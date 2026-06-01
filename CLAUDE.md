@@ -46,7 +46,7 @@ internal/mcp/               # MCP server implementation
 - `.gm/manifest.json` — savepoint index (id, name, description, created_at)
 - `.gm/snapshots/<savepoint-id>/` — one subdirectory per savepoint, containing volume copies
 
-**Savepoint IDs** are RFC3339Nano timestamps (`2026-06-01T19:41:12.123456789Z`) used as both the unique identifier and directory name. The `manifest.json` stores the numeric epoch representation (`"id": "1780335122"`) alongside the human name.
+**Savepoint IDs** are Unix timestamp integers (e.g. `1780335122`) used as both the unique identifier and the snapshot directory name. The `manifest.json` stores this alongside the human name and the RFC3339Nano `created_at` timestamp.
 
 **`gm doctor` is read-only.** It performs static analysis of the Docker Compose file and `.gm/` state and never modifies any files. Suggested fixes are consumed by `gm fix` (not yet implemented).
 
