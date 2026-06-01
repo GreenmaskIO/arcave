@@ -15,43 +15,58 @@ GM can be used as a CLI (`gm savepoint create`, `gm rollback`) or as an MCP serv
 ## Commands
 
 ```bash
-make build          # Compile to bin/gm
-make test           # Run all tests
-make test-verbose   # Run tests with -v
-make lint           # Run golangci-lint
-go test ./internal/compose/...   # Run tests for a specific package
-go run ./cmd/gm -- <args>        # Run without building
+make build            # Compile to bin/gm
+make test             # Run all tests
+make test-verbose     # Run tests with -v
+make lint             # Run golangci-lint
+go test ./internal/service/...      # Run tests for a specific package
+go run ./cmd/gm -- <args>           # Run without building
 ```
 
 ## Architecture
 
+Four layers — each only imports the layers to its left:
+
 ```
-cmd/gm/main.go              # Entry point — delegates to internal/cmd
-internal/cmd/               # Cobra command definitions (one file per command)
-internal/config/            # .gm/config.yaml and .gm/manifest.json types and I/O
-internal/compose/           # Docker Compose file parsing and service interaction
-internal/snapshot/          # Snapshot backend — MVP is copy-based; designed for pluggable backends
-internal/doctor/            # Static analysis checks for gm doctor
-internal/mcp/               # MCP server implementation
+model  ←  repository  ←  service  ←  adapter/cli
+       ←  client      ↗            ←  adapter/mcpserver
 ```
+
+| Package | Role |
+|---|---|
+| `internal/model/` | Shared data types: `Savepoint`, `StatefulService`, `Volume`, `doctor.Report` |
+| `internal/repository/` | Reads/writes `.gm` storage — defines interfaces + YAML/JSON implementations for config, manifest, and snapshot backends |
+| `internal/client/compose/` | Parses `docker-compose.yml` to detect stateful services and project name |
+| `internal/client/docker/` | Wraps `docker compose stop/up -d` and polls health via `docker inspect` |
+| `internal/service/` | Business logic; embeds repositories and clients; owns all orchestration |
+| `internal/adapter/cli/` | Cobra `RunE` handlers; marshals DTOs; maps errors to exit codes |
+| `internal/adapter/mcpserver/` | `mark3labs/mcp-go` server; registers 4 MCP tools; calls services |
+| `internal/adapter/dto/` | Shared JSON response structs used by both adapters |
+| `internal/cmd/` | Cobra command definitions (flags, `Use`, `Short`); `RunE` delegates to `adapter/cli` |
+| `cmd/gm/main.go` | DI root — constructs all repositories, clients, services, and wires adapters |
 
 ### Key design decisions
 
-**Pluggable snapshot backends.** `internal/snapshot` is the critical extensibility point. The MVP implementation stops containers, copies volume directories, and restarts. Future backends (rsync, filesystem COW, storage-native snapshots) will implement the same interface without changing the user-facing workflow. When adding snapshot logic, keep the interface clean — no copy-specific assumptions should leak into `internal/cmd`.
+**Interfaces belong to the consumer (dependency inversion).** Each service file declares its own private interfaces for the repositories and clients it needs. Concrete types in `repository/` and `client/` satisfy those interfaces implicitly — no interface definitions live in `repository/` or `client/`.
 
-**All output is JSON.** Every command writes JSON to stdout, including `gm doctor` and `gm status`. Errors should also be machine-readable where possible, to support agent-driven workflows.
+**Pluggable snapshot backends.** `SnapshotRef` and `VolumeRef` live in `repository/snapshot/ref.go` as shared value types. Each service that needs snapshotting declares its own `snapshotBackend` interface locally. `SnapshotRef.Opaque` is an opaque string only the creating backend interprets (filesystem path for copy, subvol UUID for btrfs, resource ID for cloud). Service code never inspects it. The MVP implementation is `repository/snapshot/copy/`.
 
-**`.gm/` directory layout.** At runtime GM reads and writes:
-- `.gm/config.yaml` — registered stateful services and their volume paths
-- `.gm/manifest.json` — savepoint index (id, name, description, created_at)
-- `.gm/snapshots/<savepoint-id>/` — one subdirectory per savepoint, containing volume copies
+**`VolumeRef` in the manifest.** Each savepoint record in `manifest.json` stores a `[]VolumeRef` — one per volume — pairing a volume name with its `SnapshotRef`. This is how rollback knows which backend handle to pass to `Restore`.
 
-**Savepoint IDs** are Unix timestamp integers (e.g. `1780335122`) used as both the unique identifier and the snapshot directory name. The `manifest.json` stores this alongside the human name and the RFC3339Nano `created_at` timestamp.
+**All output is JSON.** Every command writes JSON to stdout. `adapter/dto/` is the single source of truth for JSON shapes — both CLI and MCP adapters use the same DTOs and mapping functions.
 
-**`gm doctor` is read-only.** It performs static analysis of the Docker Compose file and `.gm/` state and never modifies any files. Suggested fixes are consumed by `gm fix` (not yet implemented).
+**`.gm/` directory layout.**
+- `.gm/config.yaml` — registered stateful services (`ProjectConfig`)
+- `.gm/manifest.json` — savepoint index with embedded `VolumeRef` lists
+- `.gm/snapshots/<savepoint-id>/<volume-name>/` — copy backend data
 
-**Stateful service detection** in `gm doctor` and `gm init` recognises: PostgreSQL, MySQL, MariaDB, Redis, MongoDB, Kafka, Elasticsearch — by image name matching.
+**Savepoint IDs** are Unix timestamp integers (e.g. `1780335122`) used as both identifier and snapshot directory name.
 
-## Spec
+**`gm doctor` is strictly read-only.** Uses only `ComposeClient` and `ConfigRepository`; never writes. `gm fix` (future) will consume its output.
 
-Full CLI UX specification (commands, flags, JSON output schemas, exit codes) is in `doc/spec.md`.
+**Stateful service detection** by image name substring: PostgreSQL, MySQL, MariaDB, Redis, MongoDB, Kafka, Elasticsearch.
+
+## Spec and Implementation Plan
+
+- Full CLI UX spec (commands, flags, JSON output schemas, exit codes): `doc/spec.md`
+- Detailed implementation plan with interface signatures: `doc/proposed-impl.md`

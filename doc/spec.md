@@ -467,3 +467,121 @@ Provides AI agents with native tools:
 
 This enables agent-driven development workflows where agents can safely create savepoints before modifying application
 state and automatically rollback when validation fails.
+
+---
+
+#### MCP Implementation Architecture
+
+##### Transport
+
+The MCP server uses **stdio transport** (JSON-RPC 2.0 over stdin/stdout). The agent host (e.g. Claude Desktop,
+Claude Code) launches `gm mcp` as a child process and communicates with it over its standard streams. No HTTP server,
+no port, no network configuration required.
+
+```
+Agent host process
+      │
+      │  stdin / stdout  (JSON-RPC 2.0)
+      ▼
+ gm mcp process
+      │
+      │  direct Go calls
+      ▼
+  GMService interface
+      │
+      ├── internal/snapshot   (savepoint / rollback logic)
+      ├── internal/compose    (docker compose interaction)
+      └── internal/config     (manifest, config.yaml I/O)
+```
+
+##### Internal Architecture
+
+MCP tool handlers do **not** shell out to the `gm` binary. Instead, both the CLI commands (`internal/cmd`) and
+the MCP server (`internal/mcp`) call a shared `GMService` interface defined in `internal/service`.
+
+This keeps business logic in one place and avoids subprocess overhead, output parsing, and process management
+complexity inside the MCP layer.
+
+```go
+// internal/service/service.go
+type GMService interface {
+    CreateSavepoint(ctx context.Context, req CreateSavepointRequest) (*SavepointResult, error)
+    ListSavepoints(ctx context.Context) ([]SavepointMeta, error)
+    Rollback(ctx context.Context, savepointID string) (*RollbackResult, error)
+    Status(ctx context.Context) (*StatusResult, error)
+}
+```
+
+CLI commands instantiate `GMService` and call it directly. The MCP server does the same — it is a thin transport
+adapter, not a separate execution path.
+
+##### MCP Tools
+
+###### create_savepoint
+
+Creates a new environment savepoint.
+
+Input schema:
+
+```json
+{
+  "name":        { "type": "string", "description": "Human-readable savepoint name" },
+  "description": { "type": "string", "description": "Optional description" }
+}
+```
+
+Output: savepoint metadata JSON (same schema as `gm savepoint create`).
+
+---
+
+###### list_savepoints
+
+Lists all available savepoints.
+
+Input schema: none.
+
+Output: savepoint list JSON (same schema as `gm savepoint list`).
+
+---
+
+###### rollback
+
+Restores the environment to a specified savepoint.
+
+Input schema:
+
+```json
+{
+  "savepoint_id": { "type": "string", "description": "Savepoint ID or 'latest'" }
+}
+```
+
+Output: rollback result JSON.
+
+---
+
+###### status
+
+Returns project status and storage usage.
+
+Input schema: none.
+
+Output: status JSON (same schema as `gm status`).
+
+---
+
+##### MCP Server Registration (claude_desktop_config.json / .mcp.json)
+
+```json
+{
+  "mcpServers": {
+    "gm": {
+      "command": "gm",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The agent host starts `gm mcp` in the project directory so that GM resolves `.gm/config.yaml` relative to the
+working directory, matching the same behaviour as the CLI.
