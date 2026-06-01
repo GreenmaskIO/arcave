@@ -1,6 +1,6 @@
-# Implementation spec
+# Implementation Spec
 
-### Project overview
+## Project Overview
 
 GM is a local environment lifecycle manager for stateful Docker Compose applications.
 
@@ -30,7 +30,10 @@ This enables rapid experimentation without the cost of recreating environments o
 
 GM can be used directly through its CLI:
 
-bash gm savepoint create before-migration gm rollback before-migration
+```bash
+gm savepoint create before-migration
+gm rollback before-migration
+```
 
 or through the GM MCP server, allowing AI agents to invoke savepoint, restore, clone, and environment management
 operations as native tools.
@@ -41,7 +44,9 @@ agents to safely explore, test, and recover stateful application changes with mi
 The long-term vision is to provide a generic environment state management platform that supports savepoints, rollback,
 cloning, branching, and automated recovery workflows across a wide range of databases and stateful services.
 
-### Savepoint process
+---
+
+## Savepoint Process
 
 Here is an example of the savepoint creation workflow:
 
@@ -84,7 +89,9 @@ docker compose up -d
 # 6. Wait healthy
 ```
 
-### Rollback process
+---
+
+## Rollback Process
 
 ```mermaid
 flowchart TD
@@ -101,7 +108,9 @@ flowchart TD
     J --> K["Environment restored"]
 ```
 
-### Future Optimization
+---
+
+## Future Optimization
 
 The current MVP implementation restores an environment by deleting the contents of the active volume and copying data
 back from the selected savepoint. This approach is intentionally simple, portable, and easy to validate.
@@ -111,17 +120,23 @@ swapping. Instead of physically copying data, GM would switch the active volume 
 snapshot or clone. This would reduce restore time from being proportional to dataset size to being nearly instantaneous,
 limited primarily by container restart and health check time.
 
-The restore workflow would evolve from: `Stop Services → Delete Data → Copy Snapshot → Start Services`
+The restore workflow would evolve from:
 
-to: `Stop Services → Swap Volume → Start Services`
+`Stop Services → Delete Data → Copy Snapshot → Start Services`
+
+to:
+
+`Stop Services → Swap Volume → Start Services`
 
 The architecture should therefore be designed around pluggable snapshot backends, allowing the MVP copy-based
 implementation to be replaced later with more advanced technologies such as rsync-based snapshots, filesystem-level
 copy-on-write clones, or storage-native snapshot mechanisms without changing the user-facing workflow.
 
-# GM CLI UX
+---
 
-## Project Initialization
+## GM CLI UX
+
+### Project Initialization
 
 #### gm doctor
 
@@ -132,11 +147,11 @@ The command performs static analysis of the project and reports potential issues
 
 The command never modifies project files.
 
-##### Usage
+```bash
+gm doctor
+```
 
-bash gm doctor
-
-## Checks
+##### Checks
 
 ###### Project Validation
 
@@ -177,19 +192,19 @@ Missing health checks are reported as warnings because GM restore operations rel
 
 Analyzes:
 
-- depends_on relationships
+- `depends_on` relationships
 - shared networks
 - environment variables
 
 and identifies services that may continue writing into stateful systems.
 
-###### GM Initialization
+###### GM Initialization State
 
 Checks:
 
-- .gm directory exists
-- config.yaml exists
-- manifest.json exists
+- `.gm` directory exists
+- `config.yaml` exists
+- `manifest.json` exists
 
 ###### Storage Validation
 
@@ -199,15 +214,13 @@ Checks:
 - Available disk space
 - Estimated snapshot size
 
----
-
 ##### Output Format
 
 All output is returned as JSON.
 
 Example:
 
-```json 
+```json
 {
   "project": {
     "name": "myapp"
@@ -246,31 +259,31 @@ Example:
 }
 ```
 
----
+##### Exit Codes
 
-## Exit Codes
+```text
+0  healthy
+1  warnings detected
+2  errors detected
+```
 
-text 0 = healthy 1 = warnings detected 2 = errors detected
-
----
-
-## Integration with gm fix
+##### Integration with gm fix
 
 Doctor never changes anything.
 
 Suggested fixes can be automatically applied later using:
 
-bash gm fix
+```bash
+gm fix
+```
 
 which consumes doctor recommendations and updates the project configuration accordingly.
 
 ---
 
-### gm init
+#### gm init
 
 Initializes GM metadata for the current project.
-
-Example:
 
 ```bash
 gm init
@@ -278,28 +291,31 @@ gm init
 
 Behavior:
 
-- Creates .gm directory.
+- Creates `.gm` directory.
 - Discovers stateful services.
 - Creates initial configuration.
-- Optionally adds .gm to .gitignore.
+- Optionally adds `.gm` to `.gitignore`.
 
 Result:
 
-text .gm/ ├── config.yaml ├── manifest.json └── snapshots/
+```text
+.gm/
+├── config.yaml
+├── manifest.json
+└── snapshots/
+```
 
 ---
 
-## Savepoint Management
+### Savepoint Management
 
-### gm savepoint create
+#### gm savepoint create
 
 Creates a new environment savepoint.
 
-Example:
-
-```
-gm savepoint create \ 
-    [--name before-migration] \ 
+```bash
+gm savepoint create \
+    [--name before-migration] \
     [--description "Before applying migration 2026_001"]
 ```
 
@@ -310,11 +326,13 @@ Behavior:
 - Restarts services.
 - Waits for health checks.
 
-Every savepoint receives a unique immutable identifier:
+Every savepoint receives a unique immutable identifier — a Unix timestamp integer:
 
-text 2026-06-01T19:41:12.123456789Z
+```text
+1780335122
+```
 
-Metadata:
+Metadata stored in `manifest.json`:
 
 ```json
 {
@@ -327,13 +345,11 @@ Metadata:
 
 ---
 
-### gm savepoint list
+#### gm savepoint list
 
 Lists available savepoints.
 
-Example:
-
-```bash 
+```bash
 gm savepoint list
 ```
 
@@ -352,40 +368,37 @@ Output:
 
 ---
 
-### gm savepoint remove
+#### gm savepoint remove
 
 Removes savepoints.
 
-Examples:
-
-```bash 
-gm savepoint remove --retain-recent 10 
-gm savepoint remove --retain-for 30d 
-gm savepoint remove  --before-date 2026-01-01T00:00:00Z 
+```bash
+gm savepoint remove --retain-recent 10
+gm savepoint remove --retain-for 30d
+gm savepoint remove --before-date 2026-01-01T00:00:00Z
 gm savepoint remove --dry-run --retain-for 14d
 ```
 
 Options:
 
-```text 
---before-date string Delete savepoints older than the specified RFC3339Nano timestamp. 
---dry-run Show savepoints that would be deleted without deleting them. 
---retain-for duration Retain savepoints for the specified duration. Example: 1w2d3h4m5s 
---retain-recent int Retain the most recent N savepoints.
+```text
+--before-date string   Delete savepoints older than the specified RFC3339Nano timestamp.
+--dry-run              Show savepoints that would be deleted without deleting them.
+--retain-for duration  Retain savepoints for the specified duration. Example: 1w2d3h4m5s
+--retain-recent int    Retain the most recent N savepoints.
 ```
 
 ---
 
-## Environment Recovery
+### Environment Recovery
 
-### gm rollback
+#### gm rollback
 
 Restores the environment to a specified savepoint.
 
-Examples:
-
-```bash 
-gm rollback latest gm rollback [1780335122 | latest] 
+```bash
+gm rollback latest
+gm rollback 1780335122
 ```
 
 Behavior:
@@ -397,21 +410,19 @@ Behavior:
 
 ---
 
-## Project Status
+### Project Status
 
-### gm status
+#### gm status
 
 Displays project information and storage usage.
 
-Example:
-
-```bash 
+```bash
 gm status
 ```
 
 Output:
 
-```text 
+```json
 {
   "project": {
     "name": "myapp"
@@ -437,25 +448,22 @@ Output:
 
 ---
 
-## Agent Integration
+### Agent Integration
 
-### gm mcp
+#### gm mcp
 
 Starts the GM MCP server.
 
-Example:
-
-```bash 
+```bash
 gm mcp
 ```
 
 Provides AI agents with native tools:
 
-- create_savepoint
-- list_savepoints
-- rollback
-- status
+- `create_savepoint`
+- `list_savepoints`
+- `rollback`
+- `status`
 
 This enables agent-driven development workflows where agents can safely create savepoints before modifying application
 state and automatically rollback when validation fails.
-
