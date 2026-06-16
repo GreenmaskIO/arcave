@@ -36,7 +36,7 @@ model  ←  repository  ←  service  ←  adapter/cli
 |---|---|
 | `internal/model/` | Shared data types: `Savepoint`, `StatefulService`, `Volume`, `doctor.Report` |
 | `internal/repository/` | Reads/writes `.gm` storage — defines interfaces + YAML/JSON implementations for config, manifest, and snapshot backends |
-| `internal/client/compose/` | Parses `docker-compose.yml` to detect stateful services and project name |
+| `internal/client/compose/` | Parses `docker-compose.yml` to enumerate every service's persistent mounts and the project name |
 | `internal/client/docker/` | Wraps `docker compose stop/up -d` and polls health via `docker inspect` |
 | `internal/service/` | Business logic; embeds repositories and clients; owns all orchestration |
 | `internal/adapter/cli/` | Cobra `RunE` handlers; marshals DTOs; maps errors to exit codes |
@@ -56,15 +56,16 @@ model  ←  repository  ←  service  ←  adapter/cli
 **All output is JSON.** Every command writes JSON to stdout. `adapter/dto/` is the single source of truth for JSON shapes — both CLI and MCP adapters use the same DTOs and mapping functions.
 
 **`.gm/` directory layout.**
-- `.gm/config.yaml` — registered stateful services (`ProjectConfig`)
-- `.gm/manifest.json` — savepoint index with embedded `VolumeRef` lists
-- `.gm/snapshots/<savepoint-id>/<volume-name>/` — copy backend data
+- `.gm/config.yaml` — project config (`ProjectConfig`): name, compose files, savepoint dir
+- `.gm/manifest.json` — savepoint index; each volume entry stores `service`, `mount_path`, `type`, `source`, and `path`
+- snapshot data lives under the configured savepoint dir (default `.gm/savepoints/<project-name>/`):
+  `<savepoint-id>/<service-name>/<mount-path>/data.tar`, where `<mount-path>` is the container mount path with each `/` replaced by `_` (so `/export/data` becomes `_export_data`) — one `data.tar` archive per mount. The manifest's `mount_path` keeps the original unflattened path.
 
 **Savepoint IDs** are Unix timestamp integers (e.g. `1780335122`) used as both identifier and snapshot directory name.
 
 **`gm doctor` is strictly read-only.** Uses only `ComposeClient` and `ConfigRepository`; never writes. `gm fix` (future) will consume its output.
 
-**Stateful service detection** by image name substring: PostgreSQL, MySQL, MariaDB, Redis, MongoDB, Kafka, Elasticsearch.
+**Mount detection captures every service.** GM snapshots the persistent mounts of *all* compose services — there is no image-name allowlist. Named volumes, bind mounts, and anonymous volumes are all captured (keyed by service + container target, so the scheme is uniform across mount types); only tmpfs and other non-persistent mount types are skipped, with a warning.
 
 ## Spec and Implementation Plan
 

@@ -9,7 +9,6 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(
-		newDoctorCmd(),
 		newInitCmd(),
 		newSavepointCmd(),
 		newRollbackCmd(),
