@@ -33,3 +33,6 @@ go.work.sum
 
 .gm
 .claude
+bin/
+.vscode
+test
