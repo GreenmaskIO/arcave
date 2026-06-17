@@ -67,6 +67,16 @@ model  ←  repository  ←  service  ←  adapter/cli
 
 **Mount detection captures every service.** GM snapshots the persistent mounts of *all* compose services — there is no image-name allowlist. Named volumes, bind mounts, and anonymous volumes are all captured (keyed by service + container target, so the scheme is uniform across mount types); only tmpfs and other non-persistent mount types are skipped, with a warning.
 
+**`gm rollback <savepoint-id|name|latest>`** restores the environment to a savepoint. Resolution order: `latest` (newest by `CreatedAt`) → exact ID (IDs are unique, so they win) → name. A name matching several savepoints is an *error* listing the candidate IDs, never a silent guess. Flow:
+
+1. Pre-flight: verify every savepoint archive exists; abort untouched if any is missing.
+2. `docker compose stop` (containers kept, never `down`, so mounts stay resolvable).
+3. **Safety backup** of the *current* live state of every mount to `.gm/tmp/rollback-<unix-ts>/` (same layout/format as a savepoint), so a failed rollback can be undone.
+4. For each savepoint mount: **wipe** then **restore**. Wipe runs a throwaway root `busybox` container that mounts the volume/bind path and clears it — the only host-agnostic way to delete data the service wrote as root (`CopyToContainer` only merges, never deletes). Restore extracts `data.tar` via `CopyToContainer` into the *parent* of the mount path (the tar's top entry is the mount basename).
+5. `docker compose up -d --wait --wait-timeout <n>` (default `docker.DefaultUpWaitTimeout` = 120s; overridable via `--wait-timeout`). The bound is required: without it an unhealthy `restart: always` container would hang `up --wait` forever.
+
+**Rollback auto-reverts on failure.** If any restore step fails *or* the services come up unhealthy (the `up --wait` bound elapses), GM replays the safety backup to return the environment to its pre-rollback state, restarts services, and returns an error. The backup is deleted on full success and retained (with its path reported) on failure. Restore is destructive — bind mounts (the user's own host folders) are wiped too, by design.
+
 ## Spec and Implementation Plan
 
 - Full CLI UX spec (commands, flags, JSON output schemas, exit codes): `doc/spec.md`

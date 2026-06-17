@@ -184,7 +184,7 @@ func runSavepointCreate(cmd *cobra.Command, name, description string) error {
 	}
 
 	fmt.Fprintln(errOut, "Starting services...")
-	upErr := dc.Up(ctx)
+	upErr := dc.Up(ctx, docker.DefaultUpWaitTimeout)
 
 	if snapErr != nil {
 		return snapErr
