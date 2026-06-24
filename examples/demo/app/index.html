@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gm-tools demo</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem; line-height: 1.5; }
+    h1 { margin: 0 0 .25rem; }
+    p.sub { margin: 0 0 2rem; opacity: .7; }
+    .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+    .panel { border: 1px solid currentColor; border-radius: 12px; padding: 1.25rem; }
+    .panel h2 { margin: 0 0 .25rem; font-size: 1.1rem; }
+    .panel .vol { display: inline-block; font-size: .75rem; padding: .1rem .5rem; border-radius: 999px;
+                  background: rgba(127,127,127,.2); margin-bottom: 1rem; }
+    ul { list-style: none; padding: 0; margin: 0 0 1rem; }
+    li { padding: .4rem .6rem; border-radius: 8px; background: rgba(127,127,127,.12); margin-bottom: .35rem;
+         font-size: .9rem; word-break: break-word; }
+    li.empty { background: none; opacity: .5; font-style: italic; }
+    form { display: flex; gap: .5rem; }
+    input[type=text] { flex: 1; padding: .45rem .6rem; border-radius: 8px; border: 1px solid currentColor;
+                       background: transparent; color: inherit; }
+    button { padding: .45rem .9rem; border-radius: 8px; border: 1px solid currentColor;
+             background: transparent; color: inherit; cursor: pointer; }
+    button:hover { background: rgba(127,127,127,.2); }
+    footer { margin-top: 2.5rem; font-size: .85rem; opacity: .7; }
+    code { background: rgba(127,127,127,.2); padding: .1rem .35rem; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>gm-tools demo</h1>
+  <p class="sub">Three stores, three Docker volume types. Add data, take a savepoint, change it, then roll back.</p>
+
+  <div class="panels">
+    <section class="panel">
+      <h2>PostgreSQL</h2>
+      <span class="vol">named volume</span>
+      <ul>
+        {{- range .Postgres}}
+        <li>{{.}}</li>
+        {{- else}}
+        <li class="empty">no rows</li>
+        {{- end}}
+      </ul>
+      <form method="post" action="/add/postgres">
+        <input type="text" name="text" placeholder="new note…" autocomplete="off">
+        <button type="submit">Add</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>MinIO</h2>
+      <span class="vol">host bind mount</span>
+      <ul>
+        {{- range .Minio}}
+        <li>{{.}}</li>
+        {{- else}}
+        <li class="empty">no objects</li>
+        {{- end}}
+      </ul>
+      <form method="post" action="/add/minio">
+        <input type="text" name="text" placeholder="new object contents…" autocomplete="off">
+        <button type="submit">Add</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Redis</h2>
+      <span class="vol">anonymous volume</span>
+      <ul>
+        {{- range .Redis}}
+        <li>{{.}}</li>
+        {{- else}}
+        <li class="empty">empty list</li>
+        {{- end}}
+      </ul>
+      <form method="post" action="/add/redis">
+        <input type="text" name="text" placeholder="new list item…" autocomplete="off">
+        <button type="submit">Add</button>
+      </form>
+    </section>
+  </div>
+
+  <footer>
+    Take a savepoint: <code>gm savepoint create before-changes</code> &nbsp;·&nbsp;
+    Restore it: <code>gm rollback before-changes</code>
+  </footer>
+</body>
+</html>
