@@ -126,6 +126,21 @@ func TestManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUniqueSavepointID(t *testing.T) {
+	now := time.Unix(1780335122, 0)
+
+	// No collision: the plain Unix second is used.
+	if got := uniqueSavepointID(now, nil); got != "1780335122" {
+		t.Errorf("uniqueSavepointID with no existing = %q, want %q", got, "1780335122")
+	}
+
+	// Collision in the same second bumps forward until free.
+	existing := []savepointRecord{{ID: "1780335122"}, {ID: "1780335123"}}
+	if got := uniqueSavepointID(now, existing); got != "1780335124" {
+		t.Errorf("uniqueSavepointID with collisions = %q, want %q", got, "1780335124")
+	}
+}
+
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

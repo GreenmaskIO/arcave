@@ -59,6 +59,24 @@ func mountDirName(target string) string {
 	return strings.ReplaceAll(target, "/", "_")
 }
 
+// uniqueSavepointID returns a Unix-second savepoint ID that does not collide
+// with an existing savepoint. IDs double as the snapshot directory name, so two
+// creates in the same second would otherwise share a directory and silently
+// overwrite each other's data; the later one is bumped forward a second at a
+// time until free.
+func uniqueSavepointID(now time.Time, existing []savepointRecord) string {
+	used := make(map[string]bool, len(existing))
+	for _, r := range existing {
+		used[r.ID] = true
+	}
+	for sec := now.Unix(); ; sec++ {
+		id := strconv.FormatInt(sec, 10)
+		if !used[id] {
+			return id
+		}
+	}
+}
+
 // snapshotsRoot returns the directory holding all savepoint data, relative to
 // the project root unless the config overrides it with an absolute path.
 func snapshotsRoot(cfg *projectConfig) string {
@@ -120,9 +138,17 @@ func runSavepointCreate(cmd *cobra.Command, name, description string) error {
 		return fmt.Errorf("determine working directory: %w", err)
 	}
 
+	// Load the manifest before stopping services (so a corrupt index fails
+	// fast) and so the new savepoint gets an ID that does not collide with an
+	// existing one.
+	mf, err := loadManifest()
+	if err != nil {
+		return err
+	}
+
 	now := time.Now()
 	record := savepointRecord{
-		ID:          strconv.FormatInt(now.Unix(), 10),
+		ID:          uniqueSavepointID(now, mf.Savepoints),
 		Name:        name,
 		Description: description,
 		CreatedAt:   now.UTC(),
@@ -148,9 +174,19 @@ func runSavepointCreate(cmd *cobra.Command, name, description string) error {
 	// Snapshot while the services are down; whatever happens here, the
 	// services must be started again before we return.
 	snapErr := func() error {
+		// mountDirName flattens "/" to "_", which is not injective (e.g.
+		// "/export/data" and "/export_data" both yield "_export_data"). Two
+		// mounts of one service that collide would overwrite each other's
+		// archive, so refuse rather than silently corrupt the snapshot.
+		dirOwner := map[string]string{}
 		for _, m := range mounts {
 			// .gm/snapshots/<id>/<service-name>/<volume-mounted-path>/data.tar
 			dir := mountDirName(m.Target)
+			if prev, ok := dirOwner[m.Service+"\x00"+dir]; ok {
+				return fmt.Errorf("mounts %q and %q of service %q map to the same snapshot directory %q; rename one mount path to avoid the collision",
+					prev, m.Target, m.Service, dir)
+			}
+			dirOwner[m.Service+"\x00"+dir] = m.Target
 			relDir := filepath.Join(snapDir, m.Service, dir)
 			absDir := filepath.Join(absSnapDir, m.Service, dir)
 			if err := os.MkdirAll(absDir, 0o755); err != nil {
@@ -171,12 +207,8 @@ func runSavepointCreate(cmd *cobra.Command, name, description string) error {
 			})
 		}
 
-		m, err := loadManifest()
-		if err != nil {
-			return err
-		}
-		m.Savepoints = append(m.Savepoints, record)
-		return saveManifest(m)
+		mf.Savepoints = append(mf.Savepoints, record)
+		return saveManifest(mf)
 	}()
 	if snapErr != nil {
 		// Drop the partial snapshot so it can never be rolled back to.
@@ -186,10 +218,12 @@ func runSavepointCreate(cmd *cobra.Command, name, description string) error {
 	fmt.Fprintln(errOut, "Starting services...")
 	upErr := dc.Up(ctx, docker.DefaultUpWaitTimeout)
 
-	if snapErr != nil {
+	switch {
+	case snapErr != nil && upErr != nil:
+		return fmt.Errorf("%w; additionally, services failed to restart: %v", snapErr, upErr)
+	case snapErr != nil:
 		return snapErr
-	}
-	if upErr != nil {
+	case upErr != nil:
 		return upErr
 	}
 
