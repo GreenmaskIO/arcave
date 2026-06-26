@@ -1,25 +1,73 @@
-package cmd
+package service
 
 import (
-	"os"
 	"testing"
 	"time"
+
+	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/gm-tools/internal/repository/manifest"
 )
 
-func recordsAt(times ...time.Time) []savepointRecord {
-	records := make([]savepointRecord, len(times))
+func recordsAt(times ...time.Time) []manifest.Record {
+	records := make([]manifest.Record, len(times))
 	for i, t := range times {
-		records[i] = savepointRecord{ID: t.Format("20060102T150405"), CreatedAt: t}
+		records[i] = manifest.Record{Savepoint: model.Savepoint{ID: t.Format("20060102T150405"), CreatedAt: t}}
 	}
 	return records
 }
 
-func ids(records []savepointRecord) []string {
+func ids(records []manifest.Record) []string {
 	out := make([]string, len(records))
 	for i, r := range records {
 		out[i] = r.ID
 	}
 	return out
+}
+
+func TestFindSavepoint(t *testing.T) {
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	records := []manifest.Record{
+		{Savepoint: model.Savepoint{ID: "100", Name: "before-migration", CreatedAt: base}},
+		{Savepoint: model.Savepoint{ID: "300", Name: "dup", CreatedAt: base.Add(2 * time.Hour)}}, // newest
+		{Savepoint: model.Savepoint{ID: "200", Name: "dup", CreatedAt: base.Add(time.Hour)}},
+	}
+
+	tests := []struct {
+		name    string
+		ref     string
+		wantID  string
+		wantErr bool
+	}{
+		{name: "latest picks newest by created_at", ref: "latest", wantID: "300"},
+		{name: "explicit id hit", ref: "200", wantID: "200"},
+		{name: "unique name hit", ref: "before-migration", wantID: "100"},
+		{name: "ambiguous name errors", ref: "dup", wantErr: true},
+		{name: "unknown ref errors", ref: "999", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := findSavepoint(records, tt.ref)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for ref %q, got record %q", tt.ref, got.ID)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("findSavepoint(%q): %v", tt.ref, err)
+			}
+			if got.ID != tt.wantID {
+				t.Errorf("findSavepoint(%q) = %q, want %q", tt.ref, got.ID, tt.wantID)
+			}
+		})
+	}
+
+	t.Run("empty manifest errors", func(t *testing.T) {
+		if _, err := findSavepoint(nil, "latest"); err == nil {
+			t.Fatal("expected error for empty manifest")
+		}
+	})
 }
 
 func TestPartitionSavepoints(t *testing.T) {
@@ -82,50 +130,6 @@ func TestPartitionSavepoints(t *testing.T) {
 	}
 }
 
-func TestManifestRoundTrip(t *testing.T) {
-	t.Chdir(t.TempDir())
-
-	// Missing manifest reads as empty.
-	m, err := loadManifest()
-	if err != nil {
-		t.Fatalf("loadManifest on missing file: %v", err)
-	}
-	if len(m.Savepoints) != 0 {
-		t.Fatalf("expected empty manifest, got %d savepoints", len(m.Savepoints))
-	}
-
-	if err := os.MkdirAll(gmDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	m.Savepoints = append(m.Savepoints, savepointRecord{
-		ID:        "1780335122",
-		Name:      "before-migration",
-		CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
-		Volumes: []savepointVolume{{
-			Service:   "db",
-			MountPath: "/var/lib/postgresql/data",
-			Type:      "volume",
-			Source:    "myapp_pgdata",
-			Path:      ".gm/snapshots/1780335122/db/var/lib/postgresql/data/data.tar",
-		}},
-	})
-	if err := saveManifest(m); err != nil {
-		t.Fatalf("saveManifest: %v", err)
-	}
-
-	got, err := loadManifest()
-	if err != nil {
-		t.Fatalf("loadManifest: %v", err)
-	}
-	if len(got.Savepoints) != 1 || got.Savepoints[0].ID != "1780335122" {
-		t.Fatalf("unexpected manifest after round trip: %+v", got)
-	}
-	if got.Savepoints[0].Volumes[0].Source != "myapp_pgdata" {
-		t.Fatalf("volume ref lost in round trip: %+v", got.Savepoints[0])
-	}
-}
-
 func TestUniqueSavepointID(t *testing.T) {
 	now := time.Unix(1780335122, 0)
 
@@ -135,7 +139,10 @@ func TestUniqueSavepointID(t *testing.T) {
 	}
 
 	// Collision in the same second bumps forward until free.
-	existing := []savepointRecord{{ID: "1780335122"}, {ID: "1780335123"}}
+	existing := []manifest.Record{
+		{Savepoint: model.Savepoint{ID: "1780335122"}},
+		{Savepoint: model.Savepoint{ID: "1780335123"}},
+	}
 	if got := uniqueSavepointID(now, existing); got != "1780335124" {
 		t.Errorf("uniqueSavepointID with collisions = %q, want %q", got, "1780335124")
 	}

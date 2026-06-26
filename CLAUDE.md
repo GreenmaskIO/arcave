@@ -57,9 +57,9 @@ model  ←  repository  ←  service  ←  adapter/cli
 
 **`.gm/` directory layout.**
 - `.gm/config.yaml` — project config (`ProjectConfig`): name, compose files, savepoint dir
-- `.gm/manifest.json` — savepoint index; each volume entry stores `service`, `mount_path`, `type`, `source`, and `path`
+- `.gm/manifest.json` — savepoint index; each volume entry stores `service`, `mount_path`, `type`, `source`, and a `snapshot` ref (`backend` name + an opaque handle the backend interprets — for the copy backend, the archive path relative to the project root)
 - snapshot data lives under the configured savepoint dir (default `.gm/savepoints/<project-name>/`):
-  `<savepoint-id>/<service-name>/<mount-path>/data.tar`, where `<mount-path>` is the container mount path with each `/` replaced by `_` (so `/export/data` becomes `_export_data`) — one `data.tar` archive per mount. The manifest's `mount_path` keeps the original unflattened path.
+  `<savepoint-id>/<service-name>/<mount-path>/data.tar`, where `<mount-path>` is the container mount path nested verbatim with its leading `/` stripped (so `/export/data` becomes `export/data/data.tar`) — one `data.tar` archive per mount. Nesting the real path keeps the layout collision-free, since the filesystem distinguishes `/export/data` from `/export_data` (unlike flattening `/` to `_`).
 
 **Savepoint IDs** are Unix timestamp integers (e.g. `1780335122`) used as both identifier and snapshot directory name.
 
