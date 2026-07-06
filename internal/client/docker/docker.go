@@ -113,7 +113,7 @@ func (e *Engine) Close() error { return e.cli.Close() }
 // required for export. The archive is stored verbatim rather than extracted so
 // that file ownership and permissions (which an unprivileged host process could
 // not reapply) survive a later restore.
-func (e *Engine) ExportMount(ctx context.Context, projectName, service, target, destTar string) error {
+func (e *Engine) ExportMount(ctx context.Context, projectName, service, target, destTar string) (err error) {
 	containerID, _, err := e.findServiceMount(ctx, projectName, service, target)
 	if err != nil {
 		return err
@@ -123,14 +123,18 @@ func (e *Engine) ExportMount(ctx context.Context, projectName, service, target, 
 	if err != nil {
 		return fmt.Errorf("export %s mount %s: %w", service, target, err)
 	}
-	defer rc.Close()
+	defer func() {
+		if cerr := rc.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close export stream for %s mount %s: %w", service, target, cerr)
+		}
+	}()
 
 	f, err := os.Create(destTar)
 	if err != nil {
 		return fmt.Errorf("create snapshot archive: %w", err)
 	}
 	if _, err := io.Copy(f, rc); err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("write snapshot archive for %s %s: %w", service, target, err)
 	}
 	if err := f.Close(); err != nil {
@@ -176,7 +180,7 @@ func (e *Engine) findServiceMount(ctx context.Context, projectName, service, tar
 // archive's top entry is the mount basename, it is extracted into the parent of
 // target so the data lands back exactly at target. Like export, this runs while
 // services are stopped but not removed, so the service container is reused.
-func (e *Engine) RestoreMount(ctx context.Context, projectName, service, target, srcTar string) error {
+func (e *Engine) RestoreMount(ctx context.Context, projectName, service, target, srcTar string) (err error) {
 	id, mnt, err := e.findServiceMount(ctx, projectName, service, target)
 	if err != nil {
 		return fmt.Errorf("finding service mounts: %w", err)
@@ -190,7 +194,11 @@ func (e *Engine) RestoreMount(ctx context.Context, projectName, service, target,
 	if err != nil {
 		return fmt.Errorf("open snapshot archive: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close snapshot archive for %s mount %s: %w", service, target, cerr)
+		}
+	}()
 
 	if err := e.cli.CopyToContainer(ctx, id, filepath.Dir(target), f, container.CopyToContainerOptions{}); err != nil {
 		return fmt.Errorf("restore %s mount %s: %w", service, target, err)

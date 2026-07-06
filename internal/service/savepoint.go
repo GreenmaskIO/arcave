@@ -48,7 +48,7 @@ func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, st
 // into a new savepoint, records it in the manifest, and starts the services
 // again. Human-readable progress is written to progress; the created savepoint
 // metadata is returned.
-func (s *Service) CreateSavepoint(ctx context.Context, name, description string, progress io.Writer) (model.Savepoint, error) {
+func (s *Service) CreateSavepoint(ctx context.Context, name, description string, progress io.Writer) (_ model.Savepoint, err error) {
 	cfg, err := s.cfg.Load()
 	if err != nil {
 		return model.Savepoint{}, err
@@ -88,7 +88,11 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string,
 	if err != nil {
 		return model.Savepoint{}, err
 	}
-	defer eng.Close()
+	defer func() {
+		if cerr := eng.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close docker engine: %w", cerr)
+		}
+	}()
 
 	fmt.Fprintln(progress, "Stopping services...")
 	if err := dc.Stop(ctx); err != nil {

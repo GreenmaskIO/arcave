@@ -35,7 +35,9 @@ func (h *Handlers) Init(cmd *cobra.Command, name string, composeFiles []string, 
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Initialized GM project %q at %s\n", resolvedName, path)
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Initialized GM project %q at %s\n", resolvedName, path); err != nil {
+		return err
+	}
 	return nil
 }
 
