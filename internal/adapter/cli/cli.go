@@ -58,10 +58,9 @@ func (h *Handlers) SavepointList(cmd *cobra.Command) error {
 }
 
 // SavepointRemove removes savepoints and prints what was (or would be) removed.
-func (h *Handlers) SavepointRemove(cmd *cobra.Command, ids []string, hasRecent bool, retainRecent int, retainFor, beforeDate string, dryRun bool) error {
+func (h *Handlers) SavepointRemove(cmd *cobra.Command, ids []string, retainRecent int, retainFor, beforeDate string, dryRun bool) error {
 	res, err := h.svc.RemoveSavepoints(service.RemoveRequest{
 		IDs:          ids,
-		HasRecent:    hasRecent,
 		RetainRecent: retainRecent,
 		RetainFor:    retainFor,
 		BeforeDate:   beforeDate,

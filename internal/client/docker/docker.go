@@ -179,7 +179,7 @@ func (e *Engine) findServiceMount(ctx context.Context, projectName, service, tar
 func (e *Engine) RestoreMount(ctx context.Context, projectName, service, target, srcTar string) error {
 	id, mnt, err := e.findServiceMount(ctx, projectName, service, target)
 	if err != nil {
-		return err
+		return fmt.Errorf("finding service mounts: %w", err)
 	}
 
 	if err := wipeMount(ctx, mnt); err != nil {

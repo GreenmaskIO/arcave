@@ -34,7 +34,7 @@ func NewClient() *Client { return &Client{} }
 func (c *Client) Inspect(ctx context.Context, files ...string) (Inspection, error) {
 	project, name, err := Load(ctx, files...)
 	if err != nil {
-		return Inspection{}, err
+		return Inspection{}, fmt.Errorf("loading docker compose file(s): %w", err)
 	}
 	mounts, skipped := mountsOf(project)
 	return Inspection{ProjectName: name, Mounts: mounts, Skipped: skipped}, nil

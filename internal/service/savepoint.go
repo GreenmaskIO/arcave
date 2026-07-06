@@ -12,12 +12,37 @@ import (
 
 	str2duration "github.com/xhit/go-str2duration/v2"
 
+	"github.com/greenmaskio/gm-tools/internal/client/compose"
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
 	"github.com/greenmaskio/gm-tools/internal/model"
 	"github.com/greenmaskio/gm-tools/internal/repository/manifest"
 	"github.com/greenmaskio/gm-tools/internal/repository/snapshot"
 	snapcopy "github.com/greenmaskio/gm-tools/internal/repository/snapshot/copy"
 )
+
+// Snapshot while the services are down; whatever happens here, the services
+// must be started again before we return.
+func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, store *snapcopy.Store, sp model.Savepoint, record manifest.Record, mf *manifest.Manifest, eng *docker.Engine, progress io.Writer) error {
+	for _, m := range insp.Mounts {
+		dest, ref, err := store.Dest(sp.ID, m.Service, m.Target)
+		if err != nil {
+			return fmt.Errorf("getting snapshot destination: %v", err)
+		}
+		fmt.Fprintf(progress, "Snapshotting %s:%s...\n", m.Service, m.Target)
+		if err := eng.ExportMount(ctx, insp.ProjectName, m.Service, m.Target, dest); err != nil {
+			return fmt.Errorf("exporting docker mounts/volumes: %v", err)
+		}
+		record.Volumes = append(record.Volumes, snapshot.VolumeRef{
+			Service:   m.Service,
+			MountPath: m.Target,
+			Type:      m.Type,
+			Source:    m.Source,
+			Snapshot:  ref,
+		})
+	}
+	mf.Savepoints = append(mf.Savepoints, record)
+	return s.mf.Save(mf)
+}
 
 // CreateSavepoint stops the project services, snapshots every persistent mount
 // into a new savepoint, records it in the manifest, and starts the services
@@ -72,27 +97,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string,
 
 	// Snapshot while the services are down; whatever happens here, the services
 	// must be started again before we return.
-	snapErr := func() error {
-		for _, m := range insp.Mounts {
-			dest, ref, err := store.Dest(sp.ID, m.Service, m.Target)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(progress, "Snapshotting %s:%s...\n", m.Service, m.Target)
-			if err := eng.ExportMount(ctx, insp.ProjectName, m.Service, m.Target, dest); err != nil {
-				return err
-			}
-			record.Volumes = append(record.Volumes, snapshot.VolumeRef{
-				Service:   m.Service,
-				MountPath: m.Target,
-				Type:      m.Type,
-				Source:    m.Source,
-				Snapshot:  ref,
-			})
-		}
-		mf.Savepoints = append(mf.Savepoints, record)
-		return s.mf.Save(mf)
-	}()
+	snapErr := s.snapshotMount(ctx, insp, store, sp, record, mf, eng, progress)
 	if snapErr != nil {
 		// Drop the partial snapshot so it can never be rolled back to.
 		_ = store.Remove(sp.ID)
@@ -117,7 +122,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string,
 func (s *Service) ListSavepoints() ([]model.Savepoint, error) {
 	mf, err := s.mf.Load()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading manifest.json file: %v", err)
 	}
 	return savepointsOf(mf.Savepoints), nil
 }
@@ -126,7 +131,6 @@ func (s *Service) ListSavepoints() ([]model.Savepoint, error) {
 // retention rules (the two modes are mutually exclusive).
 type RemoveRequest struct {
 	IDs          []string
-	HasRecent    bool
 	RetainRecent int
 	RetainFor    string
 	BeforeDate   string
@@ -142,7 +146,7 @@ type RemoveResult struct {
 // RemoveSavepoints deletes savepoints selected by req. In retention mode, when
 // several rules are combined a savepoint survives if any rule retains it.
 func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
-	hasRetention := req.HasRecent || req.RetainFor != "" || req.BeforeDate != ""
+	hasRetention := req.RetainRecent > 0 || req.RetainFor != "" || req.BeforeDate != ""
 
 	if len(req.IDs) > 0 && hasRetention {
 		return RemoveResult{}, errors.New("cannot combine savepoint IDs with --retain-recent/--retain-for/--before-date")
@@ -150,17 +154,17 @@ func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
 	if len(req.IDs) == 0 && !hasRetention {
 		return RemoveResult{}, errors.New("specify savepoint IDs, or at least one of --retain-recent, --retain-for or --before-date")
 	}
-	if req.HasRecent && req.RetainRecent < 0 {
+	if (hasRetention && req.RetainRecent < 0) && req.RetainFor == "" && req.BeforeDate == "" {
 		return RemoveResult{}, errors.New("--retain-recent must be zero or positive")
 	}
 
 	cfg, err := s.cfg.Load()
 	if err != nil {
-		return RemoveResult{}, err
+		return RemoveResult{}, fmt.Errorf("loading docker compose file: %w", err)
 	}
 	mf, err := s.mf.Load()
 	if err != nil {
-		return RemoveResult{}, err
+		return RemoveResult{}, fmt.Errorf("loading manifest.json file: %w", err)
 	}
 
 	var kept, removed []manifest.Record
@@ -186,7 +190,7 @@ func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
 			}
 			cutoffs = append(cutoffs, t)
 		}
-		kept, removed = partitionSavepoints(mf.Savepoints, req.HasRecent, req.RetainRecent, cutoffs)
+		kept, removed = partitionSavepoints(mf.Savepoints, req.RetainRecent, cutoffs)
 	}
 
 	if !req.DryRun && len(removed) > 0 {
@@ -198,7 +202,7 @@ func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
 		}
 		mf.Savepoints = kept
 		if err := s.mf.Save(mf); err != nil {
-			return RemoveResult{}, err
+			return RemoveResult{}, fmt.Errorf("problem saving manifest.json: %w", err)
 		}
 	}
 
@@ -299,8 +303,9 @@ func partitionByIDs(records []manifest.Record, ids []string) (kept, removed []ma
 // remove. A record is removed only when every active rule marks it deletable:
 // it is outside the retainRecent newest (when hasRecent) and older than every
 // cutoff.
-func partitionSavepoints(records []manifest.Record, hasRecent bool, retainRecent int, cutoffs []time.Time) (kept, removed []manifest.Record) {
+func partitionSavepoints(records []manifest.Record, retainRecent int, cutoffs []time.Time) (kept, removed []manifest.Record) {
 	retainedByRecency := map[string]bool{}
+	hasRecent := retainRecent > 0
 	if hasRecent {
 		byNewest := append([]manifest.Record(nil), records...)
 		sort.Slice(byNewest, func(i, j int) bool {

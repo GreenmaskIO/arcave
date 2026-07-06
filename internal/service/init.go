@@ -31,7 +31,7 @@ func (s *Service) Init(ctx context.Context, name string, composeFiles []string, 
 
 	// Read and verify the compose project before writing anything.
 	if _, err := s.compose.Inspect(ctx, composeFiles...); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("verifying compose project: %w", err)
 	}
 
 	cfg := &config.Config{
@@ -40,7 +40,7 @@ func (s *Service) Init(ctx context.Context, name string, composeFiles []string, 
 		SavepointDir: savepointDir,
 	}
 	if err := s.cfg.Save(cfg); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("saving config.yaml file: %w", err)
 	}
 	return name, s.cfg.Path(), nil
 }

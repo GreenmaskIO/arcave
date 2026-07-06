@@ -79,20 +79,17 @@ func TestPartitionSavepoints(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		hasRecent    bool
 		retainRecent int
 		cutoffs      []time.Time
 		wantRemoved  []string
 	}{
 		{
 			name:         "retain recent keeps newest N",
-			hasRecent:    true,
 			retainRecent: 2,
 			wantRemoved:  []string{records[0].ID},
 		},
 		{
 			name:         "retain recent zero removes all",
-			hasRecent:    true,
 			retainRecent: 0,
 			wantRemoved:  ids(records),
 		},
@@ -103,14 +100,12 @@ func TestPartitionSavepoints(t *testing.T) {
 		},
 		{
 			name:         "any rule retaining wins",
-			hasRecent:    true,
 			retainRecent: 3,
 			cutoffs:      []time.Time{now}, // cutoff alone would remove everything
 			wantRemoved:  nil,
 		},
 		{
 			name:         "removed only when all rules agree",
-			hasRecent:    true,
 			retainRecent: 1,
 			cutoffs:      []time.Time{now.Add(-14 * 24 * time.Hour)},
 			wantRemoved:  []string{records[0].ID},
@@ -119,7 +114,7 @@ func TestPartitionSavepoints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			kept, removed := partitionSavepoints(records, tt.hasRecent, tt.retainRecent, tt.cutoffs)
+			kept, removed := partitionSavepoints(records, tt.retainRecent, tt.cutoffs)
 			if got := ids(removed); !equal(got, tt.wantRemoved) {
 				t.Errorf("removed = %v, want %v", got, tt.wantRemoved)
 			}

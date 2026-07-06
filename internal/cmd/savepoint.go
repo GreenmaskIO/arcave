@@ -67,8 +67,7 @@ func newSavepointRemoveCmd(h *cli.Handlers) *cobra.Command {
 		Short: "Remove savepoints by ID, or by retention rules",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return h.SavepointRemove(cmd, args, cmd.Flags().Changed("retain-recent"),
-				retainRecent, retainFor, beforeDate, dryRun)
+			return h.SavepointRemove(cmd, args, retainRecent, retainFor, beforeDate, dryRun)
 		},
 	}
 	cmd.Flags().IntVar(&retainRecent, "retain-recent", 0, "Retain the most recent N savepoints")
