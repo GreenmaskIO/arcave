@@ -32,7 +32,7 @@ func NewClient() *Client { return &Client{} }
 // Inspect loads the compose project described by files and returns its name and
 // the mounts GM should snapshot. See Load for how files is resolved.
 func (c *Client) Inspect(ctx context.Context, files ...string) (Inspection, error) {
-	project, name, err := Load(ctx, files...)
+	project, name, err := load(ctx, files...)
 	if err != nil {
 		return Inspection{}, fmt.Errorf("loading docker compose file(s): %w", err)
 	}
@@ -40,7 +40,7 @@ func (c *Client) Inspect(ctx context.Context, files ...string) (Inspection, erro
 	return Inspection{ProjectName: name, Mounts: mounts, Skipped: skipped}, nil
 }
 
-// Load reads and verifies the Docker Compose project described by files.
+// load reads and verifies the Docker Compose project described by files.
 //
 // files is the ordered list of Compose configuration paths (the main
 // docker-compose.yml plus any overrides). When empty, compose-go resolves the
@@ -54,7 +54,7 @@ func (c *Client) Inspect(ctx context.Context, files ...string) (Inspection, erro
 // The second return value is the resolved Compose project name (from an
 // explicit name, the top-level `name:` field, COMPOSE_PROJECT_NAME, or the
 // working directory).
-func Load(ctx context.Context, files ...string) (*types.Project, string, error) {
+func load(ctx context.Context, files ...string) (*types.Project, string, error) {
 	opts, err := cli.NewProjectOptions(
 		files,
 		cli.WithOsEnv,
@@ -78,41 +78,24 @@ func Load(ctx context.Context, files ...string) (*types.Project, string, error) 
 	return project, project.Name, nil
 }
 
-// serviceVolumes groups a service with all of its volume mounts, sorted by
-// service name so output is deterministic.
-type serviceVolumes struct {
-	Service string
-	Volumes []types.ServiceVolumeConfig
-}
-
-func volumesByService(project *types.Project) []serviceVolumes {
+// mountsOf returns every persistent mount of every service in the project —
+// named volumes, bind mounts, and anonymous volumes — keyed by service and
+// container target. It also returns the mounts it had to skip (tmpfs and the
+// like) so callers can warn about state that will not be captured. Services are
+// visited in sorted name order so the output is deterministic.
+func mountsOf(project *types.Project) ([]model.Mount, []model.SkippedMount) {
 	names := make([]string, 0, len(project.Services))
 	for name := range project.Services {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	result := make([]serviceVolumes, 0, len(names))
-	for _, name := range names {
-		result = append(result, serviceVolumes{
-			Service: name,
-			Volumes: project.Services[name].Volumes,
-		})
-	}
-	return result
-}
-
-// mountsOf returns every persistent mount of every service in the project —
-// named volumes, bind mounts, and anonymous volumes — keyed by service and
-// container target. It also returns the mounts it had to skip (tmpfs and the
-// like) so callers can warn about state that will not be captured.
-func mountsOf(project *types.Project) ([]model.Mount, []model.SkippedMount) {
 	var (
 		mounts  []model.Mount
 		skipped []model.SkippedMount
 	)
-	for _, sv := range volumesByService(project) {
-		for _, v := range sv.Volumes {
+	for _, service := range names {
+		for _, v := range project.Services[service].Volumes {
 			switch v.Type {
 			case "volume":
 				source := "" // anonymous volume; resolved from the container later
@@ -120,21 +103,21 @@ func mountsOf(project *types.Project) ([]model.Mount, []model.SkippedMount) {
 					source = volumeName(project, v.Source)
 				}
 				mounts = append(mounts, model.Mount{
-					Service: sv.Service,
+					Service: service,
 					Target:  v.Target,
 					Type:    "volume",
 					Source:  source,
 				})
 			case "bind":
 				mounts = append(mounts, model.Mount{
-					Service: sv.Service,
+					Service: service,
 					Target:  v.Target,
 					Type:    "bind",
 					Source:  v.Source,
 				})
 			default:
 				skipped = append(skipped, model.SkippedMount{
-					Service: sv.Service,
+					Service: service,
 					Reason:  fmt.Sprintf("%s mount at %q", v.Type, v.Target),
 				})
 			}

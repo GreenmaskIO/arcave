@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/repository/snapshot"
 )
 
 const (
@@ -17,16 +16,11 @@ const (
 	fileName = "manifest.json"
 )
 
-// Record is one savepoint entry persisted in .gm/manifest.json: the savepoint
-// metadata plus one VolumeRef per snapshotted mount.
-type Record struct {
-	model.Savepoint
-	Volumes []snapshot.VolumeRef `json:"volumes"`
-}
-
-// Manifest is the savepoint index persisted in .gm/manifest.json.
-type Manifest struct {
-	Savepoints []Record `json:"savepoints"`
+// file is the on-disk shape of .gm/manifest.json. It is private to the
+// repository: the {"savepoints": [...]} envelope is a storage detail, so the
+// Load/Save contract is expressed purely in terms of the shared model types.
+type file struct {
+	Savepoints []model.SavepointRecord `json:"savepoints"`
 }
 
 // Repository reads and writes the manifest for the project rooted at
@@ -45,28 +39,29 @@ func (r *Repository) Path() string {
 	return filepath.Join(r.projectRoot, gmDir, fileName)
 }
 
-// Load reads .gm/manifest.json; a missing file yields an empty manifest so
-// list/remove work before the first savepoint is created.
-func (r *Repository) Load() (*Manifest, error) {
+// Load reads .gm/manifest.json and returns every savepoint record; a missing
+// file yields an empty slice so list/remove work before the first savepoint is
+// created.
+func (r *Repository) Load() ([]model.SavepointRecord, error) {
 	data, err := os.ReadFile(r.Path())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &Manifest{}, nil
+			return nil, nil
 		}
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
 
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	var f file
+	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse manifest %s: %w", r.Path(), err)
 	}
-	return &m, nil
+	return f.Savepoints, nil
 }
 
-// Save writes the manifest atomically (temp file + rename) so a crash mid-write
-// cannot corrupt the savepoint index.
-func (r *Repository) Save(m *Manifest) error {
-	data, err := json.MarshalIndent(m, "", "  ")
+// Save writes the savepoint records atomically (temp file + rename) so a crash
+// mid-write cannot corrupt the savepoint index.
+func (r *Repository) Save(records []model.SavepointRecord) error {
+	data, err := json.MarshalIndent(file{Savepoints: records}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
 	}

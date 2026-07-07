@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -32,16 +31,19 @@ const (
 // files, mirroring how the user would invoke docker compose by hand.
 type ComposeClient struct {
 	files []string
+	// run executes a docker CLI invocation; it defaults to runDocker and is a
+	// field only so tests can capture the assembled arguments without a daemon.
+	run func(ctx context.Context, args ...string) error
 }
 
 func NewComposeClient(files ...string) *ComposeClient {
-	return &ComposeClient{files: files}
+	return &ComposeClient{files: files, run: runDocker}
 }
 
 // Stop stops all project services. docker compose stop only returns once the
 // containers have exited, so no extra polling is needed.
 func (c *ComposeClient) Stop(ctx context.Context) error {
-	return runDocker(ctx, c.composeArgs("stop")...)
+	return c.run(ctx, c.composeArgs("stop")...)
 }
 
 // DefaultUpWaitTimeout is the default bound (seconds) for Up's health-check wait.
@@ -60,7 +62,7 @@ func (c *ComposeClient) Up(ctx context.Context, waitTimeoutSec int) error {
 		waitTimeoutSec = DefaultUpWaitTimeout
 	}
 	timeout := strconv.Itoa(waitTimeoutSec)
-	return runDocker(ctx, c.composeArgs("up", "-d", "--wait", "--wait-timeout", timeout)...)
+	return c.run(ctx, c.composeArgs("up", "-d", "--wait", "--wait-timeout", timeout)...)
 }
 
 func (c *ComposeClient) composeArgs(args ...string) []string {
@@ -87,6 +89,10 @@ func runDocker(ctx context.Context, args ...string) error {
 // service containers.
 type Engine struct {
 	cli *client.Client
+	// run executes a docker CLI invocation (used to wipe mounts via a throwaway
+	// container); it defaults to runDocker and is a field only so tests can
+	// exercise wipeMount's argument assembly without a daemon.
+	run func(ctx context.Context, args ...string) error
 }
 
 // NewEngine connects to the Docker daemon using the standard environment
@@ -97,50 +103,33 @@ func NewEngine() (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to docker engine: %w", err)
 	}
-	return &Engine{cli: cli}, nil
+	return &Engine{cli: cli, run: runDocker}, nil
 }
 
 func (e *Engine) Close() error { return e.cli.Close() }
 
-// ExportMount writes the contents of the service mount at target to destTar as
-// a tar archive.
+// OpenMount opens a tar stream of the service mount at target's contents.
 //
 // It locates the project's container for service and streams its target path
 // out via the Engine API. Keying on service + container target (rather than a
 // volume name) lets the same code export named volumes, bind mounts, and
 // anonymous volumes uniformly. GM snapshots while services are stopped but not
 // removed, so the service container itself is used — no helper image is
-// required for export. The archive is stored verbatim rather than extracted so
+// required for export. The archive is streamed verbatim rather than extracted so
 // that file ownership and permissions (which an unprivileged host process could
-// not reapply) survive a later restore.
-func (e *Engine) ExportMount(ctx context.Context, projectName, service, target, destTar string) (err error) {
+// not reapply) survive a later restore. The caller owns the returned stream and
+// closes it; Docker stays out of the host filesystem entirely.
+func (e *Engine) OpenMount(ctx context.Context, projectName, service, target string) (io.ReadCloser, error) {
 	containerID, _, err := e.findServiceMount(ctx, projectName, service, target)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	rc, _, err := e.cli.CopyFromContainer(ctx, containerID, target)
 	if err != nil {
-		return fmt.Errorf("export %s mount %s: %w", service, target, err)
+		return nil, fmt.Errorf("export %s mount %s: %w", service, target, err)
 	}
-	defer func() {
-		if cerr := rc.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("close export stream for %s mount %s: %w", service, target, cerr)
-		}
-	}()
-
-	f, err := os.Create(destTar)
-	if err != nil {
-		return fmt.Errorf("create snapshot archive: %w", err)
-	}
-	if _, err := io.Copy(f, rc); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write snapshot archive for %s %s: %w", service, target, err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("flush snapshot archive for %s %s: %w", service, target, err)
-	}
-	return nil
+	return rc, nil
 }
 
 // mountInfo carries the backing-storage details of a resolved container mount,
@@ -163,44 +152,48 @@ func (e *Engine) findServiceMount(ctx context.Context, projectName, service, tar
 	if err != nil {
 		return "", mountInfo{}, fmt.Errorf("list containers for service %q: %w", service, err)
 	}
+	id, mnt, ok := matchMount(containers, target)
+	if !ok {
+		return "", mountInfo{}, fmt.Errorf("no container for service %q in project %q mounts %q (is the project created?)", service, projectName, target)
+	}
+	return id, mnt, nil
+}
+
+// matchMount finds, among containers, the one that mounts target and returns its
+// ID and that mount's backing-storage details. This is the pure decision split
+// out of findServiceMount so it can be tested without a daemon; ok is false when
+// no container mounts target.
+func matchMount(containers []container.Summary, target string) (id string, mnt mountInfo, ok bool) {
 	for _, c := range containers {
 		for _, m := range c.Mounts {
 			if m.Destination == target {
-				return c.ID, mountInfo{Type: string(m.Type), Name: m.Name, Source: m.Source}, nil
+				return c.ID, mountInfo{Type: string(m.Type), Name: m.Name, Source: m.Source}, true
 			}
 		}
 	}
-	return "", mountInfo{}, fmt.Errorf("no container for service %q in project %q mounts %q (is the project created?)", service, projectName, target)
+	return "", mountInfo{}, false
 }
 
-// RestoreMount restores the service mount at target from the tar archive srcTar.
+// WriteMount restores the service mount at target from the tar stream r.
 //
 // It clears the mount's current contents (via wipeMount) and then extracts the
-// archive back into the container, the mirror of ExportMount. Because the
-// archive's top entry is the mount basename, it is extracted into the parent of
-// target so the data lands back exactly at target. Like export, this runs while
-// services are stopped but not removed, so the service container is reused.
-func (e *Engine) RestoreMount(ctx context.Context, projectName, service, target, srcTar string) (err error) {
+// stream back into the container, the mirror of OpenMount. Because the archive's
+// top entry is the mount basename, it is extracted into the parent of target so
+// the data lands back exactly at target. Like export, this runs while services
+// are stopped but not removed, so the service container is reused. The stream is
+// owned by the caller (volume.Copy closes its source); Docker never touches the
+// host filesystem.
+func (e *Engine) WriteMount(ctx context.Context, projectName, service, target string, r io.Reader) error {
 	id, mnt, err := e.findServiceMount(ctx, projectName, service, target)
 	if err != nil {
 		return fmt.Errorf("finding service mounts: %w", err)
 	}
 
-	if err := wipeMount(ctx, mnt); err != nil {
+	if err := wipeMount(ctx, mnt, e.run); err != nil {
 		return fmt.Errorf("clear %s mount %s before restore: %w", service, target, err)
 	}
 
-	f, err := os.Open(srcTar)
-	if err != nil {
-		return fmt.Errorf("open snapshot archive: %w", err)
-	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("close snapshot archive for %s mount %s: %w", service, target, cerr)
-		}
-	}()
-
-	if err := e.cli.CopyToContainer(ctx, id, filepath.Dir(target), f, container.CopyToContainerOptions{}); err != nil {
+	if err := e.cli.CopyToContainer(ctx, id, filepath.Dir(target), r, container.CopyToContainerOptions{}); err != nil {
 		return fmt.Errorf("restore %s mount %s: %w", service, target, err)
 	}
 	return nil
@@ -210,8 +203,9 @@ func (e *Engine) RestoreMount(ctx context.Context, projectName, service, target,
 // throwaway root container that mounts it. This is the only host-agnostic way to
 // delete data the service wrote as root: the daemon owns those files, and
 // CopyToContainer only merges entries, never deletes them. Volumes (named and
-// anonymous) are mounted by volume name; bind mounts by host path.
-func wipeMount(ctx context.Context, mnt mountInfo) error {
+// anonymous) are mounted by volume name; bind mounts by host path. run executes
+// the docker CLI (Engine.run in production, a stub in tests).
+func wipeMount(ctx context.Context, mnt mountInfo, run func(ctx context.Context, args ...string) error) error {
 	var src string
 	switch mnt.Type {
 	case "volume":
@@ -225,6 +219,6 @@ func wipeMount(ctx context.Context, mnt mountInfo) error {
 		return fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
 	}
 	// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
-	return runDocker(ctx, "run", "--rm", "-v", src+":/data", "busybox",
+	return run(ctx, "run", "--rm", "-v", src+":/data", "busybox",
 		"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+")
 }

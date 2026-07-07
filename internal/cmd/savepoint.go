@@ -6,22 +6,24 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/gm-tools/internal/adapter/cli"
+	"github.com/greenmaskio/gm-tools/internal/appconfig"
+	"github.com/greenmaskio/gm-tools/internal/service"
 )
 
-func newSavepointCmd(h *cli.Handlers) *cobra.Command {
+func newSavepointCmd(h *cli.Handlers, res *appconfig.Resolver) *cobra.Command {
 	sp := &cobra.Command{
 		Use:   "savepoint",
 		Short: "Manage environment savepoints",
 	}
 	sp.AddCommand(
-		newSavepointCreateCmd(h),
-		newSavepointListCmd(h),
-		newSavepointRemoveCmd(h),
+		newSavepointCreateCmd(h, res),
+		newSavepointListCmd(h, res),
+		newSavepointRemoveCmd(h, res),
 	)
 	return sp
 }
 
-func newSavepointCreateCmd(h *cli.Handlers) *cobra.Command {
+func newSavepointCreateCmd(h *cli.Handlers, res *appconfig.Resolver) *cobra.Command {
 	var name, description string
 
 	cmd := &cobra.Command{
@@ -35,7 +37,11 @@ func newSavepointCreateCmd(h *cli.Handlers) *cobra.Command {
 				}
 				name = args[0]
 			}
-			return h.SavepointCreate(cmd, name, description)
+			cfg, err := resolveConfig(res)
+			if err != nil {
+				return err
+			}
+			return h.SavepointCreate(cmd.Context(), cfg, name, description)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Savepoint name")
@@ -43,18 +49,21 @@ func newSavepointCreateCmd(h *cli.Handlers) *cobra.Command {
 	return cmd
 }
 
-func newSavepointListCmd(h *cli.Handlers) *cobra.Command {
+func newSavepointListCmd(h *cli.Handlers, res *appconfig.Resolver) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List available savepoints",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return h.SavepointList(cmd)
+			if _, err := resolveConfig(res); err != nil {
+				return err
+			}
+			return h.SavepointList()
 		},
 	}
 }
 
-func newSavepointRemoveCmd(h *cli.Handlers) *cobra.Command {
+func newSavepointRemoveCmd(h *cli.Handlers, res *appconfig.Resolver) *cobra.Command {
 	var (
 		retainRecent int
 		retainFor    string
@@ -67,7 +76,17 @@ func newSavepointRemoveCmd(h *cli.Handlers) *cobra.Command {
 		Short: "Remove savepoints by ID, or by retention rules",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return h.SavepointRemove(cmd, args, retainRecent, retainFor, beforeDate, dryRun)
+			cfg, err := resolveConfig(res)
+			if err != nil {
+				return err
+			}
+			return h.SavepointRemove(cfg, service.RemoveRequest{
+				IDs:          args,
+				RetainRecent: retainRecent,
+				RetainFor:    retainFor,
+				BeforeDate:   beforeDate,
+				DryRun:       dryRun,
+			})
 		},
 	}
 	cmd.Flags().IntVar(&retainRecent, "retain-recent", 0, "Retain the most recent N savepoints")

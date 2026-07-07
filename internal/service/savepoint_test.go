@@ -4,19 +4,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/repository/manifest"
 )
 
-func recordsAt(times ...time.Time) []manifest.Record {
-	records := make([]manifest.Record, len(times))
+func recordsAt(times ...time.Time) []model.SavepointRecord {
+	records := make([]model.SavepointRecord, len(times))
 	for i, t := range times {
-		records[i] = manifest.Record{Savepoint: model.Savepoint{ID: t.Format("20060102T150405"), CreatedAt: t}}
+		records[i] = model.SavepointRecord{Savepoint: model.Savepoint{ID: t.Format("20060102T150405"), CreatedAt: t}}
 	}
 	return records
 }
 
-func ids(records []manifest.Record) []string {
+func ids(records []model.SavepointRecord) []string {
+	if len(records) == 0 {
+		return nil
+	}
 	out := make([]string, len(records))
 	for i, r := range records {
 		out[i] = r.ID
@@ -26,7 +31,7 @@ func ids(records []manifest.Record) []string {
 
 func TestFindSavepoint(t *testing.T) {
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	records := []manifest.Record{
+	records := []model.SavepointRecord{
 		{Savepoint: model.Savepoint{ID: "100", Name: "before-migration", CreatedAt: base}},
 		{Savepoint: model.Savepoint{ID: "300", Name: "dup", CreatedAt: base.Add(2 * time.Hour)}}, // newest
 		{Savepoint: model.Savepoint{ID: "200", Name: "dup", CreatedAt: base.Add(time.Hour)}},
@@ -47,26 +52,25 @@ func TestFindSavepoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Act
 			got, err := findSavepoint(records, tt.ref)
+
+			// Assert
 			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error for ref %q, got record %q", tt.ref, got.ID)
-				}
+				require.Error(t, err)
 				return
 			}
-			if err != nil {
-				t.Fatalf("findSavepoint(%q): %v", tt.ref, err)
-			}
-			if got.ID != tt.wantID {
-				t.Errorf("findSavepoint(%q) = %q, want %q", tt.ref, got.ID, tt.wantID)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantID, got.ID)
 		})
 	}
 
 	t.Run("empty manifest errors", func(t *testing.T) {
-		if _, err := findSavepoint(nil, "latest"); err == nil {
-			t.Fatal("expected error for empty manifest")
-		}
+		// Act
+		_, err := findSavepoint(nil, "latest")
+
+		// Assert
+		require.Error(t, err)
 	})
 }
 
@@ -114,13 +118,12 @@ func TestPartitionSavepoints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Act
 			kept, removed := partitionSavepoints(records, tt.retainRecent, tt.cutoffs)
-			if got := ids(removed); !equal(got, tt.wantRemoved) {
-				t.Errorf("removed = %v, want %v", got, tt.wantRemoved)
-			}
-			if len(kept)+len(removed) != len(records) {
-				t.Errorf("kept(%d) + removed(%d) != total(%d)", len(kept), len(removed), len(records))
-			}
+
+			// Assert
+			assert.Equal(t, tt.wantRemoved, ids(removed))
+			assert.Len(t, kept, len(records)-len(removed), "kept + removed must cover every record")
 		})
 	}
 }
@@ -128,29 +131,32 @@ func TestPartitionSavepoints(t *testing.T) {
 func TestUniqueSavepointID(t *testing.T) {
 	now := time.Unix(1780335122, 0)
 
-	// No collision: the plain Unix second is used.
-	if got := uniqueSavepointID(now, nil); got != "1780335122" {
-		t.Errorf("uniqueSavepointID with no existing = %q, want %q", got, "1780335122")
+	tests := []struct {
+		name     string
+		existing []model.SavepointRecord
+		want     string
+	}{
+		{
+			name: "no collision uses the plain unix second",
+			want: "1780335122",
+		},
+		{
+			name: "collision in the same second bumps forward until free",
+			existing: []model.SavepointRecord{
+				{Savepoint: model.Savepoint{ID: "1780335122"}},
+				{Savepoint: model.Savepoint{ID: "1780335123"}},
+			},
+			want: "1780335124",
+		},
 	}
 
-	// Collision in the same second bumps forward until free.
-	existing := []manifest.Record{
-		{Savepoint: model.Savepoint{ID: "1780335122"}},
-		{Savepoint: model.Savepoint{ID: "1780335123"}},
-	}
-	if got := uniqueSavepointID(now, existing); got != "1780335124" {
-		t.Errorf("uniqueSavepointID with collisions = %q, want %q", got, "1780335124")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := uniqueSavepointID(now, tt.existing)
 
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

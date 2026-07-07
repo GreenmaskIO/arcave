@@ -11,51 +11,64 @@ import (
 
 	"github.com/rs/zerolog"
 	str2duration "github.com/xhit/go-str2duration/v2"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/gm-tools/internal/client/compose"
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
+	"github.com/greenmaskio/gm-tools/internal/config"
 	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/repository/manifest"
 	"github.com/greenmaskio/gm-tools/internal/repository/snapshot"
-	snapcopy "github.com/greenmaskio/gm-tools/internal/repository/snapshot/copy"
+	"github.com/greenmaskio/gm-tools/internal/volume"
 )
 
 // Snapshot while the services are down; whatever happens here, the services
-// must be started again before we return.
-func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, store *snapcopy.Store, sp model.Savepoint, record manifest.Record, mf *manifest.Manifest, eng *docker.Engine) error {
+// must be started again before we return. On success the record (with its
+// volumes filled in) is appended to records and the manifest is persisted; the
+// updated records slice is returned.
+func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, store *snapshot.Snapshot, record model.SavepointRecord, records []model.SavepointRecord, eng volumeEngine) ([]model.SavepointRecord, error) {
 	log := zerolog.Ctx(ctx)
-	for _, m := range insp.Mounts {
-		dest, ref, err := store.Dest(sp.ID, m.Service, m.Target)
-		if err != nil {
-			return fmt.Errorf("getting snapshot destination: %v", err)
-		}
-		log.Info().Str("service", m.Service).Str("mount", m.Target).Msg("snapshotting mount")
-		if err := eng.ExportMount(ctx, insp.ProjectName, m.Service, m.Target, dest); err != nil {
-			return fmt.Errorf("exporting docker mounts/volumes: %v", err)
-		}
-		record.Volumes = append(record.Volumes, snapshot.VolumeRef{
-			Service:   m.Service,
-			MountPath: m.Target,
-			Type:      m.Type,
-			Source:    m.Source,
-			Snapshot:  ref,
+
+	// Snapshot every mount concurrently, bounded like the rollback flows. Each
+	// result lands at its own index so the manifest keeps mount order and the
+	// goroutines never race on the shared slice.
+	volumes := make([]model.VolumeRef, len(insp.Mounts))
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentVolumeOperations)
+	for i, m := range insp.Mounts {
+		g.Go(func() error {
+			w, ref := store.Writer(record.ID, m.Service, m.Target)
+			log.Info().Str("service", m.Service).Str("mount", m.Target).Msg("snapshotting mount")
+			stat, err := volume.Copy(ctx, newEngineReader(eng, insp.ProjectName, m.Service, m.Target), w)
+			if err != nil {
+				return fmt.Errorf("exporting docker mounts/volumes: %w", err)
+			}
+			log.Info().Str("service", m.Service).Str("mount", m.Target).
+				Int64("bytes_stored", stat.BytesStored).Msg("mount snapshotted")
+			volumes[i] = model.VolumeRef{
+				Service:   m.Service,
+				MountPath: m.Target,
+				Type:      m.Type,
+				Source:    m.Source,
+				Snapshot:  ref,
+			}
+			return nil
 		})
 	}
-	mf.Savepoints = append(mf.Savepoints, record)
-	return s.mf.Save(mf)
+	if err := g.Wait(); err != nil {
+		return records, err
+	}
+	record.Volumes = volumes
+
+	records = append(records, record)
+	return records, s.mf.Save(records)
 }
 
 // CreateSavepoint stops the project services, snapshots every persistent mount
 // into a new savepoint, records it in the manifest, and starts the services
 // again. Progress is logged via the logger carried by ctx; the created
 // savepoint metadata is returned.
-func (s *Service) CreateSavepoint(ctx context.Context, name, description string) (_ model.Savepoint, err error) {
+func (s *Service) CreateSavepoint(ctx context.Context, cfg config.Config, name, description string) (_ model.Savepoint, err error) {
 	log := zerolog.Ctx(ctx)
-
-	cfg, err := s.cfg.Load()
-	if err != nil {
-		return model.Savepoint{}, err
-	}
 
 	insp, err := s.compose.Inspect(ctx, cfg.ComposeFiles...)
 	if err != nil {
@@ -70,24 +83,24 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string)
 
 	// Load the manifest before stopping services (so a corrupt index fails
 	// fast) and so the new savepoint gets a non-colliding ID.
-	mf, err := s.mf.Load()
+	records, err := s.mf.Load()
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
 	now := time.Now()
 	sp := model.Savepoint{
-		ID:          uniqueSavepointID(now, mf.Savepoints),
+		ID:          uniqueSavepointID(now, records),
 		Name:        name,
 		Description: description,
 		CreatedAt:   now.UTC(),
 	}
-	record := manifest.Record{Savepoint: sp}
+	record := model.SavepointRecord{Savepoint: sp}
 
-	store := snapcopy.New(s.projectRoot, snapshotsDir(cfg))
+	store := snapshot.New(s.subStorage(snapshotsDir(cfg)))
 
-	dc := docker.NewComposeClient(cfg.ComposeFiles...)
-	eng, err := docker.NewEngine()
+	dc := s.newCompose(cfg.ComposeFiles...)
+	eng, err := s.newEngine()
 	if err != nil {
 		return model.Savepoint{}, err
 	}
@@ -104,10 +117,12 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string)
 
 	// Snapshot while the services are down; whatever happens here, the services
 	// must be started again before we return.
-	snapErr := s.snapshotMount(ctx, insp, store, sp, record, mf, eng)
+	_, snapErr := s.snapshotMount(ctx, insp, store, record, records, eng)
 	if snapErr != nil {
 		// Drop the partial snapshot so it can never be rolled back to.
-		_ = store.Remove(sp.ID)
+		if rmErr := store.Remove(ctx, sp.ID); rmErr != nil {
+			log.Warn().Err(rmErr).Str("savepoint", sp.ID).Msg("failed to remove partial snapshot")
+		}
 	}
 
 	log.Info().Msg("starting services")
@@ -127,11 +142,11 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string)
 
 // ListSavepoints returns every savepoint's metadata in manifest order.
 func (s *Service) ListSavepoints() ([]model.Savepoint, error) {
-	mf, err := s.mf.Load()
+	records, err := s.mf.Load()
 	if err != nil {
 		return nil, fmt.Errorf("loading manifest.json file: %v", err)
 	}
-	return savepointsOf(mf.Savepoints), nil
+	return savepointsOf(records), nil
 }
 
 // RemoveRequest selects savepoints to remove, either by explicit IDs or by
@@ -152,7 +167,7 @@ type RemoveResult struct {
 
 // RemoveSavepoints deletes savepoints selected by req. In retention mode, when
 // several rules are combined a savepoint survives if any rule retains it.
-func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
+func (s *Service) RemoveSavepoints(cfg config.Config, req RemoveRequest) (RemoveResult, error) {
 	hasRetention := req.RetainRecent > 0 || req.RetainFor != "" || req.BeforeDate != ""
 
 	if len(req.IDs) > 0 && hasRetention {
@@ -165,18 +180,14 @@ func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
 		return RemoveResult{}, errors.New("--retain-recent must be zero or positive")
 	}
 
-	cfg, err := s.cfg.Load()
-	if err != nil {
-		return RemoveResult{}, fmt.Errorf("loading docker compose file: %w", err)
-	}
-	mf, err := s.mf.Load()
+	records, err := s.mf.Load()
 	if err != nil {
 		return RemoveResult{}, fmt.Errorf("loading manifest.json file: %w", err)
 	}
 
-	var kept, removed []manifest.Record
+	var kept, removed []model.SavepointRecord
 	if len(req.IDs) > 0 {
-		kept, removed, err = partitionByIDs(mf.Savepoints, req.IDs)
+		kept, removed, err = partitionByIDs(records, req.IDs)
 		if err != nil {
 			return RemoveResult{}, err
 		}
@@ -197,18 +208,21 @@ func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
 			}
 			cutoffs = append(cutoffs, t)
 		}
-		kept, removed = partitionSavepoints(mf.Savepoints, req.RetainRecent, cutoffs)
+		kept, removed = partitionSavepoints(records, req.RetainRecent, cutoffs)
 	}
 
 	if !req.DryRun && len(removed) > 0 {
-		store := snapcopy.New(s.projectRoot, snapshotsDir(cfg))
+		// RemoveSavepoints has no ctx of its own (it is a pure index operation);
+		// the store deletes are quick filesystem calls, so a background context
+		// is sufficient here.
+		ctx := context.Background()
+		store := snapshot.New(s.subStorage(snapshotsDir(cfg)))
 		for _, r := range removed {
-			if err := store.Remove(r.ID); err != nil {
+			if err := store.Remove(ctx, r.ID); err != nil {
 				return RemoveResult{}, fmt.Errorf("remove snapshot %s: %w", r.ID, err)
 			}
 		}
-		mf.Savepoints = kept
-		if err := s.mf.Save(mf); err != nil {
+		if err := s.mf.Save(kept); err != nil {
 			return RemoveResult{}, fmt.Errorf("problem saving manifest.json: %w", err)
 		}
 	}
@@ -221,7 +235,7 @@ func (s *Service) RemoveSavepoints(req RemoveRequest) (RemoveResult, error) {
 // creates in the same second would otherwise share a directory and silently
 // overwrite each other's data; the later one is bumped forward a second at a
 // time until free.
-func uniqueSavepointID(now time.Time, existing []manifest.Record) string {
+func uniqueSavepointID(now time.Time, existing []model.SavepointRecord) string {
 	used := make(map[string]bool, len(existing))
 	for _, r := range existing {
 		used[r.ID] = true
@@ -239,9 +253,9 @@ func uniqueSavepointID(now time.Time, existing []manifest.Record) string {
 // IDs take precedence since they are unique; a name that matches several
 // savepoints is an error rather than a silent guess, since rolling back to the
 // wrong one is destructive.
-func findSavepoint(records []manifest.Record, ref string) (manifest.Record, error) {
+func findSavepoint(records []model.SavepointRecord, ref string) (model.SavepointRecord, error) {
 	if len(records) == 0 {
-		return manifest.Record{}, errors.New("no savepoints exist")
+		return model.SavepointRecord{}, errors.New("no savepoints exist")
 	}
 	if ref == "latest" {
 		latest := records[0]
@@ -257,7 +271,7 @@ func findSavepoint(records []manifest.Record, ref string) (manifest.Record, erro
 			return r, nil
 		}
 	}
-	var byName []manifest.Record
+	var byName []model.SavepointRecord
 	for _, r := range records {
 		if r.Name == ref {
 			byName = append(byName, r)
@@ -265,7 +279,7 @@ func findSavepoint(records []manifest.Record, ref string) (manifest.Record, erro
 	}
 	switch len(byName) {
 	case 0:
-		return manifest.Record{}, fmt.Errorf("savepoint not found: %s", ref)
+		return model.SavepointRecord{}, fmt.Errorf("savepoint not found: %s", ref)
 	case 1:
 		return byName[0], nil
 	default:
@@ -273,14 +287,14 @@ func findSavepoint(records []manifest.Record, ref string) (manifest.Record, erro
 		for i, r := range byName {
 			ids[i] = r.ID
 		}
-		return manifest.Record{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s", len(byName), ref, strings.Join(ids, ", "))
+		return model.SavepointRecord{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s", len(byName), ref, strings.Join(ids, ", "))
 	}
 }
 
 // partitionByIDs splits records into the ones whose ID was requested (removed)
 // and the rest (kept). It errors if any requested ID is not present, so a typo
 // never silently deletes nothing.
-func partitionByIDs(records []manifest.Record, ids []string) (kept, removed []manifest.Record, err error) {
+func partitionByIDs(records []model.SavepointRecord, ids []string) (kept, removed []model.SavepointRecord, err error) {
 	want := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		want[id] = true
@@ -310,11 +324,11 @@ func partitionByIDs(records []manifest.Record, ids []string) (kept, removed []ma
 // remove. A record is removed only when every active rule marks it deletable:
 // it is outside the retainRecent newest (when hasRecent) and older than every
 // cutoff.
-func partitionSavepoints(records []manifest.Record, retainRecent int, cutoffs []time.Time) (kept, removed []manifest.Record) {
+func partitionSavepoints(records []model.SavepointRecord, retainRecent int, cutoffs []time.Time) (kept, removed []model.SavepointRecord) {
 	retainedByRecency := map[string]bool{}
 	hasRecent := retainRecent > 0
 	if hasRecent {
-		byNewest := append([]manifest.Record(nil), records...)
+		byNewest := append([]model.SavepointRecord(nil), records...)
 		sort.Slice(byNewest, func(i, j int) bool {
 			return byNewest[i].CreatedAt.After(byNewest[j].CreatedAt)
 		})
