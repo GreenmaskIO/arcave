@@ -11,6 +11,7 @@ func newInitCmd(h *cli.Handlers) *cobra.Command {
 		name         string
 		composeFiles []string
 		savepointDir string
+		override     bool
 	)
 
 	cmd := &cobra.Command{
@@ -18,7 +19,7 @@ func newInitCmd(h *cli.Handlers) *cobra.Command {
 		Short: "Initialize GM metadata for the current project",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return h.Init(cmd, name, composeFiles, savepointDir)
+			return h.Init(cmd, name, composeFiles, savepointDir, override)
 		},
 	}
 
@@ -28,5 +29,7 @@ func newInitCmd(h *cli.Handlers) *cobra.Command {
 		"Docker Compose file (repeatable)")
 	cmd.Flags().StringVar(&savepointDir, "savepoint-dir", "",
 		"Savepoint backup directory (default: .gm/savepoints/<project_name>)")
+	cmd.Flags().BoolVar(&override, "override", false,
+		"Overwrite an existing GM configuration")
 	return cmd
 }

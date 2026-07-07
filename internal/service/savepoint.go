@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	str2duration "github.com/xhit/go-str2duration/v2"
 
 	"github.com/greenmaskio/gm-tools/internal/client/compose"
@@ -22,13 +22,14 @@ import (
 
 // Snapshot while the services are down; whatever happens here, the services
 // must be started again before we return.
-func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, store *snapcopy.Store, sp model.Savepoint, record manifest.Record, mf *manifest.Manifest, eng *docker.Engine, progress io.Writer) error {
+func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, store *snapcopy.Store, sp model.Savepoint, record manifest.Record, mf *manifest.Manifest, eng *docker.Engine) error {
+	log := zerolog.Ctx(ctx)
 	for _, m := range insp.Mounts {
 		dest, ref, err := store.Dest(sp.ID, m.Service, m.Target)
 		if err != nil {
 			return fmt.Errorf("getting snapshot destination: %v", err)
 		}
-		fmt.Fprintf(progress, "Snapshotting %s:%s...\n", m.Service, m.Target)
+		log.Info().Str("service", m.Service).Str("mount", m.Target).Msg("snapshotting mount")
 		if err := eng.ExportMount(ctx, insp.ProjectName, m.Service, m.Target, dest); err != nil {
 			return fmt.Errorf("exporting docker mounts/volumes: %v", err)
 		}
@@ -46,9 +47,11 @@ func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, st
 
 // CreateSavepoint stops the project services, snapshots every persistent mount
 // into a new savepoint, records it in the manifest, and starts the services
-// again. Human-readable progress is written to progress; the created savepoint
-// metadata is returned.
-func (s *Service) CreateSavepoint(ctx context.Context, name, description string, progress io.Writer) (_ model.Savepoint, err error) {
+// again. Progress is logged via the logger carried by ctx; the created
+// savepoint metadata is returned.
+func (s *Service) CreateSavepoint(ctx context.Context, name, description string) (_ model.Savepoint, err error) {
+	log := zerolog.Ctx(ctx)
+
 	cfg, err := s.cfg.Load()
 	if err != nil {
 		return model.Savepoint{}, err
@@ -59,7 +62,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string,
 		return model.Savepoint{}, err
 	}
 	for _, sk := range insp.Skipped {
-		fmt.Fprintf(progress, "warning: %s: %s will not be backed up\n", sk.Service, sk.Reason)
+		log.Warn().Str("service", sk.Service).Str("reason", sk.Reason).Msg("mount will not be backed up")
 	}
 	if len(insp.Mounts) == 0 {
 		return model.Savepoint{}, errors.New("no stateful mounts found; nothing to snapshot")
@@ -94,20 +97,20 @@ func (s *Service) CreateSavepoint(ctx context.Context, name, description string,
 		}
 	}()
 
-	fmt.Fprintln(progress, "Stopping services...")
+	log.Info().Msg("stopping services")
 	if err := dc.Stop(ctx); err != nil {
 		return model.Savepoint{}, err
 	}
 
 	// Snapshot while the services are down; whatever happens here, the services
 	// must be started again before we return.
-	snapErr := s.snapshotMount(ctx, insp, store, sp, record, mf, eng, progress)
+	snapErr := s.snapshotMount(ctx, insp, store, sp, record, mf, eng)
 	if snapErr != nil {
 		// Drop the partial snapshot so it can never be rolled back to.
 		_ = store.Remove(sp.ID)
 	}
 
-	fmt.Fprintln(progress, "Starting services...")
+	log.Info().Msg("starting services")
 	upErr := dc.Up(ctx, docker.DefaultUpWaitTimeout)
 
 	switch {

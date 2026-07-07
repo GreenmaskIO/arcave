@@ -29,9 +29,19 @@ func New(svc *service.Service) *Handlers {
 	return &Handlers{svc: svc}
 }
 
-// Init initialises the project and prints a human confirmation line.
-func (h *Handlers) Init(cmd *cobra.Command, name string, composeFiles []string, savepointDir string) error {
-	resolvedName, path, err := h.svc.Init(cmd.Context(), name, composeFiles, savepointDir)
+// Init initialises the project and prints a human confirmation line. The log
+// level/format persisted into the config come from the global flags.
+func (h *Handlers) Init(cmd *cobra.Command, name string, composeFiles []string, savepointDir string, override bool) error {
+	logLevel, _ := cmd.Flags().GetString("log-level")
+	logFormat, _ := cmd.Flags().GetString("log-format")
+	resolvedName, path, err := h.svc.Init(cmd.Context(), service.InitRequest{
+		Name:         name,
+		ComposeFiles: composeFiles,
+		SavepointDir: savepointDir,
+		LogLevel:     logLevel,
+		LogFormat:    logFormat,
+		Override:     override,
+	})
 	if err != nil {
 		return err
 	}
@@ -41,9 +51,15 @@ func (h *Handlers) Init(cmd *cobra.Command, name string, composeFiles []string, 
 	return nil
 }
 
+// ConfigLog returns the project's persisted log level and format; ok is false
+// when no config is available yet.
+func (h *Handlers) ConfigLog() (level, format string, ok bool) {
+	return h.svc.ConfigLog()
+}
+
 // SavepointCreate creates a savepoint and prints its metadata as JSON.
 func (h *Handlers) SavepointCreate(cmd *cobra.Command, name, description string) error {
-	sp, err := h.svc.CreateSavepoint(cmd.Context(), name, description, cmd.ErrOrStderr())
+	sp, err := h.svc.CreateSavepoint(cmd.Context(), name, description)
 	if err != nil {
 		return err
 	}
@@ -79,7 +95,7 @@ func (h *Handlers) SavepointRemove(cmd *cobra.Command, ids []string, retainRecen
 
 // Rollback restores a savepoint and prints what was restored.
 func (h *Handlers) Rollback(cmd *cobra.Command, ref string, waitTimeout int) error {
-	res, err := h.svc.Rollback(cmd.Context(), ref, waitTimeout, cmd.ErrOrStderr())
+	res, err := h.svc.Rollback(cmd.Context(), ref, waitTimeout)
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,16 @@ type Config struct {
 	Name         string   `yaml:"name"`
 	ComposeFiles []string `yaml:"compose_files"`
 	SavepointDir string   `yaml:"savepoint_dir"`
+	// Log holds the project's default logging settings, honoured by every
+	// command unless overridden by the --log-level/--log-format global flags.
+	Log Log `yaml:"log,omitempty"`
+}
+
+// Log is the project's default logging configuration, persisted under the "log"
+// key in .gm/config.yaml.
+type Log struct {
+	Level  string `yaml:"level,omitempty"`
+	Format string `yaml:"format,omitempty"`
 }
 
 // Repository reads and writes the config for the project rooted at projectRoot.

@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
 	"github.com/greenmaskio/gm-tools/internal/model"
@@ -33,14 +34,15 @@ type BackupItem struct {
 	Tar     string
 }
 
-func createBackup(currentMounts []model.Mount, backupAbs string, eng *docker.Engine, ctx context.Context, projectName string, progress io.Writer) ([]BackupItem, error) {
+func createBackup(currentMounts []model.Mount, backupAbs string, eng *docker.Engine, ctx context.Context, projectName string) ([]BackupItem, error) {
+	log := zerolog.Ctx(ctx)
 	var backup []BackupItem
 	for _, mt := range currentMounts {
 		tar := filepath.Join(backupAbs, mt.Service, snapcopy.MountDir(mt.Target), backupArchiveName)
 		if err := os.MkdirAll(filepath.Dir(tar), 0o755); err != nil {
 			return nil, fmt.Errorf("create backup directory: %w", err)
 		}
-		fmt.Fprintf(progress, "Backing up %s:%s...\n", mt.Service, mt.Target)
+		log.Info().Str("service", mt.Service).Str("mount", mt.Target).Msg("backing up mount")
 		if err := eng.ExportMount(ctx, projectName, mt.Service, mt.Target, tar); err != nil {
 			return nil, err
 		}
@@ -50,9 +52,10 @@ func createBackup(currentMounts []model.Mount, backupAbs string, eng *docker.Eng
 }
 
 // Restore the savepoint
-func restoreBackup(record manifest.Record, store *snapcopy.Store, eng *docker.Engine, ctx context.Context, projectName string, progress io.Writer) error {
+func restoreBackup(record manifest.Record, store *snapcopy.Store, eng *docker.Engine, ctx context.Context, projectName string) error {
+	log := zerolog.Ctx(ctx)
 	for _, v := range record.Volumes {
-		fmt.Fprintf(progress, "Restoring %s:%s...\n", v.Service, v.MountPath)
+		log.Info().Str("service", v.Service).Str("mount", v.MountPath).Msg("restoring mount")
 		if err := eng.RestoreMount(ctx, projectName, v.Service, v.MountPath, store.Resolve(v.Snapshot)); err != nil {
 			return err
 		}
@@ -65,8 +68,9 @@ func restoreBackup(record manifest.Record, store *snapcopy.Store, eng *docker.En
 // up unhealthy. Containers may be running (started but unhealthy), so they
 // are stopped first — a no-op if the restore never got far enough to start
 // them.
-func revert(backup []BackupItem, backupRel string, dc *docker.ComposeClient, eng *docker.Engine, ctx context.Context, projectName string, waitTimeout int, progress io.Writer, cause error) error {
-	fmt.Fprintf(progress, "Rollback failed: %v\nReverting to the pre-rollback state from %s...\n", cause, backupRel)
+func revert(backup []BackupItem, backupRel string, dc *docker.ComposeClient, eng *docker.Engine, ctx context.Context, projectName string, waitTimeout int, cause error) error {
+	log := zerolog.Ctx(ctx)
+	log.Warn().Err(cause).Str("backup", backupRel).Msg("rollback failed; reverting to the pre-rollback state")
 	if err := dc.Stop(ctx); err != nil {
 		return fmt.Errorf("rollback failed: %w; could not stop services to revert (backup retained at %s): %v", cause, backupRel, err)
 	}
@@ -76,7 +80,7 @@ func revert(backup []BackupItem, backupRel string, dc *docker.ComposeClient, eng
 			revertErr = errors.Join(revertErr, err)
 		}
 	}
-	fmt.Fprintln(progress, "Starting services...")
+	log.Info().Msg("starting services")
 	upErr := dc.Up(ctx, waitTimeout)
 	switch {
 	case revertErr != nil:
@@ -93,8 +97,10 @@ func revert(backup []BackupItem, backupRel string, dc *docker.ComposeClient, eng
 // be undone, wipes and re-extracts each savepoint volume, then restarts the
 // services. If any restore step fails, the pre-rollback backup is replayed to
 // return the environment to where it started. waitTimeout bounds the health
-// check on restart; progress is written to progress.
-func (s *Service) Rollback(ctx context.Context, ref string, waitTimeout int, progress io.Writer) (RollbackResult, error) {
+// check on restart; progress is logged via the logger carried by ctx.
+func (s *Service) Rollback(ctx context.Context, ref string, waitTimeout int) (RollbackResult, error) {
+	log := zerolog.Ctx(ctx)
+
 	cfg, err := s.cfg.Load()
 	if err != nil {
 		return RollbackResult{}, fmt.Errorf("loading gm config file: %w", err)
@@ -132,11 +138,11 @@ func (s *Service) Rollback(ctx context.Context, ref string, waitTimeout int, pro
 
 	defer func() {
 		if err := eng.Close(); err != nil {
-			fmt.Fprintf(progress, "warning: failed to close docker engine: %v\n", err)
+			log.Warn().Err(err).Msg("failed to close docker engine")
 		}
 	}()
 
-	fmt.Fprintln(progress, "Stopping services...")
+	log.Info().Msg("stopping services")
 	if err := dc.Stop(ctx); err != nil {
 		return RollbackResult{}, fmt.Errorf("stopping services: %w", err)
 	}
@@ -144,10 +150,12 @@ func (s *Service) Rollback(ctx context.Context, ref string, waitTimeout int, pro
 	// Safety backup of the current live state, so a failed restore can be undone.
 	backupRel := filepath.Join(".gm", "tmp", "rollback-"+strconv.FormatInt(time.Now().Unix(), 10))
 	backupAbs := s.abs(backupRel)
-	backup, err := createBackup(currentMounts, backupAbs, eng, ctx, projectName, progress)
+	backup, err := createBackup(currentMounts, backupAbs, eng, ctx, projectName)
 	if err != nil {
-		os.RemoveAll(backupAbs)
-		fmt.Fprintln(progress, "Starting services...")
+		if rmErr := os.RemoveAll(backupAbs); rmErr != nil {
+			log.Warn().Err(rmErr).Str("backup", backupRel).Msg("failed to remove incomplete backup")
+		}
+		log.Info().Msg("starting services")
 		if err := dc.Up(ctx, waitTimeout); err != nil {
 			return RollbackResult{}, fmt.Errorf("pre-rollback backup failed: %w; additionally failed to restart services: %v", err, err)
 		}
@@ -155,21 +163,27 @@ func (s *Service) Rollback(ctx context.Context, ref string, waitTimeout int, pro
 	}
 
 	// Restore the savepoint.
-	err = restoreBackup(record, store, eng, ctx, projectName, progress)
+	err = restoreBackup(record, store, eng, ctx, projectName)
 	if err != nil {
-		return RollbackResult{}, revert(backup, backupRel, dc, eng, ctx, projectName, waitTimeout, progress, err)
+		return RollbackResult{}, revert(backup, backupRel, dc, eng, ctx, projectName, waitTimeout, err)
 	}
 
 	// Bring services up and verify health. An unhealthy start (up -d --wait
 	// fails) reverts to the pre-rollback state just like a restore failure.
-	fmt.Fprintln(progress, "Starting services...")
+	log.Info().Msg("starting services")
 	if upErr := dc.Up(ctx, waitTimeout); upErr != nil {
-		return RollbackResult{}, revert(backup, backupRel, dc, eng, ctx, projectName, waitTimeout, progress, fmt.Errorf("services did not become healthy after restore: %w", upErr))
+		return RollbackResult{}, revert(backup, backupRel, dc, eng, ctx, projectName, waitTimeout, fmt.Errorf("services did not become healthy after restore: %w", upErr))
 	}
 
 	// The rollback completed and services are healthy; drop the safety backup.
-	os.RemoveAll(backupAbs)
-	os.Remove(s.abs(filepath.Join(".gm", "tmp"))) // drop the parent if now empty
+	if err := os.RemoveAll(backupAbs); err != nil {
+		log.Warn().Err(err).Str("backup", backupRel).Msg("failed to remove safety backup")
+	}
+	if err := os.Remove(s.abs(filepath.Join(".gm", "tmp"))); err != nil && !os.IsNotExist(err) {
+		// Best-effort: the parent is only removed when empty, so a non-empty
+		// directory (another rollback's backup) is expected and ignored.
+		log.Debug().Err(err).Msg("did not remove .gm/tmp parent directory")
+	}
 
 	restored := make([]model.Mount, 0, len(record.Volumes))
 	for _, v := range record.Volumes {
