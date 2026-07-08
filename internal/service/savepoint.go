@@ -25,7 +25,7 @@ import (
 // must be started again before we return. On success the record (with its
 // volumes filled in) is appended to records and the manifest is persisted; the
 // updated records slice is returned.
-func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, store *snapshot.Snapshot, record model.SavepointRecord, records []model.SavepointRecord, eng volumeEngine) ([]model.SavepointRecord, error) {
+func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, store *snapshot.Snapshot, record model.SavepointRecord, records []model.SavepointRecord, dockerVol dockerVolumeClient) ([]model.SavepointRecord, error) {
 	log := zerolog.Ctx(ctx)
 
 	// Snapshot every mount concurrently, bounded like the rollback flows. Each
@@ -38,12 +38,10 @@ func (s *Service) snapshotMount(ctx context.Context, insp compose.Inspection, st
 		g.Go(func() error {
 			w, ref := store.Writer(record.ID, m.Service, m.Target)
 			log.Info().Str("service", m.Service).Str("mount", m.Target).Msg("snapshotting mount")
-			stat, err := volume.Copy(ctx, newEngineReader(eng, insp.ProjectName, m.Service, m.Target), w)
-			if err != nil {
+			if err := volume.Copy(ctx, newDockerVolumeReader(dockerVol, insp.ProjectName, m.Service, m.Target), w); err != nil {
 				return fmt.Errorf("exporting docker mounts/volumes: %w", err)
 			}
-			log.Info().Str("service", m.Service).Str("mount", m.Target).
-				Int64("bytes_stored", stat.BytesStored).Msg("mount snapshotted")
+			log.Info().Str("service", m.Service).Str("mount", m.Target).Msg("mount snapshotted")
 			volumes[i] = model.VolumeRef{
 				Service:   m.Service,
 				MountPath: m.Target,
@@ -100,12 +98,12 @@ func (s *Service) CreateSavepoint(ctx context.Context, cfg config.Config, name, 
 	store := snapshot.New(s.subStorage(snapshotsDir(cfg)))
 
 	dc := s.newCompose(cfg.ComposeFiles...)
-	eng, err := s.newEngine()
+	dockerVol, err := s.newDockerVolume()
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 	defer func() {
-		if cerr := eng.Close(); cerr != nil && err == nil {
+		if cerr := dockerVol.Close(); cerr != nil && err == nil {
 			err = fmt.Errorf("close docker engine: %w", cerr)
 		}
 	}()
@@ -117,7 +115,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, cfg config.Config, name, 
 
 	// Snapshot while the services are down; whatever happens here, the services
 	// must be started again before we return.
-	_, snapErr := s.snapshotMount(ctx, insp, store, record, records, eng)
+	_, snapErr := s.snapshotMount(ctx, insp, store, record, records, dockerVol)
 	if snapErr != nil {
 		// Drop the partial snapshot so it can never be rolled back to.
 		if rmErr := store.Remove(ctx, sp.ID); rmErr != nil {

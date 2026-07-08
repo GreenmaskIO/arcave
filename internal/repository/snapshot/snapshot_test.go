@@ -46,7 +46,7 @@ func TestWriterProducesKeyAndRef(t *testing.T) {
 
 	// Act
 	w, ref := store.Writer("100", "db", "/export/data")
-	_, err := w.Write(context.Background(), strings.NewReader("payload"))
+	err := w.Write(context.Background(), strings.NewReader("payload"))
 
 	// Assert
 	require.NoError(t, err)
@@ -62,9 +62,7 @@ func TestWriterReaderRoundTrip(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
 	w, ref := store.Writer("100", "db", "/data")
-	stored, err := w.Write(ctx, strings.NewReader("hello"))
-	require.NoError(t, err)
-	require.EqualValues(t, 5, stored)
+	require.NoError(t, w.Write(ctx, strings.NewReader("hello")))
 
 	// Act
 	rc, err := store.Reader(ref).Open(ctx)
@@ -82,8 +80,7 @@ func TestExists(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
 	w, ref := store.Writer("100", "db", "/data")
-	_, err := w.Write(ctx, strings.NewReader("hi"))
-	require.NoError(t, err)
+	require.NoError(t, w.Write(ctx, strings.NewReader("hi")))
 
 	// Act + Assert
 	exists, err := store.Exists(ctx, ref)
@@ -100,8 +97,7 @@ func TestRemove(t *testing.T) {
 	store, root := newStore(t)
 	ctx := context.Background()
 	w, ref := store.Writer("100", "db", "/data")
-	_, err := w.Write(ctx, strings.NewReader("hi"))
-	require.NoError(t, err)
+	require.NoError(t, w.Write(ctx, strings.NewReader("hi")))
 
 	// Act
 	require.NoError(t, store.Remove(ctx, "100"))

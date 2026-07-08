@@ -38,7 +38,7 @@ type BackupItem struct {
 }
 
 func createBackup(
-	ctx context.Context, currentMounts []model.Mount, sess *backup.Session, eng volumeEngine, projectName string,
+	ctx context.Context, currentMounts []model.Mount, sess *backup.Session, dockerVol dockerVolumeClient, projectName string,
 ) ([]BackupItem, error) {
 	log := zerolog.Ctx(ctx)
 
@@ -49,7 +49,7 @@ func createBackup(
 		g.Go(func() error {
 			w, key := sess.Writer(mt.Service, mt.Target)
 			log.Info().Str("service", mt.Service).Str("mount", mt.Target).Msg("backing up mount")
-			if _, err := volume.Copy(ctx, newEngineReader(eng, projectName, mt.Service, mt.Target), w); err != nil {
+			if err := volume.Copy(ctx, newDockerVolumeReader(dockerVol, projectName, mt.Service, mt.Target), w); err != nil {
 				return err
 			}
 			items[i] = BackupItem{Service: mt.Service, Target: mt.Target, Key: key}
@@ -64,7 +64,7 @@ func createBackup(
 
 // Restore the savepoint
 func restoreBackup(
-	ctx context.Context, record model.SavepointRecord, store *snapshot.Snapshot, eng volumeEngine, projectName string,
+	ctx context.Context, record model.SavepointRecord, store *snapshot.Snapshot, dockerVol dockerVolumeClient, projectName string,
 ) error {
 	log := zerolog.Ctx(ctx)
 
@@ -74,8 +74,8 @@ func restoreBackup(
 		g.Go(func() error {
 			log.Info().Str("service", v.Service).Str("mount", v.MountPath).Msg("restoring mount")
 			r := store.Reader(v.Snapshot)
-			w := newEngineWriter(eng, projectName, v.Service, v.MountPath)
-			if _, err := volume.Copy(ctx, r, w); err != nil {
+			w := newDockerVolumeWriter(dockerVol, projectName, v.Service, v.MountPath)
+			if err := volume.Copy(ctx, r, w); err != nil {
 				return err
 			}
 			return nil
@@ -94,7 +94,7 @@ func revert(
 	sess *backup.Session,
 	items []BackupItem,
 	dc composeRunner,
-	eng volumeEngine,
+	dockerVol dockerVolumeClient,
 	projectName string,
 	waitTimeout int,
 	cause error,
@@ -108,8 +108,8 @@ func revert(
 	var revertErr error
 	for _, b := range items {
 		r := sess.Reader(b.Key)
-		w := newEngineWriter(eng, projectName, b.Service, b.Target)
-		if _, err := volume.Copy(ctx, r, w); err != nil {
+		w := newDockerVolumeWriter(dockerVol, projectName, b.Service, b.Target)
+		if err := volume.Copy(ctx, r, w); err != nil {
 			revertErr = errors.Join(revertErr, err)
 		}
 	}
@@ -166,13 +166,13 @@ func (s *Service) Rollback(
 	}
 
 	dc := s.newCompose(cfg.ComposeFiles...)
-	eng, err := s.newEngine()
+	dockerVol, err := s.newDockerVolume()
 	if err != nil {
 		return RollbackResult{}, fmt.Errorf("creating docker engine: %w", err)
 	}
 
 	defer func() {
-		if err := eng.Close(); err != nil {
+		if err := dockerVol.Close(); err != nil {
 			log.Warn().Err(err).Msg("failed to close docker engine")
 		}
 	}()
@@ -184,7 +184,7 @@ func (s *Service) Rollback(
 
 	// Safety backup of the current live state, so a failed restore can be undone.
 	sess := backup.NewSession(s.subStorage(filepath.Join(".gm", "tmp")), strconv.FormatInt(time.Now().Unix(), 10))
-	items, err := createBackup(ctx, currentMounts, sess, eng, projectName)
+	items, err := createBackup(ctx, currentMounts, sess, dockerVol, projectName)
 	if err != nil {
 		if rmErr := sess.Remove(ctx); rmErr != nil {
 			log.Warn().Err(rmErr).Str("backup", sess.RelPath()).Msg("failed to remove incomplete backup")
@@ -197,16 +197,16 @@ func (s *Service) Rollback(
 	}
 
 	// Restore the savepoint.
-	err = restoreBackup(ctx, record, store, eng, projectName)
+	err = restoreBackup(ctx, record, store, dockerVol, projectName)
 	if err != nil {
-		return RollbackResult{}, revert(ctx, sess, items, dc, eng, projectName, waitTimeout, err)
+		return RollbackResult{}, revert(ctx, sess, items, dc, dockerVol, projectName, waitTimeout, err)
 	}
 
 	// Bring services up and verify health. An unhealthy start (up -d --wait
 	// fails) reverts to the pre-rollback state just like a restore failure.
 	log.Info().Msg("starting services")
 	if err := dc.Up(ctx, waitTimeout); err != nil {
-		return RollbackResult{}, revert(ctx, sess, items, dc, eng, projectName, waitTimeout, fmt.Errorf("services did not become healthy after restore: %w", err))
+		return RollbackResult{}, revert(ctx, sess, items, dc, dockerVol, projectName, waitTimeout, fmt.Errorf("services did not become healthy after restore: %w", err))
 	}
 
 	// The rollback completed and services are healthy; drop the safety backup.

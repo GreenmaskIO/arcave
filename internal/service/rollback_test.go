@@ -36,7 +36,7 @@ const (
 type rollbackFixture struct {
 	svc         *Service
 	dc          *mockCompose
-	eng         *mockEngine
+	dockerVol   *mockDockerVolume
 	projectRoot string
 	cfg         config.Config
 }
@@ -70,17 +70,17 @@ func newRollbackFixture(t *testing.T) rollbackFixture {
 	inspector.On("Inspect", mock.Anything, mock.Anything).Return(insp, nil)
 
 	dc := &mockCompose{}
-	eng := &mockEngine{}
-	eng.On("Close").Return(nil)
+	dockerVol := &mockDockerVolume{}
+	dockerVol.On("Close").Return(nil)
 
 	st, err := directory.NewStorage(&directory.Config{Path: projectRoot})
 	require.NoError(t, err)
 
 	svc := New(projectRoot, &mockConfig{}, mf, inspector, st)
 	svc.newCompose = func(files ...string) composeRunner { return dc }
-	svc.newEngine = func() (volumeEngine, error) { return eng, nil }
+	svc.newDockerVolume = func() (dockerVolumeClient, error) { return dockerVol, nil }
 
-	return rollbackFixture{svc: svc, dc: dc, eng: eng, projectRoot: projectRoot, cfg: config.Config{ComposeFiles: []string{"docker-compose.yml"}}}
+	return rollbackFixture{svc: svc, dc: dc, dockerVol: dockerVol, projectRoot: projectRoot, cfg: config.Config{ComposeFiles: []string{"docker-compose.yml"}}}
 }
 
 // backupRetained reports whether a safety-backup directory survived under .gm/tmp.
@@ -97,28 +97,28 @@ func liveStream() io.ReadCloser { return io.NopCloser(strings.NewReader(liveArch
 func TestRollback(t *testing.T) {
 	tests := []struct {
 		name         string
-		wire         func(dc *mockCompose, eng *mockEngine)
+		wire         func(dc *mockCompose, dockerVol *mockDockerVolume)
 		wantErr      string
 		wantRetained bool
 		wantRestored bool
 	}{
 		{
 			name: "happy path restores and drops the backup",
-			wire: func(dc *mockCompose, eng *mockEngine) {
+			wire: func(dc *mockCompose, dockerVol *mockDockerVolume) {
 				dc.On("Stop", mock.Anything).Return(nil).Once()
-				eng.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(liveStream(), nil)
-				eng.On("WriteMount", mock.Anything, "demo", "db", "/data", savepointArchive).Return(nil)
+				dockerVol.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(liveStream(), nil)
+				dockerVol.On("WriteMount", mock.Anything, "demo", "db", "/data", savepointArchive).Return(nil)
 				dc.On("Up", mock.Anything, mock.Anything).Return(nil).Once()
 			},
 			wantRestored: true,
 		},
 		{
 			name: "restore failure reverts to the backup and retains it",
-			wire: func(dc *mockCompose, eng *mockEngine) {
+			wire: func(dc *mockCompose, dockerVol *mockDockerVolume) {
 				dc.On("Stop", mock.Anything).Return(nil)
-				eng.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(liveStream(), nil)
-				eng.On("WriteMount", mock.Anything, "demo", "db", "/data", savepointArchive).Return(errors.New("restore boom"))
-				eng.On("WriteMount", mock.Anything, "demo", "db", "/data", liveArchive).Return(nil)
+				dockerVol.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(liveStream(), nil)
+				dockerVol.On("WriteMount", mock.Anything, "demo", "db", "/data", savepointArchive).Return(errors.New("restore boom"))
+				dockerVol.On("WriteMount", mock.Anything, "demo", "db", "/data", liveArchive).Return(nil)
 				dc.On("Up", mock.Anything, mock.Anything).Return(nil)
 			},
 			wantErr:      "backup retained at",
@@ -126,9 +126,9 @@ func TestRollback(t *testing.T) {
 		},
 		{
 			name: "backup failure changes nothing and restarts services",
-			wire: func(dc *mockCompose, eng *mockEngine) {
+			wire: func(dc *mockCompose, dockerVol *mockDockerVolume) {
 				dc.On("Stop", mock.Anything).Return(nil).Once()
-				eng.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(nil, errors.New("export boom"))
+				dockerVol.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(nil, errors.New("export boom"))
 				dc.On("Up", mock.Anything, mock.Anything).Return(nil).Once()
 			},
 			wantErr:      "nothing changed",
@@ -136,11 +136,11 @@ func TestRollback(t *testing.T) {
 		},
 		{
 			name: "unhealthy start after restore reverts to the backup",
-			wire: func(dc *mockCompose, eng *mockEngine) {
+			wire: func(dc *mockCompose, dockerVol *mockDockerVolume) {
 				dc.On("Stop", mock.Anything).Return(nil)
-				eng.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(liveStream(), nil)
-				eng.On("WriteMount", mock.Anything, "demo", "db", "/data", savepointArchive).Return(nil)
-				eng.On("WriteMount", mock.Anything, "demo", "db", "/data", liveArchive).Return(nil)
+				dockerVol.On("OpenMount", mock.Anything, "demo", "db", "/data").Return(liveStream(), nil)
+				dockerVol.On("WriteMount", mock.Anything, "demo", "db", "/data", savepointArchive).Return(nil)
+				dockerVol.On("WriteMount", mock.Anything, "demo", "db", "/data", liveArchive).Return(nil)
 				dc.On("Up", mock.Anything, mock.Anything).Return(errors.New("unhealthy")).Once()
 				dc.On("Up", mock.Anything, mock.Anything).Return(nil).Once()
 			},
@@ -153,7 +153,7 @@ func TestRollback(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			f := newRollbackFixture(t)
-			tt.wire(f.dc, f.eng)
+			tt.wire(f.dc, f.dockerVol)
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -171,7 +171,7 @@ func TestRollback(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantRetained, backupRetained(t, f.projectRoot))
 			f.dc.AssertExpectations(t)
-			f.eng.AssertExpectations(t)
+			f.dockerVol.AssertExpectations(t)
 		})
 	}
 }

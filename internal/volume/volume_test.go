@@ -48,19 +48,16 @@ type fakeWriter struct {
 	drain    bool // read the stream even when returning writeErr
 }
 
-func (w *fakeWriter) Write(_ context.Context, r io.Reader) (int64, error) {
+func (w *fakeWriter) Write(_ context.Context, r io.Reader) error {
 	if w.writeErr != nil && !w.drain {
-		return 0, w.writeErr
+		return w.writeErr
 	}
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	w.got = string(data)
-	if w.writeErr != nil {
-		return 0, w.writeErr
-	}
-	return int64(len(data)), nil
+	return w.writeErr
 }
 
 func (w *fakeWriter) DebugInfo() map[string]any { return map[string]any{"kind": "fake"} }
@@ -71,16 +68,12 @@ func TestCopy(t *testing.T) {
 		reader      *fakeReader
 		writer      *fakeWriter
 		wantErr     string
-		wantRead    int64
-		wantStored  int64
 		wantContent string
 	}{
 		{
-			name:        "clean copy counts bytes and closes source",
+			name:        "clean copy streams content and closes source",
 			reader:      &fakeReader{data: "hello world"},
 			writer:      &fakeWriter{},
-			wantRead:    11,
-			wantStored:  11,
 			wantContent: "hello world",
 		},
 		{
@@ -106,7 +99,7 @@ func TestCopy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			stat, err := Copy(context.Background(), tt.reader, tt.writer)
+			err := Copy(context.Background(), tt.reader, tt.writer)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -114,8 +107,6 @@ func TestCopy(t *testing.T) {
 				assert.Contains(t, err.Error(), tt.wantErr)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.wantRead, stat.BytesRead)
-				assert.Equal(t, tt.wantStored, stat.BytesStored)
 				assert.Equal(t, tt.wantContent, tt.writer.got)
 			}
 			// The source is always closed once opened, even on a write error.

@@ -14,8 +14,6 @@ import (
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
 	"github.com/greenmaskio/gm-tools/internal/config"
 	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/utils/ioutils"
-	"github.com/greenmaskio/gm-tools/internal/volume"
 )
 
 // configWriter persists the project config. It is used only by Init — the read
@@ -48,16 +46,22 @@ type composeRunner interface {
 	Up(ctx context.Context, waitTimeoutSec int) error
 }
 
-// volumeEngine streams service mount data in and out of containers through the
-// Docker Engine API. OpenMount yields a tar stream of a mount's contents;
-// WriteMount wipes a mount and extracts a tar stream back into it. Both are the
-// low-level halves volume.Copy wires to a store endpoint.
+// dockerVolumeClient moves the data inside a service's Docker volumes (its
+// persistent mounts) in and out of the running container, via the Docker Engine
+// API. A mount is identified by (project, service, target) — the container path
+// the volume or bind is mounted at.
+//
+// OpenMount yields a tar stream of the mount's current contents (the export
+// side); WriteMount wipes the mount and extracts a tar stream back into it (the
+// restore side). These are the low-level halves volume.Copy wires to a store
+// endpoint (dockerVolumeReader / dockerVolumeWriter adapt them to volume.Reader
+// / volume.Writer).
 //
 // Close tears down the Docker daemon connection (the wrapped *client.Client). It
 // is a per-command resource, not a per-copy one: called once via defer in
 // CreateSavepoint/Rollback after every mount is copied. Closing the per-copy
 // source stream is volume.Copy's job, not this method's.
-type volumeEngine interface {
+type dockerVolumeClient interface {
 	OpenMount(ctx context.Context, project, service, target string) (io.ReadCloser, error)
 	WriteMount(ctx context.Context, project, service, target string, r io.Reader) error
 	Close() error
@@ -73,23 +77,23 @@ type Service struct {
 	// store is the single storage backend the snapshot and backup stores are
 	// re-rooted from (via SubStorage); the service sees it only as model.Storager.
 	store model.Storager
-	// newCompose and newEngine construct the per-invocation docker clients.
+	// newCompose and newDockerVolume construct the per-invocation docker clients.
 	// They default to the real docker types; tests replace them with factories
 	// returning doubles so orchestration can be exercised without a daemon.
-	newCompose func(files ...string) composeRunner
-	newEngine  func() (volumeEngine, error)
+	newCompose      func(files ...string) composeRunner
+	newDockerVolume func() (dockerVolumeClient, error)
 }
 
 // New wires a Service for the project rooted at projectRoot.
 func New(projectRoot string, cfg configWriter, mf manifestStore, comp composeInspector, store model.Storager) *Service {
 	return &Service{
-		projectRoot: projectRoot,
-		cfg:         cfg,
-		mf:          mf,
-		compose:     comp,
-		store:       store,
-		newCompose:  func(files ...string) composeRunner { return docker.NewComposeClient(files...) },
-		newEngine:   func() (volumeEngine, error) { return docker.NewEngine() },
+		projectRoot:     projectRoot,
+		cfg:             cfg,
+		mf:              mf,
+		compose:         comp,
+		store:           store,
+		newCompose:      func(files ...string) composeRunner { return docker.NewComposeClient(files...) },
+		newDockerVolume: func() (dockerVolumeClient, error) { return docker.NewEngine() },
 	}
 }
 
@@ -99,62 +103,6 @@ func New(projectRoot string, cfg configWriter, mf manifestStore, comp composeIns
 // absolute path is used verbatim rather than joined onto the project root.
 func (s *Service) subStorage(dir string) model.Storager {
 	return s.store.SubStorage(dir, !filepath.IsAbs(dir))
-}
-
-// engineReader adapts (engine, project, service, target) to a volume.Reader that
-// streams the mount's contents out of its container. It lives here rather than in
-// the docker package to avoid a docker→service import cycle over volume.Reader.
-type engineReader struct {
-	eng     volumeEngine
-	project string
-	service string
-	target  string
-}
-
-// newEngineReader builds a volume.Reader over the given mount.
-func newEngineReader(eng volumeEngine, project, service, target string) engineReader {
-	return engineReader{eng: eng, project: project, service: service, target: target}
-}
-
-// engineWriter adapts the same tuple to a volume.Writer that wipes the mount and
-// extracts a tar stream back into its container.
-type engineWriter struct {
-	eng     volumeEngine
-	project string
-	service string
-	target  string
-}
-
-// newEngineWriter builds a volume.Writer over the given mount.
-func newEngineWriter(eng volumeEngine, project, service, target string) engineWriter {
-	return engineWriter{eng: eng, project: project, service: service, target: target}
-}
-
-var (
-	_ volume.Reader = engineReader{}
-	_ volume.Writer = engineWriter{}
-)
-
-func (r engineReader) Open(ctx context.Context) (io.ReadCloser, error) {
-	return r.eng.OpenMount(ctx, r.project, r.service, r.target)
-}
-
-func (r engineReader) DebugInfo() map[string]any {
-	return map[string]any{"service": r.service, "target": r.target}
-}
-
-func (w engineWriter) Write(ctx context.Context, r io.Reader) (int64, error) {
-	// CopyToContainer reports no byte count, so a counting reader tallies what we
-	// streamed into the container as the stored-bytes figure.
-	counted := ioutils.NewReader(io.NopCloser(r))
-	if err := w.eng.WriteMount(ctx, w.project, w.service, w.target, counted); err != nil {
-		return 0, err
-	}
-	return counted.GetCount(), nil
-}
-
-func (w engineWriter) DebugInfo() map[string]any {
-	return map[string]any{"service": w.service, "target": w.target}
 }
 
 // snapshotsDir returns the directory holding savepoint data, relative to the

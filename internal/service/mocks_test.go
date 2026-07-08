@@ -12,7 +12,7 @@ import (
 )
 
 // The doubles below satisfy the service package's private consumer interfaces
-// (composeInspector, manifestStore, composeRunner, volumeEngine, configWriter).
+// (composeInspector, manifestStore, composeRunner, dockerVolumeClient, configWriter).
 // They live in the service test package because those interfaces are unexported.
 
 type mockManifest struct{ mock.Mock }
@@ -45,11 +45,11 @@ func (m *mockCompose) Up(ctx context.Context, waitTimeoutSec int) error {
 	return m.Called(ctx, waitTimeoutSec).Error(0)
 }
 
-type mockEngine struct{ mock.Mock }
+type mockDockerVolume struct{ mock.Mock }
 
 // OpenMount returns the tar stream configured for the call. The Return value is
 // an io.ReadCloser (or nil alongside an error).
-func (m *mockEngine) OpenMount(ctx context.Context, project, service, target string) (io.ReadCloser, error) {
+func (m *mockDockerVolume) OpenMount(ctx context.Context, project, service, target string) (io.ReadCloser, error) {
 	args := m.Called(ctx, project, service, target)
 	var rc io.ReadCloser
 	if v := args.Get(0); v != nil {
@@ -61,7 +61,7 @@ func (m *mockEngine) OpenMount(ctx context.Context, project, service, target str
 // WriteMount drains r and forwards its content as the fifth expectation argument,
 // so tests distinguish a savepoint restore from a backup revert by the bytes that
 // flow in (which store minted the source stream) rather than by a file path.
-func (m *mockEngine) WriteMount(ctx context.Context, project, service, target string, r io.Reader) error {
+func (m *mockDockerVolume) WriteMount(ctx context.Context, project, service, target string, r io.Reader) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -69,7 +69,7 @@ func (m *mockEngine) WriteMount(ctx context.Context, project, service, target st
 	return m.Called(ctx, project, service, target, string(data)).Error(0)
 }
 
-func (m *mockEngine) Close() error { return m.Called().Error(0) }
+func (m *mockDockerVolume) Close() error { return m.Called().Error(0) }
 
 type mockConfig struct{ mock.Mock }
 

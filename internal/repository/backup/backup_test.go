@@ -65,7 +65,7 @@ func TestSessionWriter(t *testing.T) {
 
 			// Act
 			w, key := sess.Writer(tt.service, tt.mount)
-			_, err := w.Write(context.Background(), strings.NewReader("payload"))
+			err := w.Write(context.Background(), strings.NewReader("payload"))
 
 			// Assert
 			require.NoError(t, err)
@@ -94,12 +94,11 @@ func TestSessionRemove(t *testing.T) {
 			ctx := context.Background()
 			sess := NewSession(st, "100")
 			w, _ := sess.Writer("db", "/data")
-			_, err := w.Write(ctx, strings.NewReader("x"))
+			err := w.Write(ctx, strings.NewReader("x"))
 			require.NoError(t, err)
 			if tt.otherBackup {
 				w2, _ := NewSession(st, "200").Writer("db", "/data")
-				_, err := w2.Write(ctx, strings.NewReader("y"))
-				require.NoError(t, err)
+				require.NoError(t, w2.Write(ctx, strings.NewReader("y")))
 			}
 
 			// Act
