@@ -1,6 +1,6 @@
 // Package config persists GM's per-project configuration to .gm/config.yaml. The
 // configuration value type and its default helpers live in internal/config;
-// reading is handled by internal/appconfig (viper). This package is the sole
+// reading is handled by cmd/gm (viper). This package is the sole
 // writer.
 package config
 

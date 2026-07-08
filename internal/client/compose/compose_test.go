@@ -153,11 +153,11 @@ volumes:
 	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
 
 	// Act
-	insp, err := NewClient().Inspect(context.Background(), path)
+	insp, err := NewInspector().Inspect(context.Background(), path)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, "fixture", insp.ProjectName)
+	assert.Equal(t, "fixture", insp.ComposeProject)
 	assert.ElementsMatch(t, []model.Mount{
 		{Service: "db", Target: "/var/lib/postgresql/data", Type: "volume", Source: "fixture_pgdata"},
 		{Service: "app", Target: "/etc/cfg", Type: "bind", Source: filepath.Join(dir, "cfg")},
@@ -174,7 +174,7 @@ func TestInspectErrorsWithoutServices(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("name: empty\nservices: {}\n"), 0o644))
 
 	// Act
-	_, err := NewClient().Inspect(context.Background(), path)
+	_, err := NewInspector().Inspect(context.Background(), path)
 
 	// Assert
 	require.Error(t, err)

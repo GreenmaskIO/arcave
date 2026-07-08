@@ -1,6 +1,13 @@
-// Package compose wraps the Compose specification SDK
-// (github.com/compose-spec/compose-go) to read and validate Docker Compose
-// projects from one or more configuration files.
+// Package compose reads the compose project's *declared* state: it wraps the
+// Compose specification SDK (github.com/compose-spec/compose-go) to parse,
+// interpolate and validate one or more docker-compose.yml files, and reports the
+// project name plus the persistent mounts GM snapshots.
+//
+// It never contacts the Docker daemon — its only dependency is the compose-go
+// parser — which is why `gm init` (whose whole job is to verify the project
+// loads) runs with docker stopped. Everything that touches the *running* stack
+// lives in internal/client/docker instead: container/volume I/O through the
+// Docker SDK, and the compose lifecycle through the docker CLI.
 package compose
 
 import (
@@ -14,30 +21,28 @@ import (
 	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
-// Inspection is the resolved, GM-relevant view of a compose project: its name
-// and the persistent mounts GM snapshots, plus the mounts it had to skip.
-type Inspection struct {
-	ProjectName string
-	Mounts      []model.Mount
-	Skipped     []model.SkippedMount
-}
+// Inspector answers one question — "what does this compose project declare?" —
+// and answers it from the files alone, with no daemon and no side effects. It is
+// stateless: the compose files are supplied per call, so one instance is shared
+// across invocations.
+type Inspector struct{}
 
-// Client reads and validates compose projects. It is stateless; the compose
-// files are supplied per call.
-type Client struct{}
-
-// NewClient returns a compose client.
-func NewClient() *Client { return &Client{} }
+// NewInspector returns a compose-file inspector.
+func NewInspector() *Inspector { return &Inspector{} }
 
 // Inspect loads the compose project described by files and returns its name and
-// the mounts GM should snapshot. See Load for how files is resolved.
-func (c *Client) Inspect(ctx context.Context, files ...string) (Inspection, error) {
+// the mounts GM should snapshot. See load for how files is resolved.
+func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspection, error) {
 	project, name, err := load(ctx, files...)
 	if err != nil {
-		return Inspection{}, fmt.Errorf("loading docker compose file(s): %w", err)
+		return model.Inspection{}, fmt.Errorf("loading docker compose file(s): %w", err)
 	}
 	mounts, skipped := mountsOf(project)
-	return Inspection{ProjectName: name, Mounts: mounts, Skipped: skipped}, nil
+	return model.Inspection{
+		ComposeProject: name,
+		Mounts:         mounts,
+		Skipped:        skipped,
+	}, nil
 }
 
 // load reads and verifies the Docker Compose project described by files.

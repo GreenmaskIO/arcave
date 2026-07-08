@@ -57,9 +57,9 @@ flowchart TD
     B --> C["Discover registered stateful services"]
     C --> D["Stop Docker Compose services"]
     D --> E["Wait until containers exited"]
-    E --> F["Create snapshot directory"]
+    E --> F["Clear the savepoint namespace"]
     F --> G["Copy volume data"]
-    G --> H["Store savepoint metadata"]
+    G --> H["Commit savepoint.json (written last)"]
     H --> I["Start Docker Compose services"]
     I --> J["Wait for health checks"]
     J --> K["Savepoint ready"]
@@ -73,21 +73,29 @@ gm savepoint create before-migration
 # 1. Stop services
 docker compose stop
 
-# 2. Create snapshot
-mkdir -p .gm/snapshots/before-migration
+# 2. Clear the namespace, dropping anything a crashed run left behind
+rm -rf .gm/savepoints/myapp/1780335122
 
 # 3. Copy registered volumes
-cp -a pgdata .gm/snapshots/before-migration/postgres
-cp -a redisdata .gm/snapshots/before-migration/redis
+cp -a pgdata .gm/savepoints/myapp/1780335122/postgres
+cp -a redisdata .gm/savepoints/myapp/1780335122/redis
 
-# 4. Update manifest
-write manifest.json
+# 4. Commit the savepoint — the record is written LAST
+write .gm/savepoints/myapp/1780335122/savepoint.json
 
 # 5. Start services
 docker compose up -d
 
 # 6. Wait healthy
 ```
+
+The record is the commit marker. A crash before step 4 leaves volume data that no
+record names: `gm savepoint list` skips it, and it is safe to reclaim. There is no
+window in which a savepoint lists without its data.
+
+Removal runs the same steps in reverse, uncommitting first: `savepoint.json` is
+deleted before the namespace it lives in, so the only observable states are
+"fully present" and "gone".
 
 ---
 
@@ -97,7 +105,7 @@ docker compose up -d
 flowchart TD
     A["gm rollback before-migration"]
     A --> B["Load .gm configuration"]
-    B --> C["Find savepoint in manifest"]
+    B --> C["Find savepoint among the committed records"]
     C --> D["Stop Docker Compose services"]
     D --> E["Wait until containers exited"]
     E --> F["Clean registered volumes"]
@@ -203,8 +211,8 @@ and identifies services that may continue writing into stateful systems.
 Checks:
 
 - `.gm` directory exists
-- `config.yaml` exists
-- `manifest.json` exists
+- `config.yaml` exists, and its `version` is one GM speaks
+- the savepoint store is reachable and holds no legacy `manifest.json`
 
 ###### Storage Validation
 
@@ -300,10 +308,46 @@ Result:
 
 ```text
 .gm/
-├── config.yaml
-├── manifest.json
-└── snapshots/
+├── config.yaml                          # written by `gm init`
+├── lock                                 # flock target; serialises mutating workflows
+└── savepoints/<project-name>/           # the savepoint store, created by `gm init`
+    └── <savepoint-id>/                  # one self-contained namespace per savepoint
+        ├── savepoint.json               # the record — written last, the commit marker
+        └── <service>/<mount-path>/data.tar
 ```
+
+Each savepoint is one self-contained directory: its record and every archive it
+names live under the same namespace, so `cp -r <id>/` moves the whole savepoint.
+The record sits at the root of the store's namespace rather than in `.gm/`, so
+pointing `storage.directory.path` at remote storage carries the records along with
+the data they describe.
+
+`config.yaml` is the one file GM reads through the OS rather than through the
+storage backend — it is what says where the storage backend points.
+
+```yaml
+version: 1
+project:
+  name: myapp
+  compose_files: [docker-compose.yml]
+docker:
+  host: unix:///var/run/docker.sock     # "" => read the environment
+storage:
+  type: directory                       # directory | s3 (future)
+  directory: {path: .gm/savepoints/myapp}
+snapshot:
+  backend: fullcopy
+log: {level: info, format: text}
+```
+
+`storage` is a tagged union: `type` names the arm, and that arm must be present.
+Unknown keys are an error, not a value silently ignored. A config file without a
+`version`, or with one GM does not speak, is refused with a message naming
+`gm init --override` as the fix — GM never rewrites it silently, since that would
+clobber a path the user set deliberately.
+
+A savepoint store may not be `/`, a shallow system directory, `$HOME`, or any
+ancestor of the project.
 
 ---
 
@@ -332,7 +376,7 @@ Every savepoint receives a unique immutable identifier — a Unix timestamp inte
 1780335122
 ```
 
-Metadata stored in `manifest.json`:
+Metadata stored in `<savepoint-id>/savepoint.json`:
 
 ```json
 {
@@ -489,9 +533,10 @@ Agent host process
       ▼
   GMService interface
       │
-      ├── internal/snapshot   (savepoint / rollback logic)
-      ├── internal/compose    (docker compose interaction)
-      └── internal/config     (manifest, config.yaml I/O)
+      ├── internal/service/core            (savepoint / rollback logic)
+      ├── internal/client/{compose,docker} (docker compose interaction)
+      └── internal/repository/{savepoint,config}
+                                           (savepoint records, config.yaml I/O)
 ```
 
 ##### Internal Architecture
