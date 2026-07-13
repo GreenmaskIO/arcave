@@ -16,6 +16,11 @@ import (
 	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
+// maxConcurrentSavepointRemovals caps how many savepoints applyRemoval deletes in
+// parallel. The per-mount concurrency of a single snapshot/restore is the
+// backend's concern; this bounds the savepoint-level fan-out only.
+const maxConcurrentSavepointRemovals = 5
+
 // CreateSavepoint stops the project services, snapshots every persistent mount
 // into a new savepoint, commits the savepoint's record, and starts the services
 // again. Progress is logged via the logger carried by ctx; the created
@@ -131,9 +136,8 @@ func (s *Service) snapshotWhileStopped(
 	insp model.Inspection,
 	record model.SavepointRecord,
 ) error {
-	ns := model.SavepointNamespace(record.ID)
-	if err := s.savepointBackend.Remove(ctx, ns); err != nil {
-		return fmt.Errorf("clearing the savepoint namespace: %w", err)
+	if err := s.savepointBackend.Remove(ctx, record.ID); err != nil {
+		return fmt.Errorf("clearing the savepoint directory: %w", err)
 	}
 
 	volumes, err := s.snapshotMounts(ctx, insp, record.ID)
@@ -142,7 +146,7 @@ func (s *Service) snapshotWhileStopped(
 		err = s.savepointRepo.Save(ctx, record)
 	}
 	if err != nil {
-		if rmErr := s.savepointBackend.Remove(ctx, ns); rmErr != nil {
+		if rmErr := s.savepointBackend.Remove(ctx, record.ID); rmErr != nil {
 			zerolog.Ctx(ctx).Warn().Err(rmErr).Str("savepoint", record.ID).Msg("failed to remove partial snapshot")
 		}
 	}
@@ -150,44 +154,28 @@ func (s *Service) snapshotWhileStopped(
 }
 
 // snapshotMounts snapshots every mount of the inspected project into the
-// savepoint's namespace, returning one VolumeRef per mount in mount order.
+// savepoint's directory, returning one VolumeRef per mount in mount order. The
+// backend owns the per-mount fan-out; this only zips the stored sizes back onto
+// the mounts to form the record entries.
 func (s *Service) snapshotMounts(
 	ctx context.Context,
 	insp model.Inspection,
 	savepointID string,
 ) ([]model.VolumeRef, error) {
-	log := zerolog.Ctx(ctx)
-
-	// Snapshot every mount concurrently, bounded like the rollback flows. Each
-	// result lands at its own index so the manifest keeps mount order and the
-	// goroutines never race on the shared slice.
-	volumes := make([]model.VolumeRef, len(insp.Mounts))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrentVolumeOperations)
-	for i, m := range insp.Mounts {
-		g.Go(func() error {
-			log.Info().Str("service", m.Service).Str("mount", m.Target).Msg("snapshotting mount")
-			meta, err := s.savepointBackend.Create(gctx, model.VolumeSnapshotRequest{
-				Namespace:      model.SavepointNamespace(savepointID),
-				ComposeProject: insp.ComposeProject,
-				Volume:         model.VolumeKey{Service: m.Service, MountPath: m.Target},
-			})
-			if err != nil {
-				return fmt.Errorf("exporting docker mounts/volumes: %w", err)
-			}
-			log.Info().Str("service", m.Service).Str("mount", m.Target).Msg("mount snapshotted")
-			volumes[i] = model.VolumeRef{
-				Service:   m.Service,
-				MountPath: m.Target,
-				Type:      m.Type,
-				Source:    m.Source,
-				Snapshot:  meta,
-			}
-			return nil
-		})
+	sizes, err := s.savepointBackend.Snapshot(ctx, savepointID, insp.ComposeProject, insp.Mounts)
+	if err != nil {
+		return nil, fmt.Errorf("exporting docker mounts/volumes: %w", err)
 	}
-	if err := g.Wait(); err != nil {
-		return nil, err
+
+	volumes := make([]model.VolumeRef, len(insp.Mounts))
+	for i, m := range insp.Mounts {
+		volumes[i] = model.VolumeRef{
+			Service:   m.Service,
+			MountPath: m.Target,
+			Type:      m.Type,
+			Source:    m.Source,
+			SizeBytes: sizes[i],
+		}
 	}
 	return volumes, nil
 }
@@ -389,15 +377,14 @@ func partitionSavepoints(
 // retry it. Those namespaces are reported here and reclaimed by a future
 // `gm savepoint gc`.
 func (s *Service) applyRemoval(ctx context.Context, removed []model.SavepointRecord) error {
-	// Delete the savepoints concurrently, bounded like the snapshot flows. This is
-	// a plain errgroup.Group, not WithContext: each removal is independent, and a
-	// cancelled sibling would abort mid-delete and leave a half-deleted namespace.
-	// Wait therefore surfaces only the first failure, so each goroutine also
-	// records its own error at its own index — that is what names the savepoints
-	// whose data survived.
+	// Delete the savepoints concurrently. This is a plain errgroup.Group, not
+	// WithContext: each removal is independent, and a cancelled sibling would abort
+	// mid-delete and leave a half-deleted directory. Wait therefore surfaces only
+	// the first failure, so each goroutine also records its own error at its own
+	// index — that is what names the savepoints whose data survived.
 	errs := make([]error, len(removed))
 	g := new(errgroup.Group)
-	g.SetLimit(maxConcurrentVolumeOperations)
+	g.SetLimit(maxConcurrentSavepointRemovals)
 	for i, r := range removed {
 		g.Go(func() error {
 			errs[i] = s.removeSavepoint(ctx, r.ID)
@@ -411,15 +398,15 @@ func (s *Service) applyRemoval(ctx context.Context, removed []model.SavepointRec
 }
 
 // removeSavepoint deletes one savepoint: the record first, then the data it
-// named. A failure after the record is gone leaves an orphaned namespace, which
+// named. A failure after the record is gone leaves an orphaned directory, which
 // is logged with the id so the user can reclaim the space.
 func (s *Service) removeSavepoint(ctx context.Context, id string) error {
 	if err := s.savepointRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("uncommit savepoint %s: %w", id, err)
 	}
-	if err := s.savepointBackend.Remove(ctx, model.SavepointNamespace(id)); err != nil {
+	if err := s.savepointBackend.Remove(ctx, id); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", id).
-			Msg("savepoint was uncommitted but its data could not be removed; the namespace is orphaned")
+			Msg("savepoint was uncommitted but its data could not be removed; the directory is orphaned")
 		return fmt.Errorf("remove snapshot %s: %w", id, err)
 	}
 	return nil

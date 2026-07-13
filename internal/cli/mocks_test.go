@@ -9,17 +9,28 @@ import (
 	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
-// capturePrinter records everything a handler prints, so a test can assert on
-// the exact value marshalled without inspecting stdout. Its err lets a test
-// simulate a printer failure.
+// capturePrinter is a testify double for the printer seam: a test sets a Print
+// expectation to simulate a printer failure, and reads printed() to assert on
+// the exact value marshalled without inspecting stdout.
 type capturePrinter struct {
-	got []any
-	err error
+	mock.Mock
 }
 
 func (p *capturePrinter) Print(v any) error {
-	p.got = append(p.got, v)
-	return p.err
+	args := p.Called(v)
+	return args.Error(0)
+}
+
+// printed returns every value handed to Print, in call order, so a test can
+// assert on the exact payload marshalled. It is nil when nothing was printed.
+func (p *capturePrinter) printed() []any {
+	var vs []any
+	for _, c := range p.Calls {
+		if c.Method == "Print" {
+			vs = append(vs, c.Arguments[0])
+		}
+	}
+	return vs
 }
 
 // mockService is a testify double satisfying every per-handler service

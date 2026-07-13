@@ -39,13 +39,7 @@ func record(id string) model.SavepointRecord {
 			MountPath: "/var/lib/postgresql/data",
 			Type:      "volume",
 			Source:    "myapp_pgdata",
-			Snapshot: model.VolumeSnapshotMetadata{
-				SnapshotRef: model.SnapshotRef{
-					Backend: "FullCopy",
-					Opaque:  id + "/db/var/lib/postgresql/data/data.tar",
-				},
-				SizeBytes: 4096,
-			},
+			SizeBytes: 4096,
 		}},
 	}
 }

@@ -111,22 +111,24 @@ func (m *mockDockerVolume) WriteMount(ctx context.Context, project, service, tar
 // instead, so the tar round-trip stays covered.
 type mockBackend struct{ mock.Mock }
 
-func (m *mockBackend) Create(ctx context.Context, req model.VolumeSnapshotRequest) (model.VolumeSnapshotMetadata, error) {
-	args := m.Called(ctx, req)
-	return args.Get(0).(model.VolumeSnapshotMetadata), args.Error(1)
+func (m *mockBackend) Snapshot(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) ([]int64, error) {
+	args := m.Called(ctx, savepointID, composeProject, mounts)
+	sizes, _ := args.Get(0).([]int64)
+	return sizes, args.Error(1)
 }
 
-func (m *mockBackend) Restore(ctx context.Context, req model.VolumeRestoreRequest) error {
-	return m.Called(ctx, req).Error(0)
+func (m *mockBackend) Restore(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) error {
+	return m.Called(ctx, savepointID, composeProject, mounts).Error(0)
 }
 
-func (m *mockBackend) Exists(ctx context.Context, ref model.SnapshotRef) (bool, error) {
-	args := m.Called(ctx, ref)
-	return args.Bool(0), args.Error(1)
+func (m *mockBackend) Missing(ctx context.Context, savepointID string, mounts []model.Mount) ([]model.Mount, error) {
+	args := m.Called(ctx, savepointID, mounts)
+	missing, _ := args.Get(0).([]model.Mount)
+	return missing, args.Error(1)
 }
 
-func (m *mockBackend) Remove(ctx context.Context, ns model.Namespace) error {
-	return m.Called(ctx, ns).Error(0)
+func (m *mockBackend) Remove(ctx context.Context, savepointID string) error {
+	return m.Called(ctx, savepointID).Error(0)
 }
 
 type mockConfig struct{ mock.Mock }

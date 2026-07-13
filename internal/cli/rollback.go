@@ -13,10 +13,10 @@ type rollbackService interface {
 
 type RollbackHandler struct {
 	svc     rollbackService
-	printer model.Printer
+	printer printer
 }
 
-func NewRollbackHandler(svc rollbackService, printer model.Printer) *RollbackHandler {
+func NewRollbackHandler(svc rollbackService, printer printer) *RollbackHandler {
 	return &RollbackHandler{
 		svc:     svc,
 		printer: printer,

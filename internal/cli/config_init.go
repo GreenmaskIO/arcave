@@ -1,7 +1,7 @@
 // Package cli adapts GM's services to Cobra commands: each handler invokes a
-// service method and renders the result through a Printer — the model types go
+// service method and renders the result through a printer — the model types go
 // out as JSON (Savepoint for single-savepoint payloads, the response envelopes
-// for multi-part responses). The Printer is injected, so handlers are unit-
+// for multi-part responses). The printer is injected, so handlers are unit-
 // testable without touching stdout. Command definitions and flags live in
 // cmd/gm, which resolves the config and logger before RunE and passes typed
 // arguments here — the handlers know nothing of cobra or viper.
@@ -13,7 +13,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
 type configInitService interface {
@@ -22,10 +21,10 @@ type configInitService interface {
 
 type ConfigInitHandler struct {
 	svc     configInitService
-	printer model.Printer
+	printer printer
 }
 
-func NewConfigInitHandler(svc configInitService, printer model.Printer) *ConfigInitHandler {
+func NewConfigInitHandler(svc configInitService, printer printer) *ConfigInitHandler {
 	return &ConfigInitHandler{svc: svc, printer: printer}
 }
 

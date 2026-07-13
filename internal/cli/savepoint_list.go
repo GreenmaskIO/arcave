@@ -12,10 +12,10 @@ type savepointListService interface {
 
 type SavepointListHandler struct {
 	svc     savepointListService
-	printer model.Printer
+	printer printer
 }
 
-func NewSavepointListHandler(svc savepointListService, printer model.Printer) *SavepointListHandler {
+func NewSavepointListHandler(svc savepointListService, printer printer) *SavepointListHandler {
 	return &SavepointListHandler{
 		svc:     svc,
 		printer: printer,

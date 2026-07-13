@@ -95,11 +95,11 @@ func NewStorage(cfg *Config) (*Storage, error) {
 // resolve turns a store-relative key into an absolute path inside the store, or
 // rejects it. It is a SAFETY GATE, not a convenience: not every key reaching this
 // backend is trusted. A savepoint record (savepoint.json) is a plain file the
-// user owns, and its SnapshotRef.Opaque flows straight into GetObject/DeleteAll
-// with no path check above this layer — checkBackend validates only the backend
-// name, not the path. So a hand-edited "opaque": "../../etc/passwd" (or an id of
-// "" / ".") would otherwise read or delete outside the store. resolve is the one
-// gate every object-addressing method passes through, and it rejects:
+// user owns, and the archive key model.SnapshotKey builds from its fields flows
+// straight into GetObject/DeleteAll with no path check above this layer. So a
+// hand-edited service or mount_path of "../../etc/passwd" (or an id of "" / ".")
+// would otherwise read or delete outside the store. resolve is the one gate every
+// object-addressing method passes through, and it rejects:
 //
 //   - "" and "." — they resolve to the store root, so a DeleteAll would wipe the
 //     whole store rather than one object in it (the original rm -rf-the-store bug);

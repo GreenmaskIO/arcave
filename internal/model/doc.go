@@ -13,12 +13,10 @@
 // one and an adapter matches it with errors.Is, so the error is a contract
 // between them and belongs with the other types they share.
 //
-// The package also owns the only two interfaces that live outside the package
-// consuming them: Storager (storager.go) and Printer (printer.go). Every other
-// seam in GM is declared by its consumer, per dependency inversion. These two
-// cannot be, because each has several consumers *and* a factory that must name
-// it in a signature — storages.New returns a Storager, and cmd/gm's dependencies
-// holds a Printer field. A consumer-declared interface works as a parameter but
-// never as a return type or an exported field, so the contract lives here, where
-// every side already looks.
+// The package also owns the only interface that lives outside the package
+// consuming it: Storager (storager.go). Every other seam in GM is declared by
+// its consumer, per dependency inversion. Storager cannot be, because a factory
+// must name it in a signature — storages.New returns a Storager. A
+// consumer-declared interface works as a parameter but never as a return type,
+// so the contract lives here, where every side already looks.
 package model

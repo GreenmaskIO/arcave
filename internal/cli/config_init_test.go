@@ -62,7 +62,7 @@ func TestConfigInitHandler_Init(t *testing.T) {
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)
-			assert.Empty(t, p.got, "Init must never print")
+			assert.Empty(t, p.printed(), "Init must never print")
 			svc.AssertExpectations(t)
 		})
 	}

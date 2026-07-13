@@ -13,6 +13,7 @@ import (
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
 	"github.com/greenmaskio/gm-tools/internal/config"
 	"github.com/greenmaskio/gm-tools/internal/lock"
+	"github.com/greenmaskio/gm-tools/internal/mcp"
 	"github.com/greenmaskio/gm-tools/internal/model"
 	"github.com/greenmaskio/gm-tools/internal/printer/json"
 	cfgrepo "github.com/greenmaskio/gm-tools/internal/repository/config"
@@ -36,7 +37,8 @@ type dependencies struct {
 	safetyBackupStore model.Storager
 	engine            *docker.Engine
 	service           *core.Service
-	printer           model.Printer
+	printer           *json.Printer
+	mcp               *mcp.Server
 }
 
 // initAllDependencies wires the savepoint workflows for the project rooted at
@@ -102,6 +104,7 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		engine:            engine,
 		service:           svc,
 		printer:           json.New(os.Stdout),
+		mcp:               mcp.New(svc),
 	}, nil
 }
 
@@ -118,7 +121,7 @@ func (d *dependencies) Close(ctx context.Context) error {
 // backend, nor the Docker engine — only somewhere to write the config and a
 // compose project to verify. Nothing here holds a resource, so there is nothing
 // to close.
-func initServiceDeps(projectPath string) (*core.InitService, model.Printer) {
+func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
 	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), compose.NewInspector())
 	return svc, json.New(os.Stdout)
 }

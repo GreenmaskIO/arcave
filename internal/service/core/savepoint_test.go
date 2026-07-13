@@ -206,7 +206,7 @@ func TestService_RemoveSavepoints(t *testing.T) {
 			for _, id := range []string{"1", "2"} {
 				repo.On("Delete", id).Return(tt.deleteErr[id])
 				if slices.Contains(tt.wantDataRemoved, id) {
-					savepointBackend.On("Remove", mock.Anything, model.SavepointNamespace(id)).Return(tt.removeErr[id])
+					savepointBackend.On("Remove", mock.Anything, id).Return(tt.removeErr[id])
 				}
 			}
 			// Removal touches only the repository and the savepoint backend; the
@@ -229,7 +229,7 @@ func TestService_RemoveSavepoints(t *testing.T) {
 			// still names data that is still there, so the savepoint is intact.
 			for _, id := range []string{"1", "2"} {
 				if !slices.Contains(tt.wantDataRemoved, id) {
-					savepointBackend.AssertNotCalled(t, "Remove", mock.Anything, model.SavepointNamespace(id))
+					savepointBackend.AssertNotCalled(t, "Remove", mock.Anything, id)
 				}
 			}
 			savepointBackend.AssertExpectations(t)
@@ -253,7 +253,7 @@ func TestService_RemoveSavepoints_UncommitsBeforeDeletingData(t *testing.T) {
 	repo.On("Delete", "1").Run(func(mock.Arguments) { calls = append(calls, "uncommit") }).Return(nil)
 
 	savepointBackend := &mockBackend{}
-	savepointBackend.On("Remove", mock.Anything, model.SavepointNamespace("1")).
+	savepointBackend.On("Remove", mock.Anything, "1").
 		Run(func(mock.Arguments) { calls = append(calls, "remove data") }).Return(nil)
 
 	svc := New(repo, freeLocker(), nil, nil, savepointBackend, nil)
@@ -275,7 +275,7 @@ type createFixture struct {
 	backend  *mockBackend
 	runner   *mockComposeRunner
 	calls    *[]string // every backend/repo call, in the order it happened
-	savepnts model.Namespace
+	savepnts string    // the savepoint id (and its storage directory)
 }
 
 func newCreateFixture(t *testing.T) createFixture {
@@ -283,7 +283,6 @@ func newCreateFixture(t *testing.T) createFixture {
 
 	var calls []string
 	id := strconv.FormatInt(fixedNow.Unix(), 10)
-	ns := model.SavepointNamespace(id)
 
 	// No List expectation: create mints its id from the clock alone and never
 	// reads the store — see uniqueSavepointID.
@@ -300,13 +299,13 @@ func newCreateFixture(t *testing.T) createFixture {
 	runner.On("Up", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	backend := &mockBackend{}
-	backend.On("Remove", mock.Anything, ns).
-		Run(func(mock.Arguments) { calls = append(calls, "wipe namespace") }).Return(nil)
+	backend.On("Remove", mock.Anything, id).
+		Run(func(mock.Arguments) { calls = append(calls, "wipe directory") }).Return(nil)
 
 	svc := New(repo, freeLocker(), inspector, runner, backend, nil)
 	svc.now = func() time.Time { return fixedNow }
 
-	return createFixture{svc: svc, repo: repo, backend: backend, runner: runner, calls: &calls, savepnts: ns}
+	return createFixture{svc: svc, repo: repo, backend: backend, runner: runner, calls: &calls, savepnts: id}
 }
 
 // TestService_CreateSavepoint pins the ordering that makes the record a commit
@@ -316,11 +315,9 @@ func newCreateFixture(t *testing.T) createFixture {
 func TestService_CreateSavepoint(t *testing.T) {
 	// Arrange
 	f := newCreateFixture(t)
-	f.backend.On("Create", mock.Anything, mock.Anything).
-		Run(func(mock.Arguments) { *f.calls = append(*f.calls, "write archive") }).
-		Return(model.VolumeSnapshotMetadata{
-			SnapshotRef: model.SnapshotRef{Backend: "FullCopy", Opaque: "x/data.tar"},
-		}, nil)
+	f.backend.On("Snapshot", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { *f.calls = append(*f.calls, "write archives") }).
+		Return([]int64{4096}, nil)
 	f.repo.On("Save", mock.Anything).
 		Run(func(mock.Arguments) { *f.calls = append(*f.calls, "commit record") }).Return(nil)
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -331,17 +328,17 @@ func TestService_CreateSavepoint(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, strconv.FormatInt(fixedNow.Unix(), 10), sp.ID)
-	assert.Equal(t, []string{"wipe namespace", "write archive", "commit record"}, *f.calls)
+	assert.Equal(t, []string{"wipe directory", "write archives", "commit record"}, *f.calls)
 	f.backend.AssertExpectations(t)
 	f.repo.AssertExpectations(t)
 }
 
-// A snapshot that fails partway leaves half-written archives no ref names yet, so
-// the whole namespace is dropped — the only thing that can clean them up.
+// A snapshot that fails partway leaves half-written archives no record names yet,
+// so the whole directory is dropped — the only thing that can clean them up.
 func TestService_CreateSavepoint_DropsTheNamespaceOnFailure(t *testing.T) {
 	tests := []struct {
 		name       string
-		createErr  error // backend.Create fails: a mount could not be exported
+		createErr  error // backend.Snapshot fails: a mount could not be exported
 		saveErr    error // repo.Save fails: the commit could not be written
 		wantErrMsg string
 	}{
@@ -353,8 +350,12 @@ func TestService_CreateSavepoint_DropsTheNamespaceOnFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			f := newCreateFixture(t)
-			f.backend.On("Create", mock.Anything, mock.Anything).
-				Return(model.VolumeSnapshotMetadata{}, tt.createErr)
+			var sizes []int64
+			if tt.createErr == nil {
+				sizes = []int64{4096} // one size per inspected mount
+			}
+			f.backend.On("Snapshot", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(sizes, tt.createErr)
 			if tt.createErr == nil {
 				f.repo.On("Save", mock.Anything).Return(tt.saveErr)
 			}

@@ -15,10 +15,10 @@ type savepointRemoveService interface {
 // renders their results.
 type SavepointRemoveHandler struct {
 	svc     savepointRemoveService
-	printer model.Printer
+	printer printer
 }
 
-func NewSavepointRemoveHandler(svc savepointRemoveService, printer model.Printer) *SavepointRemoveHandler {
+func NewSavepointRemoveHandler(svc savepointRemoveService, printer printer) *SavepointRemoveHandler {
 	return &SavepointRemoveHandler{
 		svc:     svc,
 		printer: printer,

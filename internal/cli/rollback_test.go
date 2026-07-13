@@ -94,7 +94,8 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			p := &capturePrinter{err: tt.printerErr}
+			p := &capturePrinter{}
+			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
 			svc := &mockService{}
 			svc.On("Rollback", mock.Anything, wantReq).Return(tt.res, tt.svcErr)
 			h := NewRollbackHandler(svc, p)
@@ -104,7 +105,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)
-			assert.Equal(t, tt.wantPrinted, p.got)
+			assert.Equal(t, tt.wantPrinted, p.printed())
 			svc.AssertExpectations(t)
 		})
 	}

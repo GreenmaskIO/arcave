@@ -32,15 +32,17 @@ const (
 )
 
 // The stores the two backends are bound to, and the fixed clock the safety
-// backup's id is minted from — so its namespace is an exact path, not a glob.
+// backup's id is minted from — so its directory is an exact path, not a glob.
 const (
 	savepointDir = ".gm/savepoints/demo"
 	tmpDir       = ".gm/tmp"
 )
 
 var (
-	fixedNow            = time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
-	wantSafetyBackupDir = model.SafetyBackupNamespace(strconv.FormatInt(fixedNow.Unix(), 10)).String()
+	fixedNow = time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	// The safety backup lives in its own store (.gm/tmp), so its directory is the
+	// bare id — no "rollback-" prefix to distinguish it from a savepoint.
+	wantSafetyBackupDir = strconv.FormatInt(fixedNow.Unix(), 10)
 )
 
 // rollbackFixture wires a Service with mock docker clients over a temp project
@@ -69,9 +71,6 @@ func newRollbackFixture(t *testing.T) rollbackFixture {
 		Savepoint: model.Savepoint{ID: "100", Name: "sp", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		Volumes: []model.VolumeRef{{
 			Service: "db", MountPath: "/data", Type: "volume", Source: "demo_db",
-			Snapshot: model.VolumeSnapshotMetadata{
-				SnapshotRef: model.SnapshotRef{Backend: snapshot.BackendNameFullCopy, Opaque: snapshotKey},
-			},
 		}},
 	}
 	insp := model.Inspection{
@@ -101,7 +100,7 @@ func newRollbackFixture(t *testing.T) rollbackFixture {
 		snapshot.NewCopyBackend(dockerVol, savepointStore),
 		snapshot.NewCopyBackend(dockerVol, safetyBackupStore),
 	)
-	// Fix the clock so the safety backup's "rollback-<ts>" namespace is an exact
+	// Fix the clock so the safety backup's directory (its bare id) is an exact
 	// path rather than a glob.
 	svc.now = func() time.Time { return fixedNow }
 
@@ -109,7 +108,7 @@ func newRollbackFixture(t *testing.T) rollbackFixture {
 }
 
 // safetyBackupRetained reports whether the safety backup survived. The clock is
-// fixed, so its namespace is known exactly.
+// fixed, so its directory is known exactly.
 func safetyBackupRetained(t *testing.T, projectRoot string) bool {
 	t.Helper()
 	_, err := os.Stat(filepath.Join(projectRoot, filepath.FromSlash(tmpDir), wantSafetyBackupDir))
@@ -154,7 +153,7 @@ func TestRollback(t *testing.T) {
 				dockerVol.On("WriteMount", mock.Anything, "demo", "db", "/data", liveArchive).Return(nil)
 				dc.On("Up", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			},
-			wantErr:      "rollback failed: write docker mount: restore boom",
+			wantErr:      "rollback failed: restore db /data: write docker mount: restore boom",
 			wantRetained: true,
 		},
 		{

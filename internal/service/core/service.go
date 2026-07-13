@@ -64,26 +64,29 @@ type composeRunner interface {
 	Up(ctx context.Context, waitTimeoutSec int, files ...string) error
 }
 
-// snapshotBackend snapshots one volume's data into storage and restores it back.
-// It runs the WHOLE cycle itself — it holds the Docker engine and the Storager
-// of the store it owns, opens the mount, writes storage, and on restore reads
-// storage and writes the mount — so the service only hands it the volume's
-// coordinates and a namespace. An implementation may chunk/dedup the stream
-// mid-flight and persist only what is new. Create returns the metadata to record
-// in the savepoint record (the ref plus stored size), computed from the write result.
+// snapshotBackend stores and restores a whole savepoint's volume data as a unit.
+// Every method is savepoint-scoped, because that is how every caller uses it: the
+// backend owns the per-mount fan-out (the concurrency bound, the Docker I/O),
+// which is why the service never writes an errgroup over volumes itself. It holds
+// the Docker engine and the Storager of the store it owns and never speaks of
+// paths — the archive key is derived from the savepoint id and each mount via
+// model.SnapshotKey, identically on both sides.
 //
 // A backend is bound to one store at construction, so the service holds two of
-// them — one over the savepoint directory, one over the safety-backup directory
-// — and never speaks of paths.
+// them — one over the savepoint directory, one over the safety-backup directory.
 type snapshotBackend interface {
-	Create(ctx context.Context, req model.VolumeSnapshotRequest) (model.VolumeSnapshotMetadata, error)
-	Restore(ctx context.Context, req model.VolumeRestoreRequest) error
-	Exists(ctx context.Context, ref model.SnapshotRef) (bool, error)
-	// Remove drops a whole namespace — a savepoint's, or a safety backup's. It
-	// must succeed on a partially written namespace, whose refs the caller never
-	// saw. The Namespace value carries its own kind, so the call site says which
-	// of the two it is dropping.
-	Remove(ctx context.Context, ns model.Namespace) error
+	// Snapshot captures every mount into the savepoint's directory, returning the
+	// bytes stored per mount in the same order as mounts.
+	Snapshot(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) (sizes []int64, err error)
+	// Restore streams every mount back into its Docker mount.
+	Restore(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) error
+	// Missing reports the mounts whose archive is absent (pre-flight).
+	Missing(ctx context.Context, savepointID string, mounts []model.Mount) ([]model.Mount, error)
+	// Remove drops a whole savepoint directory — a savepoint's, or a safety
+	// backup's. It must succeed on a partially written directory, whose archives
+	// the caller never recorded. Being savepoint-scoped is what lets it clean up a
+	// snapshot that failed mid-fan-out; the id names which one is dropped.
+	Remove(ctx context.Context, savepointID string) error
 }
 
 // Service orchestrates GM's workflows. It is constructed once at the DI root

@@ -84,7 +84,8 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			p := &capturePrinter{err: tt.printerErr}
+			p := &capturePrinter{}
+			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
 			svc := &mockService{}
 			svc.On("RemoveSavepoints", mock.Anything, req).Return(tt.res, tt.svcErr)
 			h := NewSavepointRemoveHandler(svc, p)
@@ -99,7 +100,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 				require.Error(t, err)
 				assert.Equal(t, tt.wantErrMsg, err.Error())
 			}
-			assert.Equal(t, tt.wantPrinted, p.got)
+			assert.Equal(t, tt.wantPrinted, p.printed())
 			svc.AssertExpectations(t)
 		})
 	}

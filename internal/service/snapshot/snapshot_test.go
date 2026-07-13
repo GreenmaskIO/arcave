@@ -31,7 +31,7 @@ func newStore(t *testing.T) (model.Storager, string) {
 }
 
 // fakeDockerVolume stands in for the Docker engine: OpenMount hands out a fixed
-// payload as the mount's tar stream, and WriteMount captures whatever is
+// payload as every mount's tar stream, and WriteMount captures whatever is
 // extracted back. Errors let a test drive the failure paths.
 type fakeDockerVolume struct {
 	payload  string
@@ -55,63 +55,60 @@ func (f *fakeDockerVolume) WriteMount(ctx context.Context, project, service, tar
 	return err
 }
 
-func TestMountDir(t *testing.T) {
-	tests := []struct {
-		name  string
-		mount string
-		want  string
-	}{
-		{name: "single segment", mount: "/data", want: "data"},
-		{name: "nested path stays nested", mount: "/export/data", want: "export/data"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, MountDir(tt.mount))
-		})
-	}
-}
-
-func TestCopyBackend_Create(t *testing.T) {
+func TestCopyBackend_Snapshot(t *testing.T) {
 	// Arrange
 	st, root := newStore(t)
 	docker := &fakeDockerVolume{payload: "payload"}
 	backend := NewCopyBackend(docker, st)
+	mounts := []model.Mount{
+		{Service: "db", Target: "/export/data"},
+		{Service: "cache", Target: "/data"},
+	}
 
 	// Act
-	meta, err := backend.Create(context.Background(), model.VolumeSnapshotRequest{
-		Namespace:      model.SavepointNamespace("100"),
-		ComposeProject: "demo",
-		Volume:         model.VolumeKey{Service: "db", MountPath: "/export/data"},
-	})
+	sizes, err := backend.Snapshot(context.Background(), "100", "demo", mounts)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, BackendNameFullCopy, meta.Backend)
-	assert.Equal(t, "100/db/export/data/data.tar", meta.Opaque)
-	assert.EqualValues(t, len("payload"), meta.SizeBytes)
-	// Opaque is relative to the store the backend is bound to.
-	data, readErr := os.ReadFile(filepath.Join(root, snapshotsDir, filepath.FromSlash(meta.Opaque)))
-	require.NoError(t, readErr)
-	assert.Equal(t, "payload", string(data))
+	require.Len(t, sizes, 2)
+	assert.EqualValues(t, len("payload"), sizes[0])
+	assert.EqualValues(t, len("payload"), sizes[1])
+	// Each archive lands at its explicit, recomputable key relative to the store.
+	for _, m := range mounts {
+		key := model.SnapshotKey("100", m.Service, m.Target)
+		data, readErr := os.ReadFile(filepath.Join(root, snapshotsDir, filepath.FromSlash(key)))
+		require.NoError(t, readErr, key)
+		assert.Equal(t, "payload", string(data))
+	}
+	assert.Equal(t, "100/db/export/data/data.tar", model.SnapshotKey("100", "db", "/export/data"))
 }
 
-func TestCopyBackend_Create_OpenError(t *testing.T) {
+func TestCopyBackend_Snapshot_OpenError(t *testing.T) {
 	// Arrange
 	st, _ := newStore(t)
 	docker := &fakeDockerVolume{openErr: errors.New("export boom")}
 	backend := NewCopyBackend(docker, st)
 
 	// Act
-	_, err := backend.Create(context.Background(), model.VolumeSnapshotRequest{
-		Namespace:      model.SavepointNamespace("100"),
-		ComposeProject: "demo",
-		Volume:         model.VolumeKey{Service: "db", MountPath: "/data"},
-	})
+	_, err := backend.Snapshot(context.Background(), "100", "demo", []model.Mount{{Service: "db", Target: "/data"}})
 
 	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "export boom")
+}
+
+// Snapshot is the destructive-key producer, so a savepoint id that never was a
+// Unix timestamp must be refused before it is rendered into a storage key.
+func TestCopyBackend_Snapshot_RejectsInvalidSavepointID(t *testing.T) {
+	// Arrange
+	st, _ := newStore(t)
+	backend := NewCopyBackend(&fakeDockerVolume{payload: "hi"}, st)
+
+	// Act
+	_, err := backend.Snapshot(context.Background(), "../..", "demo", []model.Mount{{Service: "db", Target: "/data"}})
+
+	// Assert
+	require.Error(t, err)
 }
 
 func TestCopyBackend_Restore(t *testing.T) {
@@ -120,72 +117,35 @@ func TestCopyBackend_Restore(t *testing.T) {
 	ctx := context.Background()
 	docker := &fakeDockerVolume{payload: "hello"}
 	backend := NewCopyBackend(docker, st)
-	meta, err := backend.Create(ctx, model.VolumeSnapshotRequest{
-		Namespace:      model.SavepointNamespace("100"),
-		ComposeProject: "demo",
-		Volume:         model.VolumeKey{Service: "db", MountPath: "/data"},
-	})
+	mounts := []model.Mount{{Service: "db", Target: "/data"}}
+	_, err := backend.Snapshot(ctx, "100", "demo", mounts)
 	require.NoError(t, err)
 
 	// Act
-	err = backend.Restore(ctx, model.VolumeRestoreRequest{
-		ComposeProject: "demo",
-		Volume:         model.VolumeKey{Service: "db", MountPath: "/data"},
-		Snapshot:       meta.SnapshotRef,
-	})
+	err = backend.Restore(ctx, "100", "demo", mounts)
 
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "hello", docker.written.String())
 }
 
-// A ref minted by another backend carries an Opaque this one cannot interpret,
-// so Restore and Exists must refuse it rather than silently reading whatever
-// path the string happens to name.
-func TestCopyBackend_ForeignRef(t *testing.T) {
-	// Arrange
-	st, _ := newStore(t)
-	ctx := context.Background()
-	docker := &fakeDockerVolume{payload: "hi"}
-	backend := NewCopyBackend(docker, st)
-	foreign := model.SnapshotRef{Backend: "btrfs", Opaque: "some-subvol-uuid"}
-
-	// Act
-	restoreErr := backend.Restore(ctx, model.VolumeRestoreRequest{
-		ComposeProject: "demo",
-		Volume:         model.VolumeKey{Service: "db", MountPath: "/data"},
-		Snapshot:       foreign,
-	})
-	_, existsErr := backend.Exists(ctx, foreign)
-
-	// Assert
-	require.Error(t, restoreErr)
-	assert.Contains(t, restoreErr.Error(), `created by backend "btrfs"`)
-	require.Error(t, existsErr)
-	assert.Contains(t, existsErr.Error(), `created by backend "btrfs"`)
-	assert.Empty(t, docker.written.String(), "a foreign ref must never reach the mount")
-}
-
-func TestCopyBackend_Exists(t *testing.T) {
+func TestCopyBackend_Missing(t *testing.T) {
 	// Arrange
 	st, _ := newStore(t)
 	ctx := context.Background()
 	backend := NewCopyBackend(&fakeDockerVolume{payload: "hi"}, st)
-	meta, err := backend.Create(ctx, model.VolumeSnapshotRequest{
-		Namespace:      model.SavepointNamespace("100"),
-		ComposeProject: "demo",
-		Volume:         model.VolumeKey{Service: "db", MountPath: "/data"},
-	})
+	present := model.Mount{Service: "db", Target: "/data"}
+	absent := model.Mount{Service: "cache", Target: "/var"}
+	_, err := backend.Snapshot(ctx, "100", "demo", []model.Mount{present})
 	require.NoError(t, err)
 
-	// Act + Assert
-	exists, err := backend.Exists(ctx, meta.SnapshotRef)
-	require.NoError(t, err)
-	assert.True(t, exists)
+	// Act
+	missing, err := backend.Missing(ctx, "100", []model.Mount{present, absent})
 
-	missing, err := backend.Exists(ctx, model.SnapshotRef{Backend: BackendNameFullCopy, Opaque: "999/db/data/data.tar"})
+	// Assert
 	require.NoError(t, err)
-	assert.False(t, missing)
+	require.Len(t, missing, 1)
+	assert.Equal(t, absent, missing[0])
 }
 
 func TestCopyBackend_Remove(t *testing.T) {
@@ -193,38 +153,35 @@ func TestCopyBackend_Remove(t *testing.T) {
 	st, root := newStore(t)
 	ctx := context.Background()
 	backend := NewCopyBackend(&fakeDockerVolume{payload: "hi"}, st)
-	meta, err := backend.Create(ctx, model.VolumeSnapshotRequest{
-		Namespace:      model.SavepointNamespace("100"),
-		ComposeProject: "demo",
-		Volume:         model.VolumeKey{Service: "db", MountPath: "/data"},
-	})
+	mounts := []model.Mount{{Service: "db", Target: "/data"}}
+	_, err := backend.Snapshot(ctx, "100", "demo", mounts)
 	require.NoError(t, err)
 
 	// Act
-	require.NoError(t, backend.Remove(ctx, model.SavepointNamespace("100")))
+	require.NoError(t, backend.Remove(ctx, "100"))
 
 	// Assert
 	_, statErr := os.Stat(filepath.Join(root, snapshotsDir, "100"))
-	assert.True(t, os.IsNotExist(statErr), "savepoint namespace must be gone")
-	exists, err := backend.Exists(ctx, meta.SnapshotRef)
+	assert.True(t, os.IsNotExist(statErr), "savepoint directory must be gone")
+	missing, err := backend.Missing(ctx, "100", mounts)
 	require.NoError(t, err)
-	assert.False(t, exists)
+	assert.Len(t, missing, 1)
 
-	// Remove of an already-absent namespace is a no-op, not an error.
-	assert.NoError(t, backend.Remove(ctx, model.SavepointNamespace("100")))
+	// Remove of an already-absent directory is a no-op, not an error.
+	assert.NoError(t, backend.Remove(ctx, "100"))
 }
 
 // Remove is the destructive call, so an id that never was a Unix timestamp must
-// be refused before it is rendered into a storage key — the store must survive a
-// namespace hand-planted in a record.
-func TestCopyBackend_Remove_RejectsInvalidNamespace(t *testing.T) {
+// be refused before it is rendered into a storage key — the store must survive an
+// id hand-planted in a record.
+func TestCopyBackend_Remove_RejectsInvalidSavepointID(t *testing.T) {
 	tests := []struct {
-		name string
-		ns   model.Namespace
+		name        string
+		savepointID string
 	}{
-		{name: "empty id names the store root", ns: model.SavepointNamespace("")},
-		{name: "traversal escapes the store", ns: model.SavepointNamespace("../..")},
-		{name: "unknown kind", ns: model.Namespace{Kind: "volume", ID: "100"}},
+		{name: "empty id names the store root", savepointID: ""},
+		{name: "traversal escapes the store", savepointID: "../.."},
+		{name: "non-digit id", savepointID: "abc"},
 	}
 
 	for _, tt := range tests {
@@ -233,15 +190,11 @@ func TestCopyBackend_Remove_RejectsInvalidNamespace(t *testing.T) {
 			st, root := newStore(t)
 			ctx := context.Background()
 			backend := NewCopyBackend(&fakeDockerVolume{payload: "hi"}, st)
-			_, err := backend.Create(ctx, model.VolumeSnapshotRequest{
-				Namespace:      model.SavepointNamespace("100"),
-				ComposeProject: "demo",
-				Volume:         model.VolumeKey{Service: "db", MountPath: "/data"},
-			})
+			_, err := backend.Snapshot(ctx, "100", "demo", []model.Mount{{Service: "db", Target: "/data"}})
 			require.NoError(t, err)
 
 			// Act
-			err = backend.Remove(ctx, tt.ns)
+			err = backend.Remove(ctx, tt.savepointID)
 
 			// Assert
 			require.Error(t, err)

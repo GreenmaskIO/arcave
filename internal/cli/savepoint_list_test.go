@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/gm-tools/internal/model"
 )
@@ -66,7 +67,8 @@ func TestSavepointListHandler_SavepointList(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			p := &capturePrinter{err: tt.printerErr}
+			p := &capturePrinter{}
+			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
 			svc := &mockService{}
 			svc.On("ListSavepoints").Return(tt.savepoints, tt.listErr)
 			h := NewSavepointListHandler(svc, p)
@@ -76,7 +78,7 @@ func TestSavepointListHandler_SavepointList(t *testing.T) {
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)
-			assert.Equal(t, tt.wantPrinted, p.got)
+			assert.Equal(t, tt.wantPrinted, p.printed())
 			svc.AssertExpectations(t)
 		})
 	}

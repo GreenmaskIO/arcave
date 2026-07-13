@@ -63,7 +63,8 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			p := &capturePrinter{err: tt.printerErr}
+			p := &capturePrinter{}
+			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
 			svc := &mockService{}
 			svc.On("CreateSavepoint", mock.Anything, wantReq).Return(tt.sp, tt.svcErr)
 			h := NewSavepointCreateHandler(svc, p)
@@ -73,8 +74,9 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)
-			assert.Equal(t, tt.wantPrinted, p.got)
+			assert.Equal(t, tt.wantPrinted, p.printed())
 			svc.AssertExpectations(t)
+			p.AssertExpectations(t)
 		})
 	}
 }
