@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/greenmaskio/gm-tools/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +19,8 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		return d.mcp.Run(ctx)
+		h := cli.NewMCPHandler(d.service, projectCfg.Project.ComposeFiles)
+		return h.MCPRun(ctx)
 	})
 }
 
