@@ -12,10 +12,10 @@
 // bound at construction, not named per call: a savepoint store and a
 // safety-backup store are two backend instances over two stores.
 //
-// The on-disk layout is not private to this package: each archive's key is
-// model.SnapshotKey(savepointID, service, mountPath), computed identically on the
-// write and read sides, so there is no opaque handle to record — a restore is
-// fully described by the savepoint id and the mounts.
+// The on-disk layout is this package's own: each archive's key is
+// snapshotKey(savepointID, service, mountPath) (snapshot_key.go), computed
+// identically on the write and read sides, so there is no opaque handle to
+// record — a restore is fully described by the savepoint id and the mounts.
 package snapshot
 
 import (
@@ -97,7 +97,7 @@ func (b *CopyBackend) Snapshot(ctx context.Context, savepointID, composeProject 
 }
 
 // snapshotMount streams one volume out of its Docker mount and stores it verbatim
-// under model.SnapshotKey. The Docker mount is the only closer, so it is always
+// under snapshotKey. The Docker mount is the only closer, so it is always
 // closed; a close error is logged, not returned, since the bytes are already
 // stored.
 func (b *CopyBackend) snapshotMount(ctx context.Context, savepointID, composeProject string, m model.Mount) (int64, error) {
@@ -116,7 +116,7 @@ func (b *CopyBackend) snapshotMount(ctx context.Context, savepointID, composePro
 	// stream rather than stat'ing the object afterwards, so the size reported is
 	// the size actually written.
 	counted := &countingReader{r: src}
-	if err := b.storage.PutObject(ctx, model.SnapshotKey(savepointID, m.Service, m.Target), counted); err != nil {
+	if err := b.storage.PutObject(ctx, snapshotKey(savepointID, m.Service, m.Target), counted); err != nil {
 		return 0, fmt.Errorf("write storage: %w", err)
 	}
 	return counted.n, nil
@@ -145,7 +145,7 @@ func (b *CopyBackend) Restore(ctx context.Context, savepointID, composeProject s
 // always closed; a close error is logged, not returned, since the bytes are
 // already consumed.
 func (b *CopyBackend) restoreMount(ctx context.Context, savepointID, composeProject string, m model.Mount) error {
-	src, err := b.storage.GetObject(ctx, model.SnapshotKey(savepointID, m.Service, m.Target))
+	src, err := b.storage.GetObject(ctx, snapshotKey(savepointID, m.Service, m.Target))
 	if err != nil {
 		return fmt.Errorf("open storage object: %w", err)
 	}
@@ -166,7 +166,7 @@ func (b *CopyBackend) restoreMount(ctx context.Context, savepointID, composeProj
 func (b *CopyBackend) Missing(ctx context.Context, savepointID string, mounts []model.Mount) ([]model.Mount, error) {
 	var missing []model.Mount
 	for _, m := range mounts {
-		exists, err := b.storage.Exists(ctx, model.SnapshotKey(savepointID, m.Service, m.Target))
+		exists, err := b.storage.Exists(ctx, snapshotKey(savepointID, m.Service, m.Target))
 		if err != nil {
 			return nil, fmt.Errorf("check archive for %s %s: %w", m.Service, m.Target, err)
 		}
