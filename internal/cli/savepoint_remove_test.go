@@ -44,7 +44,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			res:         model.RemoveResult{},
 			svcErr:      model.ErrRemoveSelectorConflict,
 			printerErr:  nil,
-			wantErrMsg:  "cannot combine savepoint IDs with --retain-recent/--retain-for/--before-date",
+			wantErrMsg:  "cannot combine savepoint ids with retain-recent/retain-for/before-date",
 			wantPrinted: nil,
 		},
 		{
@@ -52,7 +52,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			res:         model.RemoveResult{},
 			svcErr:      model.ErrRemoveNoSelector,
 			printerErr:  nil,
-			wantErrMsg:  "specify savepoint IDs, or at least one of --retain-recent, --retain-for or --before-date",
+			wantErrMsg:  "specify savepoint ids, or at least one of retain-recent, retain-for or before-date",
 			wantPrinted: nil,
 		},
 		{
@@ -60,7 +60,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			res:         model.RemoveResult{},
 			svcErr:      model.ErrRetainRecentNegative,
 			printerErr:  nil,
-			wantErrMsg:  "--retain-recent must be zero or positive",
+			wantErrMsg:  "retain-recent must be zero or positive",
 			wantPrinted: nil,
 		},
 		{
