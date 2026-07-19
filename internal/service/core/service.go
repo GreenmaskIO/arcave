@@ -69,8 +69,8 @@ type composeRunner interface {
 // backend owns the per-mount fan-out (the concurrency bound, the Docker I/O),
 // which is why the service never writes an errgroup over volumes itself. It holds
 // the Docker engine and the Storager of the store it owns and never speaks of
-// paths — the archive key is derived from the savepoint id and each mount via
-// model.SnapshotKey, identically on both sides.
+// paths — the archive key is the backend's own, derived from the savepoint id
+// and each mount, identically on both sides.
 //
 // A backend is bound to one store at construction, so the service holds two of
 // them — one over the savepoint directory, one over the safety-backup directory.

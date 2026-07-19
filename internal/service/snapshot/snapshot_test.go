@@ -75,12 +75,12 @@ func TestCopyBackend_Snapshot(t *testing.T) {
 	assert.EqualValues(t, len("payload"), sizes[1])
 	// Each archive lands at its explicit, recomputable key relative to the store.
 	for _, m := range mounts {
-		key := model.SnapshotKey("100", m.Service, m.Target)
+		key := snapshotKey("100", m.Service, m.Target)
 		data, readErr := os.ReadFile(filepath.Join(root, snapshotsDir, filepath.FromSlash(key)))
 		require.NoError(t, readErr, key)
 		assert.Equal(t, "payload", string(data))
 	}
-	assert.Equal(t, "100/db/export/data/data.tar", model.SnapshotKey("100", "db", "/export/data"))
+	assert.Equal(t, "100/db/export/data/data.tar", snapshotKey("100", "db", "/export/data"))
 }
 
 func TestCopyBackend_Snapshot_OpenError(t *testing.T) {

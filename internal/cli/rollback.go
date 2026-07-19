@@ -33,12 +33,8 @@ func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref s
 	if err != nil {
 		return err
 	}
-	restored := make([]model.RestoredMount, 0, len(res.Restored))
-	for _, m := range res.Restored {
-		restored = append(restored, model.RestoredMount{Service: m.Service, MountPath: m.Target})
-	}
 	return h.printer.Print(model.RollbackResponse{
 		RolledBackTo: res.Savepoint,
-		Restored:     restored,
+		Restored:     restoredMounts(res.Restored),
 	})
 }

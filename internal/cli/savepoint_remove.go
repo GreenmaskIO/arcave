@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 
 	"github.com/greenmaskio/gm-tools/internal/model"
 )
@@ -32,20 +31,4 @@ func (h *SavepointRemoveHandler) SavepointRemove(ctx context.Context, req model.
 		return removeUsageError(err)
 	}
 	return h.printer.Print(model.RemoveResponse(res))
-}
-
-// removeUsageError rephrases the service's flag-agnostic selector-validation
-// errors in terms of the CLI flags the user typed. Only this layer knows the
-// flag names, so the guidance lives here rather than in the service.
-func removeUsageError(err error) error {
-	switch {
-	case errors.Is(err, model.ErrRemoveSelectorConflict):
-		return errors.New("cannot combine savepoint IDs with --retain-recent/--retain-for/--before-date")
-	case errors.Is(err, model.ErrRemoveNoSelector):
-		return errors.New("specify savepoint IDs, or at least one of --retain-recent, --retain-for or --before-date")
-	case errors.Is(err, model.ErrRetainRecentNegative):
-		return errors.New("--retain-recent must be zero or positive")
-	default:
-		return err
-	}
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
 	"github.com/greenmaskio/gm-tools/internal/config"
 	"github.com/greenmaskio/gm-tools/internal/lock"
-	"github.com/greenmaskio/gm-tools/internal/mcp"
 	"github.com/greenmaskio/gm-tools/internal/model"
 	"github.com/greenmaskio/gm-tools/internal/printer/json"
 	cfgrepo "github.com/greenmaskio/gm-tools/internal/repository/config"
@@ -38,7 +37,6 @@ type dependencies struct {
 	engine            *docker.Engine
 	service           *core.Service
 	printer           *json.Printer
-	mcp               *mcp.Server
 }
 
 // initAllDependencies wires the savepoint workflows for the project rooted at
@@ -104,7 +102,6 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		engine:            engine,
 		service:           svc,
 		printer:           json.New(os.Stdout),
-		mcp:               mcp.New(svc),
 	}, nil
 }
 
