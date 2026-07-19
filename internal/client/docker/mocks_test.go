@@ -6,6 +6,9 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
+	// dockertypes is aliased because compose-go's own types package, imported
+	// above for mockCompose, already claims the name.
+	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
@@ -32,6 +35,11 @@ func (m *mockAPI) ContainerCreate(ctx context.Context, config *container.Config,
 
 func (m *mockAPI) ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error {
 	return m.Called(ctx, containerID, options).Error(0)
+}
+
+func (m *mockAPI) ContainerAttach(ctx context.Context, containerID string, options container.AttachOptions) (dockertypes.HijackedResponse, error) {
+	args := m.Called(ctx, containerID, options)
+	return args.Get(0).(dockertypes.HijackedResponse), args.Error(1)
 }
 
 func (m *mockAPI) ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {

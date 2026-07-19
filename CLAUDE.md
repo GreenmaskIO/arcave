@@ -65,7 +65,7 @@ test: a seam with more than one mintable implementation, or a cut in the import 
 | `internal/service/core/` | Business logic; embeds repositories and clients; owns all orchestration. `core.Service` runs the savepoint/rollback workflows; `core.InitService` runs `gm init` |
 | `internal/config/` | The config value type (`config.go`) and `Unmarshal` (`unmarshal.go`) — the single home of the config *policy*: version gate, unknown-key rejection, `ApplyDefaults`, `Validate`. It takes the loaded `*viper.Viper` and decodes it: the `mapstructure` tags on `Config` *are* the schema viper fills, so the decode belongs with the type. A **data package**: it reaches for no client and no SDK, so `gm init` never drags a cloud SDK into its import graph |
 | `internal/client/compose/` | `Inspector` — reads the project's *declared* state: parses `docker-compose.yml` via `compose-go` to enumerate every service's persistent mounts and the project name. Touches no daemon. `compose.Load` is exported because `client/docker`'s `ComposeRunner` loads the same project before acting on it — one loader, so both resolve the same file set, `.env` and project name |
-| `internal/client/docker/` | Acts on the *running* stack. `Engine` moves volume bytes in/out of service containers (Docker SDK); `ComposeRunner` stops and starts services (`compose/v2` as a library). GM shells out to nothing, so it needs no docker CLI or compose plugin installed. `Engine` owns the one `docker/cli` instance that turns `docker.Options` into a connection, and `NewComposeRunner(engine)` builds over it — that shared client is why they are one package |
+| `internal/client/docker/` | Acts on the *running* stack. `Engine` moves volume bytes in/out of service containers (Docker SDK); `ComposeRunner` stops and starts services (`compose/v2` as a library). GM shells out to nothing, so it needs no docker CLI or compose plugin installed. `Engine` owns the one `docker/cli` instance that turns `docker.Options` into a connection, and `NewComposeRunner(engine)` builds over it — that shared client is why they are one package. `oneshot.go` holds the throwaway-container *mechanism* (`runOneShotContainer`) the wipe policy is built on |
 | `internal/cli/` | One handler per command (`ConfigInitHandler`, `SavepointCreateHandler`, …); each calls a service method and renders the result through the injected `model.Printer`. `errors.go` holds the cross-handler `storeError`, which rephrases a store sentinel as a remedy. Knows nothing of cobra or viper |
 | `internal/printer/json/` | The production `model.Printer`: indented JSON to stdout |
 | `internal/utils/` | Logging setup and the log-level/format defaults `cmd/gm` uses for its global flags. A leaf |
@@ -223,6 +223,37 @@ Two consequences of moving onto `docker/cli`:
 **The compose library is a pinned, expensive dependency, and it dictates `compose-go`.** `github.com/docker/compose/v2` drags in `docker/cli`, buildkit, buildx and the AWS SDK: `bin/gm` went from **17 MB to 97 MB** (65 MB with `-s -w -trimpath`) — well past the 20–40 MB the migration estimated, and the price paid for not requiring a docker CLI on the host. `pkg/api`/`pkg/compose` are semi-public and offer no compatibility guarantee (`NewComposeService` has changed signature before, and it returns `api.Compose`, not `api.Service`), so the version is pinned and upgrading it is deliberate work, not a `go get -u`. Note also that **`compose-go` is pinned down to whatever compose/v2 was built against** — v2.40.3 needs v2.9.1, and v2.11.0 does not compile against it (`types.OptOut` vs `bool` on `CreateHostPath`). Bump the two together or not at all.
 
 `Options.APIVersion` is carried by setting `DOCKER_API_VERSION` in GM's own process: the client `docker/cli` builds from a resolved endpoint reads the version from the environment (`client.WithVersionFromEnv`) and otherwise negotiates, and that is the only seam it leaves. Setting a process env var is safe here in a way it would not have been before — GM spawns no child processes, so it configures GM's client and nothing else.
+
+**Wiping a mount is a policy over a reusable one-shot-container mechanism.** `runOneShotContainer`
+(`client/docker/oneshot.go`) drives one throwaway container through its whole lifecycle — ensure the
+image, create, attach (only when the spec carries stdio), start, exchange, wait, and always remove,
+with a non-zero exit reported as an error carrying `containerOutput`. `wipeMount` is now only the
+*policy*: which bind source a `mountInfo` maps to, the `busybox` image, and the `find … -exec rm -rf`
+command. GM will run other one-shot containers — some of them talking over stdio — and they need the
+mechanism without the wipe.
+
+Both stay **unexported**: every consumer is inside `client/docker`, and exporting a seam nobody
+outside pulls on is the mistake `snapshotKey` corrected by moving *down* to its one caller. Exporting
+later is the small step.
+
+The extension point is the **spec struct, not the parameter list**: stdio is three optional fields
+(`stdin`, `stdout`, `stderr`), so a new kind of run adds a field and `wipeMount` — which sets none of
+them — is untouched. `Tty` stays false even with stdio, since demultiplexing stdout from stderr needs
+the framed stream. Two orderings inside the mechanism are load-bearing and pinned by tests, because
+both compile clean when wrong:
+
+- **Attach precedes start.** A container started first can produce, and lose, output before anyone is
+  listening.
+- **The stdin writer and the stdout reader are concurrent** (an errgroup). Filling stdin before
+  reading any output deadlocks on any payload past the pipe buffer: the container blocks writing
+  output nobody drains while GM blocks writing input nobody reads.
+  `TestRunOneShotContainer_StdioLargePayload` is what fails — by timing out — if that is ever
+  unwound.
+
+A container may legitimately exit without draining its stdin (think `head`), which fails the copy on
+the *write* side. That is not an error — the exit status decides the run's outcome — so `exchange`
+reports only a failure of the caller's own source, which is what `recordingReader` exists to tell
+apart.
 
 **The project lock belongs to the workflow, not to the command layer.** "A savepoint is never created while a rollback is running" is a property of the workflow, so `core.Service` claims the lock itself: `CreateSavepoint`, `Rollback`, and a non-dry-run `RemoveSavepoints` each open with `s.lockProject(ctx)` and `defer unlock()`. `ListSavepoints` and `--dry-run` take no lock, so a read never blocks on a running rollback.
 

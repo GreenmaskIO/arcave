@@ -19,22 +19,19 @@ package docker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
-	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/rs/zerolog"
 )
 
 // composeProjectLabel and composeServiceLabel are set by Docker Compose on
@@ -55,6 +52,7 @@ type dockerAPI interface {
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
 	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerAttach(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error)
 	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
 	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
@@ -254,6 +252,9 @@ func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
 // delete data the service wrote as root: the daemon owns those files, and
 // CopyToContainer only merges entries, never deletes them. Volumes (named and
 // anonymous) are mounted by volume name; bind mounts by host path.
+//
+// It is the wipe *policy* — which image, which command, which bind — over the
+// reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
 func wipeMount(ctx context.Context, api dockerAPI, mnt mountInfo) error {
 	var src string
 	switch mnt.Type {
@@ -268,86 +269,10 @@ func wipeMount(ctx context.Context, api dockerAPI, mnt mountInfo) error {
 		return fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
 	}
 
-	if err := ensureImage(ctx, api, wipeImage); err != nil {
-		return err
-	}
-
-	created, err := api.ContainerCreate(ctx, &container.Config{
-		Image: wipeImage,
+	return runOneShotContainer(ctx, api, oneShotSpec{
+		image: wipeImage,
 		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
-		Cmd: []string{"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"},
-	}, &container.HostConfig{
-		Binds: []string{src + ":/data"},
-	}, nil, nil, "")
-	if err != nil {
-		return fmt.Errorf("create wipe container: %w", err)
-	}
-	defer func() {
-		if err := api.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true}); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Str("container", created.ID).Msg("remove wipe container")
-		}
-	}()
-
-	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
-		return fmt.Errorf("start wipe container: %w", err)
-	}
-
-	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		return fmt.Errorf("wait for wipe container: %w", err)
-	case status := <-statusCh:
-		if status.StatusCode != 0 {
-			return fmt.Errorf("wipe container exited with status %d: %s", status.StatusCode, containerOutput(ctx, api, created.ID))
-		}
-	}
-	return nil
-}
-
-// ensureImage pulls ref unless the daemon already has it. The pull stream is
-// drained rather than reported: the daemon only completes the pull once the
-// stream is consumed, and GM has no progress UI to render it into.
-func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
-	if _, err := api.ImageInspect(ctx, ref); err == nil {
-		return nil
-	} else if !cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("inspect image %s: %w", ref, err)
-	}
-
-	rc, err := api.ImagePull(ctx, ref, image.PullOptions{})
-	if err != nil {
-		return fmt.Errorf("pull image %s: %w", ref, err)
-	}
-	defer func() {
-		if err := rc.Close(); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Str("image", ref).Msg("close image pull stream")
-		}
-	}()
-
-	if _, err := io.Copy(io.Discard, rc); err != nil {
-		return fmt.Errorf("pull image %s: %w", ref, err)
-	}
-	return nil
-}
-
-// containerOutput reads back what a failed container printed, so the error
-// carries the daemon's own message the way the CLI's combined output used to.
-// It is best-effort: a failure to read the logs must not replace the exit status
-// that is being reported.
-func containerOutput(ctx context.Context, api dockerAPI, containerID string) string {
-	rc, err := api.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
-	if err != nil {
-		return "(logs unavailable: " + err.Error() + ")"
-	}
-	defer func() {
-		if err := rc.Close(); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Str("container", containerID).Msg("close container logs")
-		}
-	}()
-
-	out, err := io.ReadAll(rc)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "(logs unavailable: " + err.Error() + ")"
-	}
-	return strings.TrimSpace(string(out))
+		cmd:   []string{"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"},
+		binds: []string{src + ":/data"},
+	})
 }
