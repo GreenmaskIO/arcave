@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/greenmaskio/gm-tools/internal/cli"
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 var (

@@ -1,10 +1,10 @@
 // Package compose reads the compose project's *declared* state: it wraps the
 // Compose specification SDK (github.com/compose-spec/compose-go) to parse,
 // interpolate and validate one or more docker-compose.yml files, and reports the
-// project name plus the persistent mounts GM snapshots.
+// project name plus the persistent mounts arcave snapshots.
 //
 // It never contacts the Docker daemon — its only dependency is the compose-go
-// parser — which is why `gm init` (whose whole job is to verify the project
+// parser — which is why `arcave init` (whose whole job is to verify the project
 // loads) runs with docker stopped. Everything that touches the *running* stack
 // lives in internal/client/docker instead: container/volume I/O and the compose
 // lifecycle, both through Docker's own Go libraries.
@@ -18,7 +18,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // Inspector answers one question — "what does this compose project declare?" —
@@ -38,7 +38,7 @@ type Inspector struct{}
 func NewInspector() *Inspector { return &Inspector{} }
 
 // Inspect loads the compose project described by files and returns its name and
-// the mounts GM should snapshot. See Load for how files is resolved.
+// the mounts arcave should snapshot. See Load for how files is resolved.
 func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspection, error) {
 	project, err := Load(ctx, files...)
 	if err != nil {
@@ -63,12 +63,12 @@ func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspect
 // Compose specification, and its Name is the resolved Compose project name (from
 // an explicit name, the top-level `name:` field, COMPOSE_PROJECT_NAME, or the
 // working directory). Load additionally verifies that the project defines at
-// least one service, since GM has nothing to manage otherwise.
+// least one service, since arcave has nothing to manage otherwise.
 //
 // It is exported because internal/client/docker's ComposeRunner loads the same
-// project before handing it to the compose library: both halves of GM must
+// project before handing it to the compose library: both halves of arcave must
 // resolve a project the same way — same file set, same .env, same name — or the
-// stack GM inspects and the stack it stops would be two different stacks.
+// stack arcave inspects and the stack it stops would be two different stacks.
 func Load(ctx context.Context, files ...string) (*types.Project, error) {
 	opts, err := cli.NewProjectOptions(
 		files,

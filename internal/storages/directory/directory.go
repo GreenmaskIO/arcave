@@ -13,13 +13,13 @@
 // limitations under the License.
 
 // Package directory is the local-filesystem Storager backend, vendored from
-// greenmask (internal/storages/directory) and adapted for gm-tools: its
+// greenmask (internal/storages/directory) and adapted for arcave: its
 // self-referential SubStorage/ListDir returns and Stat now name model.Storager /
 // *model.ObjectStat (see internal/model/storager.go), and it gains a no-op Close
 // so the interface's per-command lifecycle hook is satisfied.
 //
 // Writes are not atomic. Storager has no Rename to build atomicity out of, and
-// GM does not need it: an interrupted savepoint is discarded and re-created, not
+// arcave does not need it: an interrupted savepoint is discarded and re-created, not
 // repaired.
 //
 // Every method routes its key through resolve, so no key — however it was
@@ -47,7 +47,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // ErrUnsafeKey is returned for a key that does not name an object strictly
@@ -57,7 +57,7 @@ import (
 var ErrUnsafeKey = errors.New("unsafe storage key")
 
 // dirMode/fileMode set the permissions for created directories and files.
-// Upstream greenmask uses 0750/0650; gm-tools widens them to the conventional
+// Upstream greenmask uses 0750/0650; arcave widens them to the conventional
 // 0755/0644 to preserve the behaviour of the os.MkdirAll(0o755)/os.Create the
 // snapshot backend used before adopting the Storager.
 const (
@@ -72,7 +72,7 @@ type Storage struct {
 	mx       sync.Mutex
 }
 
-// compile-time assertion that the vendored backend satisfies the gm-tools
+// compile-time assertion that the vendored backend satisfies the arcave
 // interface (which repoints the self-referential returns).
 var _ model.Storager = (*Storage)(nil)
 
@@ -162,7 +162,7 @@ func (s *Storage) GetObject(_ context.Context, filePath string) (reader io.ReadC
 
 // PutObject writes body to filePath, creating parent dirs lazily. The write is
 // not atomic: a cancelled or failed copy leaves a partial object under filePath.
-// GM tolerates that — a savepoint that fails mid-write is dropped by namespace
+// arcave tolerates that — a savepoint that fails mid-write is dropped by namespace
 // and re-created, never repaired.
 func (s *Storage) PutObject(ctx context.Context, filePath string, body io.Reader) error {
 	full, err := s.resolve(filePath)

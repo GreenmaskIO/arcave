@@ -9,23 +9,23 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/gm-tools/internal/client/compose"
-	"github.com/greenmaskio/gm-tools/internal/client/docker"
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/lock"
-	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/printer/json"
-	cfgrepo "github.com/greenmaskio/gm-tools/internal/repository/config"
-	sprepo "github.com/greenmaskio/gm-tools/internal/repository/savepoint"
-	"github.com/greenmaskio/gm-tools/internal/service/core"
-	"github.com/greenmaskio/gm-tools/internal/service/snapshot"
-	"github.com/greenmaskio/gm-tools/internal/storages"
+	"github.com/greenmaskio/arcave/internal/client/compose"
+	"github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/lock"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/printer/json"
+	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
+	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/snapshot"
+	"github.com/greenmaskio/arcave/internal/storages"
 )
 
 // safetyBackupDir is the store safety backups live in, relative to the project
 // root. Unlike the savepoint store it is never user-configurable: it is scratch
 // space a rollback creates and deletes within one command.
-var safetyBackupDir = filepath.Join(".gm", "tmp")
+var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
 
 // dependencies is the composition root's bag of per-command collaborators. It
 // names the concrete types it constructs: an interface here would buy no
@@ -116,7 +116,7 @@ func (d *dependencies) Close(ctx context.Context) error {
 	return d.savepointStore.Close()
 }
 
-// initServiceDeps wires `gm init`, which needs neither storage, nor a snapshot
+// initServiceDeps wires `arcave init`, which needs neither storage, nor a snapshot
 // backend, nor the Docker engine — only somewhere to write the config and a
 // compose project to verify. Nothing here holds a resource, so there is nothing
 // to close.

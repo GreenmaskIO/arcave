@@ -1,6 +1,6 @@
-// Package lock serialises the GM workflows that mutate a project.
+// Package lock serialises the arcave workflows that mutate a project.
 //
-// Two concurrent `gm` runs already fight over `docker compose stop/up`, which is
+// Two concurrent `arcave` runs already fight over `docker compose stop/up`, which is
 // destructive regardless of how savepoints are stored: one run's stop races the
 // other's up, and a snapshot taken while the services are coming back is not a
 // consistent one. A per-project lock turns that race into a fast, clear failure.
@@ -24,13 +24,13 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // fileName is the lock file, relative to the project root. It is created empty
 // and never removed: unlinking it would let a second process acquire a lock on a
 // file the first still holds open, since flock guards the inode, not the name.
-var fileName = filepath.Join(".gm", "lock")
+var fileName = filepath.Join(model.StateDir, "lock")
 
 // Locker takes the exclusive lock of one project. It is bound to that project at
 // construction and holds no state between calls, so a single instance is built

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 func TestRepository_Path(t *testing.T) {
@@ -20,7 +20,7 @@ func TestRepository_Path(t *testing.T) {
 	got := New(root).Path()
 
 	// Assert
-	assert.Equal(t, filepath.Join(root, ".gm", "config.yaml"), got)
+	assert.Equal(t, filepath.Join(root, ".arcave", "config.yaml"), got)
 }
 
 func TestRepository_Exists(t *testing.T) {
@@ -31,29 +31,29 @@ func TestRepository_Exists(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "no .gm directory",
+			name:    "no .arcave directory",
 			arrange: func(*testing.T, string) {},
 			want:    false,
 		},
 		{
 			name: "directory without config file",
 			arrange: func(t *testing.T, root string) {
-				require.NoError(t, os.MkdirAll(filepath.Join(root, ".gm"), 0o755))
+				require.NoError(t, os.MkdirAll(filepath.Join(root, ".arcave"), 0o755))
 			},
 			want: false,
 		},
 		{
 			name: "config file present",
 			arrange: func(t *testing.T, root string) {
-				require.NoError(t, os.MkdirAll(filepath.Join(root, ".gm"), 0o755))
-				require.NoError(t, os.WriteFile(filepath.Join(root, ".gm", "config.yaml"), []byte("name: x\n"), 0o644))
+				require.NoError(t, os.MkdirAll(filepath.Join(root, ".arcave"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".arcave", "config.yaml"), []byte("name: x\n"), 0o644))
 			},
 			want: true,
 		},
 		{
-			name: "stat fails because .gm is a regular file",
+			name: "stat fails because .arcave is a regular file",
 			arrange: func(t *testing.T, root string) {
-				require.NoError(t, os.WriteFile(filepath.Join(root, ".gm"), []byte("not a dir"), 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".arcave"), []byte("not a dir"), 0o644))
 			},
 			want:    false,
 			wantErr: true,
@@ -96,7 +96,7 @@ func TestRepository_Save(t *testing.T) {
 				},
 				Storage: config.Storage{
 					Type:      config.StorageTypeDirectory,
-					Directory: &config.DirectoryStorage{Path: ".gm/savepoints/shop"},
+					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
 				},
 				Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
 				Log:      config.Log{Level: "debug", Format: "json"},
@@ -112,7 +112,7 @@ func TestRepository_Save(t *testing.T) {
 				},
 				Storage: config.Storage{
 					Type:      config.StorageTypeDirectory,
-					Directory: &config.DirectoryStorage{Path: ".gm/savepoints/shop"},
+					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
 				},
 				Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
 			},
@@ -155,7 +155,7 @@ func TestRepository_Save_CreatesMissingDirectory(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	info, err := os.Stat(filepath.Join(root, ".gm"))
+	info, err := os.Stat(filepath.Join(root, ".arcave"))
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 }
@@ -177,7 +177,7 @@ func TestRepository_Save_Overwrites(t *testing.T) {
 	var got config.Config
 	require.NoError(t, yaml.Unmarshal(data, &got))
 	assert.Equal(t, "new", got.Project.Name)
-	assert.Equal(t, ".gm/savepoints/new", got.Storage.DirectoryPath())
+	assert.Equal(t, ".arcave/savepoints/new", got.Storage.DirectoryPath())
 }
 
 // savedConfig returns a minimal v1 config for the project named name.
@@ -187,7 +187,7 @@ func savedConfig(name string) config.Config {
 		Project: config.Project{Name: name},
 		Storage: config.Storage{
 			Type:      config.StorageTypeDirectory,
-			Directory: &config.DirectoryStorage{Path: ".gm/savepoints/" + name},
+			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/" + name},
 		},
 		Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
 	}
@@ -209,12 +209,12 @@ func TestRepository_Save_WriteFails(t *testing.T) {
 func TestRepository_Save_MkdirFails(t *testing.T) {
 	// Arrange
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".gm"), []byte("not a dir"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".arcave"), []byte("not a dir"), 0o644))
 
 	// Act
 	err := New(root).Save(config.Config{Project: config.Project{Name: "shop"}})
 
 	// Assert
 	require.ErrorContains(t, err, "create config directory")
-	assert.NoFileExists(t, filepath.Join(root, ".gm", "config.yaml"))
+	assert.NoFileExists(t, filepath.Join(root, ".arcave", "config.yaml"))
 }

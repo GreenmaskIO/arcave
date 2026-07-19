@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/greenmaskio/gm-tools/internal/cli"
+	"github.com/greenmaskio/arcave/internal/cli"
 )
 
 var (
@@ -13,7 +13,7 @@ var (
 
 	configInitCmd = &cobra.Command{
 		Use:   "init",
-		Short: "Initialize GM metadata for the current project",
+		Short: "Initialize arcave metadata for the current project",
 		Args:  cobra.NoArgs,
 		RunE:  runConfigInit,
 	}
@@ -21,7 +21,7 @@ var (
 
 // runConfigInit carries no requireConfig guard: it is the command that
 // creates the config the others require. It builds its own narrow dependencies
-// instead of going through withDeps, so `gm init` opens neither the storage
+// instead of going through withDeps, so `arcave init` opens neither the storage
 // backend nor the Docker engine.
 func runConfigInit(cmd *cobra.Command, _ []string) error {
 	if configFound && !configInitOverride {
@@ -40,9 +40,9 @@ func init() {
 	flags.StringSliceP("file", "f", []string{"docker-compose.yaml"},
 		"Docker Compose file (repeatable)")
 	flags.String("savepoint-dir", "",
-		"Savepoint backup directory (default: .gm/savepoints/<project_name>)")
+		"Savepoint backup directory (default: .arcave/savepoints/<project_name>)")
 	flags.BoolVar(&configInitOverride, "override", false,
-		"Overwrite an existing GM configuration")
+		"Overwrite an existing arcave configuration")
 
 	// --override is transient (never persisted), so it carries no config binding.
 	// --savepoint-dir survives as sugar for the directory arm of the storage

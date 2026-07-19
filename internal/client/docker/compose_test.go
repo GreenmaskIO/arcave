@@ -76,7 +76,7 @@ func TestComposeRunner_Up(t *testing.T) {
 
 			// The library's zero CreateOptions means "renew anonymous volumes",
 			// the opposite of the CLI's default: a container recreated because
-			// the compose file changed would lose data GM promises to keep.
+			// the compose file changed would lose data arcave promises to keep.
 			assert.True(t, opts.Create.Inherit, "a recreated container must inherit its anonymous volumes")
 			assert.Equal(t, api.RecreateDiverged, opts.Create.Recreate)
 		})

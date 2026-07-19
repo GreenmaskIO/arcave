@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/storages/directory"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/storages/directory"
 )
 
 // snapshotsDir is the store the backend is bound to. It is a sub-storage of the

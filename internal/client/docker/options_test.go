@@ -89,7 +89,7 @@ func TestOptions_clientOptions(t *testing.T) {
 }
 
 // A host resolves to an endpoint whether or not anything is listening on it:
-// gm savepoint list has to work with docker stopped.
+// arcave savepoint list has to work with docker stopped.
 func TestNewEngine_AcceptsAnUnreachableHost(t *testing.T) {
 	// Act
 	eng, err := NewEngine(Options{Host: "unix:///nowhere/docker.sock"})
@@ -102,7 +102,7 @@ func TestNewEngine_AcceptsAnUnreachableHost(t *testing.T) {
 
 // A context that does not exist must surface as an error. docker/cli's own
 // answer is to print to the (discarded) error stream and os.Exit, which would
-// kill GM with no output at all — so NewEngine has to resolve it first.
+// kill arcave with no output at all — so NewEngine has to resolve it first.
 func TestNewEngine_RejectsAnUnknownContext(t *testing.T) {
 	// Arrange: an empty config dir, so no context store can define the name.
 	t.Setenv("DOCKER_CONFIG", t.TempDir())

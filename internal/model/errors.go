@@ -21,19 +21,19 @@ var (
 	ErrRemoveNoSelector = errors.New("no savepoint selector provided")
 	// ErrRetainRecentNegative is returned when the retain-recent count is negative.
 	ErrRetainRecentNegative = errors.New("retain-recent count must be zero or positive")
-	// ErrProjectLocked is returned when another gm process is already running a
+	// ErrProjectLocked is returned when another arcave process is already running a
 	// mutating workflow in this project. The service returns it, the lock
 	// implementation produces it, and the adapters match it — so it lives here
 	// rather than in internal/lock, which core must not import.
-	ErrProjectLocked = errors.New("another gm command is already running in this project")
+	ErrProjectLocked = errors.New("another arcave command is already running in this project")
 	// ErrLegacyManifest is returned when the savepoint store still holds the
 	// monolithic manifest.json that per-savepoint records replaced. The adapter
 	// renders it with the migration guidance; the repository only reports the
 	// condition, since it does not know what the user is allowed to do about it.
-	ErrLegacyManifest = errors.New("savepoint store was written by an older gm and still holds a manifest.json")
+	ErrLegacyManifest = errors.New("savepoint store was written by an older arcave and still holds a manifest.json")
 
-	// ErrUnsupportedConfigVersion reports a config file whose schema version GM does
-	// not speak. GM speaks exactly one, so any other value is refused rather than
+	// ErrUnsupportedConfigVersion reports a config file whose schema version arcave does
+	// not speak. arcave speaks exactly one, so any other value is refused rather than
 	// migrated. A file carrying no version at all is taken to be that one version:
 	// the pre-v1 flat layout is therefore reported by the keys it uses, not by its
 	// missing version.

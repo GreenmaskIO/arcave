@@ -9,12 +9,12 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 // Every command runs on one config, resolved once by rootCmd's PersistentPreRunE
-// from four sources, highest precedence first: a changed flag, a GM_<KEY>
-// environment variable, .gm/config.yaml, the flag's default. This file is the
+// from four sources, highest precedence first: a changed flag, an ARCAVE_<KEY>
+// environment variable, .arcave/config.yaml, the flag's default. This file is the
 // whole of that resolution; the values it produces live in cmd_root.go, where the
 // commands read them.
 //
@@ -27,12 +27,12 @@ import (
 // anything.
 var cfgViper = viper.New()
 
-// setupViper points viper at configPath and lets GM_<KEY> environment variables
-// override it, with dots mapped to underscores (GM_LOG_LEVEL feeds "log.level").
+// setupViper points viper at configPath and lets ARCAVE_<KEY> environment variables
+// override it, with dots mapped to underscores (ARCAVE_LOG_LEVEL feeds "log.level").
 func setupViper(v *viper.Viper, configPath string) {
 	v.SetConfigFile(configPath)
 	v.SetConfigType("yaml")
-	v.SetEnvPrefix("GM")
+	v.SetEnvPrefix("ARCAVE")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 }
@@ -42,7 +42,7 @@ func setupViper(v *viper.Viper, configPath string) {
 // defaults, validation. This function owns only the sources: the file read, the
 // multi-source merge, and the config path for the error message.
 //
-// found is false when the config file is absent — a normal case for `gm init`
+// found is false when the config file is absent — a normal case for `arcave init`
 // (it proceeds on defaults plus flags) and an error the read commands report via
 // requireConfig. It also gates the version check: a fresh project has no
 // version to check, and init stamps one when it writes.

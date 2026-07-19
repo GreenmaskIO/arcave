@@ -116,7 +116,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec oneShotSpec) e
 
 // ensureImage pulls ref unless the daemon already has it. The pull stream is
 // drained rather than reported: the daemon only completes the pull once the
-// stream is consumed, and GM has no progress UI to render it into.
+// stream is consumed, and arcave has no progress UI to render it into.
 func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 	if _, err := api.ImageInspect(ctx, ref); err == nil {
 		return nil
@@ -145,7 +145,7 @@ func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 //
 // The writer and the reader are concurrent on purpose: filling stdin before
 // reading any stdout deadlocks on any payload larger than the pipe buffer — the
-// container blocks writing output nobody drains, GM blocks writing input nobody
+// container blocks writing output nobody drains, arcave blocks writing input nobody
 // reads, and neither ever gets to the other half.
 func exchange(ctx context.Context, attached types.HijackedResponse, spec oneShotSpec) error {
 	var g errgroup.Group

@@ -8,7 +8,7 @@ import (
 	"github.com/docker/go-connections/tlsconfig"
 )
 
-// Options is how GM reaches the Docker daemon. One Engine translates it once,
+// Options is how arcave reaches the Docker daemon. One Engine translates it once,
 // into the docker/cli client options both halves of this package then share —
 // the API client behind Engine's volume I/O and the compose library behind
 // ComposeRunner both come from that single resolved client, so a configuration
@@ -16,7 +16,7 @@ import (
 // against by hand) is no longer expressible.
 //
 // The zero Options means "read the environment" (DOCKER_HOST and friends), which
-// is the behaviour GM had before the config grew a docker section.
+// is the behaviour arcave had before the config grew a docker section.
 type Options struct {
 	Host       string // e.g. "unix:///var/run/docker.sock"; "" => from the environment
 	APIVersion string // pin the API version; "" => negotiate on the first call

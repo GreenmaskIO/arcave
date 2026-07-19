@@ -5,9 +5,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /gm-demo-app .
+RUN CGO_ENABLED=0 go build -o /arcave-demo-app .
 
 FROM alpine:3.20
-COPY --from=build /gm-demo-app /usr/local/bin/gm-demo-app
+COPY --from=build /arcave-demo-app /usr/local/bin/arcave-demo-app
 EXPOSE 8080
-ENTRYPOINT ["gm-demo-app"]
+ENTRYPOINT ["arcave-demo-app"]

@@ -1,6 +1,6 @@
-// Command gm-demo-app is a tiny web app for the gm-tools demo. It reads and
+// Command arcave-demo-app is a tiny web app for the arcave demo. It reads and
 // writes three stores, each backed by a different Docker volume type, so a
-// `gm savepoint create` / `gm rollback` cycle can be observed end to end:
+// `arcave savepoint create` / `arcave rollback` cycle can be observed end to end:
 //
 //	PostgreSQL -> named volume
 //	MinIO      -> host bind mount

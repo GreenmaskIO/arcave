@@ -9,8 +9,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/utils"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // The state every command shares, produced once by initRoot and read from RunE.
@@ -19,12 +19,12 @@ import (
 var (
 	projectRoot    string        // the working directory initRoot found
 	projectCfg     config.Config // the effective config every command runs on
-	configFound    bool          // whether .gm/config.yaml existed
+	configFound    bool          // whether .arcave/config.yaml existed
 	rootConfigFile string        // the --config flag's target, read before projectCfg exists
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "gm",
+	Use:   "arcave",
 	Short: "Local environment lifecycle manager for stateful Docker Compose applications",
 	// SilenceUsage keeps a runtime failure from dumping the whole usage text;
 	// cobra still prints usage for genuine flag/arg errors.
@@ -53,7 +53,7 @@ func initRoot() error {
 	}
 	setupViper(cfgViper, configPath)
 
-	// A config GM cannot speak is held, not raised: it must not stop `gm init
+	// A config arcave cannot speak is held, not raised: it must not stop `arcave init
 	// --override`, which is the fix the error names. requireInitialized raises it
 	// for every command that reads the project instead. Anything else — an
 	// unreadable file, an unknown key — is fatal here, since no command can
@@ -73,7 +73,7 @@ func initRoot() error {
 // the config file exists, and it is how an unusable one is replaced.
 func requireConfig() error {
 	if !configFound {
-		return fmt.Errorf("config is not found: run 'gm init' if not yet initialized")
+		return fmt.Errorf("config is not found: run 'arcave init' if not yet initialized")
 	}
 	return nil
 }
@@ -84,7 +84,7 @@ func requireConfig() error {
 //
 // It takes no lock, and neither does any other command-layer helper: serialising
 // a mutating workflow is the workflow's own property, so core.Service claims the
-// project lock itself. A lock taken here would be invisible to `gm mcp`, which
+// project lock itself. A lock taken here would be invisible to `arcave mcp`, which
 // calls the service directly.
 func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
 	ctx := cmd.Context()

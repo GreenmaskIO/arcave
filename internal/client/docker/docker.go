@@ -1,6 +1,6 @@
 // Package docker acts on the *running* stack, in contrast to internal/client/
 // compose, which only reads what the compose files declare. It holds the two
-// types GM needs to reach the daemon, split by what they act on:
+// types arcave needs to reach the daemon, split by what they act on:
 //
 //   - Engine (docker.go) moves a volume's bytes in and out of a service
 //     container, through the Docker API.
@@ -8,7 +8,7 @@
 //     through the compose library (github.com/docker/compose/v2), since the
 //     Docker API itself has no Compose equivalent.
 //
-// Both reach the daemon through Go libraries — GM shells out to nothing, so it
+// Both reach the daemon through Go libraries — arcave shells out to nothing, so it
 // needs no docker CLI or compose plugin installed, only a reachable daemon.
 // They share one client: Engine owns the docker/cli instance that resolves
 // Options (host, context, TLS) into a connection, and ComposeRunner is built
@@ -42,7 +42,7 @@ const (
 )
 
 // wipeImage is the throwaway image wipeMount runs to clear a mount: small,
-// ubiquitous, and carrying the `find` GM needs.
+// ubiquitous, and carrying the `find` arcave needs.
 const wipeImage = "busybox"
 
 // dockerAPI is the slice of the Docker API client this package actually calls —
@@ -63,7 +63,7 @@ type dockerAPI interface {
 	Close() error
 }
 
-// Engine is GM's volume I/O against the Docker daemon: it streams a service
+// Engine is arcave's volume I/O against the Docker daemon: it streams a service
 // mount's contents out (OpenMount) and wipes-and-extracts a stream back in
 // (WriteMount). These are the operations that have no Compose-level equivalent,
 // so they go through the Docker API — see ComposeRunner for the lifecycle half.
@@ -88,8 +88,8 @@ type Engine struct {
 //
 // It resolves the endpoint eagerly, and does so through DockerEndpoint rather
 // than by reaching for the client: docker/cli reports a failure to resolve one
-// by writing to its error stream — which GM discards — and calling os.Exit. A
-// mistyped docker.context would therefore kill GM with no message at all, and
+// by writing to its error stream — which arcave discards — and calling os.Exit. A
+// mistyped docker.context would therefore kill arcave with no message at all, and
 // not only here: the compose library calls Client() itself, so the check has to
 // happen before either half of this package is handed a daemon. Resolving does
 // ping, but a failed ping is not an error — a command that never touches a mount
@@ -104,7 +104,7 @@ func NewEngine(opts Options) (*Engine, error) {
 	// version: the client it builds from the resolved endpoint reads the version
 	// from the environment (client.WithVersionFromEnv) and otherwise negotiates.
 	// Setting it here is safe in a way it would not have been for the exec-based
-	// version — GM spawns no child processes, so this configures GM's own client
+	// version — arcave spawns no child processes, so this configures arcave's own client
 	// and nothing else.
 	if opts.APIVersion != "" {
 		if err := os.Setenv(client.EnvOverrideAPIVersion, opts.APIVersion); err != nil {
@@ -112,7 +112,7 @@ func NewEngine(opts Options) (*Engine, error) {
 		}
 	}
 
-	// The streams are discarded: compose writes its progress UI to them, and GM's
+	// The streams are discarded: compose writes its progress UI to them, and arcave's
 	// own output contract is JSON on stdout.
 	dockerCli, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -152,7 +152,7 @@ func (e *Engine) Close() error { return e.api.Close() }
 // It locates the project's container for service and streams its target path
 // out via the Docker API. Keying on service + container target (rather than a
 // volume name) lets the same code export named volumes, bind mounts, and
-// anonymous volumes uniformly. GM snapshots while services are stopped but not
+// anonymous volumes uniformly. arcave snapshots while services are stopped but not
 // removed, so the service container itself is used — no helper image is
 // required for export. The archive is streamed verbatim rather than extracted so
 // that file ownership and permissions (which an unprivileged host process could

@@ -3,8 +3,8 @@ package cli
 import (
 	"context"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 type savepointCreateService interface {

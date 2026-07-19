@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/greenmaskio/gm-tools/internal/cli"
-	"github.com/greenmaskio/gm-tools/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/client/docker"
 )
 
 var (
@@ -56,7 +56,7 @@ func init() {
 	flags.IntVar(&savepointCreateWaitTimeout, "wait-timeout", docker.DefaultUpWaitTimeout,
 		"Seconds to wait for services to become healthy after the snapshot")
 
-	// None of these is bound to viper: --name would collide with `gm init --name`
+	// None of these is bound to viper: --name would collide with `arcave init --name`
 	// on the shared "name" config key, conflating the project name with this
 	// savepoint's name. All are per-run values, not project config.
 

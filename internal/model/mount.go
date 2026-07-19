@@ -1,6 +1,6 @@
 package model
 
-// Mount is one persistent mount of a service that GM snapshots, keyed by the
+// Mount is one persistent mount of a service that arcave snapshots, keyed by the
 // service and the path it is mounted at inside the container — the stable key
 // that works for named volumes, bind mounts, and anonymous volumes alike.
 type Mount struct {

@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 
-	"github.com/greenmaskio/gm-tools/internal/cli"
+	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/spf13/cobra"
 )
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
-	Short: "Start the GM MCP server for AI agent integration",
+	Short: "Start the arcave MCP server for AI agent integration",
 	Args:  cobra.NoArgs,
 	RunE:  runMCP,
 }
