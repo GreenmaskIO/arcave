@@ -6,8 +6,8 @@
 // It never contacts the Docker daemon — its only dependency is the compose-go
 // parser — which is why `gm init` (whose whole job is to verify the project
 // loads) runs with docker stopped. Everything that touches the *running* stack
-// lives in internal/client/docker instead: container/volume I/O through the
-// Docker SDK, and the compose lifecycle through the docker CLI.
+// lives in internal/client/docker instead: container/volume I/O and the compose
+// lifecycle, both through Docker's own Go libraries.
 package compose
 
 import (
@@ -25,27 +25,34 @@ import (
 // and answers it from the files alone, with no daemon and no side effects. It is
 // stateless: the compose files are supplied per call, so one instance is shared
 // across invocations.
+//
+// It carries no fields, and the empty struct is the point: service/core declares
+// its own composeInspector interface and may not import this package, so it needs
+// a *value* to be handed at the composition root and swapped for a mock in tests.
+// A method needs a receiver; the receiver needs no state. That is also the whole
+// difference between Inspect and Load below — Load crosses no seam (client/docker
+// calls it directly, one layer over), so it stays a plain function.
 type Inspector struct{}
 
 // NewInspector returns a compose-file inspector.
 func NewInspector() *Inspector { return &Inspector{} }
 
 // Inspect loads the compose project described by files and returns its name and
-// the mounts GM should snapshot. See load for how files is resolved.
+// the mounts GM should snapshot. See Load for how files is resolved.
 func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspection, error) {
-	project, name, err := load(ctx, files...)
+	project, err := Load(ctx, files...)
 	if err != nil {
 		return model.Inspection{}, fmt.Errorf("loading docker compose file(s): %w", err)
 	}
 	mounts, skipped := mountsOf(project)
 	return model.Inspection{
-		ComposeProject: name,
+		ComposeProject: project.Name,
 		Mounts:         mounts,
 		Skipped:        skipped,
 	}, nil
 }
 
-// load reads and verifies the Docker Compose project described by files.
+// Load reads and verifies the Docker Compose project described by files.
 //
 // files is the ordered list of Compose configuration paths (the main
 // docker-compose.yml plus any overrides). When empty, compose-go resolves the
@@ -53,13 +60,16 @@ func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspect
 // COMPOSE_FILE environment variable.
 //
 // The returned project has been parsed, interpolated, and validated against the
-// Compose specification. Load additionally verifies that the project defines at
+// Compose specification, and its Name is the resolved Compose project name (from
+// an explicit name, the top-level `name:` field, COMPOSE_PROJECT_NAME, or the
+// working directory). Load additionally verifies that the project defines at
 // least one service, since GM has nothing to manage otherwise.
 //
-// The second return value is the resolved Compose project name (from an
-// explicit name, the top-level `name:` field, COMPOSE_PROJECT_NAME, or the
-// working directory).
-func load(ctx context.Context, files ...string) (*types.Project, string, error) {
+// It is exported because internal/client/docker's ComposeRunner loads the same
+// project before handing it to the compose library: both halves of GM must
+// resolve a project the same way — same file set, same .env, same name — or the
+// stack GM inspects and the stack it stops would be two different stacks.
+func Load(ctx context.Context, files ...string) (*types.Project, error) {
 	opts, err := cli.NewProjectOptions(
 		files,
 		cli.WithOsEnv,
@@ -68,19 +78,19 @@ func load(ctx context.Context, files ...string) (*types.Project, string, error) 
 		cli.WithDefaultConfigPath,
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf("build compose project options: %w", err)
+		return nil, fmt.Errorf("build compose project options: %w", err)
 	}
 
 	project, err := opts.LoadProject(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("load compose project: %w", err)
+		return nil, fmt.Errorf("load compose project: %w", err)
 	}
 
 	if len(project.Services) == 0 {
-		return nil, "", fmt.Errorf("compose project %q defines no services", project.Name)
+		return nil, fmt.Errorf("compose project %q defines no services", project.Name)
 	}
 
-	return project, project.Name, nil
+	return project, nil
 }
 
 // mountsOf returns every persistent mount of every service in the project —

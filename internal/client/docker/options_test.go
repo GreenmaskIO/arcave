@@ -3,89 +3,113 @@ package docker
 import (
 	"testing"
 
+	"github.com/docker/cli/cli/flags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// env is what carries the options to the CLI half of this package. An unset
-// option must not export an empty variable: that would clobber the inherited
+// clientOptions is what carries the options into docker/cli. An unset option
+// must not be passed through: an empty host would override the environment's
 // DOCKER_HOST rather than defer to it.
-func TestOptions_env(t *testing.T) {
+func TestOptions_clientOptions(t *testing.T) {
 	tests := []struct {
-		name       string
-		opts       Options
-		wantVars   []string
-		wantAbsent []string
+		name    string
+		opts    Options
+		wantErr string
+		verify  func(t *testing.T, got *flags.ClientOptions)
 	}{
 		{
-			name:       "the zero options export nothing",
-			opts:       Options{},
-			wantAbsent: []string{"DOCKER_HOST=", "DOCKER_CONTEXT=", "DOCKER_CERT_PATH=", "DOCKER_TLS_VERIFY=1"},
-		},
-		{
-			name:     "a host",
-			opts:     Options{Host: "tcp://10.0.0.1:2376"},
-			wantVars: []string{"DOCKER_HOST=tcp://10.0.0.1:2376"},
-		},
-		{
-			name: "tls settings",
-			opts: Options{Host: "tcp://10.0.0.1:2376", CertPath: "/certs", TLSVerify: true},
-			wantVars: []string{
-				"DOCKER_HOST=tcp://10.0.0.1:2376",
-				"DOCKER_CERT_PATH=/certs",
-				"DOCKER_TLS_VERIFY=1",
+			name: "the zero options pass nothing through",
+			opts: Options{},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.Empty(t, got.Hosts)
+				assert.Empty(t, got.Context)
+				assert.False(t, got.TLS)
+				assert.Nil(t, got.TLSOptions)
 			},
 		},
 		{
-			name:       "tls verify off exports no flag",
-			opts:       Options{TLSVerify: false},
-			wantAbsent: []string{"DOCKER_TLS_VERIFY=1"},
+			name: "a host",
+			opts: Options{Host: "tcp://10.0.0.1:2376"},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.Equal(t, []string{"tcp://10.0.0.1:2376"}, got.Hosts)
+			},
 		},
 		{
-			name:     "a context",
-			opts:     Options{Host: "unix:///d.sock", Context: "remote"},
-			wantVars: []string{"DOCKER_CONTEXT=remote"},
+			name: "tls settings expand to the three pem paths",
+			opts: Options{Host: "tcp://10.0.0.1:2376", CertPath: "/certs", TLSVerify: true},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.True(t, got.TLS)
+				assert.True(t, got.TLSVerify)
+				require.NotNil(t, got.TLSOptions)
+				assert.Equal(t, "/certs/ca.pem", got.TLSOptions.CAFile)
+				assert.Equal(t, "/certs/cert.pem", got.TLSOptions.CertFile)
+				assert.Equal(t, "/certs/key.pem", got.TLSOptions.KeyFile)
+			},
+		},
+		{
+			name: "tls verify off carries no tls config",
+			opts: Options{TLSVerify: false},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.False(t, got.TLS)
+				assert.Nil(t, got.TLSOptions)
+			},
+		},
+		{
+			// The rule this replaced was the inverse: the raw SDK client could not
+			// resolve a context, so one was refused without a host. docker/cli can.
+			name: "a context alone is enough",
+			opts: Options{Context: "remote"},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.Equal(t, "remote", got.Context)
+				assert.Empty(t, got.Hosts)
+			},
+		},
+		{
+			name:    "a host and a context together name two daemons",
+			opts:    Options{Host: "unix:///d.sock", Context: "remote"},
+			wantErr: "mutually exclusive",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			t.Setenv("DOCKER_HOST", "unix:///inherited.sock")
-
 			// Act
-			env := tt.opts.env()
+			got, err := tt.opts.clientOptions()
 
 			// Assert
-			for _, want := range tt.wantVars {
-				assert.Contains(t, env, want)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
 			}
-			for _, absent := range tt.wantAbsent {
-				assert.NotContains(t, env, absent)
-			}
-			assert.Contains(t, env, "DOCKER_HOST=unix:///inherited.sock",
-				"the process environment must survive, so the user's own docker settings do")
+			require.NoError(t, err)
+			tt.verify(t, got)
 		})
 	}
 }
 
-// A docker context names a daemon the SDK client cannot resolve. Accepting it
-// alone would leave the CLI half talking to that daemon and the SDK half talking
-// to DOCKER_HOST's — so it is refused unless a host pins both.
-func TestNewEngine_RejectsContextWithoutHost(t *testing.T) {
+// A host resolves to an endpoint whether or not anything is listening on it:
+// gm savepoint list has to work with docker stopped.
+func TestNewEngine_AcceptsAnUnreachableHost(t *testing.T) {
 	// Act
-	_, err := NewEngine(Options{Context: "remote"})
-
-	// Assert
-	require.ErrorContains(t, err, "needs docker.host set too")
-}
-
-func TestNewEngine_AcceptsAHost(t *testing.T) {
-	// Act
-	eng, err := NewEngine(Options{Host: "unix:///var/run/docker.sock"})
+	eng, err := NewEngine(Options{Host: "unix:///nowhere/docker.sock"})
 
 	// Assert
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, eng.Close()) })
-	assert.Equal(t, "unix:///var/run/docker.sock", eng.cli.DaemonHost())
+	assert.NotNil(t, eng.api)
+}
+
+// A context that does not exist must surface as an error. docker/cli's own
+// answer is to print to the (discarded) error stream and os.Exit, which would
+// kill GM with no output at all — so NewEngine has to resolve it first.
+func TestNewEngine_RejectsAnUnknownContext(t *testing.T) {
+	// Arrange: an empty config dir, so no context store can define the name.
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+
+	// Act
+	_, err := NewEngine(Options{Context: "nosuchcontext"})
+
+	// Assert
+	require.ErrorContains(t, err, "nosuchcontext")
 }

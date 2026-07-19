@@ -62,8 +62,10 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	}
 
 	// The Docker engine is created once here and injected into the snapshot
-	// backends. NewEngine only builds the SDK client (API-version negotiation is
-	// deferred to the first call), so commands that never touch a mount (savepoint
+	// backends — and, since it owns the resolved daemon connection, into the
+	// compose runner too, so both halves of client/docker target one daemon.
+	// NewEngine only resolves the options; the connection itself is built on the
+	// first call that needs it, so commands that never touch a mount (savepoint
 	// list) create it without contacting the daemon. Every closer is owned by the
 	// returned dependencies and released by its Close — never deferred here, or
 	// they would shut down before the command ran.
@@ -92,7 +94,7 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		sprepo.New(savepointStore),
 		lock.New(projectPath),
 		compose.NewInspector(),
-		docker.NewComposeRunner(dockerOpts),
+		docker.NewComposeRunner(engine),
 		snapshot.NewCopyBackend(engine, savepointStore),
 		snapshot.NewCopyBackend(engine, safetyBackupStore),
 	)

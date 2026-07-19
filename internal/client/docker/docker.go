@@ -1,29 +1,40 @@
 // Package docker acts on the *running* stack, in contrast to internal/client/
 // compose, which only reads what the compose files declare. It holds the two
-// types GM needs to reach the daemon, split by what they act on rather than by
-// how they get there:
+// types GM needs to reach the daemon, split by what they act on:
 //
 //   - Engine (docker.go) moves a volume's bytes in and out of a service
-//     container, through the Docker SDK — no CLI output to parse, no helper image.
+//     container, through the Docker API.
 //   - ComposeRunner (compose.go) stops and starts the project's services,
-//     through the docker CLI, since the Docker API has no Compose equivalent and
-//     the CLI inherits the user's context, credentials and build settings.
+//     through the compose library (github.com/docker/compose/v2), since the
+//     Docker API itself has no Compose equivalent.
 //
-// They share one unexported seam, the runner newRunner builds (options.go):
-// Engine also shells out once, to wipe a mount with a throwaway container. That
-// shared helper — and the Options both halves must honour, or they would target
-// different daemons — is why the two live in one package.
+// Both reach the daemon through Go libraries — GM shells out to nothing, so it
+// needs no docker CLI or compose plugin installed, only a reachable daemon.
+// They share one client: Engine owns the docker/cli instance that resolves
+// Options (host, context, TLS) into a connection, and ComposeRunner is built
+// over that same instance. Targeting one daemon is therefore a property of the
+// construction rather than a contract two halves have to honour by hand, and
+// that shared client is why the two live in one package.
 package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"strings"
 
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/docker/cli/cli/command"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/rs/zerolog"
 )
 
 // composeProjectLabel and composeServiceLabel are set by Docker Compose on
@@ -33,69 +44,110 @@ const (
 	composeServiceLabel = "com.docker.compose.service"
 )
 
+// wipeImage is the throwaway image wipeMount runs to clear a mount: small,
+// ubiquitous, and carrying the `find` GM needs.
+const wipeImage = "busybox"
+
+// dockerAPI is the slice of the Docker API client this package actually calls —
+// consumer-side, so a test can drive Engine with a mock instead of a daemon.
+// *client.Client (and so docker/cli's client.APIClient) satisfies it.
+type dockerAPI interface {
+	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, container.PathStat, error)
+	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
+	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
+	Close() error
+}
+
 // Engine is GM's volume I/O against the Docker daemon: it streams a service
 // mount's contents out (OpenMount) and wipes-and-extracts a stream back in
 // (WriteMount). These are the operations that have no Compose-level equivalent,
-// so they go through the Docker API rather than the CLI — see ComposeRunner for
-// the lifecycle half.
+// so they go through the Docker API — see ComposeRunner for the lifecycle half.
+//
+// It also owns the resolved daemon connection the whole package shares:
+// dockerCli is what NewComposeRunner builds its compose service over.
 //
 // One Engine is created per command at the DI root and injected into both
 // snapshot backends; it is concurrency-safe, and its Close belongs to whoever
 // created it.
 type Engine struct {
-	cli *client.Client
-	// run executes a docker CLI invocation (used to wipe mounts via a throwaway
-	// container); it is built by newRunner and is a field only so tests can
-	// exercise wipeMount's argument assembly without a daemon.
-	run func(ctx context.Context, args ...string) error
+	dockerCli *command.DockerCli
+	// api is the resolved daemon connection. A test sets it directly, standing in
+	// for the client NewEngine would have built.
+	api dockerAPI
 }
 
-// NewEngine builds a Docker SDK client from the environment (DOCKER_HOST, the
-// active context, TLS settings), overridden by whatever opts sets. It does not
-// contact the daemon: API-version negotiation is deferred to the first call, so
-// a command that never touches a mount (savepoint list) can construct an Engine
-// with docker stopped.
+// NewEngine resolves opts into a docker/cli instance: the daemon comes from the
+// environment (DOCKER_HOST, the active context, TLS settings), overridden by
+// whatever opts sets, and a named docker context is resolved through the CLI's
+// own context store.
 //
-// opts.Context is rejected without opts.Host. A docker *context* is a CLI
-// concept — resolving one needs docker/cli's context store, which this package
-// does not depend on — so the SDK client cannot honour it. Accepting it here
-// would leave the CLI half of this package talking to the context's daemon while
-// the SDK half talked to DOCKER_HOST's: a savepoint exported from one and
-// restored into the other. Naming the host makes both halves agree.
+// It resolves the endpoint eagerly, and does so through DockerEndpoint rather
+// than by reaching for the client: docker/cli reports a failure to resolve one
+// by writing to its error stream — which GM discards — and calling os.Exit. A
+// mistyped docker.context would therefore kill GM with no message at all, and
+// not only here: the compose library calls Client() itself, so the check has to
+// happen before either half of this package is handed a daemon. Resolving does
+// ping, but a failed ping is not an error — a command that never touches a mount
+// (savepoint list) still works with docker stopped.
 func NewEngine(opts Options) (*Engine, error) {
-	if opts.Context != "" && opts.Host == "" {
-		return nil, fmt.Errorf("docker.context %q needs docker.host set too: the Docker API client cannot resolve a CLI context, so without a host the API and CLI halves of gm would target different daemons", opts.Context)
-	}
-
-	// FromEnv first, so anything opts leaves unset keeps its environment value.
-	clientOpts := []client.Opt{client.FromEnv}
-	if opts.Host != "" {
-		clientOpts = append(clientOpts, client.WithHost(opts.Host))
-	}
-	if opts.CertPath != "" || opts.TLSVerify {
-		clientOpts = append(clientOpts, client.WithTLSClientConfig(
-			filepath.Join(opts.CertPath, "ca.pem"),
-			filepath.Join(opts.CertPath, "cert.pem"),
-			filepath.Join(opts.CertPath, "key.pem"),
-		))
-	}
-	if opts.APIVersion != "" {
-		clientOpts = append(clientOpts, client.WithVersion(opts.APIVersion))
-	} else {
-		clientOpts = append(clientOpts, client.WithAPIVersionNegotiation())
-	}
-
-	cli, err := client.NewClientWithOpts(clientOpts...)
+	clientOpts, err := opts.clientOptions()
 	if err != nil {
-		return nil, fmt.Errorf("connect to docker engine: %w", err)
+		return nil, err
 	}
-	return &Engine{
-		cli: cli,
-		run: newRunner(opts),
-	}, nil
+
+	// DOCKER_API_VERSION is the only seam docker/cli leaves for pinning the API
+	// version: the client it builds from the resolved endpoint reads the version
+	// from the environment (client.WithVersionFromEnv) and otherwise negotiates.
+	// Setting it here is safe in a way it would not have been for the exec-based
+	// version — GM spawns no child processes, so this configures GM's own client
+	// and nothing else.
+	if opts.APIVersion != "" {
+		if err := os.Setenv(client.EnvOverrideAPIVersion, opts.APIVersion); err != nil {
+			return nil, fmt.Errorf("pin docker api version %q: %w", opts.APIVersion, err)
+		}
+	}
+
+	// The streams are discarded: compose writes its progress UI to them, and GM's
+	// own output contract is JSON on stdout.
+	dockerCli, err := command.NewDockerCli(
+		command.WithInputStream(nil),
+		command.WithOutputStream(io.Discard),
+		command.WithErrorStream(io.Discard),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+	if err := dockerCli.Initialize(clientOpts); err != nil {
+		return nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+
+	if ep := dockerCli.DockerEndpoint(); ep.Host == "" {
+		return nil, unresolvedEndpointError(dockerCli, opts)
+	}
+	return &Engine{dockerCli: dockerCli, api: dockerCli.Client()}, nil
 }
 
-func (e *Engine) Close() error { return e.cli.Close() }
+// unresolvedEndpointError explains why docker/cli could not name a daemon.
+// docker/cli swallowed the cause into the discarded error stream, so a
+// configured context is looked up again here to recover it.
+func unresolvedEndpointError(dockerCli *command.DockerCli, opts Options) error {
+	if opts.Context != "" {
+		if _, err := dockerCli.ContextStore().GetMetadata(opts.Context); err != nil {
+			return fmt.Errorf("connect to docker engine: docker.context %q: %w", opts.Context, err)
+		}
+	}
+	return fmt.Errorf("connect to docker engine: cannot resolve a daemon endpoint from docker.host %q / docker.context %q", opts.Host, opts.Context)
+}
+
+// Close releases the daemon connection.
+func (e *Engine) Close() error { return e.api.Close() }
 
 // OpenMount opens a tar stream of the service mount at target's contents.
 //
@@ -109,12 +161,12 @@ func (e *Engine) Close() error { return e.cli.Close() }
 // not reapply) survive a later restore. The caller owns the returned stream and
 // closes it; Docker stays out of the host filesystem entirely.
 func (e *Engine) OpenMount(ctx context.Context, projectName, service, target string) (io.ReadCloser, error) {
-	containerID, _, err := e.findServiceMount(ctx, projectName, service, target)
+	containerID, _, err := findServiceMount(ctx, e.api, projectName, service, target)
 	if err != nil {
 		return nil, err
 	}
 
-	rc, _, err := e.cli.CopyFromContainer(ctx, containerID, target)
+	rc, _, err := e.api.CopyFromContainer(ctx, containerID, target)
 	if err != nil {
 		return nil, fmt.Errorf("export %s mount %s: %w", service, target, err)
 	}
@@ -132,12 +184,12 @@ type mountInfo struct {
 // findServiceMount returns the ID of the project's container for service that
 // mounts target, along with that mount's backing-storage details. Stopped
 // containers are included, since export and restore run while services are down.
-func (e *Engine) findServiceMount(ctx context.Context, projectName, service, target string) (id string, mnt mountInfo, err error) {
+func findServiceMount(ctx context.Context, api dockerAPI, projectName, service, target string) (id string, mnt mountInfo, err error) {
 	f := filters.NewArgs(
 		filters.Arg("label", composeProjectLabel+"="+projectName),
 		filters.Arg("label", composeServiceLabel+"="+service),
 	)
-	containers, err := e.cli.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
+	containers, err := api.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
 	if err != nil {
 		return "", mountInfo{}, fmt.Errorf("list containers for service %q: %w", service, err)
 	}
@@ -172,12 +224,12 @@ func matchMount(containers []container.Summary, target string) (id string, mnt m
 // are stopped but not removed, so the service container is reused. The stream is
 // owned by the caller; Docker never touches the host filesystem.
 func (e *Engine) WriteMount(ctx context.Context, projectName, service, target string, r io.Reader) error {
-	id, mnt, err := e.findServiceMount(ctx, projectName, service, target)
+	id, mnt, err := findServiceMount(ctx, e.api, projectName, service, target)
 	if err != nil {
 		return fmt.Errorf("finding service mounts: %w", err)
 	}
 
-	if err := wipeMount(ctx, mnt, e.run); err != nil {
+	if err := wipeMount(ctx, e.api, mnt); err != nil {
 		return fmt.Errorf("clear %s mount %s before restore: %w", service, target, err)
 	}
 
@@ -185,7 +237,7 @@ func (e *Engine) WriteMount(ctx context.Context, projectName, service, target st
 	// net/http as the request body, and http.NewRequestWithContext type-asserts it
 	// to io.ReadCloser — so the transport would close the caller's stream, and the
 	// caller's own deferred Close would then fail with "file already closed".
-	if err := e.cli.CopyToContainer(ctx, id, filepath.Dir(target), readOnly{r}, container.CopyToContainerOptions{}); err != nil {
+	if err := e.api.CopyToContainer(ctx, id, filepath.Dir(target), readOnly{r}, container.CopyToContainerOptions{}); err != nil {
 		return fmt.Errorf("restore %s mount %s: %w", service, target, err)
 	}
 	return nil
@@ -201,9 +253,8 @@ func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
 // throwaway root container that mounts it. This is the only host-agnostic way to
 // delete data the service wrote as root: the daemon owns those files, and
 // CopyToContainer only merges entries, never deletes them. Volumes (named and
-// anonymous) are mounted by volume name; bind mounts by host path. run executes
-// the docker CLI (Engine.run in production, a stub in tests).
-func wipeMount(ctx context.Context, mnt mountInfo, run func(ctx context.Context, args ...string) error) error {
+// anonymous) are mounted by volume name; bind mounts by host path.
+func wipeMount(ctx context.Context, api dockerAPI, mnt mountInfo) error {
 	var src string
 	switch mnt.Type {
 	case "volume":
@@ -216,7 +267,87 @@ func wipeMount(ctx context.Context, mnt mountInfo, run func(ctx context.Context,
 	if src == "" {
 		return fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
 	}
-	// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
-	return run(ctx, "run", "--rm", "-v", src+":/data", "busybox",
-		"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+")
+
+	if err := ensureImage(ctx, api, wipeImage); err != nil {
+		return err
+	}
+
+	created, err := api.ContainerCreate(ctx, &container.Config{
+		Image: wipeImage,
+		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
+		Cmd: []string{"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"},
+	}, &container.HostConfig{
+		Binds: []string{src + ":/data"},
+	}, nil, nil, "")
+	if err != nil {
+		return fmt.Errorf("create wipe container: %w", err)
+	}
+	defer func() {
+		if err := api.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true}); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Str("container", created.ID).Msg("remove wipe container")
+		}
+	}()
+
+	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("start wipe container: %w", err)
+	}
+
+	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("wait for wipe container: %w", err)
+	case status := <-statusCh:
+		if status.StatusCode != 0 {
+			return fmt.Errorf("wipe container exited with status %d: %s", status.StatusCode, containerOutput(ctx, api, created.ID))
+		}
+	}
+	return nil
+}
+
+// ensureImage pulls ref unless the daemon already has it. The pull stream is
+// drained rather than reported: the daemon only completes the pull once the
+// stream is consumed, and GM has no progress UI to render it into.
+func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
+	if _, err := api.ImageInspect(ctx, ref); err == nil {
+		return nil
+	} else if !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("inspect image %s: %w", ref, err)
+	}
+
+	rc, err := api.ImagePull(ctx, ref, image.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("pull image %s: %w", ref, err)
+	}
+	defer func() {
+		if err := rc.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Str("image", ref).Msg("close image pull stream")
+		}
+	}()
+
+	if _, err := io.Copy(io.Discard, rc); err != nil {
+		return fmt.Errorf("pull image %s: %w", ref, err)
+	}
+	return nil
+}
+
+// containerOutput reads back what a failed container printed, so the error
+// carries the daemon's own message the way the CLI's combined output used to.
+// It is best-effort: a failure to read the logs must not replace the exit status
+// that is being reported.
+func containerOutput(ctx context.Context, api dockerAPI, containerID string) string {
+	rc, err := api.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return "(logs unavailable: " + err.Error() + ")"
+	}
+	defer func() {
+		if err := rc.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Str("container", containerID).Msg("close container logs")
+		}
+	}()
+
+	out, err := io.ReadAll(rc)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "(logs unavailable: " + err.Error() + ")"
+	}
+	return strings.TrimSpace(string(out))
 }
