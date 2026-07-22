@@ -2,7 +2,7 @@
 // compose, which only reads what the compose files declare. It holds the two
 // types GM needs to reach the daemon, split by what they act on:
 //
-//   - Engine (docker.go) moves a volume's bytes in and out of a service
+//   - Engine (engine.go) moves a volume's bytes in and out of a service
 //     container, through the Docker API.
 //   - ComposeRunner (loader.go) stops and starts the project's services,
 //     through the compose library (github.com/docker/compose/v2), since the
