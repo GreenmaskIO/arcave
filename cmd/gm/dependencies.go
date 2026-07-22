@@ -158,16 +158,30 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 		opts.Hosts = []string{cfg.Host}
 	}
 	opts.Context = cfg.Context
-	if cfg.CertPath != "" || cfg.TLSVerify {
+	if cfg.CertPath != "" || cfg.TLSVerify || cfg.CAFile != "" || cfg.CertFile != "" || cfg.KeyFile != "" {
 		opts.TLSVerify = cfg.TLSVerify
 		opts.TLS = true
 		opts.TLSOptions = &tlsconfig.Options{
-			CAFile:   filepath.Join(cfg.CertPath, "ca.pem"),
-			CertFile: filepath.Join(cfg.CertPath, "cert.pem"),
-			KeyFile:  filepath.Join(cfg.CertPath, "key.pem"),
+			CAFile:   tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem"),
+			CertFile: tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem"),
+			KeyFile:  tlsFile(cfg.KeyFile, cfg.CertPath, "key.pem"),
 		}
 	}
 	return opts, nil
+}
+
+// tlsFile resolves one TLS file path, mirroring the docker CLI's own layering: an
+// explicit path wins; otherwise it is CertPath/name (the DOCKER_CERT_PATH
+// convention); and when neither is set the field stays empty so docker/cli reads
+// it from the environment rather than being handed a bogus path.
+func tlsFile(explicit, certPath, name string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if certPath != "" {
+		return filepath.Join(certPath, name)
+	}
+	return ""
 }
 
 // initDockerClient resolves cfg into the one docker/cli instance both halves of
