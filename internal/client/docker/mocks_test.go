@@ -4,10 +4,6 @@ import (
 	"context"
 	"io"
 
-	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	// dockertypes is aliased because compose-go's own types package, imported
-	// above for mockCompose, already claims the name.
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -76,17 +72,3 @@ func (m *mockAPI) ImagePull(ctx context.Context, ref string, options image.PullO
 }
 
 func (m *mockAPI) Close() error { return m.Called().Error(0) }
-
-// mockCompose is a test double for the compose library (the composeService
-// seam), so ComposeRunner's option assembly can be asserted without a daemon.
-type mockCompose struct {
-	mock.Mock
-}
-
-func (m *mockCompose) Stop(ctx context.Context, projectName string, options api.StopOptions) error {
-	return m.Called(ctx, projectName, options).Error(0)
-}
-
-func (m *mockCompose) Up(ctx context.Context, project *types.Project, options api.UpOptions) error {
-	return m.Called(ctx, project, options).Error(0)
-}

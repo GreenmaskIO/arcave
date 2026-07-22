@@ -51,7 +51,7 @@ func TestGetDockerOptions(t *testing.T) {
 		},
 		{
 			name: "explicit files override the cert path per file",
-			opts: Options{CertPath: "/certs", CAFile: "/etc/ca.pem", KeyFile: "/etc/key.pem", TLSVerify: true},
+			cfg:  config.Docker{CertPath: "/certs", CAFile: "/etc/ca.pem", KeyFile: "/etc/key.pem", TLSVerify: true},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				require.NotNil(t, got.TLSOptions)
 				assert.Equal(t, "/etc/ca.pem", got.TLSOptions.CAFile, "explicit CAFile wins")
@@ -61,7 +61,7 @@ func TestGetDockerOptions(t *testing.T) {
 		},
 		{
 			name: "explicit files alone enable tls without a cert path",
-			opts: Options{CAFile: "/etc/ca.pem", CertFile: "/etc/cert.pem", KeyFile: "/etc/key.pem"},
+			cfg:  config.Docker{CAFile: "/etc/ca.pem", CertFile: "/etc/cert.pem", KeyFile: "/etc/key.pem"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
 				require.NotNil(t, got.TLSOptions)

@@ -1,156 +1,140 @@
-// Package compose reads the compose project's *declared* state: it wraps the
-// Compose specification SDK (github.com/compose-spec/compose-go) to parse,
-// interpolate and validate one or more docker-compose.yml files, and reports the
-// project name plus the persistent mounts GM snapshots.
-//
-// It never contacts the Docker daemon — its only dependency is the compose-go
-// parser — which is why `gm init` (whose whole job is to verify the project
-// loads) runs with docker stopped. Everything that touches the *running* stack
-// lives in internal/client/docker instead: container/volume I/O and the compose
-// lifecycle, both through Docker's own Go libraries.
 package compose
 
 import (
 	"context"
 	"fmt"
-	"sort"
+	"strings"
+	"time"
 
-	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/types"
-
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/docker/compose/v2/pkg/api"
 )
 
-// Inspector answers one question — "what does this compose project declare?" —
-// and answers it from the files alone, with no daemon and no side effects. It is
-// stateless across calls: the compose files are supplied per call, so one
-// instance is shared across invocations.
+// defaultUpWaitTimeout is the bound (seconds) Up applies to its health-check
+// wait when the caller names none. Without a bound, a service that never becomes
+// healthy (a crash-looping container with restart: always) would block forever.
 //
-// Its one field is the loader seam. Inspect resolves the project through load,
-// which NewInspector wires to Load; a test overrides it with a hand-built
-// *types.Project so the projection (mountsOf, and the Inspection it assembles)
-// is exercised without a compose file on disk. Load itself stays an exported
-// package function — client/docker's ComposeRunner calls it directly, one layer
-// over, so that path needs no seam and does not go through the field.
-type Inspector struct {
-	// load resolves the compose project from files. NewInspector wires it to
-	// Load; a test swaps in a fake to drive Inspect off an in-memory project.
-	load func(ctx context.Context, files ...string) (*types.Project, error)
+// It is the default of *this* implementation, not a property of the domain: a
+// runner that did not wait on health checks would have no use for it. Callers
+// that expose it — the command layer, for a flag default — take it from here.
+const defaultUpWaitTimeout = 120
+
+// dockerComposeAPI is the slice of the compose library's API that Client
+// calls — consumer-side, so a test can assert on the options GM passes without a
+// daemon. api.Compose satisfies it.
+type dockerComposeAPI interface {
+	Stop(ctx context.Context, projectName string, options api.StopOptions) error
+	Up(ctx context.Context, project *types.Project, options api.UpOptions) error
 }
 
-// NewInspector returns a compose-file inspector.
-func NewInspector() *Inspector { return &Inspector{load: Load} }
+type dockerComposeLoader interface {
+	Load(ctx context.Context, files ...string) (*types.Project, error)
+}
 
-// Inspect loads the compose project described by files and returns its name and
-// the mounts GM should snapshot. See Load for how files is resolved.
-func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspection, error) {
+// Client drives the *running* stack's lifecycle: it stops and starts the
+// project's services, mirroring how the user would invoke `docker compose` by
+// hand. Compose is where the Inspector's declared state becomes containers, and
+// this is the type that moves it between the two — GM stops the services before
+// touching a mount and starts them after, and it is Client that does both.
+//
+// It calls github.com/docker/compose/v2 as a library rather than shelling out to
+// the compose plugin, so GM inherits compose's own semantics (depends_on
+// ordering, health aggregation, container recreation) without requiring a docker
+// CLI on the host — which matters for gm mcp, where the environment may offer
+// nothing but the daemon socket. The semantics are pinned to the compose version
+// GM was built against, not to whatever the user happens to have installed.
+//
+// It is stateless: the compose files to act on are passed per call, so a single
+// instance is shared across invocations rather than bound to a fixed file set.
+type Client struct {
+	api    dockerComposeAPI
+	loader dockerComposeLoader
+}
+
+// NewClient returns a runner over the engine's daemon connection, so the
+// lifecycle half of this package targets the daemon Options resolved for the I/O
+// half by construction.
+func NewClient(svc dockerComposeAPI, loader dockerComposeLoader) *Client {
+	return &Client{api: svc, loader: loader}
+}
+
+// Stop stops all project services. It returns once the containers have exited,
+// so no extra polling is needed.
+func (c *Client) Stop(ctx context.Context, files ...string) error {
 	project, err := c.load(ctx, files...)
 	if err != nil {
-		return model.Inspection{}, fmt.Errorf("loading docker compose file(s): %w", err)
+		return err
 	}
-	mounts, skipped := mountsOf(project)
-	return model.Inspection{
-		ComposeProject: project.Name,
-		Mounts:         mounts,
-		Skipped:        skipped,
-	}, nil
+	return c.api.Stop(ctx, project.Name, api.StopOptions{Project: project})
 }
 
-// Load reads and verifies the Docker Compose project described by files.
+// Up starts all project services in the background and waits until they are
+// healthy, honouring container health checks where defined.
 //
-// files is the ordered list of Compose configuration paths (the main
-// docker-compose.yml plus any overrides). When empty, compose-go resolves the
-// standard compose file names in the working directory, honouring the
-// COMPOSE_FILE environment variable.
-//
-// The returned project has been parsed, interpolated, and validated against the
-// Compose specification, and its Name is the resolved Compose project name (from
-// an explicit name, the top-level `name:` field, COMPOSE_PROJECT_NAME, or the
-// working directory). Load additionally verifies that the project defines at
-// least one service, since GM has nothing to manage otherwise.
-//
-// It is exported because internal/client/docker's ComposeRunner loads the same
-// project before handing it to the compose library: both halves of GM must
-// resolve a project the same way — same file set, same .env, same name — or the
-// stack GM inspects and the stack it stops would be two different stacks.
-func Load(ctx context.Context, files ...string) (*types.Project, error) {
-	opts, err := cli.NewProjectOptions(
-		files,
-		cli.WithOsEnv,
-		cli.WithDotEnv,
-		cli.WithConfigFileEnv, // COMPOSE_FILE
-		cli.WithDefaultConfigPath,
-	)
+// waitTimeoutSec bounds how long it blocks on health checks: without a bound, a
+// service that never becomes healthy (e.g. a crash-looping container with
+// restart: always) would make Up hang forever, so the bound turns that into an
+// error callers can act on (e.g. rollback reverts to its safety backup). A
+// value <= 0 falls back to defaultUpWaitTimeout.
+func (c *Client) Up(ctx context.Context, waitTimeoutSec int, files ...string) error {
+	if waitTimeoutSec <= 0 {
+		waitTimeoutSec = defaultUpWaitTimeout
+	}
+	project, err := c.load(ctx, files...)
 	if err != nil {
-		return nil, fmt.Errorf("build compose project options: %w", err)
+		return err
 	}
-
-	project, err := opts.LoadProject(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("load compose project: %w", err)
-	}
-
-	if len(project.Services) == 0 {
-		return nil, fmt.Errorf("compose project %q defines no services", project.Name)
-	}
-
-	return project, nil
+	return c.api.Up(ctx, project, api.UpOptions{
+		Create: api.CreateOptions{
+			Services: project.ServiceNames(),
+			// Inherit carries a recreated container's anonymous volumes over from
+			// the one it replaces. The compose CLI defaults it on (it is what
+			// `--renew-anon-volumes` turns *off*), and the library does not — the
+			// zero CreateOptions silently means "renew". GM captures anonymous
+			// volumes like any other mount, so leaving it off would throw their
+			// data away whenever a container diverges from the compose file, which
+			// is exactly what GM's users are in the middle of doing.
+			Inherit: true,
+			// The CLI's defaults, spelled out: replace only containers whose
+			// config no longer matches the file. The zero value happens to behave
+			// the same way, but naming it keeps that from being an accident.
+			Recreate:             api.RecreateDiverged,
+			RecreateDependencies: api.RecreateDiverged,
+		},
+		Start: api.StartOptions{
+			Project:     project,
+			Services:    project.ServiceNames(),
+			Wait:        true,
+			WaitTimeout: time.Duration(waitTimeoutSec) * time.Second,
+		},
+	})
 }
 
-// mountsOf returns every persistent mount of every service in the project —
-// named volumes, bind mounts, and anonymous volumes — keyed by service and
-// container target. It also returns the mounts it had to skip (tmpfs and the
-// like) so callers can warn about state that will not be captured. Services are
-// visited in sorted name order so the output is deterministic.
-func mountsOf(project *types.Project) ([]model.Mount, []model.SkippedMount) {
-	names := make([]string, 0, len(project.Services))
-	for name := range project.Services {
-		names = append(names, name)
+// load resolves the project the same way Inspector does, then labels it.
+func (c *Client) load(ctx context.Context, files ...string) (*types.Project, error) {
+	project, err := c.loader.Load(ctx, files...)
+	if err != nil {
+		return nil, fmt.Errorf("loading docker compose file(s): %w", err)
 	}
-	sort.Strings(names)
+	return labelProject(project), nil
+}
 
-	var (
-		mounts  []model.Mount
-		skipped []model.SkippedMount
-	)
-	for _, service := range names {
-		for _, v := range project.Services[service].Volumes {
-			switch v.Type {
-			case "volume":
-				source := "" // anonymous volume; resolved from the container later
-				if v.Source != "" {
-					source = volumeName(project, v.Source)
-				}
-				mounts = append(mounts, model.Mount{
-					Service: service,
-					Target:  v.Target,
-					Type:    "volume",
-					Source:  source,
-				})
-			case "bind":
-				mounts = append(mounts, model.Mount{
-					Service: service,
-					Target:  v.Target,
-					Type:    "bind",
-					Source:  v.Source,
-				})
-			default:
-				skipped = append(skipped, model.SkippedMount{
-					Service: service,
-					Reason:  fmt.Sprintf("%s mount at %q", v.Type, v.Target),
-				})
-			}
+// labelProject stamps each service with the labels compose puts on the
+// containers it creates. The compose CLI does this before every call, and the
+// library does not do it for you: without them compose does not recognise its
+// own containers, so an Up would recreate a stack it should have reused and a
+// Stop would find nothing to stop.
+func labelProject(project *types.Project) *types.Project {
+	for name, service := range project.Services {
+		service.CustomLabels = map[string]string{
+			api.ProjectLabel:     project.Name,
+			api.ServiceLabel:     name,
+			api.VersionLabel:     api.ComposeVersion,
+			api.WorkingDirLabel:  project.WorkingDir,
+			api.ConfigFilesLabel: strings.Join(project.ComposeFiles, ","),
+			api.OneoffLabel:      "False",
 		}
+		project.Services[name] = service
 	}
-	return mounts, skipped
-}
-
-// volumeName resolves the Docker volume name for a compose volume key. Compose
-// prefixes volume keys with the project name unless the volume declares an
-// explicit name or is marked external (compose-go populates Name in both cases).
-func volumeName(project *types.Project, key string) string {
-	if v, ok := project.Volumes[key]; ok && v.Name != "" {
-		return v.Name
-	}
-	return project.Name + "_" + key
+	return project
 }

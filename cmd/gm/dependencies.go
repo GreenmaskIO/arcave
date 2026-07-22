@@ -15,17 +15,18 @@ import (
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
+	"github.com/greenmaskio/gm-tools/internal/client/compose"
+	"github.com/greenmaskio/gm-tools/internal/service/introspect"
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/gm-tools/internal/client/compose"
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
 	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/lock"
 	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/printer/json"
 	cfgrepo "github.com/greenmaskio/gm-tools/internal/repository/config"
 	sprepo "github.com/greenmaskio/gm-tools/internal/repository/savepoint"
 	"github.com/greenmaskio/gm-tools/internal/service/core"
+	"github.com/greenmaskio/gm-tools/internal/service/lock"
+	"github.com/greenmaskio/gm-tools/internal/service/printer/json"
 	"github.com/greenmaskio/gm-tools/internal/service/snapshot"
 	"github.com/greenmaskio/gm-tools/internal/storages"
 )
@@ -46,7 +47,7 @@ type dependencies struct {
 	dockerClient      client.APIClient
 	composeService    api.Compose
 	engine            *docker.Engine
-	composeRunner     *docker.ComposeRunner
+	composeRunner     *compose.Client
 	service           *core.Service
 	printer           *json.Printer
 }
@@ -89,7 +90,8 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	engine := docker.NewEngine(dockerClientAPI)
 
 	composeService := dockercompose.NewComposeService(dockerCli)
-	composeRunner := docker.NewComposeRunner(composeService)
+	dockerComposeLoader := compose.NewLoader()
+	composeRunner := compose.NewClient(composeService, dockerComposeLoader)
 
 	// The savepoint repository shares the savepoint store with the backend that
 	// writes the archives it records, so a record always travels with its data —
@@ -101,7 +103,7 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	svc := core.New(
 		sprepo.New(savepointStore),
 		lock.New(projectPath),
-		compose.NewInspector(),
+		introspect.NewInspector(dockerComposeLoader),
 		composeRunner,
 		snapshot.NewCopyBackend(engine, savepointStore),
 		snapshot.NewCopyBackend(engine, safetyBackupStore),
@@ -136,7 +138,7 @@ func (d *dependencies) Close(ctx context.Context) error {
 // compose project to verify. Nothing here holds a resource, so there is nothing
 // to close.
 func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
-	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), compose.NewInspector())
+	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), introspect.NewInspector(compose.NewLoader()))
 	return svc, json.New(os.Stdout)
 }
 
@@ -158,16 +160,30 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 		opts.Hosts = []string{cfg.Host}
 	}
 	opts.Context = cfg.Context
-	if cfg.CertPath != "" || cfg.TLSVerify {
+	if cfg.CertPath != "" || cfg.TLSVerify || cfg.CAFile != "" || cfg.CertFile != "" || cfg.KeyFile != "" {
 		opts.TLSVerify = cfg.TLSVerify
 		opts.TLS = true
 		opts.TLSOptions = &tlsconfig.Options{
-			CAFile:   filepath.Join(cfg.CertPath, "ca.pem"),
-			CertFile: filepath.Join(cfg.CertPath, "cert.pem"),
-			KeyFile:  filepath.Join(cfg.CertPath, "key.pem"),
+			CAFile:   certFile(cfg.CAFile, cfg.CertPath, "ca.pem"),
+			CertFile: certFile(cfg.CertFile, cfg.CertPath, "cert.pem"),
+			KeyFile:  certFile(cfg.KeyFile, cfg.CertPath, "key.pem"),
 		}
 	}
 	return opts, nil
+}
+
+// certFile resolves one of the three TLS files: an explicitly configured path
+// wins, otherwise the DOCKER_CERT_PATH convention names it under cert_path. With
+// neither set it returns "" — filepath.Join would otherwise hand docker/cli a
+// bare "ca.pem" rooted at whatever directory GM happens to run in.
+func certFile(explicit, certPath, name string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if certPath == "" {
+		return ""
+	}
+	return filepath.Join(certPath, name)
 }
 
 // initDockerClient resolves cfg into the one docker/cli instance both halves of

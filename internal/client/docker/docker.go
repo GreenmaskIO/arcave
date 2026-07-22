@@ -4,7 +4,7 @@
 //
 //   - Engine (docker.go) moves a volume's bytes in and out of a service
 //     container, through the Docker API.
-//   - ComposeRunner (compose.go) stops and starts the project's services,
+//   - ComposeRunner (loader.go) stops and starts the project's services,
 //     through the compose library (github.com/docker/compose/v2), since the
 //     Docker API itself has no Compose equivalent.
 //

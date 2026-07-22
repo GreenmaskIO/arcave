@@ -3,224 +3,287 @@ package compose
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/docker/compose/v2/pkg/api"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
-func TestMountsOfClassifiesMounts(t *testing.T) {
+// The two failures a call can meet, as sentinels so a case can assert the cause
+// survives the wrapping.
+var (
+	errLoad    = errors.New("bad compose file")
+	errCompose = errors.New("daemon refused")
+)
+
+func TestClient_Stop(t *testing.T) {
 	tests := []struct {
-		name        string
-		project     *types.Project
-		wantMounts  []model.Mount
-		wantSkipped []model.SkippedMount
+		name       string
+		loadErr    error
+		stopErr    error
+		wantErr    error
+		wantErrMsg string
+		verify     func(t *testing.T, composeAPI *mockComposeAPI)
 	}{
 		{
-			name: "named volume gets project-prefixed source",
-			project: &types.Project{
-				Name: "demo",
-				Services: types.Services{
-					"db": {Volumes: []types.ServiceVolumeConfig{
-						{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
-					}},
-				},
-			},
-			wantMounts: []model.Mount{
-				{Service: "db", Target: "/var/lib/postgresql/data", Type: "volume", Source: "demo_pgdata"},
+			name: "stops the loaded project",
+			verify: func(t *testing.T, composeAPI *mockComposeAPI) {
+				opts := composeAPI.stopCall(t)
+				require.NotNil(t, opts.Project, "compose needs the project to know which services to stop")
+				assertLabelled(t, opts.Project)
 			},
 		},
 		{
-			name: "anonymous volume has empty source",
-			project: &types.Project{
-				Name: "demo",
-				Services: types.Services{
-					"db": {Volumes: []types.ServiceVolumeConfig{
-						{Type: "volume", Target: "/data"},
-					}},
-				},
-			},
-			wantMounts: []model.Mount{
-				{Service: "db", Target: "/data", Type: "volume", Source: ""},
+			name:       "a loader failure aborts before compose is touched",
+			loadErr:    errLoad,
+			wantErr:    errLoad,
+			wantErrMsg: "loading docker compose file(s)",
+			verify: func(t *testing.T, composeAPI *mockComposeAPI) {
+				composeAPI.AssertNotCalled(t, "Stop", mock.Anything, mock.Anything, mock.Anything)
 			},
 		},
 		{
-			name: "bind mount keeps host source verbatim",
-			project: &types.Project{
-				Name: "demo",
-				Services: types.Services{
-					"app": {Volumes: []types.ServiceVolumeConfig{
-						{Type: "bind", Source: "./cfg", Target: "/etc/cfg"},
-					}},
-				},
-			},
-			wantMounts: []model.Mount{
-				{Service: "app", Target: "/etc/cfg", Type: "bind", Source: "./cfg"},
-			},
-		},
-		{
-			name: "tmpfs is skipped with a reason",
-			project: &types.Project{
-				Name: "demo",
-				Services: types.Services{
-					"app": {Volumes: []types.ServiceVolumeConfig{
-						{Type: "tmpfs", Target: "/tmp"},
-					}},
-				},
-			},
-			wantSkipped: []model.SkippedMount{
-				{Service: "app", Reason: `tmpfs mount at "/tmp"`},
-			},
-		},
-		{
-			name: "services are visited in sorted order",
-			project: &types.Project{
-				Name: "demo",
-				Services: types.Services{
-					"web": {Volumes: []types.ServiceVolumeConfig{{Type: "bind", Source: "./w", Target: "/w"}}},
-					"api": {Volumes: []types.ServiceVolumeConfig{{Type: "bind", Source: "./a", Target: "/a"}}},
-				},
-			},
-			wantMounts: []model.Mount{
-				{Service: "api", Target: "/a", Type: "bind", Source: "./a"},
-				{Service: "web", Target: "/w", Type: "bind", Source: "./w"},
-			},
+			name:    "a compose failure reaches the caller",
+			stopErr: errCompose,
+			wantErr: errCompose,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			loader := &mockLoader{}
+			loader.On("Load", mock.Anything, []string{"a.yml", "b.yml"}).Return(loadResult(tt.loadErr)).Once()
+			composeAPI := &mockComposeAPI{}
+			composeAPI.On("Stop", mock.Anything, "demo", mock.Anything).Return(tt.stopErr).Maybe()
+			c := NewClient(composeAPI, loader)
+
 			// Act
-			mounts, skipped := mountsOf(tt.project)
+			err := c.Stop(context.Background(), "a.yml", "b.yml")
 
 			// Assert
-			assert.Equal(t, tt.wantMounts, mounts)
-			assert.Equal(t, tt.wantSkipped, skipped)
+			assertError(t, err, tt.wantErr, tt.wantErrMsg)
+			loader.AssertExpectations(t)
+			if tt.verify != nil {
+				tt.verify(t, composeAPI)
+			}
 		})
 	}
 }
 
-func TestVolumeName(t *testing.T) {
-	project := &types.Project{
-		Name: "demo",
-		Volumes: types.Volumes{
-			"explicit": types.VolumeConfig{Name: "custom_name"},
-			"plain":    types.VolumeConfig{},
-		},
-	}
-
+func TestClient_Up(t *testing.T) {
 	tests := []struct {
-		name string
-		key  string
-		want string
+		name        string
+		waitTimeout int
+		loadErr     error
+		upErr       error
+		wantTimeout time.Duration
+		wantErr     error
+		wantErrMsg  string
+		verify      func(t *testing.T, composeAPI *mockComposeAPI)
 	}{
-		{name: "explicit name wins over project prefix", key: "explicit", want: "custom_name"},
-		{name: "plain key is project-prefixed", key: "plain", want: "demo_plain"},
-		{name: "unknown key is project-prefixed", key: "missing", want: "demo_missing"},
+		{
+			name:        "carries the caller's bound",
+			waitTimeout: 30,
+			wantTimeout: 30 * time.Second,
+		},
+		{
+			name:        "falls back to the default when zero",
+			waitTimeout: 0,
+			wantTimeout: defaultUpWaitTimeout * time.Second,
+		},
+		{
+			name:        "falls back to the default when negative",
+			waitTimeout: -1,
+			wantTimeout: defaultUpWaitTimeout * time.Second,
+		},
+		{
+			name:       "a loader failure aborts before compose is touched",
+			loadErr:    errLoad,
+			wantErr:    errLoad,
+			wantErrMsg: "loading docker compose file(s)",
+			verify: func(t *testing.T, composeAPI *mockComposeAPI) {
+				composeAPI.AssertNotCalled(t, "Up", mock.Anything, mock.Anything, mock.Anything)
+			},
+		},
+		{
+			name:    "a compose failure reaches the caller",
+			upErr:   errCompose,
+			wantErr: errCompose,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, volumeName(project, tt.key))
+			// Arrange
+			loader := &mockLoader{}
+			loader.On("Load", mock.Anything, []string{"a.yml"}).Return(loadResult(tt.loadErr)).Once()
+			composeAPI := &mockComposeAPI{}
+			composeAPI.On("Up", mock.Anything, mock.Anything, mock.Anything).Return(tt.upErr).Maybe()
+			c := NewClient(composeAPI, loader)
+
+			// Act
+			err := c.Up(context.Background(), tt.waitTimeout, "a.yml")
+
+			// Assert
+			assertError(t, err, tt.wantErr, tt.wantErrMsg)
+			loader.AssertExpectations(t)
+			if tt.verify != nil {
+				tt.verify(t, composeAPI)
+			}
+			if tt.wantErr == nil {
+				assertUpOptions(t, composeAPI, tt.wantTimeout)
+			}
 		})
 	}
 }
 
-// The loader is a seam: Inspect projects whatever it returns, so its logic runs
-// against an in-memory project with no compose file on disk.
-func TestInspector_Inspect(t *testing.T) {
-	t.Run("projects the loaded project", func(t *testing.T) {
-		// Arrange
-		project := &types.Project{
-			Name: "fixture",
-			Services: types.Services{
-				"db": {Volumes: []types.ServiceVolumeConfig{
-					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
-				}},
-			},
-		}
-		insp := &Inspector{load: func(context.Context, ...string) (*types.Project, error) {
-			return project, nil
-		}}
+// assertUpOptions pins what every successful Up must ask compose for, whatever
+// bound the caller named.
+func assertUpOptions(t *testing.T, composeAPI *mockComposeAPI, wantTimeout time.Duration) {
+	t.Helper()
+	project, opts := composeAPI.upCall(t)
+	assert.Equal(t, "demo", project.Name)
+	assertLabelled(t, project)
 
-		// Act
-		got, err := insp.Inspect(context.Background())
+	assert.True(t, opts.Start.Wait, "without Wait, Up would return before the services are healthy")
+	assert.Equal(t, wantTimeout, opts.Start.WaitTimeout)
+	assert.Same(t, project, opts.Start.Project)
+	assert.ElementsMatch(t, []string{"app", "db"}, opts.Start.Services)
+	assert.ElementsMatch(t, []string{"app", "db"}, opts.Create.Services)
 
-		// Assert
-		require.NoError(t, err)
-		assert.Equal(t, "fixture", got.ComposeProject)
-		assert.Equal(t, []model.Mount{
-			{Service: "db", Target: "/var/lib/postgresql/data", Type: "volume", Source: "fixture_pgdata"},
-		}, got.Mounts)
-	})
-
-	t.Run("wraps a loader failure", func(t *testing.T) {
-		// Arrange
-		insp := &Inspector{load: func(context.Context, ...string) (*types.Project, error) {
-			return nil, errors.New("bad compose file")
-		}}
-
-		// Act
-		_, err := insp.Inspect(context.Background())
-
-		// Assert
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "bad compose file")
-	})
+	// The library's zero CreateOptions means "renew anonymous volumes", the
+	// opposite of the CLI's default: a container recreated because the compose
+	// file changed would lose data GM promises to keep.
+	assert.True(t, opts.Create.Inherit, "a recreated container must inherit its anonymous volumes")
+	assert.Equal(t, api.RecreateDiverged, opts.Create.Recreate)
+	assert.Equal(t, api.RecreateDiverged, opts.Create.RecreateDependencies)
 }
 
-func TestInspectFromFile(t *testing.T) {
-	// Arrange: a real compose file parsed by compose-go (no docker daemon).
-	dir := t.TempDir()
-	path := filepath.Join(dir, "docker-compose.yml")
-	yaml := `
-name: fixture
-services:
-  db:
-    image: postgres
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-  app:
-    image: busybox
-    volumes:
-      - ./cfg:/etc/cfg
-      - type: tmpfs
-        target: /scratch
-volumes:
-  pgdata:
-`
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
-
-	// Act
-	insp, err := NewInspector().Inspect(context.Background(), path)
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, "fixture", insp.ComposeProject)
-	assert.ElementsMatch(t, []model.Mount{
-		{Service: "db", Target: "/var/lib/postgresql/data", Type: "volume", Source: "fixture_pgdata"},
-		{Service: "app", Target: "/etc/cfg", Type: "bind", Source: filepath.Join(dir, "cfg")},
-	}, insp.Mounts)
-	require.Len(t, insp.Skipped, 1)
-	assert.Equal(t, "app", insp.Skipped[0].Service)
-	assert.Contains(t, insp.Skipped[0].Reason, "tmpfs")
-}
-
-func TestInspectErrorsWithoutServices(t *testing.T) {
+// Compose does not label the project for you when it is called as a library, and
+// without the labels it does not recognise its own containers: an Up would
+// recreate a stack it should have reused, and a Stop would find nothing to stop.
+func TestLabelProject(t *testing.T) {
 	// Arrange
-	dir := t.TempDir()
-	path := filepath.Join(dir, "docker-compose.yml")
-	require.NoError(t, os.WriteFile(path, []byte("name: empty\nservices: {}\n"), 0o644))
+	project := fixtureProject()
 
 	// Act
-	_, err := NewInspector().Inspect(context.Background(), path)
+	got := labelProject(project)
 
 	// Assert
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no services")
+	require.Len(t, got.Services, 2)
+	for name, service := range got.Services {
+		assert.Equal(t, types.Labels{
+			api.ProjectLabel:     "demo",
+			api.ServiceLabel:     name,
+			api.VersionLabel:     api.ComposeVersion,
+			api.WorkingDirLabel:  "/work",
+			api.ConfigFilesLabel: "/work/a.yml,/work/b.yml",
+			api.OneoffLabel:      "False",
+		}, service.CustomLabels)
+	}
+}
+
+// assertError is the shared shape of every case's outcome check: a nil wantErr
+// means the call had to succeed, otherwise the cause must survive whatever
+// context Client wrapped around it.
+func assertError(t *testing.T, err, wantErr error, wantErrMsg string) {
+	t.Helper()
+	if wantErr == nil {
+		require.NoError(t, err)
+		return
+	}
+	require.ErrorIs(t, err, wantErr)
+	if wantErrMsg != "" {
+		assert.Contains(t, err.Error(), wantErrMsg)
+	}
+}
+
+// loadResult is what the loader double returns for a case: a fresh project, or
+// nothing at all when the case makes the load fail. It returns both values so a
+// case can spell the expectation as a single Return.
+func loadResult(loadErr error) (*types.Project, error) {
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	return fixtureProject(), nil
+}
+
+func assertLabelled(t *testing.T, project *types.Project) {
+	t.Helper()
+	for name, service := range project.Services {
+		assert.Equal(t, project.Name, service.CustomLabels[api.ProjectLabel])
+		assert.Equal(t, name, service.CustomLabels[api.ServiceLabel])
+		assert.Equal(t, api.ComposeVersion, service.CustomLabels[api.VersionLabel])
+		assert.Equal(t, "False", service.CustomLabels[api.OneoffLabel])
+	}
+}
+
+// fixtureProject is what a loader hands back: an unlabelled two-service project.
+func fixtureProject() *types.Project {
+	return &types.Project{
+		Name:         "demo",
+		WorkingDir:   "/work",
+		ComposeFiles: []string{"/work/a.yml", "/work/b.yml"},
+		Services: types.Services{
+			"db":  {Image: "postgres:16"},
+			"app": {Image: "busybox"},
+		},
+	}
+}
+
+// mockComposeAPI is the dockerComposeAPI double: it records what GM asks compose
+// to do, so the options are asserted without a daemon.
+type mockComposeAPI struct {
+	mock.Mock
+}
+
+func (m *mockComposeAPI) Stop(ctx context.Context, projectName string, options api.StopOptions) error {
+	return m.Called(ctx, projectName, options).Error(0)
+}
+
+func (m *mockComposeAPI) Up(ctx context.Context, project *types.Project, options api.UpOptions) error {
+	return m.Called(ctx, project, options).Error(0)
+}
+
+// stopCall returns the options of the one recorded Stop call.
+func (m *mockComposeAPI) stopCall(t *testing.T) api.StopOptions {
+	t.Helper()
+	call := m.calledOnce(t, "Stop")
+	return call.Arguments.Get(2).(api.StopOptions)
+}
+
+// upCall returns the project and options of the one recorded Up call.
+func (m *mockComposeAPI) upCall(t *testing.T) (*types.Project, api.UpOptions) {
+	t.Helper()
+	call := m.calledOnce(t, "Up")
+	return call.Arguments.Get(1).(*types.Project), call.Arguments.Get(2).(api.UpOptions)
+}
+
+func (m *mockComposeAPI) calledOnce(t *testing.T, method string) mock.Call {
+	t.Helper()
+	var found []mock.Call
+	for _, call := range m.Calls {
+		if call.Method == method {
+			found = append(found, call)
+		}
+	}
+	require.Len(t, found, 1, "expected exactly one %s call", method)
+	return found[0]
+}
+
+// mockLoader is the dockerComposeLoader double. It takes the variadic files as a
+// single []string so an expectation can name them.
+type mockLoader struct {
+	mock.Mock
+}
+
+func (m *mockLoader) Load(ctx context.Context, files ...string) (*types.Project, error) {
+	args := m.Called(ctx, files)
+	project, _ := args.Get(0).(*types.Project)
+	return project, args.Error(1)
 }

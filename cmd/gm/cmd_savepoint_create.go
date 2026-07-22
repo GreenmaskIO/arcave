@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/gm-tools/internal/cli"
-	"github.com/greenmaskio/gm-tools/internal/client/docker"
 )
 
 var (
@@ -53,7 +52,7 @@ func init() {
 	flags := savepointCreateCmd.Flags()
 	flags.StringVar(&savepointCreateName, "name", "", "Savepoint name")
 	flags.StringVar(&savepointCreateDescription, "description", "", "Savepoint description")
-	flags.IntVar(&savepointCreateWaitTimeout, "wait-timeout", docker.DefaultUpWaitTimeout,
+	flags.IntVar(&savepointCreateWaitTimeout, "wait-timeout", defaultUpWaitTimeout,
 		"Seconds to wait for services to become healthy after the snapshot")
 
 	// None of these is bound to viper: --name would collide with `gm init --name`
