@@ -8,8 +8,6 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/compose/v2/pkg/compose"
-
 	composeclient "github.com/greenmaskio/gm-tools/internal/client/compose"
 )
 
@@ -52,8 +50,8 @@ type ComposeRunner struct {
 // NewComposeRunner returns a runner over the engine's daemon connection, so the
 // lifecycle half of this package targets the daemon Options resolved for the I/O
 // half by construction.
-func NewComposeRunner(e *Engine) *ComposeRunner {
-	return &ComposeRunner{svc: compose.NewComposeService(e.dockerCli)}
+func NewComposeRunner(svc composeService) *ComposeRunner {
+	return &ComposeRunner{svc: svc}
 }
 
 // Stop stops all project services. It returns once the containers have exited,
