@@ -13,6 +13,14 @@ import (
 	"github.com/greenmaskio/gm-tools/internal/utils"
 )
 
+// defaultUpWaitTimeout is the --wait-timeout default of every command that
+// restarts the stack (rollback, savepoint create). The compose client applies
+// the same bound itself when a caller passes <= 0, but keeps it private: this is
+// the value the flag advertises in `gm --help`, which is the command layer's
+// concern. Keep the two in step — a drift makes the help text lie about what a
+// bare command does.
+const defaultUpWaitTimeout = 120
+
 // The state every command shares, produced once by initRoot and read from RunE.
 // It is package-level because cobra registers commands from init(), so there is
 // nowhere earlier to hang it — see config.go for the resolution that fills it.

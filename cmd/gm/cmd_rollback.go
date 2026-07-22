@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/gm-tools/internal/cli"
-	"github.com/greenmaskio/gm-tools/internal/client/docker"
 )
 
 var (
@@ -31,7 +30,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	rollbackCmd.Flags().IntVar(&rollbackWaitTimeout, "wait-timeout", docker.DefaultUpWaitTimeout,
+	rollbackCmd.Flags().IntVar(&rollbackWaitTimeout, "wait-timeout", defaultUpWaitTimeout,
 		"Seconds to wait for services to become healthy before reverting")
 
 	rootCmd.AddCommand(rollbackCmd)
