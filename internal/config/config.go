@@ -1,15 +1,15 @@
-// Package config defines GM's per-project configuration value type, the pure
+// Package config defines arcave's per-project configuration value type, the pure
 // helpers that seed and validate it, and Unmarshal — the single home of the
 // config policy (version gate, unknown-key rejection, defaults, validation).
 // Persistence lives in internal/repository/config; the multi-source merge
-// (flag > env > file) is cmd/gm's, which hands the loaded viper here.
+// (flag > env > file) is cmd/arcave's, which hands the loaded viper here.
 //
 // The config *is* its viper decode — the mapstructure tags below are the schema
 // viper fills — so Unmarshal takes a *viper.Viper rather than re-implementing
 // that decode over a settings map. The pluggable sections still declare plain
 // local union arms rather than embedding directory.Config or a future s3.Config:
 // embedding would drag a cloud SDK into the import graph of repository/config,
-// and therefore of `gm init`. cmd/gm translates each section into its package's
+// and therefore of `arcave init`. cmd/arcave translates each section into its package's
 // own options struct.
 package config
 
@@ -17,16 +17,13 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/utils"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-const (
-	gmDir    = ".gm"
-	fileName = "config.yaml"
-)
+const fileName = "config.yaml"
 
-// Version is the schema version of .gm/config.yaml, and the only one GM speaks.
+// Version is the schema version of .arcave/config.yaml, and the only one arcave speaks.
 // A file naming any other is refused — see ErrUnsupportedConfigVersion.
 const Version = 1
 
@@ -39,7 +36,7 @@ const StorageTypeDirectory = "directory"
 // mount's tar stream verbatim.
 const SnapshotBackendFullCopy = "fullcopy"
 
-// Config is the content persisted to .gm/config.yaml by init. The yaml tags
+// Config is the content persisted to .arcave/config.yaml by init. The yaml tags
 // drive Save; the mapstructure tags drive Unmarshal.
 // One section per subsystem: a new subsystem adds a section rather than another
 // top-level key.
@@ -54,13 +51,13 @@ type Config struct {
 	Log Log `yaml:"log,omitempty" mapstructure:"log"`
 }
 
-// Project identifies the compose project GM manages.
+// Project identifies the compose project arcave manages.
 type Project struct {
 	Name         string   `yaml:"name" mapstructure:"name"`
 	ComposeFiles []string `yaml:"compose_files" mapstructure:"compose_files"`
 }
 
-// Docker is how GM reaches the daemon. It is honoured by both halves of the
+// Docker is how arcave reaches the daemon. It is honoured by both halves of the
 // docker client — the SDK (Engine) and the CLI (ComposeRunner) — so the two can
 // never silently target different daemons. An empty Host means "read the
 // environment", the historical behaviour.
@@ -94,7 +91,7 @@ type DirectoryStorage struct {
 }
 
 // Validate rejects a union whose tag names an arm that is not present, or an arm
-// GM does not implement.
+// arcave does not implement.
 func (s Storage) Validate() error {
 	switch s.Type {
 	case StorageTypeDirectory:
@@ -127,7 +124,7 @@ type Snapshot struct {
 	Backend string `yaml:"backend" mapstructure:"backend"`
 }
 
-// Validate rejects a backend GM cannot construct.
+// Validate rejects a backend arcave cannot construct.
 func (s Snapshot) Validate() error {
 	if s.Backend != SnapshotBackendFullCopy {
 		return fmt.Errorf("unsupported snapshot.backend %q (supported: %s)", s.Backend, SnapshotBackendFullCopy)
@@ -136,7 +133,7 @@ func (s Snapshot) Validate() error {
 }
 
 // Log is the project's default logging configuration, persisted under the "log"
-// key in .gm/config.yaml.
+// key in .arcave/config.yaml.
 type Log struct {
 	Level  string `yaml:"level,omitempty" mapstructure:"level"`
 	Format string `yaml:"format,omitempty" mapstructure:"format"`
@@ -181,7 +178,7 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 			dir = *c.Storage.Directory
 		}
 		if dir.Path == "" {
-			dir.Path = filepath.Join(gmDir, "savepoints", c.Project.Name)
+			dir.Path = filepath.Join(model.StateDir, "savepoints", c.Project.Name)
 		}
 		c.Storage.Directory = &dir
 	}
@@ -190,7 +187,7 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	}
 }
 
-// Validate checks the sections whose values GM must be able to act on. It runs
+// Validate checks the sections whose values arcave must be able to act on. It runs
 // after ApplyDefaults, so an empty section is a default rather than an error.
 func (c *Config) Validate() error {
 	if c.Version != Version {
@@ -205,5 +202,5 @@ func (c *Config) Validate() error {
 // Path returns the absolute config file path for the project rooted at
 // projectRoot.
 func Path(projectRoot string) string {
-	return filepath.Join(projectRoot, gmDir, fileName)
+	return filepath.Join(projectRoot, model.StateDir, fileName)
 }

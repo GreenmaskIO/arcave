@@ -20,7 +20,7 @@ import (
 const defaultUpWaitTimeout = 120
 
 // dockerComposeAPI is the slice of the compose library's API that Client
-// calls — consumer-side, so a test can assert on the options GM passes without a
+// calls — consumer-side, so a test can assert on the options arcave passes without a
 // daemon. api.Compose satisfies it.
 type dockerComposeAPI interface {
 	Stop(ctx context.Context, projectName string, options api.StopOptions) error
@@ -34,15 +34,15 @@ type dockerComposeLoader interface {
 // Client drives the *running* stack's lifecycle: it stops and starts the
 // project's services, mirroring how the user would invoke `docker compose` by
 // hand. Compose is where the Inspector's declared state becomes containers, and
-// this is the type that moves it between the two — GM stops the services before
+// this is the type that moves it between the two — arcave stops the services before
 // touching a mount and starts them after, and it is Client that does both.
 //
 // It calls github.com/docker/compose/v2 as a library rather than shelling out to
-// the compose plugin, so GM inherits compose's own semantics (depends_on
+// the compose plugin, so arcave inherits compose's own semantics (depends_on
 // ordering, health aggregation, container recreation) without requiring a docker
-// CLI on the host — which matters for gm mcp, where the environment may offer
+// CLI on the host — which matters for arcave mcp, where the environment may offer
 // nothing but the daemon socket. The semantics are pinned to the compose version
-// GM was built against, not to whatever the user happens to have installed.
+// arcave was built against, not to whatever the user happens to have installed.
 //
 // It is stateless: the compose files to act on are passed per call, so a single
 // instance is shared across invocations rather than bound to a fixed file set.
@@ -90,10 +90,10 @@ func (c *Client) Up(ctx context.Context, waitTimeoutSec int, files ...string) er
 			// Inherit carries a recreated container's anonymous volumes over from
 			// the one it replaces. The compose CLI defaults it on (it is what
 			// `--renew-anon-volumes` turns *off*), and the library does not — the
-			// zero CreateOptions silently means "renew". GM captures anonymous
+			// zero CreateOptions silently means "renew". arcave captures anonymous
 			// volumes like any other mount, so leaving it off would throw their
 			// data away whenever a container diverges from the compose file, which
-			// is exactly what GM's users are in the middle of doing.
+			// is exactly what arcave's users are in the middle of doing.
 			Inherit: true,
 			// The CLI's defaults, spelled out: replace only containers whose
 			// config no longer matches the file. The zero value happens to behave

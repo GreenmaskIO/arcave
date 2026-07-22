@@ -1,9 +1,9 @@
-// Package cli adapts GM's services to Cobra commands: each handler invokes a
+// Package cli adapts arcave's services to Cobra commands: each handler invokes a
 // service method and renders the result through a printer — the model types go
 // out as JSON (Savepoint for single-savepoint payloads, the response envelopes
 // for multi-part responses). The printer is injected, so handlers are unit-
 // testable without touching stdout. Command definitions and flags live in
-// cmd/gm, which resolves the config and logger before RunE and passes typed
+// cmd/arcave, which resolves the config and logger before RunE and passes typed
 // arguments here — the handlers know nothing of cobra or viper.
 package cli
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 type configInitService interface {
@@ -35,6 +35,6 @@ func (h *ConfigInitHandler) Init(ctx context.Context, cfg config.Config, overrid
 	}
 	log.Ctx(ctx).Info().Str("name", resolvedName).
 		Str("path", path).
-		Msg("initialized GM project")
+		Msg("initialized arcave project")
 	return nil
 }

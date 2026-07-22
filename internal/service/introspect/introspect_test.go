@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // The loader is a seam: Inspect projects whatever it returns, so its logic runs

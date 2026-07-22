@@ -1,7 +1,7 @@
 package model
 
-// Inspection is the resolved, GM-relevant view of a compose project: the name
-// docker compose knows the stack by, the persistent mounts GM snapshots, and the
+// Inspection is the resolved, arcave-relevant view of a compose project: the name
+// docker compose knows the stack by, the persistent mounts arcave snapshots, and the
 // mounts it had to skip. The compose client produces it; the service consumes it
 // — it is data, so it lives here and neither layer needs to import the other.
 //

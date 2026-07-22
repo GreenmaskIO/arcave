@@ -1,4 +1,4 @@
-// Package core holds GM's business logic. It orchestrates the repositories
+// Package core holds arcave's business logic. It orchestrates the repositories
 // (config, savepoint), the snapshot backends (service/snapshot) and the clients
 // (compose, docker) to create savepoints, roll back, and initialise projects.
 // Each method declares the repository, backend and client behaviour it needs via
@@ -14,7 +14,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // savepointRepository reads and writes savepoint records, one per savepoint. It
@@ -37,7 +37,7 @@ type savepointRepository interface {
 //
 // It lives here, and not in an adapter, because "a savepoint is never created
 // while a rollback is running" is a property of the workflow, not of the CLI that
-// happens to invoke it. `gm mcp` calls these methods directly and gets the same
+// happens to invoke it. `arcave mcp` calls these methods directly and gets the same
 // guarantee for free.
 //
 // Acquire fails immediately with model.ErrProjectLocked when the project is
@@ -49,13 +49,13 @@ type projectLocker interface {
 }
 
 // composeInspector reads the compose project's *declared* state: its name and
-// the mounts GM snapshots. It only parses files, so it reaches no daemon — which
+// the mounts arcave snapshots. It only parses files, so it reaches no daemon — which
 // is why InitService can depend on it alone.
 type composeInspector interface {
 	Inspect(ctx context.Context, files ...string) (model.Inspection, error)
 }
 
-// composeRunner drives the *running* stack: it stops the services before GM
+// composeRunner drives the *running* stack: it stops the services before arcave
 // touches a mount and starts them after. It is stateless — the compose files to
 // act on are passed per call — so a single runner is injected at the DI root and
 // shared across invocations.
@@ -89,7 +89,7 @@ type snapshotBackend interface {
 	Remove(ctx context.Context, savepointID string) error
 }
 
-// Service orchestrates GM's workflows. It is constructed once at the DI root
+// Service orchestrates arcave's workflows. It is constructed once at the DI root
 // from the repositories and clients it depends on.
 type Service struct {
 	savepointRepo    savepointRepository
@@ -101,7 +101,7 @@ type Service struct {
 	// of the other and the compiler cannot tell them apart. The names must, hence
 	// no bare "backend": savepointBackend writes the project's savepoints (under
 	// the configured savepoint dir), safetyBackupBackend writes the pre-rollback
-	// safety backups (under .gm/tmp) that a failed rollback replays.
+	// safety backups (under .arcave/tmp) that a failed rollback replays.
 	savepointBackend    snapshotBackend
 	safetyBackupBackend snapshotBackend
 	// now is the clock, a func rather than an interface: for a single method that

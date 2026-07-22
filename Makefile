@@ -1,7 +1,7 @@
 .PHONY: build test lint clean
 
 build:
-	go build -o bin/gm ./cmd/gm
+	go build -o bin/arcave ./cmd/arcave
 
 test:
 	go test ./...

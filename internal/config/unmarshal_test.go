@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newViper returns a viper holding yaml, standing in for the file cmd/gm reads.
+// newViper returns a viper holding yaml, standing in for the file cmd/arcave reads.
 func newViper(t *testing.T, yaml string) *viper.Viper {
 	t.Helper()
 	v := viper.New()
@@ -20,7 +20,7 @@ func newViper(t *testing.T, yaml string) *viper.Viper {
 }
 
 // Unmarshal owns the config policy, so its rules are tested here on a viper fed
-// straight from yaml — no file, no flags. cmd/gm supplies the merge; Unmarshal
+// straight from yaml — no file, no flags. cmd/arcave supplies the merge; Unmarshal
 // decides whether the result is acceptable.
 func TestUnmarshal(t *testing.T) {
 	tests := []struct {
@@ -40,7 +40,7 @@ func TestUnmarshal(t *testing.T) {
 			},
 		},
 		{
-			// GM speaks one version and names no other, so a source that carries
+			// arcave speaks one version and names no other, so a source that carries
 			// none reads as current: the pre-v1 flat layout falls to the
 			// unknown-key check below, and is named by the keys it uses.
 			name:       "a pre-v1 flat file is rejected by its foreign keys",
@@ -58,7 +58,7 @@ func TestUnmarshal(t *testing.T) {
 			wantErrIs: model.ErrUnsupportedConfigVersion,
 		},
 		{
-			// A schema GM does not speak may spell a key with another type. The
+			// A schema arcave does not speak may spell a key with another type. The
 			// version probe reads only "version", so this is reported as the stale
 			// file it is, never as a decode error about storage.
 			name:      "a future version whose keys changed type is still stale",

@@ -10,11 +10,11 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
-const configPath = "/proj/.gm/config.yaml"
+const configPath = "/proj/.arcave/config.yaml"
 
 func TestInitService_Init(t *testing.T) {
 	inspectErr := errors.New("no such compose file")
@@ -23,7 +23,7 @@ func TestInitService_Init(t *testing.T) {
 		name       string
 		cfg        config.Config
 		override   bool
-		exists     bool  // does .gm/config.yaml already exist?
+		exists     bool  // does .arcave/config.yaml already exist?
 		inspectErr error // what the compose inspector reports
 		wantErr    string
 		verify     func(t *testing.T, saved config.Config)
@@ -100,7 +100,7 @@ func TestInitService_Init(t *testing.T) {
 			assert.Equal(t, configPath, path)
 			assert.Equal(t, config.Version, saved.Version)
 			// ApplyDefaults fills the name-dependent savepoint dir.
-			assert.Equal(t, filepath.Join(".gm", "savepoints", "demo"), saved.Storage.DirectoryPath())
+			assert.Equal(t, filepath.Join(".arcave", "savepoints", "demo"), saved.Storage.DirectoryPath())
 			if tt.verify != nil {
 				tt.verify(t, saved)
 			}
@@ -151,6 +151,6 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "myproj", name)
 	assert.Equal(t, "myproj", saved.Project.Name)
-	assert.Equal(t, filepath.Join(".gm", "savepoints", "myproj"), saved.Storage.DirectoryPath())
+	assert.Equal(t, filepath.Join(".arcave", "savepoints", "myproj"), saved.Storage.DirectoryPath())
 	cw.AssertExpectations(t)
 }

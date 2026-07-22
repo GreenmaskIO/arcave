@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // The list handler prints whatever the service returns, verbatim. A service

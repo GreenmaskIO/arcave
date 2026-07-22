@@ -8,7 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // Rollback restores the environment to the referenced savepoint. It stops the
@@ -211,7 +211,7 @@ func (s *Service) revert(
 // removeSafetyBackup deletes one safety backup's directory. The shared
 // safety-backup store is left in place once empty: pruning it would mean asking
 // a Storager to delete its own root, the one key the directory backend refuses
-// (directory.ErrUnsafeKey), and an empty .gm/tmp costs nothing.
+// (directory.ErrUnsafeKey), and an empty .arcave/tmp costs nothing.
 func (s *Service) removeSafetyBackup(ctx context.Context, safetyBackupID string) error {
 	return s.safetyBackupBackend.Remove(ctx, safetyBackupID)
 }

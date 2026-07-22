@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 // getDockerOptions is what carries the config into docker/cli. An unset option
@@ -268,7 +268,7 @@ func TestDockerTLSOptions(t *testing.T) {
 }
 
 // A host resolves to an endpoint whether or not anything is listening on it:
-// gm savepoint list has to work with docker stopped.
+// arcave savepoint list has to work with docker stopped.
 func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 	// Arrange: an empty config dir, so the developer's own docker config cannot
 	// steer the resolution.
@@ -286,7 +286,7 @@ func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 
 // api_version is the one docker field carried not through ClientOptions but
 // through the environment: docker/cli reads DOCKER_API_VERSION and otherwise
-// negotiates. GM spawns no child processes, so setting it configures GM's own
+// negotiates. arcave spawns no child processes, so setting it configures arcave's own
 // client and nothing else.
 func TestInitDockerClient_PinsAPIVersion(t *testing.T) {
 	// Arrange: an empty config dir, and a known-empty env var t restores afterwards.
@@ -326,7 +326,7 @@ func TestInitDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
 
 // A context that does not exist must surface as an error. docker/cli's own
 // answer is to print to the (discarded) error stream and os.Exit(1), which would
-// kill GM with no output at all — so the endpoint is resolved up front, where a
+// kill arcave with no output at all — so the endpoint is resolved up front, where a
 // failure is still returnable.
 func TestInitDockerClient_RejectsAnUnknownContext(t *testing.T) {
 	// Arrange: an empty config dir, so no context store can define the name.

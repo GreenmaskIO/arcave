@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // oneShotID is the container ID the mocked daemon hands back for every
@@ -224,7 +224,7 @@ func TestRunOneShotContainer_Stdio(t *testing.T) {
 // run concurrently, so neither side waits on the other to finish first.
 func TestRunOneShotContainer_StdioLargePayload(t *testing.T) {
 	// Arrange
-	payload := bytes.Repeat([]byte("gm"), 1<<20) // 2 MiB, far past any pipe buffer
+	payload := bytes.Repeat([]byte("arcave"), 1<<20) // 2 MiB, far past any pipe buffer
 
 	hj := newFakeHijack()
 	go func() {

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 // Init reports through the context logger, never the printer, so the contract
@@ -25,7 +25,7 @@ func TestConfigInitHandler_Init(t *testing.T) {
 		Docker: config.Docker{Host: "tcp://remote:2375"},
 		Storage: config.Storage{
 			Type:      config.StorageTypeDirectory,
-			Directory: &config.DirectoryStorage{Path: ".gm/savepoints/demo"},
+			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/demo"},
 		},
 		Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
 		Log:      config.Log{Level: "debug", Format: "console"},
@@ -54,7 +54,7 @@ func TestConfigInitHandler_Init(t *testing.T) {
 			// Arrange
 			p := &capturePrinter{}
 			svc := &mockService{}
-			svc.On("Init", mock.Anything, cfg, true).Return("demo", ".gm/config.yaml", tt.svcErr)
+			svc.On("Init", mock.Anything, cfg, true).Return("demo", ".arcave/config.yaml", tt.svcErr)
 			h := NewConfigInitHandler(svc, p)
 
 			// Act

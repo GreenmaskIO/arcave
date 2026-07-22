@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {

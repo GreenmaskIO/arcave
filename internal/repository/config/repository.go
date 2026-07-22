@@ -1,6 +1,6 @@
-// Package config persists GM's per-project configuration to .gm/config.yaml. The
+// Package config persists arcave's per-project configuration to .arcave/config.yaml. The
 // configuration value type and its default helpers live in internal/config;
-// reading is handled by cmd/gm (viper). This package is the sole
+// reading is handled by cmd/arcave (viper). This package is the sole
 // writer.
 package config
 
@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 // Repository writes the config for the project rooted at projectRoot.
@@ -43,7 +43,7 @@ func (r *Repository) Exists() (bool, error) {
 	}
 }
 
-// Save writes cfg to .gm/config.yaml, creating the .gm directory if needed. It
+// Save writes cfg to .arcave/config.yaml, creating the .arcave directory if needed. It
 // takes cfg by value and does not mutate it.
 func (r *Repository) Save(cfg config.Config) error {
 	path := r.Path()

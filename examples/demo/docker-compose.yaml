@@ -1,14 +1,14 @@
-# Demo stack for gm-tools. Each store is backed by a different Docker volume
-# type so a single `gm savepoint create` / `gm rollback` captures and restores
+# Demo stack for arcave. Each store is backed by a different Docker volume
+# type so a single `arcave savepoint create` / `arcave rollback` captures and restores
 # all three:
 #
 #   postgres -> named volume     (pgdata)
 #   minio    -> host bind mount   (./minio-data)
 #   redis    -> anonymous volume  (/data)
 #
-# The project name is pinned so gm and the docker CLI agree on the container
-# labels gm uses to locate each mount.
-name: gm-demo
+# The project name is pinned so arcave and the docker CLI agree on the container
+# labels arcave uses to locate each mount.
+name: arcave-demo
 
 services:
   postgres:

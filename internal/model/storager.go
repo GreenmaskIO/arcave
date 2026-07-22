@@ -15,14 +15,14 @@ type ObjectStat struct {
 	Exist        bool
 }
 
-// Storager is the storage backend contract GM's snapshot flows speak. It is the
+// Storager is the storage backend contract arcave's snapshot flows speak. It is the
 // greenmask storages.Storager surface, re-declared here (in the shared model
 // package) so the concrete backend is swappable and every layer already imports
-// it. The self-referential SubStorage/ListDir returns and Stat name gm-tools'
+// it. The self-referential SubStorage/ListDir returns and Stat name arcave'
 // own types (model.Storager / *model.ObjectStat) rather than greenmask's, which
 // is why the interface is owned here and the backend is vendored to match.
 //
-// GM's snapshot flows use only GetObject, PutObject, Exists, Delete, DeleteAll,
+// arcave's snapshot flows use only GetObject, PutObject, Exists, Delete, DeleteAll,
 // SubStorage, ListDir and Close; GetCwd, Dirname and Stat are carried for parity
 // with the upstream surface so an alternate backend drops in unchanged.
 type Storager interface {

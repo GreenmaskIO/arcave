@@ -5,14 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/utils"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // versionedConfig prefixes body with the schema version every v1 file carries,
@@ -24,8 +24,8 @@ func versionedConfig(body string) string {
 func TestResolveConfig(t *testing.T) {
 	tests := []struct {
 		name      string
-		file      string            // .gm/config.yaml body; empty means no file
-		env       map[string]string // GM_* overrides
+		file      string            // .arcave/config.yaml body; empty means no file
+		env       map[string]string // ARCAVE_* overrides
 		flags     map[string]string // flags the user changed
 		wantFound bool
 		verify    func(t *testing.T, root string, cfg config.Config)
@@ -37,7 +37,7 @@ func TestResolveConfig(t *testing.T) {
 				assert.Equal(t, config.Version, cfg.Version)
 				assert.Equal(t, filepath.Base(root), cfg.Project.Name)
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
-				assert.Equal(t, filepath.Join(".gm", "savepoints", cfg.Project.Name), cfg.Storage.DirectoryPath())
+				assert.Equal(t, filepath.Join(".arcave", "savepoints", cfg.Project.Name), cfg.Storage.DirectoryPath())
 				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
 				assert.Equal(t, utils.DefaultLogLevel, cfg.Log.Level)
 				assert.Equal(t, utils.DefaultLogFormat, cfg.Log.Format)
@@ -74,7 +74,7 @@ func TestResolveConfig(t *testing.T) {
 		{
 			name:      "env beats file",
 			file:      versionedConfig("log:\n  level: warn\n"),
-			env:       map[string]string{"GM_LOG_LEVEL": "debug"},
+			env:       map[string]string{"ARCAVE_LOG_LEVEL": "debug"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "debug", cfg.Log.Level)
@@ -83,7 +83,7 @@ func TestResolveConfig(t *testing.T) {
 		{
 			name:      "changed flag beats env",
 			file:      versionedConfig("log:\n  level: info\n"),
-			env:       map[string]string{"GM_LOG_LEVEL": "debug"},
+			env:       map[string]string{"ARCAVE_LOG_LEVEL": "debug"},
 			flags:     map[string]string{"log-level": "warn"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -128,7 +128,7 @@ func TestResolveConfig(t *testing.T) {
 	}
 }
 
-// A file GM cannot speak is rejected loudly. GM speaks exactly one schema
+// A file arcave cannot speak is rejected loudly. arcave speaks exactly one schema
 // version, so a file naming another is stale; a file naming none is taken to be
 // that version and is judged by its keys, which is what rejects the pre-v1 flat
 // layout.
@@ -160,12 +160,12 @@ func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 			wantMsg: "savepoint_dir",
 		},
 		{
-			name:    "a storage tag naming an arm GM does not implement",
+			name:    "a storage tag naming an arm arcave does not implement",
 			file:    versionedConfig("storage:\n  type: s3\n"),
 			wantMsg: "unsupported storage.type",
 		},
 		{
-			name:    "a snapshot backend GM cannot construct",
+			name:    "a snapshot backend arcave cannot construct",
 			file:    versionedConfig("snapshot:\n  backend: btrfs\n"),
 			wantMsg: "unsupported snapshot.backend",
 		},
@@ -260,7 +260,7 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 
 func writeConfig(t *testing.T, root, body string) {
 	t.Helper()
-	dir := filepath.Join(root, ".gm")
+	dir := filepath.Join(root, ".arcave")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o644))
 }
