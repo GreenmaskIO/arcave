@@ -21,10 +21,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 
-	"github.com/docker/cli/cli/command"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -68,88 +66,25 @@ type dockerAPI interface {
 // (WriteMount). These are the operations that have no Compose-level equivalent,
 // so they go through the Docker API — see ComposeRunner for the lifecycle half.
 //
-// It also owns the resolved daemon connection the whole package shares. The two
-// fields below are that one connection seen through two contracts, not two
-// connections: api is dockerCli.Client().
+// It does not resolve that connection: the composition root builds one client
+// from the config and hands the same one to Engine and to the compose service
+// ComposeRunner drives, so targeting a single daemon is a property of the
+// construction rather than a contract this package has to keep. Resolution lives
+// there because it is where a failure can still be reported — docker/cli answers
+// an unresolvable endpoint with os.Exit(1).
 //
 // One Engine is created per command at the DI root and injected into both
 // snapshot backends; it is concurrency-safe, and its Close belongs to whoever
 // created it.
 type Engine struct {
-	// dockerCli is the full resolved CLI: NewComposeRunner builds the compose
-	// service over it, and NewEngine resolved the endpoint through it. Held as the
-	// command.Cli interface, not the concrete *command.DockerCli, so the field
-	// names only the contract the package needs (Client plus the endpoint
-	// accessors compose reads).
-	dockerCli command.Cli
-	// api is dockerCli.Client() — the same daemon connection, narrowed to the
-	// method set Engine actually calls. It is a separate field so a test can inject
-	// a mock here (&Engine{api: ...}) and exercise Engine's methods without
-	// standing up a real command.Cli or a daemon.
+	// api is the resolved daemon connection. A test sets it directly, standing in
+	// for the client the composition root would have built.
 	api dockerAPI
 }
 
-// NewEngine resolves opts into a docker/cli instance: the daemon comes from the
-// environment (DOCKER_HOST, the active context, TLS settings), overridden by
-// whatever opts sets, and a named docker context is resolved through the CLI's
-// own context store.
-//
-// It resolves the endpoint eagerly, and does so through DockerEndpoint rather
-// than by reaching for the client: docker/cli reports a failure to resolve one
-// by writing to its error stream — which GM discards — and calling os.Exit. A
-// mistyped docker.context would therefore kill GM with no message at all, and
-// not only here: the compose library calls Client() itself, so the check has to
-// happen before either half of this package is handed a daemon. Resolving does
-// ping, but a failed ping is not an error — a command that never touches a mount
-// (savepoint list) still works with docker stopped.
-func NewEngine(opts Options) (*Engine, error) {
-	clientOpts, err := opts.clientOptions()
-	if err != nil {
-		return nil, err
-	}
-
-	// DOCKER_API_VERSION is the only seam docker/cli leaves for pinning the API
-	// version: the client it builds from the resolved endpoint reads the version
-	// from the environment (client.WithVersionFromEnv) and otherwise negotiates.
-	// Setting it here is safe in a way it would not have been for the exec-based
-	// version — GM spawns no child processes, so this configures GM's own client
-	// and nothing else.
-	if opts.APIVersion != "" {
-		if err := os.Setenv(client.EnvOverrideAPIVersion, opts.APIVersion); err != nil {
-			return nil, fmt.Errorf("pin docker api version %q: %w", opts.APIVersion, err)
-		}
-	}
-
-	// The streams are discarded: compose writes its progress UI to them, and GM's
-	// own output contract is JSON on stdout.
-	dockerCli, err := command.NewDockerCli(
-		command.WithInputStream(nil),
-		command.WithOutputStream(io.Discard),
-		command.WithErrorStream(io.Discard),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialise docker client: %w", err)
-	}
-	if err := dockerCli.Initialize(clientOpts); err != nil {
-		return nil, fmt.Errorf("initialise docker client: %w", err)
-	}
-
-	if ep := dockerCli.DockerEndpoint(); ep.Host == "" {
-		return nil, unresolvedEndpointError(dockerCli, opts)
-	}
-	return &Engine{dockerCli: dockerCli, api: dockerCli.Client()}, nil
-}
-
-// unresolvedEndpointError explains why docker/cli could not name a daemon.
-// docker/cli swallowed the cause into the discarded error stream, so a
-// configured context is looked up again here to recover it.
-func unresolvedEndpointError(dockerCli *command.DockerCli, opts Options) error {
-	if opts.Context != "" {
-		if _, err := dockerCli.ContextStore().GetMetadata(opts.Context); err != nil {
-			return fmt.Errorf("connect to docker engine: docker.context %q: %w", opts.Context, err)
-		}
-	}
-	return fmt.Errorf("connect to docker engine: cannot resolve a daemon endpoint from docker.host %q / docker.context %q", opts.Host, opts.Context)
+// NewEngine wraps an already-resolved daemon connection.
+func NewEngine(api dockerAPI) *Engine {
+	return &Engine{api: api}
 }
 
 // Close releases the daemon connection.
