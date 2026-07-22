@@ -68,8 +68,14 @@ type Docker struct {
 	Host       string `yaml:"host,omitempty" mapstructure:"host"`
 	APIVersion string `yaml:"api_version,omitempty" mapstructure:"api_version"`
 	Context    string `yaml:"context,omitempty" mapstructure:"context"`
-	CertPath   string `yaml:"cert_path,omitempty" mapstructure:"cert_path"`
-	TLSVerify  bool   `yaml:"tls_verify,omitempty" mapstructure:"tls_verify"`
+	// CertPath is a directory holding ca.pem/cert.pem/key.pem, the
+	// DOCKER_CERT_PATH convention. The three CertFile/CAFile/KeyFile fields below
+	// override an individual file when a certificate does not follow those names.
+	CertPath  string `yaml:"cert_path,omitempty" mapstructure:"cert_path"`
+	CAFile    string `yaml:"ca_file,omitempty" mapstructure:"ca_file"`
+	CertFile  string `yaml:"cert_file,omitempty" mapstructure:"cert_file"`
+	KeyFile   string `yaml:"key_file,omitempty" mapstructure:"key_file"`
+	TLSVerify bool   `yaml:"tls_verify,omitempty" mapstructure:"tls_verify"`
 }
 
 // Storage is a tagged union: Type names the arm, and exactly that arm must be

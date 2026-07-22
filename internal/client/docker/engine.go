@@ -1,18 +1,20 @@
 // Package docker acts on the *running* stack, in contrast to internal/client/
 // compose, which only reads what the compose files declare. It holds the two
-// types GM needs to reach the daemon, split by what they act on rather than by
-// how they get there:
+// types GM needs to reach the daemon, split by what they act on:
 //
-//   - Engine (docker.go) moves a volume's bytes in and out of a service
-//     container, through the Docker SDK — no CLI output to parse, no helper image.
-//   - ComposeRunner (compose.go) stops and starts the project's services,
-//     through the docker CLI, since the Docker API has no Compose equivalent and
-//     the CLI inherits the user's context, credentials and build settings.
+//   - Engine (engine.go) moves a volume's bytes in and out of a service
+//     container, through the Docker API.
+//   - ComposeRunner (loader.go) stops and starts the project's services,
+//     through the compose library (github.com/docker/compose/v2), since the
+//     Docker API itself has no Compose equivalent.
 //
-// They share one unexported seam, the runner newRunner builds (options.go):
-// Engine also shells out once, to wipe a mount with a throwaway container. That
-// shared helper — and the Options both halves must honour, or they would target
-// different daemons — is why the two live in one package.
+// Both reach the daemon through Go libraries — GM shells out to nothing, so it
+// needs no docker CLI or compose plugin installed, only a reachable daemon.
+// They share one client: Engine owns the docker/cli instance that resolves
+// Options (host, context, TLS) into a connection, and ComposeRunner is built
+// over that same instance. Targeting one daemon is therefore a property of the
+// construction rather than a contract two halves have to honour by hand, and
+// that shared client is why the two live in one package.
 package docker
 
 import (
@@ -21,9 +23,13 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // composeProjectLabel and composeServiceLabel are set by Docker Compose on
@@ -33,69 +39,56 @@ const (
 	composeServiceLabel = "com.docker.compose.service"
 )
 
+// wipeImage is the throwaway image wipeMount runs to clear a mount: small,
+// ubiquitous, and carrying the `find` GM needs.
+const wipeImage = "busybox"
+
+// dockerAPI is the slice of the Docker API client this package actually calls —
+// consumer-side, so a test can drive Engine with a mock instead of a daemon.
+// *client.Client (and so docker/cli's client.APIClient) satisfies it.
+type dockerAPI interface {
+	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerAttach(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error)
+	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, container.PathStat, error)
+	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
+	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
+	Close() error
+}
+
 // Engine is GM's volume I/O against the Docker daemon: it streams a service
 // mount's contents out (OpenMount) and wipes-and-extracts a stream back in
 // (WriteMount). These are the operations that have no Compose-level equivalent,
-// so they go through the Docker API rather than the CLI — see ComposeRunner for
-// the lifecycle half.
+// so they go through the Docker API — see ComposeRunner for the lifecycle half.
+//
+// It does not resolve that connection: the composition root builds one client
+// from the config and hands the same one to Engine and to the compose service
+// ComposeRunner drives, so targeting a single daemon is a property of the
+// construction rather than a contract this package has to keep. Resolution lives
+// there because it is where a failure can still be reported — docker/cli answers
+// an unresolvable endpoint with os.Exit(1).
 //
 // One Engine is created per command at the DI root and injected into both
 // snapshot backends; it is concurrency-safe, and its Close belongs to whoever
 // created it.
 type Engine struct {
-	cli *client.Client
-	// run executes a docker CLI invocation (used to wipe mounts via a throwaway
-	// container); it is built by newRunner and is a field only so tests can
-	// exercise wipeMount's argument assembly without a daemon.
-	run func(ctx context.Context, args ...string) error
+	// api is the resolved daemon connection. A test sets it directly, standing in
+	// for the client the composition root would have built.
+	api dockerAPI
 }
 
-// NewEngine builds a Docker SDK client from the environment (DOCKER_HOST, the
-// active context, TLS settings), overridden by whatever opts sets. It does not
-// contact the daemon: API-version negotiation is deferred to the first call, so
-// a command that never touches a mount (savepoint list) can construct an Engine
-// with docker stopped.
-//
-// opts.Context is rejected without opts.Host. A docker *context* is a CLI
-// concept — resolving one needs docker/cli's context store, which this package
-// does not depend on — so the SDK client cannot honour it. Accepting it here
-// would leave the CLI half of this package talking to the context's daemon while
-// the SDK half talked to DOCKER_HOST's: a savepoint exported from one and
-// restored into the other. Naming the host makes both halves agree.
-func NewEngine(opts Options) (*Engine, error) {
-	if opts.Context != "" && opts.Host == "" {
-		return nil, fmt.Errorf("docker.context %q needs docker.host set too: the Docker API client cannot resolve a CLI context, so without a host the API and CLI halves of gm would target different daemons", opts.Context)
-	}
-
-	// FromEnv first, so anything opts leaves unset keeps its environment value.
-	clientOpts := []client.Opt{client.FromEnv}
-	if opts.Host != "" {
-		clientOpts = append(clientOpts, client.WithHost(opts.Host))
-	}
-	if opts.CertPath != "" || opts.TLSVerify {
-		clientOpts = append(clientOpts, client.WithTLSClientConfig(
-			filepath.Join(opts.CertPath, "ca.pem"),
-			filepath.Join(opts.CertPath, "cert.pem"),
-			filepath.Join(opts.CertPath, "key.pem"),
-		))
-	}
-	if opts.APIVersion != "" {
-		clientOpts = append(clientOpts, client.WithVersion(opts.APIVersion))
-	} else {
-		clientOpts = append(clientOpts, client.WithAPIVersionNegotiation())
-	}
-
-	cli, err := client.NewClientWithOpts(clientOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("connect to docker engine: %w", err)
-	}
-	return &Engine{
-		cli: cli,
-		run: newRunner(opts),
-	}, nil
+// NewEngine wraps an already-resolved daemon connection.
+func NewEngine(api dockerAPI) *Engine {
+	return &Engine{api: api}
 }
 
-func (e *Engine) Close() error { return e.cli.Close() }
+// Close releases the daemon connection.
+func (e *Engine) Close() error { return e.api.Close() }
 
 // OpenMount opens a tar stream of the service mount at target's contents.
 //
@@ -109,12 +102,12 @@ func (e *Engine) Close() error { return e.cli.Close() }
 // not reapply) survive a later restore. The caller owns the returned stream and
 // closes it; Docker stays out of the host filesystem entirely.
 func (e *Engine) OpenMount(ctx context.Context, projectName, service, target string) (io.ReadCloser, error) {
-	containerID, _, err := e.findServiceMount(ctx, projectName, service, target)
+	containerID, _, err := findServiceMount(ctx, e.api, projectName, service, target)
 	if err != nil {
 		return nil, err
 	}
 
-	rc, _, err := e.cli.CopyFromContainer(ctx, containerID, target)
+	rc, _, err := e.api.CopyFromContainer(ctx, containerID, target)
 	if err != nil {
 		return nil, fmt.Errorf("export %s mount %s: %w", service, target, err)
 	}
@@ -132,12 +125,12 @@ type mountInfo struct {
 // findServiceMount returns the ID of the project's container for service that
 // mounts target, along with that mount's backing-storage details. Stopped
 // containers are included, since export and restore run while services are down.
-func (e *Engine) findServiceMount(ctx context.Context, projectName, service, target string) (id string, mnt mountInfo, err error) {
+func findServiceMount(ctx context.Context, api dockerAPI, projectName, service, target string) (id string, mnt mountInfo, err error) {
 	f := filters.NewArgs(
 		filters.Arg("label", composeProjectLabel+"="+projectName),
 		filters.Arg("label", composeServiceLabel+"="+service),
 	)
-	containers, err := e.cli.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
+	containers, err := api.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
 	if err != nil {
 		return "", mountInfo{}, fmt.Errorf("list containers for service %q: %w", service, err)
 	}
@@ -172,12 +165,12 @@ func matchMount(containers []container.Summary, target string) (id string, mnt m
 // are stopped but not removed, so the service container is reused. The stream is
 // owned by the caller; Docker never touches the host filesystem.
 func (e *Engine) WriteMount(ctx context.Context, projectName, service, target string, r io.Reader) error {
-	id, mnt, err := e.findServiceMount(ctx, projectName, service, target)
+	id, mnt, err := findServiceMount(ctx, e.api, projectName, service, target)
 	if err != nil {
 		return fmt.Errorf("finding service mounts: %w", err)
 	}
 
-	if err := wipeMount(ctx, mnt, e.run); err != nil {
+	if err := wipeMount(ctx, e.api, mnt); err != nil {
 		return fmt.Errorf("clear %s mount %s before restore: %w", service, target, err)
 	}
 
@@ -185,7 +178,7 @@ func (e *Engine) WriteMount(ctx context.Context, projectName, service, target st
 	// net/http as the request body, and http.NewRequestWithContext type-asserts it
 	// to io.ReadCloser — so the transport would close the caller's stream, and the
 	// caller's own deferred Close would then fail with "file already closed".
-	if err := e.cli.CopyToContainer(ctx, id, filepath.Dir(target), readOnly{r}, container.CopyToContainerOptions{}); err != nil {
+	if err := e.api.CopyToContainer(ctx, id, filepath.Dir(target), readOnly{r}, container.CopyToContainerOptions{}); err != nil {
 		return fmt.Errorf("restore %s mount %s: %w", service, target, err)
 	}
 	return nil
@@ -201,9 +194,11 @@ func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
 // throwaway root container that mounts it. This is the only host-agnostic way to
 // delete data the service wrote as root: the daemon owns those files, and
 // CopyToContainer only merges entries, never deletes them. Volumes (named and
-// anonymous) are mounted by volume name; bind mounts by host path. run executes
-// the docker CLI (Engine.run in production, a stub in tests).
-func wipeMount(ctx context.Context, mnt mountInfo, run func(ctx context.Context, args ...string) error) error {
+// anonymous) are mounted by volume name; bind mounts by host path.
+//
+// It is the wipe *policy* — which image, which command, which bind — over the
+// reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
+func wipeMount(ctx context.Context, api dockerAPI, mnt mountInfo) error {
 	var src string
 	switch mnt.Type {
 	case "volume":
@@ -216,7 +211,11 @@ func wipeMount(ctx context.Context, mnt mountInfo, run func(ctx context.Context,
 	if src == "" {
 		return fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
 	}
-	// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
-	return run(ctx, "run", "--rm", "-v", src+":/data", "busybox",
-		"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+")
+
+	return runOneShotContainer(ctx, api, oneShotSpec{
+		image: wipeImage,
+		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
+		cmd:   []string{"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"},
+		binds: []string{src + ":/data"},
+	})
 }

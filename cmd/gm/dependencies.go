@@ -1,23 +1,32 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/flags"
+	"github.com/docker/compose/v2/pkg/api"
+	dockercompose "github.com/docker/compose/v2/pkg/compose"
+	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/tlsconfig"
+	"github.com/greenmaskio/gm-tools/internal/client/compose"
+	"github.com/greenmaskio/gm-tools/internal/service/introspect"
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/gm-tools/internal/client/compose"
 	"github.com/greenmaskio/gm-tools/internal/client/docker"
 	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/lock"
 	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/printer/json"
 	cfgrepo "github.com/greenmaskio/gm-tools/internal/repository/config"
 	sprepo "github.com/greenmaskio/gm-tools/internal/repository/savepoint"
 	"github.com/greenmaskio/gm-tools/internal/service/core"
+	"github.com/greenmaskio/gm-tools/internal/service/lock"
+	"github.com/greenmaskio/gm-tools/internal/service/printer/json"
 	"github.com/greenmaskio/gm-tools/internal/service/snapshot"
 	"github.com/greenmaskio/gm-tools/internal/storages"
 )
@@ -34,7 +43,11 @@ var safetyBackupDir = filepath.Join(".gm", "tmp")
 type dependencies struct {
 	savepointStore    model.Storager
 	safetyBackupStore model.Storager
+	dockerCli         *command.DockerCli
+	dockerClient      client.APIClient
+	composeService    api.Compose
 	engine            *docker.Engine
+	composeRunner     *compose.Client
 	service           *core.Service
 	printer           *json.Printer
 }
@@ -61,25 +74,24 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		return nil, fmt.Errorf("initialise safety backup store: %w", err)
 	}
 
-	// The Docker engine is created once here and injected into the snapshot
-	// backends. NewEngine only builds the SDK client (API-version negotiation is
-	// deferred to the first call), so commands that never touch a mount (savepoint
-	// list) create it without contacting the daemon. Every closer is owned by the
+	// The docker/cli instance is resolved once here and is the single daemon
+	// connection both halves of client/docker are built over: the engine takes its
+	// APIClient, the compose service is constructed on the instance itself. That
+	// shared construction is what makes "both halves target one daemon" a property
+	// rather than a contract each has to keep by hand. Every closer is owned by the
 	// returned dependencies and released by its Close — never deferred here, or
 	// they would shut down before the command ran.
-	dockerOpts := docker.Options{
-		Host:       cfg.Docker.Host,
-		APIVersion: cfg.Docker.APIVersion,
-		Context:    cfg.Docker.Context,
-		CertPath:   cfg.Docker.CertPath,
-		TLSVerify:  cfg.Docker.TLSVerify,
-	}
-	engine, err := docker.NewEngine(dockerOpts)
+	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker)
 	if err != nil {
 		closeQuietly(ctx, "savepoint store", savepointStore)
 		closeQuietly(ctx, "safety backup store", safetyBackupStore)
-		return nil, fmt.Errorf("initialise docker engine: %w", err)
+		return nil, fmt.Errorf("initialise docker client: %w", err)
 	}
+	engine := docker.NewEngine(dockerClientAPI)
+
+	composeService := dockercompose.NewComposeService(dockerCli)
+	dockerComposeLoader := compose.NewLoader()
+	composeRunner := compose.NewClient(composeService, dockerComposeLoader)
 
 	// The savepoint repository shares the savepoint store with the backend that
 	// writes the archives it records, so a record always travels with its data —
@@ -91,15 +103,19 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	svc := core.New(
 		sprepo.New(savepointStore),
 		lock.New(projectPath),
-		compose.NewInspector(),
-		docker.NewComposeRunner(dockerOpts),
+		introspect.NewInspector(dockerComposeLoader),
+		composeRunner,
 		snapshot.NewCopyBackend(engine, savepointStore),
 		snapshot.NewCopyBackend(engine, safetyBackupStore),
 	)
 	return &dependencies{
 		savepointStore:    savepointStore,
 		safetyBackupStore: safetyBackupStore,
+		dockerCli:         dockerCli,
+		dockerClient:      dockerClientAPI,
+		composeService:    composeService,
 		engine:            engine,
+		composeRunner:     composeRunner,
 		service:           svc,
 		printer:           json.New(os.Stdout),
 	}, nil
@@ -108,6 +124,9 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 // Close releases the Docker engine and both stores. Only the savepoint store's
 // error is returned: it is the one holding the command's data, and a failure to
 // close the others cannot change the command's outcome.
+//
+// dockerClient is not closed here: it is the connection the engine was built
+// over, so closing the engine already releases it.
 func (d *dependencies) Close(ctx context.Context) error {
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "safety backup store", d.safetyBackupStore)
@@ -119,7 +138,7 @@ func (d *dependencies) Close(ctx context.Context) error {
 // compose project to verify. Nothing here holds a resource, so there is nothing
 // to close.
 func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
-	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), compose.NewInspector())
+	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), introspect.NewInspector(compose.NewLoader()))
 	return svc, json.New(os.Stdout)
 }
 
@@ -129,4 +148,157 @@ func closeQuietly(ctx context.Context, name string, c io.Closer) {
 	if err := c.Close(); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("close " + name)
 	}
+}
+
+func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
+	if cfg.Host != "" && cfg.Context != "" {
+		return nil, fmt.Errorf("docker.host and docker.context are mutually exclusive: %q already names a daemon, so remove one of the two", cfg.Context)
+	}
+
+	opts := flags.NewClientOptions()
+	if cfg.Host != "" {
+		opts.Hosts = []string{cfg.Host}
+	}
+	opts.Context = cfg.Context
+
+	tlsOpts, useTLS, err := dockerTLSOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if useTLS {
+		opts.TLS = true
+		opts.TLSVerify = cfg.TLSVerify
+		opts.TLSOptions = tlsOpts
+	}
+	return opts, nil
+}
+
+// dockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
+// and reports whether any TLS material was configured at all (an all-empty config
+// means "read the environment", so TLS stays off). It keeps docker's own two-part
+// model rather than treating the fields as one block: a client certificate is a
+// cert_file/key_file *pair* (mutual TLS) that must be supplied together, while
+// ca_file/tls_verify govern server verification independently — tls_verify alone
+// is valid, verifying the daemon against the system roots with no client cert.
+// cert_path is the DOCKER_CERT_PATH shorthand that supplies ca.pem/cert.pem/key.pem
+// from one directory, so it satisfies the pair on its own.
+//
+// The pair is validated here, at the composition root, because a half-set pair is a
+// footgun docker/cli would surface only as an opaque handshake failure at connect
+// time — the error names the field the user must add.
+func dockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
+	caFile := tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem")
+	certFile := tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem")
+	keyFile := tlsFile(cfg.KeyFile, cfg.CertPath, "key.pem")
+
+	switch {
+	case certFile != "" && keyFile == "":
+		return nil, false, fmt.Errorf("docker.cert_file is set but docker.key_file is missing: a client certificate needs both, or set docker.cert_path to supply the pair from one directory")
+	case keyFile != "" && certFile == "":
+		return nil, false, fmt.Errorf("docker.key_file is set but docker.cert_file is missing: a client certificate needs both, or set docker.cert_path to supply the pair from one directory")
+	}
+
+	if caFile == "" && certFile == "" && keyFile == "" && !cfg.TLSVerify {
+		return nil, false, nil
+	}
+
+	return &tlsconfig.Options{
+		CAFile:   caFile,
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}, true, nil
+}
+
+// tlsFile resolves one TLS file path, mirroring the docker CLI's own layering: an
+// explicit path wins; otherwise it is CertPath/name (the DOCKER_CERT_PATH
+// convention); and when neither is set the field stays empty so docker/cli reads
+// it from the environment rather than being handed a bogus path.
+func tlsFile(explicit, certPath, name string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if certPath != "" {
+		return filepath.Join(certPath, name)
+	}
+	return ""
+}
+
+// initDockerClient resolves cfg into the one docker/cli instance both halves of
+// client/docker are built over, and returns the APIClient it will use alongside
+// it — built here rather than taken from dockerCli.Client(), which reports a
+// failure by calling os.Exit(1).
+func initDockerClient(cfg config.Docker) (*command.DockerCli, client.APIClient, error) {
+	clientOpts, err := getDockerOptions(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+
+	// DOCKER_API_VERSION is the only seam docker/cli leaves for pinning the API
+	// version: the client it builds from the resolved endpoint reads the version
+	// from the environment (client.WithVersionFromEnv) and otherwise negotiates.
+	// Setting it here is safe in a way it would not have been for the exec-based
+	// version — GM spawns no child processes, so this configures GM's own client
+	// and nothing else.
+	if cfg.APIVersion != "" {
+		if err := os.Setenv(client.EnvOverrideAPIVersion, cfg.APIVersion); err != nil {
+			return nil, nil, fmt.Errorf("pin docker api version %q: %w", cfg.APIVersion, err)
+		}
+	}
+
+	// stdout is discarded — compose draws its progress UI there and GM's own
+	// output contract is JSON on stdout. stderr is a buffer *for now*: it is the
+	// only channel docker/cli reports a failed endpoint resolution on, and the
+	// buffer is what turns that report into a returned error below.
+	var initErr bytes.Buffer
+	dockerCli, err := command.NewDockerCli(
+		command.WithInputStream(nil),
+		command.WithOutputStream(io.Discard),
+		command.WithErrorStream(&initErr),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+	if err := dockerCli.Initialize(clientOpts); err != nil {
+		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+
+	// The connection is built here rather than left to dockerCli.Client(), which
+	// resolves lazily and answers a failure with os.Exit(1). NewAPIClientFromFlags
+	// runs the same resolution — the same context store, the same endpoint, the
+	// same client options, so DOCKER_API_VERSION is still honoured — and returns
+	// an error instead of killing the process. Injecting the result back means the
+	// CLI (and therefore the compose library built over it) uses this very client
+	// rather than constructing a second one behind the exit.
+	apiClient, err := command.NewAPIClientFromFlags(clientOpts, dockerCli.ConfigFile())
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %w", cfg.Host, cfg.Context, err)
+	}
+	if err := command.WithAPIClient(apiClient)(dockerCli); err != nil {
+		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+
+	// Initialize can log a benign warning of its own (a malformed
+	// ~/.docker/config.json), so the buffer is cleared here: from this point on
+	// anything in it comes from the CLI's own resolution, and nothing else.
+	initErr.Reset()
+
+	// One resolution is still the CLI's alone: even with the client injected, its
+	// sync.Once opens with getDockerEndPoint, and a failure there is reported only
+	// by printing to the error stream — after which Client() calls os.Exit(1).
+	// Force that Once here, through DockerEndpoint rather than Client(): both run
+	// it, but DockerEndpoint prints the cause and returns. Forcing it *here* is
+	// what matters, since the compose library calls Client() itself, well past any
+	// error handling of GM's.
+	dockerCli.DockerEndpoint()
+	if initErr.Len() > 0 {
+		return nil, nil, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %s",
+			cfg.Host, cfg.Context, strings.TrimSpace(initErr.String()))
+	}
+
+	// Resolution succeeded, so the error stream goes back to being compose's
+	// discarded progress channel — nothing must accumulate in the buffer.
+	if err := command.WithErrorStream(io.Discard)(dockerCli); err != nil {
+		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+	return dockerCli, apiClient, nil
 }

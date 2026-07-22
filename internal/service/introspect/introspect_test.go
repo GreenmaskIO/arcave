@@ -1,19 +1,68 @@
-package compose
+package introspect
 
 import (
 	"context"
-	"os"
-	"path/filepath"
+	"errors"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
-func TestMountsOfClassifiesMounts(t *testing.T) {
+// The loader is a seam: Inspect projects whatever it returns, so its logic runs
+// against an in-memory project with no compose file on disk.
+func TestInspector_Inspect(t *testing.T) {
+	t.Run("projects the loaded project", func(t *testing.T) {
+		// Arrange
+		project := &types.Project{
+			Name: "fixture",
+			Services: types.Services{
+				"db": {Volumes: []types.ServiceVolumeConfig{
+					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
+				}},
+				"app": {Volumes: []types.ServiceVolumeConfig{
+					{Type: "tmpfs", Target: "/scratch"},
+				}},
+			},
+		}
+		loader := &mockLoader{}
+		loader.On("Load", mock.Anything, []string{"a.yml"}).Return(project, nil).Once()
+
+		// Act
+		got, err := NewInspector(loader).Inspect(context.Background(), "a.yml")
+
+		// Assert
+		require.NoError(t, err)
+		loader.AssertExpectations(t)
+		assert.Equal(t, "fixture", got.ComposeProject)
+		assert.Equal(t, []model.Mount{
+			{Service: "db", Target: "/var/lib/postgresql/data", Type: "volume", Source: "fixture_pgdata"},
+		}, got.Mounts)
+		assert.Equal(t, []model.SkippedMount{
+			{Service: "app", Reason: `tmpfs mount at "/scratch"`},
+		}, got.Skipped)
+	})
+
+	t.Run("wraps a loader failure", func(t *testing.T) {
+		// Arrange
+		loader := &mockLoader{}
+		loader.On("Load", mock.Anything, mock.Anything).Return(nil, errors.New("bad compose file")).Once()
+
+		// Act
+		_, err := NewInspector(loader).Inspect(context.Background())
+
+		// Assert
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "loading docker compose file(s)")
+		assert.Contains(t, err.Error(), "bad compose file")
+	})
+}
+
+func TestMountsOf(t *testing.T) {
 	tests := []struct {
 		name        string
 		project     *types.Project
@@ -130,53 +179,14 @@ func TestVolumeName(t *testing.T) {
 	}
 }
 
-func TestInspectFromFile(t *testing.T) {
-	// Arrange: a real compose file parsed by compose-go (no docker daemon).
-	dir := t.TempDir()
-	path := filepath.Join(dir, "docker-compose.yml")
-	yaml := `
-name: fixture
-services:
-  db:
-    image: postgres
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-  app:
-    image: busybox
-    volumes:
-      - ./cfg:/etc/cfg
-      - type: tmpfs
-        target: /scratch
-volumes:
-  pgdata:
-`
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o644))
-
-	// Act
-	insp, err := NewInspector().Inspect(context.Background(), path)
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, "fixture", insp.ComposeProject)
-	assert.ElementsMatch(t, []model.Mount{
-		{Service: "db", Target: "/var/lib/postgresql/data", Type: "volume", Source: "fixture_pgdata"},
-		{Service: "app", Target: "/etc/cfg", Type: "bind", Source: filepath.Join(dir, "cfg")},
-	}, insp.Mounts)
-	require.Len(t, insp.Skipped, 1)
-	assert.Equal(t, "app", insp.Skipped[0].Service)
-	assert.Contains(t, insp.Skipped[0].Reason, "tmpfs")
+// mockLoader is the composeProjectLoader double. It takes the variadic files as
+// a single []string so an expectation can name them.
+type mockLoader struct {
+	mock.Mock
 }
 
-func TestInspectErrorsWithoutServices(t *testing.T) {
-	// Arrange
-	dir := t.TempDir()
-	path := filepath.Join(dir, "docker-compose.yml")
-	require.NoError(t, os.WriteFile(path, []byte("name: empty\nservices: {}\n"), 0o644))
-
-	// Act
-	_, err := NewInspector().Inspect(context.Background(), path)
-
-	// Assert
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no services")
+func (m *mockLoader) Load(ctx context.Context, files ...string) (*types.Project, error) {
+	args := m.Called(ctx, files)
+	project, _ := args.Get(0).(*types.Project)
+	return project, args.Error(1)
 }
