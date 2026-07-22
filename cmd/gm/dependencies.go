@@ -160,16 +160,53 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 		opts.Hosts = []string{cfg.Host}
 	}
 	opts.Context = cfg.Context
-	if cfg.CertPath != "" || cfg.TLSVerify || cfg.CAFile != "" || cfg.CertFile != "" || cfg.KeyFile != "" {
-		opts.TLSVerify = cfg.TLSVerify
+
+	tlsOpts, useTLS, err := dockerTLSOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if useTLS {
 		opts.TLS = true
-		opts.TLSOptions = &tlsconfig.Options{
-			CAFile:   tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem"),
-			CertFile: tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem"),
-			KeyFile:  tlsFile(cfg.KeyFile, cfg.CertPath, "key.pem"),
-		}
+		opts.TLSVerify = cfg.TLSVerify
+		opts.TLSOptions = tlsOpts
 	}
 	return opts, nil
+}
+
+// dockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
+// and reports whether any TLS material was configured at all (an all-empty config
+// means "read the environment", so TLS stays off). It keeps docker's own two-part
+// model rather than treating the fields as one block: a client certificate is a
+// cert_file/key_file *pair* (mutual TLS) that must be supplied together, while
+// ca_file/tls_verify govern server verification independently — tls_verify alone
+// is valid, verifying the daemon against the system roots with no client cert.
+// cert_path is the DOCKER_CERT_PATH shorthand that supplies ca.pem/cert.pem/key.pem
+// from one directory, so it satisfies the pair on its own.
+//
+// The pair is validated here, at the composition root, because a half-set pair is a
+// footgun docker/cli would surface only as an opaque handshake failure at connect
+// time — the error names the field the user must add.
+func dockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
+	caFile := tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem")
+	certFile := tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem")
+	keyFile := tlsFile(cfg.KeyFile, cfg.CertPath, "key.pem")
+
+	switch {
+	case certFile != "" && keyFile == "":
+		return nil, false, fmt.Errorf("docker.cert_file is set but docker.key_file is missing: a client certificate needs both, or set docker.cert_path to supply the pair from one directory")
+	case keyFile != "" && certFile == "":
+		return nil, false, fmt.Errorf("docker.key_file is set but docker.cert_file is missing: a client certificate needs both, or set docker.cert_path to supply the pair from one directory")
+	}
+
+	if caFile == "" && certFile == "" && keyFile == "" && !cfg.TLSVerify {
+		return nil, false, nil
+	}
+
+	return &tlsconfig.Options{
+		CAFile:   caFile,
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}, true, nil
 }
 
 // tlsFile resolves one TLS file path, mirroring the docker CLI's own layering: an

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/docker/cli/cli/flags"
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -79,6 +81,21 @@ func TestGetDockerOptions(t *testing.T) {
 			},
 		},
 		{
+			// Cert material is enough to turn TLS on: a caller who names a cert path
+			// wants an encrypted connection even if they never asked to verify the
+			// daemon's certificate, so TLS is enabled and only TLSVerify stays off.
+			name: "a cert path alone enables tls with verify off",
+			cfg:  config.Docker{CertPath: "/certs"},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.True(t, got.TLS, "cert material enables TLS")
+				assert.False(t, got.TLSVerify, "verify stays off unless asked for")
+				require.NotNil(t, got.TLSOptions)
+				assert.Equal(t, "/certs/ca.pem", got.TLSOptions.CAFile)
+				assert.Equal(t, "/certs/cert.pem", got.TLSOptions.CertFile)
+				assert.Equal(t, "/certs/key.pem", got.TLSOptions.KeyFile)
+			},
+		},
+		{
 			// The rule this replaced was the inverse: the raw SDK client could not
 			// resolve a context, so one was refused without a host. docker/cli can.
 			name: "a context alone is enough",
@@ -86,6 +103,54 @@ func TestGetDockerOptions(t *testing.T) {
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.Equal(t, "remote", got.Context)
 				assert.Empty(t, got.Hosts)
+			},
+		},
+		{
+			// tls_verify with no cert material is the public-CA case: verify the
+			// daemon against the system roots, present no client certificate.
+			name: "tls verify alone enables tls with no cert material",
+			cfg:  config.Docker{TLSVerify: true},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.True(t, got.TLS)
+				assert.True(t, got.TLSVerify)
+				require.NotNil(t, got.TLSOptions)
+				assert.Empty(t, got.TLSOptions.CAFile)
+				assert.Empty(t, got.TLSOptions.CertFile)
+				assert.Empty(t, got.TLSOptions.KeyFile)
+			},
+		},
+		{
+			// A CA to verify against, but no client certificate — still a complete
+			// config, because cert/key are a pair that is simply absent here.
+			name: "a ca file alone verifies without a client certificate",
+			cfg:  config.Docker{CAFile: "/etc/ca.pem", TLSVerify: true},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.True(t, got.TLS)
+				require.NotNil(t, got.TLSOptions)
+				assert.Equal(t, "/etc/ca.pem", got.TLSOptions.CAFile)
+				assert.Empty(t, got.TLSOptions.CertFile)
+				assert.Empty(t, got.TLSOptions.KeyFile)
+			},
+		},
+		{
+			name:    "a client cert without its key is refused",
+			cfg:     config.Docker{CertFile: "/etc/cert.pem"},
+			wantErr: "docker.key_file is missing",
+		},
+		{
+			name:    "a client key without its cert is refused",
+			cfg:     config.Docker{KeyFile: "/etc/key.pem"},
+			wantErr: "docker.cert_file is missing",
+		},
+		{
+			// cert_path supplies the whole pair from one directory, so half a pair
+			// spelled out explicitly is still completed by it rather than refused.
+			name: "a cert path completes a half-specified pair",
+			cfg:  config.Docker{CertPath: "/certs", CertFile: "/etc/cert.pem"},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				require.NotNil(t, got.TLSOptions)
+				assert.Equal(t, "/etc/cert.pem", got.TLSOptions.CertFile, "explicit CertFile wins")
+				assert.Equal(t, "/certs/key.pem", got.TLSOptions.KeyFile, "the missing key falls back to the cert path")
 			},
 		},
 		{
@@ -111,6 +176,97 @@ func TestGetDockerOptions(t *testing.T) {
 	}
 }
 
+// dockerTLSOptions honours docker's two-part TLS model: a cert_file/key_file pair
+// (mutual TLS) that must be supplied together, and ca_file/tls_verify governing
+// server verification independently. The useTLS return is what keeps an all-empty
+// config off TLS entirely, so it is asserted alongside the resolved paths.
+func TestDockerTLSOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         config.Docker
+		wantErr     string
+		wantUseTLS  bool
+		wantCAFile  string
+		wantCert    string
+		wantKeyFile string
+	}{
+		{
+			name:       "an empty config leaves tls off",
+			cfg:        config.Docker{},
+			wantUseTLS: false,
+		},
+		{
+			name:       "tls verify alone turns tls on with no cert material",
+			cfg:        config.Docker{TLSVerify: true},
+			wantUseTLS: true,
+		},
+		{
+			name:       "a ca file alone verifies without a client certificate",
+			cfg:        config.Docker{CAFile: "/etc/ca.pem"},
+			wantUseTLS: true,
+			wantCAFile: "/etc/ca.pem",
+		},
+		{
+			name:        "a full pair enables tls",
+			cfg:         config.Docker{CertFile: "/etc/cert.pem", KeyFile: "/etc/key.pem"},
+			wantUseTLS:  true,
+			wantCert:    "/etc/cert.pem",
+			wantKeyFile: "/etc/key.pem",
+		},
+		{
+			name:        "a cert path expands to the three pem paths",
+			cfg:         config.Docker{CertPath: "/certs"},
+			wantUseTLS:  true,
+			wantCAFile:  "/certs/ca.pem",
+			wantCert:    "/certs/cert.pem",
+			wantKeyFile: "/certs/key.pem",
+		},
+		{
+			name:        "a cert path completes a half-specified pair",
+			cfg:         config.Docker{CertPath: "/certs", KeyFile: "/etc/key.pem"},
+			wantUseTLS:  true,
+			wantCAFile:  "/certs/ca.pem",
+			wantCert:    "/certs/cert.pem",
+			wantKeyFile: "/etc/key.pem",
+		},
+		{
+			name:    "a client cert without its key is refused",
+			cfg:     config.Docker{CertFile: "/etc/cert.pem"},
+			wantErr: "docker.key_file is missing",
+		},
+		{
+			name:    "a client key without its cert is refused",
+			cfg:     config.Docker{KeyFile: "/etc/key.pem"},
+			wantErr: "docker.cert_file is missing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			opts, useTLS, err := dockerTLSOptions(tt.cfg)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				assert.False(t, useTLS, "a refused config must not enable TLS")
+				assert.Nil(t, opts)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantUseTLS, useTLS)
+			if !tt.wantUseTLS {
+				assert.Nil(t, opts)
+				return
+			}
+			require.NotNil(t, opts)
+			assert.Equal(t, tt.wantCAFile, opts.CAFile)
+			assert.Equal(t, tt.wantCert, opts.CertFile)
+			assert.Equal(t, tt.wantKeyFile, opts.KeyFile)
+		})
+	}
+}
+
 // A host resolves to an endpoint whether or not anything is listening on it:
 // gm savepoint list has to work with docker stopped.
 func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
@@ -126,6 +282,46 @@ func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
 	assert.NotNil(t, dockerCli)
 	assert.NotNil(t, apiClient)
+}
+
+// api_version is the one docker field carried not through ClientOptions but
+// through the environment: docker/cli reads DOCKER_API_VERSION and otherwise
+// negotiates. GM spawns no child processes, so setting it configures GM's own
+// client and nothing else.
+func TestInitDockerClient_PinsAPIVersion(t *testing.T) {
+	// Arrange: an empty config dir, and a known-empty env var t restores afterwards.
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	t.Setenv(client.EnvOverrideAPIVersion, "")
+
+	// Act
+	_, apiClient, err := initDockerClient(config.Docker{
+		Host:       "unix:///nowhere/docker.sock",
+		APIVersion: "1.45",
+	})
+
+	// Assert
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
+	assert.Equal(t, "1.45", os.Getenv(client.EnvOverrideAPIVersion),
+		"cfg.APIVersion must reach docker/cli through DOCKER_API_VERSION")
+}
+
+// An unset api_version leaves DOCKER_API_VERSION untouched, so docker/cli
+// negotiates rather than being pinned to a stale value the caller never asked
+// for — the empty field is "read the environment", not "clear it".
+func TestInitDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
+	// Arrange
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	t.Setenv(client.EnvOverrideAPIVersion, "1.40")
+
+	// Act
+	_, apiClient, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"})
+
+	// Assert
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
+	assert.Equal(t, "1.40", os.Getenv(client.EnvOverrideAPIVersion),
+		"an unset APIVersion must not disturb a version already in the environment")
 }
 
 // A context that does not exist must surface as an error. docker/cli's own
