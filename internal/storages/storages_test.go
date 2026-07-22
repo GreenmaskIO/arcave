@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 // directoryStorage returns the directory arm of the storage union, pointed at path.
@@ -27,12 +27,12 @@ func TestNew(t *testing.T) {
 		root := t.TempDir()
 
 		// Act
-		st, err := New(directoryStorage(filepath.Join(".gm", "savepoints", "demo")), root)
+		st, err := New(directoryStorage(filepath.Join(".arcave", "savepoints", "demo")), root)
 
 		// Assert
 		require.NoError(t, err)
 		t.Cleanup(func() { assert.NoError(t, st.Close()) })
-		want := filepath.Join(root, ".gm", "savepoints", "demo")
+		want := filepath.Join(root, ".arcave", "savepoints", "demo")
 		assert.Equal(t, want, st.GetCwd())
 		assert.DirExists(t, want, "the store must exist before the first PutObject")
 	})
@@ -66,7 +66,7 @@ func TestNew(t *testing.T) {
 		assert.FileExists(t, filepath.Join(root, "snaps", "100", "db", "data", "data.tar"))
 	})
 
-	t.Run("an arm GM does not implement is rejected", func(t *testing.T) {
+	t.Run("an arm arcave does not implement is rejected", func(t *testing.T) {
 		// Act
 		_, err := New(config.Storage{Type: "s3"}, t.TempDir())
 
@@ -77,7 +77,7 @@ func TestNew(t *testing.T) {
 
 // A store root whose destruction would be catastrophic is refused before any
 // directory is created — a savepoint_dir of /root must never become the place a
-// `gm savepoint remove` operates relative to.
+// `arcave savepoint remove` operates relative to.
 func TestValidateStoreRoot(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestValidateStoreRoot(t *testing.T) {
 		{name: "a shallow system directory", root: "/root", wantMsg: "system directory"},
 		{name: "another shallow system directory", root: "/etc", wantMsg: "system directory"},
 		{name: "the home directory", root: home, wantMsg: "home directory"},
-		{name: "a deep path under a system directory", root: "/var/lib/gm/savepoints"},
+		{name: "a deep path under a system directory", root: "/var/lib/arcave/savepoints"},
 		{name: "a sibling of a system directory", root: "/etcetera"},
 	}
 
@@ -111,7 +111,7 @@ func TestValidateStoreRoot(t *testing.T) {
 	}
 }
 
-// The project root and its ancestors are refused too: GM deletes namespaces
+// The project root and its ancestors are refused too: arcave deletes namespaces
 // inside the store, and the store must not contain the code it is protecting.
 func TestValidateStoreRoot_ProjectAncestors(t *testing.T) {
 	parent := t.TempDir()
@@ -125,7 +125,7 @@ func TestValidateStoreRoot_ProjectAncestors(t *testing.T) {
 	}{
 		{name: "the project root itself", root: projectRoot},
 		{name: "the project's parent", root: parent},
-		{name: "a directory inside the project", root: filepath.Join(projectRoot, ".gm", "savepoints"), wantOK: true},
+		{name: "a directory inside the project", root: filepath.Join(projectRoot, ".arcave", "savepoints"), wantOK: true},
 		{name: "a sibling of the project", root: filepath.Join(parent, "elsewhere"), wantOK: true},
 	}
 

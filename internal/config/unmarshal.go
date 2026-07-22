@@ -4,21 +4,21 @@ import (
 	"fmt"
 
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/spf13/viper"
 )
 
 // Unmarshal decodes the sources viper has merged into a validated Config. It is
 // the single home of the config policy: version gate, unknown-key rejection,
-// defaults, validation. cmd/gm owns only the merge that fills v.
+// defaults, validation. cmd/arcave owns only the merge that fills v.
 //
-// GM speaks exactly one schema version, so a file naming any other is refused
+// arcave speaks exactly one schema version, so a file naming any other is refused
 // with ErrUnsupportedConfigVersion.
 func Unmarshal(v *viper.Viper, projectRoot string) (Config, error) {
 	cfg := NewConfig()
 
 	// The gate reads the version through a probe carrying nothing but Version,
-	// never through Config: a schema GM does not speak may spell an existing key
+	// never through Config: a schema arcave does not speak may spell an existing key
 	// with another type, and decoding the whole Config leniently just to read the
 	// version would fail on that type rather than on the version. The probe claims
 	// one key and ignores the rest.

@@ -1,4 +1,4 @@
-module github.com/greenmaskio/gm-tools
+module github.com/greenmaskio/arcave
 
 go 1.25.5
 

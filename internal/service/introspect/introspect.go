@@ -6,7 +6,7 @@ import (
 	"sort"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 type composeProjectLoader interface {
@@ -36,7 +36,7 @@ func NewInspector(loader composeProjectLoader) *Inspector {
 }
 
 // Inspect loads the compose project described by files and returns its name and
-// the mounts GM should snapshot. See Load for how files is resolved.
+// the mounts arcave should snapshot. See Load for how files is resolved.
 func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspection, error) {
 	project, err := c.loader.Load(ctx, files...)
 	if err != nil {

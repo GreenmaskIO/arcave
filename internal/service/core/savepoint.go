@@ -13,7 +13,7 @@ import (
 	str2duration "github.com/xhit/go-str2duration/v2"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // maxConcurrentSavepointRemovals caps how many savepoints applyRemoval deletes in
@@ -127,7 +127,7 @@ func uniqueSavepointID(now time.Time) string {
 //  2. Write every archive.
 //  3. Save the record. It is the commit marker, so it is written *last*: a crash
 //     before this leaves data no record names, which List skips and a future
-//     step 1 (or a `gm savepoint gc`) reclaims.
+//     step 1 (or a `arcave savepoint gc`) reclaims.
 //
 // On failure the namespace is dropped again, so a partial snapshot can never be
 // rolled back to.
@@ -373,9 +373,9 @@ func partitionSavepoints(
 // only observable states "fully present" and "gone".
 //
 // The cost is an orphaned namespace when the data delete fails after the record
-// is gone: the savepoint no longer lists, so `gm savepoint remove <id>` cannot
+// is gone: the savepoint no longer lists, so `arcave savepoint remove <id>` cannot
 // retry it. Those namespaces are reported here and reclaimed by a future
-// `gm savepoint gc`.
+// `arcave savepoint gc`.
 func (s *Service) applyRemoval(ctx context.Context, removed []model.SavepointRecord) error {
 	// Delete the savepoints concurrently. This is a plain errgroup.Group, not
 	// WithContext: each removal is independent, and a cancelled sibling would abort

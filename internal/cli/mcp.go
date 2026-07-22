@@ -1,4 +1,4 @@
-// Package mcp is the MCP adapter: it exposes GM's savepoint workflows as tools
+// Package mcp is the MCP adapter: it exposes arcave's savepoint workflows as tools
 // an AI agent can call natively, mirroring what internal/cli exposes as
 // commands. Like that package it declares its own consumer-side view of the
 // service and imports no internal/service or internal/client package — a tool
@@ -21,10 +21,10 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// serverVersion is the version GM reports to the MCP host during initialise.
+// serverVersion is the version arcave reports to the MCP host during initialise.
 const serverVersion = "0.1.0"
 
 // service is this adapter's view of the savepoint workflows — the same four
@@ -37,7 +37,7 @@ type mcpService interface {
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
 }
 
-// Server serves GM's savepoint workflows over MCP.
+// Server serves arcave's savepoint workflows over MCP.
 type MCPHandler struct {
 	svc          mcpService
 	composeFiles []string
@@ -74,7 +74,7 @@ const (
 	descRollback = "Restore the environment to a savepoint, selected by id, by name, or by the " +
 		"literal 'latest'. DESTRUCTIVE: every mount it covers is wiped and replaced with the " +
 		"savepoint's data, so any change made since that savepoint is lost — including in bind " +
-		"mounts, which are the user's own host folders. GM takes a safety backup of the live " +
+		"mounts, which are the user's own host folders. arcave takes a safety backup of the live " +
 		"state first and replays it automatically if the rollback fails, so a failed rollback " +
 		"leaves the environment as it was. Services are stopped and started again."
 )
@@ -82,7 +82,7 @@ const (
 // createInput is savepoint_create's input schema. The compose files are not a
 // field: they come from the resolved project config, injected into the Server.
 type createInput struct {
-	Name        string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by gm"`
+	Name        string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by arcave"`
 	Description string `json:"description,omitempty" jsonschema:"what this savepoint captures, e.g. the change it is being taken before"`
 	WaitTimeout int    `json:"wait_timeout,omitempty" jsonschema:"seconds to wait for services to become healthy on restart; omit for the default"`
 }
@@ -173,7 +173,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 // Run registers the tools and serves them over stdio until the host closes stdin
 // or ctx is cancelled.
 func (h *MCPHandler) MCPRun(ctx context.Context) error {
-	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "gm", Version: serverVersion}, nil)
+	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "arcave", Version: serverVersion}, nil)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_create", Description: descCreate}, h.createSavepointMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList}, h.listSavepointsMCP)

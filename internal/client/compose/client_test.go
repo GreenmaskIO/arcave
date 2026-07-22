@@ -158,7 +158,7 @@ func assertUpOptions(t *testing.T, composeAPI *mockComposeAPI, wantTimeout time.
 
 	// The library's zero CreateOptions means "renew anonymous volumes", the
 	// opposite of the CLI's default: a container recreated because the compose
-	// file changed would lose data GM promises to keep.
+	// file changed would lose data arcave promises to keep.
 	assert.True(t, opts.Create.Inherit, "a recreated container must inherit its anonymous volumes")
 	assert.Equal(t, api.RecreateDiverged, opts.Create.Recreate)
 	assert.Equal(t, api.RecreateDiverged, opts.Create.RecreateDependencies)
@@ -236,7 +236,7 @@ func fixtureProject() *types.Project {
 	}
 }
 
-// mockComposeAPI is the dockerComposeAPI double: it records what GM asks compose
+// mockComposeAPI is the dockerComposeAPI double: it records what arcave asks compose
 // to do, so the options are asserted without a daemon.
 type mockComposeAPI struct {
 	mock.Mock

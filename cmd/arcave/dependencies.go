@@ -15,26 +15,26 @@ import (
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
-	"github.com/greenmaskio/gm-tools/internal/client/compose"
-	"github.com/greenmaskio/gm-tools/internal/service/introspect"
+	"github.com/greenmaskio/arcave/internal/client/compose"
+	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/gm-tools/internal/client/docker"
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/model"
-	cfgrepo "github.com/greenmaskio/gm-tools/internal/repository/config"
-	sprepo "github.com/greenmaskio/gm-tools/internal/repository/savepoint"
-	"github.com/greenmaskio/gm-tools/internal/service/core"
-	"github.com/greenmaskio/gm-tools/internal/service/lock"
-	"github.com/greenmaskio/gm-tools/internal/service/printer/json"
-	"github.com/greenmaskio/gm-tools/internal/service/snapshot"
-	"github.com/greenmaskio/gm-tools/internal/storages"
+	"github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
+	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
+	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/lock"
+	"github.com/greenmaskio/arcave/internal/service/printer/json"
+	"github.com/greenmaskio/arcave/internal/service/snapshot"
+	"github.com/greenmaskio/arcave/internal/storages"
 )
 
 // safetyBackupDir is the store safety backups live in, relative to the project
 // root. Unlike the savepoint store it is never user-configurable: it is scratch
 // space a rollback creates and deletes within one command.
-var safetyBackupDir = filepath.Join(".gm", "tmp")
+var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
 
 // dependencies is the composition root's bag of per-command collaborators. It
 // names the concrete types it constructs: an interface here would buy no
@@ -133,7 +133,7 @@ func (d *dependencies) Close(ctx context.Context) error {
 	return d.savepointStore.Close()
 }
 
-// initServiceDeps wires `gm init`, which needs neither storage, nor a snapshot
+// initServiceDeps wires `arcave init`, which needs neither storage, nor a snapshot
 // backend, nor the Docker engine — only somewhere to write the config and a
 // compose project to verify. Nothing here holds a resource, so there is nothing
 // to close.
@@ -237,7 +237,7 @@ func initDockerClient(cfg config.Docker) (*command.DockerCli, client.APIClient, 
 	// version: the client it builds from the resolved endpoint reads the version
 	// from the environment (client.WithVersionFromEnv) and otherwise negotiates.
 	// Setting it here is safe in a way it would not have been for the exec-based
-	// version — GM spawns no child processes, so this configures GM's own client
+	// version — arcave spawns no child processes, so this configures arcave's own client
 	// and nothing else.
 	if cfg.APIVersion != "" {
 		if err := os.Setenv(client.EnvOverrideAPIVersion, cfg.APIVersion); err != nil {
@@ -245,7 +245,7 @@ func initDockerClient(cfg config.Docker) (*command.DockerCli, client.APIClient, 
 		}
 	}
 
-	// stdout is discarded — compose draws its progress UI there and GM's own
+	// stdout is discarded — compose draws its progress UI there and arcave's own
 	// output contract is JSON on stdout. stderr is a buffer *for now*: it is the
 	// only channel docker/cli reports a failed endpoint resolution on, and the
 	// buffer is what turns that report into a returned error below.
@@ -288,7 +288,7 @@ func initDockerClient(cfg config.Docker) (*command.DockerCli, client.APIClient, 
 	// Force that Once here, through DockerEndpoint rather than Client(): both run
 	// it, but DockerEndpoint prints the cause and returns. Forcing it *here* is
 	// what matters, since the compose library calls Client() itself, well past any
-	// error handling of GM's.
+	// error handling of arcave's.
 	dockerCli.DockerEndpoint()
 	if initErr.Len() > 0 {
 		return nil, nil, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %s",

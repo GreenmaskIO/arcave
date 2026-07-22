@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // The whole point of the lock: the second holder must fail fast with the shared
@@ -25,7 +25,7 @@ func TestAcquire_SecondHolderFailsFast(t *testing.T) {
 
 	// Assert
 	require.ErrorIs(t, secondErr, model.ErrProjectLocked)
-	assert.FileExists(t, filepath.Join(root, ".gm", "lock"))
+	assert.FileExists(t, filepath.Join(root, ".arcave", "lock"))
 	require.NoError(t, release())
 }
 
@@ -45,8 +45,8 @@ func TestAcquire_ReleaseAllowsReacquire(t *testing.T) {
 	require.NoError(t, again())
 }
 
-// The lock lives under .gm, which a fresh project may not have yet — `gm init`
-// creates the config, but a savepoint command can run in a project whose .gm was
+// The lock lives under .arcave, which a fresh project may not have yet — `arcave init`
+// creates the config, but a savepoint command can run in a project whose .arcave was
 // removed by hand.
 func TestAcquire_CreatesTheLockDirectory(t *testing.T) {
 	// Arrange
@@ -57,7 +57,7 @@ func TestAcquire_CreatesTheLockDirectory(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.FileExists(t, filepath.Join(root, ".gm", "lock"))
+	assert.FileExists(t, filepath.Join(root, ".arcave", "lock"))
 	require.NoError(t, release())
 }
 

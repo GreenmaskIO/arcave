@@ -15,14 +15,14 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/storages/directory"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/storages/directory"
 )
 
 // systemRoots are directories a savepoint store must never be. They are the ones
 // whose destruction is unrecoverable, and none of them is a plausible store: a
-// user who means "/var/lib/gm" writes that, not "/var".
+// user who means "/var/lib/arcave" writes that, not "/var".
 var systemRoots = []string{"/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/opt", "/proc", "/root", "/sbin", "/sys", "/usr", "/var"}
 
 // New builds the Storager for cfg, rooted at the store the config names.
@@ -62,12 +62,12 @@ func New(cfg config.Storage, projectRoot string) (model.Storager, error) {
 // validateStoreRoot rejects a store root whose destruction would be
 // catastrophic: the filesystem root, a shallow system directory, the user's home
 // directory, or an ancestor of the project (which includes the project root
-// itself). GM deletes savepoint namespaces inside the store it is given, so the
+// itself). arcave deletes savepoint namespaces inside the store it is given, so the
 // store must be a place that exists to hold savepoints and nothing else.
 //
 // This is defense in depth. directory.Storage.resolve already refuses to delete
 // a store's own root, so a bad root cannot cost the whole tree; what this stops
-// is a `gm savepoint remove` quietly deleting /etc/1780335122.
+// is a `arcave savepoint remove` quietly deleting /etc/1780335122.
 func validateStoreRoot(root, projectRoot string) error {
 	abs, err := filepath.Abs(root)
 	if err != nil {

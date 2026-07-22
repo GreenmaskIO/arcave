@@ -2,20 +2,20 @@
 
 ## Project Overview
 
-GM is a local environment lifecycle manager for stateful Docker Compose applications.
+arcave is a local environment lifecycle manager for stateful Docker Compose applications.
 
 Modern development workflows make it easy to version source code, but stateful services such as PostgreSQL, MySQL,
 Redis, MongoDB, and Kafka remain difficult to manage. Developers frequently need to experiment with schema migrations,
 data transformations, test automation, AI agents, and application changes that modify persistent state. Recovering from
 mistakes often requires recreating environments, reloading datasets, or manually restoring backups.
 
-GM introduces savepoints and fast environment recovery for Docker Compose projects, allowing developers and AI agents to
+arcave introduces savepoints and fast environment recovery for Docker Compose projects, allowing developers and AI agents to
 safely iterate on stateful systems.
 
 A savepoint captures a consistent snapshot of an environment at a specific moment in time. If an experiment, migration,
 or code change fails, the environment can be quickly restored to a previously known state.
 
-GM is designed around the emerging agent-driven development workflow, where AI agents continuously modify code, execute
+arcave is designed around the emerging agent-driven development workflow, where AI agents continuously modify code, execute
 migrations, run tests, and interact with databases as part of an iterative development cycle.
 
 A typical agent development loop looks like:
@@ -28,17 +28,17 @@ A typical agent development loop looks like:
 
 This enables rapid experimentation without the cost of recreating environments or manually restoring databases.
 
-GM can be used directly through its CLI:
+arcave can be used directly through its CLI:
 
 ```bash
-gm savepoint create before-migration
-gm rollback before-migration
+arcave savepoint create before-migration
+arcave rollback before-migration
 ```
 
-or through the GM MCP server, allowing AI agents to invoke savepoint, restore, clone, and environment management
+or through the arcave MCP server, allowing AI agents to invoke savepoint, restore, clone, and environment management
 operations as native tools.
 
-By providing a lightweight state management layer for Docker Compose environments, GM enables both developers and AI
+By providing a lightweight state management layer for Docker Compose environments, arcave enables both developers and AI
 agents to safely explore, test, and recover stateful application changes with minimal operational overhead.
 
 The long-term vision is to provide a generic environment state management platform that supports savepoints, rollback,
@@ -52,8 +52,8 @@ Here is an example of the savepoint creation workflow:
 
 ```mermaid
 flowchart TD
-    A["gm savepoint create before-migration"]
-    A --> B["Load .gm configuration"]
+    A["arcave savepoint create before-migration"]
+    A --> B["Load .arcave configuration"]
     B --> C["Discover registered stateful services"]
     C --> D["Stop Docker Compose services"]
     D --> E["Wait until containers exited"]
@@ -65,23 +65,23 @@ flowchart TD
     J --> K["Savepoint ready"]
 ```
 
-Pseudo-code for the `gm savepoint create` command:
+Pseudo-code for the `arcave savepoint create` command:
 
 ```shell
-gm savepoint create before-migration
+arcave savepoint create before-migration
 
 # 1. Stop services
 docker compose stop
 
 # 2. Clear the namespace, dropping anything a crashed run left behind
-rm -rf .gm/savepoints/myapp/1780335122
+rm -rf .arcave/savepoints/myapp/1780335122
 
 # 3. Copy registered volumes
-cp -a pgdata .gm/savepoints/myapp/1780335122/postgres
-cp -a redisdata .gm/savepoints/myapp/1780335122/redis
+cp -a pgdata .arcave/savepoints/myapp/1780335122/postgres
+cp -a redisdata .arcave/savepoints/myapp/1780335122/redis
 
 # 4. Commit the savepoint — the record is written LAST
-write .gm/savepoints/myapp/1780335122/savepoint.json
+write .arcave/savepoints/myapp/1780335122/savepoint.json
 
 # 5. Start services
 docker compose up -d
@@ -90,7 +90,7 @@ docker compose up -d
 ```
 
 The record is the commit marker. A crash before step 4 leaves volume data that no
-record names: `gm savepoint list` skips it, and it is safe to reclaim. There is no
+record names: `arcave savepoint list` skips it, and it is safe to reclaim. There is no
 window in which a savepoint lists without its data.
 
 Removal runs the same steps in reverse, uncommitting first: `savepoint.json` is
@@ -103,8 +103,8 @@ deleted before the namespace it lives in, so the only observable states are
 
 ```mermaid
 flowchart TD
-    A["gm rollback before-migration"]
-    A --> B["Load .gm configuration"]
+    A["arcave rollback before-migration"]
+    A --> B["Load .arcave configuration"]
     B --> C["Find savepoint among the committed records"]
     C --> D["Stop Docker Compose services"]
     D --> E["Wait until containers exited"]
@@ -124,7 +124,7 @@ The current MVP implementation restores an environment by deleting the contents 
 back from the selected savepoint. This approach is intentionally simple, portable, and easy to validate.
 
 In future versions, the restore process can be optimized by introducing volume-level snapshot backends and volume
-swapping. Instead of physically copying data, GM would switch the active volume reference to a previously created
+swapping. Instead of physically copying data, arcave would switch the active volume reference to a previously created
 snapshot or clone. This would reduce restore time from being proportional to dataset size to being nearly instantaneous,
 limited primarily by container restart and health check time.
 
@@ -142,13 +142,13 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
 
 ---
 
-## GM CLI UX
+## arcave CLI UX
 
 ### Project Initialization
 
-#### gm doctor
+#### arcave doctor
 
-Analyzes the current Docker Compose project and validates whether it is compatible with GM savepoint and restore
+Analyzes the current Docker Compose project and validates whether it is compatible with arcave savepoint and restore
 workflows.
 
 The command performs static analysis of the project and reports potential issues, warnings, and recommendations.
@@ -156,7 +156,7 @@ The command performs static analysis of the project and reports potential issues
 The command never modifies project files.
 
 ```bash
-gm doctor
+arcave doctor
 ```
 
 ##### Checks
@@ -179,7 +179,7 @@ Detects known stateful services:
 - Kafka
 - Elasticsearch
 
-and reports whether GM can manage their persistent state.
+and reports whether arcave can manage their persistent state.
 
 ###### Volume Validation
 
@@ -194,7 +194,7 @@ Checks:
 
 Checks whether services define Docker health checks.
 
-Missing health checks are reported as warnings because GM restore operations rely on service readiness detection.
+Missing health checks are reported as warnings because arcave restore operations rely on service readiness detection.
 
 ###### Service Dependency Validation
 
@@ -206,12 +206,12 @@ Analyzes:
 
 and identifies services that may continue writing into stateful systems.
 
-###### GM Initialization State
+###### arcave Initialization State
 
 Checks:
 
-- `.gm` directory exists
-- `config.yaml` exists, and its `version` is one GM speaks
+- `.arcave` directory exists
+- `config.yaml` exists, and its `version` is one arcave speaks
 - the savepoint store is reachable and holds no legacy `manifest.json`
 
 ###### Storage Validation
@@ -275,42 +275,42 @@ Example:
 2  errors detected
 ```
 
-##### Integration with gm fix
+##### Integration with arcave fix
 
 Doctor never changes anything.
 
 Suggested fixes can be automatically applied later using:
 
 ```bash
-gm fix
+arcave fix
 ```
 
 which consumes doctor recommendations and updates the project configuration accordingly.
 
 ---
 
-#### gm init
+#### arcave init
 
-Initializes GM metadata for the current project.
+Initializes arcave metadata for the current project.
 
 ```bash
-gm init
+arcave init
 ```
 
 Behavior:
 
-- Creates `.gm` directory.
+- Creates `.arcave` directory.
 - Discovers stateful services.
 - Creates initial configuration.
-- Optionally adds `.gm` to `.gitignore`.
+- Optionally adds `.arcave` to `.gitignore`.
 
 Result:
 
 ```text
-.gm/
-├── config.yaml                          # written by `gm init`
+.arcave/
+├── config.yaml                          # written by `arcave init`
 ├── lock                                 # flock target; serialises mutating workflows
-└── savepoints/<project-name>/           # the savepoint store, created by `gm init`
+└── savepoints/<project-name>/           # the savepoint store, created by `arcave init`
     └── <savepoint-id>/                  # one self-contained namespace per savepoint
         ├── savepoint.json               # the record — written last, the commit marker
         └── <service>/<mount-path>/data.tar
@@ -318,11 +318,11 @@ Result:
 
 Each savepoint is one self-contained directory: its record and every archive it
 names live under the same namespace, so `cp -r <id>/` moves the whole savepoint.
-The record sits at the root of the store's namespace rather than in `.gm/`, so
+The record sits at the root of the store's namespace rather than in `.arcave/`, so
 pointing `storage.directory.path` at remote storage carries the records along with
 the data they describe.
 
-`config.yaml` is the one file GM reads through the OS rather than through the
+`config.yaml` is the one file arcave reads through the OS rather than through the
 storage backend — it is what says where the storage backend points.
 
 ```yaml
@@ -334,7 +334,7 @@ docker:
   host: unix:///var/run/docker.sock     # "" => read the environment
 storage:
   type: directory                       # directory | s3 (future)
-  directory: {path: .gm/savepoints/myapp}
+  directory: {path: .arcave/savepoints/myapp}
 snapshot:
   backend: fullcopy
 log: {level: info, format: text}
@@ -342,8 +342,8 @@ log: {level: info, format: text}
 
 `storage` is a tagged union: `type` names the arm, and that arm must be present.
 Unknown keys are an error, not a value silently ignored. A config file without a
-`version`, or with one GM does not speak, is refused with a message naming
-`gm init --override` as the fix — GM never rewrites it silently, since that would
+`version`, or with one arcave does not speak, is refused with a message naming
+`arcave init --override` as the fix — arcave never rewrites it silently, since that would
 clobber a path the user set deliberately.
 
 A savepoint store may not be `/`, a shallow system directory, `$HOME`, or any
@@ -353,12 +353,12 @@ ancestor of the project.
 
 ### Savepoint Management
 
-#### gm savepoint create
+#### arcave savepoint create
 
 Creates a new environment savepoint.
 
 ```bash
-gm savepoint create \
+arcave savepoint create \
     [--name before-migration] \
     [--description "Before applying migration 2026_001"]
 ```
@@ -389,12 +389,12 @@ Metadata stored in `<savepoint-id>/savepoint.json`:
 
 ---
 
-#### gm savepoint list
+#### arcave savepoint list
 
 Lists available savepoints.
 
 ```bash
-gm savepoint list
+arcave savepoint list
 ```
 
 Output:
@@ -412,15 +412,15 @@ Output:
 
 ---
 
-#### gm savepoint remove
+#### arcave savepoint remove
 
 Removes savepoints.
 
 ```bash
-gm savepoint remove --retain-recent 10
-gm savepoint remove --retain-for 30d
-gm savepoint remove --before-date 2026-01-01T00:00:00Z
-gm savepoint remove --dry-run --retain-for 14d
+arcave savepoint remove --retain-recent 10
+arcave savepoint remove --retain-for 30d
+arcave savepoint remove --before-date 2026-01-01T00:00:00Z
+arcave savepoint remove --dry-run --retain-for 14d
 ```
 
 Options:
@@ -436,13 +436,13 @@ Options:
 
 ### Environment Recovery
 
-#### gm rollback
+#### arcave rollback
 
 Restores the environment to a specified savepoint.
 
 ```bash
-gm rollback latest
-gm rollback 1780335122
+arcave rollback latest
+arcave rollback 1780335122
 ```
 
 Behavior:
@@ -456,12 +456,12 @@ Behavior:
 
 ### Project Status
 
-#### gm status
+#### arcave status
 
 Displays project information and storage usage.
 
 ```bash
-gm status
+arcave status
 ```
 
 Output:
@@ -494,12 +494,12 @@ Output:
 
 ### Agent Integration
 
-#### gm mcp
+#### arcave mcp
 
-Starts the GM MCP server.
+Starts the arcave MCP server.
 
 ```bash
-gm mcp
+arcave mcp
 ```
 
 Provides AI agents with native tools:
@@ -519,7 +519,7 @@ state and automatically rollback when validation fails.
 ##### Transport
 
 The MCP server uses **stdio transport** (JSON-RPC 2.0 over stdin/stdout). The agent host (e.g. Claude Desktop,
-Claude Code) launches `gm mcp` as a child process and communicates with it over its standard streams. No HTTP server,
+Claude Code) launches `arcave mcp` as a child process and communicates with it over its standard streams. No HTTP server,
 no port, no network configuration required.
 
 ```
@@ -527,7 +527,7 @@ Agent host process
       │
       │  stdin / stdout  (JSON-RPC 2.0)
       ▼
- gm mcp process
+ arcave mcp process
       │
       │  direct Go calls
       ▼
@@ -541,7 +541,7 @@ Agent host process
 
 ##### Internal Architecture
 
-MCP tool handlers do **not** shell out to the `gm` binary. Instead, both the CLI commands (`internal/cmd`) and
+MCP tool handlers do **not** shell out to the `arcave` binary. Instead, both the CLI commands (`internal/cmd`) and
 the MCP server (`internal/mcp`) call a shared `GMService` interface defined in `internal/service`.
 
 This keeps business logic in one place and avoids subprocess overhead, output parsing, and process management
@@ -575,7 +575,7 @@ Input schema:
 }
 ```
 
-Output: savepoint metadata JSON (same schema as `gm savepoint create`).
+Output: savepoint metadata JSON (same schema as `arcave savepoint create`).
 
 ---
 
@@ -585,7 +585,7 @@ Lists all available savepoints.
 
 Input schema: none.
 
-Output: savepoint list JSON (same schema as `gm savepoint list`).
+Output: savepoint list JSON (same schema as `arcave savepoint list`).
 
 ---
 
@@ -611,7 +611,7 @@ Returns project status and storage usage.
 
 Input schema: none.
 
-Output: status JSON (same schema as `gm status`).
+Output: status JSON (same schema as `arcave status`).
 
 ---
 
@@ -620,13 +620,13 @@ Output: status JSON (same schema as `gm status`).
 ```json
 {
   "mcpServers": {
-    "gm": {
-      "command": "gm",
+    "arcave": {
+      "command": "arcave",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-The agent host starts `gm mcp` in the project directory so that GM resolves `.gm/config.yaml` relative to the
+The agent host starts `arcave mcp` in the project directory so that arcave resolves `.arcave/config.yaml` relative to the
 working directory, matching the same behaviour as the CLI.

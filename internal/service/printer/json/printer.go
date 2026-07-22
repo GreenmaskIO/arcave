@@ -10,7 +10,7 @@ type Printer struct {
 	w io.Writer
 }
 
-// New returns a Printer that writes indented JSON to w. All gm
+// New returns a Printer that writes indented JSON to w. All arcave
 // commands report their results as JSON; logs go to stderr via the context
 // logger.
 func New(w io.Writer) *Printer {

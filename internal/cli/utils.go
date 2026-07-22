@@ -3,7 +3,7 @@ package cli
 import (
 	"errors"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // restoredMounts projects the service's mounts onto the wire type, mapping

@@ -1,4 +1,4 @@
-module gm-demo-app
+module arcave-demo-app
 
 go 1.25
 

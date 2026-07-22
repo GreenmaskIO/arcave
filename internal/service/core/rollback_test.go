@@ -16,10 +16,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/config"
-	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/service/snapshot"
-	"github.com/greenmaskio/gm-tools/internal/storages/directory"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/snapshot"
+	"github.com/greenmaskio/arcave/internal/storages/directory"
 )
 
 // The two WriteMount call sites are now distinguished by the bytes that flow
@@ -34,13 +34,13 @@ const (
 // The stores the two backends are bound to, and the fixed clock the safety
 // backup's id is minted from — so its directory is an exact path, not a glob.
 const (
-	savepointDir = ".gm/savepoints/demo"
-	tmpDir       = ".gm/tmp"
+	savepointDir = ".arcave/savepoints/demo"
+	tmpDir       = ".arcave/tmp"
 )
 
 var (
 	fixedNow = time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
-	// The safety backup lives in its own store (.gm/tmp), so its directory is the
+	// The safety backup lives in its own store (.arcave/tmp), so its directory is the
 	// bare id — no "rollback-" prefix to distinguish it from a savepoint.
 	wantSafetyBackupDir = strconv.FormatInt(fixedNow.Unix(), 10)
 )

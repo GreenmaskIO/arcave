@@ -59,7 +59,7 @@ volumes:
 			},
 		},
 		{
-			// WithOsEnv — GM passes its own environment through to compose-go.
+			// WithOsEnv — arcave passes its own environment through to compose-go.
 			name:  "interpolates variables from the process environment",
 			files: map[string]string{"docker-compose.yml": "name: fixture\nservices:\n  db:\n    image: postgres:${GM_TEST_PG_TAG}\n"},
 			load:  []string{"docker-compose.yml"},
@@ -69,7 +69,7 @@ volumes:
 			},
 		},
 		{
-			// GM hands Load whatever --file list the caller gave it, so the
+			// arcave hands Load whatever --file list the caller gave it, so the
 			// later file must win — that is what an override file is for.
 			name: "merges the files in the order given",
 			files: map[string]string{
@@ -83,7 +83,7 @@ volumes:
 			},
 		},
 		{
-			// A project with no services parses fine but is useless to GM:
+			// A project with no services parses fine but is useless to arcave:
 			// there is nothing to stop, start or snapshot, so Load refuses it
 			// rather than letting an empty savepoint look like a success.
 			name:       "refuses a project declaring no services",

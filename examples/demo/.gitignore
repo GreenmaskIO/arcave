@@ -1,5 +1,5 @@
-# gm metadata and savepoint data
-.gm/
+# arcave metadata and savepoint data
+.arcave/
 
-# MinIO host bind mount (runtime data; wiped/restored by gm rollback)
+# MinIO host bind mount (runtime data; wiped/restored by arcave rollback)
 minio-data/

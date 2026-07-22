@@ -1,11 +1,11 @@
-# gm-tools demo
+# arcave demo
 
-A self-contained demo of `gm` savepoint / rollback across **all three persistent
-Docker volume types** gm handles. A small Go web app reads and writes three
+A self-contained demo of `arcave` savepoint / rollback across **all three persistent
+Docker volume types** arcave handles. A small Go web app reads and writes three
 stores; you add data, take a savepoint, change the data, then roll back and watch
 every store return to its savepoint state.
 
-| Store      | Mount in `docker-compose.yaml`     | gm volume type     |
+| Store      | Mount in `docker-compose.yaml`     | arcave volume type     |
 |------------|------------------------------------|--------------------|
 | PostgreSQL | `pgdata:/var/lib/postgresql/data`  | **named volume**   |
 | MinIO      | `./minio-data:/data`               | **host bind mount**|
@@ -15,12 +15,12 @@ every store return to its savepoint state.
 ## Prerequisites
 
 - Docker with the Compose plugin (`docker compose`)
-- The `gm` binary — build it from the repo root: `make build` → `bin/gm`
+- The `arcave` binary — build it from the repo root: `make build` → `bin/arcave`
 
 ## Walkthrough
 
-Run everything from this directory (`examples/demo/`) so gm finds
-`docker-compose.yaml` and the project name resolves to `gm-demo`.
+Run everything from this directory (`examples/demo/`) so arcave finds
+`docker-compose.yaml` and the project name resolves to `arcave-demo`.
 
 ```bash
 cd examples/demo
@@ -33,31 +33,31 @@ docker compose up -d --wait
 open http://localhost:8080            # macOS; otherwise just browse there
 #    Each store starts pre-seeded with distinct, labelled data.
 
-# 3. Point gm at this project (writes .gm/config.yaml).
-../../bin/gm init
+# 3. Point arcave at this project (writes .arcave/config.yaml).
+../../bin/arcave init
 
 # 4. Snapshot all three volumes.
-../../bin/gm savepoint create before-changes
-../../bin/gm savepoint list           # confirm it's recorded
+../../bin/arcave savepoint create before-changes
+../../bin/arcave savepoint list           # confirm it's recorded
 
 # 5. Now change things: add or remove notes in the UI so the stores differ
 #    from the savepoint.
 
-# 6. Roll back — gm stops the services, wipes each mount, restores the
+# 6. Roll back — arcave stops the services, wipes each mount, restores the
 #    savepoint, and restarts. Output lists every restored service/mount.
-../../bin/gm rollback before-changes
+../../bin/arcave rollback before-changes
 ```
 
 Refresh <http://localhost:8080>: every change you made after the savepoint is
 gone, and all three panels show exactly the data captured at savepoint time —
-proving gm restored the named volume, the bind mount, and the anonymous volume
+proving arcave restored the named volume, the bind mount, and the anonymous volume
 together.
 
 ## How it works
 
-- `gm savepoint create` runs `docker compose stop`, copies each mount's data into
-  `.gm/savepoints/gm-demo/<id>/<service>/<mount>/data.tar`, then `up -d --wait`.
-- `gm rollback` first backs up the current live state to `.gm/tmp/`, wipes each
+- `arcave savepoint create` runs `docker compose stop`, copies each mount's data into
+  `.arcave/savepoints/arcave-demo/<id>/<service>/<mount>/data.tar`, then `up -d --wait`.
+- `arcave rollback` first backs up the current live state to `.arcave/tmp/`, wipes each
   mount, extracts the savepoint back, and restarts. If a service comes up
   unhealthy it auto-reverts to that backup, so a failed rollback leaves the
   environment where it started.
@@ -66,7 +66,7 @@ together.
 
 ```bash
 docker compose down -v                # stop and remove containers + named volume
-rm -rf .gm minio-data                 # remove gm metadata and the bind-mount data
+rm -rf .arcave minio-data                 # remove arcave metadata and the bind-mount data
 ```
 
 ## Notes

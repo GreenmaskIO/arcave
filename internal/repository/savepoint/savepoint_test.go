@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/gm-tools/internal/model"
-	"github.com/greenmaskio/gm-tools/internal/storages/directory"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/storages/directory"
 )
 
 // newStore returns a Storager rooted at a fresh temp dir, plus that dir so a
 // test can plant objects behind the repository's back — an incomplete namespace,
-// a legacy manifest, a corrupt record — exactly as a crashed run or an older gm
+// a legacy manifest, a corrupt record — exactly as a crashed run or an older arcave
 // would have left them.
 func newStore(t *testing.T) (model.Storager, string) {
 	t.Helper()
@@ -109,7 +109,7 @@ func TestRepository_List(t *testing.T) {
 	tests := []struct {
 		name string
 		// plant runs before List, seeding the store with objects a crashed run or
-		// an older gm would have left.
+		// an older arcave would have left.
 		plant   func(t *testing.T, root string)
 		wantIDs []string
 		wantErr error  // sentinel List must return

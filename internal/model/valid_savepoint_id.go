@@ -5,7 +5,7 @@ import "fmt"
 // ValidSavepointID reports whether id is a savepoint id: a non-empty run of
 // decimal digits, since an id is the Unix second the savepoint was created.
 //
-// This is GM's first path-safety gate. A savepoint id doubles as the directory
+// This is arcave's first path-safety gate. A savepoint id doubles as the directory
 // its data lives in, so every layer that renders one into a storage key calls
 // this before it does: the savepoint repository before it mints a record key,
 // and the snapshot backend on its write and destructive paths. Digits alone
