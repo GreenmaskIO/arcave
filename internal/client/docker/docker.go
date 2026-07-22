@@ -68,16 +68,24 @@ type dockerAPI interface {
 // (WriteMount). These are the operations that have no Compose-level equivalent,
 // so they go through the Docker API — see ComposeRunner for the lifecycle half.
 //
-// It also owns the resolved daemon connection the whole package shares:
-// dockerCli is what NewComposeRunner builds its compose service over.
+// It also owns the resolved daemon connection the whole package shares. The two
+// fields below are that one connection seen through two contracts, not two
+// connections: api is dockerCli.Client().
 //
 // One Engine is created per command at the DI root and injected into both
 // snapshot backends; it is concurrency-safe, and its Close belongs to whoever
 // created it.
 type Engine struct {
-	dockerCli *command.DockerCli
-	// api is the resolved daemon connection. A test sets it directly, standing in
-	// for the client NewEngine would have built.
+	// dockerCli is the full resolved CLI: NewComposeRunner builds the compose
+	// service over it, and NewEngine resolved the endpoint through it. Held as the
+	// command.Cli interface, not the concrete *command.DockerCli, so the field
+	// names only the contract the package needs (Client plus the endpoint
+	// accessors compose reads).
+	dockerCli command.Cli
+	// api is dockerCli.Client() — the same daemon connection, narrowed to the
+	// method set Engine actually calls. It is a separate field so a test can inject
+	// a mock here (&Engine{api: ...}) and exercise Engine's methods without
+	// standing up a real command.Cli or a daemon.
 	api dockerAPI
 }
 

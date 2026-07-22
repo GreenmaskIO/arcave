@@ -22,6 +22,9 @@ type Options struct {
 	APIVersion string // pin the API version; "" => negotiate on the first call
 	Context    string // docker CLI context name; mutually exclusive with Host
 	CertPath   string // directory holding ca.pem/cert.pem/key.pem
+	CAFile     string // explicit CA cert path; overrides CertPath/ca.pem
+	CertFile   string // explicit client cert path; overrides CertPath/cert.pem
+	KeyFile    string // explicit client key path; overrides CertPath/key.pem
 	TLSVerify  bool   // verify the daemon's certificate
 }
 
@@ -45,14 +48,28 @@ func (o Options) clientOptions() (*flags.ClientOptions, error) {
 		opts.Hosts = []string{o.Host}
 	}
 	opts.Context = o.Context
-	if o.CertPath != "" || o.TLSVerify {
+	if o.CertPath != "" || o.TLSVerify || o.CAFile != "" || o.CertFile != "" || o.KeyFile != "" {
 		opts.TLSVerify = o.TLSVerify
 		opts.TLS = true
 		opts.TLSOptions = &tlsconfig.Options{
-			CAFile:   filepath.Join(o.CertPath, "ca.pem"),
-			CertFile: filepath.Join(o.CertPath, "cert.pem"),
-			KeyFile:  filepath.Join(o.CertPath, "key.pem"),
+			CAFile:   tlsFile(o.CAFile, o.CertPath, "ca.pem"),
+			CertFile: tlsFile(o.CertFile, o.CertPath, "cert.pem"),
+			KeyFile:  tlsFile(o.KeyFile, o.CertPath, "key.pem"),
 		}
 	}
 	return opts, nil
+}
+
+// tlsFile resolves one TLS file path, mirroring the docker CLI's own layering: an
+// explicit path wins; otherwise it is CertPath/name (the DOCKER_CERT_PATH
+// convention); and when neither is set the field stays empty so docker/cli reads
+// it from the environment rather than being handed a bogus path.
+func tlsFile(explicit, certPath, name string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if certPath != "" {
+		return filepath.Join(certPath, name)
+	}
+	return ""
 }

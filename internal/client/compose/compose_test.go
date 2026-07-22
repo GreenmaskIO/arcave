@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -128,6 +129,49 @@ func TestVolumeName(t *testing.T) {
 			assert.Equal(t, tt.want, volumeName(project, tt.key))
 		})
 	}
+}
+
+// The loader is a seam: Inspect projects whatever it returns, so its logic runs
+// against an in-memory project with no compose file on disk.
+func TestInspector_Inspect(t *testing.T) {
+	t.Run("projects the loaded project", func(t *testing.T) {
+		// Arrange
+		project := &types.Project{
+			Name: "fixture",
+			Services: types.Services{
+				"db": {Volumes: []types.ServiceVolumeConfig{
+					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
+				}},
+			},
+		}
+		insp := &Inspector{load: func(context.Context, ...string) (*types.Project, error) {
+			return project, nil
+		}}
+
+		// Act
+		got, err := insp.Inspect(context.Background())
+
+		// Assert
+		require.NoError(t, err)
+		assert.Equal(t, "fixture", got.ComposeProject)
+		assert.Equal(t, []model.Mount{
+			{Service: "db", Target: "/var/lib/postgresql/data", Type: "volume", Source: "fixture_pgdata"},
+		}, got.Mounts)
+	})
+
+	t.Run("wraps a loader failure", func(t *testing.T) {
+		// Arrange
+		insp := &Inspector{load: func(context.Context, ...string) (*types.Project, error) {
+			return nil, errors.New("bad compose file")
+		}}
+
+		// Act
+		_, err := insp.Inspect(context.Background())
+
+		// Assert
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "bad compose file")
+	})
 }
 
 func TestInspectFromFile(t *testing.T) {

@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
 // oneShotID is the container ID the mocked daemon hands back for every
@@ -45,23 +47,41 @@ func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 	assert.True(t, pulled.drained, "the pull stream must be read to completion")
 }
 
-// A non-zero exit carries the container's own output, the way the CLI's
-// combined output used to.
+// A non-zero exit carries the container's own output as a typed error, the way
+// the CLI's combined output used to — bounded and demultiplexed, never with the
+// stdcopy framing bytes the daemon wraps a no-TTY stream in.
 func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	// Arrange
+	var framed bytes.Buffer
+	// The daemon frames log output with stdcopy whenever the container has no TTY,
+	// which every one-shot run is; feeding raw bytes here would hide exactly the
+	// framing bug the demux fixes.
+	_, _ = io.WriteString(stdcopy.NewStdWriter(&framed, stdcopy.Stderr), "rm: permission denied\n")
+
 	api := &mockAPI{}
 	expectImagePresent(api, wipeImage)
 	expectOneShotRun(api, 137)
 	api.On("ContainerLogs", mock.Anything, oneShotID, mock.Anything).
-		Return(io.NopCloser(strings.NewReader("rm: permission denied\n")), nil)
+		Return(io.NopCloser(bytes.NewReader(framed.Bytes())), nil)
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, oneShotSpec{image: wipeImage})
 
 	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "status 137")
-	assert.Contains(t, err.Error(), "rm: permission denied")
+	var exitErr *model.ContainerExitError
+	require.ErrorAs(t, err, &exitErr, "the exit must surface as a typed error errors.As can recover")
+	assert.Equal(t, wipeImage, exitErr.Image)
+	assert.Equal(t, int64(137), exitErr.StatusCode)
+	assert.Equal(t, []string{"rm: permission denied"}, exitErr.Output)
+
+	// The compact message names image, status and a short tail, with no framing byte.
+	assert.Equal(t, "busybox container exited with status 137: rm: permission denied", err.Error())
+	assert.NotContains(t, err.Error(), "\x01", "the stdcopy header must be demultiplexed away")
+
+	// The read is bounded at the daemon.
+	opts := api.Calls[callIndex(api, "ContainerLogs")].Arguments.Get(2).(container.LogsOptions)
+	assert.Equal(t, "200", opts.Tail, "the log read must be bounded at the daemon")
 }
 
 func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
@@ -242,6 +262,32 @@ func TestRunOneShotContainer_StdioLargePayload(t *testing.T) {
 	assert.True(t, bytes.Equal(payload, stdout.Bytes()), "the echoed payload must come back byte for byte")
 }
 
+// A failure reading the caller's own stdin surfaces as an error — told apart
+// from the container merely exiting without draining its input, which is not one.
+// This is the single case recordingReader exists for: without it the errgroup
+// could not attribute a failed io.Copy to the read side.
+func TestRunOneShotContainer_StdinReadError(t *testing.T) {
+	// Arrange
+	hj := newFakeHijack()
+	hj.closeOutput() // the container prints nothing, so the reader half returns at once
+
+	api := &mockAPI{}
+	expectImagePresent(api, wipeImage)
+	expectOneShotRun(api, 0)
+	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
+
+	// Act
+	err := runOneShotContainer(context.Background(), api, oneShotSpec{
+		image: wipeImage,
+		stdin: &errReader{err: errors.New("source gone")},
+	})
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "container input", "the failure must be attributed to the read side")
+	assert.Contains(t, err.Error(), "source gone", "the source's own error must be wrapped")
+}
+
 // expectImagePresent makes the daemon report ref as already pulled.
 func expectImagePresent(api *mockAPI, ref string) {
 	api.On("ImageInspect", mock.Anything, ref).Return(image.InspectResponse{}, nil)
@@ -285,6 +331,12 @@ func assertClosedWrite(t *testing.T, hj *fakeHijack, msg string) {
 		t.Fatal(msg)
 	}
 }
+
+// errReader fails every read with err, standing in for a caller's stdin source
+// that goes bad mid-stream.
+type errReader struct{ err error }
+
+func (r *errReader) Read([]byte) (int, error) { return 0, r.err }
 
 // countingReader records whether its stream was read to EOF.
 type countingReader struct {

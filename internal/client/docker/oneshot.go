@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/greenmaskio/gm-tools/internal/model"
 )
 
 // oneShotSpec describes a throwaway container run to completion: which image,
@@ -108,7 +111,17 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec oneShotSpec) e
 		return fmt.Errorf("wait for %s container: %w", spec.image, err)
 	case status := <-statusCh:
 		if status.StatusCode != 0 {
-			return fmt.Errorf("%s container exited with status %d: %s", spec.image, status.StatusCode, containerOutput(ctx, api, created.ID))
+			output := containerOutput(ctx, api, created.ID)
+			zerolog.Ctx(ctx).Debug().
+				Str("container", created.ID).
+				Str("image", spec.image).
+				Strs("container_output", output).
+				Msg("one-shot container exited non-zero")
+			return &model.ContainerExitError{
+				Image:      spec.image,
+				StatusCode: status.StatusCode,
+				Output:     output,
+			}
 		}
 	}
 	return nil
@@ -201,14 +214,29 @@ func (rr *recordingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// containerOutput reads back what a failed container printed, so the error
-// carries the daemon's own message the way the CLI's combined output used to.
-// It is best-effort: a failure to read the logs must not replace the exit status
-// that is being reported.
-func containerOutput(ctx context.Context, api dockerAPI, containerID string) string {
-	rc, err := api.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
+// maxContainerOutputBytes bounds how much of a failed container's log is read
+// back into an error: enough to diagnose the failure, not enough to flood a JSON
+// result or the context of an agent reading an MCP tool result. Tail already
+// caps the line count at the daemon; this caps the bytes a few very long lines
+// could still add.
+const maxContainerOutputBytes = 8 << 10 // 8 KiB
+
+// containerOutput reads back what a failed container printed — bounded and
+// demultiplexed — so the exit error carries the daemon's own message the way the
+// CLI's combined output used to. It is best-effort: a failure to read the logs
+// must not replace the exit status being reported, so a problem comes back as a
+// single explanatory line rather than an error.
+func containerOutput(ctx context.Context, api dockerAPI, containerID string) []string {
+	// Tail bounds the read at the daemon. Tty is false for every one-shot run, so
+	// the stream is stdcopy-framed (an 8-byte header per frame) and must be
+	// demultiplexed — reading it raw would put the framing bytes into the message.
+	rc, err := api.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "200",
+	})
 	if err != nil {
-		return "(logs unavailable: " + err.Error() + ")"
+		return []string{"(logs unavailable: " + err.Error() + ")"}
 	}
 	defer func() {
 		if err := rc.Close(); err != nil {
@@ -216,9 +244,16 @@ func containerOutput(ctx context.Context, api dockerAPI, containerID string) str
 		}
 	}()
 
-	out, err := io.ReadAll(rc)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "(logs unavailable: " + err.Error() + ")"
+	// StdCopy writes one frame at a time on this goroutine, so a single buffer for
+	// both streams is safe; the error text does not need to tell stdout from stderr.
+	var buf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&buf, &buf, io.LimitReader(rc, maxContainerOutputBytes)); err != nil {
+		return []string{"(logs unavailable: " + err.Error() + ")"}
 	}
-	return strings.TrimSpace(string(out))
+
+	trimmed := strings.TrimSpace(buf.String())
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\n")
 }

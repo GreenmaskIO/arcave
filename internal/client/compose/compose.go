@@ -23,24 +23,28 @@ import (
 
 // Inspector answers one question — "what does this compose project declare?" —
 // and answers it from the files alone, with no daemon and no side effects. It is
-// stateless: the compose files are supplied per call, so one instance is shared
-// across invocations.
+// stateless across calls: the compose files are supplied per call, so one
+// instance is shared across invocations.
 //
-// It carries no fields, and the empty struct is the point: service/core declares
-// its own composeInspector interface and may not import this package, so it needs
-// a *value* to be handed at the composition root and swapped for a mock in tests.
-// A method needs a receiver; the receiver needs no state. That is also the whole
-// difference between Inspect and Load below — Load crosses no seam (client/docker
-// calls it directly, one layer over), so it stays a plain function.
-type Inspector struct{}
+// Its one field is the loader seam. Inspect resolves the project through load,
+// which NewInspector wires to Load; a test overrides it with a hand-built
+// *types.Project so the projection (mountsOf, and the Inspection it assembles)
+// is exercised without a compose file on disk. Load itself stays an exported
+// package function — client/docker's ComposeRunner calls it directly, one layer
+// over, so that path needs no seam and does not go through the field.
+type Inspector struct {
+	// load resolves the compose project from files. NewInspector wires it to
+	// Load; a test swaps in a fake to drive Inspect off an in-memory project.
+	load func(ctx context.Context, files ...string) (*types.Project, error)
+}
 
 // NewInspector returns a compose-file inspector.
-func NewInspector() *Inspector { return &Inspector{} }
+func NewInspector() *Inspector { return &Inspector{load: Load} }
 
 // Inspect loads the compose project described by files and returns its name and
 // the mounts GM should snapshot. See Load for how files is resolved.
 func (c *Inspector) Inspect(ctx context.Context, files ...string) (model.Inspection, error) {
-	project, err := Load(ctx, files...)
+	project, err := c.load(ctx, files...)
 	if err != nil {
 		return model.Inspection{}, fmt.Errorf("loading docker compose file(s): %w", err)
 	}

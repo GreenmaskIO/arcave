@@ -74,6 +74,9 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		APIVersion: cfg.Docker.APIVersion,
 		Context:    cfg.Docker.Context,
 		CertPath:   cfg.Docker.CertPath,
+		CAFile:     cfg.Docker.CAFile,
+		CertFile:   cfg.Docker.CertFile,
+		KeyFile:    cfg.Docker.KeyFile,
 		TLSVerify:  cfg.Docker.TLSVerify,
 	}
 	engine, err := docker.NewEngine(dockerOpts)

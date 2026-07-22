@@ -2,11 +2,16 @@ package docker
 
 import (
 	"context"
+	"errors"
+	"io"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,6 +81,106 @@ func TestMatchMount(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Engine's own methods run against the api seam, so they are exercised with a
+// mocked daemon — the coverage that the field being an injected interface buys.
+func TestEngine_OpenMount(t *testing.T) {
+	const (
+		project = "demo"
+		service = "db"
+		target  = "/var/lib/postgresql/data"
+	)
+	matched := []container.Summary{{
+		ID:     "pg-1",
+		Mounts: []container.MountPoint{{Type: mount.TypeVolume, Name: "demo_pgdata", Destination: target}},
+	}}
+
+	tests := []struct {
+		name       string
+		list       []container.Summary
+		listErr    error
+		wantErr    string
+		wantStream string
+	}{
+		{name: "streams the matched container's mount", list: matched, wantStream: "tar-bytes"},
+		{name: "no matching container is an error", list: []container.Summary{}, wantErr: "no container for service"},
+		{name: "a list failure is wrapped", list: []container.Summary{}, listErr: errors.New("daemon down"), wantErr: "list containers"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			api := &mockAPI{}
+			api.On("ContainerList", mock.Anything, mock.Anything).Return(tt.list, tt.listErr)
+			if tt.wantErr == "" {
+				api.On("CopyFromContainer", mock.Anything, "pg-1", target).
+					Return(io.NopCloser(strings.NewReader(tt.wantStream)), container.PathStat{}, nil)
+			}
+			e := &Engine{api: api}
+
+			// Act
+			rc, err := e.OpenMount(context.Background(), project, service, target)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			defer rc.Close()
+			got, err := io.ReadAll(rc)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStream, string(got))
+		})
+	}
+}
+
+func TestEngine_WriteMount(t *testing.T) {
+	const (
+		project = "demo"
+		service = "db"
+		target  = "/var/lib/postgresql/data"
+	)
+
+	t.Run("wipes then extracts into the mount's parent", func(t *testing.T) {
+		// Arrange
+		api := &mockAPI{}
+		api.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{{
+			ID:     "pg-1",
+			Mounts: []container.MountPoint{{Type: mount.TypeVolume, Name: "demo_pgdata", Destination: target}},
+		}}, nil)
+		expectImagePresent(api, wipeImage) // the wipe's own one-shot container
+		expectOneShotRun(api, 0)
+		api.On("CopyToContainer", mock.Anything, "pg-1", filepath.Dir(target), mock.Anything, mock.Anything).Return(nil)
+		e := &Engine{api: api}
+
+		// Act
+		err := e.WriteMount(context.Background(), project, service, target, strings.NewReader("payload"))
+
+		// Assert
+		require.NoError(t, err)
+		api.AssertExpectations(t)
+		// The mount is wiped before the archive is extracted back into it.
+		assert.Less(t, callIndex(api, "ContainerCreate"), callIndex(api, "CopyToContainer"),
+			"the mount must be cleared before the restore stream is extracted")
+	})
+
+	t.Run("a missing service container is reported before any write", func(t *testing.T) {
+		// Arrange
+		api := &mockAPI{}
+		api.On("ContainerList", mock.Anything, mock.Anything).Return([]container.Summary{}, nil)
+		e := &Engine{api: api}
+
+		// Act
+		err := e.WriteMount(context.Background(), project, service, target, strings.NewReader("payload"))
+
+		// Assert
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no container for service")
+		api.AssertNotCalled(t, "CopyToContainer")
+	})
 }
 
 func TestWipeMount(t *testing.T) {
