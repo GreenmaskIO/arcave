@@ -43,16 +43,16 @@ func TestUnmarshal(t *testing.T) {
 				// prevent, so it can never be what a bare file means.
 				assert.Equal(t, DefaultWaitTimeout, cfg.Compose.WaitTimeout)
 				assert.Equal(t, DefaultStopTimeout, cfg.Compose.StopTimeout)
-				assert.Equal(t, ProgressAuto, cfg.Compose.Progress)
+				assert.Equal(t, ProgressLog, cfg.Compose.Progress)
 			},
 		},
 		{
 			name: "the compose section is read",
-			yaml: "version: 1\ncompose:\n  wait_timeout: 5m\n  stop_timeout: 1m30s\n  progress: plain\n",
+			yaml: "version: 1\ncompose:\n  wait_timeout: 5m\n  stop_timeout: 1m30s\n  progress: tty\n",
 			verify: func(t *testing.T, cfg Config) {
 				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
 				assert.Equal(t, 90*time.Second, cfg.Compose.StopTimeout)
-				assert.Equal(t, ProgressPlain, cfg.Compose.Progress)
+				assert.Equal(t, ProgressTTY, cfg.Compose.Progress)
 			},
 		},
 		{
@@ -74,9 +74,18 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: "compose.stop_timeout must not be negative, got -5s",
 		},
 		{
-			name:       "a progress mode compose does not know is rejected",
+			name:       "a progress channel arcave does not offer is rejected",
 			yaml:       "version: 1\ncompose:\n  progress: verbose\n",
 			wantErrMsg: "unsupported compose.progress",
+		},
+		{
+			// compose's own --progress values are no longer arcave's: how a record
+			// is rendered is log.format's business now, and this key only picks
+			// the channel. The file is refused rather than migrated, which is what
+			// the config promises for any value it does not speak.
+			name:       "a compose render mode is no longer a progress channel",
+			yaml:       "version: 1\ncompose:\n  progress: plain\n",
+			wantErrMsg: `unsupported compose.progress "plain" (supported: log, tty, quiet)`,
 		},
 		{
 			// arcave speaks one version and names no other, so a source that carries

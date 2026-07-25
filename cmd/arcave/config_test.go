@@ -104,12 +104,12 @@ func TestResolveConfig(t *testing.T) {
 			// The compose bounds are config keys reached through root-persistent
 			// flags, so the same precedence has to hold for them as for log.level.
 			name:      "the compose section comes from the file",
-			file:      versionedConfig("compose:\n  wait_timeout: 5m\n  stop_timeout: 45s\n  progress: plain\n"),
+			file:      versionedConfig("compose:\n  wait_timeout: 5m\n  stop_timeout: 45s\n  progress: tty\n"),
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
 				assert.Equal(t, 45*time.Second, cfg.Compose.StopTimeout)
-				assert.Equal(t, config.ProgressPlain, cfg.Compose.Progress)
+				assert.Equal(t, config.ProgressTTY, cfg.Compose.Progress)
 			},
 		},
 		{
@@ -291,7 +291,7 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs.String("savepoint-dir", "", "")
 	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
-	fs.String("progress", config.ProgressAuto, "")
+	fs.String("progress", config.ProgressLog, "")
 	viperBind(v, fs, map[string]string{
 		"log-level":     "log.level",
 		"log-format":    "log.format",
