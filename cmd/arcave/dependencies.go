@@ -19,6 +19,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/storages"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
@@ -45,6 +46,7 @@ var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
 type dependencies struct {
 	savepointStore    storages.Storager
 	safetyBackupStore storages.Storager
+	progressWriter    io.WriteCloser
 	dockerCli         *command.DockerCli
 	dockerClient      client.APIClient
 	composeService    api.Compose
@@ -77,6 +79,12 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		return nil, fmt.Errorf("initialise safety backup store: %w", err)
 	}
 
+	// Where compose's own progress goes. The logger comes from the context — the
+	// one initRoot resolved — because the adapter is handed a logger rather than
+	// reaching for zerolog's global: it is a client-layer type, and the
+	// composition root is where the resolved logger lives.
+	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
+
 	// The docker/cli instance is resolved once here and is the single daemon
 	// connection both halves of client/docker are built over: the engine takes its
 	// APIClient, the compose service is constructed on the instance itself. That
@@ -84,10 +92,11 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	// rather than a contract each has to keep by hand. Every closer is owned by the
 	// returned dependencies and released by its Close — never deferred here, or
 	// they would shut down before the command ran.
-	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, composeProgressStream(cfg.Compose.Progress))
+	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, progressWriter)
 	if err != nil {
 		closeQuietly(ctx, "savepoint store", savepointStore)
 		closeQuietly(ctx, "safety backup store", safetyBackupStore)
+		closeQuietly(ctx, "compose progress writer", progressWriter)
 		return nil, fmt.Errorf("initialise docker client: %w", err)
 	}
 	engine := docker.NewEngine(dockerClientAPI)
@@ -117,6 +126,7 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	return &dependencies{
 		savepointStore:    savepointStore,
 		safetyBackupStore: safetyBackupStore,
+		progressWriter:    progressWriter,
 		dockerCli:         dockerCli,
 		dockerClient:      dockerClientAPI,
 		composeService:    composeService,
@@ -127,14 +137,19 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	}, nil
 }
 
-// Close releases the Docker engine and both stores. Only the savepoint store's
-// error is returned: it is the one holding the command's data, and a failure to
-// close the others cannot change the command's outcome.
+// Close releases the Docker engine, the progress writer and both stores. Only
+// the savepoint store's error is returned: it is the one holding the command's
+// data, and a failure to close the others cannot change the command's outcome.
+//
+// The progress writer is closed after the engine, so a last line compose left
+// unterminated is still emitted — and closed at all because that trailing line
+// would otherwise sit in its buffer forever.
 //
 // dockerClient is not closed here: it is the connection the engine was built
 // over, so closing the engine already releases it.
 func (d *dependencies) Close(ctx context.Context) error {
 	closeQuietly(ctx, "docker engine", d.engine)
+	closeQuietly(ctx, "compose progress writer", d.progressWriter)
 	closeQuietly(ctx, "safety backup store", d.safetyBackupStore)
 	return d.savepointStore.Close()
 }
@@ -229,36 +244,52 @@ func tlsFile(explicit, certPath, name string) string {
 	return ""
 }
 
-// composeProgressStream translates the project's compose.progress setting into
-// the library's global render mode, and returns the stream compose renders on.
+// nopWriteCloser makes a stream arcave does not own — os.Stderr, io.Discard —
+// safe to hand to a Close that closes whatever writer it was given. Closing
+// os.Stderr would take the process's error stream down with it.
 //
-// It is **stderr**, never stdout: arcave's output contract is JSON on stdout, and
-// compose draws its per-container progress on the error stream (`stdinfo()`), so
-// showing it costs the contract nothing. arcave used to discard that stream
-// outright, which is what made a two-minute health-check wait look like a hang —
-// the savepoint printed "starting services" and then nothing at all until compose
-// gave up. A user who wants the old silence asks for compose.progress: quiet.
+// It is spelled out here because the standard library has no writer counterpart:
+// io.NopCloser wraps a Reader, and io.NopWriteCloser has been proposed
+// (golang/go#22823) and never accepted. The name mirrors what that function
+// would be called, so replacing this is mechanical if it ever lands.
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+// composeProgressWriter translates the project's compose.progress setting into
+// the library's global render mode plus the writer compose renders on. Whatever
+// it returns, the destination is **stderr or nothing**: arcave's output contract
+// is JSON on stdout, and compose draws its per-container progress on the error
+// stream (`stdinfo()`).
+//
+// The default is ProgressLog: compose is put in its JSON event mode and the
+// stream goes to compose.ProgressLogger, which re-emits each event as an arcave
+// log record. That is what makes the run speak one format — compose's renderer
+// wrote raw text regardless of log.format, which under `log.format: json`
+// corrupted the very stream an agent or a CI job parses.
+//
+// ProgressTTY hands the terminal back to compose's own renderer. It selects
+// ModeAuto rather than ModeTTY on purpose: compose then redraws on a terminal
+// and falls back to plain lines in a pipe, where forcing ModeTTY would spray
+// ANSI escapes into a log file.
 //
 // progress.Mode is a package-level variable of the compose library. Setting a
 // global belongs here if anywhere: the composition root is the one place that
 // knows the whole process's configuration, and arcave runs one command per process.
-func composeProgressStream(mode string) io.Writer {
+func composeProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
 	switch mode {
 	case config.ProgressQuiet:
 		// The mode alone suppresses the progress UI; discarding the stream as well
 		// covers the warnings compose writes there outside it.
 		progress.Mode = progress.ModeQuiet
-		return io.Discard
+		return nopWriteCloser{io.Discard}
 	case config.ProgressTTY:
-		progress.Mode = progress.ModeTTY
-	case config.ProgressPlain:
-		progress.Mode = progress.ModePlain
-	case config.ProgressJSON:
-		progress.Mode = progress.ModeJSON
-	default:
 		progress.Mode = progress.ModeAuto
+		return nopWriteCloser{os.Stderr}
+	default:
+		progress.Mode = progress.ModeJSON
+		return compose.NewProgressLogger(logger)
 	}
-	return os.Stderr
 }
 
 // initDockerClient resolves cfg into the one docker/cli instance both halves of
