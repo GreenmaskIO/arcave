@@ -13,7 +13,7 @@
 // savepoint that was mid-write, and they delete the create-time race in which a
 // second process's manifest was clobbered by the first's stale in-memory copy.
 //
-// The store is the savepoint store — the same model.Storager the snapshot
+// The store is the savepoint store — the same storages.Storager the snapshot
 // backend writes archives into — so records always travel with the data they
 // describe. A savepoint store on S3 or a shared mount carries its own records;
 // nothing here assumes a local directory.
@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"path"
 
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -56,12 +57,12 @@ type file struct {
 type Repository struct {
 	// storage is re-rooted at the savepoint store, shared with the backend that
 	// writes the archives these records describe.
-	storage model.Storager
+	storage storages.Storager
 }
 
 // New returns a savepoint repository over store, which must already be re-rooted
 // at the store whose savepoints it records.
-func New(store model.Storager) *Repository {
+func New(store storages.Storager) *Repository {
 	return &Repository{storage: store}
 }
 

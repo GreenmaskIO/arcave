@@ -139,15 +139,43 @@ deleted on success and **kept** (its path printed) on failure.
 
 > Rollback is destructive: bind-mounted host folders are wiped and restored too.
 
-### `--wait-timeout`
+### Timeouts and progress
 
-`arcave rollback` waits up to `--wait-timeout` seconds (default **120**) for services
-to become healthy before deciding a rollback failed and reverting. Increase it for
+`arcave rollback` waits up to `--wait-timeout` (default **2m**) for services to
+become healthy before deciding a rollback failed and reverting. Increase it for
 slow-starting services:
 
 ```bash
-arcave rollback latest --wait-timeout 300
+arcave rollback latest --wait-timeout 5m
 ```
+
+Every bound carries its unit — `90s`, `5m`, `1h30m`, anything Go's
+`time.ParseDuration` accepts. A number without one is an error, not a guess.
+
+That wait is where a arcave run spends most of its time, so it is not silent: arcave
+logs the deadline it will fail at, and compose's own per-container progress is
+rendered alongside it **on stderr**, leaving stdout to the JSON result.
+
+```text
+INF starting services
+INF waiting for services to become healthy wait_timeout=2m0s
+ Container myapp-db-1  Waiting
+ Container myapp-db-1  Healthy
+```
+
+The three settings behind this live in `.arcave/config.yaml` under `compose:`, so a
+project fixes them once instead of passing a flag every time:
+
+| Key | Flag | Default | What it does |
+|---|---|---|---|
+| `compose.wait_timeout` | `--wait-timeout` | `2m` | How long to wait for health checks after a start |
+| `compose.stop_timeout` | `--stop-timeout` | `10s` | How long a container gets to exit before SIGKILL. arcave snapshots the volumes the moment the containers are down, so this is what keeps a database from being captured mid-shutdown |
+| `compose.progress` | `--progress` | `auto` | `auto`, `tty`, `plain`, `json` or `quiet` |
+
+Each is also settable per run through the environment
+(`ARCAVE_COMPOSE_WAIT_TIMEOUT`, `ARCAVE_COMPOSE_STOP_TIMEOUT`,
+`ARCAVE_COMPOSE_PROGRESS`); a changed flag wins over the environment, which wins
+over the file.
 
 Output on success:
 

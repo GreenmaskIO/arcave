@@ -12,6 +12,10 @@ import (
 // The message states the domain condition only; how to phrase it in terms of
 // the CLI flags the user typed is the adapter's concern, so the service stays
 // flag-agnostic.
+//
+// Only errors of arcave's own seams live here. A sentinel a library owns is
+// matched where it is defined — storages.ErrFileNotFound, like io.EOF — because
+// the alternative is restating a contract arcave does not control.
 var (
 	// ErrRemoveSelectorConflict is returned when a remove request combines
 	// explicit savepoint IDs with retention rules; the two modes are exclusive.

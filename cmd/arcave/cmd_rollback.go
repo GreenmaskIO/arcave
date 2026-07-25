@@ -8,16 +8,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/cli"
 )
 
-var (
-	rollbackWaitTimeout int
-
-	rollbackCmd = &cobra.Command{
-		Use:   "rollback [savepoint-id|name|latest]",
-		Short: "Restore the environment to a specified savepoint",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runRollback,
-	}
-)
+var rollbackCmd = &cobra.Command{
+	Use:   "rollback [savepoint-id|name|latest]",
+	Short: "Restore the environment to a specified savepoint",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runRollback,
+}
 
 func runRollback(cmd *cobra.Command, args []string) error {
 	if err := requireConfig(); err != nil {
@@ -25,13 +21,12 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	}
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewRollbackHandler(d.service, d.printer)
-		return h.Rollback(ctx, projectCfg, args[0], rollbackWaitTimeout)
+		return h.Rollback(ctx, projectCfg, args[0])
 	})
 }
 
 func init() {
-	rollbackCmd.Flags().IntVar(&rollbackWaitTimeout, "wait-timeout", defaultUpWaitTimeout,
-		"Seconds to wait for services to become healthy before reverting")
-
+	// No flags of its own: the bound it waits for before reverting is
+	// compose.wait_timeout, carried by rootCmd's persistent --wait-timeout.
 	rootCmd.AddCommand(rollbackCmd)
 }

@@ -15,6 +15,7 @@ import (
 func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 	cfg := config.Config{
 		Project: config.Project{ComposeFiles: []string{"docker-compose.yaml"}},
+		Compose: config.Compose{WaitTimeout: waitTimeout},
 	}
 	wantReq := model.CreateSavepointRequest{
 		ComposeFiles: []string{"docker-compose.yaml"},
@@ -70,7 +71,7 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 			h := NewSavepointCreateHandler(svc, p)
 
 			// Act
-			err := h.SavepointCreate(context.Background(), cfg, "before-migration", "schema v2", waitTimeout)
+			err := h.SavepointCreate(context.Background(), cfg, "before-migration", "schema v2")
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -146,7 +147,7 @@ func (s *Service) createSafetyBackup(
 // volume was restored: it drops the partial backup and restarts the services.
 // Nothing was changed, so there is nothing to revert. nil means the services
 // are back up; the caller pairs any error with the original backup failure.
-func (s *Service) abortBeforeRestore(ctx context.Context, composeFiles []string, safetyBackupID string, waitTimeout int) error {
+func (s *Service) abortBeforeRestore(ctx context.Context, composeFiles []string, safetyBackupID string, waitTimeout time.Duration) error {
 	log := zerolog.Ctx(ctx)
 	if err := s.removeSafetyBackup(ctx, safetyBackupID); err != nil {
 		log.Warn().Err(err).Str("safety_backup_id", safetyBackupID).Msg("failed to remove incomplete safety backup")
@@ -169,7 +170,7 @@ func (s *Service) applySavepoint(
 	record model.SavepointRecord,
 	composeFiles []string,
 	composeProject string,
-	waitTimeout int,
+	waitTimeout time.Duration,
 ) error {
 	if err := s.savepointBackend.Restore(ctx, record.ID, composeProject, mountsOf(record.Volumes)); err != nil {
 		return err
@@ -193,7 +194,7 @@ func (s *Service) revert(
 	currentMounts []model.Mount,
 	composeFiles []string,
 	composeProject string,
-	waitTimeout int,
+	waitTimeout time.Duration,
 ) error {
 	if err := s.composeRunner.Stop(ctx, composeFiles...); err != nil {
 		return fmt.Errorf("stopping services: %w", err)
@@ -210,8 +211,8 @@ func (s *Service) revert(
 
 // removeSafetyBackup deletes one safety backup's directory. The shared
 // safety-backup store is left in place once empty: pruning it would mean asking
-// a Storager to delete its own root, the one key the directory backend refuses
-// (directory.ErrUnsafeKey), and an empty .arcave/tmp costs nothing.
+// a Storager to delete its own root, the one key the storage adapter refuses
+// (storages.ErrUnsafeKey), and an empty .arcave/tmp costs nothing.
 func (s *Service) removeSafetyBackup(ctx context.Context, safetyBackupID string) error {
 	return s.safetyBackupBackend.Remove(ctx, safetyBackupID)
 }

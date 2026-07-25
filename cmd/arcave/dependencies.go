@@ -13,10 +13,12 @@ import (
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v2/pkg/api"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
+	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
@@ -28,7 +30,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
 	"github.com/greenmaskio/arcave/internal/service/snapshot"
-	"github.com/greenmaskio/arcave/internal/storages"
+	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
 // safetyBackupDir is the store safety backups live in, relative to the project
@@ -41,8 +43,8 @@ var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
 // polymorphism, and hiding *docker.Engine behind one only cost Close a type
 // assertion.
 type dependencies struct {
-	savepointStore    model.Storager
-	safetyBackupStore model.Storager
+	savepointStore    storages.Storager
+	safetyBackupStore storages.Storager
 	dockerCli         *command.DockerCli
 	dockerClient      client.APIClient
 	composeService    api.Compose
@@ -53,19 +55,20 @@ type dependencies struct {
 }
 
 // initAllDependencies wires the savepoint workflows for the project rooted at
-// projectPath. Each store is built by storages.New, which resolves and validates
-// the configured path once and hands back a Storager already rooted at it — so
-// nothing below this line ever names a directory.
+// projectPath. Each store is built by storefactory.New, which resolves the
+// configured path once, roots it under the static arcave namespace, and hands
+// back a Storager already rooted there — so nothing below this line ever names
+// a directory.
 func initAllDependencies(ctx context.Context, projectPath string, cfg config.Config) (*dependencies, error) {
-	savepointStore, err := storages.New(cfg.Storage, projectPath)
+	savepointStore, err := storefactory.New(cfg.Storage, projectPath)
 	if err != nil {
 		return nil, fmt.Errorf("initialise savepoint store: %w", err)
 	}
 
 	// The safety-backup store is not user-configurable, so it is built from a
 	// literal directory arm rather than from cfg. It goes through the same
-	// factory, and therefore the same root validation, as the savepoint store.
-	safetyBackupStore, err := storages.New(config.Storage{
+	// factory, and therefore the same namespacing, as the savepoint store.
+	safetyBackupStore, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: safetyBackupDir},
 	}, projectPath)
@@ -81,7 +84,7 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	// rather than a contract each has to keep by hand. Every closer is owned by the
 	// returned dependencies and released by its Close — never deferred here, or
 	// they would shut down before the command ran.
-	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker)
+	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, composeProgressStream(cfg.Compose.Progress))
 	if err != nil {
 		closeQuietly(ctx, "savepoint store", savepointStore)
 		closeQuietly(ctx, "safety backup store", safetyBackupStore)
@@ -91,7 +94,10 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 
 	composeService := dockercompose.NewComposeService(dockerCli)
 	dockerComposeLoader := compose.NewLoader()
-	composeRunner := compose.NewClient(composeService, dockerComposeLoader)
+	composeRunner := compose.NewClient(composeService, dockerComposeLoader, compose.Options{
+		WaitTimeout: cfg.Compose.WaitTimeout,
+		StopTimeout: cfg.Compose.StopTimeout,
+	})
 
 	// The savepoint repository shares the savepoint store with the backend that
 	// writes the archives it records, so a record always travels with its data —
@@ -223,11 +229,47 @@ func tlsFile(explicit, certPath, name string) string {
 	return ""
 }
 
+// composeProgressStream translates the project's compose.progress setting into
+// the library's global render mode, and returns the stream compose renders on.
+//
+// It is **stderr**, never stdout: arcave's output contract is JSON on stdout, and
+// compose draws its per-container progress on the error stream (`stdinfo()`), so
+// showing it costs the contract nothing. arcave used to discard that stream
+// outright, which is what made a two-minute health-check wait look like a hang —
+// the savepoint printed "starting services" and then nothing at all until compose
+// gave up. A user who wants the old silence asks for compose.progress: quiet.
+//
+// progress.Mode is a package-level variable of the compose library. Setting a
+// global belongs here if anywhere: the composition root is the one place that
+// knows the whole process's configuration, and arcave runs one command per process.
+func composeProgressStream(mode string) io.Writer {
+	switch mode {
+	case config.ProgressQuiet:
+		// The mode alone suppresses the progress UI; discarding the stream as well
+		// covers the warnings compose writes there outside it.
+		progress.Mode = progress.ModeQuiet
+		return io.Discard
+	case config.ProgressTTY:
+		progress.Mode = progress.ModeTTY
+	case config.ProgressPlain:
+		progress.Mode = progress.ModePlain
+	case config.ProgressJSON:
+		progress.Mode = progress.ModeJSON
+	default:
+		progress.Mode = progress.ModeAuto
+	}
+	return os.Stderr
+}
+
 // initDockerClient resolves cfg into the one docker/cli instance both halves of
 // client/docker are built over, and returns the APIClient it will use alongside
 // it — built here rather than taken from dockerCli.Client(), which reports a
 // failure by calling os.Exit(1).
-func initDockerClient(cfg config.Docker) (*command.DockerCli, client.APIClient, error) {
+//
+// progressOut is where the CLI's error stream — compose's progress channel —
+// points once the endpoint has resolved. Until then it is a buffer, because that
+// stream is the only place docker/cli reports a failed resolution.
+func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerCli, client.APIClient, error) {
 	clientOpts, err := getDockerOptions(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
@@ -295,9 +337,9 @@ func initDockerClient(cfg config.Docker) (*command.DockerCli, client.APIClient, 
 			cfg.Host, cfg.Context, strings.TrimSpace(initErr.String()))
 	}
 
-	// Resolution succeeded, so the error stream goes back to being compose's
-	// discarded progress channel — nothing must accumulate in the buffer.
-	if err := command.WithErrorStream(io.Discard)(dockerCli); err != nil {
+	// Resolution succeeded, so the error stream becomes compose's progress
+	// channel for the rest of the run — nothing must accumulate in the buffer.
+	if err := command.WithErrorStream(progressOut)(dockerCli); err != nil {
 		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
 	}
 	return dockerCli, apiClient, nil

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,6 +94,11 @@ func TestRepository_Save(t *testing.T) {
 				Project: config.Project{
 					Name:         "shop",
 					ComposeFiles: []string{"docker-compose.yml", "docker-compose.override.yml"},
+				},
+				Compose: config.Compose{
+					WaitTimeout: 5 * time.Minute,
+					StopTimeout: 30 * time.Second,
+					Progress:    config.ProgressPlain,
 				},
 				Storage: config.Storage{
 					Type:      config.StorageTypeDirectory,

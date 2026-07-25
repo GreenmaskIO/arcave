@@ -24,12 +24,17 @@ func NewSavepointCreateHandler(svc savepointCreateService, printer printer) *Sav
 }
 
 // SavepointCreate creates a savepoint and prints its metadata as JSON.
-func (h *SavepointCreateHandler) SavepointCreate(ctx context.Context, cfg config.Config, name, description string, waitTimeout int) error {
+//
+// The health-check bound comes from cfg rather than from a parameter: it is a
+// project setting (compose.wait_timeout, which the --wait-timeout flag
+// overrides), resolved once by cmd/arcave exactly like the compose file list
+// beside it.
+func (h *SavepointCreateHandler) SavepointCreate(ctx context.Context, cfg config.Config, name, description string) error {
 	sp, err := h.svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
 		ComposeFiles: cfg.Project.ComposeFiles,
 		Name:         name,
 		Description:  description,
-		WaitTimeout:  waitTimeout,
+		WaitTimeout:  cfg.Compose.WaitTimeout,
 	})
 	if err != nil {
 		return err

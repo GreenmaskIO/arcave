@@ -1,10 +1,12 @@
 package main
 
 import (
+	"io"
 	"os"
 	"testing"
 
 	"github.com/docker/cli/cli/flags"
+	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -267,6 +269,44 @@ func TestDockerTLSOptions(t *testing.T) {
 	}
 }
 
+// Compose's progress is what turns a two-minute health-check wait from a hang
+// into something a user can watch, so every mode must reach the library — and
+// none of them may reach stdout, which carries arcave's JSON.
+func TestComposeProgressStream(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		wantMode   string
+		wantSilent bool
+	}{
+		{name: "auto", mode: config.ProgressAuto, wantMode: progress.ModeAuto},
+		{name: "tty", mode: config.ProgressTTY, wantMode: progress.ModeTTY},
+		{name: "plain", mode: config.ProgressPlain, wantMode: progress.ModePlain},
+		{name: "json", mode: config.ProgressJSON, wantMode: progress.ModeJSON},
+		{name: "quiet discards the stream as well", mode: config.ProgressQuiet, wantMode: progress.ModeQuiet, wantSilent: true},
+		{name: "an unset mode renders as auto", mode: "", wantMode: progress.ModeAuto},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: progress.Mode is the library's global, so it is restored.
+			original := progress.Mode
+			t.Cleanup(func() { progress.Mode = original })
+
+			// Act
+			out := composeProgressStream(tt.mode)
+
+			// Assert
+			assert.Equal(t, tt.wantMode, progress.Mode)
+			if tt.wantSilent {
+				assert.Equal(t, io.Discard, out)
+				return
+			}
+			assert.Equal(t, os.Stderr, out, "progress belongs on stderr; stdout carries the JSON result")
+		})
+	}
+}
+
 // A host resolves to an endpoint whether or not anything is listening on it:
 // arcave savepoint list has to work with docker stopped.
 func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
@@ -275,7 +315,7 @@ func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	dockerCli, apiClient, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"})
+	dockerCli, apiClient, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
@@ -297,7 +337,7 @@ func TestInitDockerClient_PinsAPIVersion(t *testing.T) {
 	_, apiClient, err := initDockerClient(config.Docker{
 		Host:       "unix:///nowhere/docker.sock",
 		APIVersion: "1.45",
-	})
+	}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
@@ -315,7 +355,7 @@ func TestInitDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
 	t.Setenv(client.EnvOverrideAPIVersion, "1.40")
 
 	// Act
-	_, apiClient, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"})
+	_, apiClient, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
@@ -333,7 +373,7 @@ func TestInitDockerClient_RejectsAnUnknownContext(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	_, _, err := initDockerClient(config.Docker{Context: "nosuchcontext"})
+	_, _, err := initDockerClient(config.Docker{Context: "nosuchcontext"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "nosuchcontext")
@@ -350,7 +390,7 @@ func TestInitDockerClient_RejectsAnUnbuildableClient(t *testing.T) {
 	t.Setenv("DOCKER_CUSTOM_HEADERS", "not-a-key-value-pair")
 
 	// Act
-	_, _, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"})
+	_, _, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "DOCKER_CUSTOM_HEADERS")

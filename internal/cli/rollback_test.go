@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -12,13 +13,16 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// waitTimeout is an arbitrary caller-supplied bound: the handler passes it
-// through untouched, so its value carries no meaning beyond being non-zero.
-const waitTimeout = 60
+// waitTimeout is an arbitrary configured bound. The handler carries
+// compose.wait_timeout into the request untouched — bar the unit conversion the
+// request's plain time.Duration asks for — so the value means nothing beyond
+// being distinct from the package default a mistake would fall back to.
+const waitTimeout = 90 * time.Second
 
 func TestRollbackHandler_Rollback(t *testing.T) {
 	cfg := config.Config{
 		Project: config.Project{ComposeFiles: []string{"docker-compose.yaml"}},
+		Compose: config.Compose{WaitTimeout: waitTimeout},
 	}
 	wantReq := model.RollbackRequest{
 		ComposeFiles: []string{"docker-compose.yaml"},
@@ -101,7 +105,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			h := NewRollbackHandler(svc, p)
 
 			// Act
-			err := h.Rollback(context.Background(), cfg, "latest", waitTimeout)
+			err := h.Rollback(context.Background(), cfg, "latest")
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/spf13/pflag"
@@ -97,6 +98,46 @@ func TestResolveConfig(t *testing.T) {
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "flagproj", cfg.Project.Name)
 				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
+			},
+		},
+		{
+			// The compose bounds are config keys reached through root-persistent
+			// flags, so the same precedence has to hold for them as for log.level.
+			name:      "the compose section comes from the file",
+			file:      versionedConfig("compose:\n  wait_timeout: 5m\n  stop_timeout: 45s\n  progress: plain\n"),
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
+				assert.Equal(t, 45*time.Second, cfg.Compose.StopTimeout)
+				assert.Equal(t, config.ProgressPlain, cfg.Compose.Progress)
+			},
+		},
+		{
+			name:      "a changed --wait-timeout beats the file",
+			file:      versionedConfig("compose:\n  wait_timeout: 5m\n"),
+			flags:     map[string]string{"wait-timeout": "30s"},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, 30*time.Second, cfg.Compose.WaitTimeout)
+			},
+		},
+		{
+			// The flag's own default is the *lowest* precedence source, so an
+			// unchanged --wait-timeout must not overwrite the file's value.
+			name:      "an unchanged --progress leaves the file's mode alone",
+			file:      versionedConfig("compose:\n  progress: quiet\n"),
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, config.ProgressQuiet, cfg.Compose.Progress)
+			},
+		},
+		{
+			name:      "env beats the file for a compose bound too",
+			file:      versionedConfig("compose:\n  wait_timeout: 5m\n"),
+			env:       map[string]string{"ARCAVE_COMPOSE_WAIT_TIMEOUT": "90s"},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, 90*time.Second, cfg.Compose.WaitTimeout)
 			},
 		},
 	}
@@ -248,12 +289,18 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs.String("name", "", "")
 	fs.StringSlice("file", []string{"docker-compose.yaml"}, "")
 	fs.String("savepoint-dir", "", "")
+	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
+	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
+	fs.String("progress", config.ProgressAuto, "")
 	viperBind(v, fs, map[string]string{
 		"log-level":     "log.level",
 		"log-format":    "log.format",
 		"name":          "project.name",
 		"file":          "project.compose_files",
 		"savepoint-dir": "storage.directory.path",
+		"wait-timeout":  "compose.wait_timeout",
+		"stop-timeout":  "compose.stop_timeout",
+		"progress":      "compose.progress",
 	})
 	return fs
 }
