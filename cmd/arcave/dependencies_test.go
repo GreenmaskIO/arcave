@@ -8,9 +8,11 @@ import (
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
 )
 
@@ -270,21 +272,34 @@ func TestDockerTLSOptions(t *testing.T) {
 }
 
 // Compose's progress is what turns a two-minute health-check wait from a hang
-// into something a user can watch, so every mode must reach the library — and
+// into something a user can watch, so every channel must reach the library — and
 // none of them may reach stdout, which carries arcave's JSON.
-func TestComposeProgressStream(t *testing.T) {
+func TestComposeProgressWriter(t *testing.T) {
 	tests := []struct {
-		name       string
-		mode       string
-		wantMode   string
-		wantSilent bool
+		name     string
+		mode     string
+		wantMode string
+		wantOut  io.Writer // nil means "the adapter", which has no comparable value
 	}{
-		{name: "auto", mode: config.ProgressAuto, wantMode: progress.ModeAuto},
-		{name: "tty", mode: config.ProgressTTY, wantMode: progress.ModeTTY},
-		{name: "plain", mode: config.ProgressPlain, wantMode: progress.ModePlain},
-		{name: "json", mode: config.ProgressJSON, wantMode: progress.ModeJSON},
-		{name: "quiet discards the stream as well", mode: config.ProgressQuiet, wantMode: progress.ModeQuiet, wantSilent: true},
-		{name: "an unset mode renders as auto", mode: "", wantMode: progress.ModeAuto},
+		{
+			name: "log folds compose's events into arcave's own log",
+			mode: config.ProgressLog, wantMode: progress.ModeJSON,
+		},
+		{
+			// ModeAuto, not ModeTTY: compose then redraws on a terminal and falls
+			// back to plain lines in a pipe, where ModeTTY would spray ANSI escapes
+			// into a log file.
+			name: "tty hands the terminal back to compose's own renderer",
+			mode: config.ProgressTTY, wantMode: progress.ModeAuto, wantOut: os.Stderr,
+		},
+		{
+			name: "quiet discards the stream as well as the UI",
+			mode: config.ProgressQuiet, wantMode: progress.ModeQuiet, wantOut: io.Discard,
+		},
+		{
+			name: "an unset channel is the log",
+			mode: "", wantMode: progress.ModeJSON,
+		},
 	}
 
 	for _, tt := range tests {
@@ -294,15 +309,19 @@ func TestComposeProgressStream(t *testing.T) {
 			t.Cleanup(func() { progress.Mode = original })
 
 			// Act
-			out := composeProgressStream(tt.mode)
+			out := composeProgressWriter(tt.mode, zerolog.Nop())
 
 			// Assert
 			assert.Equal(t, tt.wantMode, progress.Mode)
-			if tt.wantSilent {
-				assert.Equal(t, io.Discard, out)
+			if tt.wantOut == nil {
+				assert.IsType(t, &compose.ProgressLogger{}, out)
 				return
 			}
-			assert.Equal(t, os.Stderr, out, "progress belongs on stderr; stdout carries the JSON result")
+			// The streams arcave does not own are wrapped so Close cannot reach
+			// them — closing os.Stderr would take the process's error stream down
+			// with it.
+			assert.Equal(t, nopWriteCloser{tt.wantOut}, out)
+			assert.NoError(t, out.Close())
 		})
 	}
 }

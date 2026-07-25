@@ -98,7 +98,7 @@ func TestRepository_Save(t *testing.T) {
 				Compose: config.Compose{
 					WaitTimeout: 5 * time.Minute,
 					StopTimeout: 30 * time.Second,
-					Progress:    config.ProgressPlain,
+					Progress:    config.ProgressTTY,
 				},
 				Storage: config.Storage{
 					Type:      config.StorageTypeDirectory,

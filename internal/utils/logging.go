@@ -60,11 +60,15 @@ func GetLogger(logLevelStr string, logFormat string) (zerolog.Logger, error) {
 		Logger(), nil
 }
 
-func SetDefaultContextLogger(logLevelStr string, logFormat string) error {
+// SetDefaultContextLogger builds the logger and installs it as zerolog's default
+// for a context that carries none. It returns the logger it installed, because
+// the composition root also has to hand it to collaborators that take one
+// explicitly — the logrus bridge and the compose progress adapter.
+func SetDefaultContextLogger(logLevelStr string, logFormat string) (zerolog.Logger, error) {
 	logger, err := GetLogger(logLevelStr, logFormat)
 	if err != nil {
-		return fmt.Errorf("get logger: %w", err)
+		return zerolog.Logger{}, fmt.Errorf("get logger: %w", err)
 	}
 	zerolog.DefaultContextLogger = &logger
-	return nil
+	return logger, nil
 }
