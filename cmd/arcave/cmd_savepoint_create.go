@@ -12,7 +12,6 @@ import (
 var (
 	savepointCreateName        string
 	savepointCreateDescription string
-	savepointCreateWaitTimeout int
 
 	savepointCreateCmd = &cobra.Command{
 		Use:   "create [name]",
@@ -32,7 +31,7 @@ func runSavepointCreate(cmd *cobra.Command, args []string) error {
 	}
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewSavepointCreateHandler(d.service, d.printer)
-		return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription, savepointCreateWaitTimeout)
+		return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription)
 	})
 }
 
@@ -52,12 +51,11 @@ func init() {
 	flags := savepointCreateCmd.Flags()
 	flags.StringVar(&savepointCreateName, "name", "", "Savepoint name")
 	flags.StringVar(&savepointCreateDescription, "description", "", "Savepoint description")
-	flags.IntVar(&savepointCreateWaitTimeout, "wait-timeout", defaultUpWaitTimeout,
-		"Seconds to wait for services to become healthy after the snapshot")
 
-	// None of these is bound to viper: --name would collide with `arcave init --name`
+	// Neither is bound to viper: --name would collide with `arcave init --name`
 	// on the shared "name" config key, conflating the project name with this
-	// savepoint's name. All are per-run values, not project config.
+	// savepoint's name. Both are per-run values, not project config — unlike
+	// --wait-timeout, which is a config key and lives on rootCmd.
 
 	savepointCmd.AddCommand(savepointCreateCmd)
 }

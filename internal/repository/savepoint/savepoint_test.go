@@ -10,18 +10,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/greenmaskio/storages"
+	"github.com/greenmaskio/storages/directory"
+
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/storages/directory"
 )
 
 // newStore returns a Storager rooted at a fresh temp dir, plus that dir so a
 // test can plant objects behind the repository's back — an incomplete namespace,
 // a legacy manifest, a corrupt record — exactly as a crashed run or an older arcave
 // would have left them.
-func newStore(t *testing.T) (model.Storager, string) {
+func newStore(t *testing.T) (storages.Storager, string) {
 	t.Helper()
 	root := t.TempDir()
-	st, err := directory.NewStorage(&directory.Config{Path: root})
+	st, err := directory.NewStorage(directory.Config{Path: root})
 	require.NoError(t, err)
 	return st, root
 }

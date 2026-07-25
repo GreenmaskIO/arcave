@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 
@@ -77,8 +78,8 @@ func (m *mockComposeRunner) Stop(ctx context.Context, files ...string) error {
 	return m.Called(ctx, files).Error(0)
 }
 
-func (m *mockComposeRunner) Up(ctx context.Context, waitTimeoutSec int, files ...string) error {
-	return m.Called(ctx, waitTimeoutSec, files).Error(0)
+func (m *mockComposeRunner) Up(ctx context.Context, waitTimeout time.Duration, files ...string) error {
+	return m.Called(ctx, waitTimeout, files).Error(0)
 }
 
 type mockDockerVolume struct{ mock.Mock }

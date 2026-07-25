@@ -17,9 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/storages/directory"
+
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/snapshot"
-	"github.com/greenmaskio/arcave/internal/storages/directory"
 )
 
 // The two WriteMount call sites are now distinguished by the bytes that flow
@@ -86,12 +87,14 @@ func newRollbackFixture(t *testing.T) rollbackFixture {
 	dc := &mockComposeRunner{}
 	dockerVol := &mockDockerVolume{}
 
-	st, err := directory.NewStorage(&directory.Config{Path: projectRoot})
+	store, err := directory.NewStorage(directory.Config{Path: projectRoot})
 	require.NoError(t, err)
 
 	// Two store-bound backends, exactly as the DI root builds them.
-	savepointStore := st.SubStorage(savepointDir, true)
-	safetyBackupStore := st.SubStorage(tmpDir, true)
+	savepointStore, err := store.SubStorage(savepointDir, true)
+	require.NoError(t, err)
+	safetyBackupStore, err := store.SubStorage(tmpDir, true)
+	require.NoError(t, err)
 	svc := New(
 		repo,
 		freeLocker(),
@@ -192,7 +195,7 @@ func TestRollback(t *testing.T) {
 			res, err := f.svc.Rollback(ctx, model.RollbackRequest{
 				ComposeFiles: f.cfg.Project.ComposeFiles,
 				Ref:          "100",
-				WaitTimeout:  60,
+				WaitTimeout:  60 * time.Second,
 			})
 
 			// Assert
@@ -237,7 +240,7 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	_, err := f.svc.Rollback(ctx, model.RollbackRequest{
 		ComposeFiles: f.cfg.Project.ComposeFiles,
 		Ref:          "100",
-		WaitTimeout:  60,
+		WaitTimeout:  60 * time.Second,
 	})
 
 	// Assert
@@ -260,7 +263,7 @@ func TestService_Rollback_MissingArchive(t *testing.T) {
 	_, err := f.svc.Rollback(ctx, model.RollbackRequest{
 		ComposeFiles: f.cfg.Project.ComposeFiles,
 		Ref:          "100",
-		WaitTimeout:  60,
+		WaitTimeout:  60 * time.Second,
 	})
 
 	// Assert

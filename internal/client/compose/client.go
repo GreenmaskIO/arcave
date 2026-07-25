@@ -8,16 +8,19 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
+	"github.com/rs/zerolog"
 )
 
-// defaultUpWaitTimeout is the bound (seconds) Up applies to its health-check
-// wait when the caller names none. Without a bound, a service that never becomes
-// healthy (a crash-looping container with restart: always) would block forever.
-//
-// It is the default of *this* implementation, not a property of the domain: a
-// runner that did not wait on health checks would have no use for it. Callers
-// that expose it — the command layer, for a flag default — take it from here.
-const defaultUpWaitTimeout = 120
+// The bounds Client falls back to when it is handed no Options at all — a direct
+// caller (a test, an embedder) rather than arcave's own composition root, which
+// resolves both from config.Compose. They are last resorts, not the product's
+// defaults: config.DefaultWaitTimeout and config.DefaultStopTimeout are what a
+// user sees and overrides, and these exist so a zero Options can never mean
+// "wait forever" or "SIGKILL immediately".
+const (
+	defaultUpWaitTimeout = 120 * time.Second
+	defaultStopTimeout   = 10 * time.Second
+)
 
 // dockerComposeAPI is the slice of the compose library's API that Client
 // calls — consumer-side, so a test can assert on the options arcave passes without a
@@ -44,46 +47,82 @@ type dockerComposeLoader interface {
 // nothing but the daemon socket. The semantics are pinned to the compose version
 // arcave was built against, not to whatever the user happens to have installed.
 //
-// It is stateless: the compose files to act on are passed per call, so a single
-// instance is shared across invocations rather than bound to a fixed file set.
+// The compose files to act on are passed per call, so a single instance is
+// shared across invocations rather than bound to a fixed file set. The two
+// timeouts are not: they are project config, resolved once at the composition
+// root, so they are held rather than threaded through every call site.
 type Client struct {
 	api    dockerComposeAPI
 	loader dockerComposeLoader
+	opts   Options
+}
+
+// Options are the project's compose-lifecycle bounds. They are durations, not a
+// count of seconds: the unit is chosen where the user writes it (config.Duration
+// parses `2m`), so no layer below that one has to remember which one it is
+// holding. A zero field falls back to this package's own default.
+type Options struct {
+	// WaitTimeout bounds Up's health-check wait when a call names no bound of its
+	// own.
+	WaitTimeout time.Duration
+	// StopTimeout is the grace period a container gets to exit before compose
+	// SIGKILLs it. It applies to Stop, and to the stop half of any container Up
+	// recreates.
+	StopTimeout time.Duration
 }
 
 // NewClient returns a runner over the engine's daemon connection, so the
-// lifecycle half of this package targets the daemon Options resolved for the I/O
-// half by construction.
-func NewClient(svc dockerComposeAPI, loader dockerComposeLoader) *Client {
-	return &Client{api: svc, loader: loader}
+// lifecycle half of this package targets the daemon resolved for the I/O half by
+// construction. opts carries the project's bounds; a zero Options is valid and
+// means "this package's defaults".
+func NewClient(svc dockerComposeAPI, loader dockerComposeLoader, opts Options) *Client {
+	return &Client{api: svc, loader: loader, opts: opts}
 }
 
 // Stop stops all project services. It returns once the containers have exited,
 // so no extra polling is needed.
+//
+// Each container gets the configured grace period to exit on its own before
+// compose SIGKILLs it. That bound is arcave's business in a way it is not the
+// compose CLI's: the volumes are snapshotted the instant the containers are
+// down, so a database that was still flushing when it was killed is what the
+// savepoint captures.
 func (c *Client) Stop(ctx context.Context, files ...string) error {
 	project, err := c.load(ctx, files...)
 	if err != nil {
 		return err
 	}
-	return c.api.Stop(ctx, project.Name, api.StopOptions{Project: project})
+	timeout := c.stopTimeout()
+	// Str, not Dur: zerolog renders a Dur in milliseconds, and "10000" is not what
+	// a user reading a grace period wants to see.
+	zerolog.Ctx(ctx).Debug().Str("stop_timeout", timeout.String()).Msg("stopping compose services")
+	return c.api.Stop(ctx, project.Name, api.StopOptions{Project: project, Timeout: &timeout})
 }
 
 // Up starts all project services in the background and waits until they are
 // healthy, honouring container health checks where defined.
 //
-// waitTimeoutSec bounds how long it blocks on health checks: without a bound, a
+// waitTimeout bounds how long it blocks on health checks: without a bound, a
 // service that never becomes healthy (e.g. a crash-looping container with
 // restart: always) would make Up hang forever, so the bound turns that into an
 // error callers can act on (e.g. rollback reverts to its safety backup). A
-// value <= 0 falls back to defaultUpWaitTimeout.
-func (c *Client) Up(ctx context.Context, waitTimeoutSec int, files ...string) error {
-	if waitTimeoutSec <= 0 {
-		waitTimeoutSec = defaultUpWaitTimeout
-	}
+// value <= 0 falls back to the configured Options.
+//
+// The effective bound is logged before compose is called, because this wait is
+// where a arcave run spends minutes without finishing: the log line is what tells
+// a user staring at a quiet terminal that arcave is waiting rather than wedged, and
+// names the deadline it will fail at. Compose's own per-container progress goes
+// to stderr alongside it, unless the project asked for compose.progress: quiet.
+func (c *Client) Up(ctx context.Context, waitTimeout time.Duration, files ...string) error {
 	project, err := c.load(ctx, files...)
 	if err != nil {
 		return err
 	}
+	waitTimeout = c.waitTimeoutOr(waitTimeout)
+	stopTimeout := c.stopTimeout()
+	zerolog.Ctx(ctx).Info().Str("wait_timeout", waitTimeout.String()).
+		Msg("waiting for services to become healthy")
+
 	return c.api.Up(ctx, project, api.UpOptions{
 		Create: api.CreateOptions{
 			Services: project.ServiceNames(),
@@ -100,14 +139,42 @@ func (c *Client) Up(ctx context.Context, waitTimeoutSec int, files ...string) er
 			// the same way, but naming it keeps that from being an accident.
 			Recreate:             api.RecreateDiverged,
 			RecreateDependencies: api.RecreateDiverged,
+			// Recreating a container stops the one it replaces, so the same grace
+			// period applies here as in Stop — otherwise a service arcave is careful
+			// to shut down cleanly before a snapshot gets SIGKILLed on the way up.
+			Timeout: &stopTimeout,
 		},
 		Start: api.StartOptions{
 			Project:     project,
 			Services:    project.ServiceNames(),
 			Wait:        true,
-			WaitTimeout: time.Duration(waitTimeoutSec) * time.Second,
+			WaitTimeout: waitTimeout,
 		},
 	})
+}
+
+// waitTimeoutOr resolves the bound a call named against the configured one: a
+// caller that names none (an MCP tool call omitting wait_timeout) gets the
+// project's, and a Client built with a zero Options still gets a bound rather
+// than an unbounded wait.
+func (c *Client) waitTimeoutOr(waitTimeout time.Duration) time.Duration {
+	if waitTimeout <= 0 {
+		waitTimeout = c.opts.WaitTimeout
+	}
+	if waitTimeout <= 0 {
+		waitTimeout = defaultUpWaitTimeout
+	}
+	return waitTimeout
+}
+
+// stopTimeout is the configured grace period, or this package's default when the
+// Client was built without one. No call names its own: nothing above has ever
+// needed to stop one workflow harder than another.
+func (c *Client) stopTimeout() time.Duration {
+	if c.opts.StopTimeout <= 0 {
+		return defaultStopTimeout
+	}
+	return c.opts.StopTimeout
 }
 
 // load resolves the project the same way Inspector does, then labels it.

@@ -13,10 +13,8 @@
 // one and an adapter matches it with errors.Is, so the error is a contract
 // between them and belongs with the other types they share.
 //
-// The package also owns the only interface that lives outside the package
-// consuming it: Storager (storager.go). Every other seam in arcave is declared by
-// its consumer, per dependency inversion. Storager cannot be, because a factory
-// must name it in a signature — storages.New returns a Storager. A
-// consumer-declared interface works as a parameter but never as a return type,
-// so the contract lives here, where every side already looks.
+// The package declares no interfaces: every seam in arcave is declared by its
+// consumer, per dependency inversion. The storage contract is the exception that
+// proves it — it is greenmaskio/storages' own Storager, consumed directly, so
+// there is nothing here to re-declare.
 package model

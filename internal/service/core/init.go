@@ -41,7 +41,7 @@ func NewInitService(projectRoot string, cw configWriter, ci composeInspector) *I
 // copy of it: every section it forgot to carry (docker, snapshot) would be
 // silently dropped from the file a `arcave init --override` rewrote. It also has
 // nothing to create: the savepoint store is a `storage` section here and nothing
-// more, brought into existence by storages.New at the first savepoint, so Init
+// more, brought into existence by storefactory.New at the first savepoint, so Init
 // never names a directory and never opens one.
 //
 // override is an argument rather than a config field because it is transient:

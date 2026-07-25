@@ -18,6 +18,8 @@ package cli
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -84,21 +86,40 @@ const (
 type createInput struct {
 	Name        string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by arcave"`
 	Description string `json:"description,omitempty" jsonschema:"what this savepoint captures, e.g. the change it is being taken before"`
-	WaitTimeout int    `json:"wait_timeout,omitempty" jsonschema:"seconds to wait for services to become healthy on restart; omit for the default"`
+	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
 }
 
 // createSavepoint snapshots every stateful mount in the project.
 func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in createInput) (*mcpsdk.CallToolResult, model.Savepoint, error) {
+	waitTimeout, err := parseWaitTimeout(in.WaitTimeout)
+	if err != nil {
+		return nil, model.Savepoint{}, err
+	}
 	sp, err := h.svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
 		ComposeFiles: h.composeFiles,
 		Name:         in.Name,
 		Description:  in.Description,
-		WaitTimeout:  in.WaitTimeout,
+		WaitTimeout:  waitTimeout,
 	})
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
 	return nil, sp, nil
+}
+
+// parseWaitTimeout reads the bound a tool call named, in the same unit-bearing
+// form the config file uses ("2m", "90s") and retain_for already asks for. An
+// omitted field is the zero duration, which the service reads as "the project's
+// bound" — so an agent that does not care never has to name one.
+func parseWaitTimeout(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("wait_timeout %q: want a unit-bearing value like 2m, 90s or 1h30m", s)
+	}
+	return d, nil
 }
 
 // listOutput wraps the savepoints, because MCP structured output must be a JSON
@@ -151,15 +172,19 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 // rollbackInput is rollback's input schema.
 type rollbackInput struct {
 	Ref         string `json:"ref" jsonschema:"the savepoint to restore: its id, its name, or the literal 'latest'"`
-	WaitTimeout int    `json:"wait_timeout,omitempty" jsonschema:"seconds to wait for services to become healthy on restart; omit for the default"`
+	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
 }
 
 // rollback restores the environment to the referenced savepoint.
 func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in rollbackInput) (*mcpsdk.CallToolResult, model.RollbackResponse, error) {
+	waitTimeout, err := parseWaitTimeout(in.WaitTimeout)
+	if err != nil {
+		return nil, model.RollbackResponse{}, err
+	}
 	res, err := h.svc.Rollback(ctx, model.RollbackRequest{
 		ComposeFiles: h.composeFiles,
 		Ref:          in.Ref,
-		WaitTimeout:  in.WaitTimeout,
+		WaitTimeout:  waitTimeout,
 	})
 	if err != nil {
 		return nil, model.RollbackResponse{}, err

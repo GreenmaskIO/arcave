@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -36,6 +37,38 @@ const StorageTypeDirectory = "directory"
 // mount's tar stream verbatim.
 const SnapshotBackendFullCopy = "fullcopy"
 
+// The bounds arcave gives compose when it stops and starts the stack. They live
+// here rather than in the compose client because they are project config now:
+// the client applies them, but the user names them, and cmd/arcave advertises
+// them as the --wait-timeout/--stop-timeout defaults.
+const (
+	// DefaultWaitTimeout bounds the health-check wait after a start. Without a
+	// bound a service that never becomes healthy (a crash-looping container with
+	// restart: always) would block a savepoint forever.
+	DefaultWaitTimeout = 120 * time.Second
+	// DefaultStopTimeout is the grace period a container gets to exit before
+	// compose sends SIGKILL. It matters more here than it does to `docker compose
+	// stop`: arcave snapshots the volumes the moment the containers are down, so a
+	// database killed mid-shutdown is captured mid-shutdown.
+	DefaultStopTimeout = 10 * time.Second
+)
+
+// How much of compose's own progress reaches the terminal. The values are
+// compose's (`docker compose --progress`), restated here because internal/config
+// reaches for no SDK — cmd/arcave maps them onto the library's own mode.
+const (
+	// ProgressAuto renders as a TTY when stderr is one, and plain otherwise.
+	ProgressAuto = "auto"
+	// ProgressTTY forces the redrawing renderer.
+	ProgressTTY = "tty"
+	// ProgressPlain dumps one line per event — the mode to keep in CI logs.
+	ProgressPlain = "plain"
+	// ProgressJSON emits compose's machine-readable event stream.
+	ProgressJSON = "json"
+	// ProgressQuiet shows nothing, leaving only arcave's own log lines.
+	ProgressQuiet = "quiet"
+)
+
 // Config is the content persisted to .arcave/config.yaml by init. The yaml tags
 // drive Save; the mapstructure tags drive Unmarshal.
 // One section per subsystem: a new subsystem adds a section rather than another
@@ -44,6 +77,7 @@ type Config struct {
 	Version  int      `yaml:"version" mapstructure:"version"`
 	Project  Project  `yaml:"project" mapstructure:"project"`
 	Docker   Docker   `yaml:"docker,omitempty" mapstructure:"docker"`
+	Compose  Compose  `yaml:"compose" mapstructure:"compose"`
 	Storage  Storage  `yaml:"storage" mapstructure:"storage"`
 	Snapshot Snapshot `yaml:"snapshot" mapstructure:"snapshot"`
 	// Log holds the project's default logging settings, honoured by every
@@ -75,6 +109,52 @@ type Docker struct {
 	TLSVerify bool   `yaml:"tls_verify,omitempty" mapstructure:"tls_verify"`
 }
 
+// Compose is how arcave drives the project's lifecycle — the two bounds it gives
+// `docker compose stop`/`up`, and how loudly compose reports its own progress.
+// Unlike Docker, which says *which* daemon to reach, this section says how
+// patient arcave is with the stack once it has it.
+//
+// It is a section of its own rather than fields on Project because Project
+// identifies the stack (its name, its files) while these are the knobs a user
+// turns when a service is slow: a savepoint that reports nothing for two minutes
+// and a database killed mid-shutdown are both fixed from here.
+type Compose struct {
+	// WaitTimeout bounds the health-check wait after a start. Every command that
+	// restarts the stack advertises it as --wait-timeout; a request naming its own
+	// bound (an MCP tool call) overrides it.
+	WaitTimeout time.Duration `yaml:"wait_timeout" mapstructure:"wait_timeout"`
+	// StopTimeout is how long a container gets to exit on its own before compose
+	// sends SIGKILL. Zero means "unset": DefaultStopTimeout applies, so an
+	// immediate kill is spelled 1s, not 0 — the value that reads as "no grace at
+	// all" is the one a user is most likely to leave unset by accident, and a
+	// SIGKILLed database is exactly what this bound exists to prevent.
+	StopTimeout time.Duration `yaml:"stop_timeout" mapstructure:"stop_timeout"`
+	// Progress selects how compose's own progress is rendered. It goes to stderr,
+	// never stdout, so it can be on by default without touching arcave's
+	// JSON-on-stdout contract.
+	Progress string `yaml:"progress" mapstructure:"progress"`
+}
+
+// Validate rejects bounds arcave cannot act on and a progress mode compose does
+// not know. A wait timeout of zero never reaches here — ApplyDefaults fills it —
+// so a non-positive value is one the user wrote deliberately, and "wait forever"
+// is not on offer: it is the failure mode the bound exists to turn into an error.
+func (c Compose) Validate() error {
+	if c.WaitTimeout <= 0 {
+		return fmt.Errorf("compose.wait_timeout must be a positive duration, got %s", c.WaitTimeout)
+	}
+	if c.StopTimeout < 0 {
+		return fmt.Errorf("compose.stop_timeout must not be negative, got %s", c.StopTimeout)
+	}
+	switch c.Progress {
+	case ProgressAuto, ProgressTTY, ProgressPlain, ProgressJSON, ProgressQuiet:
+		return nil
+	default:
+		return fmt.Errorf("unsupported compose.progress %q (supported: %s, %s, %s, %s, %s)",
+			c.Progress, ProgressAuto, ProgressTTY, ProgressPlain, ProgressJSON, ProgressQuiet)
+	}
+}
+
 // Storage is a tagged union: Type names the arm, and exactly that arm must be
 // present. The arms are pointers so an unset one is omitted on marshal rather
 // than written out as a block of zero values.
@@ -84,8 +164,9 @@ type Storage struct {
 }
 
 // DirectoryStorage is the local-filesystem arm. Path is resolved against the
-// project root when relative, and validated, by internal/storages.New — which is
-// the only place that turns it into a Storager.
+// project root when relative, and rooted under the static arcave namespace, by
+// internal/storefactory.New — which is the only place that turns it into a
+// Storager.
 type DirectoryStorage struct {
 	Path string `yaml:"path" mapstructure:"path"`
 }
@@ -111,7 +192,7 @@ func (s Storage) Validate() error {
 // name that arm. A caller that only wants to *read* the savepoint directory (a
 // status report; a test asserting on a resolved config) uses this rather than
 // dereferencing an arm a hand-written config may not carry. Nothing turns the
-// path into a store this way — that is storages.New's alone.
+// path into a store this way — that is storefactory.New's alone.
 func (s Storage) DirectoryPath() string {
 	if s.Directory == nil {
 		return ""
@@ -165,6 +246,15 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Project.Name == "" {
 		c.Project.Name = filepath.Base(projectRoot)
 	}
+	if c.Compose.WaitTimeout == 0 {
+		c.Compose.WaitTimeout = DefaultWaitTimeout
+	}
+	if c.Compose.StopTimeout == 0 {
+		c.Compose.StopTimeout = DefaultStopTimeout
+	}
+	if c.Compose.Progress == "" {
+		c.Compose.Progress = ProgressAuto
+	}
 	if c.Storage.Type == "" {
 		c.Storage.Type = StorageTypeDirectory
 	}
@@ -192,6 +282,9 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 func (c *Config) Validate() error {
 	if c.Version != Version {
 		return model.ErrUnsupportedConfigVersion
+	}
+	if err := c.Compose.Validate(); err != nil {
+		return err
 	}
 	if err := c.Storage.Validate(); err != nil {
 		return err

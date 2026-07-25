@@ -13,14 +13,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// defaultUpWaitTimeout is the --wait-timeout default of every command that
-// restarts the stack (rollback, savepoint create). The compose client applies
-// the same bound itself when a caller passes <= 0, but keeps it private: this is
-// the value the flag advertises in `arcave --help`, which is the command layer's
-// concern. Keep the two in step — a drift makes the help text lie about what a
-// bare command does.
-const defaultUpWaitTimeout = 120
-
 // The state every command shares, produced once by initRoot and read from RunE.
 // It is package-level because cobra registers commands from init(), so there is
 // nowhere earlier to hang it — see config.go for the resolution that fills it.
@@ -121,8 +113,26 @@ func init() {
 		),
 	)
 
+	// The compose bounds are persistent flags on root, next to --log-level, for
+	// the same reason: they are *config keys*, and one viper key can hold exactly
+	// one flag binding. Declared per command they would collide — `savepoint
+	// create` and `rollback` both want --wait-timeout, and whichever init() ran
+	// last would silently own the key for both, so the other command's flag would
+	// parse and then be ignored. Declared once here, every command that restarts
+	// the stack inherits them and the binding is unambiguous.
+	pf.Duration("wait-timeout", config.DefaultWaitTimeout,
+		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
+	pf.Duration("stop-timeout", config.DefaultStopTimeout,
+		"How long a container gets to exit on its own before it is killed, e.g. 30s")
+	pf.String("progress", config.ProgressAuto,
+		fmt.Sprintf("How docker compose reports its progress on stderr: %s, %s, %s, %s or %s",
+			config.ProgressAuto, config.ProgressTTY, config.ProgressPlain, config.ProgressJSON, config.ProgressQuiet))
+
 	viperBind(cfgViper, pf, map[string]string{
-		"log-level":  "log.level",
-		"log-format": "log.format",
+		"log-level":    "log.level",
+		"log-format":   "log.format",
+		"wait-timeout": "compose.wait_timeout",
+		"stop-timeout": "compose.stop_timeout",
+		"progress":     "compose.progress",
 	})
 }

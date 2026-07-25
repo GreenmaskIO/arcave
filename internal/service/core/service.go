@@ -61,7 +61,7 @@ type composeInspector interface {
 // shared across invocations.
 type composeRunner interface {
 	Stop(ctx context.Context, files ...string) error
-	Up(ctx context.Context, waitTimeoutSec int, files ...string) error
+	Up(ctx context.Context, waitTimeout time.Duration, files ...string) error
 }
 
 // snapshotBackend stores and restores a whole savepoint's volume data as a unit.

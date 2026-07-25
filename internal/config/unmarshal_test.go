@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/spf13/viper"
@@ -37,7 +38,45 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, Version, cfg.Version)
 				assert.Equal(t, StorageTypeDirectory, cfg.Storage.Type)
 				assert.Equal(t, SnapshotBackendFullCopy, cfg.Snapshot.Backend)
+				// A project that names no compose section still gets bounds: an
+				// unbounded health-check wait is the failure this config exists to
+				// prevent, so it can never be what a bare file means.
+				assert.Equal(t, DefaultWaitTimeout, cfg.Compose.WaitTimeout)
+				assert.Equal(t, DefaultStopTimeout, cfg.Compose.StopTimeout)
+				assert.Equal(t, ProgressAuto, cfg.Compose.Progress)
 			},
+		},
+		{
+			name: "the compose section is read",
+			yaml: "version: 1\ncompose:\n  wait_timeout: 5m\n  stop_timeout: 1m30s\n  progress: plain\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
+				assert.Equal(t, 90*time.Second, cfg.Compose.StopTimeout)
+				assert.Equal(t, ProgressPlain, cfg.Compose.Progress)
+			},
+		},
+		{
+			// Viper's own duration hook, left in place by rejectUnknownKeys.
+			name:       "a unit go does not know is rejected",
+			yaml:       "version: 1\ncompose:\n  wait_timeout: 5 minutes\n",
+			wantErrMsg: "time: unknown unit",
+		},
+		{
+			// "Wait forever" is not on offer: it is exactly the hang the bound
+			// exists to turn into an error.
+			name:       "a non-positive wait timeout is rejected",
+			yaml:       "version: 1\ncompose:\n  wait_timeout: -1s\n",
+			wantErrMsg: "compose.wait_timeout must be a positive duration, got -1s",
+		},
+		{
+			name:       "a negative stop timeout is rejected",
+			yaml:       "version: 1\ncompose:\n  stop_timeout: -5s\n",
+			wantErrMsg: "compose.stop_timeout must not be negative, got -5s",
+		},
+		{
+			name:       "a progress mode compose does not know is rejected",
+			yaml:       "version: 1\ncompose:\n  progress: verbose\n",
+			wantErrMsg: "unsupported compose.progress",
 		},
 		{
 			// arcave speaks one version and names no other, so a source that carries

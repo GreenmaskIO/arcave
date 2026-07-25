@@ -12,8 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/greenmaskio/storages"
+	"github.com/greenmaskio/storages/directory"
+
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/storages/directory"
 )
 
 // snapshotsDir is the store the backend is bound to. It is a sub-storage of the
@@ -22,12 +24,14 @@ const snapshotsDir = "snapshots"
 
 // newStore returns a Storager rooted at snapshotsDir inside a fresh temp
 // directory, plus that temp directory, so a test can assert on the real paths.
-func newStore(t *testing.T) (model.Storager, string) {
+func newStore(t *testing.T) (storages.Storager, string) {
 	t.Helper()
 	root := t.TempDir()
-	st, err := directory.NewStorage(&directory.Config{Path: root})
+	st, err := directory.NewStorage(directory.Config{Path: root})
 	require.NoError(t, err)
-	return st.SubStorage(snapshotsDir, true), root
+	sub, err := st.SubStorage(snapshotsDir, true)
+	require.NoError(t, err)
+	return sub, root
 }
 
 // fakeDockerVolume stands in for the Docker engine: OpenMount hands out a fixed

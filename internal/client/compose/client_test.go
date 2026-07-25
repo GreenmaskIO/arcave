@@ -20,9 +20,15 @@ var (
 	errCompose = errors.New("daemon refused")
 )
 
+// testOptions is the resolved project config a Client is normally built with;
+// its values are distinct from the package fallbacks so a case can tell the two
+// apart.
+var testOptions = Options{WaitTimeout: 45 * time.Second, StopTimeout: 25 * time.Second}
+
 func TestClient_Stop(t *testing.T) {
 	tests := []struct {
 		name       string
+		opts       Options
 		loadErr    error
 		stopErr    error
 		wantErr    error
@@ -30,11 +36,24 @@ func TestClient_Stop(t *testing.T) {
 		verify     func(t *testing.T, composeAPI *mockComposeAPI)
 	}{
 		{
-			name: "stops the loaded project",
+			name: "stops the loaded project with the configured grace period",
+			opts: testOptions,
 			verify: func(t *testing.T, composeAPI *mockComposeAPI) {
 				opts := composeAPI.stopCall(t)
 				require.NotNil(t, opts.Project, "compose needs the project to know which services to stop")
 				assertLabelled(t, opts.Project)
+				// Without a Timeout compose applies the container's own, and a
+				// database SIGKILLed mid-shutdown is what the next savepoint captures.
+				require.NotNil(t, opts.Timeout, "a stop with no bound is a stop arcave does not control")
+				assert.Equal(t, 25*time.Second, *opts.Timeout)
+			},
+		},
+		{
+			name: "falls back to the package default when unconfigured",
+			verify: func(t *testing.T, composeAPI *mockComposeAPI) {
+				opts := composeAPI.stopCall(t)
+				require.NotNil(t, opts.Timeout)
+				assert.Equal(t, defaultStopTimeout, *opts.Timeout)
 			},
 		},
 		{
@@ -60,7 +79,7 @@ func TestClient_Stop(t *testing.T) {
 			loader.On("Load", mock.Anything, []string{"a.yml", "b.yml"}).Return(loadResult(tt.loadErr)).Once()
 			composeAPI := &mockComposeAPI{}
 			composeAPI.On("Stop", mock.Anything, "demo", mock.Anything).Return(tt.stopErr).Maybe()
-			c := NewClient(composeAPI, loader)
+			c := NewClient(composeAPI, loader, tt.opts)
 
 			// Act
 			err := c.Stop(context.Background(), "a.yml", "b.yml")
@@ -78,28 +97,43 @@ func TestClient_Stop(t *testing.T) {
 func TestClient_Up(t *testing.T) {
 	tests := []struct {
 		name        string
-		waitTimeout int
+		opts        Options
+		waitTimeout time.Duration
 		loadErr     error
 		upErr       error
 		wantTimeout time.Duration
+		wantStop    time.Duration
 		wantErr     error
 		wantErrMsg  string
 		verify      func(t *testing.T, composeAPI *mockComposeAPI)
 	}{
 		{
-			name:        "carries the caller's bound",
-			waitTimeout: 30,
+			name:        "a caller's own bound wins over the configured one",
+			opts:        testOptions,
+			waitTimeout: 30 * time.Second,
 			wantTimeout: 30 * time.Second,
+			wantStop:    25 * time.Second,
 		},
 		{
-			name:        "falls back to the default when zero",
+			// An MCP tool call omitting wait_timeout lands here: the project's
+			// configured bound applies, not the package fallback.
+			name:        "falls back to the configured bound when zero",
+			opts:        testOptions,
 			waitTimeout: 0,
-			wantTimeout: defaultUpWaitTimeout * time.Second,
+			wantTimeout: 45 * time.Second,
+			wantStop:    25 * time.Second,
 		},
 		{
-			name:        "falls back to the default when negative",
+			name:        "falls back to the package default when neither is set",
+			waitTimeout: 0,
+			wantTimeout: defaultUpWaitTimeout,
+			wantStop:    defaultStopTimeout,
+		},
+		{
+			name:        "falls back when negative",
 			waitTimeout: -1,
-			wantTimeout: defaultUpWaitTimeout * time.Second,
+			wantTimeout: defaultUpWaitTimeout,
+			wantStop:    defaultStopTimeout,
 		},
 		{
 			name:       "a loader failure aborts before compose is touched",
@@ -124,7 +158,7 @@ func TestClient_Up(t *testing.T) {
 			loader.On("Load", mock.Anything, []string{"a.yml"}).Return(loadResult(tt.loadErr)).Once()
 			composeAPI := &mockComposeAPI{}
 			composeAPI.On("Up", mock.Anything, mock.Anything, mock.Anything).Return(tt.upErr).Maybe()
-			c := NewClient(composeAPI, loader)
+			c := NewClient(composeAPI, loader, tt.opts)
 
 			// Act
 			err := c.Up(context.Background(), tt.waitTimeout, "a.yml")
@@ -136,7 +170,7 @@ func TestClient_Up(t *testing.T) {
 				tt.verify(t, composeAPI)
 			}
 			if tt.wantErr == nil {
-				assertUpOptions(t, composeAPI, tt.wantTimeout)
+				assertUpOptions(t, composeAPI, tt.wantTimeout, tt.wantStop)
 			}
 		})
 	}
@@ -144,7 +178,7 @@ func TestClient_Up(t *testing.T) {
 
 // assertUpOptions pins what every successful Up must ask compose for, whatever
 // bound the caller named.
-func assertUpOptions(t *testing.T, composeAPI *mockComposeAPI, wantTimeout time.Duration) {
+func assertUpOptions(t *testing.T, composeAPI *mockComposeAPI, wantTimeout, wantStop time.Duration) {
 	t.Helper()
 	project, opts := composeAPI.upCall(t)
 	assert.Equal(t, "demo", project.Name)
@@ -152,6 +186,12 @@ func assertUpOptions(t *testing.T, composeAPI *mockComposeAPI, wantTimeout time.
 
 	assert.True(t, opts.Start.Wait, "without Wait, Up would return before the services are healthy")
 	assert.Equal(t, wantTimeout, opts.Start.WaitTimeout)
+
+	// Recreating a container stops the one it replaces, so the grace period must
+	// reach Up as well — a service arcave shut down cleanly for the snapshot would
+	// otherwise be SIGKILLed on the way back up.
+	require.NotNil(t, opts.Create.Timeout, "a recreate with no bound is a stop arcave does not control")
+	assert.Equal(t, wantStop, *opts.Create.Timeout)
 	assert.Same(t, project, opts.Start.Project)
 	assert.ElementsMatch(t, []string{"app", "db"}, opts.Start.Services)
 	assert.ElementsMatch(t, []string{"app", "db"}, opts.Create.Services)

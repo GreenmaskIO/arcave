@@ -35,5 +35,8 @@ go.work.sum
 .claude
 bin/
 .vscode
+.user
+examples/demo/.gm
+.idea
 
 .mcp.json

@@ -1,6 +1,6 @@
 // Package snapshot is the snapshot backend: it stores and restores a whole
 // savepoint's volume data as a unit. Each volume is stored as a plain tar archive
-// through a model.Storager (the local-directory backend today). The archive is
+// through a storages.Storager (the local-directory backend today). The archive is
 // written verbatim (never extracted on the host) so file ownership and
 // permissions survive a later restore.
 //
@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
@@ -52,14 +53,14 @@ type CopyBackend struct {
 	docker DockerVolume
 	// storage is rooted at the store this backend writes into — the savepoint
 	// directory or the safety-backup directory. One instance serves one store.
-	storage model.Storager
+	storage storages.Storager
 }
 
 // NewCopyBackend wires a copy backend to a ready Docker engine and the Storager
 // of the store it owns, already re-rooted at that store's directory. Both are
 // shared, concurrency-safe dependencies from the DI root; the backend owns
 // neither's lifecycle.
-func NewCopyBackend(docker DockerVolume, storage model.Storager) *CopyBackend {
+func NewCopyBackend(docker DockerVolume, storage storages.Storager) *CopyBackend {
 	return &CopyBackend{docker: docker, storage: storage}
 }
 
