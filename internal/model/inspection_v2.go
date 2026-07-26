@@ -73,7 +73,7 @@ type ServiceVolume struct {
 	Backend      SnapshotBackend
 }
 
-// StorageID is the stable identity of this mount's data — the key to iterate by
+// ObjectID is the stable identity of this mount's data — the key to iterate by
 // and the basis of the storage key a backend renders (identity, not a path).
 // A named volume returns its NamedVolume's id, which is how the two levels join;
 // an unsupported mount has none.
@@ -81,7 +81,7 @@ type ServiceVolume struct {
 // A rename therefore mints a new identity, deliberately: docker creates an empty
 // volume on a rename too, so an old backup must not map onto it. A restore into
 // a renamed project fails preflight as a missing archive.
-func (v ServiceVolume) StorageID(service string) string {
+func (v ServiceVolume) ObjectID(service string) string {
 	switch v.Type {
 	case VolumeTypeNamed:
 		return namedStorageID(v.VolumeName)

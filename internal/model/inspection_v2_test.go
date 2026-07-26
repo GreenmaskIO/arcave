@@ -48,7 +48,7 @@ func TestServiceVolume_StorageID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := tt.volume.StorageID(tt.service)
+			got := tt.volume.ObjectID(tt.service)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -67,5 +67,5 @@ func TestNamedVolume_StorageID(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, "volume/demo_pgdata", got)
-	assert.Equal(t, got, reference.StorageID("db"))
+	assert.Equal(t, got, reference.ObjectID("db"))
 }
