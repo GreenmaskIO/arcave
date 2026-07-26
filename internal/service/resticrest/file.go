@@ -8,9 +8,8 @@ import (
 	"github.com/greenmaskio/storages"
 )
 
-// storagerFile presents one stored object to http.ServeContent as an
-// io.ReadSeekCloser, which is the only thing ServeContent needs and the only
-// thing a Storager cannot be.
+// storagerFile presents one stored object as an io.ReadSeekCloser, which is the
+// only thing http.ServeContent needs and the only thing a Storager cannot be.
 //
 // It is lazy on purpose. Seek is arithmetic over the size Stat reported — it
 // opens nothing, which matters because ServeContent's first act is to seek to
@@ -22,8 +21,8 @@ import (
 // reason restic can read one blob out of a large pack.
 //
 // The context is held in the struct because io.Reader has nowhere to pass one;
-// it is the request's, and the file never outlives the request (getBlob closes
-// it before returning).
+// it is the request's, and the file never outlives the request (the handler
+// closes it before returning).
 type storagerFile struct {
 	ctx   context.Context
 	store storages.Storager
@@ -36,19 +35,12 @@ type storagerFile struct {
 // compile-time assertion: ServeContent takes exactly this, and Close is ours.
 var _ io.ReadSeekCloser = (*storagerFile)(nil)
 
-// newStoragerFile stats the object and reports a missing one as
-// storages.ErrFileNotFound, so the caller answers 404 the same way it does for a
-// GetObject failure. The size is read once here: a 206 needs it, and re-statting
-// per Read would make a range read O(reads) round trips.
-func newStoragerFile(ctx context.Context, store storages.Storager, key string) (*storagerFile, error) {
-	st, err := store.Stat(key)
-	if err != nil {
-		return nil, err
-	}
-	if !st.Exist {
-		return nil, fmt.Errorf("%w: %s", storages.ErrFileNotFound, key)
-	}
-	return &storagerFile{ctx: ctx, store: store, key: key, size: st.Size}, nil
+// newStoragerFile wraps an object the caller has already stat'ed: it opens
+// nothing and cannot fail. The size comes in rather than being read here
+// because absence is the caller's to report — an object that is not there never
+// becomes a file at all.
+func newStoragerFile(ctx context.Context, store storages.Storager, key string, size int64) *storagerFile {
+	return &storagerFile{ctx: ctx, store: store, key: key, size: size}
 }
 
 // Read opens the stream on demand and reports EOF at (or past) the end without

@@ -30,7 +30,7 @@ const letteredBlobID = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
 
 // newHandler returns the handler over a fresh directory store, plus that store
 // so a test can plant objects the handler is then asked about.
-func newHandler(t *testing.T) (http.Handler, storages.Storager) {
+func newStoreHandler(t *testing.T) (http.Handler, storages.Storager) {
 	t.Helper()
 	store, err := directory.NewStorage(directory.Config{Path: t.TempDir()})
 	require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestHandler_ServeHTTP_PathValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, _ := newHandler(t)
+			h, _ := newStoreHandler(t)
 
 			// Act
 			rec := do(t, h, tt.method, tt.target, "")
@@ -198,7 +198,7 @@ func TestHandler_ServeHTTP_PercentEncodedPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, store := newHandler(t)
+			h, store := newStoreHandler(t)
 			put(t, store, tt.key, tt.body)
 
 			// Act
@@ -236,7 +236,7 @@ func TestHandler_ServeHTTP_MethodNotAllowed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, _ := newHandler(t)
+			h, _ := newStoreHandler(t)
 
 			// Act
 			rec := do(t, h, tt.method, tt.target, "")
@@ -254,7 +254,7 @@ func TestHandler_ServeHTTP_MethodNotAllowed(t *testing.T) {
 // strip, so only the status and the type are asserted.
 func TestHandler_ServeHTTP_HeadOnAListing(t *testing.T) {
 	// Arrange
-	h, store := newHandler(t)
+	h, store := newStoreHandler(t)
 	put(t, store, "data/"+blobID, "abc")
 
 	// Act
@@ -279,7 +279,7 @@ func TestHandler_createRepo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, _ := newHandler(t)
+			h, _ := newStoreHandler(t)
 
 			// Act
 			rec := do(t, h, http.MethodPost, tt.target, "")
@@ -294,7 +294,7 @@ func TestHandler_createRepo(t *testing.T) {
 // though init created nothing: "absent" and "empty" are the same state here.
 func TestHandler_createRepo_LeavesAnEmptyRepository(t *testing.T) {
 	// Arrange
-	h, _ := newHandler(t)
+	h, _ := newStoreHandler(t)
 
 	// Act
 	created := do(t, h, http.MethodPost, "/?create=true", "")
@@ -308,7 +308,7 @@ func TestHandler_createRepo_LeavesAnEmptyRepository(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, config.Code, "an initialised repository still has no config until restic writes one")
 }
 
-func TestHandler_statObject(t *testing.T) {
+func TestHandler_ServeHTTP_Stat(t *testing.T) {
 	tests := []struct {
 		name       string
 		key        string
@@ -327,7 +327,7 @@ func TestHandler_statObject(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, store := newHandler(t)
+			h, store := newStoreHandler(t)
 			if tt.key != "" {
 				put(t, store, tt.key, tt.body)
 			}
@@ -346,12 +346,12 @@ func TestHandler_statObject(t *testing.T) {
 
 func TestHandler_getConfig(t *testing.T) {
 	// Arrange
-	h, store := newHandler(t)
+	h, store := newStoreHandler(t)
 	put(t, store, "config", "[repository]")
 
 	// Act
 	present := do(t, h, http.MethodGet, "/config", "")
-	h2, _ := newHandler(t)
+	h2, _ := newStoreHandler(t)
 	absent := do(t, h2, http.MethodGet, "/config", "")
 
 	// Assert
@@ -365,7 +365,7 @@ func TestHandler_getConfig(t *testing.T) {
 // stop.
 func TestHandler_saveConfig(t *testing.T) {
 	// Arrange
-	h, store := newHandler(t)
+	h, store := newStoreHandler(t)
 
 	// Act
 	first := do(t, h, http.MethodPost, "/config", "[repository]")
@@ -385,7 +385,7 @@ func TestHandler_saveConfig(t *testing.T) {
 
 func TestHandler_saveBlob(t *testing.T) {
 	// Arrange
-	h, store := newHandler(t)
+	h, store := newStoreHandler(t)
 
 	// Act: a blob, then the same name again — restic retries uploads, and the
 	// name is content-addressed, so the second one is not refused.
@@ -405,7 +405,7 @@ func TestHandler_saveBlob(t *testing.T) {
 // DELETE is idempotent on purpose: restic retries deletes during prune and
 // unlock, and a retry that lands after the first attempt succeeded must not fail
 // the operation.
-func TestHandler_deleteObject(t *testing.T) {
+func TestHandler_ServeHTTP_Delete(t *testing.T) {
 	tests := []struct {
 		name   string
 		key    string
@@ -419,7 +419,7 @@ func TestHandler_deleteObject(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, store := newHandler(t)
+			h, store := newStoreHandler(t)
 			put(t, store, tt.key, "payload")
 
 			// Act
@@ -490,7 +490,7 @@ func TestHandler_listBlobs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, store := newHandler(t)
+			h, store := newStoreHandler(t)
 			put(t, store, "data/"+blobID, "abc")
 			put(t, store, "data/"+otherBlobID, "abcde")
 			put(t, store, "index/"+blobID, "xy")
@@ -514,7 +514,7 @@ func TestHandler_listBlobs(t *testing.T) {
 // under the type prefix was not written here and is not a blob.
 func TestHandler_listBlobs_SkipsNestedKeys(t *testing.T) {
 	// Arrange
-	h, store := newHandler(t)
+	h, store := newStoreHandler(t)
 	put(t, store, "data/"+blobID, "abc")
 	put(t, store, "data/aa/"+otherBlobID, "nested")
 
@@ -552,7 +552,7 @@ func TestHandler_getBlob(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, store := newHandler(t)
+			h, store := newStoreHandler(t)
 			put(t, store, "data/"+blobID, payload)
 
 			// Act
@@ -581,7 +581,7 @@ func TestHandler_getBlob(t *testing.T) {
 
 func TestHandler_getBlob_Missing(t *testing.T) {
 	// Arrange
-	h, _ := newHandler(t)
+	h, _ := newStoreHandler(t)
 
 	// Act
 	rec := do(t, h, http.MethodGet, "/data/"+blobID, "")
@@ -594,7 +594,7 @@ func TestHandler_getBlob_Missing(t *testing.T) {
 // zero-length read never reaches the store, which would reject every range on it.
 func TestHandler_getBlob_Empty(t *testing.T) {
 	// Arrange
-	h, store := newHandler(t)
+	h, store := newStoreHandler(t)
 	put(t, store, "locks/"+blobID, "")
 
 	// Act

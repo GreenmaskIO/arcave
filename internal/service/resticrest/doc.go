@@ -11,6 +11,47 @@
 // shared, multi-repo instance would break, which is why one instance serves one
 // tunnel session.
 //
+// # The two layers
+//
+// The package is cut in two along the `repository` interface (resticrest.go),
+// and the cut is what keeps either half readable on its own:
+//
+//	http.Handler  →  handler        the protocol: which paths exist, which
+//	                 (handler.go)   method each takes, what Accept negotiates,
+//	                                which status each outcome earns
+//	              →  repository     the objects: which key each lands under,
+//	                 (service.go)   which store failure means what
+//
+// Nothing above the line names a storage key, and nothing below it names an
+// HTTP status. What crosses it is a (type, name) pair and, in the failing
+// direction, one of two sentinels — errObjectNotFound and errConfigExists —
+// which handler.fail is the whole of the mapping for. The interface is the
+// consumer's, declared with the handler that calls it; storeRepository is its
+// one implementation, and a double stands in for it in handler_test.go.
+//
+// # The log
+//
+// A third file, logging.go, wraps both: withRequestLog resolves the logger once
+// per request — the context's, or the global one when the context carries none
+// — stamps it with the method and path, and puts it back in the context, so
+// every layer below simply reads zerolog.Ctx(r.Context()) and no line has to
+// name the request again. It logs the start and the end of each request at
+// DEBUG, including the status, which is the one thing an http.Handler reports
+// to nobody.
+//
+// The levels are chosen by how often a condition is a *fault*, not by the
+// severity of the status it earns, because a healthy backup must be silent
+// above DEBUG: a 404 is restic asking whether an object exists (DEBUG, and
+// there are thousands), while a 405, a path outside the grammar, a POST / that
+// is not an init and an init refused against an existing config are all things
+// no client of ours does (WARN), and a store failure is the only ERROR.
+//
+// The Range protocol stays on the HTTP side of that line by design: the
+// repository hands back an io.ReadSeekCloser (file.go, a lazy seeker over
+// GetObjectRange) and http.ServeContent does the rest, so 206, Content-Range
+// and 416 are stdlib's semantics — which is exactly what rest-server relies on
+// too.
+//
 // Semantics are mirrored from restic/rest-server's repo package — status codes,
 // the Content-Length on HEAD, the v1/v2 listing content types, the order the
 // path is validated in — because that is the server real restic clients are
@@ -42,10 +83,11 @@
 // oracle_test.go, so one that quietly disappears — or one that quietly appears —
 // fails the tests.
 //
-// Append-only mode is not implemented (MVP). Its insertion points are saveBlob
-// and deleteObject, marked in object.go.
+// Append-only mode is not implemented (MVP). It is a policy over the objects,
+// not over the protocol, so its insertion points are SaveBlob and DeleteBlob in
+// service.go, where they are marked.
 //
-// The handler holds no state of its own beyond the store, so it is safe to serve
-// concurrently: per-key atomicity is the Storager's job. Production runs restic
+// Neither layer holds state of its own beyond the store, so the handler is safe
+// to serve concurrently: per-key atomicity is the Storager's job. Production runs restic
 // with rest.connections=1, but nothing here relies on that.
 package resticrest
