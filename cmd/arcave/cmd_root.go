@@ -69,9 +69,17 @@ func initRoot() error {
 	if err != nil {
 		return fmt.Errorf("resolve config: %w", err)
 	}
-	if err := utils.SetDefaultContextLogger(projectCfg.Log.Level, projectCfg.Log.Format); err != nil {
+	logger, err := utils.SetDefaultContextLogger(projectCfg.Log.Level, projectCfg.Log.Format)
+	if err != nil {
 		return fmt.Errorf("set log level: %w", err)
 	}
+
+	// The bridge goes in here, the moment the logger exists and before any
+	// command has had a chance to reach docker or compose: those libraries log
+	// through the package-level logrus logger, and every record written before
+	// this call would leave in logrus's own format on a stream arcave does not
+	// control.
+	utils.BridgeLogrus(logger, logger.GetLevel())
 	return nil
 }
 
@@ -131,9 +139,9 @@ func init() {
 		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
 	pf.Duration("stop-timeout", config.DefaultStopTimeout,
 		"How long a container gets to exit on its own before it is killed, e.g. 30s")
-	pf.String("progress", config.ProgressAuto,
-		fmt.Sprintf("How docker compose reports its progress on stderr: %s, %s, %s, %s or %s",
-			config.ProgressAuto, config.ProgressTTY, config.ProgressPlain, config.ProgressJSON, config.ProgressQuiet))
+	pf.String("progress", config.ProgressLog,
+		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",
+			config.ProgressLog, config.ProgressTTY, config.ProgressQuiet))
 
 	viperBind(cfgViper, pf, map[string]string{
 		"log-level":    "log.level",

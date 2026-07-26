@@ -111,8 +111,9 @@ func (c *Client) Stop(ctx context.Context, files ...string) error {
 // The effective bound is logged before compose is called, because this wait is
 // where a arcave run spends minutes without finishing: the log line is what tells
 // a user staring at a quiet terminal that arcave is waiting rather than wedged, and
-// names the deadline it will fail at. Compose's own per-container progress goes
-// to stderr alongside it, unless the project asked for compose.progress: quiet.
+// names the deadline it will fail at. Compose's own per-container progress
+// arrives alongside it as further log records (see ProgressLogger), unless the
+// project asked for compose.progress: tty or quiet.
 func (c *Client) Up(ctx context.Context, waitTimeout time.Duration, files ...string) error {
 	project, err := c.load(ctx, files...)
 	if err != nil {
