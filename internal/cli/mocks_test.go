@@ -66,3 +66,9 @@ func (m *mockService) Rollback(ctx context.Context, req model.RollbackRequest) (
 	args := m.Called(ctx, req)
 	return args.Get(0).(model.RollbackResult), args.Error(1)
 }
+
+func (m *mockService) Recommend(ctx context.Context, composeFiles ...string) ([]model.Recommendation, error) {
+	args := m.Called(ctx, composeFiles)
+	recs, _ := args.Get(0).([]model.Recommendation)
+	return recs, args.Error(1)
+}

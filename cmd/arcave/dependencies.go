@@ -24,6 +24,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	arcrepo "github.com/greenmaskio/arcave/internal/repository/arc"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -145,6 +146,17 @@ func (d *dependencies) Close(ctx context.Context) error {
 // to close.
 func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
 	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), introspect.NewInspector(compose.NewLoader()))
+	return svc, json.New(os.Stdout)
+}
+
+// recommendServiceDeps wires `arcave recommend`, which is strictly read-only: it
+// parses the compose files and the recommender catalog and reaches for nothing
+// else — no storage, no snapshot backend, no Docker engine, no lock.
+// recommenderFiles are the optional user catalogs merged over the built-in one,
+// in order; empty when the caller passed none. Nothing here holds a resource, so
+// there is nothing to close.
+func recommendServiceDeps(recommenderFiles []string) (*core.RecommendService, *json.Printer) {
+	svc := core.NewRecommendService(arcrepo.NewARC(recommenderFiles...), introspect.NewInspector(compose.NewLoader()))
 	return svc, json.New(os.Stdout)
 }
 

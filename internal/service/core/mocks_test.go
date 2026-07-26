@@ -142,3 +142,23 @@ func (m *mockConfig) Exists() (bool, error) {
 func (m *mockConfig) Save(cfg config.Config) error { return m.Called(cfg).Error(0) }
 
 func (m *mockConfig) Path() string { return m.Called().String(0) }
+
+// mockCatalog is the recommendationCatalog double. It drops ctx from its
+// expectations because the seam takes none — the catalog is local bytes.
+type mockCatalog struct{ mock.Mock }
+
+func (m *mockCatalog) List() ([]model.ARCEntry, error) {
+	args := m.Called()
+	entries, _ := args.Get(0).([]model.ARCEntry)
+	return entries, args.Error(1)
+}
+
+// mockServiceInspector is the composeServiceInspector double. It takes the
+// variadic files as a single []string so an expectation can name them.
+type mockServiceInspector struct{ mock.Mock }
+
+func (m *mockServiceInspector) Services(ctx context.Context, files ...string) ([]model.ComposeService, error) {
+	args := m.Called(ctx, files)
+	services, _ := args.Get(0).([]model.ComposeService)
+	return services, args.Error(1)
+}

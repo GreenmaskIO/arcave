@@ -1,0 +1,84 @@
+# The Arcave Recommender Config arcave ships with — the images whose persistent
+# state it knows about, and the container paths that state lives at.
+#
+# Every image key here is a *normalized repository*: no tag, no digest, and no
+# `docker.io/library/` prefix, because that is the form a compose service's image
+# is reduced to before it is matched (see internal/service/introspect.imageRepo).
+#
+# `aliases` share the entry's `volumes` verbatim, so an image belongs here only
+# when it stores the same state in the same places — a drop-in rebuild of the
+# same server. A variant that relocates its data directory (every bitnami image)
+# gets an entry of its own instead.
+#
+# Each file passed with --recommender-file is merged over this one, in order:
+# entries matching an image key are unioned, new image keys are appended.
+
+- image: postgres
+  aliases:
+    - pgvector/pgvector
+    - postgis/postgis
+    - timescale/timescaledb
+  volumes:
+    - /var/lib/postgresql/data
+
+- image: bitnami/postgresql
+  volumes:
+    - /bitnami/postgresql
+
+- image: mysql
+  volumes:
+    - /var/lib/mysql
+
+- image: mariadb
+  volumes:
+    - /var/lib/mysql
+
+- image: bitnami/mysql
+  volumes:
+    - /bitnami/mysql
+
+- image: bitnami/mariadb
+  volumes:
+    - /bitnami/mariadb
+
+- image: redis
+  aliases:
+    - valkey/valkey
+    - redis/redis-stack-server
+  volumes:
+    - /data
+
+- image: bitnami/redis
+  volumes:
+    - /bitnami/redis/data
+
+- image: mongo
+  aliases:
+    - mongodb/mongodb-community-server
+  volumes:
+    - /data/db
+    - /data/configdb
+
+- image: bitnami/mongodb
+  volumes:
+    - /bitnami/mongodb
+
+- image: elasticsearch
+  aliases:
+    - elasticsearch/elasticsearch
+  volumes:
+    - /usr/share/elasticsearch/data
+
+- image: apache/kafka
+  aliases:
+    - confluentinc/cp-kafka
+  volumes:
+    - /var/lib/kafka/data
+
+- image: bitnami/kafka
+  volumes:
+    - /bitnami/kafka
+
+- image: minio/minio
+  volumes:
+    - /data
