@@ -1,4 +1,4 @@
-// Package resticrest serves the restic REST backend protocol over a
+// Package rest serves the restic REST backend protocol over a
 // storages.Storager, so a restic process can back up into whatever store arcave has
 // configured — a local directory today, an object store tomorrow — without
 // arcave shipping a restic server or a filesystem for it to write to.
@@ -13,7 +13,7 @@
 //
 // # The two layers
 //
-// The package is cut in two along the `repository` interface (resticrest.go),
+// The package is cut in two along the `repository` interface (rest.go),
 // and the cut is what keeps either half readable on its own:
 //
 //	http.Handler  →  handler        the protocol: which paths exist, which
@@ -90,4 +90,4 @@
 // Neither layer holds state of its own beyond the store, so the handler is safe
 // to serve concurrently: per-key atomicity is the Storager's job. Production runs restic
 // with rest.connections=1, but nothing here relies on that.
-package resticrest
+package rest

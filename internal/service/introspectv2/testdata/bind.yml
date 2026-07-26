@@ -1,0 +1,7 @@
+name: demo
+
+services:
+  app:
+    image: alpine:3
+    volumes:
+      - ./cfg:/etc/cfg

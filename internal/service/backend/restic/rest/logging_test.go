@@ -1,4 +1,4 @@
-package resticrest
+package rest
 
 import (
 	"bytes"
@@ -137,7 +137,7 @@ func TestWithRequestLog_RecordsWhatWasAnswered(t *testing.T) {
 	// Assert
 	require.Equal(t, http.StatusOK, rec.Code)
 	served := requireRecord(t, logRecords(t, buf), "restic rest request served")
-	assert.Equal(t, "resticrest", served["component"])
+	assert.Equal(t, "rest", served["component"])
 	assert.Equal(t, http.MethodGet, served["method"])
 	assert.Equal(t, "/data/", served["path"])
 	assert.EqualValues(t, http.StatusOK, served["status"])
