@@ -21,6 +21,13 @@ var (
 	projectCfg     config.Config // the effective config every command runs on
 	configFound    bool          // whether .arcave/config.yaml existed
 	rootConfigFile string        // the --config flag's target, read before projectCfg exists
+
+	// rootExitCode is the status a *successful* command exits with. It is zero
+	// unless a command sets it, so nothing changes for the commands that only
+	// ever succeed or fail. `recommend` sets 1 when it has advice to give: that
+	// is a finding, not an error — it belongs on stdout as JSON, and returning
+	// an error to say it would put a second, redundant line on stderr.
+	rootExitCode int
 )
 
 var rootCmd = &cobra.Command{

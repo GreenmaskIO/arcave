@@ -289,6 +289,145 @@ which consumes doctor recommendations and updates the project configuration acco
 
 ---
 
+#### arcave recommend
+
+Reports the persistent volumes the project's services should mount and do not — state that lives inside the container
+filesystem and would therefore be silently lost by a savepoint/rollback cycle.
+
+It is the shipped, narrowed form of the `Volume Validation` check above: one question, one output shape, no severity
+model. It is strictly read-only — it parses the compose files and the recommendation catalog and reaches for neither the
+savepoint store, nor the Docker daemon, nor the project lock — so it is safe to run at any time, including while another
+arcave command is working.
+
+```bash
+arcave recommend
+arcave recommend -f docker-compose.yaml -f docker-compose.override.yaml
+arcave recommend --recommender-file ./team-arc.yaml --recommender-file ./my-arc.yaml
+```
+
+##### Flags
+
+```text
+-f, --file                Docker Compose file (repeatable). Defaults to the project's configured
+                          compose files; with an explicit -f the command needs no arcave project at all.
+    --recommender-file    A recommendation catalog merged over the built-in one (repeatable;
+                          several are merged left to right).
+```
+
+##### How a recommendation is produced
+
+Each service's image is reduced to its repository — no tag, no digest, no `docker.io/library/` prefix, so `postgres:16`
+becomes `postgres` and `ghcr.io/org/pg:1` becomes `org/pg` — and looked up in the catalog. Every catalog volume the
+service does not already mount something persistent at becomes one recommendation. A named volume, a bind mount and an
+anonymous volume all count as coverage; a tmpfs mount does not, since it persists nothing. A service that only builds,
+or whose image reference will not parse, is skipped.
+
+##### Registries
+
+arcave assumes no default registry and no single one: the domain is dropped from every image before matching, so a
+project pulling from Docker Hub, a corporate registry and ghcr.io in the same compose file matches all of them against
+one catalog.
+
+```text
+postgres:16                                          -> postgres                       (built-in match)
+registry.corp.local/postgres:16                      -> postgres                       (built-in match)
+localhost:5000/redis:7                               -> redis                          (built-in match)
+docker.elastic.co/elasticsearch/elasticsearch:8.13.0 -> elasticsearch/elasticsearch    (built-in match)
+ghcr.io/myorg/mydb:1                                 -> myorg/mydb                     (no entry)
+mycorp.jfrog.io/docker-remote/library/postgres:16    -> docker-remote/library/postgres (no entry)
+```
+
+Docker Hub is special-cased in exactly one respect: it is the only registry that injects a `library/` namespace nobody
+writes, so that prefix is stripped.
+
+The last two lines are the two ways a match is missed, and they are different problems:
+
+- A **private image** is missed on purpose — arcave cannot know what someone's own image stores. Describe it in a
+  catalog of your own.
+- A **pull-through mirror that prefixes the path** (Artifactory, Nexus, Harbor) yields a genuinely different key. Map it
+  onto the entry it belongs to with an alias.
+
+Both are handled by the same file, which a team commits to its repository and passes with `--recommender-file`:
+
+```yaml
+- image: postgres                              # merged into the built-in entry
+  aliases:
+    - docker-remote/library/postgres           # the mirror prefix your registry adds
+- image: myorg/mydb                            # your own image
+  volumes:
+    - /var/lib/mydb
+```
+
+arcave deliberately does *not* guess here by trimming leading path segments until something matches: that would advise
+on anyone's own `ghcr.io/myorg/redis`, and the catalog is additive, so a false positive could not be taken back. An
+entry cannot be pinned to a registry either — two registries serving different layouts under the same path would be
+indistinguishable — which no known setup needs.
+
+##### The ARC catalog
+
+The Arcave Recommender Config is a YAML list. arcave ships one compiled into the binary; each `--recommender-file` is
+merged over the result so far, keyed on the exact image string — a matching entry gains the file's aliases and volumes
+(deduplicated, earlier order first), a new image is appended. Nothing is ever removed, and an alias a later file
+reassigns wins over the earlier mapping, so a personal catalog can layer over a team one and both over arcave's own.
+
+```yaml
+- image: postgres            # normalized repository, the match key
+  aliases:                   # images storing the same state in the same places
+    - pgvector/pgvector
+    - timescale/timescaledb
+  volumes:                   # container paths that state lives at
+    - /var/lib/postgresql/data
+
+- image: minio/minio
+  volumes:
+    - /data
+```
+
+An entry without an `image`, or an unknown key, is an error naming the file and the entry's index.
+
+##### Output
+
+A JSON array on stdout, empty (`[]`, never `null`) when there is nothing to recommend. Services are ordered by name and
+volumes in catalog order, so the output is stable across runs.
+
+```json
+[
+  {
+    "service": "db",
+    "image": "postgres:16",
+    "volume": "/var/lib/postgresql/data",
+    "operation": "AddVolume",
+    "hash": "51d8076c46776093139962baadd5cb8ada04514f0d5d100ed44b6276b44a8184"
+  }
+]
+```
+
+`image` is the compose file's value verbatim, tag and all — not the normalized repository the catalog was matched on.
+
+`hash` identifies the recommendation, not the run: it is the lowercase hex sha256 of
+
+```text
+service + "|" + image + "|" + volume + "|" + operation
+```
+
+so the same finding hashes identically on every invocation and a caller can suppress one it has already seen or acted
+on. Because `image` participates, bumping the image tag produces a new hash — the advice is about that image.
+
+`operation` names what to do. `AddVolume` is the only value today; it exists as a field so a future `arcave fix` can
+dispatch on it, and so a second kind of recommendation needs no change to the wire shape.
+
+##### Exit Codes
+
+```text
+0  nothing to recommend (the array is empty)
+1  there are recommendations, or the command failed
+```
+
+The status is a finding, not an error: the JSON array is still written to stdout, and nothing is printed to stderr.
+A caller that needs to tell "has advice" from "failed" reads stdout — a failure produces no JSON.
+
+---
+
 #### arcave init
 
 Initializes arcave metadata for the current project.
