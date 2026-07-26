@@ -53,18 +53,17 @@ const (
 	DefaultStopTimeout = 10 * time.Second
 )
 
-// How much of compose's own progress reaches the terminal. The values are
-// compose's (`docker compose --progress`), restated here because internal/config
-// reaches for no SDK — cmd/arcave maps them onto the library's own mode.
+// Which channel compose's own progress goes out on. These are arcave's values,
+// not compose's `--progress` ones: the choice here is *where* the events go, and
+// how they are rendered once they get there is log.format's business.
 const (
-	// ProgressAuto renders as a TTY when stderr is one, and plain otherwise.
-	ProgressAuto = "auto"
-	// ProgressTTY forces the redrawing renderer.
+	// ProgressLog turns each compose event into an arcave log record, so the run
+	// has one output channel in one format. The default.
+	ProgressLog = "log"
+	// ProgressTTY hands the terminal to compose's own renderer instead — the
+	// familiar redrawing progress display, at the cost of a second format on
+	// stderr.
 	ProgressTTY = "tty"
-	// ProgressPlain dumps one line per event — the mode to keep in CI logs.
-	ProgressPlain = "plain"
-	// ProgressJSON emits compose's machine-readable event stream.
-	ProgressJSON = "json"
 	// ProgressQuiet shows nothing, leaving only arcave's own log lines.
 	ProgressQuiet = "quiet"
 )
@@ -129,9 +128,11 @@ type Compose struct {
 	// all" is the one a user is most likely to leave unset by accident, and a
 	// SIGKILLed database is exactly what this bound exists to prevent.
 	StopTimeout time.Duration `yaml:"stop_timeout" mapstructure:"stop_timeout"`
-	// Progress selects how compose's own progress is rendered. It goes to stderr,
-	// never stdout, so it can be on by default without touching arcave's
-	// JSON-on-stdout contract.
+	// Progress selects the channel compose's own progress goes out on: folded
+	// into arcave's log (the default), rendered by compose itself, or dropped.
+	// It is not a choice of *format* — a log record is rendered by log.format
+	// like every other. Either way it stays off stdout, which carries nothing
+	// but arcave's JSON result.
 	Progress string `yaml:"progress" mapstructure:"progress"`
 }
 
@@ -147,11 +148,11 @@ func (c Compose) Validate() error {
 		return fmt.Errorf("compose.stop_timeout must not be negative, got %s", c.StopTimeout)
 	}
 	switch c.Progress {
-	case ProgressAuto, ProgressTTY, ProgressPlain, ProgressJSON, ProgressQuiet:
+	case ProgressLog, ProgressTTY, ProgressQuiet:
 		return nil
 	default:
-		return fmt.Errorf("unsupported compose.progress %q (supported: %s, %s, %s, %s, %s)",
-			c.Progress, ProgressAuto, ProgressTTY, ProgressPlain, ProgressJSON, ProgressQuiet)
+		return fmt.Errorf("unsupported compose.progress %q (supported: %s, %s, %s)",
+			c.Progress, ProgressLog, ProgressTTY, ProgressQuiet)
 	}
 }
 
@@ -253,7 +254,7 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 		c.Compose.StopTimeout = DefaultStopTimeout
 	}
 	if c.Compose.Progress == "" {
-		c.Compose.Progress = ProgressAuto
+		c.Compose.Progress = ProgressLog
 	}
 	if c.Storage.Type == "" {
 		c.Storage.Type = StorageTypeDirectory

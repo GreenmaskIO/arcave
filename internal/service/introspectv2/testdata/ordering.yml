@@ -1,0 +1,15 @@
+name: demo
+
+services:
+  web:
+    image: nginx:1
+    volumes:
+      - wdata:/w
+  api:
+    image: alpine:3
+    volumes:
+      - adata:/a
+
+volumes:
+  wdata:
+  adata:

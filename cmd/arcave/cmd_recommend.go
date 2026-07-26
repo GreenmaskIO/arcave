@@ -63,5 +63,9 @@ func init() {
 	flags.StringSliceVar(&recommendFlagRecommenderFiles, "recommender-file", nil,
 		"Recommender catalog to merge over the built-in one (repeatable)")
 
+	viperBind(cfgViper, flags, map[string]string{
+		"file": "project.compose_files",
+	})
+
 	rootCmd.AddCommand(recommendCmd)
 }

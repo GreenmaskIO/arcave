@@ -117,9 +117,9 @@ func newRecommendation(service, image, volume string) model.Recommendation {
 		Service:   service,
 		Image:     image,
 		Volume:    volume,
-		Operation: operationAddVolume,
+		Operation: model.RecommendationOperationAddVolume,
 	}
-	sum := sha256.Sum256([]byte(r.Service + "|" + r.Image + "|" + r.Volume + "|" + r.Operation))
+	sum := sha256.Sum256([]byte(r.Service + "|" + r.Image + "|" + r.Volume + "|" + string(r.Operation)))
 	r.Hash = hex.EncodeToString(sum[:])
 	return r
 }
