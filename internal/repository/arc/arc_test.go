@@ -31,11 +31,15 @@ func TestRepository_List(t *testing.T) {
 			},
 		},
 		{
-			name:     "a new image is appended after the built-ins",
-			userYAML: "- image: minio/minio\n  volumes:\n    - /data\n",
+			name: "a new image is appended after the built-ins",
+			// The image must be one the built-in catalog does not carry, or the
+			// merge would union it in place and this would assert nothing about
+			// appending — and it must not be whichever entry happens to sit last
+			// in default.yaml, or adding a built-in would break this case.
+			userYAML: "- image: myorg/queue\n  volumes:\n    - /var/queue\n",
 			verify: func(t *testing.T, got []model.ARCEntry) {
 				require.NotEmpty(t, got)
-				assert.Equal(t, model.ARCEntry{Image: "minio/minio", Volumes: []string{"/data"}}, got[len(got)-1])
+				assert.Equal(t, model.ARCEntry{Image: "myorg/queue", Volumes: []string{"/var/queue"}}, got[len(got)-1])
 			},
 		},
 		{
@@ -106,14 +110,18 @@ func TestRepository_List(t *testing.T) {
 
 // Several user files fold left to right, each merged over the result of the
 // last, so a personal catalog layers over a team one.
+//
+// Both images are ones the built-in catalog does not carry, so what is asserted
+// here is the file-to-file merge alone — naming a built-in would union its
+// volumes in too, and the case would then break whenever that entry changed.
 func TestRepository_List_SeveralUserFiles(t *testing.T) {
 	// Arrange
 	dir := t.TempDir()
 	team := filepath.Join(dir, "team.yaml")
-	require.NoError(t, os.WriteFile(team, []byte("- image: minio/minio\n  volumes:\n    - /data\n"), 0o600))
+	require.NoError(t, os.WriteFile(team, []byte("- image: myorg/store\n  volumes:\n    - /data\n"), 0o600))
 	personal := filepath.Join(dir, "personal.yaml")
 	require.NoError(t, os.WriteFile(personal, []byte(
-		"- image: minio/minio\n  volumes:\n    - /data\n    - /config\n"+
+		"- image: myorg/store\n  volumes:\n    - /data\n    - /config\n"+
 			"- image: myorg/queue\n  volumes:\n    - /var/queue\n"), 0o600))
 
 	// Act
@@ -123,7 +131,7 @@ func TestRepository_List_SeveralUserFiles(t *testing.T) {
 	require.NoError(t, err)
 	// The team file's volume keeps its place and is not duplicated by the
 	// personal file that repeats it; the personal addition follows.
-	assert.Equal(t, []string{"/data", "/config"}, find(t, got, "minio/minio").Volumes)
+	assert.Equal(t, []string{"/data", "/config"}, find(t, got, "myorg/store").Volumes)
 	assert.Equal(t, []string{"/var/queue"}, find(t, got, "myorg/queue").Volumes)
 	// Order across files: the earlier file's new image precedes the later one's.
 	assert.Equal(t, model.ARCEntry{Image: "myorg/queue", Volumes: []string{"/var/queue"}}, got[len(got)-1])

@@ -19,7 +19,11 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewMCPHandler(d.service, projectCfg.Project.ComposeFiles)
+		h := cli.NewMCPHandler(
+			d.service,
+			func(recommenderFiles []string) cli.RecommendService { return newRecommendService(recommenderFiles) },
+			projectCfg.Project.ComposeFiles,
+		)
 		return h.MCPRun(ctx)
 	})
 }

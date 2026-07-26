@@ -5,8 +5,7 @@ package model
 // Its json tags are the wire contract — `arcave recommend` marshals a slice of
 // these directly.
 //
-// The type is here because both the CLI and a future MCP adapter marshal it. The
-// rules that fill it are not: nothing outside service/core mints a
+// The rules that fill it live elsewhere: nothing outside service/core mints a
 // recommendation, so neither the hash nor the operation vocabulary is a Go
 // constant here — they are stated below and in doc/spec.md, which is what an
 // external consumer of the JSON actually reads.

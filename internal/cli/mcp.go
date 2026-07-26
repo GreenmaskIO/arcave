@@ -41,8 +41,9 @@ type mcpService interface {
 
 // Server serves arcave's savepoint workflows over MCP.
 type MCPHandler struct {
-	svc          mcpService
-	composeFiles []string
+	svc              mcpService
+	recommendFactory RecommendServiceFactory
+	composeFiles     []string
 }
 
 // New builds the MCP adapter over svc. The compose files are injected rather
@@ -50,10 +51,15 @@ type MCPHandler struct {
 // not something an agent should have to know or could keep in step with it. The
 // adapter takes the file list rather than a config.Config because that is all it
 // needs, and the whole config would drag internal/config into its import graph.
-func NewMCPHandler(svc mcpService, composeFiles []string) *MCPHandler {
+//
+// recommendFactory is a factory rather than a second service for the reason
+// stated on RecommendServiceFactory: the recommend tool takes its catalogs per
+// call, and a service is bound to its catalog at construction.
+func NewMCPHandler(svc mcpService, recommendFactory RecommendServiceFactory, composeFiles []string) *MCPHandler {
 	return &MCPHandler{
-		svc:          svc,
-		composeFiles: composeFiles,
+		svc:              svc,
+		recommendFactory: recommendFactory,
+		composeFiles:     composeFiles,
 	}
 }
 
@@ -79,6 +85,46 @@ const (
 		"mounts, which are the user's own host folders. arcave takes a safety backup of the live " +
 		"state first and replays it automatically if the rollback fails, so a failed rollback " +
 		"leaves the environment as it was. Services are stopped and started again."
+	// descRecommend carries the workflow, not just the trigger: arcave exposes no
+	// tool that applies a recommendation — editing the user's compose files is the
+	// agent's job, done with its own editing tools after asking the user what to
+	// apply and where. That decision lives here because this description is the
+	// only place the agent reads it.
+	//
+	// The two questions are asked through the host's own structured-question tool
+	// where there is one, because "apply which of these, and to which file" is
+	// exactly a multi-select plus a single-select. It is named as a preference and
+	// not a requirement: an MCP server does not get to know its host's tool
+	// inventory, arcave is not Claude Code's alone, and that tool caps a question at
+	// four options while a recommendation list has no bound. So the plain-text
+	// fallback is spelled out too, and the numbered table above is what makes it
+	// answerable — it is the fallback's option list.
+	descRecommend = "Report volumes the project's services should mount but do not: a service whose " +
+		"image is known to write persistent state to a path with no volume or bind mount on it, so " +
+		"a savepoint would silently fail to capture that state. Strictly read-only — it reads the " +
+		"compose files and the recommender catalog, and touches neither the Docker daemon, nor the " +
+		"savepoint storage, nor the project lock. Returns compose_files (the files actually " +
+		"checked) and recommendations, each with service, image, volume (the container path to " +
+		"mount), operation ('AddVolume') and hash (stable id of the finding). An empty " +
+		"recommendations array means there is nothing to advise.\n\n" +
+		"arcave does NOT apply recommendations — you do. When the array is not empty: (1) render the " +
+		"findings to the user as a markdown table, never as raw JSON, with one row per " +
+		"recommendation and the columns '#' (a 1-based number the user can refer to), 'Service', " +
+		"'Image' and 'Volume to add' (the container path); omit operation and hash, which are not " +
+		"for the user to read; name the checked compose_files in a sentence under the table; " +
+		"(2) ask the user two things — which recommendations to apply, and where to put them (one " +
+		"of the files in compose_files, or a new override file docker-compose.arcave.yaml). If your " +
+		"host offers a structured question tool (in Claude Code it is AskUserQuestion), use it and " +
+		"ask both in a single call: the first question multi-select with one option per " +
+		"recommendation labelled '<service> → <volume>', the second single-select with one option " +
+		"per compose file plus 'new docker-compose.arcave.yaml'. That tool allows at most four " +
+		"options per question, so when there are more than four recommendations — or the host has " +
+		"no such tool — ask in plain text instead and let the user answer with the row numbers from " +
+		"the table; (3) edit the chosen file yourself: add a named volume to " +
+		"services.<service>.volumes as '<volume-name>:<volume-path>' and declare <volume-name> " +
+		"under the top-level volumes: key. If you created a new file, add it to project.compose_files " +
+		"in .arcave/config.yaml so savepoint and rollback see the new volumes, and tell the user " +
+		"their own `docker compose` invocations must now pass it with -f."
 )
 
 // createInput is savepoint_create's input schema. The compose files are not a
@@ -195,6 +241,52 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	}, nil
 }
 
+// recommendInput is recommend's input schema. Unlike every other tool here it
+// does carry compose_files: recommend reads nothing but the files it is given, so
+// an agent may legitimately check a file set the project config does not name —
+// a compose file it is about to add, say. Omitting the field falls back to the
+// configured set, which is what the other tools always use.
+type recommendInput struct {
+	ComposeFiles     []string `json:"compose_files,omitempty" jsonschema:"Docker Compose files to check; omit to use the project's configured compose files"`
+	RecommenderFiles []string `json:"recommender_files,omitempty" jsonschema:"recommender catalog files to merge over the built-in catalog, in order; omit to use the built-in catalog alone"`
+}
+
+// recommendOutput wraps the recommendations, because MCP structured output must
+// be a JSON object — the CLI prints the bare array Recommendations holds.
+//
+// ComposeFiles reports the files the check actually ran over, resolved fallback
+// and all: the agent has to name them back to the user when it asks which file to
+// add a volume to, and it cannot know the configured set otherwise.
+type recommendOutput struct {
+	ComposeFiles    []string               `json:"compose_files" jsonschema:"the compose files the check ran over"`
+	Recommendations []model.Recommendation `json:"recommendations" jsonschema:"the volumes the project's services should mount but do not"`
+}
+
+// recommend reports the persistent volumes the project's services are missing. It
+// reaches no daemon, opens no storage and takes no lock, so it is safe to call at
+// any time — including while another workflow is running.
+//
+// The CLI turns "there is advice" into exit status 1; there is no equivalent here
+// and none is wanted: a non-empty recommendations array says the same thing, and
+// an MCP tool error means the check itself failed.
+func (h *MCPHandler) recommendMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in recommendInput) (*mcpsdk.CallToolResult, recommendOutput, error) {
+	files := in.ComposeFiles
+	if len(files) == 0 {
+		files = h.composeFiles
+	}
+
+	recs, err := h.recommendFactory(in.RecommenderFiles).Recommend(ctx, files...)
+	if err != nil {
+		return nil, recommendOutput{}, err
+	}
+	// A non-nil empty slice marshals as [] rather than null, so an agent reading
+	// the result never has to tell "nothing to advise" from "no such field".
+	if recs == nil {
+		recs = []model.Recommendation{}
+	}
+	return nil, recommendOutput{ComposeFiles: files, Recommendations: recs}, nil
+}
+
 // Run registers the tools and serves them over stdio until the host closes stdin
 // or ctx is cancelled.
 func (h *MCPHandler) MCPRun(ctx context.Context) error {
@@ -204,6 +296,7 @@ func (h *MCPHandler) MCPRun(ctx context.Context) error {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList}, h.listSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove}, h.removeSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "recommend", Description: descRecommend}, h.recommendMCP)
 
 	return srv.Run(ctx, &mcpsdk.StdioTransport{})
 }

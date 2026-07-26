@@ -156,8 +156,15 @@ func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
 // in order; empty when the caller passed none. Nothing here holds a resource, so
 // there is nothing to close.
 func recommendServiceDeps(recommenderFiles []string) (*core.RecommendService, *json.Printer) {
-	svc := core.NewRecommendService(arcrepo.NewARC(recommenderFiles...), introspect.NewInspector(compose.NewLoader()))
-	return svc, json.New(os.Stdout)
+	return newRecommendService(recommenderFiles), json.New(os.Stdout)
+}
+
+// newRecommendService builds the recommend service alone, without a printer:
+// `arcave mcp` needs one per tool call (the catalogs arrive with the call, and the
+// service is bound to its catalog at construction) and must not print — its stdout
+// is the JSON-RPC channel.
+func newRecommendService(recommenderFiles []string) *core.RecommendService {
+	return core.NewRecommendService(arcrepo.NewARC(recommenderFiles...), introspect.NewInspector(compose.NewLoader()))
 }
 
 // closeQuietly closes c and logs any error without failing the caller — used for
