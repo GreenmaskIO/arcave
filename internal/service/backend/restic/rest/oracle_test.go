@@ -1,4 +1,4 @@
-package resticrest
+package rest
 
 import (
 	"crypto/sha256"

@@ -1,4 +1,4 @@
-package resticrest
+package rest
 
 import (
 	"context"
@@ -96,7 +96,7 @@ func requestLogger(r *http.Request) zerolog.Logger {
 		logger = &log.Logger
 	}
 	return logger.With().
-		Str("component", "resticrest").
+		Str("component", "rest").
 		Str("method", r.Method).
 		Str("path", r.URL.Path).
 		Logger()

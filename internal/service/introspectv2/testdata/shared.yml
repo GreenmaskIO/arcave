@@ -1,0 +1,14 @@
+name: demo
+
+services:
+  web:
+    image: nginx:1
+    volumes:
+      - assets:/usr/share/nginx/html
+  api:
+    image: alpine:3
+    volumes:
+      - assets:/srv/assets
+
+volumes:
+  assets:
