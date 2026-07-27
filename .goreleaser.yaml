@@ -105,23 +105,7 @@ snapshot:
   version_template: "{{ incpatch .Version }}-dev-{{ .ShortCommit }}"
 
 changelog:
-  sort: asc
-  # Drop the commit hash each entry would otherwise open with. The default
-  # renders the FULL 40-char sha, which buries the subject line; `abbrev: -1`
-  # removes it too but leaves the separator behind, so every entry starts with a
-  # stray double space. Overriding the whole line is the clean cut.
-  #
-  # The template must NOT include its own "* ": GoReleaser adds the list marker,
-  # so a bullet here yields "* * feat: ...".
-  format: "{{ .Message }}"
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^ci:"
-      - Merge pull request
-      - Merge branch
+  disable: true
 
 release:
   # prerelease: auto marks a tag carrying a pre-release suffix (v0.0.1-rc1) as a
