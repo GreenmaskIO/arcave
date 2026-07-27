@@ -1,11 +1,14 @@
 // Package storefactory turns a config.Storage union into the storages.Storager
 // the backends write through. It is the one place a configured path becomes a
-// store root, which makes it the one place the store namespace is appended.
+// store root, which makes it the one place the store namespace and the session
+// segment are appended.
 //
 // Nothing above it ever names a directory again: New returns a Storager already
 // rooted at the store, so SubStorage is never called with an absolute path and
 // the filepath.IsAbs check the DI root used to carry — a check no object store
-// could honour — has nowhere left to live.
+// could honour — has nowhere left to live. It roots the store at the session and
+// stops there: everything below is the backend's own layout, and pre-narrowing to
+// a savepoint would decide here what only a backend knows.
 //
 // The backends themselves are greenmaskio/storages' (directory today; s3, azure,
 // ssh and inmemory without new work in arcave), and arcave speaks their interface
@@ -15,13 +18,14 @@ package storefactory
 
 import (
 	"fmt"
-	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // storeNamespace is the static segment every store is rooted under, appended to
@@ -39,32 +43,44 @@ import (
 // root its store under this same segment.
 const storeNamespace = "arcave"
 
-// New builds the Storager for cfg, rooted at the store the config names plus
-// the storeNamespace segment.
+// New builds the Storager for cfg, rooted at <path>/arcave/<session>, where the
+// session names a lifetime: everything under that root dies with it. For the
+// directory arm a relative path is resolved against projectRoot; an absolute one
+// is honoured verbatim.
 //
-// For the directory arm: a relative path is resolved against projectRoot (an
-// absolute one is honoured verbatim), the namespace is appended, and the result
-// is created. The MkdirAll is why the factory must exist at all:
-// directory.NewStorage stats its path and fails on a missing one, while
-// SubStorage — which the DI root used instead — never stats and so silently
-// deferred the failure to the first PutObject. Reconciling the two is this
-// function's job.
-func New(cfg config.Storage, projectRoot string) (storages.Storager, error) {
+// The store's prefix is created by the backend (WithCreatePrefix), never its
+// root: a relative path is rooted at projectRoot — which exists by definition —
+// so the whole configured path materializes on first use, while an absolute path
+// must already exist, keeping a typo from quietly growing a fresh tree. The
+// session segment still arrives with the first object written under it.
+func New(cfg config.Storage, projectRoot, session string) (storages.Storager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	// The session is rendered into a store root, so it is gated at the layer that
+	// owns the value, before any of it reaches a backend.
+	if err := model.ValidSessionID(session); err != nil {
+		return nil, err
+	}
+
 	switch cfg.Type {
 	case config.StorageTypeDirectory:
-		root := cfg.Directory.Path
-		if !filepath.IsAbs(root) {
-			root = filepath.Join(projectRoot, root)
+		rootPath, prefix := projectRoot, path.Join(filepath.ToSlash(cfg.Directory.Path), storeNamespace)
+		if filepath.IsAbs(cfg.Directory.Path) {
+			rootPath, prefix = cfg.Directory.Path, storeNamespace
 		}
-		root = filepath.Join(root, storeNamespace)
-
-		if err := os.MkdirAll(root, 0o755); err != nil {
-			return nil, fmt.Errorf("create storage directory %s: %w", root, err)
+		store, err := directory.NewStorage(directory.Config{
+			RootPath: rootPath,
+			Prefix:   prefix,
+		}, directory.WithCreatePrefix())
+		if err != nil {
+			return nil, err
 		}
-		return directory.NewStorage(directory.Config{Path: root})
+		sessionStore, err := store.SubStorage(session, true)
+		if err != nil {
+			return nil, fmt.Errorf("re-root storage at session %s: %w", session, err)
+		}
+		return sessionStore, nil
 	default:
 		// Unreachable: cfg.Validate above rejects every other tag. The arm exists
 		// so adding a storage type without wiring it here fails to compile clean.

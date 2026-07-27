@@ -23,7 +23,7 @@ import (
 // it wrote.
 func newRepository(t *testing.T) (*storeRepository, storages.Storager) {
 	t.Helper()
-	store, err := directory.NewStorage(directory.Config{Path: t.TempDir()})
+	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
 	return newStoreRepository(store), store
 }

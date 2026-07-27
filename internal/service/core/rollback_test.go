@@ -84,7 +84,7 @@ func newRollbackFixture(t *testing.T) rollbackFixture {
 	dc := &mockComposeRunner{}
 	dockerVol := &mockDockerVolume{}
 
-	store, err := directory.NewStorage(directory.Config{Path: projectRoot})
+	store, err := directory.NewStorage(directory.Config{RootPath: projectRoot})
 	require.NoError(t, err)
 
 	// Two store-bound backends, exactly as the DI root builds them.

@@ -269,7 +269,7 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 			dir = *c.Storage.Directory
 		}
 		if dir.Path == "" {
-			dir.Path = filepath.Join(model.StateDir, "savepoints", c.Project.Name)
+			dir.Path = filepath.Join(model.StateDir, "storage", c.Project.Name)
 		}
 		c.Storage.Directory = &dir
 	}
