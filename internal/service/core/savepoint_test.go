@@ -16,15 +16,15 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-func recordsAt(times ...time.Time) []model.SavepointRecord {
-	records := make([]model.SavepointRecord, len(times))
+func recordsAt(times ...time.Time) []model.Savepoint {
+	records := make([]model.Savepoint, len(times))
 	for i, t := range times {
-		records[i] = model.SavepointRecord{Savepoint: model.Savepoint{ID: t.Format("20060102T150405"), CreatedAt: t}}
+		records[i] = model.Savepoint{ID: t.Format("20060102T150405"), CreatedAt: t}
 	}
 	return records
 }
 
-func ids(records []model.SavepointRecord) []string {
+func ids(records []model.Savepoint) []string {
 	if len(records) == 0 {
 		return nil
 	}
@@ -37,10 +37,10 @@ func ids(records []model.SavepointRecord) []string {
 
 func TestFindSavepoint(t *testing.T) {
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	records := []model.SavepointRecord{
-		{Savepoint: model.Savepoint{ID: "100", Name: "before-migration", CreatedAt: base}},
-		{Savepoint: model.Savepoint{ID: "300", Name: "dup", CreatedAt: base.Add(2 * time.Hour)}}, // newest
-		{Savepoint: model.Savepoint{ID: "200", Name: "dup", CreatedAt: base.Add(time.Hour)}},
+	records := []model.Savepoint{
+		{ID: "100", Name: "before-migration", CreatedAt: base},
+		{ID: "300", Name: "dup", CreatedAt: base.Add(2 * time.Hour)}, // newest
+		{ID: "200", Name: "dup", CreatedAt: base.Add(time.Hour)},
 	}
 
 	tests := []struct {
@@ -194,10 +194,10 @@ func TestService_RemoveSavepoints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			records := []model.SavepointRecord{
-				{Savepoint: model.Savepoint{ID: "1"}},
-				{Savepoint: model.Savepoint{ID: "2"}},
-				{Savepoint: model.Savepoint{ID: "3"}},
+			records := []model.Savepoint{
+				{ID: "1"},
+				{ID: "2"},
+				{ID: "3"},
 			}
 			repo := &mockSavepointRepo{}
 			repo.On("List").Return(records, nil)
@@ -223,7 +223,7 @@ func TestService_RemoveSavepoints(t *testing.T) {
 				assert.Contains(t, err.Error(), tt.wantErr)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.wantRemoved, ids(recordsOf(res.Removed)))
+				assert.Equal(t, tt.wantRemoved, ids(res.Removed))
 			}
 			// An id whose uncommit failed must never reach the backend: its record
 			// still names data that is still there, so the savepoint is intact.
@@ -249,7 +249,7 @@ func TestService_RemoveSavepoints_UncommitsBeforeDeletingData(t *testing.T) {
 	// Arrange
 	var calls []string
 	repo := &mockSavepointRepo{}
-	repo.On("List").Return([]model.SavepointRecord{{Savepoint: model.Savepoint{ID: "1"}}}, nil)
+	repo.On("List").Return([]model.Savepoint{{ID: "1"}}, nil)
 	repo.On("Delete", "1").Run(func(mock.Arguments) { calls = append(calls, "uncommit") }).Return(nil)
 
 	savepointBackend := &mockBackend{}
@@ -270,12 +270,13 @@ func TestService_RemoveSavepoints_UncommitsBeforeDeletingData(t *testing.T) {
 // createFixture wires a Service whose collaborators are all mocks, with the
 // clock fixed so the minted savepoint id is exact.
 type createFixture struct {
-	svc      *Service
-	repo     *mockSavepointRepo
-	backend  *mockBackend
-	runner   *mockComposeRunner
-	calls    *[]string // every backend/repo call, in the order it happened
-	savepnts string    // the savepoint id (and its storage directory)
+	svc       *Service
+	repo      *mockSavepointRepo
+	inspector *mockInspector
+	backend   *mockBackend
+	runner    *mockComposeRunner
+	calls     *[]string // every backend/repo call, in the order it happened
+	savepnts  string    // the savepoint id (and its storage directory)
 }
 
 func newCreateFixture(t *testing.T) createFixture {
@@ -289,10 +290,7 @@ func newCreateFixture(t *testing.T) createFixture {
 	repo := &mockSavepointRepo{}
 
 	inspector := &mockInspector{}
-	inspector.On("Inspect", mock.Anything, mock.Anything).Return(model.Inspection{
-		ComposeProject: "demo",
-		Mounts:         []model.Mount{{Service: "db", Target: "/data", Type: "volume", Source: "demo_db"}},
-	}, nil)
+	inspector.On("Introspect", mock.Anything, mock.Anything).Return(demoIntrospection(), nil)
 
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, mock.Anything).Return(nil)
@@ -305,21 +303,32 @@ func newCreateFixture(t *testing.T) createFixture {
 	svc := New(repo, freeLocker(), inspector, runner, backend, nil)
 	svc.now = func() time.Time { return fixedNow }
 
-	return createFixture{svc: svc, repo: repo, backend: backend, runner: runner, calls: &calls, savepnts: id}
+	return createFixture{
+		svc: svc, repo: repo, inspector: inspector, backend: backend,
+		runner: runner, calls: &calls, savepnts: id,
+	}
 }
 
 // TestService_CreateSavepoint pins the ordering that makes the record a commit
 // marker: the namespace is wiped before any archive is written, and the record is
 // saved *last*. A crash before the save leaves data no record names — invisible
 // to List, collectable — rather than a savepoint that lists without its data.
+//
+// It also pins the two ends: the units FindBackupVolumes derived reach the
+// backend, and the stats it returns are committed verbatim.
 func TestService_CreateSavepoint(t *testing.T) {
 	// Arrange
 	f := newCreateFixture(t)
-	f.backend.On("Snapshot", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	stats := demoStats()
+	f.backend.On("Snapshot", mock.Anything, f.savepnts, demoProject, []model.Volume{demoVolume()}).
 		Run(func(mock.Arguments) { *f.calls = append(*f.calls, "write archives") }).
-		Return([]int64{4096}, nil)
+		Return(stats, nil)
+	var committed model.Savepoint
 	f.repo.On("Save", mock.Anything).
-		Run(func(mock.Arguments) { *f.calls = append(*f.calls, "commit record") }).Return(nil)
+		Run(func(args mock.Arguments) {
+			*f.calls = append(*f.calls, "commit record")
+			committed = args.Get(0).(model.Savepoint)
+		}).Return(nil)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -329,8 +338,77 @@ func TestService_CreateSavepoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, strconv.FormatInt(fixedNow.Unix(), 10), sp.ID)
 	assert.Equal(t, []string{"wipe directory", "write archives", "commit record"}, *f.calls)
+	assert.Equal(t, stats, committed.Stats, "the committed record carries the backend's stats")
+	assert.Equal(t, stats, sp.Stats, "and so does the savepoint returned to the caller")
 	f.backend.AssertExpectations(t)
 	f.repo.AssertExpectations(t)
+}
+
+// A named volume several services mount is one unit: snapshotted once, recorded
+// once, where v1 captured it per mount. Nothing else here would notice.
+func TestService_CreateSavepoint_SnapshotsASharedVolumeOnce(t *testing.T) {
+	// Arrange
+	f := newCreateFixture(t)
+	shared := model.IntrospectionResult{Project: model.Project{
+		Name: demoProject,
+		Services: []model.Service{
+			{Name: "api", Volumes: []model.ServiceVolume{
+				{Type: model.VolumeTypeNamed, RawType: "volume", Source: "assets", Target: "/srv/assets", VolumeName: "demo_assets"},
+			}},
+			{Name: "web", Volumes: []model.ServiceVolume{
+				{Type: model.VolumeTypeNamed, RawType: "volume", Source: "assets", Target: "/usr/share/nginx/html", VolumeName: "demo_assets"},
+			}},
+		},
+		Volumes: []model.NamedVolume{{
+			Key:  "assets",
+			Name: "demo_assets",
+			UsedBy: []model.ServiceReference{
+				{Service: "api", Target: "/srv/assets"},
+				{Service: "web", Target: "/usr/share/nginx/html"},
+			},
+		}},
+	}}
+	f.inspector.ExpectedCalls = nil
+	f.inspector.On("Introspect", mock.Anything, mock.Anything).Return(shared, nil)
+
+	var snapshotted []model.Volume
+	f.backend.On("Snapshot", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { snapshotted = args.Get(3).([]model.Volume) }).
+		Return([]model.SnapshotStat{{Volume: demoVolume()}}, nil)
+	f.repo.On("Save", mock.Anything).Return(nil)
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := f.svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, snapshotted, 1, "one volume, however many services mount it")
+	assert.Equal(t, "volume/demo_assets", snapshotted[0].ObjectID)
+	assert.Len(t, snapshotted[0].Named.UsedBy, 2, "both mounts travel with the one unit")
+}
+
+// A project whose every volume is unreachable — a named volume nobody mounts —
+// has nothing to capture, so the create fails before the services are stopped.
+func TestService_CreateSavepoint_NothingToSnapshot(t *testing.T) {
+	// Arrange
+	f := newCreateFixture(t)
+	f.inspector.ExpectedCalls = nil
+	f.inspector.On("Introspect", mock.Anything, mock.Anything).Return(model.IntrospectionResult{
+		Project: model.Project{
+			Name:    demoProject,
+			Volumes: []model.NamedVolume{{Key: "orphan", Name: "demo_orphan"}},
+		},
+	}, nil)
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := f.svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+
+	// Assert
+	require.ErrorContains(t, err, "nothing to snapshot")
+	f.runner.AssertNotCalled(t, "Stop", mock.Anything, mock.Anything)
+	f.backend.AssertNotCalled(t, "Snapshot", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // A snapshot that fails partway leaves half-written archives no record names yet,
@@ -350,12 +428,12 @@ func TestService_CreateSavepoint_DropsTheNamespaceOnFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			f := newCreateFixture(t)
-			var sizes []int64
+			var stats []model.SnapshotStat
 			if tt.createErr == nil {
-				sizes = []int64{4096} // one size per inspected mount
+				stats = demoStats() // one stat per captured volume
 			}
 			f.backend.On("Snapshot", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-				Return(sizes, tt.createErr)
+				Return(stats, tt.createErr)
 			if tt.createErr == nil {
 				f.repo.On("Save", mock.Anything).Return(tt.saveErr)
 			}
@@ -474,13 +552,4 @@ func TestService_retentionCutoffs(t *testing.T) {
 			}
 		})
 	}
-}
-
-// recordsOf lifts savepoint metadata back into records so ids() can read it.
-func recordsOf(savepoints []model.Savepoint) []model.SavepointRecord {
-	out := make([]model.SavepointRecord, len(savepoints))
-	for i, sp := range savepoints {
-		out[i] = model.SavepointRecord{Savepoint: sp}
-	}
-	return out
 }

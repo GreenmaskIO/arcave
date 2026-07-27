@@ -38,6 +38,6 @@ func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref s
 	}
 	return h.printer.Print(model.RollbackResponse{
 		RolledBackTo: res.Savepoint,
-		Restored:     restoredMounts(res.Restored),
+		Restored:     res.Restored,
 	})
 }

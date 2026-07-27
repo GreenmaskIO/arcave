@@ -153,15 +153,26 @@ Every bound carries its unit — `90s`, `5m`, `1h30m`, anything Go's
 `time.ParseDuration` accepts. A number without one is an error, not a guess.
 
 That wait is where a arcave run spends most of its time, so it is not silent: arcave
-logs the deadline it will fail at, and compose's own per-container progress is
-rendered alongside it **on stderr**, leaving stdout to the JSON result.
+logs the deadline it will fail at, and compose's own per-container events arrive
+alongside it as ordinary arcave log records — same stream (**stderr**, leaving
+stdout to the JSON result), same format, same `--log-format`.
 
 ```text
 INF starting services
 INF waiting for services to become healthy wait_timeout=2m0s
- Container myapp-db-1  Waiting
- Container myapp-db-1  Healthy
+INF compose kind=Container name=myapp-db-1 status=Started
+INF compose kind=Container name=myapp-db-1 status=Healthy
 ```
+
+Under `--log-format json` they are records like any other, so a CI job or an
+agent can parse the whole stream instead of picking prose out of it:
+
+```json
+{"level":"info","kind":"Container","name":"myapp-db-1","status":"Healthy","message":"compose"}
+```
+
+Steps still in flight — `Waiting`, `Starting`, `Creating`, image-pull progress —
+are logged at debug, so `--log-level debug` is how you watch a slow start unfold.
 
 The three settings behind this live in `.arcave/config.yaml` under `compose:`, so a
 project fixes them once instead of passing a flag every time:
@@ -170,7 +181,7 @@ project fixes them once instead of passing a flag every time:
 |---|---|---|---|
 | `compose.wait_timeout` | `--wait-timeout` | `2m` | How long to wait for health checks after a start |
 | `compose.stop_timeout` | `--stop-timeout` | `10s` | How long a container gets to exit before SIGKILL. arcave snapshots the volumes the moment the containers are down, so this is what keeps a database from being captured mid-shutdown |
-| `compose.progress` | `--progress` | `auto` | `auto`, `tty`, `plain`, `json` or `quiet` |
+| `compose.progress` | `--progress` | `log` | Where compose's own progress goes: `log` (arcave log records, as above), `tty` (compose's own renderer) or `quiet` |
 
 Each is also settable per run through the environment
 (`ARCAVE_COMPOSE_WAIT_TIMEOUT`, `ARCAVE_COMPOSE_STOP_TIMEOUT`,

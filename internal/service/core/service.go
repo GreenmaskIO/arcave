@@ -21,12 +21,16 @@ import (
 // lives in the same store as the savepoints it records, so its methods take a
 // context: reaching it may cross a network.
 //
+// A record *is* a model.Savepoint: its Stats carry the per-volume bookkeeping a
+// rollback addresses each archive from, so a record type would hold nothing the
+// savepoint does not.
+//
 // Save is the commit and Delete is the uncommit, so the *order* in which the
 // service calls them relative to the snapshot backend is a correctness property,
 // not a style choice — see snapshotWhileStopped and applyRemoval.
 type savepointRepository interface {
-	List(ctx context.Context) ([]model.SavepointRecord, error)
-	Save(ctx context.Context, record model.SavepointRecord) error
+	List(ctx context.Context) ([]model.Savepoint, error)
+	Save(ctx context.Context, savepoint model.Savepoint) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -48,11 +52,12 @@ type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
 }
 
-// composeInspector reads the compose project's *declared* state: its name and
-// the mounts arcave snapshots. It only parses files, so it reaches no daemon — which
-// is why InitService can depend on it alone.
+// composeInspector reads the compose project's *declared* state: its name, its
+// services' mounts and its named volumes. It reports facts and decides nothing —
+// what a savepoint captures is FindBackupVolumes' call, in this package. It only
+// parses files, which is why InitService can depend on it alone.
 type composeInspector interface {
-	Inspect(ctx context.Context, files ...string) (model.Inspection, error)
+	Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error)
 }
 
 // composeRunner drives the *running* stack: it stops the services before arcave
@@ -66,22 +71,25 @@ type composeRunner interface {
 
 // snapshotBackend stores and restores a whole savepoint's volume data as a unit.
 // Every method is savepoint-scoped, because that is how every caller uses it: the
-// backend owns the per-mount fan-out (the concurrency bound, the Docker I/O),
+// backend owns the per-volume fan-out (the concurrency bound, the Docker I/O),
 // which is why the service never writes an errgroup over volumes itself. It holds
 // the Docker engine and the Storager of the store it owns and never speaks of
 // paths — the archive key is the backend's own, derived from the savepoint id
-// and each mount, identically on both sides.
+// and each volume's ObjectID, identically on both sides. Which mount it reaches
+// a volume through is its policy too: the service hands it the unit, not a
+// container path.
 //
 // A backend is bound to one store at construction, so the service holds two of
 // them — one over the savepoint directory, one over the safety-backup directory.
 type snapshotBackend interface {
-	// Snapshot captures every mount into the savepoint's directory, returning the
-	// bytes stored per mount in the same order as mounts.
-	Snapshot(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) (sizes []int64, err error)
-	// Restore streams every mount back into its Docker mount.
-	Restore(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) error
-	// Missing reports the mounts whose archive is absent (pre-flight).
-	Missing(ctx context.Context, savepointID string, mounts []model.Mount) ([]model.Mount, error)
+	// Snapshot captures every volume into the savepoint's directory, returning one
+	// stat per volume, in order. A stat and not a byte count, because what
+	// capturing produced is the backend's own — and it is what the savepoint records.
+	Snapshot(ctx context.Context, savepointID, composeProject string, volumes []model.Volume) ([]model.SnapshotStat, error)
+	// Restore streams every volume back into the project.
+	Restore(ctx context.Context, savepointID, composeProject string, volumes []model.Volume) error
+	// Missing reports the volumes whose archive is absent (pre-flight).
+	Missing(ctx context.Context, savepointID string, volumes []model.Volume) ([]model.Volume, error)
 	// Remove drops a whole savepoint directory — a savepoint's, or a safety
 	// backup's. It must succeed on a partially written directory, whose archives
 	// the caller never recorded. Being savepoint-scoped is what lets it clean up a
@@ -149,13 +157,4 @@ func (s *Service) lockProject(ctx context.Context) (unlock func(), err error) {
 			zerolog.Ctx(ctx).Error().Err(err).Msg("release project lock")
 		}
 	}, nil
-}
-
-// savepointsOf projects savepoint records to their savepoint metadata.
-func savepointsOf(records []model.SavepointRecord) []model.Savepoint {
-	out := make([]model.Savepoint, 0, len(records))
-	for _, r := range records {
-		out = append(out, r.Savepoint)
-	}
-	return out
 }

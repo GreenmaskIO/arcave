@@ -76,7 +76,7 @@ func TestService_CreateSavepoint_ReleasesTheLockOnFailure(t *testing.T) {
 	// Arrange
 	locker := freeLocker()
 	inspector := &mockInspector{}
-	inspector.On("Inspect", mock.Anything, mock.Anything).Return(model.Inspection{}, nil)
+	inspector.On("Introspect", mock.Anything, mock.Anything).Return(model.IntrospectionResult{}, nil)
 	svc := New(&mockSavepointRepo{}, locker, inspector, &mockComposeRunner{}, &mockBackend{}, nil)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -94,7 +94,7 @@ func TestService_RemoveSavepoints_DryRunTakesNoLock(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{} // no On("Acquire"): any call panics on the missing expectation
 	repo := &mockSavepointRepo{}
-	repo.On("List").Return([]model.SavepointRecord{{Savepoint: model.Savepoint{ID: "1"}}}, nil)
+	repo.On("List").Return([]model.Savepoint{{ID: "1"}}, nil)
 	backend := &mockBackend{}
 	svc := New(repo, locker, nil, nil, backend, nil)
 	ctx := zerolog.Nop().WithContext(context.Background())

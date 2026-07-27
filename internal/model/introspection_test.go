@@ -32,9 +32,33 @@ func TestServiceVolume_StorageID(t *testing.T) {
 			want:    "service/db/data",
 		},
 		{
-			name:    "unsupported mount has no identity",
+			name:    "tmpfs has no identity",
 			service: "app",
-			volume:  ServiceVolume{Type: VolumeTypeUnsupported, RawType: "tmpfs", Target: "/scratch"},
+			volume:  ServiceVolume{Type: VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
+			want:    "",
+		},
+		{
+			name:    "npipe has no identity",
+			service: "app",
+			volume:  ServiceVolume{Type: VolumeTypeNPipe, RawType: "npipe", Target: `\\.\pipe\docker_engine`},
+			want:    "",
+		},
+		{
+			name:    "cluster volume has no identity",
+			service: "app",
+			volume:  ServiceVolume{Type: VolumeTypeCluster, RawType: "cluster", Source: "csi-data", Target: "/data"},
+			want:    "",
+		},
+		{
+			name:    "image mount has no identity",
+			service: "app",
+			volume:  ServiceVolume{Type: VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/srv/assets"},
+			want:    "",
+		},
+		{
+			name:    "an unknown mount type has no identity",
+			service: "app",
+			volume:  ServiceVolume{Type: VolumeTypeUnknown, RawType: "something-new", Target: "/data"},
 			want:    "",
 		},
 		{
@@ -63,7 +87,7 @@ func TestNamedVolume_StorageID(t *testing.T) {
 	reference := ServiceVolume{Type: VolumeTypeNamed, VolumeName: "demo_pgdata"}
 
 	// Act
-	got := named.StorageID()
+	got := named.ObjectID()
 
 	// Assert
 	assert.Equal(t, "volume/demo_pgdata", got)

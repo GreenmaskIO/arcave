@@ -61,28 +61,25 @@ func newRollbackFixture(t *testing.T) rollbackFixture {
 	t.Helper()
 
 	projectRoot := t.TempDir()
-	// The one savepoint volume's archive must exist for the pre-flight check.
-	// Its key is relative to the savepoint store's root.
-	const snapshotKey = "100/db/data/data.tar"
+	// The one savepoint volume's archive must exist for the pre-flight check. Its
+	// key is relative to the store root, and names the object id — not the mount
+	// the volume happens to be reachable through.
+	const snapshotKey = "100/volume/demo_db/data.tar"
 	archiveAbs := filepath.Join(projectRoot, filepath.FromSlash(savepointDir), filepath.FromSlash(snapshotKey))
 	require.NoError(t, os.MkdirAll(filepath.Dir(archiveAbs), 0o755))
 	require.NoError(t, os.WriteFile(archiveAbs, []byte(savepointArchive), 0o644))
 
-	rec := model.SavepointRecord{
-		Savepoint: model.Savepoint{ID: "100", Name: "sp", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-		Volumes: []model.VolumeRef{{
-			Service: "db", MountPath: "/data", Type: "volume", Source: "demo_db",
-		}},
-	}
-	insp := model.Inspection{
-		ComposeProject: "demo",
-		Mounts:         []model.Mount{{Service: "db", Target: "/data", Type: "volume", Source: "demo_db"}},
+	// The savepoint records the unit it captured, so the restore addresses the
+	// archive, and picks the mount to write it through, from the record alone.
+	rec := model.Savepoint{
+		ID: "100", Name: "sp", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Stats: demoStats(),
 	}
 
 	repo := &mockSavepointRepo{}
-	repo.On("List").Return([]model.SavepointRecord{rec}, nil)
+	repo.On("List").Return([]model.Savepoint{rec}, nil)
 	inspector := &mockInspector{}
-	inspector.On("Inspect", mock.Anything, mock.Anything).Return(insp, nil)
+	inspector.On("Introspect", mock.Anything, mock.Anything).Return(demoIntrospection(), nil)
 
 	dc := &mockComposeRunner{}
 	dockerVol := &mockDockerVolume{}
@@ -156,7 +153,7 @@ func TestRollback(t *testing.T) {
 				dockerVol.On("WriteMount", mock.Anything, "demo", "db", "/data", liveArchive).Return(nil)
 				dc.On("Up", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			},
-			wantErr:      "rollback failed: restore db /data: write docker mount: restore boom",
+			wantErr:      "rollback failed: restore volume/demo_db: write docker mount db /data: restore boom",
 			wantRetained: true,
 		},
 		{
@@ -206,7 +203,7 @@ func TestRollback(t *testing.T) {
 				require.NoError(t, err)
 			}
 			if tt.wantRestored {
-				assert.Equal(t, []model.Mount{{Service: "db", Target: "/data"}}, res.Restored)
+				assert.Equal(t, []model.Volume{demoVolume()}, res.Restored)
 			}
 			assert.Equal(t, tt.wantRetained, safetyBackupRetained(t, f.projectRoot))
 			f.dc.AssertExpectations(t)
@@ -268,8 +265,41 @@ func TestService_Rollback_MissingArchive(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "savepoint archive missing for db /data")
+	assert.Contains(t, err.Error(), "savepoint archive missing for volume/demo_db")
 	f.dc.AssertNotCalled(t, "Stop")
 	f.dockerVol.AssertNotCalled(t, "OpenMount")
 	assert.False(t, tmpParentExists(t, f.projectRoot))
+}
+
+// TestVolumesOf pins the projection rollback addresses every archive from, plus
+// the guarantee the CLI used to make for itself: never nil, so restored marshals
+// as [] and not null.
+func TestVolumesOf(t *testing.T) {
+	tests := []struct {
+		name   string
+		record model.Savepoint
+		want   []model.Volume
+	}{
+		{
+			name:   "a stat per volume yields a volume per stat",
+			record: model.Savepoint{ID: "100", Stats: demoStats()},
+			want:   []model.Volume{demoVolume()},
+		},
+		{
+			name:   "no stats yields an empty slice, never nil",
+			record: model.Savepoint{ID: "100"},
+			want:   []model.Volume{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := volumesOf(tt.record)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+			assert.NotNil(t, got)
+		})
+	}
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
-	"github.com/greenmaskio/arcave/internal/service/introspect"
+	introspect "github.com/greenmaskio/arcave/internal/service/introspectv2"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

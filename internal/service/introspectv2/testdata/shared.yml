@@ -4,7 +4,12 @@ services:
   web:
     image: nginx:1
     volumes:
-      - assets:/usr/share/nginx/html
+      - type: volume
+        source: assets
+        target: /usr/share/nginx/html
+        read_only: true
+        volume:
+          subpath: public
   api:
     image: alpine:3
     volumes:

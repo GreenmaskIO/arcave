@@ -1,14 +1,46 @@
 package model
 
-// VolumeRef records one snapshotted mount so rollback knows what to clear and
-// restore. One VolumeRef is stored per volume in each savepoint record. The
-// archive's storage location is not stored: the snapshot backend recomputes it
-// from the savepoint id and these coordinates, so the record stays flat and there
-// is no opaque handle to interpret.
-type VolumeRef struct {
-	Service   string `json:"service"`              // compose service that owns the mount
-	MountPath string `json:"mount_path"`           // mount path inside the container
-	Type      string `json:"type"`                 // "volume" or "bind"
-	Source    string `json:"source,omitempty"`     // Docker volume name or host path; "" if anonymous
-	SizeBytes int64  `json:"size_bytes,omitempty"` // bytes stored for this volume's archive
+// Volume is the unit of backup, flattened from the introspection result.
+// Exactly one of Named/Bind/Anon is non-nil, matching Type: addressing is
+// type-specific, so each arm carries only the fields its type has, and reading
+// the wrong one is a nil deref rather than a silent empty string.
+//
+// The arms hold no per-mount labels: those are input to the decision, and by the
+// time a Volume exists Backend is already assigned.
+//
+// The json tags are a contract: a Volume is stored in every savepoint record and
+// reported by every rollback.
+type Volume struct {
+	ObjectID string          `json:"object_id"` // stable identity: ServiceVolume.ObjectID() / NamedVolume.ObjectID()
+	Type     VolumeType      `json:"type"`
+	Backend  SnapshotBackend `json:"backend"`
+
+	Named *VolumePropertiesNamed `json:"named,omitempty"`
+	Bind  *VolumePropertiesBind  `json:"bind,omitempty"`
+	Anon  *VolumePropertiesAnon  `json:"anon,omitempty"`
+}
+
+// VolumePropertiesNamed addresses a named volume: by docker name, plus every
+// mount of it — who to stop, and where the data is reachable through each.
+type VolumePropertiesNamed struct {
+	VolumeName string             `json:"volume_name"`
+	UsedBy     []ServiceReference `json:"used_by,omitempty"`
+}
+
+// VolumePropertiesBind addresses a bind mount: the service declaring it and the
+// host path the data lives at.
+type VolumePropertiesBind struct {
+	Service  string `json:"service"`
+	Target   string `json:"target"`
+	Source   string `json:"source,omitempty"` // host path the data lives at, verbatim compose "source"
+	ReadOnly bool   `json:"read_only,omitempty"`
+}
+
+// VolumePropertiesAnon addresses an anonymous volume — reachable only through
+// its one mount: the docker name is minted per container and is not stable.
+type VolumePropertiesAnon struct {
+	Service  string `json:"service"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+	Subpath  string `json:"subpath,omitempty"`
 }

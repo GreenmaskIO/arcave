@@ -22,16 +22,16 @@ type mockSavepointRepo struct{ mock.Mock }
 
 // The repository mock drops ctx from its expectations: no test asserts on it, and
 // carrying it would force a mock.Anything into every On("List") call.
-func (m *mockSavepointRepo) List(context.Context) ([]model.SavepointRecord, error) {
+func (m *mockSavepointRepo) List(context.Context) ([]model.Savepoint, error) {
 	args := m.Called()
-	var recs []model.SavepointRecord
+	var recs []model.Savepoint
 	if v := args.Get(0); v != nil {
-		recs = v.([]model.SavepointRecord)
+		recs = v.([]model.Savepoint)
 	}
 	return recs, args.Error(1)
 }
 
-func (m *mockSavepointRepo) Save(_ context.Context, record model.SavepointRecord) error {
+func (m *mockSavepointRepo) Save(_ context.Context, record model.Savepoint) error {
 	return m.Called(record).Error(0)
 }
 
@@ -67,9 +67,9 @@ func freeLocker() *mockLocker {
 
 type mockInspector struct{ mock.Mock }
 
-func (m *mockInspector) Inspect(ctx context.Context, files ...string) (model.Inspection, error) {
+func (m *mockInspector) Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error) {
 	args := m.Called(ctx, files)
-	return args.Get(0).(model.Inspection), args.Error(1)
+	return args.Get(0).(model.IntrospectionResult), args.Error(1)
 }
 
 type mockComposeRunner struct{ mock.Mock }
@@ -112,19 +112,21 @@ func (m *mockDockerVolume) WriteMount(ctx context.Context, project, service, tar
 // instead, so the tar round-trip stays covered.
 type mockBackend struct{ mock.Mock }
 
-func (m *mockBackend) Snapshot(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) ([]int64, error) {
-	args := m.Called(ctx, savepointID, composeProject, mounts)
-	sizes, _ := args.Get(0).([]int64)
-	return sizes, args.Error(1)
+func (m *mockBackend) Snapshot(
+	ctx context.Context, savepointID, composeProject string, volumes []model.Volume,
+) ([]model.SnapshotStat, error) {
+	args := m.Called(ctx, savepointID, composeProject, volumes)
+	stats, _ := args.Get(0).([]model.SnapshotStat)
+	return stats, args.Error(1)
 }
 
-func (m *mockBackend) Restore(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) error {
-	return m.Called(ctx, savepointID, composeProject, mounts).Error(0)
+func (m *mockBackend) Restore(ctx context.Context, savepointID, composeProject string, volumes []model.Volume) error {
+	return m.Called(ctx, savepointID, composeProject, volumes).Error(0)
 }
 
-func (m *mockBackend) Missing(ctx context.Context, savepointID string, mounts []model.Mount) ([]model.Mount, error) {
-	args := m.Called(ctx, savepointID, mounts)
-	missing, _ := args.Get(0).([]model.Mount)
+func (m *mockBackend) Missing(ctx context.Context, savepointID string, volumes []model.Volume) ([]model.Volume, error) {
+	args := m.Called(ctx, savepointID, volumes)
+	missing, _ := args.Get(0).([]model.Volume)
 	return missing, args.Error(1)
 }
 

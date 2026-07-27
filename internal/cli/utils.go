@@ -6,18 +6,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// restoredMounts projects the service's mounts onto the wire type, mapping
-// Mount.Target to the mount_path the response names it by. The slice is non-nil
-// so an empty rollback marshals restored as [] rather than null. Both the CLI
-// and MCP rollback handlers share it.
-func restoredMounts(ms []model.Mount) []model.RestoredMount {
-	out := make([]model.RestoredMount, 0, len(ms))
-	for _, m := range ms {
-		out = append(out, model.RestoredMount{Service: m.Service, MountPath: m.Target})
-	}
-	return out
-}
-
 // removeUsageError restates the service's selector-validation errors as the
 // remedy the caller can act on: which selector to drop, or which to supply.
 //

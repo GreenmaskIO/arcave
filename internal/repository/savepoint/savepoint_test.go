@@ -28,20 +28,27 @@ func newStore(t *testing.T) (storages.Storager, string) {
 	return st, root
 }
 
-// record is a savepoint record with one volume, for the id given.
-func record(id string) model.SavepointRecord {
-	return model.SavepointRecord{
-		Savepoint: model.Savepoint{
-			ID:        id,
-			Name:      "before-migration",
-			CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
-		},
-		Volumes: []model.VolumeRef{{
-			Service:   "db",
-			MountPath: "/var/lib/postgresql/data",
-			Type:      "volume",
-			Source:    "myapp_pgdata",
-			SizeBytes: 4096,
+// record is a savepoint with one captured volume, for the id given. The stat's
+// payload is nil: a typed one would not survive the round trip (it decodes back
+// as a map), which is why nothing outside its own backend reads one.
+func record(id string) model.Savepoint {
+	return model.Savepoint{
+		ID:        id,
+		Name:      "before-migration",
+		CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
+		Stats: []model.SnapshotStat{{
+			Type: model.SnapshotBackendFullCopy,
+			Volume: model.Volume{
+				ObjectID: "volume/myapp_pgdata",
+				Type:     model.VolumeTypeNamed,
+				Backend:  model.SnapshotBackendFullCopy,
+				Named: &model.VolumePropertiesNamed{
+					VolumeName: "myapp_pgdata",
+					UsedBy: []model.ServiceReference{
+						{Service: "db", Target: "/var/lib/postgresql/data"},
+					},
+				},
+			},
 		}},
 	}
 }
@@ -157,6 +164,26 @@ func TestRepository_List(t *testing.T) {
 				writeObject(t, root, "1780335122/db/data/data.tar", "payload")
 			},
 			wantErr: model.ErrLegacyManifest,
+		},
+		{
+			// A v1 record is intact, and so are its archives — but they sit where v1
+			// put them, which this arcave would not find.
+			name: "a record from another schema version is refused",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "1780335999/savepoint.json",
+					`{"schema_version":1,"id":"1780335999","volumes":[{"service":"db","mount_path":"/data"}]}`)
+			},
+			wantErr: model.ErrUnsupportedRecordVersion,
+		},
+		{
+			// No version means v0, not "current" — unlike the config gate, which
+			// reads an absent version as current so a project with no file works.
+			// Every record was written by arcave, and every one carries its version.
+			name: "a record with no version is refused too",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "1780335999/savepoint.json", `{"id":"1780335999"}`)
+			},
+			wantErr: model.ErrUnsupportedRecordVersion,
 		},
 	}
 

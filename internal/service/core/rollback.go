@@ -38,11 +38,12 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 	if err != nil {
 		return model.RollbackResult{}, err
 	}
-	insp, err := s.composeInspector.Inspect(ctx, req.ComposeFiles...)
+	// The live state, decided exactly as a create would: the safety backup must
+	// cover the volumes a savepoint covers, or it could not put the project back.
+	currentVolumes, composeProject, err := s.resolveBackupVolumes(ctx, req.ComposeFiles)
 	if err != nil {
-		return model.RollbackResult{}, fmt.Errorf("inspecting compose files: %w", err)
+		return model.RollbackResult{}, err
 	}
-	currentMounts, composeProject := insp.Mounts, insp.ComposeProject
 
 	if err := s.preflightArchives(ctx, record); err != nil {
 		return model.RollbackResult{}, err
@@ -57,7 +58,7 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 	// touch anything, so a rollback that fails partway (a bad restore, or services
 	// that never come up healthy) can be replayed back to the pre-rollback state.
 	// It is consumed by revert below and deleted only on full success.
-	safetyBackupID, err := s.createSafetyBackup(ctx, currentMounts, composeProject)
+	safetyBackupID, err := s.createSafetyBackup(ctx, currentVolumes, composeProject)
 	if err != nil {
 		// The safety backup failed before anything was restored, so nothing
 		// changed. Bring the services back up best-effort — a restart failure on
@@ -73,7 +74,7 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 		log.Warn().Err(err).Str("safety_backup_id", safetyBackupID).
 			Msg("rollback failed; reverting to the pre-rollback state")
 
-		revertErr := s.revert(ctx, safetyBackupID, currentMounts, req.ComposeFiles, composeProject, req.WaitTimeout)
+		revertErr := s.revert(ctx, safetyBackupID, currentVolumes, req.ComposeFiles, composeProject, req.WaitTimeout)
 		if revertErr != nil {
 			log.Error().Err(revertErr).Str("safety_backup_id", safetyBackupID).
 				Msg("revert failed; environment left in an inconsistent state, safety backup retained")
@@ -88,22 +89,22 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 		log.Warn().Err(err).Str("safety_backup_id", safetyBackupID).Msg("failed to remove safety backup")
 	}
 	return model.RollbackResult{
-		Savepoint: record.Savepoint,
-		Restored:  restoredMounts(record),
+		Savepoint: record,
+		Restored:  volumesOf(record),
 	}, nil
 }
 
 // resolveSavepoint lists the committed savepoints and resolves ref to the record
 // to roll back to. Resolution stays in memory: the store has no index to query,
 // and findSavepoint already takes the whole slice.
-func (s *Service) resolveSavepoint(ctx context.Context, ref string) (model.SavepointRecord, error) {
+func (s *Service) resolveSavepoint(ctx context.Context, ref string) (model.Savepoint, error) {
 	records, err := s.savepointRepo.List(ctx)
 	if err != nil {
-		return model.SavepointRecord{}, err
+		return model.Savepoint{}, err
 	}
 	record, err := findSavepoint(records, ref)
 	if err != nil {
-		return model.SavepointRecord{}, fmt.Errorf("finding savepoint %q: %w", ref, err)
+		return model.Savepoint{}, fmt.Errorf("finding savepoint %q: %w", ref, err)
 	}
 	return record, nil
 }
@@ -111,33 +112,35 @@ func (s *Service) resolveSavepoint(ctx context.Context, ref string) (model.Savep
 // preflightArchives verifies every savepoint archive exists before anything is
 // touched, so a missing archive aborts the rollback untouched. It names every gap
 // at once rather than aborting on the first.
-func (s *Service) preflightArchives(ctx context.Context, record model.SavepointRecord) error {
-	missing, err := s.savepointBackend.Missing(ctx, record.ID, mountsOf(record.Volumes))
+func (s *Service) preflightArchives(ctx context.Context, record model.Savepoint) error {
+	missing, err := s.savepointBackend.Missing(ctx, record.ID, volumesOf(record))
 	if err != nil {
 		return fmt.Errorf("checking savepoint archives: %w", err)
 	}
 	if len(missing) > 0 {
+		// Named by object id: that is what the archive is keyed by, and for a named
+		// volume it is the only identity.
 		names := make([]string, len(missing))
-		for i, m := range missing {
-			names[i] = m.Service + " " + m.Target
+		for i, v := range missing {
+			names[i] = v.ObjectID
 		}
 		return fmt.Errorf("savepoint archive missing for %s", strings.Join(names, ", "))
 	}
 	return nil
 }
 
-// createSafetyBackup captures the current live state of every mount in the
+// createSafetyBackup captures the current live state of every volume in the
 // safety-backup store so a failed restore can be undone, returning the backup id.
-// The id doubles as the safety backup's storage directory, so revert re-addresses
-// each mount from it and the same currentMounts — there is no per-mount handle to
-// carry. The id is returned even on error, so the caller can clean up a partial
-// backup.
+// The id doubles as its storage directory, so revert re-addresses each volume from
+// it and the same currentVolumes — there is no per-volume handle to carry, which
+// is why the stats are dropped too. The id comes back even on error, so the caller
+// can clean up a partial backup.
 func (s *Service) createSafetyBackup(
-	ctx context.Context, currentMounts []model.Mount, composeProject string,
+	ctx context.Context, currentVolumes []model.Volume, composeProject string,
 ) (string, error) {
 	id := strconv.FormatInt(s.now().Unix(), 10)
 	zerolog.Ctx(ctx).Info().Msg("backing up current state")
-	if _, err := s.safetyBackupBackend.Snapshot(ctx, id, composeProject, currentMounts); err != nil {
+	if _, err := s.safetyBackupBackend.Snapshot(ctx, id, composeProject, currentVolumes); err != nil {
 		return id, err
 	}
 	return id, nil
@@ -163,16 +166,21 @@ func (s *Service) abortBeforeRestore(ctx context.Context, composeFiles []string,
 // health-checks the services. Both steps share the same revert path, so merging
 // them gives the caller a single revert call site. A restore failure is returned
 // raw; an unhealthy start is wrapped, so the returned error carries the
-// restore-vs-restart distinction. The backend owns the per-mount fan-out; this
-// only names the savepoint's mounts (not the safety backup — that is revert's job).
+// restore-vs-restart distinction. The backend owns the per-volume fan-out; this
+// only names the savepoint's volumes (not the safety backup — that is revert's job).
+//
+// The volumes come from the record, so a restore writes through a mount that
+// existed when the savepoint was taken. If compose has since dropped it, the
+// failure comes from docker; a pre-flight against the live project is a separate
+// decision.
 func (s *Service) applySavepoint(
 	ctx context.Context,
-	record model.SavepointRecord,
+	record model.Savepoint,
 	composeFiles []string,
 	composeProject string,
 	waitTimeout time.Duration,
 ) error {
-	if err := s.savepointBackend.Restore(ctx, record.ID, composeProject, mountsOf(record.Volumes)); err != nil {
+	if err := s.savepointBackend.Restore(ctx, record.ID, composeProject, volumesOf(record)); err != nil {
 		return err
 	}
 	zerolog.Ctx(ctx).Info().Msg("starting services")
@@ -183,15 +191,15 @@ func (s *Service) applySavepoint(
 }
 
 // revert replays the safety backup to return the environment to its pre-rollback
-// state: stop services, restore every backed-up mount, restart. It re-addresses
-// each mount from the safety backup id and the same currentMounts createSafetyBackup
-// captured, since the storage key is derived, not stored. nil means the environment
-// is fully back to where it started; the caller pairs any error with the original
-// rollback failure.
+// state: stop services, restore every backed-up volume, restart. It re-addresses
+// each volume from the safety backup id and the same currentVolumes
+// createSafetyBackup captured, since the storage key is derived, not stored. nil
+// means the environment is fully back to where it started; the caller pairs any
+// error with the original rollback failure.
 func (s *Service) revert(
 	ctx context.Context,
 	safetyBackupID string,
-	currentMounts []model.Mount,
+	currentVolumes []model.Volume,
 	composeFiles []string,
 	composeProject string,
 	waitTimeout time.Duration,
@@ -199,7 +207,7 @@ func (s *Service) revert(
 	if err := s.composeRunner.Stop(ctx, composeFiles...); err != nil {
 		return fmt.Errorf("stopping services: %w", err)
 	}
-	if err := s.safetyBackupBackend.Restore(ctx, safetyBackupID, composeProject, currentMounts); err != nil {
+	if err := s.safetyBackupBackend.Restore(ctx, safetyBackupID, composeProject, currentVolumes); err != nil {
 		return fmt.Errorf("restoring safety backup: %w", err)
 	}
 	zerolog.Ctx(ctx).Info().Msg("starting services")
@@ -217,24 +225,16 @@ func (s *Service) removeSafetyBackup(ctx context.Context, safetyBackupID string)
 	return s.safetyBackupBackend.Remove(ctx, safetyBackupID)
 }
 
-// restoredMounts projects the savepoint's volumes to the result's mount list.
-func restoredMounts(savepointRecord model.SavepointRecord) []model.Mount {
-	restored := make([]model.Mount, 0, len(savepointRecord.Volumes))
-	for _, v := range savepointRecord.Volumes {
-		restored = append(restored, model.Mount{
-			Service: v.Service,
-			Target:  v.MountPath,
-		})
+// volumesOf projects a savepoint's stats back to the volumes the backend
+// addresses, so pre-flight, restore and the result each take the whole savepoint
+// at once. Each stat carries the unit it captured, which is all a restore needs;
+// the payload beside it is the backend's own.
+//
+// The slice is non-nil, so an empty savepoint marshals restored as [], not null.
+func volumesOf(record model.Savepoint) []model.Volume {
+	volumes := make([]model.Volume, 0, len(record.Stats))
+	for _, stat := range record.Stats {
+		volumes = append(volumes, stat.Volume)
 	}
-	return restored
-}
-
-// mountsOf projects a record's volumes back to the mounts the backend addresses,
-// so pre-flight and restore can pass the whole savepoint at once.
-func mountsOf(vols []model.VolumeRef) []model.Mount {
-	mounts := make([]model.Mount, len(vols))
-	for i, v := range vols {
-		mounts[i] = model.Mount{Service: v.Service, Target: v.MountPath, Type: v.Type, Source: v.Source}
-	}
-	return mounts
+	return volumes
 }
