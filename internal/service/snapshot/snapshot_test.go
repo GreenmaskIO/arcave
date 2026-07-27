@@ -27,7 +27,7 @@ const snapshotsDir = "snapshots"
 func newStore(t *testing.T) (storages.Storager, string) {
 	t.Helper()
 	root := t.TempDir()
-	st, err := directory.NewStorage(directory.Config{Path: root})
+	st, err := directory.NewStorage(directory.Config{RootPath: root})
 	require.NoError(t, err)
 	sub, err := st.SubStorage(snapshotsDir, true)
 	require.NoError(t, err)

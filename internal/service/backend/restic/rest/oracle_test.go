@@ -206,7 +206,7 @@ func newOraclePair(t *testing.T) (ours, reference http.Handler) {
 	t.Helper()
 
 	root := t.TempDir()
-	st, err := directory.NewStorage(directory.Config{Path: root})
+	st, err := directory.NewStorage(directory.Config{RootPath: root})
 	require.NoError(t, err)
 	ours = New(st)
 

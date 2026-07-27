@@ -25,50 +25,99 @@ func TestRecommendService_Recommend(t *testing.T) {
 		},
 	}
 
+	pgdata := "/var/lib/postgresql/data"
+
 	tests := []struct {
 		name     string
-		services []model.ComposeService
+		services []model.Service
 		want     []model.Recommendation
 	}{
 		{
 			name: "an uncovered volume is recommended",
-			services: []model.ComposeService{
-				{Name: "db", Image: "postgres:16", ImageRepo: "postgres"},
+			services: []model.Service{
+				{Name: "db", Image: "postgres:16"},
 			},
 			want: []model.Recommendation{
-				newRecommendation("db", "postgres:16", "/var/lib/postgresql/data"),
+				newRecommendation("db", "postgres:16", pgdata),
 			},
 		},
 		{
 			name: "a named volume covers the path",
-			services: []model.ComposeService{
-				{Name: "db", Image: "postgres:16", ImageRepo: "postgres",
-					MountTargets: []string{"/var/lib/postgresql/data"}},
+			services: []model.Service{
+				{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
+					{Type: model.VolumeTypeNamed, Source: "pgdata", Target: pgdata},
+				}},
 			},
 			want: []model.Recommendation{},
 		},
 		{
 			name: "a bind mount covers the path just as well",
-			services: []model.ComposeService{
-				{Name: "db", Image: "postgres:16", ImageRepo: "postgres",
-					MountTargets: []string{"/etc/pg", "/var/lib/postgresql/data"}},
+			services: []model.Service{
+				{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
+					{Type: model.VolumeTypeBind, Source: "./pg", Target: "/etc/pg"},
+					{Type: model.VolumeTypeBind, Source: "./data", Target: pgdata},
+				}},
+			},
+			want: []model.Recommendation{},
+		},
+		// The compose mount type alone cannot decide these three: an anonymous
+		// volume is a "volume" and persists, while tmpfs and an image mount sit
+		// at a path without keeping anything there.
+		{
+			name: "an anonymous volume covers the path",
+			services: []model.Service{
+				{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
+					{Type: model.VolumeTypeAnon, Target: pgdata},
+				}},
 			},
 			want: []model.Recommendation{},
 		},
 		{
-			name: "an alias matches the entry it belongs to",
-			services: []model.ComposeService{
-				{Name: "vec", Image: "pgvector/pgvector:pg16", ImageRepo: "pgvector/pgvector"},
+			name: "a tmpfs mount does not cover the path",
+			services: []model.Service{
+				{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
+					{Type: model.VolumeTypeTmpfs, Target: pgdata},
+				}},
 			},
 			want: []model.Recommendation{
-				newRecommendation("vec", "pgvector/pgvector:pg16", "/var/lib/postgresql/data"),
+				newRecommendation("db", "postgres:16", pgdata),
+			},
+		},
+		{
+			name: "an image mount does not cover the path",
+			services: []model.Service{
+				{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
+					{Type: model.VolumeTypeImage, Source: "seed:1", Target: pgdata},
+				}},
+			},
+			want: []model.Recommendation{
+				newRecommendation("db", "postgres:16", pgdata),
+			},
+		},
+		{
+			name: "an alias matches the entry it belongs to",
+			services: []model.Service{
+				{Name: "vec", Image: "pgvector/pgvector:pg16"},
+			},
+			want: []model.Recommendation{
+				newRecommendation("vec", "pgvector/pgvector:pg16", pgdata),
+			},
+		},
+		{
+			name: "a registry-qualified image matches the official entry",
+			services: []model.Service{
+				{Name: "db", Image: "registry.corp.local/postgres:16"},
+			},
+			want: []model.Recommendation{
+				newRecommendation("db", "registry.corp.local/postgres:16", pgdata),
 			},
 		},
 		{
 			name: "partial coverage recommends only what is missing",
-			services: []model.ComposeService{
-				{Name: "mongo", Image: "mongo:7", ImageRepo: "mongo",
-					MountTargets: []string{"/data/db"}},
+			services: []model.Service{
+				{Name: "mongo", Image: "mongo:7", Volumes: []model.ServiceVolume{
+					{Type: model.VolumeTypeNamed, Source: "mongodata", Target: "/data/db"},
+				}},
 			},
 			want: []model.Recommendation{
 				newRecommendation("mongo", "mongo:7", "/data/configdb"),
@@ -76,15 +125,22 @@ func TestRecommendService_Recommend(t *testing.T) {
 		},
 		{
 			name: "an unknown image is not advised on",
-			services: []model.ComposeService{
-				{Name: "app", Image: "ghcr.io/org/app:1", ImageRepo: "org/app"},
+			services: []model.Service{
+				{Name: "app", Image: "ghcr.io/org/app:1"},
 			},
 			want: []model.Recommendation{},
 		},
 		{
 			name: "a build-only service is skipped",
-			services: []model.ComposeService{
+			services: []model.Service{
 				{Name: "builder"},
+			},
+			want: []model.Recommendation{},
+		},
+		{
+			name: "an unparsable image is skipped, not an error",
+			services: []model.Service{
+				{Name: "db", Image: "NOT A REFERENCE"},
 			},
 			want: []model.Recommendation{},
 		},
@@ -95,12 +151,12 @@ func TestRecommendService_Recommend(t *testing.T) {
 		},
 		{
 			name: "volumes keep catalog order across services",
-			services: []model.ComposeService{
-				{Name: "db", Image: "postgres:16", ImageRepo: "postgres"},
-				{Name: "mongo", Image: "mongo:7", ImageRepo: "mongo"},
+			services: []model.Service{
+				{Name: "db", Image: "postgres:16"},
+				{Name: "mongo", Image: "mongo:7"},
 			},
 			want: []model.Recommendation{
-				newRecommendation("db", "postgres:16", "/var/lib/postgresql/data"),
+				newRecommendation("db", "postgres:16", pgdata),
 				newRecommendation("mongo", "mongo:7", "/data/db"),
 				newRecommendation("mongo", "mongo:7", "/data/configdb"),
 			},
@@ -112,8 +168,9 @@ func TestRecommendService_Recommend(t *testing.T) {
 			// Arrange
 			catalog := &mockCatalog{}
 			catalog.On("List").Return(entries, nil).Once()
-			inspector := &mockServiceInspector{}
-			inspector.On("Services", mock.Anything, []string{"compose.yaml"}).Return(tt.services, nil).Once()
+			inspector := &mockIntrospector{}
+			inspector.On("Introspect", mock.Anything, []string{"compose.yaml"}).
+				Return(model.IntrospectionResult{Project: model.Project{Services: tt.services}}, nil).Once()
 
 			// Act
 			got, err := NewRecommendService(catalog, inspector).Recommend(context.Background(), "compose.yaml")
@@ -124,6 +181,47 @@ func TestRecommendService_Recommend(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 			catalog.AssertExpectations(t)
 			inspector.AssertExpectations(t)
+		})
+	}
+}
+
+func TestImageRepo(t *testing.T) {
+	tests := []struct {
+		name    string
+		image   string
+		want    string
+		wantErr bool
+	}{
+		{name: "official image loses its tag", image: "postgres:16", want: "postgres"},
+		{name: "bare official image", image: "postgres", want: "postgres"},
+		{name: "explicit library namespace is stripped", image: "docker.io/library/redis:7", want: "redis"},
+		{name: "registry is stripped, namespace kept", image: "ghcr.io/org/pg:1", want: "org/pg"},
+		{name: "elastic registry", image: "docker.elastic.co/elasticsearch/elasticsearch:8.13.0", want: "elasticsearch/elasticsearch"},
+		{name: "digest is stripped", image: "redis@sha256:0000000000000000000000000000000000000000000000000000000000000000", want: "redis"},
+		{name: "hub namespace is kept", image: "bitnami/postgresql:16", want: "bitnami/postgresql"},
+		// The domain is dropped for every registry, so these four coexist in one
+		// compose file and match the same catalog. Only a mirror that prefixes the
+		// path yields a different key — a catalog alias's job, not this function's.
+		{name: "corporate registry matches the official entry", image: "registry.corp.local/postgres:16", want: "postgres"},
+		{name: "registry with a port", image: "localhost:5000/redis:7", want: "redis"},
+		{name: "private ghcr image keeps its namespace", image: "ghcr.io/myorg/mydb:1", want: "myorg/mydb"},
+		{name: "a mirror prefix stays part of the key", image: "mycorp.jfrog.io/docker-remote/library/postgres:16", want: "docker-remote/library/postgres"},
+		{name: "no image at all", image: "", want: ""},
+		{name: "unparsable reference", image: "Postgres:16", want: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got, err := imageRepo(tt.image)
+
+			// Assert
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -177,9 +275,9 @@ func TestRecommendService_Recommend_Errors(t *testing.T) {
 			// Arrange
 			catalog := &mockCatalog{}
 			catalog.On("List").Return([]model.ARCEntry{{Image: "postgres", Volumes: []string{"/data"}}}, tt.catalogErr).Once()
-			inspector := &mockServiceInspector{}
-			inspector.On("Services", mock.Anything, mock.Anything).
-				Return([]model.ComposeService{}, tt.inspectErr).Maybe()
+			inspector := &mockIntrospector{}
+			inspector.On("Introspect", mock.Anything, mock.Anything).
+				Return(model.IntrospectionResult{}, tt.inspectErr).Maybe()
 
 			// Act
 			got, err := NewRecommendService(catalog, inspector).Recommend(context.Background())

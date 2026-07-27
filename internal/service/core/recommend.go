@@ -5,6 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
+
+	"github.com/distribution/reference"
+	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -19,13 +23,12 @@ type recommendationCatalog interface {
 	List() ([]model.ARCEntry, error)
 }
 
-// composeServiceInspector reads what each compose service runs and what it
-// already mounts. It is a seam of its own rather than a method added to
-// composeInspector: RecommendService needs only this projection, and the
-// savepoint workflows need only the other, so neither depends on the half it
-// does not use.
-type composeServiceInspector interface {
-	Services(ctx context.Context, files ...string) ([]model.ComposeService, error)
+// composeIntrospector reads what a compose project declares. Every consumer
+// takes the whole introspection and projects out the part it cares about — the
+// savepoint workflows read mounts, this service reads images and mount targets —
+// so the inspector stays a reader of compose files and nothing else.
+type composeIntrospector interface {
+	Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error)
 }
 
 // RecommendService advises on state a compose project would lose: a service
@@ -38,11 +41,11 @@ type composeServiceInspector interface {
 // serialise against a running rollback.
 type RecommendService struct {
 	catalog          recommendationCatalog
-	composeInspector composeServiceInspector
+	composeInspector composeIntrospector
 }
 
 // NewRecommendService wires a recommend service.
-func NewRecommendService(catalog recommendationCatalog, ci composeServiceInspector) *RecommendService {
+func NewRecommendService(catalog recommendationCatalog, ci composeIntrospector) *RecommendService {
 	return &RecommendService{catalog: catalog, composeInspector: ci}
 }
 
@@ -61,28 +64,30 @@ func (s *RecommendService) Recommend(ctx context.Context, composeFiles ...string
 	}
 	index := catalogIndex(entries)
 
-	services, err := s.composeInspector.Services(ctx, composeFiles...)
+	result, err := s.composeInspector.Introspect(ctx, composeFiles...)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting compose services: %w", err)
 	}
 
 	recommendations := make([]model.Recommendation, 0)
-	for _, svc := range services {
+	for _, svc := range result.Project.Services {
+		repo, err := imageRepo(svc.Image)
+		if err != nil {
+			log.Ctx(ctx).Warn().Err(err).Str("service", svc.Name).Str("image", svc.Image).
+				Msg("cannot parse service image; skipping it when matching the recommender catalog")
+		}
 		// A service that only builds, or whose image would not parse, has no key
 		// to match on. It is not an error: arcave cannot know what such an image
 		// stores, so it says nothing about it.
-		if svc.ImageRepo == "" {
+		if repo == "" {
 			continue
 		}
-		entry, ok := index[svc.ImageRepo]
+		entry, ok := index[repo]
 		if !ok {
 			continue
 		}
 
-		covered := make(map[string]struct{}, len(svc.MountTargets))
-		for _, target := range svc.MountTargets {
-			covered[target] = struct{}{}
-		}
+		covered := coveredTargets(svc)
 		for _, volume := range entry.Volumes {
 			if _, ok := covered[volume]; ok {
 				continue
@@ -91,6 +96,58 @@ func (s *RecommendService) Recommend(ctx context.Context, composeFiles ...string
 		}
 	}
 	return recommendations, nil
+}
+
+// dockerHubDomain is the registry reference.ParseNormalizedNamed fills in for an
+// unqualified image. It covers one quirk only: Docker Hub alone injects a
+// `library/` namespace nobody writes.
+const dockerHubDomain = "docker.io"
+
+// imageRepo reduces a compose image reference to the repository it names, the key
+// the catalog is written in: no tag, no digest, no `docker.io/library/` prefix.
+// `postgres:16` becomes `postgres`, `ghcr.io/org/pg:1` becomes `org/pg`.
+//
+// The registry is dropped rather than matched on, so every registry is treated
+// alike. A mirror that *prefixes* the path does not fall out of this, and the fix
+// is a catalog alias: trimming leading segments until something matched would
+// advise on anyone's own image named `redis`.
+//
+// A service that only builds declares no image and resolves to "", which is not
+// an error. An unparseable reference is, and comes back with the reason.
+func imageRepo(image string) (string, error) {
+	if image == "" {
+		return "", nil
+	}
+	named, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return "", fmt.Errorf("parse image reference %q: %w", image, err)
+	}
+	path := reference.Path(reference.TrimNamed(named))
+	// Docker Hub's official images live under `library/`, which no compose file
+	// writes and the catalog therefore does not spell either.
+	if reference.Domain(named) == dockerHubDomain {
+		path = strings.TrimPrefix(path, "library/")
+	}
+	return path, nil
+}
+
+// coveredTargets is the set of container paths the service already mounts
+// something persistent at. A tmpfs stores nothing and an image mount is
+// read-only, so neither may read as a path already taken care of.
+//
+// It reads the inspector's classification rather than compose's raw mount type,
+// which is what keeps this projection and the savepoint workflows' from
+// disagreeing: an anonymous volume persists just as a named one does, and both
+// are compose's "volume".
+func coveredTargets(svc model.Service) map[string]struct{} {
+	covered := make(map[string]struct{}, len(svc.Volumes))
+	for _, v := range svc.Volumes {
+		switch v.Type {
+		case model.VolumeTypeNamed, model.VolumeTypeAnon, model.VolumeTypeBind:
+			covered[v.Target] = struct{}{}
+		}
+	}
+	return covered
 }
 
 // newRecommendation returns an add-volume recommendation with its hash filled in.

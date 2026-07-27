@@ -100,7 +100,7 @@ func TestInitService_Init(t *testing.T) {
 			assert.Equal(t, configPath, path)
 			assert.Equal(t, config.Version, saved.Version)
 			// ApplyDefaults fills the name-dependent savepoint dir.
-			assert.Equal(t, filepath.Join(".arcave", "savepoints", "demo"), saved.Storage.DirectoryPath())
+			assert.Equal(t, filepath.Join(".arcave", "storage", "demo"), saved.Storage.DirectoryPath())
 			if tt.verify != nil {
 				tt.verify(t, saved)
 			}
@@ -151,6 +151,6 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "myproj", name)
 	assert.Equal(t, "myproj", saved.Project.Name)
-	assert.Equal(t, filepath.Join(".arcave", "savepoints", "myproj"), saved.Storage.DirectoryPath())
+	assert.Equal(t, filepath.Join(".arcave", "storage", "myproj"), saved.Storage.DirectoryPath())
 	cw.AssertExpectations(t)
 }

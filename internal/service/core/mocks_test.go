@@ -155,12 +155,12 @@ func (m *mockCatalog) List() ([]model.ARCEntry, error) {
 	return entries, args.Error(1)
 }
 
-// mockServiceInspector is the composeServiceInspector double. It takes the
-// variadic files as a single []string so an expectation can name them.
-type mockServiceInspector struct{ mock.Mock }
+// mockIntrospector is the composeIntrospector double. It takes the variadic
+// files as a single []string so an expectation can name them.
+type mockIntrospector struct{ mock.Mock }
 
-func (m *mockServiceInspector) Services(ctx context.Context, files ...string) ([]model.ComposeService, error) {
+func (m *mockIntrospector) Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error) {
 	args := m.Called(ctx, files)
-	services, _ := args.Get(0).([]model.ComposeService)
-	return services, args.Error(1)
+	result, _ := args.Get(0).(model.IntrospectionResult)
+	return result, args.Error(1)
 }

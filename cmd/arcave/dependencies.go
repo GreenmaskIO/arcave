@@ -59,11 +59,11 @@ type dependencies struct {
 
 // initAllDependencies wires the savepoint workflows for the project rooted at
 // projectPath. Each store is built by storefactory.New, which resolves the
-// configured path once, roots it under the static arcave namespace, and hands
-// back a Storager already rooted there — so nothing below this line ever names
-// a directory.
+// configured path once, roots it under the static arcave namespace and the
+// session, and hands back a Storager already rooted there — so nothing below this
+// line ever names a directory.
 func initAllDependencies(ctx context.Context, projectPath string, cfg config.Config) (*dependencies, error) {
-	savepointStore, err := storefactory.New(cfg.Storage, projectPath)
+	savepointStore, err := storefactory.New(cfg.Storage, projectPath, model.DefaultSession)
 	if err != nil {
 		return nil, fmt.Errorf("initialise savepoint store: %w", err)
 	}
@@ -74,7 +74,7 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	safetyBackupStore, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: safetyBackupDir},
-	}, projectPath)
+	}, projectPath, model.DefaultSession)
 	if err != nil {
 		closeQuietly(ctx, "savepoint store", savepointStore)
 		return nil, fmt.Errorf("initialise safety backup store: %w", err)
@@ -115,7 +115,8 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	// gets no records: a backup is addressed by its namespace alone.
 	// The locker is bound to the project root here, exactly as each backend is
 	// bound to its store, so the service serialises its own mutating workflows
-	// without ever naming a path.
+	// without ever naming a path. Both take the session store: a savepoint's
+	// records and its archives are what dies with the session.
 	svc := core.New(
 		sprepo.New(savepointStore),
 		lock.New(projectPath),

@@ -32,7 +32,7 @@ const letteredBlobID = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
 // so a test can plant objects the handler is then asked about.
 func newStoreHandler(t *testing.T) (http.Handler, storages.Storager) {
 	t.Helper()
-	store, err := directory.NewStorage(directory.Config{Path: t.TempDir()})
+	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
 	return New(store), store
 }
@@ -610,7 +610,7 @@ func TestHandler_getBlob_Empty(t *testing.T) {
 // whole pack across the tunnel.
 func TestStoragerFile_Read_RangedGetFetchesOnlyTheRange(t *testing.T) {
 	// Arrange
-	st, err := directory.NewStorage(directory.Config{Path: t.TempDir()})
+	st, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
 	counting := &countingStore{Storager: st}
 	put(t, counting.Storager, "data/"+blobID, strings.Repeat("x", 1024)+"needle"+strings.Repeat("y", 1024))

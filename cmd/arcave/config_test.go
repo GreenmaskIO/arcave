@@ -38,7 +38,7 @@ func TestResolveConfig(t *testing.T) {
 				assert.Equal(t, config.Version, cfg.Version)
 				assert.Equal(t, filepath.Base(root), cfg.Project.Name)
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
-				assert.Equal(t, filepath.Join(".arcave", "savepoints", cfg.Project.Name), cfg.Storage.DirectoryPath())
+				assert.Equal(t, filepath.Join(".arcave", "storage", cfg.Project.Name), cfg.Storage.DirectoryPath())
 				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
 				assert.Equal(t, utils.DefaultLogLevel, cfg.Log.Level)
 				assert.Equal(t, utils.DefaultLogFormat, cfg.Log.Format)
