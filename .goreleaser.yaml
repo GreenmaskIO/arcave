@@ -76,8 +76,14 @@ checksum:
   # One combined file for the whole release, not a .sha256 per artifact (which
   # is what `split: true` did here before). Now that the release lists one bare
   # binary per target, a checksum file beside each one would double that list
-  # for no gain. The default name carries the project and version, so a copy
-  # downloaded on its own still says which release it belongs to.
+  # for no gain.
+  #
+  # The default name is {{ .ProjectName }}_{{ .Version }}_checksums.txt; a fixed
+  # name is easier to reference from docs and scripts, since the URL of the
+  # latest release's checksums stops changing every version. The trade is that a
+  # copy downloaded on its own no longer says which release it came from — the
+  # binary names it lists do.
+  name_template: checksum.txt
 
 snapshot:
   # Snapshot builds run on every push to main and are never published, so the
