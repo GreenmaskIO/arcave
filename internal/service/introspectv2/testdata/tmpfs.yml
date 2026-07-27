@@ -6,3 +6,6 @@ services:
     volumes:
       - type: tmpfs
         target: /scratch
+        tmpfs:
+          size: 64mb
+          mode: 0o1777

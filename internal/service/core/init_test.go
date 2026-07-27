@@ -77,8 +77,8 @@ func TestInitService_Init(t *testing.T) {
 			cw, ci := &mockConfig{}, &mockInspector{}
 			cw.On("Exists").Return(tt.exists, nil)
 			cw.On("Path").Return(configPath).Maybe()
-			ci.On("Inspect", mock.Anything, mock.Anything).
-				Return(model.Inspection{ComposeProject: "demo"}, tt.inspectErr).Maybe()
+			ci.On("Introspect", mock.Anything, mock.Anything).
+				Return(demoIntrospection(), tt.inspectErr).Maybe()
 			var saved config.Config
 			cw.On("Save", mock.Anything).Run(func(args mock.Arguments) {
 				saved = args.Get(0).(config.Config)
@@ -115,7 +115,7 @@ func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 	cw, ci := &mockConfig{}, &mockInspector{}
 	cw.On("Exists").Return(false, nil)
 	cw.On("Path").Return(configPath)
-	ci.On("Inspect", mock.Anything, mock.Anything).Return(model.Inspection{}, nil)
+	ci.On("Introspect", mock.Anything, mock.Anything).Return(model.IntrospectionResult{}, nil)
 	cw.On("Save", mock.Anything).Return(nil)
 	svc := NewInitService("/proj", cw, ci)
 	cfg := config.Config{Storage: config.Storage{Directory: &config.DirectoryStorage{}}}
@@ -137,7 +137,7 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	cw, ci := &mockConfig{}, &mockInspector{}
 	cw.On("Exists").Return(false, nil)
 	cw.On("Path").Return(configPath)
-	ci.On("Inspect", mock.Anything, mock.Anything).Return(model.Inspection{}, nil)
+	ci.On("Introspect", mock.Anything, mock.Anything).Return(model.IntrospectionResult{}, nil)
 	var saved config.Config
 	cw.On("Save", mock.Anything).Run(func(args mock.Arguments) {
 		saved = args.Get(0).(config.Config)

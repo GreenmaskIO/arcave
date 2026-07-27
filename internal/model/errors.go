@@ -35,6 +35,11 @@ var (
 	// renders it with the migration guidance; the repository only reports the
 	// condition, since it does not know what the user is allowed to do about it.
 	ErrLegacyManifest = errors.New("savepoint store was written by an older arcave and still holds a manifest.json")
+	// ErrUnsupportedRecordVersion reports a savepoint record whose schema version
+	// arcave does not speak. The version also fixes the storage layout its
+	// archives are in, so a foreign one is refused rather than migrated — and,
+	// like ErrLegacyManifest, never reported as an empty listing.
+	ErrUnsupportedRecordVersion = errors.New("unsupported savepoint record version")
 
 	// ErrUnsupportedConfigVersion reports a config file whose schema version arcave does
 	// not speak. arcave speaks exactly one, so any other value is refused rather than

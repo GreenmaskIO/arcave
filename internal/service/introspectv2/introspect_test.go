@@ -38,7 +38,7 @@ func TestInspector_Inspect(t *testing.T) {
 		loader.On("Load", mock.Anything, []string{"a.yml"}).Return(project, nil).Once()
 
 		// Act
-		got, err := NewInspector(loader).Inspect(context.Background(), "a.yml")
+		got, err := NewInspector(loader).Introspect(context.Background(), "a.yml")
 
 		// Assert
 		require.NoError(t, err)
@@ -47,16 +47,62 @@ func TestInspector_Inspect(t *testing.T) {
 			Name: "fixture",
 			Services: []model.Service{
 				{Name: "app", Volumes: []model.ServiceVolume{
-					{Type: model.VolumeTypeUnsupported, RawType: "tmpfs", Target: "/scratch", Backend: model.SnapshotBackendUnknown},
+					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
 				}},
 				{Name: "db", Volumes: []model.ServiceVolume{
 					{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "fixture_pgdata"},
 				}},
 			},
 			Volumes: []model.NamedVolume{
-				{Key: "pgdata", Name: "fixture_pgdata", UsedBy: []string{"db"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+				{Key: "pgdata", Name: "fixture_pgdata", UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}}},
 			},
 		}, got.Project)
+	})
+
+	// compose-go rejects such a project at load, so this only reaches introspect
+	// through the loader seam — and an empty VolumeName would be an identity that
+	// collides with every other empty one.
+	t.Run("refuses a mount whose volume the project does not declare", func(t *testing.T) {
+		// Arrange
+		project := &types.Project{
+			Name: "fixture",
+			Services: types.Services{
+				"db": {Volumes: []types.ServiceVolumeConfig{
+					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
+				}},
+			},
+		}
+		loader := &mockLoader{}
+		loader.On("Load", mock.Anything, mock.Anything).Return(project, nil).Once()
+
+		// Act
+		_, err := NewInspector(loader).Introspect(context.Background(), "a.yml")
+
+		// Assert
+		require.Error(t, err)
+		assert.EqualError(t, err, `service "db" mounts undeclared volume "pgdata"`)
+	})
+
+	t.Run("refuses a declared volume with no resolved docker name", func(t *testing.T) {
+		// Arrange
+		project := &types.Project{
+			Name:    "fixture",
+			Volumes: types.Volumes{"pgdata": types.VolumeConfig{}},
+			Services: types.Services{
+				"db": {Volumes: []types.ServiceVolumeConfig{
+					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
+				}},
+			},
+		}
+		loader := &mockLoader{}
+		loader.On("Load", mock.Anything, mock.Anything).Return(project, nil).Once()
+
+		// Act
+		_, err := NewInspector(loader).Introspect(context.Background(), "a.yml")
+
+		// Assert
+		require.Error(t, err)
+		assert.EqualError(t, err, `service "db" mounts volume "pgdata" with no resolved docker name`)
 	})
 
 	t.Run("wraps a loader failure", func(t *testing.T) {
@@ -65,7 +111,7 @@ func TestInspector_Inspect(t *testing.T) {
 		loader.On("Load", mock.Anything, mock.Anything).Return(nil, errors.New("bad compose file")).Once()
 
 		// Act
-		_, err := NewInspector(loader).Inspect(context.Background())
+		_, err := NewInspector(loader).Introspect(context.Background())
 
 		// Assert
 		require.Error(t, err)
@@ -88,35 +134,56 @@ func TestIntrospect(t *testing.T) {
 		want model.Project
 	}{
 		{
-			name: "named volume from the volumes section",
+			name: "named volume carries its labels, driver and driver options",
 			file: "named.yml",
 			want: model.Project{
 				Name: "demo",
 				Services: []model.Service{
-					{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata"},
+					{Name: "db", Image: "postgres:16", Labels: map[string]string{"io.arcave.role": "database"}, Volumes: []model.ServiceVolume{
+						// compose fills an empty options struct for the short syntax.
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata", Volume: &model.VolumeMount{}},
 					}},
 				},
 				Volumes: []model.NamedVolume{
-					{Key: "pgdata", Name: "demo_pgdata", UsedBy: []string{"db"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+					{
+						Key:    "pgdata",
+						Name:   "demo_pgdata",
+						UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
+						Labels: map[string]string{"io.arcave.backend": "cdc"},
+						Driver: "local",
+						DriverOpts: map[string]string{
+							"type":   "none",
+							"device": "/srv/pgdata",
+							"o":      "bind",
+						},
+					},
 				},
 			},
 		},
 		{
-			name: "named volume shared by two services is one project volume",
+			// The web mount is read-only and exposes a subpath; both reach its
+			// reference, so the two mounts are not interchangeable.
+			name: "named volume shared by two services is one project volume, mounted twice",
 			file: "shared.yml",
 			want: model.Project{
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "api", Image: "alpine:3", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "assets", Target: "/srv/assets", VolumeName: "demo_assets"},
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "assets", Target: "/srv/assets", VolumeName: "demo_assets", Volume: &model.VolumeMount{}},
 					}},
 					{Name: "web", Image: "nginx:1", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "assets", Target: "/usr/share/nginx/html", VolumeName: "demo_assets"},
+						{
+							Type: model.VolumeTypeNamed, RawType: "volume", Source: "assets",
+							Target: "/usr/share/nginx/html", VolumeName: "demo_assets",
+							ReadOnly: true, Volume: &model.VolumeMount{Subpath: "public"},
+						},
 					}},
 				},
 				Volumes: []model.NamedVolume{
-					{Key: "assets", Name: "demo_assets", UsedBy: []string{"api", "web"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+					{Key: "assets", Name: "demo_assets", UsedBy: []model.ServiceReference{
+						{Service: "api", Target: "/srv/assets"},
+						{Service: "web", Target: "/usr/share/nginx/html", ReadOnly: true, Subpath: "public"},
+					}},
 				},
 			},
 		},
@@ -127,11 +194,11 @@ func TestIntrospect(t *testing.T) {
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "custom_pgdata"},
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "custom_pgdata", Volume: &model.VolumeMount{}},
 					}},
 				},
 				Volumes: []model.NamedVolume{
-					{Key: "pgdata", Name: "custom_pgdata", UsedBy: []string{"db"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+					{Key: "pgdata", Name: "custom_pgdata", UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}}},
 				},
 			},
 		},
@@ -144,7 +211,7 @@ func TestIntrospect(t *testing.T) {
 					{Name: "app", Image: "alpine:3", Volumes: []model.ServiceVolume{}},
 				},
 				Volumes: []model.NamedVolume{
-					{Key: "orphan", Name: "demo_orphan", UsedBy: nil, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+					{Key: "orphan", Name: "demo_orphan", UsedBy: nil},
 				},
 			},
 		},
@@ -155,48 +222,101 @@ func TestIntrospect(t *testing.T) {
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "shared_pgdata", Target: "/var/lib/postgresql/data", VolumeName: "shared_pgdata"},
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "shared_pgdata", Target: "/var/lib/postgresql/data", VolumeName: "shared_pgdata", Volume: &model.VolumeMount{}},
 					}},
 				},
 				Volumes: []model.NamedVolume{
-					{Key: "shared_pgdata", Name: "shared_pgdata", External: true, UsedBy: []string{"db"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+					{Key: "shared_pgdata", Name: "shared_pgdata", External: true, UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}}},
 				},
 			},
 		},
 		{
-			name: "anonymous volume has no source and no project entry",
+			name: "anonymous volume has no source, no project entry, and carries its per-mount labels",
 			file: "anonymous.yml",
 			want: model.Project{
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/var/lib/postgresql/data", NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+						{
+							Type: model.VolumeTypeAnon, RawType: "volume", Target: "/var/lib/postgresql/data",
+							Volume: &model.VolumeMount{Labels: map[string]string{"io.arcave.backend": "cdc"}},
+						},
 					}},
 				},
 				Volumes: []model.NamedVolume{},
 			},
 		},
 		{
-			name: "bind mount carries the resolved host path",
+			name: "bind mount carries the resolved host path and its bind options",
 			file: "bind.yml",
 			want: model.Project{
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "app", Image: "alpine:3", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeBind, RawType: "bind", Source: bindCfg, Target: "/etc/cfg", NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+						{
+							Type: model.VolumeTypeBind, RawType: "bind", Source: bindCfg, Target: "/etc/cfg",
+							ReadOnly: true,
+							Bind:     &model.BindMount{SELinux: "z", Propagation: "rprivate", CreateHostPath: true},
+						},
 					}},
 				},
 				Volumes: []model.NamedVolume{},
 			},
 		},
 		{
-			name: "tmpfs is unsupported, not dropped",
+			name: "tmpfs is classified and reported, not dropped",
 			file: "tmpfs.yml",
 			want: model.Project{
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "app", Image: "alpine:3", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeUnsupported, RawType: "tmpfs", Target: "/scratch", Backend: model.SnapshotBackendUnknown},
+						{
+							Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch",
+							Tmpfs: &model.TmpfsMount{SizeBytes: 64 << 20, Mode: 0o1777},
+						},
+					}},
+				},
+				Volumes: []model.NamedVolume{},
+			},
+		},
+		{
+			name: "npipe is classified and reported",
+			file: "npipe.yml",
+			want: model.Project{
+				Name: "demo",
+				Services: []model.Service{
+					{Name: "app", Image: "alpine:3", Volumes: []model.ServiceVolume{
+						{Type: model.VolumeTypeNPipe, RawType: "npipe", Source: `\\.\pipe\docker_engine`, Target: `\\.\pipe\docker_engine`},
+					}},
+				},
+				Volumes: []model.NamedVolume{},
+			},
+		},
+		{
+			// A CSI source is not a volumes: key, so there is no project entry.
+			name: "cluster volume is classified and reported",
+			file: "cluster.yml",
+			want: model.Project{
+				Name: "demo",
+				Services: []model.Service{
+					{Name: "app", Image: "alpine:3", Volumes: []model.ServiceVolume{
+						{Type: model.VolumeTypeCluster, RawType: "cluster", Source: "csi-data", Target: "/data"},
+					}},
+				},
+				Volumes: []model.NamedVolume{},
+			},
+		},
+		{
+			name: "image mount is classified and carries its subpath",
+			file: "image.yml",
+			want: model.Project{
+				Name: "demo",
+				Services: []model.Service{
+					{Name: "app", Image: "alpine:3", Volumes: []model.ServiceVolume{
+						{
+							Type: model.VolumeTypeImage, RawType: "image", Source: "assets-image:1", Target: "/srv/assets",
+							Image: &model.ImageMount{Subpath: "public"},
+						},
 					}},
 				},
 				Volumes: []model.NamedVolume{},
@@ -209,15 +329,15 @@ func TestIntrospect(t *testing.T) {
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "api", Image: "alpine:3", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "adata", Target: "/a", VolumeName: "demo_adata"},
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "adata", Target: "/a", VolumeName: "demo_adata", Volume: &model.VolumeMount{}},
 					}},
 					{Name: "web", Image: "nginx:1", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "wdata", Target: "/w", VolumeName: "demo_wdata"},
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "wdata", Target: "/w", VolumeName: "demo_wdata", Volume: &model.VolumeMount{}},
 					}},
 				},
 				Volumes: []model.NamedVolume{
-					{Key: "adata", Name: "demo_adata", UsedBy: []string{"api"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
-					{Key: "wdata", Name: "demo_wdata", UsedBy: []string{"web"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+					{Key: "adata", Name: "demo_adata", UsedBy: []model.ServiceReference{{Service: "api", Target: "/a"}}},
+					{Key: "wdata", Name: "demo_wdata", UsedBy: []model.ServiceReference{{Service: "web", Target: "/w"}}},
 				},
 			},
 		},
@@ -228,12 +348,12 @@ func TestIntrospect(t *testing.T) {
 				Name: "demo",
 				Services: []model.Service{
 					{Name: "db", Image: "postgres:16", Volumes: []model.ServiceVolume{
-						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "db", Target: "/var/lib/postgresql/data", VolumeName: "demo_db"},
-						{Type: model.VolumeTypeBind, RawType: "bind", Source: bindLocal, Target: "/db", NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "db", Target: "/var/lib/postgresql/data", VolumeName: "demo_db", Volume: &model.VolumeMount{}},
+						{Type: model.VolumeTypeBind, RawType: "bind", Source: bindLocal, Target: "/db", Bind: &model.BindMount{CreateHostPath: true}},
 					}},
 				},
 				Volumes: []model.NamedVolume{
-					{Key: "db", Name: "demo_db", UsedBy: []string{"db"}, NeedToBackup: true, Backend: model.SnapshotBackendFullCopy},
+					{Key: "db", Name: "demo_db", UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}}},
 				},
 			},
 		},
@@ -245,9 +365,10 @@ func TestIntrospect(t *testing.T) {
 			project := loadProject(t, tt.file)
 
 			// Act
-			got := introspect(project)
+			got, err := introspect(project)
 
 			// Assert
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got.Project)
 		})
 	}
@@ -260,9 +381,11 @@ func TestIntrospect_StorageID(t *testing.T) {
 	project := loadProject(t, "collision.yml")
 
 	// Act
-	got := introspect(project).Project
+	result, err := introspect(project)
 
 	// Assert
+	require.NoError(t, err)
+	got := result.Project
 	require.Len(t, got.Services, 1)
 	require.Len(t, got.Services[0].Volumes, 2)
 	require.Len(t, got.Volumes, 1)
@@ -270,44 +393,76 @@ func TestIntrospect_StorageID(t *testing.T) {
 	svc := got.Services[0]
 	assert.Equal(t, "volume/demo_db", svc.Volumes[0].ObjectID(svc.Name))
 	assert.Equal(t, "service/db/db", svc.Volumes[1].ObjectID(svc.Name))
-	assert.Equal(t, "volume/demo_db", got.Volumes[0].StorageID(), "service and project entry must address the same data")
+	assert.Equal(t, "volume/demo_db", got.Volumes[0].ObjectID(), "service and project entry must address the same data")
 }
 
 func TestVolumeUsers(t *testing.T) {
-	named := func(key string) model.ServiceVolume {
-		return model.ServiceVolume{Type: model.VolumeTypeNamed, Source: key}
+	named := func(key, target string) model.ServiceVolume {
+		return model.ServiceVolume{Type: model.VolumeTypeNamed, Source: key, Target: target}
 	}
 
 	tests := []struct {
 		name     string
 		services []model.Service
-		want     map[string][]string
+		want     map[string][]model.ServiceReference
 	}{
 		{
-			name: "one volume shared by two services",
+			name: "one volume shared by two services, each with its own mount path",
 			services: []model.Service{
-				{Name: "api", Volumes: []model.ServiceVolume{named("assets")}},
-				{Name: "web", Volumes: []model.ServiceVolume{named("assets")}},
+				{Name: "api", Volumes: []model.ServiceVolume{named("assets", "/srv/assets")}},
+				{Name: "web", Volumes: []model.ServiceVolume{named("assets", "/usr/share/nginx/html")}},
 			},
-			want: map[string][]string{"assets": {"api", "web"}},
+			want: map[string][]model.ServiceReference{"assets": {
+				{Service: "api", Target: "/srv/assets"},
+				{Service: "web", Target: "/usr/share/nginx/html"},
+			}},
 		},
 		{
-			name: "a service mounting one volume twice is one user",
+			name: "a service mounting one volume at two paths is two references",
 			services: []model.Service{
-				{Name: "db", Volumes: []model.ServiceVolume{named("data"), named("data")}},
+				{Name: "db", Volumes: []model.ServiceVolume{named("data", "/data"), named("data", "/backup")}},
 			},
-			want: map[string][]string{"data": {"db"}},
+			want: map[string][]model.ServiceReference{"data": {
+				{Service: "db", Target: "/backup"},
+				{Service: "db", Target: "/data"},
+			}},
 		},
 		{
-			name: "bind, anonymous and unsupported mounts have no volume key",
+			name: "the same service and target declared twice is one reference",
+			services: []model.Service{
+				{Name: "db", Volumes: []model.ServiceVolume{named("data", "/data"), named("data", "/data")}},
+			},
+			want: map[string][]model.ServiceReference{"data": {{Service: "db", Target: "/data"}}},
+		},
+		{
+			name: "two mounts of one volume differing only in read_only or subpath are two references",
+			services: []model.Service{
+				{Name: "web", Volumes: []model.ServiceVolume{
+					named("assets", "/srv/assets"),
+					{Type: model.VolumeTypeNamed, Source: "assets", Target: "/srv/assets", ReadOnly: true},
+					{Type: model.VolumeTypeNamed, Source: "assets", Target: "/srv/assets", Volume: &model.VolumeMount{Subpath: "public"}},
+				}},
+			},
+			want: map[string][]model.ServiceReference{"assets": {
+				{Service: "web", Target: "/srv/assets"},
+				{Service: "web", Target: "/srv/assets", ReadOnly: true},
+				{Service: "web", Target: "/srv/assets", Subpath: "public"},
+			}},
+		},
+		{
+			name: "no mount type other than named has a volume key",
 			services: []model.Service{
 				{Name: "app", Volumes: []model.ServiceVolume{
 					{Type: model.VolumeTypeBind, Source: "/host/cfg"},
 					{Type: model.VolumeTypeAnon},
-					{Type: model.VolumeTypeUnsupported, RawType: "tmpfs"},
+					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs"},
+					{Type: model.VolumeTypeNPipe, RawType: "npipe"},
+					{Type: model.VolumeTypeCluster, RawType: "cluster", Source: "csi-data"},
+					{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1"},
+					{Type: model.VolumeTypeUnknown, RawType: "something-new"},
 				}},
 			},
-			want: map[string][]string{},
+			want: map[string][]model.ServiceReference{},
 		},
 	}
 

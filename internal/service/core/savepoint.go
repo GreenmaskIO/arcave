@@ -39,9 +39,12 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	}
 	defer unlock()
 
-	insp, err := s.inspectStatefulMounts(ctx, req.ComposeFiles)
+	volumes, composeProject, err := s.resolveBackupVolumes(ctx, req.ComposeFiles)
 	if err != nil {
 		return model.Savepoint{}, err
+	}
+	if len(volumes) == 0 {
+		return model.Savepoint{}, errors.New("no stateful volumes found; nothing to snapshot")
 	}
 
 	record, err := s.newSavepointRecord(req)
@@ -57,7 +60,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	// Snapshot while the services are stopped. On failure the services still
 	// must come back up, so restart them best-effort — a restart failure on top
 	// changes nothing and is only logged — then report the snapshot error.
-	if err := s.snapshotWhileStopped(ctx, insp, record); err != nil {
+	if err := s.snapshotWhileStopped(ctx, volumes, composeProject, &record); err != nil {
 		log.Info().Msg("starting services")
 		if err := s.composeRunner.Up(ctx, req.WaitTimeout, req.ComposeFiles...); err != nil {
 			log.Error().Err(err).Msg("services failed to restart after snapshot failure")
@@ -70,41 +73,53 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 		return model.Savepoint{}, fmt.Errorf("starting services: %w", err)
 	}
 
-	return record.Savepoint, nil
+	return record, nil
 }
 
-// inspectStatefulMounts inspects the compose project and returns its persistent
-// mounts. Mounts that cannot be snapshotted are logged and skipped; an empty
-// result is an error, since there is nothing to snapshot.
-func (s *Service) inspectStatefulMounts(ctx context.Context, composeFiles []string) (model.Inspection, error) {
-	insp, err := s.composeInspector.Inspect(ctx, composeFiles...)
+// resolveBackupVolumes reads the compose project and returns the units a
+// savepoint of it covers, plus the name docker compose knows the stack by.
+//
+// Three steps, each at its own level: introspection reports facts,
+// FindBackupVolumes decides the units, reachableVolumes drops the ones today's
+// backend has no container to reach. The skips are logged here so both of those
+// stay pure functions.
+//
+// Rollback shares it: a safety backup must cover the volumes a savepoint would.
+// An empty result is not an error here — a rollback with nothing live to back up
+// still has a savepoint to restore — so create checks for it itself.
+func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []string) ([]model.Volume, string, error) {
+	res, err := s.composeInspector.Introspect(ctx, composeFiles...)
 	if err != nil {
-		return model.Inspection{}, err
+		return nil, "", fmt.Errorf("introspecting compose files: %w", err)
 	}
 
-	for _, sk := range insp.Skipped {
+	volumes, skipped, err := FindBackupVolumes(res)
+	if err != nil {
+		return nil, "", fmt.Errorf("deciding which volumes to back up: %w", err)
+	}
+	volumes, unreachable := reachableVolumes(volumes)
+
+	for _, sk := range append(skipped, unreachable...) {
 		zerolog.Ctx(ctx).Warn().
 			Str("service", sk.Service).
+			Str("target", sk.Target).
+			Str("raw_type", sk.RawType).
 			Str("reason", sk.Reason).
-			Msg("mount will not be backed up")
+			Msg("volume will not be backed up")
 	}
-	if len(insp.Mounts) == 0 {
-		return model.Inspection{}, errors.New("no stateful mounts found; nothing to snapshot")
-	}
-	return insp, nil
+	return volumes, res.Project.Name, nil
 }
 
 // newSavepointRecord builds the record for a new savepoint. It reads no store:
 // with one record per savepoint there is nothing to append the new one to.
-func (s *Service) newSavepointRecord(req model.CreateSavepointRequest) (model.SavepointRecord, error) {
+func (s *Service) newSavepointRecord(req model.CreateSavepointRequest) (model.Savepoint, error) {
 	now := s.now()
-	sp := model.Savepoint{
+	return model.Savepoint{
 		ID:          uniqueSavepointID(now),
 		Name:        req.Name,
 		Description: req.Description,
 		CreatedAt:   now.UTC(),
-	}
-	return model.SavepointRecord{Savepoint: sp}, nil
+	}, nil
 }
 
 // uniqueSavepointID returns a Unix-second savepoint ID. IDs double as the
@@ -131,19 +146,26 @@ func uniqueSavepointID(now time.Time) string {
 //
 // On failure the namespace is dropped again, so a partial snapshot can never be
 // rolled back to.
+//
+// record is a pointer because the backend's stats are the savepoint's own
+// per-volume bookkeeping: they go into it before the commit, and the caller
+// hands that same value back.
 func (s *Service) snapshotWhileStopped(
 	ctx context.Context,
-	insp model.Inspection,
-	record model.SavepointRecord,
+	volumes []model.Volume,
+	composeProject string,
+	record *model.Savepoint,
 ) error {
 	if err := s.savepointBackend.Remove(ctx, record.ID); err != nil {
 		return fmt.Errorf("clearing the savepoint directory: %w", err)
 	}
 
-	volumes, err := s.snapshotMounts(ctx, insp, record.ID)
+	stats, err := s.savepointBackend.Snapshot(ctx, record.ID, composeProject, volumes)
 	if err == nil {
-		record.Volumes = volumes
-		err = s.savepointRepo.Save(ctx, record)
+		record.Stats = stats
+		err = s.savepointRepo.Save(ctx, *record)
+	} else {
+		err = fmt.Errorf("exporting docker mounts/volumes: %w", err)
 	}
 	if err != nil {
 		if rmErr := s.savepointBackend.Remove(ctx, record.ID); rmErr != nil {
@@ -153,40 +175,9 @@ func (s *Service) snapshotWhileStopped(
 	return err
 }
 
-// snapshotMounts snapshots every mount of the inspected project into the
-// savepoint's directory, returning one VolumeRef per mount in mount order. The
-// backend owns the per-mount fan-out; this only zips the stored sizes back onto
-// the mounts to form the record entries.
-func (s *Service) snapshotMounts(
-	ctx context.Context,
-	insp model.Inspection,
-	savepointID string,
-) ([]model.VolumeRef, error) {
-	sizes, err := s.savepointBackend.Snapshot(ctx, savepointID, insp.ComposeProject, insp.Mounts)
-	if err != nil {
-		return nil, fmt.Errorf("exporting docker mounts/volumes: %w", err)
-	}
-
-	volumes := make([]model.VolumeRef, len(insp.Mounts))
-	for i, m := range insp.Mounts {
-		volumes[i] = model.VolumeRef{
-			Service:   m.Service,
-			MountPath: m.Target,
-			Type:      m.Type,
-			Source:    m.Source,
-			SizeBytes: sizes[i],
-		}
-	}
-	return volumes, nil
-}
-
-// ListSavepoints returns every committed savepoint's metadata.
+// ListSavepoints returns every committed savepoint.
 func (s *Service) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
-	records, err := s.savepointRepo.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return savepointsOf(records), nil
+	return s.savepointRepo.List(ctx)
 }
 
 // RemoveSavepoints deletes savepoints selected by req. In retention mode, when
@@ -224,7 +215,7 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 		}
 	}
 
-	return model.RemoveResult{DryRun: req.DryRun, Removed: savepointsOf(removed)}, nil
+	return model.RemoveResult{DryRun: req.DryRun, Removed: removed}, nil
 }
 
 // validateRemoveRequest rejects contradictory or incomplete remove requests:
@@ -255,9 +246,9 @@ func validateRemoveRequest(req model.RemoveRequest) error {
 // retention rules. Only the removed half is destructive input; kept is returned
 // so a caller can report or assert on the complement.
 func (s *Service) selectSavepointsToRemove(
-	records []model.SavepointRecord,
+	records []model.Savepoint,
 	req model.RemoveRequest,
-) (kept, removed []model.SavepointRecord, err error) {
+) (kept, removed []model.Savepoint, err error) {
 	if len(req.IDs) > 0 {
 		return partitionByIDs(records, req.IDs)
 	}
@@ -295,9 +286,9 @@ func (s *Service) retentionCutoffs(req model.RemoveRequest) ([]time.Time, error)
 // and the rest (kept). It errors if any requested ID is not present, so a typo
 // never silently deletes nothing.
 func partitionByIDs(
-	records []model.SavepointRecord,
+	records []model.Savepoint,
 	ids []string,
-) (kept, removed []model.SavepointRecord, err error) {
+) (kept, removed []model.Savepoint, err error) {
 	want := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		want[id] = true
@@ -328,14 +319,14 @@ func partitionByIDs(
 // it is outside the retainRecent newest (when hasRecent) and older than every
 // cutoff.
 func partitionSavepoints(
-	records []model.SavepointRecord,
+	records []model.Savepoint,
 	retainRecent int,
 	cutoffs []time.Time,
-) (kept, removed []model.SavepointRecord) {
+) (kept, removed []model.Savepoint) {
 	retainedByRecency := map[string]bool{}
 	hasRecent := retainRecent > 0
 	if hasRecent {
-		byNewest := append([]model.SavepointRecord(nil), records...)
+		byNewest := append([]model.Savepoint(nil), records...)
 		sort.Slice(byNewest, func(i, j int) bool {
 			return byNewest[i].CreatedAt.After(byNewest[j].CreatedAt)
 		})
@@ -376,7 +367,7 @@ func partitionSavepoints(
 // is gone: the savepoint no longer lists, so `arcave savepoint remove <id>` cannot
 // retry it. Those namespaces are reported here and reclaimed by a future
 // `arcave savepoint gc`.
-func (s *Service) applyRemoval(ctx context.Context, removed []model.SavepointRecord) error {
+func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) error {
 	// Delete the savepoints concurrently. This is a plain errgroup.Group, not
 	// WithContext: each removal is independent, and a cancelled sibling would abort
 	// mid-delete and leave a half-deleted directory. Wait therefore surfaces only
@@ -420,9 +411,9 @@ const refLatest = "latest"
 // IDs take precedence since they are unique; a name that matches several
 // savepoints is an error rather than a silent guess, since rolling back to the
 // wrong one is destructive.
-func findSavepoint(records []model.SavepointRecord, ref string) (model.SavepointRecord, error) {
+func findSavepoint(records []model.Savepoint, ref string) (model.Savepoint, error) {
 	if len(records) == 0 {
-		return model.SavepointRecord{}, errors.New("no savepoints exist")
+		return model.Savepoint{}, errors.New("no savepoints exist")
 	}
 	if ref == refLatest {
 		latest := records[0]
@@ -438,7 +429,7 @@ func findSavepoint(records []model.SavepointRecord, ref string) (model.Savepoint
 			return r, nil
 		}
 	}
-	var byName []model.SavepointRecord
+	var byName []model.Savepoint
 	for _, r := range records {
 		if r.Name == ref {
 			byName = append(byName, r)
@@ -446,7 +437,7 @@ func findSavepoint(records []model.SavepointRecord, ref string) (model.Savepoint
 	}
 	switch len(byName) {
 	case 0:
-		return model.SavepointRecord{}, fmt.Errorf("savepoint not found: %s", ref)
+		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", ref)
 	case 1:
 		return byName[0], nil
 	default:
@@ -454,6 +445,6 @@ func findSavepoint(records []model.SavepointRecord, ref string) (model.Savepoint
 		for i, r := range byName {
 			ids[i] = r.ID
 		}
-		return model.SavepointRecord{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s", len(byName), ref, strings.Join(ids, ", "))
+		return model.Savepoint{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s", len(byName), ref, strings.Join(ids, ", "))
 	}
 }

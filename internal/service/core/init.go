@@ -62,7 +62,7 @@ func (s *InitService) Init(ctx context.Context, cfg config.Config, override bool
 	cfg.ApplyDefaults(s.projectRoot)
 
 	// Read and verify the compose project before writing anything.
-	if _, err := s.composeInspector.Inspect(ctx, cfg.Project.ComposeFiles...); err != nil {
+	if _, err := s.composeInspector.Introspect(ctx, cfg.Project.ComposeFiles...); err != nil {
 		return "", "", fmt.Errorf("verifying compose project: %w", err)
 	}
 

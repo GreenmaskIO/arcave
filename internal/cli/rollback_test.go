@@ -30,6 +30,23 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		WaitTimeout:  waitTimeout,
 	}
 	sp := model.Savepoint{ID: "1780335122"}
+	restored := []model.Volume{
+		{
+			ObjectID: "volume/demo_pgdata",
+			Type:     model.VolumeTypeNamed,
+			Backend:  model.SnapshotBackendFullCopy,
+			Named: &model.VolumePropertiesNamed{
+				VolumeName: "demo_pgdata",
+				UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
+			},
+		},
+		{
+			ObjectID: "service/cache/data",
+			Type:     model.VolumeTypeAnon,
+			Backend:  model.SnapshotBackendFullCopy,
+			Anon:     &model.VolumePropertiesAnon{Service: "cache", Target: "/data"},
+		},
+	}
 	svcErr := errors.New("savepoint not found")
 	printErr := errors.New("stdout closed")
 
@@ -42,36 +59,31 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		wantPrinted []any                // every value handed to the printer, in order
 	}{
 		{
-			name: "maps every restored mount",
+			// The handler maps nothing: what a savepoint covers is already the
+			// domain's own type. The "empty slice, never nil" guarantee is the
+			// service's now, not this adapter's.
+			name: "forwards every restored volume",
 			res: model.RollbackResult{
 				Savepoint: sp,
-				Restored: []model.Mount{
-					{Service: "db", Target: "/var/lib/postgresql/data"},
-					{Service: "cache", Target: "/data"},
-				},
+				Restored:  restored,
 			},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
 			wantPrinted: []any{model.RollbackResponse{
 				RolledBackTo: sp,
-				Restored: []model.RestoredMount{
-					{Service: "db", MountPath: "/var/lib/postgresql/data"},
-					{Service: "cache", MountPath: "/data"},
-				},
+				Restored:     restored,
 			}},
 		},
 		{
-			// Restored must be an empty slice, never nil, so it marshals as []
-			// rather than null. assert.Equal tells the two apart.
 			name:       "restores nothing",
-			res:        model.RollbackResult{Savepoint: sp, Restored: nil},
+			res:        model.RollbackResult{Savepoint: sp, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
 			wantPrinted: []any{model.RollbackResponse{
 				RolledBackTo: sp,
-				Restored:     []model.RestoredMount{},
+				Restored:     []model.Volume{},
 			}},
 		},
 		{
@@ -84,13 +96,13 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		},
 		{
 			name:       "printer error surfaces",
-			res:        model.RollbackResult{Savepoint: sp},
+			res:        model.RollbackResult{Savepoint: sp, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: printErr,
 			wantErr:    printErr,
 			wantPrinted: []any{model.RollbackResponse{
 				RolledBackTo: sp,
-				Restored:     []model.RestoredMount{},
+				Restored:     []model.Volume{},
 			}},
 		},
 	}

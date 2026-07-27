@@ -3,8 +3,17 @@ name: demo
 services:
   db:
     image: postgres:16
+    labels:
+      io.arcave.role: database
     volumes:
       - pgdata:/var/lib/postgresql/data
 
 volumes:
   pgdata:
+    labels:
+      io.arcave.backend: cdc
+    driver: local
+    driver_opts:
+      type: none
+      device: /srv/pgdata
+      o: bind

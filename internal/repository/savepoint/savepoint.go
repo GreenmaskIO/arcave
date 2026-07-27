@@ -42,15 +42,21 @@ const recordName = "savepoint.json"
 const legacyManifestName = "manifest.json"
 
 // schemaVersion is the record's own version, independent of the config's. It is
-// written into every record so a future reader can tell what it is holding.
-const schemaVersion = 1
+// written into every record, and a record carrying any other value is refused.
+//
+// Version 2 replaced the flat per-mount volumes list with the savepoint's stats,
+// and the storage layout moved with it — "<id>/<service>/<mount-path>/data.tar"
+// became "<id>/<object-id>/data.tar". A v1 record therefore names archives that
+// are not where it says they are, so it is refused rather than read: arcave
+// speaks exactly one record version, as it speaks one config version.
+const schemaVersion = 2
 
-// file is the on-disk shape of savepoint.json: the shared record, flattened,
+// file is the on-disk shape of savepoint.json: the shared savepoint, flattened,
 // plus its schema version. The envelope is private to the repository, so the
 // Save/List contract is expressed purely in the shared model types.
 type file struct {
 	SchemaVersion int `json:"schema_version"`
-	model.SavepointRecord
+	model.Savepoint
 }
 
 // Repository reads and writes savepoint records inside store.
@@ -69,18 +75,18 @@ func New(store storages.Storager) *Repository {
 // Save writes "<id>/savepoint.json". It is the commit: the caller must have
 // written every archive first, because a reader treats this object's existence
 // as proof that the savepoint is whole.
-func (r *Repository) Save(ctx context.Context, record model.SavepointRecord) error {
-	if err := model.ValidSavepointID(record.ID); err != nil {
+func (r *Repository) Save(ctx context.Context, savepoint model.Savepoint) error {
+	if err := model.ValidSavepointID(savepoint.ID); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(file{SchemaVersion: schemaVersion, SavepointRecord: record}, "", "  ")
+	data, err := json.MarshalIndent(file{SchemaVersion: schemaVersion, Savepoint: savepoint}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal savepoint %s: %w", record.ID, err)
+		return fmt.Errorf("marshal savepoint %s: %w", savepoint.ID, err)
 	}
 	data = append(data, '\n')
 
-	if err := r.storage.PutObject(ctx, recordKey(record.ID), bytes.NewReader(data)); err != nil {
-		return fmt.Errorf("write savepoint record %s: %w", record.ID, err)
+	if err := r.storage.PutObject(ctx, recordKey(savepoint.ID), bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("write savepoint record %s: %w", savepoint.ID, err)
 	}
 	return nil
 }
@@ -95,7 +101,7 @@ func (r *Repository) Save(ctx context.Context, record model.SavepointRecord) err
 //
 // That is N+1 round-trips rather than a single index read, which is free on a
 // local filesystem and, on an object store, collapses into one prefix listing.
-func (r *Repository) List(ctx context.Context) ([]model.SavepointRecord, error) {
+func (r *Repository) List(ctx context.Context) ([]model.Savepoint, error) {
 	if err := r.rejectLegacyManifest(ctx); err != nil {
 		return nil, err
 	}
@@ -105,7 +111,7 @@ func (r *Repository) List(ctx context.Context) ([]model.SavepointRecord, error) 
 		return nil, fmt.Errorf("list savepoint store: %w", err)
 	}
 
-	records := make([]model.SavepointRecord, 0, len(dirs))
+	records := make([]model.Savepoint, 0, len(dirs))
 	for _, dir := range dirs {
 		id := dir.Dirname()
 		if err := model.ValidSavepointID(id); err != nil {
@@ -144,21 +150,21 @@ func (r *Repository) rejectLegacyManifest(ctx context.Context) error {
 
 // load reads one savepoint's record. found is false when the namespace holds no
 // record, which means the savepoint never committed.
-func (r *Repository) load(ctx context.Context, id string) (model.SavepointRecord, bool, error) {
+func (r *Repository) load(ctx context.Context, id string) (model.Savepoint, bool, error) {
 	// Exists rather than matching GetObject's error against os.ErrNotExist: that
 	// error belongs to the directory backend, and an object store would report a
 	// missing key differently.
 	exists, err := r.storage.Exists(ctx, recordKey(id))
 	if err != nil {
-		return model.SavepointRecord{}, false, fmt.Errorf("stat savepoint record %s: %w", id, err)
+		return model.Savepoint{}, false, fmt.Errorf("stat savepoint record %s: %w", id, err)
 	}
 	if !exists {
-		return model.SavepointRecord{}, false, nil
+		return model.Savepoint{}, false, nil
 	}
 
 	src, err := r.storage.GetObject(ctx, recordKey(id))
 	if err != nil {
-		return model.SavepointRecord{}, false, fmt.Errorf("read savepoint record %s: %w", id, err)
+		return model.Savepoint{}, false, fmt.Errorf("read savepoint record %s: %w", id, err)
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
@@ -168,9 +174,17 @@ func (r *Repository) load(ctx context.Context, id string) (model.SavepointRecord
 
 	var f file
 	if err := json.NewDecoder(src).Decode(&f); err != nil {
-		return model.SavepointRecord{}, false, fmt.Errorf("parse savepoint record %s: %w", id, err)
+		return model.Savepoint{}, false, fmt.Errorf("parse savepoint record %s: %w", id, err)
 	}
-	return f.SavepointRecord, true, nil
+	// Refused, never skipped — same rule as the legacy manifest above, for the same
+	// reason: skipping reports "no savepoints" over a store that is full of them.
+	if f.SchemaVersion != schemaVersion {
+		return model.Savepoint{}, false, fmt.Errorf(
+			"%w: savepoint %s is version %d, this arcave writes and reads %d",
+			model.ErrUnsupportedRecordVersion, id, f.SchemaVersion, schemaVersion,
+		)
+	}
+	return f.Savepoint, true, nil
 }
 
 // Delete removes one savepoint's record. It is the uncommit: the caller must run

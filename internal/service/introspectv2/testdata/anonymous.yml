@@ -4,4 +4,8 @@ services:
   db:
     image: postgres:16
     volumes:
-      - /var/lib/postgresql/data
+      - type: volume
+        target: /var/lib/postgresql/data
+        volume:
+          labels:
+            io.arcave.backend: cdc

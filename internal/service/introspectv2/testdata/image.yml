@@ -1,0 +1,11 @@
+name: demo
+
+services:
+  app:
+    image: alpine:3
+    volumes:
+      - type: image
+        source: assets-image:1
+        target: /srv/assets
+        image:
+          subpath: public

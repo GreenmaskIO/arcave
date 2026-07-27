@@ -6,16 +6,21 @@
 //
 // CopyBackend runs the whole cycle itself, including the per-volume fan-out. It
 // holds a DockerVolume (the mount endpoints) and the Storager of the store it
-// writes into, so given a savepoint id and its mounts it opens each source,
+// writes into, so given a savepoint id and its volumes it opens each source,
 // writes storage, and on restore reads storage and writes each mount — the
 // service never wires the two halves or bounds the concurrency. The store is
 // bound at construction, not named per call: a savepoint store and a
 // safety-backup store are two backend instances over two stores.
 //
-// The on-disk layout is this package's own: each archive's key is
-// snapshotKey(savepointID, service, mountPath) (snapshot_key.go), computed
-// identically on the write and read sides, so there is no opaque handle to
-// record — a restore is fully described by the savepoint id and the mounts.
+// Two things are this package's own policy, and the service names neither:
+//
+//   - The on-disk layout: snapshotKey(savepointID, volume.ObjectID)
+//     (snapshot_key.go), rendered identically on both sides, so there is no
+//     handle to record.
+//   - The way in: this backend moves bytes through a container that mounts the
+//     volume, so it picks that mount itself (accessPath, access_path.go). A
+//     backend reading a volume directly would make no such choice — which is why
+//     the choice is not in the seam.
 package snapshot
 
 import (
@@ -30,16 +35,26 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// maxConcurrentVolumeOperations caps how many mount export/restore operations run
-// in parallel within one savepoint, bounding pressure on Docker and the host
+// maxConcurrentVolumeOperations caps how many volume export/restore operations
+// run in parallel within one savepoint, bounding pressure on Docker and the host
 // filesystem.
 const maxConcurrentVolumeOperations = 5
+
+// FullCopyStat is this backend's SnapshotStat payload. It is owned here, beside
+// the code that mints it, for the same reason the storage key is: a payload means
+// whatever its backend says it means.
+type FullCopyStat struct {
+	SizeBytes int64 `json:"size_bytes"`
+}
 
 // DockerVolume is what the backend needs from the Docker engine: stream a
 // mount's contents out (OpenMount, the export side) and wipe+extract a stream
 // back in (WriteMount, the restore side). The concrete *docker.Engine satisfies
 // it. Close is deliberately absent — the engine's lifecycle belongs to whoever
 // created it (the DI root), not to the backend it is injected into.
+//
+// It speaks (project, service, target) strings and stayed that way through the
+// move to model.Volume above it: that is Docker's addressing, not a domain model.
 type DockerVolume interface {
 	OpenMount(ctx context.Context, project, service, target string) (io.ReadCloser, error)
 	WriteMount(ctx context.Context, project, service, target string, r io.Reader) error
@@ -47,7 +62,7 @@ type DockerVolume interface {
 
 // CopyBackend stores a savepoint's tar streams verbatim through its Storager and
 // streams them back on restore. It owns the whole transfer end to end: fan out
-// over the mounts, open each Docker mount, write storage, and the mirror on
+// over the volumes, open each Docker mount, write storage, and the mirror on
 // restore.
 type CopyBackend struct {
 	docker DockerVolume
@@ -64,47 +79,59 @@ func NewCopyBackend(docker DockerVolume, storage storages.Storager) *CopyBackend
 	return &CopyBackend{docker: docker, storage: storage}
 }
 
-// Snapshot captures every mount into the savepoint's directory concurrently,
-// returning the bytes stored per mount in the same order as mounts. The savepoint
-// id is validated before any key is rendered, since it is the write path. On the
-// first mount failure the group is cancelled and the error returned; the caller
-// drops the whole directory (Remove) to clean up the partial fan-out.
-func (b *CopyBackend) Snapshot(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) ([]int64, error) {
+// Snapshot captures every volume into the savepoint's directory concurrently,
+// returning one stat per volume in the same order as volumes. The savepoint id is
+// validated before any key is rendered, since it is the write path. On the first
+// volume failure the group is cancelled and the error returned; the caller drops
+// the whole directory (Remove) to clean up the partial fan-out.
+func (b *CopyBackend) Snapshot(
+	ctx context.Context, savepointID, composeProject string, volumes []model.Volume,
+) ([]model.SnapshotStat, error) {
 	if err := model.ValidSavepointID(savepointID); err != nil {
 		return nil, err
 	}
 
-	// Each size lands at its own index, so the goroutines never race on the slice
-	// and the caller keeps mount order.
-	sizes := make([]int64, len(mounts))
+	// Each stat lands at its own index, so the goroutines never race on the slice
+	// and the caller keeps volume order.
+	stats := make([]model.SnapshotStat, len(volumes))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrentVolumeOperations)
-	for i, m := range mounts {
+	for i, v := range volumes {
 		g.Go(func() error {
-			zerolog.Ctx(gctx).Info().Str("service", m.Service).Str("mount", m.Target).Msg("snapshotting mount")
-			size, err := b.snapshotMount(gctx, savepointID, composeProject, m)
+			zerolog.Ctx(gctx).Info().Str("volume", v.ObjectID).Msg("snapshotting volume")
+			size, err := b.snapshotVolume(gctx, savepointID, composeProject, v)
 			if err != nil {
-				return fmt.Errorf("snapshot %s %s: %w", m.Service, m.Target, err)
+				return fmt.Errorf("snapshot %s: %w", v.ObjectID, err)
 			}
-			zerolog.Ctx(gctx).Info().Str("service", m.Service).Str("mount", m.Target).Msg("mount snapshotted")
-			sizes[i] = size
+			zerolog.Ctx(gctx).Info().Str("volume", v.ObjectID).Int64("size_bytes", size).Msg("volume snapshotted")
+			stats[i] = model.SnapshotStat{
+				Volume:  v,
+				Type:    model.SnapshotBackendFullCopy,
+				Payload: FullCopyStat{SizeBytes: size},
+			}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	return sizes, nil
+	return stats, nil
 }
 
-// snapshotMount streams one volume out of its Docker mount and stores it verbatim
-// under snapshotKey. The Docker mount is the only closer, so it is always
-// closed; a close error is logged, not returned, since the bytes are already
-// stored.
-func (b *CopyBackend) snapshotMount(ctx context.Context, savepointID, composeProject string, m model.Mount) (int64, error) {
-	src, err := b.docker.OpenMount(ctx, composeProject, m.Service, m.Target)
+// snapshotVolume streams one volume out through the mount accessPath picked and
+// stores it verbatim under snapshotKey. The Docker mount is the only closer, so it
+// is always closed; a close error is logged, not returned — the bytes are stored.
+func (b *CopyBackend) snapshotVolume(
+	ctx context.Context, savepointID, composeProject string, v model.Volume,
+) (int64, error) {
+	service, target, err := accessPath(v)
 	if err != nil {
-		return 0, fmt.Errorf("open docker mount: %w", err)
+		return 0, err
+	}
+
+	src, err := b.docker.OpenMount(ctx, composeProject, service, target)
+	if err != nil {
+		return 0, fmt.Errorf("open docker mount %s %s: %w", service, target, err)
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
@@ -117,22 +144,22 @@ func (b *CopyBackend) snapshotMount(ctx context.Context, savepointID, composePro
 	// stream rather than stat'ing the object afterwards, so the size reported is
 	// the size actually written.
 	counted := &countingReader{r: src}
-	if err := b.storage.PutObject(ctx, snapshotKey(savepointID, m.Service, m.Target), counted); err != nil {
+	if err := b.storage.PutObject(ctx, snapshotKey(savepointID, v.ObjectID), counted); err != nil {
 		return 0, fmt.Errorf("write storage: %w", err)
 	}
 	return counted.n, nil
 }
 
-// Restore streams every stored mount back into its Docker mount concurrently, the
+// Restore streams every stored volume back into the project concurrently, the
 // mirror of Snapshot. A restore failure fails the whole call; the caller reverts.
-func (b *CopyBackend) Restore(ctx context.Context, savepointID, composeProject string, mounts []model.Mount) error {
+func (b *CopyBackend) Restore(ctx context.Context, savepointID, composeProject string, volumes []model.Volume) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrentVolumeOperations)
-	for _, m := range mounts {
+	for _, v := range volumes {
 		g.Go(func() error {
-			zerolog.Ctx(gctx).Info().Str("service", m.Service).Str("mount", m.Target).Msg("restoring mount")
-			if err := b.restoreMount(gctx, savepointID, composeProject, m); err != nil {
-				return fmt.Errorf("restore %s %s: %w", m.Service, m.Target, err)
+			zerolog.Ctx(gctx).Info().Str("volume", v.ObjectID).Msg("restoring volume")
+			if err := b.restoreVolume(gctx, savepointID, composeProject, v); err != nil {
+				return fmt.Errorf("restore %s: %w", v.ObjectID, err)
 			}
 			return nil
 		})
@@ -140,13 +167,17 @@ func (b *CopyBackend) Restore(ctx context.Context, savepointID, composeProject s
 	return g.Wait()
 }
 
-// restoreMount recomputes the storage key from the savepoint id and the mount,
-// opens the stored object, and hands the tar stream to WriteMount, which wipes
-// the mount and extracts it. The storage object is the only closer, so it is
-// always closed; a close error is logged, not returned, since the bytes are
-// already consumed.
-func (b *CopyBackend) restoreMount(ctx context.Context, savepointID, composeProject string, m model.Mount) error {
-	src, err := b.storage.GetObject(ctx, snapshotKey(savepointID, m.Service, m.Target))
+// restoreVolume recomputes the storage key from the savepoint id and the volume's
+// object id, opens the stored object, and hands the tar stream to WriteMount,
+// which wipes the mount and extracts it. The storage object is the only closer, so
+// it is always closed; a close error is logged, not returned — the bytes are read.
+func (b *CopyBackend) restoreVolume(ctx context.Context, savepointID, composeProject string, v model.Volume) error {
+	service, target, err := accessPath(v)
+	if err != nil {
+		return err
+	}
+
+	src, err := b.storage.GetObject(ctx, snapshotKey(savepointID, v.ObjectID))
 	if err != nil {
 		return fmt.Errorf("open storage object: %w", err)
 	}
@@ -156,23 +187,23 @@ func (b *CopyBackend) restoreMount(ctx context.Context, savepointID, composeProj
 		}
 	}()
 
-	if err := b.docker.WriteMount(ctx, composeProject, m.Service, m.Target, src); err != nil {
-		return fmt.Errorf("write docker mount: %w", err)
+	if err := b.docker.WriteMount(ctx, composeProject, service, target, src); err != nil {
+		return fmt.Errorf("write docker mount %s %s: %w", service, target, err)
 	}
 	return nil
 }
 
-// Missing reports which of the savepoint's mounts have no archive in the store,
+// Missing reports which of the savepoint's volumes have no archive in the store,
 // so a pre-flight can name every gap at once rather than abort on the first.
-func (b *CopyBackend) Missing(ctx context.Context, savepointID string, mounts []model.Mount) ([]model.Mount, error) {
-	var missing []model.Mount
-	for _, m := range mounts {
-		exists, err := b.storage.Exists(ctx, snapshotKey(savepointID, m.Service, m.Target))
+func (b *CopyBackend) Missing(ctx context.Context, savepointID string, volumes []model.Volume) ([]model.Volume, error) {
+	var missing []model.Volume
+	for _, v := range volumes {
+		exists, err := b.storage.Exists(ctx, snapshotKey(savepointID, v.ObjectID))
 		if err != nil {
-			return nil, fmt.Errorf("check archive for %s %s: %w", m.Service, m.Target, err)
+			return nil, fmt.Errorf("check archive for %s: %w", v.ObjectID, err)
 		}
 		if !exists {
-			missing = append(missing, m)
+			missing = append(missing, v)
 		}
 	}
 	return missing, nil
@@ -183,9 +214,9 @@ func (b *CopyBackend) Missing(ctx context.Context, savepointID string, mounts []
 // on a missing prefix (unlike os.RemoveAll).
 //
 // Deleting the whole directory, rather than a set of archives, is what lets the
-// service drop a *partial* snapshot: when a mount fails mid-fan-out there are only
-// half-written archives on disk. It is why Remove is savepoint-scoped while the
-// transfer methods are per-mount underneath.
+// service drop a *partial* snapshot: when a volume fails mid-fan-out there are
+// only half-written archives on disk. It is why Remove is savepoint-scoped while
+// the transfer methods are per-volume underneath.
 //
 // The savepoint id is validated before it is rendered into a storage key: this is
 // the destructive call, so an id that is not a Unix timestamp must not reach the
@@ -204,7 +235,7 @@ func (b *CopyBackend) Remove(ctx context.Context, savepointID string) error {
 	return b.storage.DeleteAll(ctx, savepointID)
 }
 
-// countingReader tallies the bytes read through it, so snapshotMount can report
+// countingReader tallies the bytes read through it, so snapshotVolume can report
 // how much it actually stored without buffering or re-reading the stream.
 type countingReader struct {
 	r io.Reader

@@ -237,7 +237,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	}
 	return nil, model.RollbackResponse{
 		RolledBackTo: res.Savepoint,
-		Restored:     restoredMounts(res.Restored),
+		Restored:     res.Restored,
 	}, nil
 }
 
