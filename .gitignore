@@ -34,6 +34,8 @@ go.work.sum
 .arcave
 .claude
 bin/
+# goreleaser's build output
+dist/
 .vscode
 .user
 examples/demo/.gm

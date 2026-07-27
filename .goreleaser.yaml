@@ -1,0 +1,124 @@
+# GoReleaser owns the release build: the target matrix, the archives, the
+# per-artifact checksums and the GitHub Release. The Makefile stays the local
+# entry point and deliberately does not share these flags — a release binary is
+# stripped and trimmed, a development one is not.
+#
+# The whole run happens on ONE macOS runner, because the darwin targets need cgo
+# (see below) and GoReleaser's split/merge across runners is a Pro feature. The
+# linux targets are pure Go, so they cross-compile from macOS just as well as
+# from anywhere else.
+#
+# Windows is deliberately absent: internal/service/lock reaches for
+# syscall.Flock, which does not exist there, so arcave does not build for windows
+# at all yet. Adding a windows target means implementing that lock first
+# (LockFileEx), not editing this file.
+#
+# Validate a change with `goreleaser check`, and prove the matrix still compiles
+# with `goreleaser release --snapshot --clean --skip=publish`.
+version: 2
+
+project_name: arcave
+
+builds:
+  - id: arcave
+    main: ./cmd/arcave
+    binary: arcave
+    env:
+      # darwin CANNOT be built with CGO_ENABLED=0: compose/v2's pkg/compose
+      # pulls in pkg/watch, which pulls in github.com/fsnotify/fsevents — a
+      # cgo-only package with no pure-Go fallback, so a cgo-less darwin build
+      # fails with "undefined: EventFlags". That is why the release job needs a
+      # macOS runner at all. linux needs no C toolchain, so it stays static.
+      - CGO_ENABLED={{ if eq .Os "darwin" }}1{{ else }}0{{ end }}
+      # Read only when cgo is on, i.e. only on darwin — on linux CGO_ENABLED=0
+      # means the C compiler is never invoked and this value is inert. The macOS
+      # SDK on the arm64 runner carries both slices, so clang targets x86_64
+      # from it directly.
+      - CC=clang -arch {{ if eq .Arch "amd64" }}x86_64{{ else }}arm64{{ end }}
+    flags:
+      - -trimpath
+    # -s -w drops the symbol table and DWARF: the compose/v2 dependency puts the
+    # binary near 97 MB, and this is what brings it back to roughly 65 MB. The -X
+    # stamps are what make `arcave --version` report a real version;
+    # cmd/arcave/cmd_root.go declares the vars they fill.
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.buildDate={{ .Date }}
+    # An explicit target list, not goos x goarch: the matrix is ragged — darwin
+    # ships two architectures and linux seven — so the cross product would need
+    # more `ignore` entries than it has real targets. Each line here is a target
+    # that actually gets built, which is also how the list is reviewed.
+    #
+    # linux_arm_6 and linux_arm_7 are the reason the archive name_template below
+    # carries the GOARM level: without it both render as `linux_arm` and the two
+    # binaries overwrite each other.
+    targets:
+      - darwin_amd64
+      - darwin_arm64
+      - linux_amd64
+      - linux_arm64
+      - linux_arm_6
+      - linux_arm_7
+      - linux_ppc64le
+      - linux_riscv64
+      - linux_s390x
+
+archives:
+  # No `ids` filter: every build above belongs in the release, and listing them
+  # would be one more place to forget a target.
+  - id: arcave
+    # `binary` is the "do not archive" format: each build is published as the
+    # bare executable, so a user downloads one file and runs it, with no unpack
+    # step. The cost is that nothing can ride along — `files:` has no container
+    # to live in, so LICENSE and README are no longer shipped beside the binary
+    # the way they were inside the tarball.
+    formats:
+      - binary
+    # With `binary` this names the executable itself, not an archive around it.
+    #
+    # The `{{ with .Arm }}` suffix is load-bearing, not decoration: linux_arm_6
+    # and linux_arm_7 both render `.Arch` as `arm`, so without the GOARM level
+    # the two binaries take the same name and the second silently replaces the
+    # first. It renders empty for every non-arm target, so nothing else changes.
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+
+checksum:
+  algorithm: sha256
+  # One combined file for the whole release, not a .sha256 per artifact (which
+  # is what `split: true` did here before). Now that the release lists one bare
+  # binary per target, a checksum file beside each one would double that list
+  # for no gain.
+  #
+  # The default name is {{ .ProjectName }}_{{ .Version }}_checksums.txt; a fixed
+  # name is easier to reference from docs and scripts, since the URL of the
+  # latest release's checksums stops changing every version. The trade is that a
+  # copy downloaded on its own no longer says which release it came from — the
+  # binary names it lists do.
+  name_template: checksum.txt
+
+snapshot:
+  # Snapshot builds run on every push to main and are never published, so the
+  # version only has to be unique and obviously not a release.
+  version_template: "{{ incpatch .Version }}-dev-{{ .ShortCommit }}"
+
+changelog:
+  disable: true
+
+release:
+  # prerelease: auto marks a tag carrying a pre-release suffix (v0.0.1-rc1) as a
+  # GitHub pre-release, which is what makes a rehearsal tag safe to push.
+  prerelease: auto
+  # The licence and readme ride along as their own release assets. They used to
+  # travel inside the tar.gz via `archives.files`, which the `binary` format
+  # left nowhere to put; attaching them here puts them back in the release,
+  # just as two more files next to the binaries rather than inside one.
+  #
+  # A glob that matches nothing fails the release — which is the behaviour you
+  # want, but note it only fires in the publish step, so `--snapshot` never
+  # exercises it and a typo here surfaces on the tag.
+  extra_files:
+    - glob: ./LICENSE
+    - glob: ./README.md
