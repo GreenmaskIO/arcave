@@ -10,11 +10,16 @@ The two core workflows are:
 - **Create savepoint** → stop services → copy volume data → restart services → wait for health checks.
 - **Rollback** → stop services → delete volume data → copy savepoint data back → restart services → wait for health checks.
 
-arcave is a CLI today (`arcave savepoint create`, `arcave rollback`). `arcave mcp` — an MCP server exposing these
-operations as native tools for AI agents — is the design target and **not yet implemented**: the
-command exists and returns "not implemented", as does `arcave status`. Wherever this file argues that a
-decision was made "so `arcave mcp` gets it too", it is protecting that seam in advance, not describing a
-shipped adapter.
+arcave has two adapters over the same service layer: the CLI (`arcave savepoint create`, `arcave rollback`)
+and `arcave mcp`, an MCP server over stdio exposing those operations as native tools for AI agents
+(`savepoint_create`, `savepoint_list`, `savepoint_remove`, `rollback`, `recommend`). Both are shipped, so
+where this file argues a decision was made "so `arcave mcp` gets it too", it is describing a real second
+caller. `arcave status` is the one command that still returns "not implemented".
+
+The `recommend` tool is where the two adapters deliberately stop being symmetric: arcave reports what a
+compose project is missing and never edits it. Applying a recommendation — choosing which findings to
+act on, which file to add the volume to — is the *agent's* job, driven by the instructions in the tool's
+own description. There is no apply tool, and no code path in arcave writes a compose file.
 
 ## Commands
 
@@ -67,7 +72,7 @@ test: a seam with more than one mintable implementation, or a cut in the import 
 | `internal/config/` | The config value type (`config.go`) and `Unmarshal` (`unmarshal.go`) — the single home of the config *policy*: version gate, unknown-key rejection, `ApplyDefaults`, `Validate`. It takes the loaded `*viper.Viper` and decodes it: the `mapstructure` tags on `Config` *are* the schema viper fills, so the decode belongs with the type. A **data package**: it reaches for no client and no SDK, so `arcave init` never drags a cloud SDK into its import graph |
 | `internal/client/compose/` | `Inspector` — reads the project's *declared* state: parses `docker-compose.yml` via `compose-go` to enumerate every service's persistent mounts and the project name. Touches no daemon. `compose.Load` is exported because `client/docker`'s `ComposeRunner` loads the same project before acting on it — one loader, so both resolve the same file set, `.env` and project name |
 | `internal/client/docker/` | Acts on the *running* stack. `Engine` moves volume bytes in/out of service containers (Docker SDK); `ComposeRunner` stops and starts services (`compose/v2` as a library). arcave shells out to nothing, so it needs no docker CLI or compose plugin installed. `Engine` owns the one `docker/cli` instance that turns `docker.Options` into a connection, and `NewComposeRunner(engine)` builds over it — that shared client is why they are one package. `oneshot.go` holds the throwaway-container *mechanism* (`runOneShotContainer`) the wipe policy is built on |
-| `internal/cli/` | One handler per command (`ConfigInitHandler`, `SavepointCreateHandler`, …); each calls a service method and renders the result through the injected `model.Printer`. `errors.go` holds the cross-handler `storeError`, which rephrases a store sentinel as a remedy. Knows nothing of cobra or viper |
+| `internal/cli/` | One handler per command (`ConfigInitHandler`, `SavepointCreateHandler`, …); each calls a service method and renders the result through the injected `model.Printer`. `errors.go` holds the cross-handler `storeError`, which rephrases a store sentinel as a remedy. Knows nothing of cobra or viper. `mcp.go` is the second adapter in the same package — `MCPHandler`, the tool schemas, and the descriptions that are the agent's only instructions; it declares its own `mcpService` seam and writes nothing to stdout, which is its JSON-RPC channel |
 | `internal/printer/json/` | The production `model.Printer`: indented JSON to stdout |
 | `internal/utils/` | Logging setup and the log-level/format defaults `cmd/arcave` uses for its global flags. A leaf |
 | `cmd/arcave/` | The composition root. One file per command — the cobra definition, its flags, and its `RunE`. Resolves config via viper and builds per-command dependencies |

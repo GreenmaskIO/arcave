@@ -81,4 +81,4 @@
 
 - image: minio/minio
   volumes:
-    - /data
+    - /export

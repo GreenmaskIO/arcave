@@ -43,6 +43,9 @@ services:
     environment:
       PGPASSWORD: example
 
+  kafka:
+    image: bitnami/kafka
+
 volumes:
   pgdata:
   miniodata:

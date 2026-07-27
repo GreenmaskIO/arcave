@@ -6,16 +6,31 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-type recommendService interface {
+// RecommendService is this package's view of the recommend workflow. It is
+// consumer-owned like every other seam here, and exported for the same reason
+// snapshot.DockerVolume is: it is named in a constructor's signature — a
+// RecommendServiceFactory is a parameter of NewMCPHandler — so godoc has to be
+// able to say what the contract is.
+type RecommendService interface {
 	Recommend(ctx context.Context, composeFiles ...string) ([]model.Recommendation, error)
 }
 
+// RecommendServiceFactory mints a RecommendService over the recommender catalogs
+// merged on top of the built-in one, in order (empty for the built-in alone).
+//
+// The seam is a factory rather than a service because the catalog is fixed at
+// construction while the catalogs to merge arrive with each MCP tool call — the
+// CLI takes them from a flag once per process, an agent names them per call.
+// Constructing one is cheap (embedded bytes plus any files named), so building it
+// per call costs nothing worth caching.
+type RecommendServiceFactory func(recommenderFiles []string) RecommendService
+
 type RecommendHandler struct {
-	svc     recommendService
+	svc     RecommendService
 	printer printer
 }
 
-func NewRecommendHandler(svc recommendService, printer printer) *RecommendHandler {
+func NewRecommendHandler(svc RecommendService, printer printer) *RecommendHandler {
 	return &RecommendHandler{
 		svc:     svc,
 		printer: printer,
