@@ -57,24 +57,27 @@ archives:
   # No `ids` filter: every build above belongs in the release, and listing them
   # would be one more place to forget a target.
   - id: arcave
+    # `binary` is the "do not archive" format: each build is published as the
+    # bare executable, so a user downloads one file and runs it, with no unpack
+    # step. The cost is that nothing can ride along — `files:` has no container
+    # to live in, so LICENSE and README are no longer shipped beside the binary
+    # the way they were inside the tarball.
     formats:
-      - tar.gz
-    # os_arch is enough to name a target while the matrix is one arch level per
-    # platform. Adding a target that splits an arch further — armv6 next to
-    # armv7 — means adding the discriminator here too, or two builds collide on
-    # one archive name.
+      - binary
+    # With `binary` this names the executable itself, not an archive around it.
+    # os_arch is enough while the matrix is one arch level per platform; adding
+    # a target that splits an arch further — armv6 next to armv7 — means adding
+    # the discriminator here too, or two builds collide on one file name.
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    files:
-      - LICENSE
-      - README.md
 
 checksum:
   algorithm: sha256
-  # split: true writes one <artifact>.sha256 next to each archive instead of a
-  # single combined checksums.txt, so a user verifying one download fetches one
-  # small file. The default name template is {{ .ArtifactName }}.{{ .Algorithm }}.
-  split: true
+  # One combined file for the whole release, not a .sha256 per artifact (which
+  # is what `split: true` did here before). Now that the release lists one bare
+  # binary per target, a checksum file beside each one would double that list
+  # for no gain. The default name carries the project and version, so a copy
+  # downloaded on its own still says which release it belongs to.
 
 snapshot:
   # Snapshot builds run on every push to main and are never published, so the
@@ -83,6 +86,14 @@ snapshot:
 
 changelog:
   sort: asc
+  # Drop the commit hash each entry would otherwise open with. The default
+  # renders the FULL 40-char sha, which buries the subject line; `abbrev: -1`
+  # removes it too but leaves the separator behind, so every entry starts with a
+  # stray double space. Overriding the whole line is the clean cut.
+  #
+  # The template must NOT include its own "* ": GoReleaser adds the list marker,
+  # so a bullet here yields "* * feat: ...".
+  format: "{{ .Message }}"
   filters:
     exclude:
       - "^docs:"
@@ -96,3 +107,14 @@ release:
   # prerelease: auto marks a tag carrying a pre-release suffix (v0.0.1-rc1) as a
   # GitHub pre-release, which is what makes a rehearsal tag safe to push.
   prerelease: auto
+  # The licence and readme ride along as their own release assets. They used to
+  # travel inside the tar.gz via `archives.files`, which the `binary` format
+  # left nowhere to put; attaching them here puts them back in the release,
+  # just as two more files next to the binaries rather than inside one.
+  #
+  # A glob that matches nothing fails the release — which is the behaviour you
+  # want, but note it only fires in the publish step, so `--snapshot` never
+  # exercises it and a typo here surfaces on the tag.
+  extra_files:
+    - glob: ./LICENSE
+    - glob: ./README.md
