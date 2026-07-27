@@ -30,9 +30,25 @@ var (
 	rootExitCode int
 )
 
+// The build stamps, filled at link time by goreleaser's -X flags (see
+// .goreleaser.yaml). They are plain package vars in main because that is the
+// only path -X can name, and they keep readable defaults so a binary built by
+// `make build` or `go run` reports what it is rather than an empty string.
+var (
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "arcave",
 	Short: "Local environment lifecycle manager for stateful Docker Compose applications",
+	// Setting Version is what gives the tree its --version flag. Go resolves the
+	// initialisation order from the dependency, so the stamps above are already
+	// filled when this literal is evaluated. It is the one output that is not
+	// JSON: nothing consumes it as a command result, and cobra renders it before
+	// PersistentPreRunE has resolved a config to print through.
+	Version: fmt.Sprintf("%s (commit %s, built %s)", version, commit, buildDate),
 	// SilenceUsage keeps a runtime failure from dumping the whole usage text;
 	// cobra still prints usage for genuine flag/arg errors.
 	SilenceUsage: true,

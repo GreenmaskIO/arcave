@@ -17,13 +17,9 @@ const (
 // constant here — they are stated below and in doc/spec.md, which is what an
 // external consumer of the JSON actually reads.
 type Recommendation struct {
-	Service string `json:"service"`
-	Image   string `json:"image"`
-	Volume  string `json:"volume"`
-	// Operation names what to do about the finding. `"AddVolume"` is the only
-	// value arcave emits today; it is a field of its own so a future `arcave fix`
-	// can dispatch on it and a second kind of recommendation needs no change to
-	// the wire shape.
+	Service   string                  `json:"service"`
+	Image     string                  `json:"image"`
+	Volume    string                  `json:"volume"`
 	Operation RecommendationOperation `json:"operation"`
 	// Hash identifies the recommendation itself, not the run that produced it,
 	// so a caller can suppress one it has already seen or acted on. The contract

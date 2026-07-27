@@ -396,8 +396,8 @@ volumes in catalog order, so the output is stable across runs.
     "service": "db",
     "image": "postgres:16",
     "volume": "/var/lib/postgresql/data",
-    "operation": "AddVolume",
-    "hash": "51d8076c46776093139962baadd5cb8ada04514f0d5d100ed44b6276b44a8184"
+    "operation": "add-volume",
+    "hash": "68cf83ec338db99fb410469421d5623bc116ea567d598e65e0e6d76603566892"
   }
 ]
 ```
@@ -413,7 +413,7 @@ service + "|" + image + "|" + volume + "|" + operation
 so the same finding hashes identically on every invocation and a caller can suppress one it has already seen or acted
 on. Because `image` participates, bumping the image tag produces a new hash — the advice is about that image.
 
-`operation` names what to do. `AddVolume` is the only value today; it exists as a field so a future `arcave fix` can
+`operation` names what to do. `add-volume` is the only value today; it exists as a field so a future `arcave fix` can
 dispatch on it, and so a second kind of recommendation needs no change to the wire shape.
 
 ##### Exit Codes

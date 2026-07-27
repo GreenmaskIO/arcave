@@ -1,0 +1,114 @@
+#   pull request  -> lint + test
+#   push to main  -> lint + test + build every target (nothing published)
+#   push of a tag -> lint + test + build every target + GitHub Release
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # internal/service/backend/restic/rest skips its conformance test when no
+      # restic binary is on PATH, so without this the suite would go green
+      # having never run it.
+      - name: Install restic
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y restic
+
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build (all targets)
+    if: github.ref == 'refs/heads/main'
+    needs: [lint, test]
+    # macOS, not ubuntu: the darwin targets need cgo (compose/v2 pulls in the cgo-only fsnotify/fsevents)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # A compile check, nothing more: the output stays on the runner and is
+      # discarded with it. Nothing is uploaded and nothing is published — the
+      # question this job answers is only "does every target still build".
+      #
+      # `release --snapshot --skip=publish` rather than plain `build`: it costs a
+      # few extra seconds to also pack the archives and checksums, and in return
+      # a mistake in that half of .goreleaser.yaml fails here instead of at the
+      # moment someone pushes a release tag.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test]
+    # Same reason as the build job: the darwin targets need cgo, so the release
+    # is cut on macOS.
+    runs-on: macos-latest
+    permissions:
+      # Creating the release and uploading its assets is the one write this
+      # workflow performs.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # GoReleaser reads the tag history to derive the version and build the
+          # changelog; a shallow clone has neither.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -213,8 +213,8 @@ func TestNewRecommendation(t *testing.T) {
 				Service:   "db",
 				Image:     "postgres:16",
 				Volume:    "/var/lib/postgresql/data",
-				Operation: operationAddVolume,
-				Hash:      "51d8076c46776093139962baadd5cb8ada04514f0d5d100ed44b6276b44a8184",
+				Operation: model.RecommendationOperationAddVolume,
+				Hash:      "68cf83ec338db99fb410469421d5623bc116ea567d598e65e0e6d76603566892",
 			},
 		},
 		{
@@ -226,8 +226,8 @@ func TestNewRecommendation(t *testing.T) {
 				Service:   "db",
 				Image:     "postgres:17",
 				Volume:    "/var/lib/postgresql/data",
-				Operation: operationAddVolume,
-				Hash:      "d63220b533c6c76ed44a4006eac3dc3d9f8ffb9a8813ec8467651fe1aeb78de7",
+				Operation: model.RecommendationOperationAddVolume,
+				Hash:      "f7d55a55cdd152f429c2701d1f239b50a132673c14806ea25d74fc67576e771b",
 			},
 		},
 	}

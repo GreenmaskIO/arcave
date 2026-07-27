@@ -1,0 +1,98 @@
+# GoReleaser owns the release build: the target matrix, the archives, the
+# per-artifact checksums and the GitHub Release. The Makefile stays the local
+# entry point and deliberately does not share these flags — a release binary is
+# stripped and trimmed, a development one is not.
+#
+# The whole run happens on ONE macOS runner, because the darwin targets need cgo
+# (see below) and GoReleaser's split/merge across runners is a Pro feature. The
+# linux targets are pure Go, so they cross-compile from macOS just as well as
+# from anywhere else.
+#
+# Windows is deliberately absent: internal/service/lock reaches for
+# syscall.Flock, which does not exist there, so arcave does not build for windows
+# at all yet. Adding a windows target means implementing that lock first
+# (LockFileEx), not editing this file.
+#
+# Validate a change with `goreleaser check`, and prove the matrix still compiles
+# with `goreleaser release --snapshot --clean --skip=publish`.
+version: 2
+
+project_name: arcave
+
+builds:
+  - id: arcave
+    main: ./cmd/arcave
+    binary: arcave
+    env:
+      # darwin CANNOT be built with CGO_ENABLED=0: compose/v2's pkg/compose
+      # pulls in pkg/watch, which pulls in github.com/fsnotify/fsevents — a
+      # cgo-only package with no pure-Go fallback, so a cgo-less darwin build
+      # fails with "undefined: EventFlags". That is why the release job needs a
+      # macOS runner at all. linux needs no C toolchain, so it stays static.
+      - CGO_ENABLED={{ if eq .Os "darwin" }}1{{ else }}0{{ end }}
+      # Read only when cgo is on, i.e. only on darwin — on linux CGO_ENABLED=0
+      # means the C compiler is never invoked and this value is inert. The macOS
+      # SDK on the arm64 runner carries both slices, so clang targets x86_64
+      # from it directly.
+      - CC=clang -arch {{ if eq .Arch "amd64" }}x86_64{{ else }}arm64{{ end }}
+    flags:
+      - -trimpath
+    # -s -w drops the symbol table and DWARF: the compose/v2 dependency puts the
+    # binary near 97 MB, and this is what brings it back to roughly 65 MB. The -X
+    # stamps are what make `arcave --version` report a real version;
+    # cmd/arcave/cmd_root.go declares the vars they fill.
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.buildDate={{ .Date }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  # No `ids` filter: every build above belongs in the release, and listing them
+  # would be one more place to forget a target.
+  - id: arcave
+    formats:
+      - tar.gz
+    # os_arch is enough to name a target while the matrix is one arch level per
+    # platform. Adding a target that splits an arch further — armv6 next to
+    # armv7 — means adding the discriminator here too, or two builds collide on
+    # one archive name.
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  algorithm: sha256
+  # split: true writes one <artifact>.sha256 next to each archive instead of a
+  # single combined checksums.txt, so a user verifying one download fetches one
+  # small file. The default name template is {{ .ArtifactName }}.{{ .Algorithm }}.
+  split: true
+
+snapshot:
+  # Snapshot builds run on every push to main and are never published, so the
+  # version only has to be unique and obviously not a release.
+  version_template: "{{ incpatch .Version }}-dev-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  # prerelease: auto marks a tag carrying a pre-release suffix (v0.0.1-rc1) as a
+  # GitHub pre-release, which is what makes a rehearsal tag safe to push.
+  prerelease: auto

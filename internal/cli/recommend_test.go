@@ -23,8 +23,8 @@ func TestRecommendHandler_Recommend(t *testing.T) {
 		Service:   "db",
 		Image:     "postgres:16",
 		Volume:    "/var/lib/postgresql/data",
-		Operation: "AddVolume",
-		Hash:      "51d8076c46776093139962baadd5cb8ada04514f0d5d100ed44b6276b44a8184",
+		Operation: model.RecommendationOperationAddVolume,
+		Hash:      "68cf83ec338db99fb410469421d5623bc116ea567d598e65e0e6d76603566892",
 	}}
 	svcErr := errors.New("bad compose file")
 	printErr := errors.New("stdout closed")
