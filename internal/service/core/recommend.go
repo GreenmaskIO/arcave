@@ -93,18 +93,7 @@ func (s *RecommendService) Recommend(ctx context.Context, composeFiles ...string
 	return recommendations, nil
 }
 
-// operationAddVolume is the value newRecommendation stamps on every
-// recommendation it mints: a persistent volume the image wants and the compose
-// file does not declare. It sits with its one reader rather than in model —
-// nothing outside this service names it, and a constant reaches model only when a
-// layer that *cannot* import its owner has to. Should `arcave fix` land in an
-// adapter and need to dispatch on the value, exporting it is the smaller step.
-//
-// It is unexported for the same reason snapshotKey is: a seam nobody outside
-// pulls on should not be exported ahead of a caller.
-const operationAddVolume = "AddVolume"
-
-// newRecommendation returns an AddVolume recommendation with its hash filled in.
+// newRecommendation returns an add-volume recommendation with its hash filled in.
 // It is the only way one is minted, so the canonical form the hash is taken over
 // — `service|image|volume|operation`, sha256, lowercase hex — has exactly one
 // implementation and cannot drift.
