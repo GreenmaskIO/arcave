@@ -18,7 +18,7 @@ import (
 // are new values rather than wrapped sentinels, the expectation is the message,
 // not errors.Is.
 func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
-	req := model.RemoveRequest{DryRun: true, IDs: []string{"1780335122"}}
+	req := model.RemoveRequest{DryRun: true, IDs: []model.SavepointID{"1780335122"}}
 	res := model.RemoveResult{DryRun: true, Removed: []model.Savepoint{{ID: "1780335122"}}}
 	other := errors.New("disk on fire")
 	printErr := errors.New("stdout closed")

@@ -203,7 +203,7 @@ type removeSavepointInput struct {
 // removeSavepoints deletes the selected savepoints and reports what went.
 func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResponse, error) {
 	res, err := h.svc.RemoveSavepoints(ctx, model.RemoveRequest{
-		IDs:          in.IDs,
+		IDs:          model.SavepointIDs(in.IDs),
 		RetainRecent: in.RetainRecent,
 		RetainFor:    in.RetainFor,
 		BeforeDate:   in.BeforeDate,

@@ -37,7 +37,7 @@ func TestNew(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { assert.NoError(t, session.Close()) })
 		store := filepath.Join(root, ".arcave", "savepoints", "demo", "arcave")
-		assert.Equal(t, filepath.Join(store, model.DefaultSession), session.GetCwd())
+		assert.Equal(t, filepath.Join(store, model.DefaultSession.String()), session.GetCwd())
 		assert.DirExists(t, store)
 		// The session segment does not exist yet: it arrives with the first object
 		// written under it, since the backend creates the parents of every key.
@@ -57,7 +57,7 @@ func TestNew(t *testing.T) {
 		// Assert
 		require.NoError(t, err)
 		t.Cleanup(func() { assert.NoError(t, session.Close()) })
-		assert.Equal(t, filepath.Join(abs, "arcave", model.DefaultSession), session.GetCwd())
+		assert.Equal(t, filepath.Join(abs, "arcave", model.DefaultSession.String()), session.GetCwd())
 		assert.DirExists(t, filepath.Join(abs, "arcave"))
 	})
 
@@ -113,7 +113,7 @@ func TestNew(t *testing.T) {
 	t.Run("an invalid session is refused before a store is opened", func(t *testing.T) {
 		tests := []struct {
 			name    string
-			session string
+			session model.SessionID
 		}{
 			{name: "empty", session: ""},
 			{name: "a nested path", session: "a/b"},

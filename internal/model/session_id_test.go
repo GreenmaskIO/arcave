@@ -7,12 +7,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidSessionID(t *testing.T) {
+func TestSessionID_Validate(t *testing.T) {
 	const canonical = "0f9c2f4a-6d3e-4b6f-9a2c-1d5e8b7a4c31"
 
 	tests := []struct {
 		name    string
-		id      string
+		id      SessionID
 		wantErr bool
 	}{
 		{name: "the default session", id: DefaultSession},
@@ -30,7 +30,7 @@ func TestValidSessionID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			err := ValidSessionID(tt.id)
+			err := tt.id.Validate()
 
 			// Assert
 			if !tt.wantErr {

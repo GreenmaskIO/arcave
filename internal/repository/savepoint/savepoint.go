@@ -34,30 +34,8 @@ import (
 
 // recordName is the reserved key at the root of every savepoint namespace. The
 // namespace directory belongs to this layer; a backend may write anything else
-// beneath it, and must never mint an Opaque that collides with this key.
+// beneath it, and must never create an Opaque that collides with this key.
 const recordName = "savepoint.json"
-
-// legacyManifestName is the monolithic index this package replaced. Its presence
-// at the store root means the store predates per-savepoint records.
-const legacyManifestName = "manifest.json"
-
-// schemaVersion is the record's own version, independent of the config's. It is
-// written into every record, and a record carrying any other value is refused.
-//
-// Version 2 replaced the flat per-mount volumes list with the savepoint's stats,
-// and the storage layout moved with it — "<id>/<service>/<mount-path>/data.tar"
-// became "<id>/<object-id>/data.tar". A v1 record therefore names archives that
-// are not where it says they are, so it is refused rather than read: arcave
-// speaks exactly one record version, as it speaks one config version.
-const schemaVersion = 2
-
-// file is the on-disk shape of savepoint.json: the shared savepoint, flattened,
-// plus its schema version. The envelope is private to the repository, so the
-// Save/List contract is expressed purely in the shared model types.
-type file struct {
-	SchemaVersion int `json:"schema_version"`
-	model.Savepoint
-}
 
 // Repository reads and writes savepoint records inside store.
 type Repository struct {
@@ -76,10 +54,10 @@ func New(store storages.Storager) *Repository {
 // written every archive first, because a reader treats this object's existence
 // as proof that the savepoint is whole.
 func (r *Repository) Save(ctx context.Context, savepoint model.Savepoint) error {
-	if err := model.ValidSavepointID(savepoint.ID); err != nil {
+	if err := savepoint.ID.Validate(); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(file{SchemaVersion: schemaVersion, Savepoint: savepoint}, "", "  ")
+	data, err := json.MarshalIndent(savepoint, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal savepoint %s: %w", savepoint.ID, err)
 	}
@@ -102,10 +80,6 @@ func (r *Repository) Save(ctx context.Context, savepoint model.Savepoint) error 
 // That is N+1 round-trips rather than a single index read, which is free on a
 // local filesystem and, on an object store, collapses into one prefix listing.
 func (r *Repository) List(ctx context.Context) ([]model.Savepoint, error) {
-	if err := r.rejectLegacyManifest(ctx); err != nil {
-		return nil, err
-	}
-
 	_, dirs, err := r.storage.ListDir(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list savepoint store: %w", err)
@@ -113,9 +87,9 @@ func (r *Repository) List(ctx context.Context) ([]model.Savepoint, error) {
 
 	records := make([]model.Savepoint, 0, len(dirs))
 	for _, dir := range dirs {
-		id := dir.Dirname()
-		if err := model.ValidSavepointID(id); err != nil {
-			log.Ctx(ctx).Debug().Str("entry", id).Msg("ignoring directory that is not a savepoint namespace")
+		id := model.SavepointID(dir.Dirname())
+		if err := id.Validate(); err != nil {
+			log.Ctx(ctx).Debug().Str("entry", id.String()).Msg("ignoring directory that is not a savepoint namespace")
 			continue
 		}
 		record, found, err := r.load(ctx, id)
@@ -123,7 +97,7 @@ func (r *Repository) List(ctx context.Context) ([]model.Savepoint, error) {
 			return nil, err
 		}
 		if !found {
-			log.Ctx(ctx).Debug().Str("savepoint", id).Msg("skipping incomplete savepoint: no record")
+			log.Ctx(ctx).Debug().Str("savepoint", id.String()).Msg("skipping incomplete savepoint: no record")
 			continue
 		}
 		records = append(records, record)
@@ -131,26 +105,9 @@ func (r *Repository) List(ctx context.Context) ([]model.Savepoint, error) {
 	return records, nil
 }
 
-// rejectLegacyManifest refuses a store still holding the monolithic index.
-//
-// Silence is the dangerous outcome here. Every namespace of a legacy store holds
-// archives but no savepoint.json, so List would classify each as incomplete and
-// skip it — reporting "no savepoints" to a user whose data is sitting on disk.
-// That reads as data loss, so the store is rejected before anything is skipped.
-func (r *Repository) rejectLegacyManifest(ctx context.Context) error {
-	exists, err := r.storage.Exists(ctx, legacyManifestName)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", legacyManifestName, err)
-	}
-	if exists {
-		return fmt.Errorf("%w: %s", model.ErrLegacyManifest, path.Join(r.storage.GetCwd(), legacyManifestName))
-	}
-	return nil
-}
-
 // load reads one savepoint's record. found is false when the namespace holds no
 // record, which means the savepoint never committed.
-func (r *Repository) load(ctx context.Context, id string) (model.Savepoint, bool, error) {
+func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
 	// Exists rather than matching GetObject's error against os.ErrNotExist: that
 	// error belongs to the directory backend, and an object store would report a
 	// missing key differently.
@@ -168,23 +125,15 @@ func (r *Repository) load(ctx context.Context, id string) (model.Savepoint, bool
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
-			log.Ctx(ctx).Debug().Err(err).Str("savepoint", id).Msg("close savepoint record")
+			log.Ctx(ctx).Debug().Err(err).Str("savepoint", id.String()).Msg("close savepoint record")
 		}
 	}()
 
-	var f file
-	if err := json.NewDecoder(src).Decode(&f); err != nil {
+	var record model.Savepoint
+	if err := json.NewDecoder(src).Decode(&record); err != nil {
 		return model.Savepoint{}, false, fmt.Errorf("parse savepoint record %s: %w", id, err)
 	}
-	// Refused, never skipped — same rule as the legacy manifest above, for the same
-	// reason: skipping reports "no savepoints" over a store that is full of them.
-	if f.SchemaVersion != schemaVersion {
-		return model.Savepoint{}, false, fmt.Errorf(
-			"%w: savepoint %s is version %d, this arcave writes and reads %d",
-			model.ErrUnsupportedRecordVersion, id, f.SchemaVersion, schemaVersion,
-		)
-	}
-	return f.Savepoint, true, nil
+	return record, true, nil
 }
 
 // Delete removes one savepoint's record. It is the uncommit: the caller must run
@@ -193,8 +142,8 @@ func (r *Repository) load(ctx context.Context, id string) (model.Savepoint, bool
 // lists and still resolves but whose archives are half gone.
 //
 // It is idempotent: a namespace with no record is already uncommitted.
-func (r *Repository) Delete(ctx context.Context, id string) error {
-	if err := model.ValidSavepointID(id); err != nil {
+func (r *Repository) Delete(ctx context.Context, id model.SavepointID) error {
+	if err := id.Validate(); err != nil {
 		return err
 	}
 	exists, err := r.storage.Exists(ctx, recordKey(id))
@@ -211,7 +160,7 @@ func (r *Repository) Delete(ctx context.Context, id string) error {
 }
 
 // recordKey is the record's key relative to the store root. Every caller has
-// already validated id, so this never mints a key that escapes the store.
-func recordKey(id string) string {
-	return path.Join(id, recordName)
+// already validated id, so this never builds a key that escapes the store.
+func recordKey(id model.SavepointID) string {
+	return path.Join(id.String(), recordName)
 }

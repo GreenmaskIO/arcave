@@ -7,7 +7,7 @@ package model
 // archive from the Volume here. Payload decodes back as a map[string]any, which
 // costs nothing while no reader outside its own backend interprets one.
 type SnapshotStat struct {
-	Volume  Volume          `json:"volume"`
-	Type    SnapshotBackend `json:"type"`
-	Payload any             `json:"payload,omitempty"`
+	Volume  Volume              `json:"volume"`
+	Type    SnapshotBackendKind `json:"type"`
+	Payload any                 `json:"payload,omitempty"`
 }

@@ -1,68 +1,50 @@
 package core
 
 import (
+	"bytes"
 	"context"
-	"io"
+	"sync"
 	"time"
 
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// The doubles below satisfy the service package's private consumer interfaces
-// (composeInspector, savepointRepository, projectLocker, composeRunner, configWriter)
-// plus the snapshot backend's DockerVolume. They live in the service test package
-// because those interfaces are unexported; mockDockerVolume drives a real
-// snapshot.CopyBackend over a real directory Storager so orchestration is
-// exercised end to end without a daemon.
+// Every mock forwards all of its seam's arguments to Called, ctx included;
+// tests match ctx with mock.Anything unless they assert on it.
 
 type mockSavepointRepo struct{ mock.Mock }
 
-// The repository mock drops ctx from its expectations: no test asserts on it, and
-// carrying it would force a mock.Anything into every On("List") call.
-func (m *mockSavepointRepo) List(context.Context) ([]model.Savepoint, error) {
-	args := m.Called()
-	var recs []model.Savepoint
-	if v := args.Get(0); v != nil {
-		recs = v.([]model.Savepoint)
-	}
-	return recs, args.Error(1)
+func (m *mockSavepointRepo) List(ctx context.Context) ([]model.Savepoint, error) {
+	args := m.Called(ctx)
+	records, _ := args.Get(0).([]model.Savepoint)
+	return records, args.Error(1)
 }
 
-func (m *mockSavepointRepo) Save(_ context.Context, record model.Savepoint) error {
-	return m.Called(record).Error(0)
+func (m *mockSavepointRepo) Save(ctx context.Context, record model.Savepoint) error {
+	return m.Called(ctx, record).Error(0)
 }
 
-func (m *mockSavepointRepo) Delete(_ context.Context, id string) error {
-	return m.Called(id).Error(0)
+func (m *mockSavepointRepo) Delete(ctx context.Context, id model.SavepointID) error {
+	return m.Called(ctx, id).Error(0)
 }
 
-// mockLocker is a projectLocker double. It counts releases rather than expecting
-// them, because release is a closure Acquire returns rather than a method the
-// mock can match on — and "the lock was given back" is what a test asserts.
+// mockLocker counts releases in a field: release is a closure Acquire returns,
+// not a method an expectation can match.
 type mockLocker struct {
 	mock.Mock
 	released int
 }
 
-func (m *mockLocker) Acquire(context.Context) (func() error, error) {
-	if err := m.Called().Error(0); err != nil {
+func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
+	if err := m.Called(ctx).Error(0); err != nil {
 		return nil, err
 	}
 	return func() error {
 		m.released++
 		return nil
 	}, nil
-}
-
-// freeLocker returns a locker that always grants the project, for the tests whose
-// subject is not the lock.
-func freeLocker() *mockLocker {
-	l := &mockLocker{}
-	l.On("Acquire").Return(nil)
-	return l
 }
 
 type mockInspector struct{ mock.Mock }
@@ -82,85 +64,79 @@ func (m *mockComposeRunner) Up(ctx context.Context, waitTimeout time.Duration, f
 	return m.Called(ctx, waitTimeout, files).Error(0)
 }
 
-type mockDockerVolume struct{ mock.Mock }
+type mockRegistry struct{ mock.Mock }
 
-// OpenMount returns the tar stream configured for the call. The Return value is
-// an io.ReadCloser (or nil alongside an error).
-func (m *mockDockerVolume) OpenMount(ctx context.Context, project, service, target string) (io.ReadCloser, error) {
-	args := m.Called(ctx, project, service, target)
-	var rc io.ReadCloser
-	if v := args.Get(0); v != nil {
-		rc = v.(io.ReadCloser)
-	}
-	return rc, args.Error(1)
+func (m *mockRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+	args := m.Called(spec)
+	backend, _ := args.Get(0).(model.VolumeSnapshotBackend)
+	return backend, args.Error(1)
 }
 
-// WriteMount drains r and forwards its content as the fifth expectation argument,
-// so tests distinguish a savepoint restore from a backup revert by the bytes that
-// flow in (which store minted the source stream) rather than by a file path.
-func (m *mockDockerVolume) WriteMount(ctx context.Context, project, service, target string, r io.Reader) error {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-	return m.Called(ctx, project, service, target, string(data)).Error(0)
+// mockBackend doubles model.VolumeSnapshotBackend; volume answers the Volume()
+// accessor directly — it is identity, not behavior a test expects on.
+type mockBackend struct {
+	mock.Mock
+	volume model.Volume
 }
 
-// mockBackend is a snapshotBackend double for the flows that only need the
-// backend's contract, not a real archive on disk (removal, pre-flight). The
-// data-moving flows drive a real snapshot.CopyBackend over mockDockerVolume
-// instead, so the tar round-trip stays covered.
-type mockBackend struct{ mock.Mock }
+func (m *mockBackend) Volume() model.Volume { return m.volume }
 
-func (m *mockBackend) Snapshot(
-	ctx context.Context, savepointID, composeProject string, volumes []model.Volume,
-) ([]model.SnapshotStat, error) {
-	args := m.Called(ctx, savepointID, composeProject, volumes)
-	stats, _ := args.Get(0).([]model.SnapshotStat)
-	return stats, args.Error(1)
+func (m *mockBackend) Snapshot(ctx context.Context, req model.BackendSnapshotRequest) (model.SnapshotStat, error) {
+	args := m.Called(ctx, req)
+	stat, _ := args.Get(0).(model.SnapshotStat)
+	return stat, args.Error(1)
 }
 
-func (m *mockBackend) Restore(ctx context.Context, savepointID, composeProject string, volumes []model.Volume) error {
-	return m.Called(ctx, savepointID, composeProject, volumes).Error(0)
+func (m *mockBackend) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
+	return m.Called(ctx, req).Error(0)
 }
 
-func (m *mockBackend) Missing(ctx context.Context, savepointID string, volumes []model.Volume) ([]model.Volume, error) {
-	args := m.Called(ctx, savepointID, volumes)
-	missing, _ := args.Get(0).([]model.Volume)
-	return missing, args.Error(1)
-}
-
-func (m *mockBackend) Remove(ctx context.Context, savepointID string) error {
-	return m.Called(ctx, savepointID).Error(0)
-}
-
-type mockConfig struct{ mock.Mock }
-
-func (m *mockConfig) Exists() (bool, error) {
-	args := m.Called()
+func (m *mockBackend) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
+	args := m.Called(ctx, req)
 	return args.Bool(0), args.Error(1)
 }
 
-func (m *mockConfig) Save(cfg config.Config) error { return m.Called(cfg).Error(0) }
-
-func (m *mockConfig) Path() string { return m.Called().String(0) }
-
-// mockCatalog is the recommendationCatalog double. It drops ctx from its
-// expectations because the seam takes none — the catalog is local bytes.
-type mockCatalog struct{ mock.Mock }
-
-func (m *mockCatalog) List() ([]model.ARCEntry, error) {
-	args := m.Called()
-	entries, _ := args.Get(0).([]model.ARCEntry)
-	return entries, args.Error(1)
+func (m *mockBackend) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
+	return m.Called(ctx, req).Error(0)
 }
 
-// mockIntrospector is the composeIntrospector double. It takes the variadic
-// files as a single []string so an expectation can name them.
-type mockIntrospector struct{ mock.Mock }
+// matchSpec matches a registry New's BackendSpec argument by tier and volume.
+func matchSpec(tier model.BackendTier, objectID string) any {
+	return mock.MatchedBy(func(spec model.BackendSpec) bool {
+		return spec.Tier == tier && spec.Volume.ObjectID == objectID
+	})
+}
 
-func (m *mockIntrospector) Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error) {
-	args := m.Called(ctx, files)
-	result, _ := args.Get(0).(model.IntrospectionResult)
-	return result, args.Error(1)
+// matchValidSnapshotID matches a Snapshot request whose id passes the gate; the
+// id comes off the clock, so no literal can name it.
+func matchValidSnapshotID() any {
+	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
+		return req.SnapshotID.Validate() == nil
+	})
+}
+
+// matchSafetyRecord matches the record a rollback's safety backup commits.
+func matchSafetyRecord() any {
+	return mock.MatchedBy(func(r model.Savepoint) bool {
+		return r.ID.Validate() == nil && r.Name == safetyBackupName
+	})
+}
+
+// syncBuffer is the log sink workflow tests read back; guarded, because the
+// fan-out logs from one goroutine per volume.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

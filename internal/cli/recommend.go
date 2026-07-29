@@ -15,7 +15,7 @@ type RecommendService interface {
 	Recommend(ctx context.Context, composeFiles ...string) ([]model.Recommendation, error)
 }
 
-// RecommendServiceFactory mints a RecommendService over the recommender catalogs
+// RecommendServiceFactory builds a RecommendService over the recommender catalogs
 // merged on top of the built-in one, in order (empty for the built-in alone).
 //
 // The seam is a factory rather than a service because the catalog is fixed at

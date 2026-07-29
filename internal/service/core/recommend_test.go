@@ -168,7 +168,7 @@ func TestRecommendService_Recommend(t *testing.T) {
 			// Arrange
 			catalog := &mockCatalog{}
 			catalog.On("List").Return(entries, nil).Once()
-			inspector := &mockIntrospector{}
+			inspector := &mockInspector{}
 			inspector.On("Introspect", mock.Anything, []string{"compose.yaml"}).
 				Return(model.IntrospectionResult{Project: model.Project{Services: tt.services}}, nil).Once()
 
@@ -275,8 +275,9 @@ func TestRecommendService_Recommend_Errors(t *testing.T) {
 			// Arrange
 			catalog := &mockCatalog{}
 			catalog.On("List").Return([]model.ARCEntry{{Image: "postgres", Volumes: []string{"/data"}}}, tt.catalogErr).Once()
-			inspector := &mockIntrospector{}
-			inspector.On("Introspect", mock.Anything, mock.Anything).
+			inspector := &mockInspector{}
+			// A call naming no files passes the nil slice through.
+			inspector.On("Introspect", mock.Anything, []string(nil)).
 				Return(model.IntrospectionResult{}, tt.inspectErr).Maybe()
 
 			// Act
@@ -287,6 +288,8 @@ func TestRecommendService_Recommend_Errors(t *testing.T) {
 			assert.ErrorIs(t, err, tt.wantErr)
 			assert.Contains(t, err.Error(), tt.wantMsg)
 			assert.Nil(t, got)
+			catalog.AssertExpectations(t)
+			inspector.AssertExpectations(t)
 		})
 	}
 }
@@ -358,4 +361,14 @@ func TestNewRecommendation_Distinct(t *testing.T) {
 	assert.NotEqual(t, base.Hash, otherService.Hash)
 	assert.NotEqual(t, base.Hash, otherImage.Hash)
 	assert.NotEqual(t, base.Hash, otherVolume.Hash)
+}
+
+// mockCatalog doubles recommendationCatalog; the seam takes no ctx — the
+// catalog is local bytes.
+type mockCatalog struct{ mock.Mock }
+
+func (m *mockCatalog) List() ([]model.ARCEntry, error) {
+	args := m.Called()
+	entries, _ := args.Get(0).([]model.ARCEntry)
+	return entries, args.Error(1)
 }

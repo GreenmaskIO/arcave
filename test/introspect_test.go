@@ -13,7 +13,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/corev2"
+	"github.com/greenmaskio/arcave/internal/service/core"
 	introspect "github.com/greenmaskio/arcave/internal/service/introspectv2"
 )
 
@@ -94,7 +94,7 @@ func TestFindBackupVolumes_RealLoader(t *testing.T) {
 	require.NoError(t, err)
 
 	// Act
-	volumes, skipped, err := corev2.FindBackupVolumes(got)
+	volumes, skipped, err := core.FindBackupVolumes(got)
 
 	// Assert
 	require.NoError(t, err)

@@ -30,16 +30,20 @@ var (
 	// implementation produces it, and the adapters match it — so it lives here
 	// rather than in internal/lock, which core must not import.
 	ErrProjectLocked = errors.New("another arcave command is already running in this project")
-	// ErrLegacyManifest is returned when the savepoint store still holds the
-	// monolithic manifest.json that per-savepoint records replaced. The adapter
-	// renders it with the migration guidance; the repository only reports the
-	// condition, since it does not know what the user is allowed to do about it.
-	ErrLegacyManifest = errors.New("savepoint store was written by an older arcave and still holds a manifest.json")
-	// ErrUnsupportedRecordVersion reports a savepoint record whose schema version
-	// arcave does not speak. The version also fixes the storage layout its
-	// archives are in, so a foreign one is refused rather than migrated — and,
-	// like ErrLegacyManifest, never reported as an empty listing.
-	ErrUnsupportedRecordVersion = errors.New("unsupported savepoint record version")
+
+	// ErrInvalidSavepointID reports an id that is not a run of decimal digits.
+	// SavepointID.Validate wraps it with the offending id.
+	ErrInvalidSavepointID = errors.New("invalid savepoint id")
+
+	// ErrMissingVolumeInSnapshot reports that a snapshot holds no capture for a
+	// volume it is expected to cover; which volumes are missing is logged.
+	ErrMissingVolumeInSnapshot = errors.New("snapshot is missing a volume capture")
+
+	// ErrUnknownBackendTier reports a BackendSpec.Tier no backend can place. It
+	// sits beside the registry's own ErrNoBackendTier, which is the zero value:
+	// this one is a tier that is set and unrecognised. BackendSpec.TierStore wraps
+	// it with the offending value.
+	ErrUnknownBackendTier = errors.New("unknown backend tier")
 
 	// ErrUnsupportedConfigVersion reports a config file whose schema version arcave does
 	// not speak. arcave speaks exactly one, so any other value is refused rather than

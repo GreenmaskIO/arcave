@@ -22,18 +22,19 @@ const (
 	VolumeTypeUnknown VolumeType = "unknown"
 )
 
-// SnapshotBackend names the mechanism that captures a volume. Assigned where a
-// savepoint's units are decided, never by introspection.
-type SnapshotBackend string
+// SnapshotBackendKind names the mechanism that captures a volume. Assigned where
+// a savepoint's units are decided, never by introspection. Kind is not noise: it
+// is what keeps this apart from VolumeSnapshotBackend, the instance itself.
+type SnapshotBackendKind string
 
 const (
-	SnapshotBackendCDC      SnapshotBackend = "cdc"
-	SnapshotBackendFullCopy SnapshotBackend = "full-copy"
-	SnapshotBackendUnknown  SnapshotBackend = "unknown"
+	SnapshotBackendCDC     SnapshotBackendKind = "cdc"
+	SnapshotBackendCopy    SnapshotBackendKind = "copy"
+	SnapshotBackendUnknown SnapshotBackendKind = "unknown"
 )
 
 // The two prefixes keep the identity spaces apart: a volume named "db" and a
-// service named "db" must not mint the same StorageID.
+// service named "db" must not produce the same StorageID.
 const (
 	storageIDVolumePrefix  = "volume/"
 	storageIDServicePrefix = "service/"
@@ -46,7 +47,7 @@ func namedStorageID(dockerName string) string {
 }
 
 // serviceStorageID identifies a bind or anonymous mount by service and target: a
-// bind has no docker name, and an anonymous volume's is minted per container.
+// bind has no docker name, and an anonymous volume's is created per container.
 func serviceStorageID(service, target string) string {
 	return storageIDServicePrefix + service + "/" + strings.TrimPrefix(target, "/")
 }
@@ -86,7 +87,7 @@ type ServiceVolume struct {
 // how the two levels join; no other type is ever a unit of backup, so none has
 // an id.
 //
-// A rename mints a new identity, deliberately: docker creates an empty volume on
+// A rename produces a new identity, deliberately: docker creates an empty volume on
 // a rename, so an old backup must not map onto it.
 func (v ServiceVolume) ObjectID(service string) string {
 	switch v.Type {
@@ -169,7 +170,7 @@ type NamedVolume struct {
 	//	    external: true   # Key "shared",  Name "shared"
 	//
 	// Only Name identifies the data — two projects declaring "pgdata" hold two
-	// different volumes — so ObjectID is minted from it. Key joins the two levels
+	// different volumes — so ObjectID is built from it. Key joins the two levels
 	// of the introspection result: it is a named ServiceVolume's Source.
 	Key  string
 	Name string

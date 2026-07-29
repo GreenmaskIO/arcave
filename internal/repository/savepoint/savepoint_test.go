@@ -18,8 +18,7 @@ import (
 
 // newStore returns a Storager rooted at a fresh temp dir, plus that dir so a
 // test can plant objects behind the repository's back — an incomplete namespace,
-// a legacy manifest, a corrupt record — exactly as a crashed run or an older arcave
-// would have left them.
+// a corrupt record — exactly as a crashed run would have left them.
 func newStore(t *testing.T) (storages.Storager, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -31,17 +30,17 @@ func newStore(t *testing.T) (storages.Storager, string) {
 // record is a savepoint with one captured volume, for the id given. The stat's
 // payload is nil: a typed one would not survive the round trip (it decodes back
 // as a map), which is why nothing outside its own backend reads one.
-func record(id string) model.Savepoint {
+func record(id model.SavepointID) model.Savepoint {
 	return model.Savepoint{
 		ID:        id,
 		Name:      "before-migration",
 		CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
 		Stats: []model.SnapshotStat{{
-			Type: model.SnapshotBackendFullCopy,
+			Type: model.SnapshotBackendCopy,
 			Volume: model.Volume{
 				ObjectID: "volume/myapp_pgdata",
 				Type:     model.VolumeTypeNamed,
-				Backend:  model.SnapshotBackendFullCopy,
+				Backend:  model.SnapshotBackendCopy,
 				Named: &model.VolumePropertiesNamed{
 					VolumeName: "myapp_pgdata",
 					UsedBy: []model.ServiceReference{
@@ -87,7 +86,7 @@ func TestRepository_Save(t *testing.T) {
 func TestRepository_Save_RejectsInvalidID(t *testing.T) {
 	tests := []struct {
 		name string
-		id   string
+		id   model.SavepointID
 	}{
 		{name: "empty", id: ""},
 		{name: "traversal", id: "../../etc"},
@@ -117,11 +116,10 @@ func TestRepository_Save_RejectsInvalidID(t *testing.T) {
 func TestRepository_List(t *testing.T) {
 	tests := []struct {
 		name string
-		// plant runs before List, seeding the store with objects a crashed run or
-		// an older arcave would have left.
+		// plant runs before List, seeding the store with objects a crashed run
+		// would have left.
 		plant   func(t *testing.T, root string)
 		wantIDs []string
-		wantErr error  // sentinel List must return
 		wantMsg string // substring List's error must carry
 	}{
 		{
@@ -157,34 +155,6 @@ func TestRepository_List(t *testing.T) {
 			},
 			wantMsg: "parse savepoint record 1780335999",
 		},
-		{
-			name: "a legacy manifest is refused before anything is skipped",
-			plant: func(t *testing.T, root string) {
-				writeObject(t, root, "manifest.json", `{"savepoints":[{"id":"1780335122"}]}`)
-				writeObject(t, root, "1780335122/db/data/data.tar", "payload")
-			},
-			wantErr: model.ErrLegacyManifest,
-		},
-		{
-			// A v1 record is intact, and so are its archives — but they sit where v1
-			// put them, which this arcave would not find.
-			name: "a record from another schema version is refused",
-			plant: func(t *testing.T, root string) {
-				writeObject(t, root, "1780335999/savepoint.json",
-					`{"schema_version":1,"id":"1780335999","volumes":[{"service":"db","mount_path":"/data"}]}`)
-			},
-			wantErr: model.ErrUnsupportedRecordVersion,
-		},
-		{
-			// No version means v0, not "current" — unlike the config gate, which
-			// reads an absent version as current so a project with no file works.
-			// Every record was written by arcave, and every one carries its version.
-			name: "a record with no version is refused too",
-			plant: func(t *testing.T, root string) {
-				writeObject(t, root, "1780335999/savepoint.json", `{"id":"1780335999"}`)
-			},
-			wantErr: model.ErrUnsupportedRecordVersion,
-		},
 	}
 
 	for _, tt := range tests {
@@ -204,10 +174,6 @@ func TestRepository_List(t *testing.T) {
 			got, err := repo.List(ctx)
 
 			// Assert
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-				return
-			}
 			if tt.wantMsg != "" {
 				require.ErrorContains(t, err, tt.wantMsg)
 				return
@@ -215,7 +181,7 @@ func TestRepository_List(t *testing.T) {
 			require.NoError(t, err)
 			ids := make([]string, 0, len(got))
 			for _, r := range got {
-				ids = append(ids, r.ID)
+				ids = append(ids, r.ID.String())
 			}
 			assert.Equal(t, tt.wantIDs, nilIfEmpty(ids))
 		})

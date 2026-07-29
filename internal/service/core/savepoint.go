@@ -5,31 +5,37 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
-	str2duration "github.com/xhit/go-str2duration/v2"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/rs/zerolog"
+	"github.com/xhit/go-str2duration/v2"
+	"golang.org/x/sync/errgroup"
 )
 
-// maxConcurrentSavepointRemovals caps how many savepoints applyRemoval deletes in
-// parallel. The per-mount concurrency of a single snapshot/restore is the
-// backend's concern; this bounds the savepoint-level fan-out only.
+// maxConcurrentSavepointRemovals caps how many savepoints applyRemoval deletes
+// in parallel; each fans out over its own volumes in turn.
 const maxConcurrentSavepointRemovals = 5
 
-// CreateSavepoint stops the project services, snapshots every persistent mount
-// into a new savepoint, commits the savepoint's record, and starts the services
-// again. Progress is logged via the logger carried by ctx; the created
-// savepoint metadata is returned.
+// errNoVolumesToBackUp refuses a savepoint that would cover nothing. It stays
+// unexported: no adapter matches on it, so it is not a seam contract and does
+// not belong in model.
+var errNoVolumesToBackUp = errors.New("no stateful volumes found; nothing to capture")
+
+// errCaptureDirectoryNotEmpty refuses to capture into a directory that already
+// holds data. Unexported for the same reason: nothing matches on it.
+var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
+
+// CreateSavepoint stops the project services, captures every volume marked for
+// backup under one id, commits the record, and starts the services again.
 //
-// It holds the project lock for the whole workflow, so a concurrent rollback
-// cannot restart the services mid-snapshot. The lock is taken first: a caller who
+// The project lock is held for the whole workflow, and taken first: a caller who
 // cannot have the project must not learn anything about it, and must certainly
 // not stop its services.
+//
+// The volumes are resolved exactly as a rollback resolves them: a savepoint
+// covering a volume its own rollback cannot reach would never roll back.
 func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
 	log := zerolog.Ctx(ctx)
 
@@ -39,15 +45,16 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	}
 	defer unlock()
 
-	volumes, composeProject, err := s.resolveBackupVolumes(ctx, req.ComposeFiles)
+	volumes, err := s.resolveBackupVolumes(ctx, req.ComposeFiles)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 	if len(volumes) == 0 {
-		return model.Savepoint{}, errors.New("no stateful volumes found; nothing to snapshot")
+		return model.Savepoint{}, errNoVolumesToBackUp
 	}
 
-	record, err := s.newSavepointRecord(req)
+	// Ahead of the stop: a backend that cannot be built leaves the project running.
+	backends, err := s.buildBackends(volumes, model.BackendTierSavepoint)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
@@ -57,122 +64,32 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 		return model.Savepoint{}, fmt.Errorf("stopping services: %w", err)
 	}
 
-	// Snapshot while the services are stopped. On failure the services still
-	// must come back up, so restart them best-effort — a restart failure on top
-	// changes nothing and is only logged — then report the snapshot error.
-	if err := s.snapshotWhileStopped(ctx, volumes, composeProject, &record); err != nil {
+	// Capture while the services are stopped. On failure they still must come back
+	// up, so the restart is best-effort — a restart failure on top changes nothing
+	// and is only logged — and the capture error is what the caller gets.
+	record, err := s.performSavepoint(ctx, s.savepointRepo, s.savepointStore, backends, req.Name, req.Description)
+	if err != nil {
+		// Nothing was committed, so there is no record to uncommit — only the data
+		// the fan-out got as far as writing, which no savepoint will ever name. A
+		// refused directory is the exception: its objects predate this run, and
+		// keeping them is the point of the refusal.
+		if !errors.Is(err, errCaptureDirectoryNotEmpty) {
+			if dropErr := s.dropCaptures(ctx, s.savepointStore, record, backends); dropErr != nil {
+				log.Warn().Err(dropErr).Str("savepoint", record.ID.String()).Msg("failed to remove the partial capture")
+			}
+		}
 		log.Info().Msg("starting services")
 		if err := s.composeRunner.Up(ctx, req.WaitTimeout, req.ComposeFiles...); err != nil {
-			log.Error().Err(err).Msg("services failed to restart after snapshot failure")
+			log.Error().Err(err).Msg("services failed to restart after capture failure")
 		}
-		return model.Savepoint{}, fmt.Errorf("snapshotting mounts: %w", err)
+		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", err)
 	}
 
 	log.Info().Msg("starting services")
 	if err := s.composeRunner.Up(ctx, req.WaitTimeout, req.ComposeFiles...); err != nil {
 		return model.Savepoint{}, fmt.Errorf("starting services: %w", err)
 	}
-
 	return record, nil
-}
-
-// resolveBackupVolumes reads the compose project and returns the units a
-// savepoint of it covers, plus the name docker compose knows the stack by.
-//
-// Three steps, each at its own level: introspection reports facts,
-// FindBackupVolumes decides the units, reachableVolumes drops the ones today's
-// backend has no container to reach. The skips are logged here so both of those
-// stay pure functions.
-//
-// Rollback shares it: a safety backup must cover the volumes a savepoint would.
-// An empty result is not an error here — a rollback with nothing live to back up
-// still has a savepoint to restore — so create checks for it itself.
-func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []string) ([]model.Volume, string, error) {
-	res, err := s.composeInspector.Introspect(ctx, composeFiles...)
-	if err != nil {
-		return nil, "", fmt.Errorf("introspecting compose files: %w", err)
-	}
-
-	volumes, skipped, err := FindBackupVolumes(res)
-	if err != nil {
-		return nil, "", fmt.Errorf("deciding which volumes to back up: %w", err)
-	}
-	volumes, unreachable := reachableVolumes(volumes)
-
-	for _, sk := range append(skipped, unreachable...) {
-		zerolog.Ctx(ctx).Warn().
-			Str("service", sk.Service).
-			Str("target", sk.Target).
-			Str("raw_type", sk.RawType).
-			Str("reason", sk.Reason).
-			Msg("volume will not be backed up")
-	}
-	return volumes, res.Project.Name, nil
-}
-
-// newSavepointRecord builds the record for a new savepoint. It reads no store:
-// with one record per savepoint there is nothing to append the new one to.
-func (s *Service) newSavepointRecord(req model.CreateSavepointRequest) (model.Savepoint, error) {
-	now := s.now()
-	return model.Savepoint{
-		ID:          uniqueSavepointID(now),
-		Name:        req.Name,
-		Description: req.Description,
-		CreatedAt:   now.UTC(),
-	}, nil
-}
-
-// uniqueSavepointID returns a Unix-second savepoint ID. IDs double as the
-// snapshot namespace, and the project lock serialises creates, so uniqueness
-// rests on two creates never landing in the same second.
-func uniqueSavepointID(now time.Time) string {
-	return strconv.FormatInt(now.Unix(), 10)
-}
-
-// snapshotWhileStopped snapshots every mount into the savepoint and commits its
-// record, while the services are stopped. The caller must restart the services
-// regardless of the outcome.
-//
-// Three steps, in an order that is the whole crash-safety story:
-//
-//  1. Drop the namespace. A create killed by a crash on an earlier run can leave
-//     an orphan data tree under this id — invisible to List, and therefore not
-//     avoided by uniqueSavepointID — whose stale archives would otherwise be
-//     mixed into the new savepoint.
-//  2. Write every archive.
-//  3. Save the record. It is the commit marker, so it is written *last*: a crash
-//     before this leaves data no record names, which List skips and a future
-//     step 1 (or a `arcave savepoint gc`) reclaims.
-//
-// On failure the namespace is dropped again, so a partial snapshot can never be
-// rolled back to.
-//
-// record is a pointer because the backend's stats are the savepoint's own
-// per-volume bookkeeping: they go into it before the commit, and the caller
-// hands that same value back.
-func (s *Service) snapshotWhileStopped(
-	ctx context.Context,
-	volumes []model.Volume,
-	composeProject string,
-	record *model.Savepoint,
-) error {
-	if err := s.savepointBackend.Remove(ctx, record.ID); err != nil {
-		return fmt.Errorf("clearing the savepoint directory: %w", err)
-	}
-
-	stats, err := s.savepointBackend.Snapshot(ctx, record.ID, composeProject, volumes)
-	if err == nil {
-		record.Stats = stats
-		err = s.savepointRepo.Save(ctx, *record)
-	} else {
-		err = fmt.Errorf("exporting docker mounts/volumes: %w", err)
-	}
-	if err != nil {
-		if rmErr := s.savepointBackend.Remove(ctx, record.ID); rmErr != nil {
-			zerolog.Ctx(ctx).Warn().Err(rmErr).Str("savepoint", record.ID).Msg("failed to remove partial snapshot")
-		}
-	}
-	return err
 }
 
 // ListSavepoints returns every committed savepoint.
@@ -180,12 +97,11 @@ func (s *Service) ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
 	return s.savepointRepo.List(ctx)
 }
 
-// RemoveSavepoints deletes savepoints selected by req. In retention mode, when
-// several rules are combined a savepoint survives if any rule retains it.
+// RemoveSavepoints deletes savepoints selected by req. Combined retention rules
+// keep a savepoint if any one of them retains it.
 //
-// A dry run takes no lock: it only reads, and it must not block on — or be
-// blocked by — a rollback the user is watching. A real removal takes the lock
-// before it lists, so the set it selects is the set it deletes.
+// A dry run takes no lock — it only reads. A real removal locks before it lists,
+// so the set it selects is the set it deletes.
 func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error) {
 	if err := validateRemoveRequest(req); err != nil {
 		return model.RemoveResult{}, err
@@ -201,7 +117,7 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 
 	records, err := s.savepointRepo.List(ctx)
 	if err != nil {
-		return model.RemoveResult{}, err
+		return model.RemoveResult{}, fmt.Errorf("listing savepoints: %w", err)
 	}
 
 	_, removed, err := s.selectSavepointsToRemove(records, req)
@@ -218,14 +134,12 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 	return model.RemoveResult{DryRun: req.DryRun, Removed: removed}, nil
 }
 
-// validateRemoveRequest rejects contradictory or incomplete remove requests:
-// explicit IDs and retention rules are mutually exclusive, and at least one
-// selector must be given. The errors it returns are the shared model sentinels,
-// which the adapters match on.
+// validateRemoveRequest rejects contradictory or incomplete requests — ids and
+// retention rules are mutually exclusive, one selector is required — with the
+// model sentinels the adapters match on.
 func validateRemoveRequest(req model.RemoveRequest) error {
-	// Checked before hasRetention, which counts only a *positive* RetainRecent: a
-	// negative count would otherwise fall through and be reported as "no selector
-	// provided".
+	// Before hasRetention, which counts only a positive RetainRecent: a negative
+	// would fall through and be reported as "no selector provided".
 	if req.RetainRecent < 0 {
 		return model.ErrRetainRecentNegative
 	}
@@ -241,10 +155,8 @@ func validateRemoveRequest(req model.RemoveRequest) error {
 	return nil
 }
 
-// selectSavepointsToRemove splits records into the ones to keep and the ones to
-// remove according to req: an explicit ID list when given, otherwise the
-// retention rules. Only the removed half is destructive input; kept is returned
-// so a caller can report or assert on the complement.
+// selectSavepointsToRemove splits records by req: an explicit id list when
+// given, otherwise the retention rules.
 func (s *Service) selectSavepointsToRemove(
 	records []model.Savepoint,
 	req model.RemoveRequest,
@@ -261,8 +173,7 @@ func (s *Service) selectSavepointsToRemove(
 }
 
 // retentionCutoffs parses the time-based retention flags into cutoff instants;
-// each cutoff marks savepoints created before it as deletable. It reads the
-// injected clock, so --retain-for is testable without wall-clock time.
+// each marks savepoints created before it as deletable.
 func (s *Service) retentionCutoffs(req model.RemoveRequest) ([]time.Time, error) {
 	var cutoffs []time.Time
 	if req.RetainFor != "" {
@@ -270,7 +181,7 @@ func (s *Service) retentionCutoffs(req model.RemoveRequest) ([]time.Time, error)
 		if err != nil {
 			return nil, fmt.Errorf("invalid --retain-for %q: %w", req.RetainFor, err)
 		}
-		cutoffs = append(cutoffs, s.now().UTC().Add(-d))
+		cutoffs = append(cutoffs, time.Now().UTC().Add(-d))
 	}
 	if req.BeforeDate != "" {
 		t, err := time.Parse(time.RFC3339Nano, req.BeforeDate)
@@ -287,13 +198,13 @@ func (s *Service) retentionCutoffs(req model.RemoveRequest) ([]time.Time, error)
 // never silently deletes nothing.
 func partitionByIDs(
 	records []model.Savepoint,
-	ids []string,
+	ids []model.SavepointID,
 ) (kept, removed []model.Savepoint, err error) {
-	want := make(map[string]bool, len(ids))
+	want := make(map[model.SavepointID]bool, len(ids))
 	for _, id := range ids {
 		want[id] = true
 	}
-	seen := make(map[string]bool, len(ids))
+	seen := make(map[model.SavepointID]bool, len(ids))
 	for _, r := range records {
 		if want[r.ID] {
 			removed = append(removed, r)
@@ -305,7 +216,7 @@ func partitionByIDs(
 	var missing []string
 	for _, id := range ids {
 		if !seen[id] {
-			missing = append(missing, id)
+			missing = append(missing, id.String())
 		}
 	}
 	if len(missing) > 0 {
@@ -314,16 +225,14 @@ func partitionByIDs(
 	return kept, removed, nil
 }
 
-// partitionSavepoints splits records into the ones to keep and the ones to
-// remove. A record is removed only when every active rule marks it deletable:
-// it is outside the retainRecent newest (when hasRecent) and older than every
-// cutoff.
+// partitionSavepoints removes a record only when every active rule marks it
+// deletable: outside the retainRecent newest, and older than every cutoff.
 func partitionSavepoints(
 	records []model.Savepoint,
 	retainRecent int,
 	cutoffs []time.Time,
 ) (kept, removed []model.Savepoint) {
-	retainedByRecency := map[string]bool{}
+	retainedByRecency := map[model.SavepointID]bool{}
 	hasRecent := retainRecent > 0
 	if hasRecent {
 		byNewest := append([]model.Savepoint(nil), records...)
@@ -351,34 +260,19 @@ func partitionSavepoints(
 	return kept, removed
 }
 
-// applyRemoval performs the destructive step, uncommit-first: for each savepoint
-// it deletes the record *before* the data.
-//
-// This inverts the order a monolithic manifest wanted. There, data went first so
-// "the index never points at data that is gone", and that was safe only because
-// rewriting the whole index was a single swap. With a per-savepoint marker,
-// data-first is the dangerous path: a crash after some archives are gone but
-// before the marker is removed leaves a savepoint that still lists and still
-// resolves, whose rollback pre-flight then fails — or, if pre-flight is ever
-// relaxed, restores a half-empty volume over live data. Uncommit-first makes the
-// only observable states "fully present" and "gone".
-//
-// The cost is an orphaned namespace when the data delete fails after the record
-// is gone: the savepoint no longer lists, so `arcave savepoint remove <id>` cannot
-// retry it. Those namespaces are reported here and reclaimed by a future
-// `arcave savepoint gc`.
+// applyRemoval deletes uncommit-first, so the only observable states are "fully
+// present" and "gone". The cost is an orphaned directory when the data delete
+// fails, reported here and reclaimed by a future `arcave savepoint gc`.
 func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) error {
-	// Delete the savepoints concurrently. This is a plain errgroup.Group, not
-	// WithContext: each removal is independent, and a cancelled sibling would abort
-	// mid-delete and leave a half-deleted directory. Wait therefore surfaces only
-	// the first failure, so each goroutine also records its own error at its own
-	// index — that is what names the savepoints whose data survived.
+	// A plain errgroup.Group, not WithContext: a cancelled sibling would abort
+	// mid-delete. Wait reports only the first failure, so each goroutine records
+	// its own — that is what names the savepoints whose data survived.
 	errs := make([]error, len(removed))
 	g := new(errgroup.Group)
 	g.SetLimit(maxConcurrentSavepointRemovals)
 	for i, r := range removed {
 		g.Go(func() error {
-			errs[i] = s.removeSavepoint(ctx, r.ID)
+			errs[i] = s.removeSavepoint(ctx, r)
 			return errs[i]
 		})
 	}
@@ -388,17 +282,17 @@ func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) e
 	return nil
 }
 
-// removeSavepoint deletes one savepoint: the record first, then the data it
-// named. A failure after the record is gone leaves an orphaned directory, which
-// is logged with the id so the user can reclaim the space.
-func (s *Service) removeSavepoint(ctx context.Context, id string) error {
-	if err := s.savepointRepo.Delete(ctx, id); err != nil {
-		return fmt.Errorf("uncommit savepoint %s: %w", id, err)
+// removeSavepoint drops one savepoint from the savepoint tier. The backends are
+// built first: one that cannot be built leaves the savepoint whole.
+func (s *Service) removeSavepoint(ctx context.Context, record model.Savepoint) error {
+	backends, err := s.buildBackends(volumesOf(record), model.BackendTierSavepoint)
+	if err != nil {
+		return err
 	}
-	if err := s.savepointBackend.Remove(ctx, id); err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", id).
+	if err := s.dropSavepoint(ctx, s.savepointRepo, s.savepointStore, record, backends); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", record.ID.String()).
 			Msg("savepoint was uncommitted but its data could not be removed; the directory is orphaned")
-		return fmt.Errorf("remove snapshot %s: %w", id, err)
+		return err
 	}
 	return nil
 }
@@ -406,11 +300,8 @@ func (s *Service) removeSavepoint(ctx context.Context, id string) error {
 // refLatest is the reserved ref that selects the newest savepoint by CreatedAt.
 const refLatest = "latest"
 
-// findSavepoint resolves a CLI ref to a savepoint record. The ref may be
-// refLatest (the newest savepoint), an exact savepoint ID, or a savepoint name.
-// IDs take precedence since they are unique; a name that matches several
-// savepoints is an error rather than a silent guess, since rolling back to the
-// wrong one is destructive.
+// findSavepoint resolves a ref — refLatest, an exact id, or a name. Ids win,
+// being unique; a name matching several is an error, never a silent guess.
 func findSavepoint(records []model.Savepoint, ref string) (model.Savepoint, error) {
 	if len(records) == 0 {
 		return model.Savepoint{}, errors.New("no savepoints exist")
@@ -425,7 +316,7 @@ func findSavepoint(records []model.Savepoint, ref string) (model.Savepoint, erro
 		return latest, nil
 	}
 	for _, r := range records {
-		if r.ID == ref {
+		if r.ID.String() == ref {
 			return r, nil
 		}
 	}
@@ -443,7 +334,7 @@ func findSavepoint(records []model.Savepoint, ref string) (model.Savepoint, erro
 	default:
 		ids := make([]string, len(byName))
 		for i, r := range byName {
-			ids[i] = r.ID
+			ids[i] = r.ID.String()
 		}
 		return model.Savepoint{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s", len(byName), ref, strings.Join(ids, ", "))
 	}

@@ -7,45 +7,36 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 )
 
-// configWriter persists the project config. Only Init uses it — the read
-// commands take a resolved config.Config by value (from cmd/arcave resolve) and
-// never touch the store.
+// configWriter persists the project config. Only Init uses it: every other
+// command takes a resolved config.Config by value.
 type configWriter interface {
 	Exists() (bool, error)
 	Save(config.Config) error
 	Path() string
 }
 
-// InitService creates a project's arcave metadata. It is separate from Service
-// because it shares only the compose inspector with the savepoint workflows and
-// needs neither storage, nor a snapshot backend, nor the Docker engine — so
-// `arcave init` runs without ever reaching for a daemon.
+// InitService creates a project's arcave metadata. It shares only the compose
+// inspector with the savepoint workflows and needs neither storage, a snapshot
+// backend nor the Docker engine, so `arcave init` never reaches for a daemon.
 type InitService struct {
-	projectRoot      string
-	configWriter     configWriter
-	composeInspector composeInspector
+	projectRoot         string
+	configWriter        configWriter
+	composeIntrospector composeIntrospector
 }
 
 // NewInitService wires an InitService for the project rooted at projectRoot.
-func NewInitService(projectRoot string, cw configWriter, ci composeInspector) *InitService {
-	return &InitService{projectRoot: projectRoot, configWriter: cw, composeInspector: ci}
+func NewInitService(projectRoot string, cw configWriter, ci composeIntrospector) *InitService {
+	return &InitService{projectRoot: projectRoot, configWriter: cw, composeIntrospector: ci}
 }
 
-// Init initialises arcave metadata for the project: it verifies the compose project
-// loads, then writes cfg to .arcave/config.yaml. It returns the resolved project
-// name and the path of the written config file. An already-initialised project
-// is an error unless override is set.
+// Init verifies the compose project loads, then writes cfg to
+// .arcave/config.yaml, returning the resolved project name and the file's path.
+// An already-initialised project is an error unless override is set.
 //
-// cfg is the value Init persists, verbatim — it takes no request type of its
-// own. An InitRequest mirroring a subset of the config could only be a lossy
-// copy of it: every section it forgot to carry (docker, snapshot) would be
-// silently dropped from the file a `arcave init --override` rewrote. It also has
-// nothing to create: the savepoint store is a `storage` section here and nothing
-// more, brought into existence by storefactory.New at the first savepoint, so Init
-// never names a directory and never opens one.
-//
-// override is an argument rather than a config field because it is transient:
-// it steers this run and is never persisted.
+// cfg is persisted verbatim, with no request type of its own: a type mirroring a
+// subset of the config would silently drop the sections it forgot from the file
+// an `arcave init --override` rewrites. override is an argument rather than a
+// config field because it steers this run and is never persisted.
 func (s *InitService) Init(ctx context.Context, cfg config.Config, override bool) (resolvedName, path string, err error) {
 	exists, err := s.configWriter.Exists()
 	if err != nil {
@@ -55,14 +46,13 @@ func (s *InitService) Init(ctx context.Context, cfg config.Config, override bool
 		return "", "", fmt.Errorf("project already initialized: %s exists (use --override to overwrite)", s.configWriter.Path())
 	}
 
-	// ApplyDefaults stamps the schema version, the computed project name and the
-	// union tags, so the file init writes is a complete v1 config. cmd/arcave has
-	// already run it (config.Unmarshal does), but it is idempotent, and an MCP
+	// Stamps the schema version, project name and union tags, so the file is a
+	// complete v1 config. Idempotent: cmd/arcave has run it already, but an MCP
 	// caller may hand over a Config it assembled by hand.
 	cfg.ApplyDefaults(s.projectRoot)
 
 	// Read and verify the compose project before writing anything.
-	if _, err := s.composeInspector.Introspect(ctx, cfg.Project.ComposeFiles...); err != nil {
+	if _, err := s.composeIntrospector.Introspect(ctx, cfg.Project.ComposeFiles...); err != nil {
 		return "", "", fmt.Errorf("verifying compose project: %w", err)
 	}
 
