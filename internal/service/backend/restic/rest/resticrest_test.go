@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -15,49 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// blobID is a syntactically valid object name: exactly 64 lowercase hex
-// characters, which is all the protocol (and validPath) asks of one.
-const blobID = "1111111111111111111111111111111111111111111111111111111111111111"
-
-// otherBlobID is a second valid name, for the cases that need two.
-const otherBlobID = "2222222222222222222222222222222222222222222222222222222222222222"
-
-// letteredBlobID is a valid name carrying hex letters, so upper-casing it
-// actually produces a different string. blobID does not: it is all digits, and a
-// case test built on it passes without testing anything.
-const letteredBlobID = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
-
-// newHandler returns the handler over a fresh directory store, plus that store
-// so a test can plant objects the handler is then asked about.
-func newStoreHandler(t *testing.T) (http.Handler, storages.Storager) {
-	t.Helper()
-	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
-	require.NoError(t, err)
-	return New(store), store
-}
-
-// put plants an object directly in the store, behind the handler's back.
-func put(t *testing.T, store storages.Storager, key, body string) {
-	t.Helper()
-	require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader(body)))
-}
-
-// do runs one request against h and returns the recorded response.
-func do(t *testing.T, h http.Handler, method, target, body string, headers ...[2]string) *httptest.ResponseRecorder {
-	t.Helper()
-	var reader io.Reader
-	if body != "" {
-		reader = strings.NewReader(body)
-	}
-	req := httptest.NewRequest(method, target, reader)
-	for _, kv := range headers {
-		req.Header.Set(kv[0], kv[1])
-	}
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
-}
 
 // The path gate is the first thing every request meets: a name that is not
 // exactly 64 hex characters, a type outside the white list, or anything with a
@@ -265,6 +221,7 @@ func TestHandler_ServeHTTP_HeadOnAListing(t *testing.T) {
 	assert.Equal(t, mimeTypeAPIV1, rec.Header().Get("Content-Type"))
 }
 
+// An init is POST / with create=true; anything else on / is a 400.
 func TestHandler_createRepo(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -308,6 +265,7 @@ func TestHandler_createRepo_LeavesAnEmptyRepository(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, config.Code, "an initialised repository still has no config until restic writes one")
 }
 
+// HEAD answers the object's exact size in Content-Length; absent is a 404.
 func TestHandler_ServeHTTP_Stat(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -344,6 +302,7 @@ func TestHandler_ServeHTTP_Stat(t *testing.T) {
 	}
 }
 
+// GET /config serves the config verbatim; absent is a 404.
 func TestHandler_getConfig(t *testing.T) {
 	// Arrange
 	h, store := newStoreHandler(t)
@@ -383,6 +342,8 @@ func TestHandler_saveConfig(t *testing.T) {
 	assert.Equal(t, "[repository]", string(got), "the refused POST must not have touched the config")
 }
 
+// The same name twice is an overwrite, never a refusal — restic retries
+// uploads, and the name is content-addressed.
 func TestHandler_saveBlob(t *testing.T) {
 	// Arrange
 	h, store := newStoreHandler(t)
@@ -437,6 +398,8 @@ func TestHandler_ServeHTTP_Delete(t *testing.T) {
 	}
 }
 
+// A listing speaks both API versions — v1 is names, v2 carries sizes — and an
+// empty one is [] in either.
 func TestHandler_listBlobs(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -528,6 +491,7 @@ func TestHandler_listBlobs_SkipsNestedKeys(t *testing.T) {
 	assert.Equal(t, []blob{{Name: blobID, Size: 3}}, blobs)
 }
 
+// GET serves the blob whole or by Range, with http.ServeContent's bounds.
 func TestHandler_getBlob(t *testing.T) {
 	const payload = "0123456789abcdef"
 
@@ -579,6 +543,7 @@ func TestHandler_getBlob(t *testing.T) {
 	}
 }
 
+// Reading a blob that is not there is a 404.
 func TestHandler_getBlob_Missing(t *testing.T) {
 	// Arrange
 	h, _ := newStoreHandler(t)

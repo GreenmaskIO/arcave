@@ -18,8 +18,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-const testComposeProject = "demo"
-
 // The stream lands verbatim at <id>/<objectID>/data.tar of the tier the
 // snapshotter was built for, and the stat reports the bytes actually written.
 func TestSnapshotter_Snapshot(t *testing.T) {
@@ -85,7 +83,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			docker := &mockMountStreamer{}
-			docker.On("OpenMount", testComposeProject, "app", "/etc/cfg").Return(tt.reader, tt.openErr).Once()
+			docker.On("OpenMount", mock.Anything, testComposeProject, "app", "/etc/cfg").Return(tt.reader, tt.openErr).Once()
 			sessionStore, safetyStore := newStore(t, "session"), newStore(t, "safety")
 			snapshotter, err := NewFactory(docker).New(model.BackendSpec{
 				SessionStore: sessionStore,
@@ -140,7 +138,7 @@ func TestSnapshotter_Exists(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, exists)
-			assert.Empty(t, docker.Calls, "Exists must not touch the engine")
+			docker.AssertExpectations(t)
 		})
 	}
 }
@@ -190,7 +188,6 @@ func TestSnapshotter_Restore(t *testing.T) {
 			verify: func(t *testing.T, err error, _ string, docker *mockMountStreamer) {
 				require.Error(t, err)
 				assert.ErrorIs(t, err, storages.ErrFileNotFound)
-				assert.Empty(t, docker.Calls, "no bytes may reach a live mount from an archive that is not there")
 			},
 		},
 	}
@@ -203,9 +200,9 @@ func TestSnapshotter_Restore(t *testing.T) {
 			sessionStore := newStore(t, "session")
 			ctx := context.Background()
 			if tt.seed {
-				docker.On("WriteMount", testComposeProject, "app", "/etc/cfg", mock.Anything).
+				docker.On("WriteMount", mock.Anything, testComposeProject, "app", "/etc/cfg", mock.Anything).
 					Run(func(args mock.Arguments) {
-						_, err := io.Copy(&restored, args.Get(3).(io.Reader))
+						_, err := io.Copy(&restored, args.Get(4).(io.Reader))
 						assert.NoError(t, err)
 					}).
 					Return(tt.writeErr).Once()
@@ -269,7 +266,7 @@ func TestSnapshotter_Remove(t *testing.T) {
 			// Assert
 			assert.NoError(t, err)
 			assert.Empty(t, objectNames(t, sessionStore))
-			assert.Empty(t, docker.Calls, "Remove must not touch the engine")
+			docker.AssertExpectations(t)
 		})
 	}
 }
@@ -339,8 +336,8 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 				// Assert
 				require.Error(t, err)
 				require.ErrorIs(t, err, model.ErrInvalidSavepointID)
-				assert.Empty(t, docker.Calls, "the engine must not be touched under an id the gate refuses")
 				assert.Empty(t, objectNames(t, sessionStore), "the store must be untouched")
+				docker.AssertExpectations(t)
 			})
 		}
 	}
@@ -407,61 +404,13 @@ func TestFactory_New(t *testing.T) {
 				if tt.wantErrIs != nil {
 					assert.ErrorIs(t, err, tt.wantErrIs)
 				}
-				assert.Empty(t, docker.Calls, "no mount may be opened for a volume with no way in")
+				docker.AssertExpectations(t)
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.volume, snapshotter.Volume())
+			docker.AssertExpectations(t)
 		})
-	}
-}
-
-// mockMountStreamer is the MountStreamer double. ctx is dropped from its
-// expectations: no test asserts on it.
-type mockMountStreamer struct{ mock.Mock }
-
-func (m *mockMountStreamer) OpenMount(_ context.Context, project, service, target string) (io.ReadCloser, error) {
-	args := m.Called(project, service, target)
-	rc, _ := args.Get(0).(io.ReadCloser)
-	return rc, args.Error(1)
-}
-
-func (m *mockMountStreamer) WriteMount(_ context.Context, project, service, target string, r io.Reader) error {
-	return m.Called(project, service, target, r).Error(0)
-}
-
-// failingReader fails mid-stream; a mock cannot, since it only hands the reader over.
-type failingReader struct{ err error }
-
-func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
-
-func namedVolume(dockerName string, usedBy ...model.ServiceReference) model.Volume {
-	return model.Volume{
-		ObjectID:       model.NamedVolume{Name: dockerName}.ObjectID(),
-		ComposeProject: testComposeProject,
-		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendCopy,
-		Named:          &model.VolumePropertiesNamed{VolumeName: dockerName, UsedBy: usedBy},
-	}
-}
-
-func bindVolume(service, target string) model.Volume {
-	return model.Volume{
-		ObjectID:       model.ServiceVolume{Type: model.VolumeTypeBind, Target: target}.ObjectID(service),
-		ComposeProject: testComposeProject,
-		Type:           model.VolumeTypeBind,
-		Backend:        model.SnapshotBackendCopy,
-		Bind:           &model.VolumePropertiesBind{Service: service, Target: target},
-	}
-}
-
-func anonVolume(service, target string) model.Volume {
-	return model.Volume{
-		ObjectID:       model.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}.ObjectID(service),
-		ComposeProject: testComposeProject,
-		Type:           model.VolumeTypeAnon,
-		Backend:        model.SnapshotBackendCopy,
-		Anon:           &model.VolumePropertiesAnon{Service: service, Target: target},
 	}
 }
 
