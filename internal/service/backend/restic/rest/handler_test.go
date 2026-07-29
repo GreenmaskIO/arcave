@@ -1,7 +1,6 @@
 package rest
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,14 +18,6 @@ import (
 // status. What the repository then does with the objects is service_test.go's,
 // and that the two together answer like rest-server is oracle_test.go's.
 
-// newMockedHandler returns the handler over a fresh double, plus the double.
-func newMockedHandler(t *testing.T) (http.Handler, *repositoryMock) {
-	t.Helper()
-	repo := &repositoryMock{}
-	t.Cleanup(func() { repo.AssertExpectations(t) })
-	return newHandler(repo), repo
-}
-
 // Every route reaches exactly one repository method, carrying the type and name
 // the URL named and nothing else. The expectation is set with the exact
 // arguments, so AssertExpectations failing is the assertion: a handler that
@@ -43,56 +34,56 @@ func TestHandler_ServeHTTP_DelegatesToRepository(t *testing.T) {
 	}{
 		{
 			name: "init", method: http.MethodPost, target: "/?create=true",
-			expect: func(repo *repositoryMock) { repo.On("Create", mock.Anything).Return(nil) },
+			expect: func(repo *repositoryMock) { repo.On("Create", mock.Anything).Return(nil).Once() },
 		},
 		{
 			name: "stat the config", method: http.MethodHead, target: "/config",
-			expect: func(repo *repositoryMock) { repo.On("StatConfig", mock.Anything).Return(int64(12), nil) },
+			expect: func(repo *repositoryMock) { repo.On("StatConfig", mock.Anything).Return(int64(12), nil).Once() },
 		},
 		{
 			name: "read the config", method: http.MethodGet, target: "/config",
 			expect: func(repo *repositoryMock) {
-				repo.On("OpenConfig", mock.Anything).Return(io.NopCloser(strings.NewReader("[repository]")), nil)
+				repo.On("OpenConfig", mock.Anything).Return(io.NopCloser(strings.NewReader("[repository]")), nil).Once()
 			},
 		},
 		{
 			name: "write the config", method: http.MethodPost, target: "/config", body: "[repository]",
 			expect: func(repo *repositoryMock) {
-				repo.On("SaveConfig", mock.Anything, mock.Anything).Return(nil)
+				repo.On("SaveConfig", mock.Anything, mock.Anything).Return(nil).Once()
 			},
 		},
 		{
 			name: "delete the config", method: http.MethodDelete, target: "/config",
-			expect: func(repo *repositoryMock) { repo.On("DeleteConfig", mock.Anything).Return(nil) },
+			expect: func(repo *repositoryMock) { repo.On("DeleteConfig", mock.Anything).Return(nil).Once() },
 		},
 		{
 			name: "list a type", method: http.MethodGet, target: "/data/",
 			expect: func(repo *repositoryMock) {
-				repo.On("ListBlobs", mock.Anything, "data").Return([]blob{{Name: blobID, Size: 3}}, nil)
+				repo.On("ListBlobs", mock.Anything, "data").Return([]blob{{Name: blobID, Size: 3}}, nil).Once()
 			},
 		},
 		{
 			name: "stat a blob", method: http.MethodHead, target: "/index/" + blobID,
 			expect: func(repo *repositoryMock) {
-				repo.On("StatBlob", mock.Anything, "index", blobID).Return(int64(3), nil)
+				repo.On("StatBlob", mock.Anything, "index", blobID).Return(int64(3), nil).Once()
 			},
 		},
 		{
 			name: "read a blob", method: http.MethodGet, target: "/locks/" + blobID,
 			expect: func(repo *repositoryMock) {
-				repo.On("OpenBlob", mock.Anything, "locks", blobID).Return(newReadSeekCloser("payload"), nil)
+				repo.On("OpenBlob", mock.Anything, "locks", blobID).Return(newReadSeekCloser("payload"), nil).Once()
 			},
 		},
 		{
 			name: "write a blob", method: http.MethodPost, target: "/keys/" + blobID, body: "key-bytes",
 			expect: func(repo *repositoryMock) {
-				repo.On("SaveBlob", mock.Anything, "keys", blobID, mock.Anything).Return(nil)
+				repo.On("SaveBlob", mock.Anything, "keys", blobID, mock.Anything).Return(nil).Once()
 			},
 		},
 		{
 			name: "delete a blob", method: http.MethodDelete, target: "/snapshots/" + blobID,
 			expect: func(repo *repositoryMock) {
-				repo.On("DeleteBlob", mock.Anything, "snapshots", blobID).Return(nil)
+				repo.On("DeleteBlob", mock.Anything, "snapshots", blobID).Return(nil).Once()
 			},
 		},
 	}
@@ -100,7 +91,7 @@ func TestHandler_ServeHTTP_DelegatesToRepository(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, repo := newMockedHandler(t)
+			h, repo := newMockedHandler()
 			tt.expect(repo)
 
 			// Act
@@ -108,6 +99,7 @@ func TestHandler_ServeHTTP_DelegatesToRepository(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, http.StatusOK, rec.Code)
+			repo.AssertExpectations(t)
 		})
 	}
 }
@@ -117,7 +109,7 @@ func TestHandler_ServeHTTP_DelegatesToRepository(t *testing.T) {
 // thing a stream of pack files must never do.
 func TestHandler_saveBlob_HandsOverTheRequestBody(t *testing.T) {
 	// Arrange
-	h, repo := newMockedHandler(t)
+	h, repo := newMockedHandler()
 	var got string
 	repo.On("SaveBlob", mock.Anything, "data", blobID, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -125,7 +117,7 @@ func TestHandler_saveBlob_HandsOverTheRequestBody(t *testing.T) {
 			require.NoError(t, err)
 			got = string(body)
 		}).
-		Return(nil)
+		Return(nil).Once()
 
 	// Act
 	rec := do(t, h, http.MethodPost, "/data/"+blobID, "pack-bytes")
@@ -133,6 +125,7 @@ func TestHandler_saveBlob_HandsOverTheRequestBody(t *testing.T) {
 	// Assert
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "pack-bytes", got)
+	repo.AssertExpectations(t)
 }
 
 // The two conditions the repository names, and everything else, become the
@@ -153,45 +146,45 @@ func TestHandler_ServeHTTP_MapsRepositoryErrors(t *testing.T) {
 			name: "a missing blob is a 404", method: http.MethodHead, target: "/data/" + blobID, want: http.StatusNotFound,
 			expect: func(repo *repositoryMock) {
 				repo.On("StatBlob", mock.Anything, "data", blobID).
-					Return(int64(0), fmt.Errorf("%w: data/%s", errObjectNotFound, blobID))
+					Return(int64(0), fmt.Errorf("%w: data/%s", errObjectNotFound, blobID)).Once()
 			},
 		},
 		{
 			name: "a missing config is a 404", method: http.MethodGet, target: "/config", want: http.StatusNotFound,
 			expect: func(repo *repositoryMock) {
-				repo.On("OpenConfig", mock.Anything).Return(nil, fmt.Errorf("%w: config", errObjectNotFound))
+				repo.On("OpenConfig", mock.Anything).Return(nil, fmt.Errorf("%w: config", errObjectNotFound)).Once()
 			},
 		},
 		{
 			name: "a blob that cannot be opened is a 404", method: http.MethodGet, target: "/data/" + blobID, want: http.StatusNotFound,
 			expect: func(repo *repositoryMock) {
-				repo.On("OpenBlob", mock.Anything, "data", blobID).Return(nil, errObjectNotFound)
+				repo.On("OpenBlob", mock.Anything, "data", blobID).Return(nil, errObjectNotFound).Once()
 			},
 		},
 		{
 			name: "an existing config is a 403", method: http.MethodPost, target: "/config", want: http.StatusForbidden,
 			expect: func(repo *repositoryMock) {
-				repo.On("SaveConfig", mock.Anything, mock.Anything).Return(errConfigExists)
+				repo.On("SaveConfig", mock.Anything, mock.Anything).Return(errConfigExists).Once()
 			},
 		},
 		{
 			name: "a failed init is a 500", method: http.MethodPost, target: "/?create=true", want: http.StatusInternalServerError,
-			expect: func(repo *repositoryMock) { repo.On("Create", mock.Anything).Return(failed) },
+			expect: func(repo *repositoryMock) { repo.On("Create", mock.Anything).Return(failed).Once() },
 		},
 		{
 			name: "a failed listing is a 500", method: http.MethodGet, target: "/data/", want: http.StatusInternalServerError,
-			expect: func(repo *repositoryMock) { repo.On("ListBlobs", mock.Anything, "data").Return(nil, failed) },
+			expect: func(repo *repositoryMock) { repo.On("ListBlobs", mock.Anything, "data").Return(nil, failed).Once() },
 		},
 		{
 			name: "a failed upload is a 500", method: http.MethodPost, target: "/data/" + blobID, want: http.StatusInternalServerError,
 			expect: func(repo *repositoryMock) {
-				repo.On("SaveBlob", mock.Anything, "data", blobID, mock.Anything).Return(failed)
+				repo.On("SaveBlob", mock.Anything, "data", blobID, mock.Anything).Return(failed).Once()
 			},
 		},
 		{
 			name: "a failed delete is a 500", method: http.MethodDelete, target: "/data/" + blobID, want: http.StatusInternalServerError,
 			expect: func(repo *repositoryMock) {
-				repo.On("DeleteBlob", mock.Anything, "data", blobID).Return(failed)
+				repo.On("DeleteBlob", mock.Anything, "data", blobID).Return(failed).Once()
 			},
 		},
 	}
@@ -199,7 +192,7 @@ func TestHandler_ServeHTTP_MapsRepositoryErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, repo := newMockedHandler(t)
+			h, repo := newMockedHandler()
 			tt.expect(repo)
 
 			// Act
@@ -207,6 +200,7 @@ func TestHandler_ServeHTTP_MapsRepositoryErrors(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, rec.Code)
+			repo.AssertExpectations(t)
 		})
 	}
 }
@@ -215,9 +209,9 @@ func TestHandler_ServeHTTP_MapsRepositoryErrors(t *testing.T) {
 // client can do nothing with it, and it names the store's layout.
 func TestHandler_ServeHTTP_DoesNotLeakTheCause(t *testing.T) {
 	// Arrange
-	h, repo := newMockedHandler(t)
+	h, repo := newMockedHandler()
 	repo.On("ListBlobs", mock.Anything, "data").
-		Return(nil, fmt.Errorf("listing data: open /srv/backups/tenant-42/arcave: permission denied"))
+		Return(nil, fmt.Errorf("listing data: open /srv/backups/tenant-42/arcave: permission denied")).Once()
 
 	// Act
 	rec := do(t, h, http.MethodGet, "/data/", "")
@@ -225,74 +219,5 @@ func TestHandler_ServeHTTP_DoesNotLeakTheCause(t *testing.T) {
 	// Assert
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Equal(t, "Internal Server Error\n", rec.Body.String())
+	repo.AssertExpectations(t)
 }
-
-// repositoryMock is the handler's view of a repository, doubled. It is what
-// makes the seam worth having: the handler is exercised without a store, a
-// filesystem or a single real object.
-type repositoryMock struct {
-	mock.Mock
-}
-
-// compile-time assertion: the double must keep up with the interface.
-var _ repository = (*repositoryMock)(nil)
-
-func (m *repositoryMock) Create(ctx context.Context) error {
-	return m.Called(ctx).Error(0)
-}
-
-func (m *repositoryMock) StatConfig(ctx context.Context) (int64, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(int64), args.Error(1)
-}
-
-func (m *repositoryMock) OpenConfig(ctx context.Context) (io.ReadCloser, error) {
-	args := m.Called(ctx)
-	rc, _ := args.Get(0).(io.ReadCloser)
-	return rc, args.Error(1)
-}
-
-func (m *repositoryMock) SaveConfig(ctx context.Context, body io.Reader) error {
-	return m.Called(ctx, body).Error(0)
-}
-
-func (m *repositoryMock) DeleteConfig(ctx context.Context) error {
-	return m.Called(ctx).Error(0)
-}
-
-func (m *repositoryMock) ListBlobs(ctx context.Context, objectType string) ([]blob, error) {
-	args := m.Called(ctx, objectType)
-	blobs, _ := args.Get(0).([]blob)
-	return blobs, args.Error(1)
-}
-
-func (m *repositoryMock) StatBlob(ctx context.Context, objectType, name string) (int64, error) {
-	args := m.Called(ctx, objectType, name)
-	return args.Get(0).(int64), args.Error(1)
-}
-
-func (m *repositoryMock) OpenBlob(ctx context.Context, objectType, name string) (io.ReadSeekCloser, error) {
-	args := m.Called(ctx, objectType, name)
-	f, _ := args.Get(0).(io.ReadSeekCloser)
-	return f, args.Error(1)
-}
-
-func (m *repositoryMock) SaveBlob(ctx context.Context, objectType, name string, body io.Reader) error {
-	return m.Called(ctx, objectType, name, body).Error(0)
-}
-
-func (m *repositoryMock) DeleteBlob(ctx context.Context, objectType, name string) error {
-	return m.Called(ctx, objectType, name).Error(0)
-}
-
-// readSeekCloser is an in-memory stand-in for what OpenBlob returns, which
-// http.ServeContent seeks over to measure the object.
-type readSeekCloser struct {
-	*strings.Reader
-}
-
-func newReadSeekCloser(payload string) io.ReadSeekCloser {
-	return readSeekCloser{Reader: strings.NewReader(payload)}
-}
-
-func (readSeekCloser) Close() error { return nil }

@@ -15,109 +15,102 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// The loader is a seam: Inspect projects whatever it returns, so it runs against
-// an in-memory project with no compose file on disk.
-func TestInspector_Inspect(t *testing.T) {
-	t.Run("projects the loaded project", func(t *testing.T) {
-		// Arrange
-		project := &types.Project{
-			Name: "fixture",
-			// compose-go resolves every volume's Name at load; introspect reads it
-			// rather than re-deriving the project prefix.
-			Volumes: types.Volumes{"pgdata": types.VolumeConfig{Name: "fixture_pgdata"}},
-			Services: types.Services{
-				"db": {Volumes: []types.ServiceVolumeConfig{
-					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
-				}},
-				"app": {Volumes: []types.ServiceVolumeConfig{
-					{Type: "tmpfs", Target: "/scratch"},
-				}},
+// The loader is a seam: Introspect projects whatever it returns, so it runs
+// against an in-memory project with no compose file on disk.
+func TestInspector_Introspect(t *testing.T) {
+	tests := []struct {
+		name    string
+		project *types.Project
+		loadErr error
+		want    model.Project
+		wantErr string
+	}{
+		{
+			name: "projects the loaded project",
+			project: &types.Project{
+				Name: "fixture",
+				// compose-go resolves every volume's Name at load; introspect reads it
+				// rather than re-deriving the project prefix.
+				Volumes: types.Volumes{"pgdata": types.VolumeConfig{Name: "fixture_pgdata"}},
+				Services: types.Services{
+					"db": {Volumes: []types.ServiceVolumeConfig{
+						{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
+					}},
+					"app": {Volumes: []types.ServiceVolumeConfig{
+						{Type: "tmpfs", Target: "/scratch"},
+					}},
+				},
 			},
-		}
-		loader := &mockLoader{}
-		loader.On("Load", mock.Anything, []string{"a.yml"}).Return(project, nil).Once()
-
-		// Act
-		got, err := NewInspector(loader).Introspect(context.Background(), "a.yml")
-
-		// Assert
-		require.NoError(t, err)
-		loader.AssertExpectations(t)
-		assert.Equal(t, model.Project{
-			Name: "fixture",
-			Services: []model.Service{
-				{Name: "app", Volumes: []model.ServiceVolume{
-					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
-				}},
-				{Name: "db", Volumes: []model.ServiceVolume{
-					{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "fixture_pgdata"},
-				}},
+			want: model.Project{
+				Name: "fixture",
+				Services: []model.Service{
+					{Name: "app", Volumes: []model.ServiceVolume{
+						{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
+					}},
+					{Name: "db", Volumes: []model.ServiceVolume{
+						{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "fixture_pgdata"},
+					}},
+				},
+				Volumes: []model.NamedVolume{
+					{Key: "pgdata", Name: "fixture_pgdata", UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}}},
+				},
 			},
-			Volumes: []model.NamedVolume{
-				{Key: "pgdata", Name: "fixture_pgdata", UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}}},
+		},
+		{
+			// compose-go rejects such a project at load, so it reaches introspect
+			// only through the loader seam.
+			name: "refuses a mount whose volume the project does not declare",
+			project: &types.Project{
+				Name: "fixture",
+				Services: types.Services{
+					"db": {Volumes: []types.ServiceVolumeConfig{
+						{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
+					}},
+				},
 			},
-		}, got.Project)
-	})
-
-	// compose-go rejects such a project at load, so this only reaches introspect
-	// through the loader seam — and an empty VolumeName would be an identity that
-	// collides with every other empty one.
-	t.Run("refuses a mount whose volume the project does not declare", func(t *testing.T) {
-		// Arrange
-		project := &types.Project{
-			Name: "fixture",
-			Services: types.Services{
-				"db": {Volumes: []types.ServiceVolumeConfig{
-					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
-				}},
+			wantErr: `service "db" mounts undeclared volume "pgdata"`,
+		},
+		{
+			// An empty VolumeName would be an identity colliding with every other
+			// empty one.
+			name: "refuses a declared volume with no resolved docker name",
+			project: &types.Project{
+				Name:    "fixture",
+				Volumes: types.Volumes{"pgdata": types.VolumeConfig{}},
+				Services: types.Services{
+					"db": {Volumes: []types.ServiceVolumeConfig{
+						{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
+					}},
+				},
 			},
-		}
-		loader := &mockLoader{}
-		loader.On("Load", mock.Anything, mock.Anything).Return(project, nil).Once()
+			wantErr: `service "db" mounts volume "pgdata" with no resolved docker name`,
+		},
+		{
+			name:    "wraps a loader failure",
+			loadErr: errors.New("bad compose file"),
+			wantErr: "loading docker compose file(s): bad compose file",
+		},
+	}
 
-		// Act
-		_, err := NewInspector(loader).Introspect(context.Background(), "a.yml")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			loader := &mockLoader{}
+			loader.On("Load", mock.Anything, []string{"a.yml"}).Return(tt.project, tt.loadErr).Once()
 
-		// Assert
-		require.Error(t, err)
-		assert.EqualError(t, err, `service "db" mounts undeclared volume "pgdata"`)
-	})
+			// Act
+			got, err := NewInspector(loader).Introspect(context.Background(), "a.yml")
 
-	t.Run("refuses a declared volume with no resolved docker name", func(t *testing.T) {
-		// Arrange
-		project := &types.Project{
-			Name:    "fixture",
-			Volumes: types.Volumes{"pgdata": types.VolumeConfig{}},
-			Services: types.Services{
-				"db": {Volumes: []types.ServiceVolumeConfig{
-					{Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data"},
-				}},
-			},
-		}
-		loader := &mockLoader{}
-		loader.On("Load", mock.Anything, mock.Anything).Return(project, nil).Once()
-
-		// Act
-		_, err := NewInspector(loader).Introspect(context.Background(), "a.yml")
-
-		// Assert
-		require.Error(t, err)
-		assert.EqualError(t, err, `service "db" mounts volume "pgdata" with no resolved docker name`)
-	})
-
-	t.Run("wraps a loader failure", func(t *testing.T) {
-		// Arrange
-		loader := &mockLoader{}
-		loader.On("Load", mock.Anything, mock.Anything).Return(nil, errors.New("bad compose file")).Once()
-
-		// Act
-		_, err := NewInspector(loader).Introspect(context.Background())
-
-		// Assert
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "loading docker compose file(s)")
-		assert.Contains(t, err.Error(), "bad compose file")
-	})
+			// Assert
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got.Project)
+			}
+			loader.AssertExpectations(t)
+		})
+	}
 }
 
 // Real compose files, not hand-built *types.Project values: what compose-go
@@ -396,6 +389,8 @@ func TestIntrospect_StorageID(t *testing.T) {
 	assert.Equal(t, "volume/demo_db", got.Volumes[0].ObjectID(), "service and project entry must address the same data")
 }
 
+// volumeUsers inverts the services' mounts into each named volume's UsedBy,
+// deduplicated and sorted by (service, target).
 func TestVolumeUsers(t *testing.T) {
 	named := func(key, target string) model.ServiceVolume {
 		return model.ServiceVolume{Type: model.VolumeTypeNamed, Source: key, Target: target}

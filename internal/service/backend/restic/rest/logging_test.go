@@ -49,7 +49,7 @@ func TestWithRequestLog(t *testing.T) {
 		{
 			name:   "a served request logs both ends at debug",
 			method: http.MethodHead, target: "/config", status: http.StatusOK,
-			expect: func(repo *repositoryMock) { repo.On("StatConfig", mock.Anything).Return(int64(12), nil) },
+			expect: func(repo *repositoryMock) { repo.On("StatConfig", mock.Anything).Return(int64(12), nil).Once() },
 			want: map[string]string{
 				"restic rest request":        "debug",
 				"restic rest request served": "debug",
@@ -77,7 +77,7 @@ func TestWithRequestLog(t *testing.T) {
 			name:   "a missing object is debug, not warn",
 			method: http.MethodHead, target: "/data/" + blobID, status: http.StatusNotFound,
 			expect: func(repo *repositoryMock) {
-				repo.On("StatBlob", mock.Anything, "data", blobID).Return(int64(0), errObjectNotFound)
+				repo.On("StatBlob", mock.Anything, "data", blobID).Return(int64(0), errObjectNotFound).Once()
 			},
 			want: map[string]string{"object not found": "debug"},
 		},
@@ -85,14 +85,14 @@ func TestWithRequestLog(t *testing.T) {
 			name:   "an init against an existing config is warned",
 			method: http.MethodPost, target: "/config", status: http.StatusForbidden,
 			expect: func(repo *repositoryMock) {
-				repo.On("SaveConfig", mock.Anything, mock.Anything).Return(errConfigExists)
+				repo.On("SaveConfig", mock.Anything, mock.Anything).Return(errConfigExists).Once()
 			},
 			want: map[string]string{"refusing to re-initialise a repository that already has a config": "warn"},
 		},
 		{
 			name:   "a store failure is an error, and the log is where the cause goes",
 			method: http.MethodGet, target: "/data/", status: http.StatusInternalServerError,
-			expect:  func(repo *repositoryMock) { repo.On("ListBlobs", mock.Anything, "data").Return(nil, failed) },
+			expect:  func(repo *repositoryMock) { repo.On("ListBlobs", mock.Anything, "data").Return(nil, failed).Once() },
 			want:    map[string]string{"restic rest request failed": "error"},
 			wantErr: "the store is unreachable",
 		},
@@ -101,7 +101,7 @@ func TestWithRequestLog(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h, repo := newMockedHandler(t)
+			h, repo := newMockedHandler()
 			if tt.expect != nil {
 				tt.expect(repo)
 			}
@@ -119,6 +119,7 @@ func TestWithRequestLog(t *testing.T) {
 			if tt.wantErr != "" {
 				assert.Contains(t, requireRecord(t, records, "restic rest request failed")["error"], tt.wantErr)
 			}
+			repo.AssertExpectations(t)
 		})
 	}
 }
@@ -127,8 +128,8 @@ func TestWithRequestLog(t *testing.T) {
 // what nothing else can report: the status and the body size the handler wrote.
 func TestWithRequestLog_RecordsWhatWasAnswered(t *testing.T) {
 	// Arrange
-	h, repo := newMockedHandler(t)
-	repo.On("ListBlobs", mock.Anything, "data").Return([]blob{{Name: blobID, Size: 3}}, nil)
+	h, repo := newMockedHandler()
+	repo.On("ListBlobs", mock.Anything, "data").Return([]blob{{Name: blobID, Size: 3}}, nil).Once()
 	logger, buf := captureLogger()
 
 	// Act
@@ -143,6 +144,7 @@ func TestWithRequestLog_RecordsWhatWasAnswered(t *testing.T) {
 	assert.EqualValues(t, http.StatusOK, served["status"])
 	assert.EqualValues(t, rec.Body.Len(), served["bytes"])
 	assert.Contains(t, served, "duration")
+	repo.AssertExpectations(t)
 }
 
 // A request that reaches the handler with no logger in its context is served
@@ -150,8 +152,8 @@ func TestWithRequestLog_RecordsWhatWasAnswered(t *testing.T) {
 // what it is doing.
 func TestRequestLogger_FallsBackToTheGlobalLogger(t *testing.T) {
 	// Arrange
-	h, repo := newMockedHandler(t)
-	repo.On("StatConfig", mock.Anything).Return(int64(12), nil)
+	h, repo := newMockedHandler()
+	repo.On("StatConfig", mock.Anything).Return(int64(12), nil).Once()
 	global, buf := captureLogger()
 	log.Logger = global
 	t.Cleanup(func() { log.Logger = zerolog.Nop() })
@@ -162,6 +164,7 @@ func TestRequestLogger_FallsBackToTheGlobalLogger(t *testing.T) {
 	// Assert
 	require.Equal(t, http.StatusOK, rec.Code)
 	requireRecord(t, logRecords(t, buf), "restic rest request served")
+	repo.AssertExpectations(t)
 }
 
 // A zerolog.DefaultContextLogger is what it says: the logger for a request
@@ -171,8 +174,8 @@ func TestRequestLogger_FallsBackToTheGlobalLogger(t *testing.T) {
 // case that pins the choice.
 func TestRequestLogger_HonoursTheDefaultContextLogger(t *testing.T) {
 	// Arrange
-	h, repo := newMockedHandler(t)
-	repo.On("StatConfig", mock.Anything).Return(int64(12), nil)
+	h, repo := newMockedHandler()
+	repo.On("StatConfig", mock.Anything).Return(int64(12), nil).Once()
 	global, buf := captureLogger()
 	log.Logger = global
 	silent := zerolog.Nop()
@@ -188,6 +191,7 @@ func TestRequestLogger_HonoursTheDefaultContextLogger(t *testing.T) {
 	// Assert
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Empty(t, buf.String())
+	repo.AssertExpectations(t)
 }
 
 // captureLogger returns a logger writing JSON records into the buffer beside it.

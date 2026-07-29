@@ -49,6 +49,8 @@ func TestStoreRepository_SaveBlob(t *testing.T) {
 	assert.EqualValues(t, len("pack-bytes-again"), st.Size)
 }
 
+// StatBlob answers the exact size, and anything not at the flat key — absent
+// or of another type — is errObjectNotFound.
 func TestStoreRepository_StatBlob(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -140,6 +142,7 @@ func TestStoreRepository_SaveConfig(t *testing.T) {
 	assert.Equal(t, "[repository]", string(got), "the refused write must not have touched the config")
 }
 
+// A missing config is errObjectNotFound, same as any other absent object.
 func TestStoreRepository_OpenConfig_Missing(t *testing.T) {
 	// Arrange
 	repo, _ := newRepository(t)
@@ -151,6 +154,7 @@ func TestStoreRepository_OpenConfig_Missing(t *testing.T) {
 	assert.ErrorIs(t, err, errObjectNotFound)
 }
 
+// StatConfig reports the config's size once it exists, errObjectNotFound before.
 func TestStoreRepository_StatConfig(t *testing.T) {
 	// Arrange
 	repo, store := newRepository(t)
@@ -218,6 +222,8 @@ func TestStoreRepository_Delete(t *testing.T) {
 	}
 }
 
+// A listing is the type's own flat keys with sizes — never a prefix-sharing
+// sibling's, and [] when empty.
 func TestStoreRepository_ListBlobs(t *testing.T) {
 	tests := []struct {
 		name       string
