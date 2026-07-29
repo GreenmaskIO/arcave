@@ -53,14 +53,14 @@ const storeNamespace = "arcave"
 // so the whole configured path materializes on first use, while an absolute path
 // must already exist, keeping a typo from quietly growing a fresh tree. The
 // session segment still arrives with the first object written under it.
-func New(cfg config.Storage, projectRoot, session string) (storages.Storager, error) {
+func New(cfg config.Storage, projectRoot string, session model.SessionID) (storages.Storager, error) {
 	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	// The session is rendered into a store root, so it is gated at the layer that
 	// owns the value, before any of it reaches a backend.
-	if err := model.ValidSessionID(session); err != nil {
-		return nil, err
+	if err := session.Validate(); err != nil {
+		return nil, fmt.Errorf("validate session id: %w", err)
 	}
 
 	switch cfg.Type {
@@ -76,7 +76,7 @@ func New(cfg config.Storage, projectRoot, session string) (storages.Storager, er
 		if err != nil {
 			return nil, err
 		}
-		sessionStore, err := store.SubStorage(session, true)
+		sessionStore, err := store.SubStorage(session.String(), true)
 		if err != nil {
 			return nil, fmt.Errorf("re-root storage at session %s: %w", session, err)
 		}

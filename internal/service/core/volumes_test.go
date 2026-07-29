@@ -44,25 +44,28 @@ func TestFindBackupVolumes(t *testing.T) {
 			},
 			want: []model.Volume{
 				{
-					ObjectID: "volume/demo_pgdata",
-					Type:     model.VolumeTypeNamed,
-					Backend:  model.SnapshotBackendFullCopy,
+					ObjectID:       "volume/demo_pgdata",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeNamed,
+					Backend:        model.SnapshotBackendCopy,
 					Named: &model.VolumePropertiesNamed{
 						VolumeName: "demo_pgdata",
 						UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
 					},
 				},
 				{
-					ObjectID: "service/app/etc/cfg",
-					Type:     model.VolumeTypeBind,
-					Backend:  model.SnapshotBackendFullCopy,
-					Bind:     &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg", ReadOnly: true},
+					ObjectID:       "service/app/etc/cfg",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeBind,
+					Backend:        model.SnapshotBackendCopy,
+					Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg", ReadOnly: true},
 				},
 				{
-					ObjectID: "service/db/data",
-					Type:     model.VolumeTypeAnon,
-					Backend:  model.SnapshotBackendFullCopy,
-					Anon:     &model.VolumePropertiesAnon{Service: "db", Target: "/data", Subpath: "inner"},
+					ObjectID:       "service/db/data",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeAnon,
+					Backend:        model.SnapshotBackendCopy,
+					Anon:           &model.VolumePropertiesAnon{Service: "db", Target: "/data", Subpath: "inner"},
 				},
 			},
 			wantSkipped: []model.SkippedVolume{
@@ -91,9 +94,10 @@ func TestFindBackupVolumes(t *testing.T) {
 				}},
 			},
 			want: []model.Volume{{
-				ObjectID: "volume/demo_assets",
-				Type:     model.VolumeTypeNamed,
-				Backend:  model.SnapshotBackendFullCopy,
+				ObjectID:       "volume/demo_assets",
+				ComposeProject: "demo",
+				Type:           model.VolumeTypeNamed,
+				Backend:        model.SnapshotBackendCopy,
 				Named: &model.VolumePropertiesNamed{
 					VolumeName: "demo_assets",
 					UsedBy: []model.ServiceReference{
@@ -113,8 +117,8 @@ func TestFindBackupVolumes(t *testing.T) {
 				},
 			},
 			want: []model.Volume{
-				{ObjectID: "volume/demo_orphan", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendFullCopy, Named: &model.VolumePropertiesNamed{VolumeName: "demo_orphan"}},
-				{ObjectID: "volume/shared_pgdata", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendFullCopy, Named: &model.VolumePropertiesNamed{VolumeName: "shared_pgdata"}},
+				{ObjectID: "volume/demo_orphan", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "demo_orphan"}},
+				{ObjectID: "volume/shared_pgdata", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "shared_pgdata"}},
 			},
 		},
 		{
@@ -149,10 +153,11 @@ func TestFindBackupVolumes(t *testing.T) {
 				}}},
 			},
 			want: []model.Volume{{
-				ObjectID: "service/app/etc/cfg",
-				Type:     model.VolumeTypeBind,
-				Backend:  model.SnapshotBackendFullCopy,
-				Bind:     &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
+				ObjectID:       "service/app/etc/cfg",
+				ComposeProject: "demo",
+				Type:           model.VolumeTypeBind,
+				Backend:        model.SnapshotBackendCopy,
+				Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
 			}},
 			wantSkipped: []model.SkippedVolume{
 				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
@@ -189,16 +194,18 @@ func TestFindBackupVolumes(t *testing.T) {
 			},
 			want: []model.Volume{
 				{
-					ObjectID: "service/api/etc/cfg",
-					Type:     model.VolumeTypeBind,
-					Backend:  model.SnapshotBackendFullCopy,
-					Bind:     &model.VolumePropertiesBind{Service: "api", Target: "/etc/cfg", Source: "/host/cfg"},
+					ObjectID:       "service/api/etc/cfg",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeBind,
+					Backend:        model.SnapshotBackendCopy,
+					Bind:           &model.VolumePropertiesBind{Service: "api", Target: "/etc/cfg", Source: "/host/cfg"},
 				},
 				{
-					ObjectID: "service/web/etc/cfg",
-					Type:     model.VolumeTypeBind,
-					Backend:  model.SnapshotBackendFullCopy,
-					Bind:     &model.VolumePropertiesBind{Service: "web", Target: "/etc/cfg", Source: "/host/cfg"},
+					ObjectID:       "service/web/etc/cfg",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeBind,
+					Backend:        model.SnapshotBackendCopy,
+					Bind:           &model.VolumePropertiesBind{Service: "web", Target: "/etc/cfg", Source: "/host/cfg"},
 				},
 			},
 		},
@@ -215,24 +222,6 @@ func TestFindBackupVolumes(t *testing.T) {
 			assert.Equal(t, tt.wantSkipped, skipped)
 			assertOneArmPerType(t, got)
 		})
-	}
-}
-
-// assertOneArmPerType pins the invariant no type expresses: exactly one
-// addressing arm is non-nil, and it is the one Type names. FindBackupVolumes is
-// the only place a model.Volume is built.
-func assertOneArmPerType(t *testing.T, volumes []model.Volume) {
-	t.Helper()
-
-	for _, v := range volumes {
-		set := map[model.VolumeType]bool{
-			model.VolumeTypeNamed: v.Named != nil,
-			model.VolumeTypeBind:  v.Bind != nil,
-			model.VolumeTypeAnon:  v.Anon != nil,
-		}
-		for volumeType, isSet := range set {
-			assert.Equal(t, volumeType == v.Type, isSet, "volume %s of type %s: arm %s", v.ObjectID, v.Type, volumeType)
-		}
 	}
 }
 
@@ -321,5 +310,22 @@ func TestReachableVolumes(t *testing.T) {
 				assert.Equal(t, "volume", skipped[i].RawType)
 			}
 		})
+	}
+}
+
+// assertOneArmPerType pins the invariant no type expresses: exactly one
+// addressing arm is non-nil, and it is the one Type names.
+func assertOneArmPerType(t *testing.T, volumes []model.Volume) {
+	t.Helper()
+
+	for _, v := range volumes {
+		set := map[model.VolumeType]bool{
+			model.VolumeTypeNamed: v.Named != nil,
+			model.VolumeTypeBind:  v.Bind != nil,
+			model.VolumeTypeAnon:  v.Anon != nil,
+		}
+		for volumeType, isSet := range set {
+			assert.Equal(t, volumeType == v.Type, isSet, "volume %s of type %s: arm %s", v.ObjectID, v.Type, volumeType)
+		}
 	}
 }

@@ -31,7 +31,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
-	"github.com/greenmaskio/arcave/internal/service/snapshot"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -109,21 +108,36 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		StopTimeout: cfg.Compose.StopTimeout,
 	})
 
-	// The savepoint repository shares the savepoint store with the backend that
-	// writes the archives it records, so a record always travels with its data —
-	// move the store to S3 and the records go with it. The safety-backup store
-	// gets no records: a backup is addressed by its namespace alone.
-	// The locker is bound to the project root here, exactly as each backend is
-	// bound to its store, so the service serialises its own mutating workflows
-	// without ever naming a path. Both take the session store: a savepoint's
-	// records and its archives are what dies with the session.
+	// The registry is the one place a volume's Backend becomes an instance, and
+	// the only thing here that names the engine — through tarcopy.MountStreamer,
+	// the two methods a backend needs, so core still knows no client package.
+	registry, err := core.DefaultRegistry(engine)
+	if err != nil {
+		closeQuietly(ctx, "savepoint store", savepointStore)
+		closeQuietly(ctx, "safety backup store", safetyBackupStore)
+		closeQuietly(ctx, "compose progress writer", progressWriter)
+		closeQuietly(ctx, "docker engine", engine)
+		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
+	}
+
+	// Two repositories, one per tier: core commits a record beside every
+	// capture, a rollback's undo included, so the safety tier keeps records of its
+	// own rather than being addressed by id alone. Each shares its tier's store
+	// with the backends that write the archives it records, so a record always
+	// travels with its data — move the store to S3 and the records go with it.
+	//
+	// The locker is bound to the project root here, exactly as each store is bound
+	// to its root, so the service serialises its own mutating workflows without
+	// ever naming a path.
 	svc := core.New(
 		sprepo.New(savepointStore),
+		sprepo.New(safetyBackupStore),
 		lock.New(projectPath),
 		introspect.NewInspector(dockerComposeLoader),
 		composeRunner,
-		snapshot.NewCopyBackend(engine, savepointStore),
-		snapshot.NewCopyBackend(engine, safetyBackupStore),
+		registry,
+		savepointStore,
+		safetyBackupStore,
 	)
 	return &dependencies{
 		savepointStore:    savepointStore,

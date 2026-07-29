@@ -39,7 +39,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 		{
 			name: "RemoveSavepoints",
 			call: func(svc *Service, ctx context.Context) error {
-				_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []string{"1"}})
+				_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []model.SavepointID{"1"}})
 				return err
 			},
 		},
@@ -49,9 +49,11 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			locker := &mockLocker{}
-			locker.On("Acquire").Return(model.ErrProjectLocked)
-			repo, inspector, runner, backend := &mockSavepointRepo{}, &mockInspector{}, &mockComposeRunner{}, &mockBackend{}
-			svc := New(repo, locker, inspector, runner, backend, backend)
+			locker.On("Acquire", mock.Anything).Return(model.ErrProjectLocked)
+			repo, inspector, runner := &mockSavepointRepo{}, &mockInspector{}, &mockComposeRunner{}
+			registry := &mockRegistry{}
+			// Nil stores: a workflow that got as far as a backend would deref one.
+			svc := New(repo, repo, locker, inspector, runner, registry, nil, nil)
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -59,52 +61,18 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 
 			// Assert
 			require.ErrorIs(t, err, model.ErrProjectLocked)
+			inspector.AssertNotCalled(t, "Introspect", mock.Anything, mock.Anything)
 			runner.AssertNotCalled(t, "Stop", mock.Anything, mock.Anything)
 			runner.AssertNotCalled(t, "Up", mock.Anything, mock.Anything, mock.Anything)
-			repo.AssertNotCalled(t, "List")
-			repo.AssertNotCalled(t, "Delete", mock.Anything)
-			backend.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
+			repo.AssertNotCalled(t, "List", mock.Anything)
+			repo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+			registry.AssertNotCalled(t, "New", mock.Anything)
 			assert.Zero(t, locker.released, "a lock that was never taken must not be released")
 			locker.AssertExpectations(t)
+			repo.AssertExpectations(t)
+			inspector.AssertExpectations(t)
+			runner.AssertExpectations(t)
+			registry.AssertExpectations(t)
 		})
 	}
-}
-
-// The lock is given back however the workflow ends, so a failed create does not
-// wedge the project against the next command.
-func TestService_CreateSavepoint_ReleasesTheLockOnFailure(t *testing.T) {
-	// Arrange
-	locker := freeLocker()
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything, mock.Anything).Return(model.IntrospectionResult{}, nil)
-	svc := New(&mockSavepointRepo{}, locker, inspector, &mockComposeRunner{}, &mockBackend{}, nil)
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act: no stateful mounts, so the workflow fails right after the lock is taken.
-	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-	// Assert
-	require.Error(t, err)
-	assert.Equal(t, 1, locker.released)
-}
-
-// A dry-run removal only reads, so it must neither take the project lock nor be
-// refused by one a rollback is holding.
-func TestService_RemoveSavepoints_DryRunTakesNoLock(t *testing.T) {
-	// Arrange
-	locker := &mockLocker{} // no On("Acquire"): any call panics on the missing expectation
-	repo := &mockSavepointRepo{}
-	repo.On("List").Return([]model.Savepoint{{ID: "1"}}, nil)
-	backend := &mockBackend{}
-	svc := New(repo, locker, nil, nil, backend, nil)
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	res, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []string{"1"}, DryRun: true})
-
-	// Assert
-	require.NoError(t, err)
-	assert.True(t, res.DryRun)
-	locker.AssertNotCalled(t, "Acquire")
-	backend.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything)
 }

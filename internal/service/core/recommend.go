@@ -23,14 +23,6 @@ type recommendationCatalog interface {
 	List() ([]model.ARCEntry, error)
 }
 
-// composeIntrospector reads what a compose project declares. Every consumer
-// takes the whole introspection and projects out the part it cares about — the
-// savepoint workflows read mounts, this service reads images and mount targets —
-// so the inspector stays a reader of compose files and nothing else.
-type composeIntrospector interface {
-	Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error)
-}
-
 // RecommendService advises on state a compose project would lose: a service
 // whose image writes into the container filesystem, with nothing persistent
 // mounted where it writes.
@@ -151,7 +143,7 @@ func coveredTargets(svc model.Service) map[string]struct{} {
 }
 
 // newRecommendation returns an add-volume recommendation with its hash filled in.
-// It is the only way one is minted, so the canonical form the hash is taken over
+// It is the only way one is produced, so the canonical form the hash is taken over
 // — `service|image|volume|operation`, sha256, lowercase hex — has exactly one
 // implementation and cannot drift.
 //

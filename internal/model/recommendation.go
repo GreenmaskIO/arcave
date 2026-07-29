@@ -11,7 +11,7 @@ const (
 // Its json tags are the wire contract — `arcave recommend` marshals a slice of
 // these directly.
 //
-// The rules that fill it live elsewhere: nothing outside service/core mints a
+// The rules that fill it live elsewhere: nothing outside service/core produces a
 // recommendation. The operation vocabulary is a constant here because an adapter
 // may dispatch on it; the hash is not — its canonical form is stated below and in
 // doc/spec.md.

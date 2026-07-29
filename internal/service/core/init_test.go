@@ -49,7 +49,7 @@ func TestInitService_Init(t *testing.T) {
 		},
 		{
 			// Init persists the config verbatim, so a section it has no flag for
-			// survives an --override rather than being dropped from the file.
+			// survives an --override.
 			name: "override preserves the sections init has no flag for",
 			cfg: config.Config{
 				Project:  config.Project{Name: "demo"},
@@ -77,10 +77,14 @@ func TestInitService_Init(t *testing.T) {
 			cw, ci := &mockConfig{}, &mockInspector{}
 			cw.On("Exists").Return(tt.exists, nil)
 			cw.On("Path").Return(configPath).Maybe()
-			ci.On("Introspect", mock.Anything, mock.Anything).
-				Return(demoIntrospection(), tt.inspectErr).Maybe()
+			// Init only cares that the project loads, so an empty result suffices;
+			// the files reach the inspector verbatim (ApplyDefaults leaves them be).
+			ci.On("Introspect", mock.Anything, tt.cfg.Project.ComposeFiles).
+				Return(model.IntrospectionResult{}, tt.inspectErr).Maybe()
 			var saved config.Config
-			cw.On("Save", mock.Anything).Run(func(args mock.Arguments) {
+			cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
+				return c.Version == config.Version
+			})).Run(func(args mock.Arguments) {
 				saved = args.Get(0).(config.Config)
 			}).Return(nil).Maybe()
 			svc := NewInitService("/proj", cw, ci)
@@ -93,6 +97,8 @@ func TestInitService_Init(t *testing.T) {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
 				cw.AssertNotCalled(t, "Save", mock.Anything)
+				cw.AssertExpectations(t)
+				ci.AssertExpectations(t)
 				return
 			}
 			require.NoError(t, err)
@@ -104,19 +110,23 @@ func TestInitService_Init(t *testing.T) {
 			if tt.verify != nil {
 				tt.verify(t, saved)
 			}
+			cw.AssertExpectations(t)
+			ci.AssertExpectations(t)
 		})
 	}
 }
 
 // A Config reaches Init by value, so the defaults it stamps must not reach back
-// through the caller's storage-arm pointer and mutate the value it still holds.
+// through the caller's storage-arm pointer.
 func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 	// Arrange
 	cw, ci := &mockConfig{}, &mockInspector{}
 	cw.On("Exists").Return(false, nil)
 	cw.On("Path").Return(configPath)
-	ci.On("Introspect", mock.Anything, mock.Anything).Return(model.IntrospectionResult{}, nil)
-	cw.On("Save", mock.Anything).Return(nil)
+	ci.On("Introspect", mock.Anything, []string(nil)).Return(model.IntrospectionResult{}, nil)
+	cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
+		return c.Version == config.Version
+	})).Return(nil)
 	svc := NewInitService("/proj", cw, ci)
 	cfg := config.Config{Storage: config.Storage{Directory: &config.DirectoryStorage{}}}
 
@@ -128,6 +138,8 @@ func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 	assert.Zero(t, cfg.Version)
 	assert.Empty(t, cfg.Project.Name)
 	assert.Empty(t, cfg.Storage.DirectoryPath())
+	cw.AssertExpectations(t)
+	ci.AssertExpectations(t)
 }
 
 // The project name defaults to the project root's base name, and the savepoint
@@ -137,9 +149,11 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	cw, ci := &mockConfig{}, &mockInspector{}
 	cw.On("Exists").Return(false, nil)
 	cw.On("Path").Return(configPath)
-	ci.On("Introspect", mock.Anything, mock.Anything).Return(model.IntrospectionResult{}, nil)
+	ci.On("Introspect", mock.Anything, []string(nil)).Return(model.IntrospectionResult{}, nil)
 	var saved config.Config
-	cw.On("Save", mock.Anything).Run(func(args mock.Arguments) {
+	cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
+		return c.Version == config.Version
+	})).Run(func(args mock.Arguments) {
 		saved = args.Get(0).(config.Config)
 	}).Return(nil)
 	svc := NewInitService(filepath.Join("/home", "vadim", "myproj"), cw, ci)
@@ -153,4 +167,17 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	assert.Equal(t, "myproj", saved.Project.Name)
 	assert.Equal(t, filepath.Join(".arcave", "storage", "myproj"), saved.Storage.DirectoryPath())
 	cw.AssertExpectations(t)
+	ci.AssertExpectations(t)
 }
+
+// mockConfig doubles configWriter; the seam takes no ctx.
+type mockConfig struct{ mock.Mock }
+
+func (m *mockConfig) Exists() (bool, error) {
+	args := m.Called()
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockConfig) Save(cfg config.Config) error { return m.Called(cfg).Error(0) }
+
+func (m *mockConfig) Path() string { return m.Called().String(0) }

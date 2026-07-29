@@ -11,9 +11,12 @@ package model
 // The json tags are a contract: a Volume is stored in every savepoint record and
 // reported by every rollback.
 type Volume struct {
-	ObjectID string          `json:"object_id"` // stable identity: ServiceVolume.ObjectID() / NamedVolume.ObjectID()
-	Type     VolumeType      `json:"type"`
-	Backend  SnapshotBackend `json:"backend"`
+	ObjectID string `json:"object_id"` // stable identity: ServiceVolume.ObjectID() / NamedVolume.ObjectID()
+	// ComposeProject is the project name at capture time — how docker locates
+	// the stack's containers.
+	ComposeProject string              `json:"compose_project"`
+	Type           VolumeType          `json:"type"`
+	Backend        SnapshotBackendKind `json:"backend"`
 
 	Named *VolumePropertiesNamed `json:"named,omitempty"`
 	Bind  *VolumePropertiesBind  `json:"bind,omitempty"`
@@ -37,7 +40,7 @@ type VolumePropertiesBind struct {
 }
 
 // VolumePropertiesAnon addresses an anonymous volume — reachable only through
-// its one mount: the docker name is minted per container and is not stable.
+// its one mount: the docker name is created per container and is not stable.
 type VolumePropertiesAnon struct {
 	Service  string `json:"service"`
 	Target   string `json:"target"`

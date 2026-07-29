@@ -30,7 +30,7 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewSavepointRemoveHandler(d.service, d.printer)
 		return h.SavepointRemove(ctx, model.RemoveRequest{
-			IDs:          args,
+			IDs:          model.SavepointIDs(args),
 			RetainRecent: savepointRemoveRetainRecent,
 			RetainFor:    savepointRemoveRetainFor,
 			BeforeDate:   savepointRemoveBeforeDate,

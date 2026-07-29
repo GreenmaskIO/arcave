@@ -7,7 +7,7 @@ import "time"
 // that embeds this type. Its json tags are the wire contract: single-savepoint
 // command payloads marshal this type directly.
 type Savepoint struct {
-	ID          string         `json:"id"`
+	ID          SavepointID    `json:"id"`
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	CreatedAt   time.Time      `json:"created_at"`

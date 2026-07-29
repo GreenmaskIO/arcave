@@ -17,7 +17,7 @@ import (
 // so an empty result must report false even though it printed successfully.
 func TestRecommendHandler_Recommend(t *testing.T) {
 	// The handler forwards whatever the service produced, so the fixture is a
-	// literal rather than a minted recommendation: how a hash is computed is the
+	// literal rather than one the service built: how a hash is computed is the
 	// service's business, and this test must not depend on it.
 	recs := []model.Recommendation{{
 		Service:   "db",
