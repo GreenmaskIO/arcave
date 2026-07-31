@@ -1,5 +1,5 @@
 # arcave metadata and savepoint data
 .arcave/
 
-# MinIO host bind mount (runtime data; wiped/restored by arcave rollback)
+# Leftover from when MinIO mounted a host bind; it is a named volume now
 minio-data/

@@ -3,7 +3,7 @@
 // `arcave savepoint create` / `arcave rollback` cycle can be observed end to end:
 //
 //	PostgreSQL -> named volume
-//	MinIO      -> host bind mount
+//	MinIO      -> named volume
 //	Redis      -> anonymous volume
 //
 // The UI at http://localhost:8080 lists the current entries of each store and
@@ -176,7 +176,7 @@ func (a *app) bootstrap(ctx context.Context) error {
 		return fmt.Errorf("list minio: %w", err)
 	}
 	if len(objs) == 0 {
-		body := "MinIO object (host bind mount)"
+		body := "MinIO object (named volume)"
 		if err := a.putMinio(ctx, "seed-1.txt", body); err != nil {
 			return fmt.Errorf("seed minio: %w", err)
 		}

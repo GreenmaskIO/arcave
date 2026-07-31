@@ -3,8 +3,14 @@
 # all three:
 #
 #   postgres -> named volume     (pgdata)
-#   minio    -> host bind mount   (./minio-data)
+#   minio    -> named volume     (miniodata)
 #   redis    -> anonymous volume  (/data)
+#
+# minio used to mount ./minio-data as a host bind. It does not any more: with
+# snapshot.backend: cdc every capture runs restic in a container, and restic sets
+# O_NOATIME on each source file through fcntl — which Docker Desktop's VirtioFS
+# answers with EIO on the next read. That breaks a bind mount on macOS and only a
+# bind mount; volumes live in the VM's own filesystem and are unaffected.
 #
 # The project name is pinned so arcave and the docker CLI agree on the container
 # labels arcave uses to locate each mount.
@@ -35,7 +41,7 @@ services:
     # ports:
     #   - "9001:9001"
     volumes:
-      - ./minio-data:/data                     # host bind mount
+      - miniodata:/data                        # named volume
     healthcheck:
       test: ["CMD-SHELL", "timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1"]
       interval: 3s
@@ -80,3 +86,4 @@ services:
 
 volumes:
   pgdata:
+  miniodata:
