@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -183,6 +184,142 @@ func TestEngine_WriteMount(t *testing.T) {
 	})
 }
 
+// ResolveMountSource answers what a backend running its own container has to
+// bind, which is the only way to address an anonymous volume: its docker name is
+// created per container, so nothing in the compose file names it.
+func TestEngine_ResolveMountSource(t *testing.T) {
+	const (
+		project = "demo"
+		service = "db"
+		target  = "/var/lib/postgresql/data"
+	)
+
+	tests := []struct {
+		name    string
+		list    []container.Summary
+		want    string
+		wantErr string
+	}{
+		{
+			name: "a volume resolves to its docker name",
+			list: []container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "demo_pgdata", Destination: target}}}},
+			want: "demo_pgdata",
+		},
+		{
+			name: "an anonymous volume resolves to the name the daemon gave it",
+			list: []container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}},
+			want: "9f2c0a",
+		},
+		{
+			name: "a bind mount resolves to its host path",
+			list: []container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
+				{Type: mount.TypeBind, Source: "/host/data", Destination: target}}}},
+			want: "/host/data",
+		},
+		{
+			name: "a mount type no container can bind is refused",
+			list: []container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
+				{Type: mount.TypeTmpfs, Destination: target}}}},
+			wantErr: "unsupported mount type",
+		},
+		{
+			name:    "no matching container is an error",
+			list:    []container.Summary{},
+			wantErr: "no container for service",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			api := &mockAPI{}
+			api.On("ContainerList", mock.Anything, matchComposeLabels(project, service)).
+				Return(tt.list, nil).Once()
+			e := &Engine{api: api}
+
+			// Act
+			got, err := e.ResolveMountSource(context.Background(), project, service, target)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				assert.Empty(t, got)
+				api.AssertExpectations(t)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			api.AssertExpectations(t)
+		})
+	}
+}
+
+// WipeMount is WriteMount's first half on its own, for a backend that writes the
+// data back itself: it clears the mount and stops there. No CopyToContainer
+// expectation is ever declared, so a copy would fail the run where it happened.
+func TestEngine_WipeMount(t *testing.T) {
+	const (
+		project = "demo"
+		service = "db"
+		target  = "/var/lib/postgresql/data"
+	)
+
+	tests := []struct {
+		name      string
+		list      []container.Summary
+		wantBinds []string
+		wantErr   string
+	}{
+		{
+			name: "clears the mount the service declares",
+			list: []container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "demo_pgdata", Destination: target}}}},
+			wantBinds: []string{"demo_pgdata:/data"},
+		},
+		{
+			name: "clears a bind mount by its host path",
+			list: []container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
+				{Type: mount.TypeBind, Source: "/host/data", Destination: target}}}},
+			wantBinds: []string{"/host/data:/data"},
+		},
+		{
+			name:    "a missing service container is reported before any container runs",
+			list:    []container.Summary{},
+			wantErr: "no container for service",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			api := &mockAPI{}
+			api.On("ContainerList", mock.Anything, matchComposeLabels(project, service)).
+				Return(tt.list, nil).Once()
+			if tt.wantErr == "" {
+				expectImagePresent(api, wipeImage)
+				expectOneShotRun(api, 0)
+			}
+			e := &Engine{api: api}
+
+			// Act
+			err := e.WipeMount(context.Background(), project, service, target)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				api.AssertExpectations(t)
+				return
+			}
+			require.NoError(t, err)
+			host := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
+			assert.Equal(t, tt.wantBinds, host.Binds)
+			api.AssertExpectations(t)
+		})
+	}
+}
+
 func TestWipeMount(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -240,4 +377,23 @@ func TestWipeMount(t *testing.T) {
 			assert.Equal(t, tt.wantBinds, host.Binds)
 		})
 	}
+}
+
+// matchComposeLabels matches the container listing by the label filter it
+// carries: finding a service's container by compose's own labels is the whole
+// contract of that call, so it is asserted rather than widened away.
+func matchComposeLabels(project, service string) any {
+	return mock.MatchedBy(func(opts container.ListOptions) bool {
+		want := []string{composeProjectLabel + "=" + project, composeServiceLabel + "=" + service}
+		got := opts.Filters.Get("label")
+		if !opts.All || len(got) != len(want) {
+			return false
+		}
+		for _, w := range want {
+			if !slices.Contains(got, w) {
+				return false
+			}
+		}
+		return true
+	})
 }

@@ -35,33 +35,29 @@ func (s *Service) buildBackends(
 	return backends, nil
 }
 
-// performSavepoint captures every volume and commits the record last: that write
-// is the commit, so a run that died halfway leaves data no record names.
+// captureVolumes takes one capture per backend under a fresh id and returns the
+// uncommitted savepoint they make up. Both tiers share it: a safety backup stops
+// here, a savepoint goes on to commit a record.
 //
-// repo and store are parameters, and must be one tier's pair, because both tiers
-// take savepoints — a rollback's undo is a savepoint in the safety-backup tree,
-// with a record of its own.
+// It opens by refusing a tree the new id already names. Only an interrupted run
+// can have left one, and its objects are the last copy of what that run
+// captured — so the run stops and names them rather than dropping them.
 //
-// It opens by refusing a tree the new id already names. A create killed by a
-// crash can have left an orphan there: no record names it, so List cannot see it
-// and the id created from the clock does not avoid it, and its stale archives
-// would otherwise be mixed into this savepoint. Dropping it here would delete
-// data nobody asked to lose, silently — so the run stops instead and names it.
-//
-// The record comes back even on error, filled as far as the fan-out got, for the
-// caller's cleanup to address.
-func (s *Service) performSavepoint(
+// The savepoint comes back even on error, filled as far as the fan-out got, for
+// the caller's cleanup to address.
+func (s *Service) captureVolumes(
 	ctx context.Context,
-	repo savepointRepository,
 	store storages.Storager,
 	backends []model.VolumeSnapshotBackend,
 	name, description string,
+	labels map[string]string,
 ) (model.Savepoint, error) {
 	createdAt := time.Now()
 	record := model.Savepoint{
 		ID:          model.SavepointID(strconv.FormatInt(createdAt.Unix(), 10)),
 		Name:        name,
 		Description: description,
+		Labels:      labels,
 		CreatedAt:   createdAt,
 		Stats:       make([]model.SnapshotStat, len(backends)),
 	}
@@ -72,13 +68,36 @@ func (s *Service) performSavepoint(
 
 	err := s.forEachBackend(ctx, record.ID, backends, "snapshot",
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: record.ID})
+			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{
+				SnapshotID: record.ID,
+				Labels:     record.Labels,
+			})
 			if err != nil {
 				return fmt.Errorf("capture volume: %w", err)
 			}
 			record.Stats[i] = stat
 			return nil
 		})
+	if err != nil {
+		return record, err
+	}
+	return record, nil
+}
+
+// performSavepoint captures every volume and commits the record last: that write
+// is the commit, so a run that died halfway leaves data no record names.
+//
+// repo and store must be one tier's pair. The record comes back even on error,
+// exactly as captureVolumes returns it.
+func (s *Service) performSavepoint(
+	ctx context.Context,
+	repo savepointRepository,
+	store storages.Storager,
+	backends []model.VolumeSnapshotBackend,
+	name, description string,
+	labels map[string]string,
+) (model.Savepoint, error) {
+	record, err := s.captureVolumes(ctx, store, backends, name, description, labels)
 	if err != nil {
 		return record, err
 	}

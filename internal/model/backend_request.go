@@ -7,6 +7,10 @@ package model
 type (
 	BackendSnapshotRequest struct {
 		SnapshotID SavepointID
+		// Labels are the savepoint's marks, for the backend to render into
+		// whatever marking its own store understands. A backend with nowhere to
+		// put them ignores them.
+		Labels map[string]string
 	}
 
 	BackendRestoreRequest struct {

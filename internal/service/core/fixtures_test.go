@@ -52,6 +52,13 @@ func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector,
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything, demoComposeFiles()).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
-	locker.On("Acquire", mock.Anything).Return(nil)
+	expectLock(locker)
 	return repo, inspector, locker
+}
+
+// expectLock declares a free lock and the release that always follows it —
+// lockProject defers the release, so a taken lock is a released one.
+func expectLock(locker *mockLocker) *mock.Call {
+	locker.On("Release").Return(nil).Once()
+	return locker.On("Acquire", mock.Anything).Return(nil).Once()
 }

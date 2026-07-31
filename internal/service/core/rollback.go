@@ -11,9 +11,20 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// safetyBackupName is the Name a rollback's undo commits its record under, for
-// whoever reads that record after a rollback died mid-flight.
+// safetyBackupName is the Name a rollback's undo carries.
 const safetyBackupName = "safety-backup"
+
+// The label a rollback stamps its safety backup with — the only mark of the tier
+// that reaches a backend keeping both tiers in one place, since the safety tier
+// commits no record.
+const (
+	tierLabel       = "arcave-tier"
+	tierLabelSafety = "safety"
+)
+
+func safetyBackupLabels() map[string]string {
+	return map[string]string{tierLabel: tierLabelSafety}
+}
 
 // Rollback restores the environment to the referenced savepoint: stop, safety
 // backup, restore, start. Any failure replays the safety backup. The project
@@ -39,7 +50,8 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 	}
 
 	// One set of backends per tier: a volume may have been added or dropped
-	// since the savepoint was taken.
+	// since the savepoint was taken. Both sets are built ahead of the stop: a
+	// backend that cannot be built leaves the project running.
 	savepointBackends, err := s.buildBackends(volumesOf(record), model.BackendTierSavepoint)
 	if err != nil {
 		return model.RollbackResult{}, err
@@ -58,10 +70,12 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 		return model.RollbackResult{}, fmt.Errorf("stopping services: %w", err)
 	}
 
-	// A savepoint of the live state, so a rollback that fails partway can be
-	// replayed back. Dropped on every path but a failed revert.
+	// A capture of the live state, so a rollback that fails partway can be replayed
+	// back. Dropped on every path but a failed revert, and committing no record:
+	// nothing outlives this call to read one.
 	log.Info().Msg("backing up current state")
-	safetyBackup, err := s.performSavepoint(ctx, s.safetyBackupRepo, s.safetyBackupStore, safetyBackends, safetyBackupName, "")
+	safetyBackup, err := s.captureVolumes(
+		ctx, s.safetyBackupStore, safetyBackends, safetyBackupName, "", safetyBackupLabels())
 	if err != nil {
 		// Nothing changed: restart best-effort and report the backup error. A
 		// refused capture directory holds objects this run did not write, and
@@ -190,12 +204,12 @@ func (s *Service) revert(
 	return nil
 }
 
-// dropSafetyBackup pairs the safety tier's repository with its store; crossing
-// the tiers would uncommit a record in one tree and sweep the other.
+// dropSafetyBackup drops the backup's captures and sweeps the tree they shared:
+// dropCaptures over the safety store, with no record to uncommit first.
 func (s *Service) dropSafetyBackup(
 	ctx context.Context, safetyBackup model.Savepoint, safetyBackends []model.VolumeSnapshotBackend,
 ) error {
-	return s.dropSavepoint(ctx, s.safetyBackupRepo, s.safetyBackupStore, safetyBackup, safetyBackends)
+	return s.dropCaptures(ctx, s.safetyBackupStore, safetyBackup, safetyBackends)
 }
 
 // volumesOf projects a savepoint's stats back to volumes. Non-nil, so an empty

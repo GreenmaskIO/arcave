@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/cdc"
-	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
 )
 
 var (
@@ -34,12 +32,6 @@ func NewSnapshotBackendRegistry(factories ...model.SnapshotBackendFactory) (*Sna
 		indexed[factory.Kind()] = factory
 	}
 	return &SnapshotBackendRegistry{factories: indexed}, nil
-}
-
-// DefaultRegistry is the registry arcave ships: every backend kind a volume can
-// name. The concrete *docker.Engine arrives from the DI root.
-func DefaultRegistry(docker tarcopy.MountStreamer) (*SnapshotBackendRegistry, error) {
-	return NewSnapshotBackendRegistry(tarcopy.NewFactory(docker), cdc.NewFactory())
 }
 
 // New builds the backend spec.Volume.Backend names; an unregistered kind is

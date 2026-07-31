@@ -30,6 +30,8 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // composeProjectLabel and composeServiceLabel are set by Docker Compose on
@@ -90,6 +92,14 @@ func NewEngine(api dockerAPI) *Engine {
 // Close releases the daemon connection.
 func (e *Engine) Close() error { return e.api.Close() }
 
+// RunOneShot drives one throwaway container to completion; a non-zero exit is a
+// model.ContainerExitError carrying the container's own output. It is the
+// exported face of the mechanism in oneshot.go, for the backends that run their
+// own containers.
+func (e *Engine) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
+	return runOneShotContainer(ctx, e.api, spec)
+}
+
 // OpenMount opens a tar stream of the service mount at target's contents.
 //
 // It locates the project's container for service and streams its target path
@@ -112,6 +122,31 @@ func (e *Engine) OpenMount(ctx context.Context, projectName, service, target str
 		return nil, fmt.Errorf("export %s mount %s: %w", service, target, err)
 	}
 	return rc, nil
+}
+
+// ResolveMountSource returns what a container has to bind to reach the service
+// mount at target: the docker volume name for a named or anonymous volume, the
+// host path for a bind mount. It is the only way to address an anonymous volume,
+// whose docker name is created per container.
+func (e *Engine) ResolveMountSource(ctx context.Context, projectName, service, target string) (string, error) {
+	_, mnt, err := findServiceMount(ctx, e.api, projectName, service, target)
+	if err != nil {
+		return "", err
+	}
+	return mountSource(mnt)
+}
+
+// WipeMount clears the service mount at target — WriteMount's first half on its
+// own, for a backend that writes the data back itself.
+func (e *Engine) WipeMount(ctx context.Context, projectName, service, target string) error {
+	_, mnt, err := findServiceMount(ctx, e.api, projectName, service, target)
+	if err != nil {
+		return fmt.Errorf("finding service mounts: %w", err)
+	}
+	if err := wipeMount(ctx, e.api, mnt); err != nil {
+		return fmt.Errorf("clear %s mount %s: %w", service, target, err)
+	}
+	return nil
 }
 
 // mountInfo carries the backing-storage details of a resolved container mount,
@@ -199,6 +234,24 @@ func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
 // It is the wipe *policy* — which image, which command, which bind — over the
 // reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
 func wipeMount(ctx context.Context, api dockerAPI, mnt mountInfo) error {
+	src, err := mountSource(mnt)
+	if err != nil {
+		return err
+	}
+
+	return runOneShotContainer(ctx, api, model.OneShotSpec{
+		Image: wipeImage,
+		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
+		Cmd:   []string{"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"},
+		Binds: []string{src + ":/data"},
+	})
+}
+
+// mountSource is the bind source that reaches a resolved mount's backing
+// storage: volumes by volume name, bind mounts by host path. One rule for both
+// the wipe policy and ResolveMountSource, so a backend addressing a volume
+// cannot disagree with the wipe that clears it.
+func mountSource(mnt mountInfo) (string, error) {
 	var src string
 	switch mnt.Type {
 	case "volume":
@@ -206,16 +259,10 @@ func wipeMount(ctx context.Context, api dockerAPI, mnt mountInfo) error {
 	case "bind":
 		src = mnt.Source
 	default:
-		return fmt.Errorf("unsupported mount type %q", mnt.Type)
+		return "", fmt.Errorf("unsupported mount type %q", mnt.Type)
 	}
 	if src == "" {
-		return fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
+		return "", fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
 	}
-
-	return runOneShotContainer(ctx, api, oneShotSpec{
-		image: wipeImage,
-		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
-		cmd:   []string{"find", "/data", "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"},
-		binds: []string{src + ":/data"},
-	})
+	return src, nil
 }

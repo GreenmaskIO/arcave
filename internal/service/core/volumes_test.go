@@ -214,7 +214,7 @@ func TestFindBackupVolumes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, skipped, err := FindBackupVolumes(model.IntrospectionResult{Project: tt.project})
+			got, skipped, err := FindBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.SnapshotBackendCopy)
 
 			// Assert
 			require.NoError(t, err)
@@ -222,6 +222,31 @@ func TestFindBackupVolumes(t *testing.T) {
 			assert.Equal(t, tt.wantSkipped, skipped)
 			assertOneArmPerType(t, got)
 		})
+	}
+}
+
+// The backend is the caller's, stamped on every unit whatever its addressing
+// arm: it is project config, not a constant of this package.
+func TestFindBackupVolumes_StampsTheGivenBackend(t *testing.T) {
+	// Arrange
+	res := model.IntrospectionResult{Project: model.Project{
+		Name: "demo",
+		Services: []model.Service{{
+			Name:    "app",
+			Volumes: []model.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"}},
+		}},
+		Volumes: []model.NamedVolume{{Key: "db", Name: "demo_db",
+			UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}}},
+	}}
+
+	// Act
+	got, _, err := FindBackupVolumes(res, model.SnapshotBackendCDC)
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	for _, v := range got {
+		assert.Equal(t, model.SnapshotBackendCDC, v.Backend, "volume %s", v.ObjectID)
 	}
 }
 

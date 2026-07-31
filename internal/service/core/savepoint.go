@@ -67,7 +67,8 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	// Capture while the services are stopped. On failure they still must come back
 	// up, so the restart is best-effort — a restart failure on top changes nothing
 	// and is only logged — and the capture error is what the caller gets.
-	record, err := s.performSavepoint(ctx, s.savepointRepo, s.savepointStore, backends, req.Name, req.Description)
+	record, err := s.performSavepoint(
+		ctx, s.savepointRepo, s.savepointStore, backends, req.Name, req.Description, req.Labels)
 	if err != nil {
 		// Nothing was committed, so there is no record to uncommit — only the data
 		// the fan-out got as far as writing, which no savepoint will ever name. A

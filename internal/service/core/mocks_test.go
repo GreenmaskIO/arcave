@@ -30,21 +30,16 @@ func (m *mockSavepointRepo) Delete(ctx context.Context, id model.SavepointID) er
 	return m.Called(ctx, id).Error(0)
 }
 
-// mockLocker counts releases in a field: release is a closure Acquire returns,
-// not a method an expectation can match.
-type mockLocker struct {
-	mock.Mock
-	released int
-}
+// mockLocker doubles projectLocker. Release is a closure Acquire returns rather
+// than a method of the seam, so it reports itself as one — MethodCalled puts it
+// where testify counts it and mock.InOrder can place it.
+type mockLocker struct{ mock.Mock }
 
 func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 	if err := m.Called(ctx).Error(0); err != nil {
 		return nil, err
 	}
-	return func() error {
-		m.released++
-		return nil
-	}, nil
+	return func() error { return m.MethodCalled("Release").Error(0) }, nil
 }
 
 type mockInspector struct{ mock.Mock }
@@ -115,10 +110,13 @@ func matchValidSnapshotID() any {
 	})
 }
 
-// matchSafetyRecord matches the record a rollback's safety backup commits.
-func matchSafetyRecord() any {
-	return mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.ID.Validate() == nil && r.Name == safetyBackupName
+// matchSafetySnapshot matches a safety-tier capture request: an id off the clock
+// that passes the gate, carrying the tier label a rollback stamps. That label is
+// the only thing marking the capture as an undo, now that the safety tier
+// commits no record, so it is matched rather than widened away.
+func matchSafetySnapshot() any {
+	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
+		return req.SnapshotID.Validate() == nil && req.Labels[tierLabel] == tierLabelSafety
 	})
 }
 

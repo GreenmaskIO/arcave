@@ -143,6 +143,161 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, []string{"a.yaml", "b.yaml"}, cfg.Project.ComposeFiles)
 			},
 		},
+		{
+			// A full-copy project carries no cdc section: a backend it never runs
+			// should not be a block in its config file.
+			name: "a full-copy project gets no cdc arm",
+			yaml: "version: 1\nsnapshot:\n  backend: fullcopy\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Nil(t, cfg.Backends.CDC)
+			},
+		},
+		{
+			name: "naming cdc fills its section with the defaults",
+			yaml: "version: 1\nsnapshot:\n  backend: cdc\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, SnapshotBackendCDC, cfg.Snapshot.Backend)
+				assert.Equal(t, model.SnapshotBackendCDC, cfg.Snapshot.BackendKind())
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, RestoreModeWipe, cfg.Backends.CDC.RestoreMode)
+				assert.Equal(t, OverwriteIfChanged, cfg.Backends.CDC.Overwrite)
+				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
+				// The data plane defaults with it, on the tcp arm only.
+				assert.Equal(t, DataPlane{
+					Transport:     DataPlaneTransportTCP,
+					Address:       DefaultDataPlaneAddress,
+					ContainerHost: DefaultDataPlaneContainerHost,
+					Auth:          DataPlaneAuthNone,
+				}, cfg.Backends.CDC.DataPlane)
+			},
+		},
+		{
+			name: "the data plane section is read, and the keys it omits still default",
+			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n    data_plane:\n" +
+				"      address: 127.0.0.1:18080\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, DataPlane{
+					Transport:     DataPlaneTransportTCP,
+					Address:       "127.0.0.1:18080",
+					ContainerHost: DefaultDataPlaneContainerHost,
+					Auth:          DataPlaneAuthNone,
+				}, cfg.Backends.CDC.DataPlane)
+			},
+		},
+		{
+			// A credential the project names is carried as it is; nothing fills
+			// one, and the wiring refuses the mode outright.
+			name: "basic auth is read, username and all",
+			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n    data_plane:\n" +
+				"      auth: basic\n      password: hunter2\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, DataPlane{
+					Transport:     DataPlaneTransportTCP,
+					Address:       DefaultDataPlaneAddress,
+					ContainerHost: DefaultDataPlaneContainerHost,
+					Auth:          DataPlaneAuthBasic,
+					Username:      DefaultDataPlaneUsername,
+					Password:      "hunter2",
+				}, cfg.Backends.CDC.DataPlane)
+			},
+		},
+		{
+			// The unix arm defaults to no auth: on a socket the authorisation is
+			// the file's permissions, and the tcp keys stay absent so validation
+			// does not trip over an arm the project did not name.
+			name: "the unix arm defaults to its own keys",
+			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n    data_plane:\n" +
+				"      transport: unix\n      socket: /tmp/arcave.sock\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, DataPlane{
+					Transport:       DataPlaneTransportUnix,
+					Socket:          "/tmp/arcave.sock",
+					ContainerSocket: DefaultDataPlaneContainerSocket,
+					Auth:            DataPlaneAuthNone,
+				}, cfg.Backends.CDC.DataPlane)
+			},
+		},
+		{
+			name:       "a transport arcave cannot serve is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      transport: quic\n",
+			wantErrMsg: "unsupported backends.cdc.data_plane.transport",
+		},
+		{
+			name:       "an auth mode restic cannot present is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      auth: bearer\n",
+			wantErrMsg: "unsupported backends.cdc.data_plane.auth",
+		},
+		{
+			// A key of the arm the transport does not name is an error rather
+			// than a value silently ignored.
+			name:       "a socket under the tcp arm is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      socket: /tmp/arcave.sock\n",
+			wantErrMsg: "belong to transport unix",
+		},
+		{
+			name: "an address under the unix arm is rejected",
+			yaml: "version: 1\nbackends:\n  cdc:\n    data_plane:\n" +
+				"      transport: unix\n      address: 127.0.0.1:0\n",
+			wantErrMsg: "belong to transport tcp",
+		},
+		{
+			name:       "an address that is not host:port is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      address: 18080\n",
+			wantErrMsg: "is not a host:port address",
+		},
+		{
+			// Credentials with nothing to authenticate are a mistake worth
+			// naming: the user believes the endpoint is closed and it is not.
+			name: "a password under auth: none is rejected",
+			yaml: "version: 1\nbackends:\n  cdc:\n    data_plane:\n" +
+				"      auth: none\n      password: hunter2\n",
+			wantErrMsg: "password are set but auth is none",
+		},
+		{
+			name: "the cdc section is read, and the keys it omits still default",
+			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    restore_mode: incremental\n    overwrite: always\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
+				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
+				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
+			},
+		},
+		{
+			// The section is honoured wherever it appears: a project may configure
+			// the backend before switching to it.
+			name: "a cdc section under a full-copy project is still defaulted",
+			yaml: "version: 1\nbackends:\n  cdc:\n    image: restic/restic:0.18.0\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, "restic/restic:0.18.0", cfg.Backends.CDC.Image)
+				assert.Equal(t, RestoreModeWipe, cfg.Backends.CDC.RestoreMode)
+			},
+		},
+		{
+			name:       "a restore mode arcave does not offer is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    restore_mode: patch\n",
+			wantErrMsg: "unsupported backends.cdc.restore_mode",
+		},
+		{
+			name:       "an overwrite policy arcave does not offer is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    overwrite: never\n",
+			wantErrMsg: "unsupported backends.cdc.overwrite",
+		},
+		{
+			name:       "a backend arcave cannot construct is rejected",
+			yaml:       "version: 1\nsnapshot:\n  backend: rsync\n",
+			wantErrMsg: "unsupported snapshot.backend",
+		},
+		{
+			name:       "an unknown key under backends is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    password: hunter2\n",
+			wantErrMsg: "password",
+		},
 	}
 
 	for _, tt := range tests {

@@ -9,10 +9,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// defaultBackend captures every unit arcave takes today. Choosing cdc, opting a
-// volume out by label or warning on a non-local driver all plug in here.
-const defaultBackend = model.SnapshotBackendCopy
-
 // skipReasons says why a mount type is not a unit of backup.
 var skipReasons = map[model.VolumeType]string{
 	model.VolumeTypeTmpfs:   "non-persistent (tmpfs lives in RAM)",
@@ -32,7 +28,7 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []strin
 		return nil, fmt.Errorf("introspecting compose files: %w", err)
 	}
 
-	volumes, skipped, err := FindBackupVolumes(res)
+	volumes, skipped, err := FindBackupVolumes(res, s.defaultBackend)
 	if err != nil {
 		return nil, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
@@ -55,9 +51,14 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []strin
 // renders them as it likes.
 //
 // Today it applies the defaults only: every named volume and every bind or
-// anonymous mount, all full-copy, deduplicated by ObjectID. The one place
+// anonymous mount, all on backend, deduplicated by ObjectID. The one place
 // ComposeProject is stamped.
-func FindBackupVolumes(res model.IntrospectionResult) ([]model.Volume, []model.SkippedVolume, error) {
+//
+// backend is a parameter because it is project config (snapshot.backend),
+// resolved at the DI root. A per-volume choice would plug in here.
+func FindBackupVolumes(
+	res model.IntrospectionResult, backend model.SnapshotBackendKind,
+) ([]model.Volume, []model.SkippedVolume, error) {
 	var (
 		volumes []model.Volume
 		skipped []model.SkippedVolume
@@ -75,7 +76,7 @@ func FindBackupVolumes(res model.IntrospectionResult) ([]model.Volume, []model.S
 			ObjectID:       named.ObjectID(),
 			ComposeProject: res.Project.Name,
 			Type:           model.VolumeTypeNamed,
-			Backend:        defaultBackend,
+			Backend:        backend,
 			Named: &model.VolumePropertiesNamed{
 				VolumeName: named.Name,
 				UsedBy:     named.UsedBy,
@@ -111,7 +112,7 @@ func FindBackupVolumes(res model.IntrospectionResult) ([]model.Volume, []model.S
 				ObjectID:       objectID,
 				ComposeProject: res.Project.Name,
 				Type:           sv.Type,
-				Backend:        defaultBackend,
+				Backend:        backend,
 				Bind:           bindProperties(svc.Name, sv),
 				Anon:           anonProperties(svc.Name, sv),
 			})
@@ -160,9 +161,10 @@ func anonProperties(service string, sv model.ServiceVolume) *model.VolumePropert
 	}
 }
 
-// reachableVolumes drops the units today's backend cannot get at, returning them
-// as skips. Not part of FindBackupVolumes: reachability is a property of the
-// copy backend, not of what a savepoint covers.
+// reachableVolumes drops the units today's backends cannot get at, returning
+// them as skips. Kept out of FindBackupVolumes: reachability is the backends'
+// property, not the domain's. One rule covers both today, and splits the day one
+// of them reaches what the other cannot.
 func reachableVolumes(volumes []model.Volume) ([]model.Volume, []model.SkippedVolume) {
 	var (
 		kept    []model.Volume
@@ -181,7 +183,7 @@ func reachableVolumes(volumes []model.Volume) ([]model.Volume, []model.SkippedVo
 	return kept, skipped
 }
 
-// unreachableReason returns why the copy backend cannot reach v's data, or "".
+// unreachableReason returns why no backend can reach v's data, or "".
 // Only a named volume can be unreachable: a bind or anonymous one is its own
 // single mount.
 func unreachableReason(v model.Volume) string {

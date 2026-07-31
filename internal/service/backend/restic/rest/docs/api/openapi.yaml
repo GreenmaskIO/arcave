@@ -1,0 +1,400 @@
+openapi: 3.0.3
+info:
+  # NOTE: Please do not use `allOf` inheritance. Instead, explicitly define propertires in schemas.
+  # This serves as a hint for AI agents and maintains better compatibility with some code generators.
+  title: restic REST backend
+  version: 1.0.0
+  description: |
+    The REST protocol a restic client speaks to a remote repository, as specified by
+    https://restic.readthedocs.io/en/stable/100_references.html#rest-backend.
+
+    This document is the contract, not a description of an implementation: the Go
+    server is generated from it. Many repositories are served, each addressed by
+    the first segment of the path — the `{path}` of the specification is that
+    segment, and a restic client is pointed at `{address}/{repoName}`.
+servers:
+  - url: /
+    description: Many restic repositories, each under its own first path segment
+tags:
+  - name: "v1"
+paths:
+  /{repoName}/:
+    post:
+      operationId: createRepository
+      tags: [v1]
+      summary: Create the repository
+      description: |
+        `restic init`'s first call. Reports success whether the repository was
+        created or already existed; what creating one costs is the server's
+        business.
+
+        `create=true` is required — a bare POST is not an init, and answering it
+        200 would report a repository nobody asked for.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+        - name: create
+          in: query
+          required: true
+          description: Must be the literal `true`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The repository exists
+        '400':
+          description: Not an init — `create` was absent or not `true`
+        '404':
+          description: No repository is served under this name
+        '500':
+          description: The repository could not be created
+    delete:
+      operationId: deleteRepository
+      tags: [v1]
+      summary: Delete the repository
+      description: |
+        Not supported. The lifetime of a repository belongs to the layer that
+        created the store it lives in, and the protocol provides for a server
+        that does not implement removal.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+      responses:
+        '501':
+          description: Removing a repository is not implemented by this server
+
+  /{repoName}/config:
+    head:
+      operationId: statConfig
+      tags: [v1]
+      summary: Report the config's size
+      description: How a client decides whether the repository is initialised at all.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+      responses:
+        '200':
+          description: The config exists
+          headers:
+            Content-Length:
+              description: The config's size in bytes
+              required: true
+              schema:
+                type: integer
+                format: int64
+        '404':
+          description: The repository holds no config
+        '500':
+          description: The config could not be read
+    get:
+      operationId: getConfig
+      tags: [v1]
+      summary: Read the config
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+      responses:
+        '200':
+          description: The config
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: The repository holds no config
+        '500':
+          description: The config could not be read
+    post:
+      operationId: saveConfig
+      tags: [v1]
+      summary: Write the config
+      description: |
+        `restic init`'s write. A config that is already there is refused rather
+        than replaced: a repository holding data must never be silently
+        re-initialised.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: The config was written
+        '403':
+          description: The repository already holds a config
+        '404':
+          description: No repository is served under this name
+        '500':
+          description: The config could not be written
+    delete:
+      operationId: deleteConfig
+      tags: [v1]
+      summary: Remove the config
+      description: Idempotent — a config that is already gone is a success.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+      responses:
+        '200':
+          description: The repository holds no config
+        '404':
+          description: No repository is served under this name
+        '500':
+          description: The config could not be removed
+
+  /{repoName}/{type}/:
+    get:
+      operationId: listBlobs
+      tags: [v1]
+      summary: List the objects of one type
+      description: |
+        One shape: `[{name,size}]`, the v2 listing, whatever `Accept` says.
+
+        The protocol has a second, older shape — a bare `[name]` array under
+        `application/vnd.x.restic.rest.v1` — and this server does not serve it.
+        Every request a stock restic makes carries
+        `Accept: application/vnd.x.restic.rest.v2`, so the negotiation only ever
+        had one outcome, and the client reads the shape the `Content-Type` names.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ObjectTypePath'
+      responses:
+        '200':
+          description: The objects of this type
+          content:
+            application/vnd.x.restic.rest.v2:
+              schema:
+                $ref: '#/components/schemas/BlobList'
+        '404':
+          description: |
+            This protocol has no such namespace. A client addressing one that
+            does not exist is, to this protocol, a client asking after something
+            that is not there — a 400 would be hinting at the shape of a key.
+        '500':
+          description: The objects could not be listed
+    head:
+      operationId: headBlobs
+      tags: [v1]
+      summary: Answer a listing without its body
+      description: |
+        Present so that a HEAD of a listing is not a 405. The protocol does not
+        describe it and a restic client never sends it.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ObjectTypePath'
+      responses:
+        '200':
+          description: This type can be listed
+        '404':
+          description: This protocol has no such namespace — see the listing above.
+        '500':
+          description: The objects could not be listed
+
+  /{repoName}/{type}/{name}:
+    head:
+      operationId: statBlob
+      tags: [v1]
+      summary: Report one object's size
+      description: How a client decides whether the repository already holds a pack.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ObjectTypePath'
+        - $ref: '#/components/parameters/ObjectIDPath'
+      responses:
+        '200':
+          description: The object exists
+          headers:
+            Content-Length:
+              description: The object's size in bytes
+              required: true
+              schema:
+                type: integer
+                format: int64
+        '404':
+          description: The repository holds no such object
+        '500':
+          description: The object could not be read
+    get:
+      operationId: getBlob
+      tags: [v1]
+      summary: Read one object, whole or in part
+      description: |
+        The hot path: a pack is some 16 MiB of concatenated chunks and a client
+        almost always wants one chunk out of the middle, so it asks with `Range`
+        and the answer is a 206 rather than a 200.
+
+        A `Range` this server does not understand — a unit other than bytes, a
+        malformed spec, more than one range — is ignored and the whole object is
+        returned, which RFC 9110 permits and which is safer than a refusal.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ObjectTypePath'
+        - $ref: '#/components/parameters/ObjectIDPath'
+        - name: Range
+          in: header
+          required: false
+          description: A single byte range, e.g. `bytes=0-1023`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The whole object
+          headers:
+            Accept-Ranges:
+              required: true
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: The requested part of the object
+          headers:
+            Accept-Ranges:
+              required: true
+              schema:
+                type: string
+            Content-Range:
+              description: '`bytes <start>-<end>/<size>`'
+              required: true
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: The repository holds no such object
+        '416':
+          description: The requested range starts past the end of the object
+          headers:
+            Content-Range:
+              description: '`bytes */<size>`'
+              required: true
+              schema:
+                type: string
+        '500':
+          description: The object could not be read
+    post:
+      operationId: saveBlob
+      tags: [v1]
+      summary: Write one object
+      description: |
+        Object names are content-addressed, so an upload under a name that
+        already exists carries the same bytes: this overwrites rather than
+        refusing, because a retry after a half-written object is the case that
+        matters.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ObjectTypePath'
+        - $ref: '#/components/parameters/ObjectIDPath'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: The object was written
+        '404':
+          description: |
+            Not an address: the namespace is not one of the five, or the name is
+            not 64 lowercase hex characters. Answered as a read of the same
+            address would be, since neither ever named an object.
+        '500':
+          description: The object could not be written
+    delete:
+      operationId: deleteBlob
+      tags: [v1]
+      summary: Remove one object
+      description: |
+        Idempotent — a client retries deletes, and a retry landing after the
+        first attempt succeeded must not fail a prune.
+      parameters:
+        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ObjectTypePath'
+        - $ref: '#/components/parameters/ObjectIDPath'
+      responses:
+        '200':
+          description: |
+            The repository holds no such object — whether this call removed it or
+            it was already gone.
+        '404':
+          description: |
+            Not an address: the namespace is not one of the five, or the name is
+            not 64 lowercase hex characters. Idempotence does not reach this
+            case — an address that could never name an object is not an object
+            that is already gone.
+        '500':
+          description: The object could not be removed
+
+components:
+  parameters:
+    RepoNamePath:
+      name: repoName
+      in: path
+      required: true
+      description: |
+        The repository this call addresses — the first segment of the path, which
+        is where a client's `{address}/{repoName}` ends up. One segment is the
+        only structural rule; which repository a name resolves to is the server's
+        business.
+
+        A name no repository is served under is the 404 of every operation that
+        reads one — including a HEAD, which otherwise answers from its path
+        alone. `deleteRepository` is the one exception: it is not implemented for
+        any name, so it answers 501 whatever the name says.
+      schema:
+        type: string
+        minLength: 1
+    ObjectTypePath:
+      name: type
+      in: path
+      required: true
+      description: The namespace the object lives in.
+      schema:
+        $ref: '#/components/schemas/ObjectType'
+    ObjectIDPath:
+      name: name
+      in: path
+      required: true
+      description: The object's name — the 64 hex characters of its content hash.
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{64}$'
+  schemas:
+    ObjectType:
+      type: string
+      description: |
+        The namespaces of a repository. `config` is not one of them: it is
+        addressed as a single object with no name and is never listed.
+      enum:
+        - data
+        - keys
+        - locks
+        - snapshots
+        - index
+    Blob:
+      type: object
+      description: One object of a v2 listing.
+      required:
+        - name
+        - size
+      properties:
+        name:
+          type: string
+          description: The 64 hex characters of the object's content hash.
+        size:
+          type: integer
+          format: int64
+          description: The object's size in bytes.
+    BlobList:
+      type: array
+      description: The v2 listing.
+      items:
+        $ref: '#/components/schemas/Blob'

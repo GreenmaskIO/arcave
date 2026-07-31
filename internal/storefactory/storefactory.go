@@ -43,6 +43,11 @@ import (
 // root its store under this same segment.
 const storeNamespace = "arcave"
 
+// sharedNamespace sits beside the sessions, for the data a backend keeps across
+// them. It cannot collide with a session: SessionID.Validate admits only
+// "global" or a canonical UUID.
+const sharedNamespace = "shared"
+
 // New builds the Storager for cfg, rooted at <path>/arcave/<session>, where the
 // session names a lifetime: everything under that root dies with it. For the
 // directory arm a relative path is resolved against projectRoot; an absolute one
@@ -54,13 +59,34 @@ const storeNamespace = "arcave"
 // must already exist, keeping a typo from quietly growing a fresh tree. The
 // session segment still arrives with the first object written under it.
 func New(cfg config.Storage, projectRoot string, session model.SessionID) (storages.Storager, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("validate config: %w", err)
-	}
 	// The session is rendered into a store root, so it is gated at the layer that
 	// owns the value, before any of it reaches a backend.
 	if err := session.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session id: %w", err)
+	}
+	store, err := getStorager(cfg, projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return wrapNamespace(store, session.String())
+}
+
+// NewShared builds the Storager for the data that outlives a session, rooted at
+// <path>/arcave/shared. Identical to New but for that last segment.
+func NewShared(cfg config.Storage, projectRoot string) (storages.Storager, error) {
+	store, err := getStorager(cfg, projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return wrapNamespace(store, sharedNamespace)
+}
+
+// getStorager resolves the config union into a store rooted at <path>/arcave — one arm
+// per storage type, and nothing else: what a segment means is wrapNamespace's, so a
+// new arm lands here alone.
+func getStorager(cfg config.Storage, projectRoot string) (storages.Storager, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
 	}
 
 	switch cfg.Type {
@@ -69,21 +95,24 @@ func New(cfg config.Storage, projectRoot string, session model.SessionID) (stora
 		if filepath.IsAbs(cfg.Directory.Path) {
 			rootPath, prefix = cfg.Directory.Path, storeNamespace
 		}
-		store, err := directory.NewStorage(directory.Config{
+		return directory.NewStorage(directory.Config{
 			RootPath: rootPath,
 			Prefix:   prefix,
 		}, directory.WithCreatePrefix())
-		if err != nil {
-			return nil, err
-		}
-		sessionStore, err := store.SubStorage(session.String(), true)
-		if err != nil {
-			return nil, fmt.Errorf("re-root storage at session %s: %w", session, err)
-		}
-		return sessionStore, nil
 	default:
 		// Unreachable: cfg.Validate above rejects every other tag. The arm exists
 		// so adding a storage type without wiring it here fails to compile clean.
 		return nil, fmt.Errorf("unsupported storage.type %q", cfg.Type)
 	}
+}
+
+// wrapNamespace re-roots a namespace store at its last segment: a session's, or the
+// shared one. The segment is validated by whoever owns its vocabulary, before it
+// gets here.
+func wrapNamespace(store storages.Storager, segment string) (storages.Storager, error) {
+	segmentStore, err := store.SubStorage(segment, true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root storage at %s: %w", segment, err)
+	}
+	return segmentStore, nil
 }

@@ -20,6 +20,9 @@ linters:
       - path: ^internal/utils/testutils/
         linters:
           - errcheck
+      - path: ^internal/service/backend/restic/rest/modeltest/
+        linters:
+          - errcheck
       - path: ^pkg/common/mocks/
         linters:
           - errcheck

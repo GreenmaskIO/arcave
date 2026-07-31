@@ -2,11 +2,11 @@
 
 This document describes the restic side of the seam: what a restic repository *is* as a set of
 objects, why the protocol needs ranged reads, and what each restic operation does to the store — so
-that a change to `handler.go` or `service.go` can be judged against the client that will actually
-talk to it.
+that a change to `handler/handler.go` or `repo/repository.go` can be judged against the client that
+will actually talk to it.
 
 Everything below was **observed**, not remembered: the request traces are real, captured by wrapping
-`resticrest.New(store)` in a logging `http.Handler` and driving it with `restic 0.19.0` over a
+the protocol handler in a logging `http.Handler` and driving it with `restic 0.19.0` over a
 directory store, repository format version 2. §11 says how to reproduce them. Where a statement is
 an inference rather than an observation, it says so.
 
@@ -355,42 +355,34 @@ length + 32 bytes of crypto overhead + 15 entries × 41 bytes; the arithmetic is
 
 | Requirement | Observed as | Our implementation |
 |---|---|---|
-| Open-ended range (`bytes=N-`) | every full object read: `bytes=0-` | `http.ServeContent` |
-| Explicit span (`bytes=N-M`), including mid-object | selective restore, header reads | `http.ServeContent` |
-| `206 Partial Content` + `Content-Range` | all of the above | `http.ServeContent` |
-| `416` on an unsatisfiable range | not issued by restic; pinned by the oracle | `http.ServeContent` |
-| Transfer **only** the requested bytes | the 8.55-of-40 MiB result | `storagerFile` + `GetObjectRange` |
+| Open-ended range (`bytes=N-`) | every full object read: `bytes=0-` | `handler/range.go` |
+| Explicit span (`bytes=N-M`), including mid-object | selective restore, header reads | `handler/range.go` |
+| `206 Partial Content` + `Content-Range` | all of the above | `handler.GetBlob` |
+| `416` on an unsatisfiable range | not issued by restic; pinned by the oracle | `handler/range.go` |
+| Transfer **only** the requested bytes | the 8.55-of-40 MiB result | `repo.OpenBlobRange` + `GetObjectRange` |
 
-The last row is the one that is ours to get wrong, and it is not something `ServeContent` can do for
-us. `ServeContent` needs an `io.ReadSeeker`, and the naive way to produce one from an object store —
-download the object, then seek within it — satisfies the *protocol* perfectly while defeating its
-entire purpose. `file.go` exists to prevent that:
-
-- `Seek` is **arithmetic over the size**, opening nothing. This matters because `ServeContent`'s
-  first act is to seek to the end and back, to measure the object.
-- The stream is opened by the **first `Read` after a seek**, as a single `GetObjectRange(pos, -1)`.
-- A subsequent seek **discards** the open stream, so the next read re-opens at the new offset.
+The last row is the one that is ours to get wrong. The naive way to serve a range out of an object
+store — download the object, then seek within it — satisfies the *protocol* perfectly while
+defeating its entire purpose. The interval is therefore resolved before a byte is opened: the size
+comes from one `StatBlob`, `parseRange` clamps the header against it, and `OpenBlobRange` issues
+exactly **one** `GetObjectRange` covering that interval and nothing else.
 
 So a plain `GET` costs one ranged fetch covering the whole object, and a `Range` request costs one
-ranged fetch starting at the offset — the bytes before it never move.
-`TestStoragerFile_Read_RangedGetFetchesOnlyTheRange` asserts exactly one `GetObjectRange` at exactly
-the right offset, and it is the test that fails if anyone "simplifies" this into a download.
-
-One more subtlety worth keeping: `getBlob` sets `Content-Type` explicitly. Without it,
-`ServeContent` sniffs — a 512-byte read from offset 0 followed by a seek back — which is an *extra
-ranged fetch on every GET*, including the ranged ones this machinery exists to keep cheap.
+ranged fetch starting at the offset — the bytes before it never move. Nothing on this path holds an
+`io.ReadSeeker`, which is what a `http.ServeContent`-shaped implementation would need and what would
+quietly reintroduce the download.
 
 > **Not used, but supported:** suffix ranges (`bytes=-N`). Zero were observed across the whole trace
 > — including the pack-header reads, where a suffix range would be the natural spelling and restic
-> instead computed an explicit `bytes=start-end` from the size it already knew. We answer them
-> correctly anyway because `ServeContent` does, and the oracle test pins the behaviour, but nothing
-> here should be *designed* around them.
+> instead computed an explicit `bytes=start-end` from the size it already knew. `parseRange` answers
+> them correctly anyway, but nothing here should be *designed* around them.
 
 ---
 
 ## 6. The HTTP surface
 
-The complete grammar — four path shapes, nothing else exists:
+The complete grammar — four path shapes, nothing else exists (each under the repository's own name,
+which is the first segment this server routes on):
 
 | Path | Methods | Meaning |
 |---|---|---|
@@ -400,9 +392,9 @@ The complete grammar — four path shapes, nothing else exists:
 | `/<type>/<id>` | `HEAD` `GET` `POST` `DELETE` | one object |
 
 where `<type>` ∈ {`data`, `index`, `keys`, `locks`, `snapshots`} and `<id>` is exactly 64 lowercase
-hex characters. Anything else is a flat `404` — decided by `validPath` in `resticrest.go`, *before*
-the mux, which is also the path-safety gate: a key rendered from a path that passes it cannot contain
-a separator, a `..`, or an absolute path.
+hex characters. Anything else is a flat `404` — decided by `ParseObjectType` and `ParseObjectID` in
+`model/object.go`, on the way into every request, which is also the path-safety gate: a key rendered
+from an address that passes them cannot contain a separator, a `..`, or an absolute path.
 
 Listings are content-negotiated by `Accept`:
 
@@ -467,9 +459,9 @@ Layout afterwards: `config=1 keys=1`. Nothing else exists.
   full of data — restic surfaces the 403 to the user as "repository master key and config already
   initialized".
 
-**In this package:** `handler.createRepo` (the `create=true` gate) → `storeRepository.Create` (a
-logged no-op). `handler.saveConfig` → `storeRepository.SaveConfig`, whose `Exists`-then-`PutObject`
-pair returns `errConfigExists`, which `handler.fail` maps to 403. `TestStoreRepository_SaveConfig`
+**In this package:** `handler.createRepo` (the `create=true` gate) → `repo.Repository.Create` (a
+logged no-op). `handler.saveConfig` → `repo.Repository.SaveConfig`, whose `Exists`-then-`PutObject`
+pair returns `repo.ErrConfigExists`, which `handler.fail` maps to 403. `TestRepository_SaveConfig`
 pins both the refusal and that the refused write did not touch the stored bytes.
 
 ### 7.2 Creating the config on its own
@@ -510,7 +502,7 @@ Layout afterwards: `config=1 data=2 index=1 keys=1 snapshots=1`.
 - Order is the crash-safety story and it is the client's: data → index → snapshot. The server
   guarantees nothing about it and must not try to.
 
-**In this package:** `handler.saveBlob` → `storeRepository.SaveBlob` → `PutObject`. The whole path
+**In this package:** `handler.saveBlob` → `repo.Repository.SaveBlob` → `PutObject`. The whole path
 is four lines of code, which is the point.
 
 ### 7.4 Creating a backup — second run (incremental)
@@ -564,8 +556,8 @@ between the two runs: the full pack read at step 14 vanishes, the two content ra
 bytes transferred. Resolving `latest` reads *every* snapshot object, so a repository with many
 snapshots issues many small GETs — cheap, but not zero.
 
-**In this package:** `handler.getBlob` → `storeRepository.OpenBlob` → `statObject` (size, or
-`errObjectNotFound` → 404 *before* any byte is opened) → `newStoragerFile` → `http.ServeContent`.
+**In this package:** `handler.getBlob` → `repo.Repository.OpenBlob` → `statObject` (size, or
+`repo.ErrObjectNotFound` → 404 *before* any byte is opened) → `repo.newStoragerFile` → `http.ServeContent`.
 
 ### 7.6 Restoring incrementally — restore over a populated target
 
@@ -620,7 +612,7 @@ restic forget <snapshot-id>                    # one specific backup, no reclaim
 **Expected behaviour:** `DELETE` must be **idempotent**. restic retries deletes, and a retry landing
 after the first one succeeded must not fail the command. Note this inverts the underlying store's
 semantics: `storages.Storager.Delete` reports a missing object as an error, deliberately, so a caller
-that meant to delete something learns it did not. `storeRepository.deleteObject` absorbs the
+that meant to delete something learns it did not. `repo.Repository.deleteObject` absorbs the
 difference by swallowing `storages.ErrFileNotFound` — in the repository, not in the store, and not in
 the handler.
 
@@ -685,7 +677,7 @@ Without `--read-data`, `check` verifies structure: every blob the index claims e
 the size claimed, and every snapshot's trees resolve. With `--read-data` it downloads and re-hashes
 every pack — in the measured repository, 40.01 MiB across 5 requests, i.e. the whole repository.
 
-This is our cheapest end-to-end proof: `conformance_test.go` runs `check --read-data` against a real
+This is our cheapest end-to-end proof: `handler/conformance_test.go` runs `check --read-data` against a real
 restic binary, so if this server ever corrupts, truncates or mis-ranges anything, that test fails.
 
 ---
@@ -696,15 +688,15 @@ Everything the client depends on, and where it is pinned.
 
 | # | Behaviour | Why restic needs it | Pinned by |
 |---|---|---|---|
-| 1 | `HEAD /config` → 404 on a fresh store, 200 + `Content-Length` afterwards | the "is this a repository?" probe opening every command | oracle, `TestStoreRepository_StatConfig` |
-| 2 | `POST /config` refuses an existing config with 403 | a second `init` must not orphan live data | oracle, `TestStoreRepository_SaveConfig` |
+| 1 | `HEAD /config` → 404 on a fresh store, 200 + `Content-Length` afterwards | the "is this a repository?" probe opening every command | oracle, `TestRepository_StatConfig` |
+| 2 | `POST /config` refuses an existing config with 403 | a second `init` must not orphan live data | oracle, `TestRepository_SaveConfig` |
 | 3 | `POST /?create=true` required; bare `POST /` → 400 | a stray POST must not report a repository | `TestHandler_createRepo` |
-| 4 | Empty namespace → `200 []`, never 404, never `null` | `init` lists `/keys/` and `/snapshots/` before writing anything | `TestStoreRepository_ListBlobs`, oracle |
-| 5 | `POST /<type>/<id>` overwrites an existing object (200) | retried uploads after a failure | oracle (pinned deviation), `TestStoreRepository_SaveBlob` |
-| 6 | `DELETE` of a missing object → 200 | restic retries deletes during `prune`/`unlock` | oracle, `TestStoreRepository_Delete` |
+| 4 | Empty namespace → `200 []`, never 404, never `null` | `init` lists `/keys/` and `/snapshots/` before writing anything | `TestRepository_ListBlobs`, oracle |
+| 5 | `POST /<type>/<id>` overwrites an existing object (200) | retried uploads after a failure | oracle (pinned deviation), `TestRepository_SaveBlob` |
+| 6 | `DELETE` of a missing object → 200 | restic retries deletes during `prune`/`unlock` | oracle, `TestRepository_Delete` |
 | 7 | Ranged `GET` → 206 + `Content-Range`, only the requested bytes moved | reading one blob out of a pack | oracle, `TestStoragerFile_Read_RangedGetFetchesOnlyTheRange` |
 | 8 | v1/v2 listing chosen by `Accept`, answered with the matching `Content-Type` | `prune`/`check` plan from sizes | `TestHandler_listBlobs`, oracle |
-| 9 | Listing reports only flat keys of that type | a hidden object reads as "missing"; a stray one as garbage | `TestStoreRepository_ListBlobs_SkipsNestedKeys` |
+| 9 | Listing reports only flat keys of that type | a hidden object reads as "missing"; a stray one as garbage | `TestRepository_ListBlobs_SkipsNestedKeys` |
 | 10 | Any path outside the grammar → flat 404 (no redirect, no stdlib body) | rest-server parity; also the path-safety gate | `TestHandler_ServeHTTP_PathValidation`, oracle |
 | 11 | Wrong method on a valid path → 405 with `Allow` | restic uses a general HTTP client | `TestHandler_ServeHTTP_MethodNotAllowed` |
 
@@ -713,7 +705,7 @@ Everything the client depends on, and where it is pinned.
 ## 9. Where this server deliberately differs from rest-server
 
 `restic/rest-server` is the reference implementation and is imported as a **test-only** oracle:
-`oracle_test.go` replays the same request stream against both and compares status, headers and body.
+`handler/oracle_test.go` replays the same request stream against both and compares status, headers and body.
 Each difference below is pinned from *both* sides, so one that quietly disappears — or one that
 quietly appears — fails the test.
 
@@ -732,12 +724,10 @@ quietly appears — fails the test.
 
 - **Append-only mode.** rest-server can refuse deletes and overwrites so that a compromised client
   cannot destroy history. It is a policy over the *objects*, not over the protocol, so its insertion
-  points are `SaveBlob` and `DeleteBlob` in `service.go`, where they are marked. Note that it must
+  points are `SaveBlob` and `DeleteBlob` in `repo/repository.go`, where they are marked. Note that it must
   exempt `locks/`, which every command deletes.
-- **Authentication, quotas, metrics.** The intended transport is a private stdio/unix-socket
-  connection to a single container, and byte counts come from `restic --json`.
-- **Multi-repository serving.** One instance serves exactly one repository — there is no `{repo}`
-  segment in the URL; the binding is the `Storager` handed to `New`.
+- **Authentication, quotas, metrics.** The intended transport is a private loopback connection the
+  containers of one command reach, and byte counts come from `restic --json`.
 
 ---
 
@@ -748,17 +738,16 @@ The traces above were produced by a throwaway test that wraps the handler in a l
 line per request. The wrapper is no longer needed — `logging.go` logs both ends of every request,
 with the range, the Accept, the status and the bytes written — so regenerating them is:
 
-1. Point the logger at stderr at DEBUG instead of silencing it, by editing `TestMain` in
-   `logging_test.go` to `log.Logger = zerolog.New(os.Stderr).Level(zerolog.DebugLevel)`, and read the
-   `restic rest request` / `restic rest request served` pairs. (The whole conformance run is ~270
-   lines.)
+1. Point the logger at stderr at DEBUG instead of into a buffer, by giving `NewEcho` a context
+   carrying `zerolog.New(os.Stderr).Level(zerolog.DebugLevel)`, and read the `restic rest request` /
+   `request` pairs. (The whole conformance run is ~270 lines.)
 2. Drive it with `exec.Command("restic", "-r", "rest:"+srv.URL+"/", "--cache-dir", <tmp>, …)` and
    `RESTIC_PASSWORD` in the environment. Use a dedicated cache dir — the default `~/.cache/restic`
    makes runs non-reproducible.
 3. For range measurements, use **incompressible** fixtures (`rand`), or v2 compression will shrink
    the packs to nothing and the numbers will not mean anything.
 
-`conformance_test.go` already does the driving half of this and is the permanent version of the same
+`handler/conformance_test.go` already does the driving half of this and is the permanent version of the same
 idea: it runs `init → backup → check --read-data → restore → forget → prune → check` against a real
 binary, and is skipped by `-short` and on hosts without `restic` on `PATH`.
 

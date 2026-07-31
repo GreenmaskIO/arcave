@@ -39,7 +39,7 @@ func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 	expectOneShotRun(api, 0)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, oneShotSpec{image: wipeImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: wipeImage})
 
 	// Assert
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 		Return(io.NopCloser(bytes.NewReader(framed.Bytes())), nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, oneShotSpec{image: wipeImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: wipeImage})
 
 	// Assert
 	require.Error(t, err)
@@ -92,7 +92,7 @@ func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
 		Return(container.CreateResponse{}, errors.New("boom"))
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, oneShotSpec{image: wipeImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: wipeImage})
 
 	// Assert
 	require.Error(t, err)
@@ -111,7 +111,7 @@ func TestRunOneShotContainer_RemovesContainerOnStartFailure(t *testing.T) {
 	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, oneShotSpec{image: wipeImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: wipeImage})
 
 	// Assert
 	require.Error(t, err)
@@ -124,23 +124,23 @@ func TestRunOneShotContainer_RemovesContainerOnStartFailure(t *testing.T) {
 func TestRunOneShotContainer_AttachConfig(t *testing.T) {
 	tests := []struct {
 		name       string
-		spec       oneShotSpec
+		spec       model.OneShotSpec
 		wantAttach bool
 		wantCfg    container.Config
 	}{
 		{
 			name: "no stdio does not attach at all",
-			spec: oneShotSpec{image: wipeImage},
+			spec: model.OneShotSpec{Image: wipeImage},
 		},
 		{
 			name:       "stdin opens and attaches stdin",
-			spec:       oneShotSpec{image: wipeImage, stdin: strings.NewReader("")},
+			spec:       model.OneShotSpec{Image: wipeImage, Stdin: strings.NewReader("")},
 			wantAttach: true,
 			wantCfg:    container.Config{OpenStdin: true, StdinOnce: true, AttachStdin: true},
 		},
 		{
 			name:       "output receivers attach their own streams",
-			spec:       oneShotSpec{image: wipeImage, stdout: io.Discard, stderr: io.Discard},
+			spec:       model.OneShotSpec{Image: wipeImage, Stdout: io.Discard, Stderr: io.Discard},
 			wantAttach: true,
 			wantCfg:    container.Config{AttachStdout: true, AttachStderr: true},
 		},
@@ -198,11 +198,11 @@ func TestRunOneShotContainer_Stdio(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, oneShotSpec{
-		image:  wipeImage,
-		stdin:  strings.NewReader("to stdin"),
-		stdout: &stdout,
-		stderr: &stderr,
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
+		Image:  wipeImage,
+		Stdin:  strings.NewReader("to stdin"),
+		Stdout: &stdout,
+		Stderr: &stderr,
 	})
 
 	// Assert
@@ -244,10 +244,10 @@ func TestRunOneShotContainer_StdioLargePayload(t *testing.T) {
 	// Act
 	done := make(chan error, 1)
 	go func() {
-		done <- runOneShotContainer(context.Background(), api, oneShotSpec{
-			image:  wipeImage,
-			stdin:  bytes.NewReader(payload),
-			stdout: &stdout,
+		done <- runOneShotContainer(context.Background(), api, model.OneShotSpec{
+			Image:  wipeImage,
+			Stdin:  bytes.NewReader(payload),
+			Stdout: &stdout,
 		})
 	}()
 
@@ -277,15 +277,84 @@ func TestRunOneShotContainer_StdinReadError(t *testing.T) {
 	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, oneShotSpec{
-		image: wipeImage,
-		stdin: &errReader{err: errors.New("source gone")},
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
+		Image: wipeImage,
+		Stdin: &errReader{err: errors.New("source gone")},
 	})
 
 	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "container input", "the failure must be attributed to the read side")
 	assert.Contains(t, err.Error(), "source gone", "the source's own error must be wrapped")
+}
+
+// A cancelled run ends, and takes its container with it: the hijacked stream is
+// broken by hand, and the removal travels on a context the cancellation cannot
+// refuse. Both halves compile clean when missing, and a quiet container hangs.
+func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
+	// Arrange: a container that prints nothing and never exits.
+	hj := newFakeHijack()
+
+	api := &mockAPI{}
+	expectImagePresent(api, wipeImage)
+	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(container.CreateResponse{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
+	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
+	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var stdout bytes.Buffer
+
+	// Act
+	done := make(chan error, 1)
+	go func() {
+		done <- runOneShotContainer(ctx, api, model.OneShotSpec{Image: wipeImage, Stdout: &stdout})
+	}()
+	cancel()
+
+	// Assert
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled, "the cause must be the cancellation, not the broken stream")
+	case <-time.After(30 * time.Second):
+		t.Fatal("a cancelled run must not outlive its context")
+	}
+	api.AssertExpectations(t)
+
+	removeCtx, ok := api.Calls[callIndex(api, "ContainerRemove")].Arguments.Get(0).(context.Context)
+	require.True(t, ok)
+	assert.NoError(t, removeCtx.Err(), "the removal must not travel on the cancelled context")
+}
+
+// RunOneShot is the exported face of the mechanism, for the runner seams the
+// backends declare: the spec's command, environment and binds reach the daemon
+// verbatim.
+func TestEngine_RunOneShot(t *testing.T) {
+	// Arrange
+	const resticImage = "restic/restic:0.19.1"
+	api := &mockAPI{}
+	expectImagePresent(api, resticImage)
+	expectOneShotRun(api, 0)
+
+	spec := model.OneShotSpec{
+		Image: resticImage,
+		Cmd:   []string{"init"},
+		Env:   []string{"RESTIC_REPOSITORY=rest:http://arcave:token@host.docker.internal:1/repo1/"},
+		Binds: []string{"vol:/data"},
+	}
+
+	// Act
+	err := NewEngine(api).RunOneShot(context.Background(), spec)
+
+	// Assert
+	require.NoError(t, err)
+	api.AssertExpectations(t)
+	cfg := createdConfig(t, api)
+	assert.Equal(t, spec.Cmd, []string(cfg.Cmd))
+	assert.Equal(t, spec.Env, cfg.Env)
+	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
+	assert.Equal(t, spec.Binds, hostCfg.Binds)
 }
 
 // expectImagePresent makes the daemon report ref as already pulled.
@@ -404,14 +473,20 @@ func (f *fakeHijack) closeOutput() { _ = f.outW.Close() }
 // taken from net.Pipe because the run half-closes stdin, and only a conn with
 // its own CloseWrite can keep the read direction open across that.
 type fakeConn struct {
-	r  io.Reader
+	r  *io.PipeReader
 	w  *io.PipeWriter
 	hj *fakeHijack
 }
 
 func (c *fakeConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
 func (c *fakeConn) Write(p []byte) (int, error) { return c.w.Write(p) }
-func (c *fakeConn) Close() error                { return c.w.Close() }
+
+// Close breaks both directions, as closing a real conn does — which is what a
+// cancelled run relies on to unblock its reader.
+func (c *fakeConn) Close() error {
+	_ = c.r.CloseWithError(net.ErrClosed)
+	return c.w.Close()
+}
 
 func (c *fakeConn) CloseWrite() error {
 	select {

@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
 )
 
@@ -43,16 +42,6 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 			wantType: tarcopy.Snapshotter{},
 		},
 		{
-			name: "a cdc volume builds the cdc backend",
-			spec: model.BackendSpec{
-				SessionStore: session,
-				SafetyStore:  safety,
-				Volume:       model.Volume{ObjectID: "volume/demo_pgdata", Backend: model.SnapshotBackendCDC},
-				Tier:         model.BackendTierSafety,
-			},
-			wantType: cdc.Snapshotter{},
-		},
-		{
 			name: "an unregistered backend is ErrUnknownBackend",
 			spec: model.BackendSpec{
 				SessionStore: session,
@@ -82,7 +71,7 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			registry, err := DefaultRegistry(&fakeMountStreamer{})
+			registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(&fakeMountStreamer{}))
 			require.NoError(t, err)
 
 			// Act
@@ -99,19 +88,8 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 	}
 }
 
-// The shipped registry knows every kind a volume can name.
-func TestDefaultRegistry(t *testing.T) {
-	// Act
-	registry, err := DefaultRegistry(&fakeMountStreamer{})
-
-	// Assert
-	require.NoError(t, err)
-	for _, kind := range []model.SnapshotBackendKind{model.SnapshotBackendCopy, model.SnapshotBackendCDC} {
-		assert.Contains(t, registry.factories, kind)
-	}
-}
-
-// A spec missing a root or a tier must not reach a factory.
+// A spec missing a root or a tier must not reach a factory: the double carries
+// no New expectation, so a dispatch fails the run where it happened.
 func TestSnapshotBackendRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
 	session, safety := newDirStore(t), newDirStore(t)
 	volume := model.Volume{ObjectID: "volume/demo_pgdata", Backend: model.SnapshotBackendCopy}
@@ -146,7 +124,7 @@ func TestSnapshotBackendRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
 
 			// Assert
 			require.Error(t, err)
-			factory.AssertNotCalled(t, "New", mock.Anything)
+			factory.AssertExpectations(t)
 		})
 	}
 }
@@ -192,7 +170,7 @@ func TestNewSnapshotBackendRegistry_DuplicateKind(t *testing.T) {
 	docker := &fakeMountStreamer{}
 
 	// Act
-	_, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker), cdc.NewFactory(), tarcopy.NewFactory(docker))
+	_, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker), tarcopy.NewFactory(docker))
 
 	// Assert
 	require.ErrorIs(t, err, ErrBackendAlreadyRegistered)

@@ -15,7 +15,9 @@ type VolumeSnapshotBackend interface {
 	Remove(ctx context.Context, req BackendRemoveRequest) error
 }
 
-// SnapshotBackendFactory builds a backend bound to one spec, for the Kind it names.
+// SnapshotBackendFactory builds a backend bound to one spec, for the Kind it
+// names. Whatever a kind shares between its instances is built and owned at the
+// DI root and lives for the process — a factory has no lifecycle of its own.
 type SnapshotBackendFactory interface {
 	Kind() SnapshotBackendKind
 	New(spec BackendSpec) (VolumeSnapshotBackend, error)

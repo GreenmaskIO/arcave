@@ -15,6 +15,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"time"
 
@@ -33,9 +34,76 @@ const Version = 1
 // arm rather than a new set of top-level keys.
 const StorageTypeDirectory = "directory"
 
-// SnapshotBackendFullCopy names the MVP snapshot backend, which stores each
-// mount's tar stream verbatim.
-const SnapshotBackendFullCopy = "fullcopy"
+// The tokens snapshot.backend accepts.
+const (
+	// SnapshotBackendFullCopy stores each mount's tar stream verbatim.
+	SnapshotBackendFullCopy = "fullcopy"
+	// SnapshotBackendCDC captures into a restic repository that outlives any one
+	// savepoint, writing only the chunks that changed.
+	SnapshotBackendCDC = "cdc"
+)
+
+// The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
+const (
+	// RestoreModeWipe clears the mount and restores it whole. The default.
+	RestoreModeWipe = "wipe"
+	// RestoreModeIncremental restores over the live data, writing only what
+	// differs and deleting what the snapshot does not carry.
+	RestoreModeIncremental = "incremental"
+)
+
+// What an incremental restore does with a file that is already there. Ignored by
+// RestoreModeWipe.
+const (
+	// OverwriteIfChanged compares content and rewrites only what differs.
+	OverwriteIfChanged = "if-changed"
+	// OverwriteAlways rewrites every file the snapshot carries.
+	OverwriteAlways = "always"
+)
+
+// DefaultResticImage is the stock image every cdc command runs in.
+// --delete/--overwrite need restic ≥0.17.
+const DefaultResticImage = "restic/restic:0.19.1"
+
+// The sockets backends.cdc.data_plane.transport accepts.
+const (
+	// DataPlaneTransportTCP serves the repositories on a host port the container
+	// reaches by name. The default, and the only implemented arm.
+	DataPlaneTransportTCP = "tcp"
+	// DataPlaneTransportUnix serves them on a unix socket bound into the
+	// container. Not implemented: a project naming it fails at wiring time.
+	DataPlaneTransportUnix = "unix"
+)
+
+// How the data plane authenticates a container. The vocabulary is restic's: it
+// presents credentials through the URL's userinfo and can send no header of its
+// own, so a bearer arm would be a key nobody could use.
+const (
+	// DataPlaneAuthNone serves whoever reaches the socket. The default, and the
+	// only implemented arm.
+	DataPlaneAuthNone = "none"
+	// DataPlaneAuthBasic requires the username and password the repository URL
+	// carries. Not implemented: a project naming it fails at wiring time.
+	DataPlaneAuthBasic = "basic"
+)
+
+// The data plane's defaults, filled per transport by ApplyDefaults.
+const (
+	// DefaultDataPlaneAddress binds the loopback on a port the kernel picks. A
+	// fixed port would collide between two arcave processes — a CLI run and an
+	// `arcave mcp` server, or two projects — and give an attacker a predictable
+	// target.
+	DefaultDataPlaneAddress = "127.0.0.1:0"
+	// DefaultDataPlaneContainerHost is how a container on Docker Desktop names
+	// the host loopback. Native Linux does not resolve it, which is what makes
+	// this key the one that gets cdc running there.
+	DefaultDataPlaneContainerHost = "host.docker.internal"
+	// DefaultDataPlaneContainerSocket is where the host's socket is bound inside
+	// the restic container.
+	DefaultDataPlaneContainerSocket = "/run/arcave.sock"
+	// DefaultDataPlaneUsername is the user half of the generated credential.
+	DefaultDataPlaneUsername = "arcave"
+)
 
 // The bounds arcave gives compose when it stops and starts the stack. They live
 // here rather than in the compose client because they are project config now:
@@ -79,6 +147,9 @@ type Config struct {
 	Compose  Compose  `yaml:"compose" mapstructure:"compose"`
 	Storage  Storage  `yaml:"storage" mapstructure:"storage"`
 	Snapshot Snapshot `yaml:"snapshot" mapstructure:"snapshot"`
+	// Backends holds the settings of the individual snapshot backends, one
+	// section per backend, present only for the backends a project configures.
+	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
 	// Log holds the project's default logging settings, honoured by every
 	// command unless overridden by the --log-level/--log-format global flags.
 	Log Log `yaml:"log,omitempty" mapstructure:"log"`
@@ -201,17 +272,183 @@ func (s Storage) DirectoryPath() string {
 	return s.Directory.Path
 }
 
-// Snapshot selects the snapshot backend that owns the read→write pipeline.
+// Snapshot selects the snapshot backend that owns the read→write pipeline. It
+// says which backend a *new* savepoint uses; a rollback reads the backend out of
+// the record it restores, so changing this never orphans an existing savepoint.
 type Snapshot struct {
 	Backend string `yaml:"backend" mapstructure:"backend"`
 }
 
 // Validate rejects a backend arcave cannot construct.
 func (s Snapshot) Validate() error {
-	if s.Backend != SnapshotBackendFullCopy {
-		return fmt.Errorf("unsupported snapshot.backend %q (supported: %s)", s.Backend, SnapshotBackendFullCopy)
+	switch s.Backend {
+	case SnapshotBackendFullCopy, SnapshotBackendCDC:
+		return nil
+	default:
+		return fmt.Errorf("unsupported snapshot.backend %q (supported: %s, %s)",
+			s.Backend, SnapshotBackendFullCopy, SnapshotBackendCDC)
+	}
+}
+
+// BackendKind translates the configured token into the kind a volume carries —
+// the one place the two vocabularies meet. An unknown token yields
+// SnapshotBackendUnknown, which the registry refuses by name; Validate has
+// rejected it long before.
+func (s Snapshot) BackendKind() model.SnapshotBackendKind {
+	switch s.Backend {
+	case SnapshotBackendFullCopy:
+		return model.SnapshotBackendCopy
+	case SnapshotBackendCDC:
+		return model.SnapshotBackendCDC
+	default:
+		return model.SnapshotBackendUnknown
+	}
+}
+
+// Backends is one optional section per snapshot backend. The arms are pointers
+// so a project that never names a backend carries no section for it.
+type Backends struct {
+	CDC *CDCBackend `yaml:"cdc,omitempty" mapstructure:"cdc"`
+}
+
+// CDCBackend configures the content-defined-chunking backend: which restic image
+// its one-shot containers run, and how a restore reaches the live mount.
+type CDCBackend struct {
+	// RestoreMode is wipe (clear the mount, then restore it whole) or incremental
+	// (restore over the live data, letting restic write only the difference).
+	RestoreMode string `yaml:"restore_mode" mapstructure:"restore_mode"`
+	// Overwrite governs an incremental restore only.
+	Overwrite string `yaml:"overwrite" mapstructure:"overwrite"`
+	// Image is the restic image every cdc command runs in.
+	Image string `yaml:"image" mapstructure:"image"`
+	// DataPlane is the socket the restic containers reach their repositories
+	// through, and how they authenticate on it.
+	DataPlane DataPlane `yaml:"data_plane" mapstructure:"data_plane"`
+}
+
+// DataPlane configures the HTTP endpoint cdc's containers reach their
+// repositories through: which socket it listens on, how a container names it,
+// and how it authenticates. It is a tagged union in all but the tag's name —
+// Transport selects the arm, and a key of the other arm is an error rather than
+// a value silently ignored.
+type DataPlane struct {
+	// Transport is tcp (a host port) or unix (a socket file).
+	Transport string `yaml:"transport" mapstructure:"transport"`
+	// Address is the tcp arm's bind address. Port 0 lets the kernel pick.
+	Address string `yaml:"address,omitempty" mapstructure:"address"`
+	// ContainerHost is the tcp arm's host name *as the container sees it*, which
+	// is not the address arcave binds: a container cannot reach 127.0.0.1.
+	ContainerHost string `yaml:"container_host,omitempty" mapstructure:"container_host"`
+	// Socket is the unix arm's socket path on the host.
+	Socket string `yaml:"socket,omitempty" mapstructure:"socket"`
+	// ContainerSocket is where that socket is bound inside the container — the
+	// unix arm's counterpart to ContainerHost, and required for the same reason:
+	// the path a container sees is not the path on the host.
+	ContainerSocket string `yaml:"container_socket,omitempty" mapstructure:"container_socket"`
+	// Auth is basic or none, and defaults to none.
+	Auth string `yaml:"auth" mapstructure:"auth"`
+	// Username is the basic-auth user.
+	Username string `yaml:"username,omitempty" mapstructure:"username"`
+	// Password is the basic-auth credential.
+	Password string `yaml:"password,omitempty" mapstructure:"password"`
+}
+
+// Validate checks the arms that are present. An absent arm is not an error: a
+// project that does not use a backend does not have to configure it.
+func (b Backends) Validate() error {
+	if b.CDC == nil {
+		return nil
+	}
+	return b.CDC.Validate()
+}
+
+// Validate rejects a mode or an overwrite policy the backend cannot act on.
+func (c CDCBackend) Validate() error {
+	switch c.RestoreMode {
+	case RestoreModeWipe, RestoreModeIncremental:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.restore_mode %q (supported: %s, %s)",
+			c.RestoreMode, RestoreModeWipe, RestoreModeIncremental)
+	}
+	switch c.Overwrite {
+	case OverwriteIfChanged, OverwriteAlways:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.overwrite %q (supported: %s, %s)",
+			c.Overwrite, OverwriteIfChanged, OverwriteAlways)
+	}
+	if c.Image == "" {
+		return fmt.Errorf("backends.cdc.image is required")
+	}
+	return c.DataPlane.Validate()
+}
+
+// Validate rejects a transport or an auth mode arcave cannot serve, and a key
+// that belongs to the arm the transport does not name. An ignored key is not on
+// offer here: a user who sets backends.cdc.data_plane.socket and gets a tcp
+// endpoint anyway has been told nothing.
+func (d DataPlane) Validate() error {
+	switch d.Transport {
+	case DataPlaneTransportTCP:
+		if err := d.validateTCP(); err != nil {
+			return err
+		}
+	case DataPlaneTransportUnix:
+		if err := d.validateUnix(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported backends.cdc.data_plane.transport %q (supported: %s, %s)",
+			d.Transport, DataPlaneTransportTCP, DataPlaneTransportUnix)
+	}
+	return d.validateAuth()
+}
+
+func (d DataPlane) validateTCP() error {
+	if d.Socket != "" || d.ContainerSocket != "" {
+		return fmt.Errorf("backends.cdc.data_plane.socket and container_socket belong to transport %s, but the transport is %s",
+			DataPlaneTransportUnix, DataPlaneTransportTCP)
+	}
+	if d.Address == "" {
+		return fmt.Errorf("backends.cdc.data_plane.address is required")
+	}
+	// The address is bound, so it must split into host and port here rather than
+	// at listen time, halfway through wiring a command.
+	if _, _, err := net.SplitHostPort(d.Address); err != nil {
+		return fmt.Errorf("backends.cdc.data_plane.address %q is not a host:port address: %w", d.Address, err)
+	}
+	if d.ContainerHost == "" {
+		return fmt.Errorf("backends.cdc.data_plane.container_host is required")
 	}
 	return nil
+}
+
+func (d DataPlane) validateUnix() error {
+	if d.Address != "" || d.ContainerHost != "" {
+		return fmt.Errorf("backends.cdc.data_plane.address and container_host belong to transport %s, but the transport is %s",
+			DataPlaneTransportTCP, DataPlaneTransportUnix)
+	}
+	if d.ContainerSocket == "" {
+		return fmt.Errorf("backends.cdc.data_plane.container_socket is required")
+	}
+	return nil
+}
+
+func (d DataPlane) validateAuth() error {
+	switch d.Auth {
+	case DataPlaneAuthNone:
+		if d.Username != "" || d.Password != "" {
+			return fmt.Errorf("backends.cdc.data_plane.username and password are set but auth is %s", DataPlaneAuthNone)
+		}
+		return nil
+	case DataPlaneAuthBasic:
+		if d.Username == "" {
+			return fmt.Errorf("backends.cdc.data_plane.username is required")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported backends.cdc.data_plane.auth %q (supported: %s, %s)",
+			d.Auth, DataPlaneAuthNone, DataPlaneAuthBasic)
+	}
 }
 
 // Log is the project's default logging configuration, persisted under the "log"
@@ -276,6 +513,63 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Snapshot.Backend == "" {
 		c.Snapshot.Backend = SnapshotBackendFullCopy
 	}
+	c.applyCDCDefaults()
+}
+
+// applyCDCDefaults fills the cdc arm only for a project that has one or names cdc
+// as its backend: a full-copy project should carry no block for a backend it
+// never runs. Like the storage arm it fills a copy and re-points, since a Config
+// travels by value and writing through the pointer would reach across the copy.
+func (c *Config) applyCDCDefaults() {
+	if c.Backends.CDC == nil && c.Snapshot.Backend != SnapshotBackendCDC {
+		return
+	}
+	cdc := CDCBackend{}
+	if c.Backends.CDC != nil {
+		cdc = *c.Backends.CDC
+	}
+	if cdc.RestoreMode == "" {
+		cdc.RestoreMode = RestoreModeWipe
+	}
+	if cdc.Overwrite == "" {
+		cdc.Overwrite = OverwriteIfChanged
+	}
+	if cdc.Image == "" {
+		cdc.Image = DefaultResticImage
+	}
+	cdc.DataPlane.applyDefaults()
+	c.Backends.CDC = &cdc
+}
+
+// applyDefaults fills the data plane's keys for the transport it names, and only
+// those: a key of the other arm is an error, so defaulting both arms would make
+// every project fail its own validation. The receiver is already a copy of the
+// arm applyCDCDefaults is filling, so mutating it in place reaches nothing.
+//
+// The default auth is none on both arms, since nothing implements another one.
+func (d *DataPlane) applyDefaults() {
+	if d.Transport == "" {
+		d.Transport = DataPlaneTransportTCP
+	}
+	switch d.Transport {
+	case DataPlaneTransportTCP:
+		if d.Address == "" {
+			d.Address = DefaultDataPlaneAddress
+		}
+		if d.ContainerHost == "" {
+			d.ContainerHost = DefaultDataPlaneContainerHost
+		}
+	case DataPlaneTransportUnix:
+		if d.ContainerSocket == "" {
+			d.ContainerSocket = DefaultDataPlaneContainerSocket
+		}
+	}
+	if d.Auth == "" {
+		d.Auth = DataPlaneAuthNone
+	}
+	if d.Auth == DataPlaneAuthBasic && d.Username == "" {
+		d.Username = DefaultDataPlaneUsername
+	}
 }
 
 // Validate checks the sections whose values arcave must be able to act on. It runs
@@ -290,7 +584,10 @@ func (c *Config) Validate() error {
 	if err := c.Storage.Validate(); err != nil {
 		return err
 	}
-	return c.Snapshot.Validate()
+	if err := c.Snapshot.Validate(); err != nil {
+		return err
+	}
+	return c.Backends.Validate()
 }
 
 // Path returns the absolute config file path for the project rooted at

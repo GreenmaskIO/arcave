@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
@@ -19,6 +20,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	introspect "github.com/greenmaskio/arcave/internal/service/introspectv2"
 	"github.com/greenmaskio/storages"
+	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -28,6 +30,10 @@ import (
 	arcrepo "github.com/greenmaskio/arcave/internal/repository/arc"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
+	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
@@ -39,6 +45,11 @@ import (
 // space a rollback creates and deletes within one command.
 var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
 
+// resticShutdownTimeout bounds the restic server's graceful shutdown. By the
+// time Close runs every container that could be talking to it has exited, so
+// this is the ceiling on an anomaly rather than a wait the command pays.
+const resticShutdownTimeout = 5 * time.Second
+
 // dependencies is the composition root's bag of per-command collaborators. It
 // names the concrete types it constructs: an interface here would buy no
 // polymorphism, and hiding *docker.Engine behind one only cost Close a type
@@ -46,14 +57,19 @@ var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
 type dependencies struct {
 	savepointStore    storages.Storager
 	safetyBackupStore storages.Storager
+	sharedStore       storages.Storager
 	progressWriter    io.WriteCloser
 	dockerCli         *command.DockerCli
 	dockerClient      client.APIClient
 	composeService    api.Compose
 	engine            *docker.Engine
 	composeRunner     *compose.Client
-	service           *core.Service
-	printer           *json.Printer
+	// resticServer serves the restic repositories to the cdc backend's containers.
+	// It is held here for one reason only — so Close shuts it down: what goes down
+	// to the backend is the URL base rest.Serve's port renders, never the object.
+	resticServer *echo.Echo
+	service      *core.Service
+	printer      *json.Printer
 }
 
 // initAllDependencies wires the savepoint workflows for the project rooted at
@@ -62,10 +78,17 @@ type dependencies struct {
 // session, and hands back a Storager already rooted there — so nothing below this
 // line ever names a directory.
 func initAllDependencies(ctx context.Context, projectPath string, cfg config.Config) (*dependencies, error) {
+	// One unwind for every failure path: whatever is open by then is released
+	// newest first. A per-failure list of closers went stale on every new
+	// resource, and the one it forgot was the one that leaked.
+	var opened partial
+	defer func() { opened.releaseOnFailure(ctx) }()
+
 	savepointStore, err := storefactory.New(cfg.Storage, projectPath, model.DefaultSession)
 	if err != nil {
 		return nil, fmt.Errorf("initialise savepoint store: %w", err)
 	}
+	opened.add("savepoint store", savepointStore)
 
 	// The safety-backup store is not user-configurable, so it is built from a
 	// literal directory arm rather than from cfg. It goes through the same
@@ -75,15 +98,24 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		Directory: &config.DirectoryStorage{Path: safetyBackupDir},
 	}, projectPath, model.DefaultSession)
 	if err != nil {
-		closeQuietly(ctx, "savepoint store", savepointStore)
 		return nil, fmt.Errorf("initialise safety backup store: %w", err)
 	}
+	opened.add("safety backup store", safetyBackupStore)
+
+	// The shared store sits beside the sessions rather than under one: a cdc
+	// repository that died with its session would cost a cold full backup.
+	sharedStore, err := storefactory.NewShared(cfg.Storage, projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("initialise shared store: %w", err)
+	}
+	opened.add("shared store", sharedStore)
 
 	// Where compose's own progress goes. The logger comes from the context — the
 	// one initRoot resolved — because the adapter is handed a logger rather than
 	// reaching for zerolog's global: it is a client-layer type, and the
 	// composition root is where the resolved logger lives.
 	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
+	opened.add("compose progress writer", progressWriter)
 
 	// The docker/cli instance is resolved once here and is the single daemon
 	// connection both halves of client/docker are built over: the engine takes its
@@ -94,12 +126,10 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	// they would shut down before the command ran.
 	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, progressWriter)
 	if err != nil {
-		closeQuietly(ctx, "savepoint store", savepointStore)
-		closeQuietly(ctx, "safety backup store", safetyBackupStore)
-		closeQuietly(ctx, "compose progress writer", progressWriter)
 		return nil, fmt.Errorf("initialise docker client: %w", err)
 	}
 	engine := docker.NewEngine(dockerClientAPI)
+	opened.add("docker engine", engine)
 
 	composeService := dockercompose.NewComposeService(dockerCli)
 	dockerComposeLoader := compose.NewLoader()
@@ -108,54 +138,161 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		StopTimeout: cfg.Compose.StopTimeout,
 	})
 
-	// The registry is the one place a volume's Backend becomes an instance, and
-	// the only thing here that names the engine — through tarcopy.MountStreamer,
-	// the two methods a backend needs, so core still knows no client package.
-	registry, err := core.DefaultRegistry(engine)
+	dataPlane, err := cdcDataPlane(cfg.Backends.CDC)
 	if err != nil {
-		closeQuietly(ctx, "savepoint store", savepointStore)
-		closeQuietly(ctx, "safety backup store", safetyBackupStore)
-		closeQuietly(ctx, "compose progress writer", progressWriter)
-		closeQuietly(ctx, "docker engine", engine)
+		return nil, err
+	}
+	repos, resticServer, repoURLBase, err := initResticDataPlane(ctx, dataPlane)
+	if err != nil {
+		return nil, err
+	}
+	opened.add("restic server", resticServer)
+
+	// The registry is the one place a volume's Backend becomes an instance, and
+	// the only place that names the engine — through the seam its backend
+	// declares, so neither core nor a backend imports a client. What the restic
+	// server contributes is a value, so it needs no seam at all.
+	backendRegistry, err := core.NewSnapshotBackendRegistry(
+		tarcopy.NewFactory(engine),
+		cdc.NewFactory(cdc.Deps{
+			Runner:      engine,
+			Publisher:   repos,
+			RepoURLBase: repoURLBase,
+			SharedStore: sharedStore,
+			Options:     cdcOptions(cfg.Backends.CDC),
+		}),
+	)
+	if err != nil {
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	// Two repositories, one per tier: core commits a record beside every
-	// capture, a rollback's undo included, so the safety tier keeps records of its
-	// own rather than being addressed by id alone. Each shares its tier's store
-	// with the backends that write the archives it records, so a record always
-	// travels with its data — move the store to S3 and the records go with it.
+	// One repository, over the savepoint tier's own store, so a record always
+	// travels with its data. The safety tier keeps none: a rollback's undo lives
+	// for the length of that rollback.
 	//
-	// The locker is bound to the project root here, exactly as each store is bound
-	// to its root, so the service serialises its own mutating workflows without
-	// ever naming a path.
+	// The locker is bound to the project root here, like every store to its own,
+	// so the service never names a path.
 	svc := core.New(
 		sprepo.New(savepointStore),
-		sprepo.New(safetyBackupStore),
 		lock.New(projectPath),
 		introspect.NewInspector(dockerComposeLoader),
 		composeRunner,
-		registry,
+		backendRegistry,
 		savepointStore,
 		safetyBackupStore,
+		cfg.Snapshot.BackendKind(),
 	)
+	opened.keep()
 	return &dependencies{
 		savepointStore:    savepointStore,
 		safetyBackupStore: safetyBackupStore,
+		sharedStore:       sharedStore,
 		progressWriter:    progressWriter,
 		dockerCli:         dockerCli,
 		dockerClient:      dockerClientAPI,
 		composeService:    composeService,
 		engine:            engine,
 		composeRunner:     composeRunner,
+		resticServer:      resticServer,
 		service:           svc,
 		printer:           json.New(os.Stdout),
 	}, nil
 }
 
-// Close releases the Docker engine, the progress writer and both stores. Only
-// the savepoint store's error is returned: it is the one holding the command's
-// data, and a failure to close the others cannot change the command's outcome.
+// initResticDataPlane assembles what the cdc backend's containers reach: the
+// registry a backend publishes its repository on, the echo app that serves the
+// protocol over it, and the URL base a container addresses it by. It listens for
+// the whole process — built listening, closed by Close — so no workflow owns a
+// transport's lifetime, and a port that will not bind fails the command before it
+// touches the project.
+func initResticDataPlane(ctx context.Context, dataPlane config.DataPlane) (*registry.Registry, *echo.Echo, string, error) {
+	repos := registry.New()
+	e := rest.NewEcho(ctx, repos)
+	port, err := rest.Serve(e, dataPlane.Address)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("start the restic server: %w", err)
+	}
+	return repos, e, rest.RepositoryURLBase(dataPlane.ContainerHost, port), nil
+}
+
+// cdcOptions translates the backends.cdc section into the backend's own options,
+// the same way every pluggable section is translated here. A project that never
+// names cdc carries no section, and the zero options never reach a container.
+func cdcOptions(cfg *config.CDCBackend) cdc.Options {
+	if cfg == nil {
+		return cdc.Options{}
+	}
+	return cdc.Options{
+		Image:       cfg.Image,
+		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
+		Overwrite:   cfg.Overwrite,
+	}
+}
+
+// cdcDataPlane resolves the backends.cdc.data_plane section, the same way
+// every pluggable section is translated here. The DI root reads both of its
+// halves, and they go to different places: the bind address is the server's, and
+// the name a *container* resolves is no business of a listener's — it reaches it
+// as an argument to RepositoryURLBase, so nothing holds two host names it cannot
+// check against each other.
+//
+// The unix transport and every auth mode but none are in the schema and not
+// implemented, so a project naming one fails here — at wiring time, before the
+// command touches the project — rather than at capture time. A project that
+// never names cdc carries no section; the defaults stand in, so the URL rendered
+// here is well formed even though no container ever reaches for it.
+func cdcDataPlane(cfg *config.CDCBackend) (config.DataPlane, error) {
+	if cfg == nil {
+		return config.DataPlane{
+			Address:       config.DefaultDataPlaneAddress,
+			ContainerHost: config.DefaultDataPlaneContainerHost,
+		}, nil
+	}
+
+	section := cfg.DataPlane
+	if section.Transport == config.DataPlaneTransportUnix {
+		return config.DataPlane{}, fmt.Errorf("backends.cdc.data_plane.transport %q is not implemented: use %q",
+			config.DataPlaneTransportUnix, config.DataPlaneTransportTCP)
+	}
+	if section.Auth == config.DataPlaneAuthBasic {
+		return config.DataPlane{}, fmt.Errorf("backends.cdc.data_plane.auth %q is not implemented: remove the auth, username and password keys",
+			config.DataPlaneAuthBasic)
+	}
+	return section, nil
+}
+
+// partial tracks what a half-finished wiring has opened. releaseOnFailure is
+// deferred once and does nothing after keep, which the success path calls.
+type partial struct {
+	closers []namedCloser
+	kept    bool
+}
+
+type namedCloser struct {
+	name string
+	c    io.Closer
+}
+
+func (p *partial) add(name string, c io.Closer) { p.closers = append(p.closers, namedCloser{name, c}) }
+
+func (p *partial) keep() { p.kept = true }
+
+func (p *partial) releaseOnFailure(ctx context.Context) {
+	if p.kept {
+		return
+	}
+	for i := len(p.closers) - 1; i >= 0; i-- {
+		closeQuietly(ctx, p.closers[i].name, p.closers[i].c)
+	}
+}
+
+// Close releases the restic server, the Docker engine, the progress writer and
+// every store. Only the savepoint store's error is returned: it holds the
+// command's data, and the others cannot change the command's outcome.
+//
+// The restic server goes first: it is the only listener arcave opens, and it
+// must not outlive the command that started it. It is shut down rather than
+// closed — see shutdownResticServer.
 //
 // The progress writer is closed after the engine, so a last line compose left
 // unterminated is still emitted — and closed at all because that trailing line
@@ -164,10 +301,31 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 // dockerClient is not closed here: it is the connection the engine was built
 // over, so closing the engine already releases it.
 func (d *dependencies) Close(ctx context.Context) error {
+	shutdownResticServer(ctx, d.resticServer)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
+	closeQuietly(ctx, "shared store", d.sharedStore)
 	closeQuietly(ctx, "safety backup store", d.safetyBackupStore)
 	return d.savepointStore.Close()
+}
+
+// shutdownResticServer stops serving gracefully: a request still in flight is
+// given resticShutdownTimeout to finish, where Close would sever it mid-object.
+// A container is on the other end of that connection, and restic reports a
+// severed one as a repository error rather than as the shutdown it was.
+//
+// The deadline is detached from the command's context on purpose. Close runs
+// from a defer, so the context it is handed is routinely already cancelled — a
+// Ctrl-C, a failed command — and Shutdown handed a cancelled context returns at
+// once, which is the abrupt close this exists to avoid. The timeout is what
+// bounds it instead, so a request that never ends cannot hold the command open.
+func shutdownResticServer(ctx context.Context, e *echo.Echo) {
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resticShutdownTimeout)
+	defer cancel()
+
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		log.Ctx(ctx).Error().Err(err).Msg("shut down restic server")
+	}
 }
 
 // initServiceDeps wires `arcave init`, which needs neither storage, nor a snapshot

@@ -1,0 +1,404 @@
+// Package cdcbackend drives the cdc backend one contract call at a time: one
+// volume, one instance, a real daemon, stock restic containers and the
+// repository registry behind the real endpoint. What only this level buys is the repository in view —
+// the shared store is inmemory, so a case lists the keys restic actually wrote.
+// Guarded twice: -short skips, and so does an unreachable daemon.
+package cdcbackend
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"path"
+	"sort"
+	"sync"
+	"testing"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/docker/client"
+	"github.com/greenmaskio/storages"
+	"github.com/greenmaskio/storages/inmemory"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
+	resticrepo "github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+)
+
+const (
+	// itProject is the compose project name the container labels carry; the
+	// backend finds a volume's mount through them.
+	itProject = "arcave-cdc-vol-it"
+	// busyboxImage fills, mutates and hashes the volumes.
+	busyboxImage = "busybox"
+	// blobKiB is the payload per volume, in random bytes — zeros would deduplicate
+	// into a repository proving nothing. 16 MiB rather than 4: restic averages
+	// 1 MiB per chunk, and at 4 MiB a 128 KiB edit reshipped 2.8 of 4.2 MB.
+	blobKiB = 16384
+	// mutateKiB is what changes between two captures: the shape of a migration.
+	mutateKiB = 128
+	// resticPassword is the constant every arcave repository uses; a stock container
+	// opening one with it is part of the contract.
+	resticPassword = "arcave"
+	// containerHost is how a container names the host the restic server listens
+	// on — the config default, which the DI root supplies and the transport keeps
+	// no copy of.
+	containerHost = "host.docker.internal"
+)
+
+// The ids the cases capture under — a counter, not the clock, so a failure names
+// the same id on every run.
+const (
+	idFirst  = model.SavepointID("1780000001")
+	idSecond = model.SavepointID("1780000002")
+)
+
+// The repository objects the assertions name — restic's own layout.
+const (
+	configKey     = "config"
+	locksPrefix   = "locks"
+	snapshotsPath = "snapshots"
+	dataPrefix    = "data"
+)
+
+// env is one cdc factory over a live daemon and an observable store.
+type env struct {
+	ctx    context.Context
+	cli    *client.Client
+	engine *dockerclient.Engine
+	repos  *registry.Registry
+	// repoURLBase is what the DI root hands a backend: the served endpoint as a
+	// container names it, with a prefix still to append.
+	repoURLBase string
+	shared      storages.Storager
+	factory     *cdc.Factory
+	opts        cdc.Options
+}
+
+// newEnv wires the backend as cmd/arcave does, with the shared store in memory:
+// the restic server is started once here and lives for the whole case, exactly as
+// the DI root keeps it for the whole process.
+func newEnv(t *testing.T, opts cdc.Options) *env {
+	t.Helper()
+
+	cli := newDaemonClient(t)
+	// restic's own output goes to the logger; it is worth reading only when a case
+	// failed, and reading it then is most of the diagnosis.
+	logs := &syncBuffer{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("backend log:\n%s", logs.String())
+		}
+	})
+	shared := inmemory.New("shared")
+	t.Cleanup(func() { assert.NoError(t, shared.Close()) })
+
+	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
+	repos := registry.New()
+	server := rest.NewEcho(ctx, repos)
+	port, err := rest.Serve(server, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, server.Close()) })
+	engine := dockerclient.NewEngine(cli)
+
+	e := &env{
+		ctx:         ctx,
+		cli:         cli,
+		engine:      engine,
+		repos:       repos,
+		repoURLBase: rest.RepositoryURLBase(containerHost, port),
+		shared:      shared,
+		opts:        opts,
+	}
+	e.factory = cdc.NewFactory(cdc.Deps{
+		Runner:      engine,
+		Publisher:   repos,
+		RepoURLBase: e.repoURLBase,
+		SharedStore: shared,
+		Options:     opts,
+	})
+	return e
+}
+
+// syncBuffer collects the log of one case. The endpoint serves its requests
+// concurrently, so a bare bytes.Buffer would be written from several goroutines
+// at once — zerolog synchronises nothing on the writer's behalf.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// wipeOptions is the default: a restore clears the mount and restores it whole.
+func wipeOptions() cdc.Options {
+	return cdc.Options{Image: config.DefaultResticImage, Overwrite: config.OverwriteIfChanged}
+}
+
+// incrementalOptions restores over the live data instead.
+func incrementalOptions() cdc.Options {
+	return cdc.Options{
+		Image:       config.DefaultResticImage,
+		Incremental: true,
+		Overwrite:   config.OverwriteIfChanged,
+	}
+}
+
+// newVolume creates a filled named volume plus the labelled container that mounts
+// it. The model.Volume is assembled by hand: this layer sits below the introspector.
+func (e *env) newVolume(t *testing.T, service, target string) model.Volume {
+	t.Helper()
+
+	name := itProject + "-" + service + "-" + randomSuffix(t)
+	createVolume(t, e.cli, name)
+	createLabelledContainer(t, e.cli, service, name, target)
+	e.fill(t, name)
+
+	return model.Volume{
+		ObjectID:       "volume/" + name,
+		ComposeProject: itProject,
+		Type:           model.VolumeTypeNamed,
+		Backend:        model.SnapshotBackendCDC,
+		Named: &model.VolumePropertiesNamed{
+			VolumeName: name,
+			UsedBy:     []model.ServiceReference{{Service: service, Target: target}},
+		},
+	}
+}
+
+// backend builds the instance under test, as the registry does. Both tier stores
+// are nil on purpose: a cdc repository lives beside both trees, so a backend that
+// starts calling TierStore() fails here loudly.
+func (e *env) backend(t *testing.T, vol model.Volume, tier model.BackendTier) model.VolumeSnapshotBackend {
+	t.Helper()
+
+	backend, err := e.factory.New(model.BackendSpec{Volume: vol, Tier: tier})
+	require.NoError(t, err)
+	return backend
+}
+
+// snapshot captures the volume and returns the payload the backend reported.
+func (e *env) snapshot(
+	t *testing.T, backend model.VolumeSnapshotBackend, id model.SavepointID, labels map[string]string,
+) cdc.Payload {
+	t.Helper()
+
+	stat, err := backend.Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: id, Labels: labels})
+	require.NoError(t, err)
+	require.Equal(t, model.SnapshotBackendCDC, stat.Type)
+
+	payload, ok := stat.Payload.(cdc.Payload)
+	require.Truef(t, ok, "stat for %s carries no cdc payload: %T", stat.Volume.ObjectID, stat.Payload)
+	return payload
+}
+
+// repoStore re-roots the shared store at one volume's repository, as the factory does.
+func (e *env) repoStore(t *testing.T, vol model.Volume) storages.Storager {
+	t.Helper()
+
+	store, err := e.shared.SubStorage(path.Join("restic", vol.ObjectID), true)
+	require.NoError(t, err)
+	return store
+}
+
+// repoKeys lists a repository's whole tree, relative to its root.
+func (e *env) repoKeys(t *testing.T, vol model.Volume) []string {
+	t.Helper()
+
+	return objectNames(t, e.repoStore(t, vol), "")
+}
+
+// snapshotRefs is the snapshot objects the repository holds, one per capture.
+func (e *env) snapshotRefs(t *testing.T, vol model.Volume) []string {
+	t.Helper()
+
+	return objectNames(t, e.repoStore(t, vol), snapshotsPath)
+}
+
+// oracleSnapshot is what a stock restic container reports about a snapshot.
+// Snapshot objects are encrypted, so this is the only view of the tags.
+type oracleSnapshot struct {
+	ID       string   `json:"id"`
+	Hostname string   `json:"hostname"`
+	Paths    []string `json:"paths"`
+	Tags     []string `json:"tags"`
+}
+
+// oracleSnapshots reads the repository with `restic snapshots --json`, through a
+// prefix of its own — an independent reader of what arcave believes it wrote.
+func (e *env) oracleSnapshots(t *testing.T, vol model.Volume) []oracleSnapshot {
+	t.Helper()
+
+	prefix := "oracle-" + randomSuffix(t)
+	require.NoError(t, e.repos.Register(prefix, resticrepo.New(e.repoStore(t, vol))))
+	defer e.repos.Unregister(prefix)
+
+	var stdout, stderr bytes.Buffer
+	err := e.engine.RunOneShot(e.ctx, model.OneShotSpec{
+		Image: e.opts.Image,
+		Cmd:   []string{"snapshots", "--json"},
+		Env: []string{
+			"RESTIC_REPOSITORY=" + e.repoURLBase + "/" + prefix + "/",
+			"RESTIC_PASSWORD=" + resticPassword,
+		},
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	require.NoErrorf(t, err, "restic snapshots failed:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+
+	var snapshots []oracleSnapshot
+	require.NoErrorf(t, json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &snapshots),
+		"restic snapshots --json printed %q", stdout.String())
+	return snapshots
+}
+
+// hash is a sorted sha256 listing of every file in the volume: content and file
+// set in one string, so a leftover file changes it.
+func (e *env) hash(t *testing.T, vol model.Volume) string {
+	t.Helper()
+
+	out := busybox(t, e.engine, vol.Named.VolumeName, "find /data -type f -exec sha256sum {} + | sort")
+	require.NotEmpty(t, out, "volume %s must hold files to hash", vol.Named.VolumeName)
+	return out
+}
+
+// fill seeds a volume with random bytes in more than one shape.
+func (e *env) fill(t *testing.T, name string) {
+	t.Helper()
+
+	busybox(t, e.engine, name, fmt.Sprintf(
+		"dd if=/dev/urandom of=/data/blob bs=1k count=%d "+
+			"&& mkdir -p /data/nested && dd if=/dev/urandom of=/data/nested/inner bs=1k count=64 "+
+			"&& dd if=/dev/urandom of=/data/small bs=1k count=4", blobKiB))
+}
+
+// mutate overwrites mutateKiB mid-blob, leaving its size alone.
+func (e *env) mutate(t *testing.T, vol model.Volume) {
+	t.Helper()
+
+	busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(
+		"dd if=/dev/urandom of=/data/blob bs=1k count=%d seek=%d conv=notrunc", mutateKiB, blobKiB/3))
+}
+
+// addFile writes a file no snapshot carries — what a restore has to take away.
+func (e *env) addFile(t *testing.T, vol model.Volume, name string) {
+	t.Helper()
+
+	busybox(t, e.engine, vol.Named.VolumeName, fmt.Sprintf(
+		"dd if=/dev/urandom of=/data/%s bs=1k count=32", name))
+}
+
+// putObject plants a precondition the backend would never write itself.
+func putObject(t *testing.T, store storages.Storager, key, body string) {
+	t.Helper()
+
+	require.NoError(t, store.PutObject(context.Background(), key, bytes.NewBufferString(body)))
+}
+
+// objectNames lists a prefix's tree, sorted, with names relative to it.
+func objectNames(t *testing.T, store storages.Storager, prefix string) []string {
+	t.Helper()
+
+	objects, err := store.List(context.Background(), prefix)
+	require.NoError(t, err)
+	names := make([]string, 0, len(objects))
+	for _, obj := range objects {
+		names = append(names, obj.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// newDaemonClient skips the test unless a docker daemon answers.
+func newDaemonClient(t *testing.T) *client.Client {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("skipping the cdc backend volume-level test in short mode")
+	}
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err)
+	if _, err := cli.Ping(context.Background()); err != nil {
+		_ = cli.Close()
+		t.Skip("skipping the cdc backend volume-level test: no reachable docker daemon: " + err.Error())
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	return cli
+}
+
+// randomSuffix keeps concurrent copies of these tests apart on one daemon.
+func randomSuffix(t *testing.T) string {
+	t.Helper()
+
+	b := make([]byte, 5)
+	_, err := rand.Read(b)
+	require.NoError(t, err)
+	return hex.EncodeToString(b)
+}
+
+// createVolume makes an empty named volume, removed with the test.
+func createVolume(t *testing.T, cli *client.Client, name string) {
+	t.Helper()
+
+	_, err := cli.VolumeCreate(context.Background(), volume.CreateOptions{Name: name})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cli.VolumeRemove(context.Background(), name, true) })
+}
+
+// createLabelledContainer creates — never starts — a container carrying compose's
+// own labels, which is how the backend locates the mount.
+func createLabelledContainer(t *testing.T, cli *client.Client, service, name, target string) {
+	t.Helper()
+
+	created, err := cli.ContainerCreate(context.Background(),
+		&container.Config{
+			Image: busyboxImage,
+			Cmd:   []string{"sh", "-c", "sleep 3600"},
+			Labels: map[string]string{
+				"com.docker.compose.project": itProject,
+				"com.docker.compose.service": service,
+			},
+		},
+		&container.HostConfig{Binds: []string{name + ":" + target}},
+		nil, nil, name+"-holder")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	})
+}
+
+// busybox runs one shell line with the volume at /data and returns its stdout.
+func busybox(t *testing.T, engine *dockerclient.Engine, name, script string) string {
+	t.Helper()
+
+	var stdout, stderr bytes.Buffer
+	err := engine.RunOneShot(context.Background(), model.OneShotSpec{
+		Image:  busyboxImage,
+		Cmd:    []string{"sh", "-c", script},
+		Binds:  []string{name + ":/data"},
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	require.NoErrorf(t, err, "busybox %q failed:\nstdout:\n%s\nstderr:\n%s", script, stdout.String(), stderr.String())
+	return stdout.String()
+}

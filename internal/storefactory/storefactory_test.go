@@ -142,3 +142,62 @@ func TestNew(t *testing.T) {
 		require.ErrorContains(t, err, "unsupported storage.type")
 	})
 }
+
+// NewShared resolves the same path the same way and roots at "shared" instead of
+// a session: what lives there is a backend's own data, which outlives any one
+// lifetime on purpose.
+func TestNewShared(t *testing.T) {
+	t.Run("the store sits beside the sessions, under the same namespace", func(t *testing.T) {
+		// Arrange
+		root := t.TempDir()
+
+		// Act
+		shared, err := NewShared(directoryStorage("snaps"), root)
+
+		// Assert
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, shared.Close()) })
+		assert.Equal(t, filepath.Join(root, "snaps", "arcave", "shared"), shared.GetCwd())
+	})
+
+	// "shared" cannot collide with a session: SessionID.Validate admits only
+	// "global" or a canonical UUID, and this pins that they are siblings rather
+	// than the same tree.
+	t.Run("a session store and the shared store are siblings, never the same", func(t *testing.T) {
+		// Arrange
+		root := t.TempDir()
+
+		// Act
+		session, err := New(directoryStorage("snaps"), root, model.DefaultSession)
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, session.Close()) })
+		shared, err := NewShared(directoryStorage("snaps"), root)
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, shared.Close()) })
+
+		// Assert
+		assert.NotEqual(t, session.GetCwd(), shared.GetCwd())
+		assert.Equal(t, filepath.Dir(session.GetCwd()), filepath.Dir(shared.GetCwd()))
+	})
+
+	t.Run("the shared store cannot reach out of its own tree", func(t *testing.T) {
+		// Arrange
+		shared, err := NewShared(directoryStorage("snaps"), t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, shared.Close()) })
+
+		// Act
+		_, err = shared.SubStorage("../global", true)
+
+		// Assert
+		require.ErrorIs(t, err, storages.ErrUnsafeKey)
+	})
+
+	t.Run("an arm arcave does not implement is rejected", func(t *testing.T) {
+		// Act
+		_, err := NewShared(config.Storage{Type: "s3"}, t.TempDir())
+
+		// Assert
+		require.ErrorContains(t, err, "unsupported storage.type")
+	})
+}

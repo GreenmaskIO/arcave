@@ -94,7 +94,7 @@ func TestFindBackupVolumes_RealLoader(t *testing.T) {
 	require.NoError(t, err)
 
 	// Act
-	volumes, skipped, err := core.FindBackupVolumes(got)
+	volumes, skipped, err := core.FindBackupVolumes(got, model.SnapshotBackendCopy)
 
 	// Assert
 	require.NoError(t, err)
