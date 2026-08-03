@@ -40,20 +40,14 @@ import (
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
-// safetyBackupDir is the store safety backups live in, relative to the project
-// root. Unlike the savepoint store it is never user-configurable: it is scratch
-// space a rollback creates and deletes within one command.
+// safetyBackupDir is the store safety backups live in, relative to the project root.
+// Never user-configurable: scratch space one rollback creates and deletes.
 var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
 
-// resticShutdownTimeout bounds the restic server's graceful shutdown. By the
-// time Close runs every container that could be talking to it has exited, so
-// this is the ceiling on an anomaly rather than a wait the command pays.
+// resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
 
-// dependencies is the composition root's bag of per-command collaborators. It
-// names the concrete types it constructs: an interface here would buy no
-// polymorphism, and hiding *docker.Engine behind one only cost Close a type
-// assertion.
+// dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
 	savepointStore    storages.Storager
 	safetyBackupStore storages.Storager
@@ -64,23 +58,18 @@ type dependencies struct {
 	composeService    api.Compose
 	engine            *docker.Engine
 	composeRunner     *compose.Client
-	// resticServer serves the restic repositories to the cdc backend's containers.
-	// It is held here for one reason only — so Close shuts it down: what goes down
-	// to the backend is the URL base rest.Serve's port renders, never the object.
+	// resticServer is held for one reason only — so Close shuts it down. What goes
+	// down to the backend is the URL base, never the object.
 	resticServer *echo.Echo
 	service      *core.Service
 	printer      *json.Printer
 }
 
 // initAllDependencies wires the savepoint workflows for the project rooted at
-// projectPath. Each store is built by storefactory.New, which resolves the
-// configured path once, roots it under the static arcave namespace and the
-// session, and hands back a Storager already rooted there — so nothing below this
-// line ever names a directory.
+// projectPath. Every store arrives from storefactory already rooted, so nothing
+// below this line names a directory.
 func initAllDependencies(ctx context.Context, projectPath string, cfg config.Config) (*dependencies, error) {
-	// One unwind for every failure path: whatever is open by then is released
-	// newest first. A per-failure list of closers went stale on every new
-	// resource, and the one it forgot was the one that leaked.
+	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
@@ -90,9 +79,8 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	}
 	opened.add("savepoint store", savepointStore)
 
-	// The safety-backup store is not user-configurable, so it is built from a
-	// literal directory arm rather than from cfg. It goes through the same
-	// factory, and therefore the same namespacing, as the savepoint store.
+	// Not user-configurable, so it is built from a literal directory arm rather
+	// than from cfg — through the same factory, and so the same namespacing.
 	safetyBackupStore, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: safetyBackupDir},
@@ -102,28 +90,21 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	}
 	opened.add("safety backup store", safetyBackupStore)
 
-	// The shared store sits beside the sessions rather than under one: a cdc
-	// repository that died with its session would cost a cold full backup.
+	// Beside the sessions rather than under one: a cdc repository that died with
+	// its session would cost a cold full backup.
 	sharedStore, err := storefactory.NewShared(cfg.Storage, projectPath)
 	if err != nil {
 		return nil, fmt.Errorf("initialise shared store: %w", err)
 	}
 	opened.add("shared store", sharedStore)
 
-	// Where compose's own progress goes. The logger comes from the context — the
-	// one initRoot resolved — because the adapter is handed a logger rather than
-	// reaching for zerolog's global: it is a client-layer type, and the
-	// composition root is where the resolved logger lives.
+	// Where compose's own progress goes, on the logger initRoot resolved.
 	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
 	opened.add("compose progress writer", progressWriter)
 
-	// The docker/cli instance is resolved once here and is the single daemon
-	// connection both halves of client/docker are built over: the engine takes its
-	// APIClient, the compose service is constructed on the instance itself. That
-	// shared construction is what makes "both halves target one daemon" a property
-	// rather than a contract each has to keep by hand. Every closer is owned by the
-	// returned dependencies and released by its Close — never deferred here, or
-	// they would shut down before the command ran.
+	// One docker/cli instance is the single daemon connection both halves of
+	// client/docker are built over, so they cannot target different daemons. Its
+	// closers belong to the returned dependencies — never deferred here.
 	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, progressWriter)
 	if err != nil {
 		return nil, fmt.Errorf("initialise docker client: %w", err)
@@ -138,40 +119,43 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		StopTimeout: cfg.Compose.StopTimeout,
 	})
 
-	dataPlane, err := cdcDataPlane(cfg.Backends.CDC)
+	// The effective cdc section, defaults included even where the project carries
+	// no block: a rollback restores through the backend its record names, so cdc
+	// is wired whatever snapshot.backend says.
+	cdcCfg := config.CDCWithDefaults(cfg.Backends.CDC)
+
+	// The server cdc's containers fetch their repositories over. It listens for
+	// the whole process, so an address that will not bind fails the command up
+	// front, and the port it took is known here — before the first backend.
+	resticRepos := registry.New()
+	resticServer := rest.NewEcho(ctx, resticRepos)
+	resticPort, err := rest.Serve(resticServer, cdcCfg.ServerAddress)
 	if err != nil {
-		return nil, err
-	}
-	repos, resticServer, repoURLBase, err := initResticDataPlane(ctx, dataPlane)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("start the restic server: %w", err)
 	}
 	opened.add("restic server", resticServer)
 
-	// The registry is the one place a volume's Backend becomes an instance, and
-	// the only place that names the engine — through the seam its backend
-	// declares, so neither core nor a backend imports a client. What the restic
-	// server contributes is a value, so it needs no seam at all.
+	// The one place a volume's Backend becomes an instance, and the only place
+	// that names the engine — through the seam its backend declares.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
 		tarcopy.NewFactory(engine),
-		cdc.NewFactory(cdc.Deps{
-			Runner:      engine,
-			Publisher:   repos,
-			RepoURLBase: repoURLBase,
+		cdc.NewFactory(cdc.Dependencies{
+			Runner:    engine,
+			Publisher: resticRepos,
+			// The container's own name for the server, joined to the port it bound:
+			// the value the backend is handed, so nothing below holds the server.
+			RepoURLBase: rest.RepositoryURLBase(cdcCfg.ContainerHost, resticPort),
 			SharedStore: sharedStore,
-			Options:     cdcOptions(cfg.Backends.CDC),
+			Options:     cdcOptions(cdcCfg),
 		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	// One repository, over the savepoint tier's own store, so a record always
-	// travels with its data. The safety tier keeps none: a rollback's undo lives
-	// for the length of that rollback.
-	//
-	// The locker is bound to the project root here, like every store to its own,
-	// so the service never names a path.
+	// One repository, over the savepoint tier's own store, so a record travels
+	// with its data; the safety tier keeps none. The locker is bound to the
+	// project root here, so the service never names a path.
 	svc := core.New(
 		sprepo.New(savepointStore),
 		lock.New(projectPath),
@@ -199,66 +183,13 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	}, nil
 }
 
-// initResticDataPlane assembles what the cdc backend's containers reach: the
-// registry a backend publishes its repository on, the echo app that serves the
-// protocol over it, and the URL base a container addresses it by. It listens for
-// the whole process — built listening, closed by Close — so no workflow owns a
-// transport's lifetime, and a port that will not bind fails the command before it
-// touches the project.
-func initResticDataPlane(ctx context.Context, dataPlane config.DataPlane) (*registry.Registry, *echo.Echo, string, error) {
-	repos := registry.New()
-	e := rest.NewEcho(ctx, repos)
-	port, err := rest.Serve(e, dataPlane.Address)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("start the restic server: %w", err)
-	}
-	return repos, e, rest.RepositoryURLBase(dataPlane.ContainerHost, port), nil
-}
-
-// cdcOptions translates the backends.cdc section into the backend's own options,
-// the same way every pluggable section is translated here. A project that never
-// names cdc carries no section, and the zero options never reach a container.
-func cdcOptions(cfg *config.CDCBackend) cdc.Options {
-	if cfg == nil {
-		return cdc.Options{}
-	}
+// cdcOptions translates the backends.cdc section into the backend's own options.
+func cdcOptions(cfg config.CDCBackend) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
 	}
-}
-
-// cdcDataPlane resolves the backends.cdc.data_plane section, the same way
-// every pluggable section is translated here. The DI root reads both of its
-// halves, and they go to different places: the bind address is the server's, and
-// the name a *container* resolves is no business of a listener's — it reaches it
-// as an argument to RepositoryURLBase, so nothing holds two host names it cannot
-// check against each other.
-//
-// The unix transport and every auth mode but none are in the schema and not
-// implemented, so a project naming one fails here — at wiring time, before the
-// command touches the project — rather than at capture time. A project that
-// never names cdc carries no section; the defaults stand in, so the URL rendered
-// here is well formed even though no container ever reaches for it.
-func cdcDataPlane(cfg *config.CDCBackend) (config.DataPlane, error) {
-	if cfg == nil {
-		return config.DataPlane{
-			Address:       config.DefaultDataPlaneAddress,
-			ContainerHost: config.DefaultDataPlaneContainerHost,
-		}, nil
-	}
-
-	section := cfg.DataPlane
-	if section.Transport == config.DataPlaneTransportUnix {
-		return config.DataPlane{}, fmt.Errorf("backends.cdc.data_plane.transport %q is not implemented: use %q",
-			config.DataPlaneTransportUnix, config.DataPlaneTransportTCP)
-	}
-	if section.Auth == config.DataPlaneAuthBasic {
-		return config.DataPlane{}, fmt.Errorf("backends.cdc.data_plane.auth %q is not implemented: remove the auth, username and password keys",
-			config.DataPlaneAuthBasic)
-	}
-	return section, nil
 }
 
 // partial tracks what a half-finished wiring has opened. releaseOnFailure is
@@ -287,19 +218,9 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 }
 
 // Close releases the restic server, the Docker engine, the progress writer and
-// every store. Only the savepoint store's error is returned: it holds the
-// command's data, and the others cannot change the command's outcome.
-//
-// The restic server goes first: it is the only listener arcave opens, and it
-// must not outlive the command that started it. It is shut down rather than
-// closed — see shutdownResticServer.
-//
-// The progress writer is closed after the engine, so a last line compose left
-// unterminated is still emitted — and closed at all because that trailing line
-// would otherwise sit in its buffer forever.
-//
-// dockerClient is not closed here: it is the connection the engine was built
-// over, so closing the engine already releases it.
+// every store; only the savepoint store's error is returned. The progress writer
+// is closed after the engine, so a line compose left unterminated is still
+// emitted. dockerClient is not closed — the engine was built over it.
 func (d *dependencies) Close(ctx context.Context) error {
 	shutdownResticServer(ctx, d.resticServer)
 	closeQuietly(ctx, "docker engine", d.engine)
@@ -309,16 +230,10 @@ func (d *dependencies) Close(ctx context.Context) error {
 	return d.savepointStore.Close()
 }
 
-// shutdownResticServer stops serving gracefully: a request still in flight is
-// given resticShutdownTimeout to finish, where Close would sever it mid-object.
-// A container is on the other end of that connection, and restic reports a
-// severed one as a repository error rather than as the shutdown it was.
-//
-// The deadline is detached from the command's context on purpose. Close runs
-// from a defer, so the context it is handed is routinely already cancelled — a
-// Ctrl-C, a failed command — and Shutdown handed a cancelled context returns at
-// once, which is the abrupt close this exists to avoid. The timeout is what
-// bounds it instead, so a request that never ends cannot hold the command open.
+// shutdownResticServer stops serving gracefully: restic in a container reports a
+// severed connection as a repository error rather than as the shutdown it was.
+// The deadline is detached from ctx, which is routinely already cancelled by the
+// time Close runs from a defer — and a cancelled Shutdown severs at once.
 func shutdownResticServer(ctx context.Context, e *echo.Echo) {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resticShutdownTimeout)
 	defer cancel()
@@ -328,35 +243,28 @@ func shutdownResticServer(ctx context.Context, e *echo.Echo) {
 	}
 }
 
-// initServiceDeps wires `arcave init`, which needs neither storage, nor a snapshot
-// backend, nor the Docker engine — only somewhere to write the config and a
-// compose project to verify. Nothing here holds a resource, so there is nothing
-// to close.
+// initServiceDeps wires `arcave init`: somewhere to write the config and a
+// compose project to verify, nothing more. Nothing here holds a resource.
 func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
 	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), introspect.NewInspector(compose.NewLoader()))
 	return svc, json.New(os.Stdout)
 }
 
-// recommendServiceDeps wires `arcave recommend`, which is strictly read-only: it
-// parses the compose files and the recommender catalog and reaches for nothing
-// else — no storage, no snapshot backend, no Docker engine, no lock.
-// recommenderFiles are the optional user catalogs merged over the built-in one,
-// in order; empty when the caller passed none. Nothing here holds a resource, so
-// there is nothing to close.
+// recommendServiceDeps wires `arcave recommend`, which is strictly read-only and
+// holds no resource. recommenderFiles are the optional user catalogs merged over
+// the built-in one, in order; empty when the caller passed none.
 func recommendServiceDeps(recommenderFiles []string) (*core.RecommendService, *json.Printer) {
 	return newRecommendService(recommenderFiles), json.New(os.Stdout)
 }
 
 // newRecommendService builds the recommend service alone, without a printer:
-// `arcave mcp` needs one per tool call (the catalogs arrive with the call, and the
-// service is bound to its catalog at construction) and must not print — its stdout
-// is the JSON-RPC channel.
+// `arcave mcp` needs one per tool call — the catalogs arrive with the call — and
+// must not print, its stdout being the JSON-RPC channel.
 func newRecommendService(recommenderFiles []string) *core.RecommendService {
 	return core.NewRecommendService(arcrepo.NewARC(recommenderFiles...), introspect.NewInspector(compose.NewLoader()))
 }
 
-// closeQuietly closes c and logs any error without failing the caller — used for
-// teardown of a resource whose close error is secondary to the work just done.
+// closeQuietly closes c and logs any error without failing the caller.
 func closeQuietly(ctx context.Context, name string, c io.Closer) {
 	if err := c.Close(); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("close " + name)
@@ -387,18 +295,9 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 }
 
 // dockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
-// and reports whether any TLS material was configured at all (an all-empty config
-// means "read the environment", so TLS stays off). It keeps docker's own two-part
-// model rather than treating the fields as one block: a client certificate is a
-// cert_file/key_file *pair* (mutual TLS) that must be supplied together, while
-// ca_file/tls_verify govern server verification independently — tls_verify alone
-// is valid, verifying the daemon against the system roots with no client cert.
-// cert_path is the DOCKER_CERT_PATH shorthand that supplies ca.pem/cert.pem/key.pem
-// from one directory, so it satisfies the pair on its own.
-//
-// The pair is validated here, at the composition root, because a half-set pair is a
-// footgun docker/cli would surface only as an opaque handshake failure at connect
-// time — the error names the field the user must add.
+// and reports whether any TLS material was configured (all-empty means "read the
+// environment"). cert_file/key_file are a mutual-TLS pair, checked here because
+// docker/cli would surface a half-set one only as an opaque handshake failure.
 func dockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
 	caFile := tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem")
 	certFile := tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem")
@@ -411,7 +310,8 @@ func dockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
 		return nil, false, fmt.Errorf("docker.key_file is set but docker.cert_file is missing: a client certificate needs both, or set docker.cert_path to supply the pair from one directory")
 	}
 
-	if caFile == "" && certFile == "" && keyFile == "" && !cfg.TLSVerify {
+	// keyFile is not tested: the switch above leaves the pair either both set or both empty.
+	if caFile == "" && certFile == "" && !cfg.TLSVerify {
 		return nil, false, nil
 	}
 
@@ -422,10 +322,9 @@ func dockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
 	}, true, nil
 }
 
-// tlsFile resolves one TLS file path, mirroring the docker CLI's own layering: an
-// explicit path wins; otherwise it is CertPath/name (the DOCKER_CERT_PATH
-// convention); and when neither is set the field stays empty so docker/cli reads
-// it from the environment rather than being handed a bogus path.
+// tlsFile resolves one TLS file path the way the docker CLI does: an explicit
+// path wins, then CertPath/name (DOCKER_CERT_PATH); neither set leaves it empty,
+// so docker/cli reads the environment rather than a bogus path.
 func tlsFile(explicit, certPath, name string) string {
 	if explicit != "" {
 		return explicit
@@ -437,45 +336,24 @@ func tlsFile(explicit, certPath, name string) string {
 }
 
 // nopWriteCloser makes a stream arcave does not own — os.Stderr, io.Discard —
-// safe to hand to a Close that closes whatever writer it was given. Closing
-// os.Stderr would take the process's error stream down with it.
-//
-// It is spelled out here because the standard library has no writer counterpart:
-// io.NopCloser wraps a Reader, and io.NopWriteCloser has been proposed
-// (golang/go#22823) and never accepted. The name mirrors what that function
-// would be called, so replacing this is mechanical if it ever lands.
+// safe to hand to a Close that closes whatever writer it was given. Spelled out
+// because the stdlib has no writer counterpart to io.NopCloser (golang/go#22823).
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
 
-// composeProgressWriter translates the project's compose.progress setting into
-// the library's global render mode plus the writer compose renders on. Whatever
-// it returns, the destination is **stderr or nothing**: arcave's output contract
-// is JSON on stdout, and compose draws its per-container progress on the error
-// stream (`stdinfo()`).
-//
-// The default is ProgressLog: compose is put in its JSON event mode and the
-// stream goes to compose.ProgressLogger, which re-emits each event as an arcave
-// log record. That is what makes the run speak one format — compose's renderer
-// wrote raw text regardless of log.format, which under `log.format: json`
-// corrupted the very stream an agent or a CI job parses.
-//
-// ProgressTTY hands the terminal back to compose's own renderer. It selects
-// ModeAuto rather than ModeTTY on purpose: compose then redraws on a terminal
-// and falls back to plain lines in a pipe, where forcing ModeTTY would spray
-// ANSI escapes into a log file.
-//
-// progress.Mode is a package-level variable of the compose library. Setting a
-// global belongs here if anywhere: the composition root is the one place that
-// knows the whole process's configuration, and arcave runs one command per process.
+// composeProgressWriter translates compose.progress into the library's global
+// render mode (progress.Mode) plus the writer compose renders on. The destination
+// is always stderr or nothing — stdout carries arcave's JSON — and the default
+// re-emits compose's events as arcave log records, so the run speaks one format.
 func composeProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
 	switch mode {
 	case config.ProgressQuiet:
-		// The mode alone suppresses the progress UI; discarding the stream as well
-		// covers the warnings compose writes there outside it.
+		// Discarding the stream too covers the warnings compose writes outside the UI.
 		progress.Mode = progress.ModeQuiet
 		return nopWriteCloser{io.Discard}
 	case config.ProgressTTY:
+		// ModeAuto, not ModeTTY: compose falls back to plain lines in a pipe.
 		progress.Mode = progress.ModeAuto
 		return nopWriteCloser{os.Stderr}
 	default:
@@ -485,13 +363,9 @@ func composeProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
 }
 
 // initDockerClient resolves cfg into the one docker/cli instance both halves of
-// client/docker are built over, and returns the APIClient it will use alongside
-// it — built here rather than taken from dockerCli.Client(), which reports a
-// failure by calling os.Exit(1).
-//
-// progressOut is where the CLI's error stream — compose's progress channel —
-// points once the endpoint has resolved. Until then it is a buffer, because that
-// stream is the only place docker/cli reports a failed resolution.
+// client/docker are built over, plus the APIClient it uses. progressOut becomes
+// the CLI's error stream once the endpoint resolves; until then that stream is a
+// buffer, being the only place docker/cli reports a failed resolution.
 func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerCli, client.APIClient, error) {
 	clientOpts, err := getDockerOptions(cfg)
 	if err != nil {
@@ -499,21 +373,17 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	}
 
 	// DOCKER_API_VERSION is the only seam docker/cli leaves for pinning the API
-	// version: the client it builds from the resolved endpoint reads the version
-	// from the environment (client.WithVersionFromEnv) and otherwise negotiates.
-	// Setting it here is safe in a way it would not have been for the exec-based
-	// version — arcave spawns no child processes, so this configures arcave's own client
-	// and nothing else.
+	// version. Safe to set in-process: arcave spawns no children, so this configures
+	// arcave's own client and nothing else.
 	if cfg.APIVersion != "" {
 		if err := os.Setenv(client.EnvOverrideAPIVersion, cfg.APIVersion); err != nil {
 			return nil, nil, fmt.Errorf("pin docker api version %q: %w", cfg.APIVersion, err)
 		}
 	}
 
-	// stdout is discarded — compose draws its progress UI there and arcave's own
-	// output contract is JSON on stdout. stderr is a buffer *for now*: it is the
-	// only channel docker/cli reports a failed endpoint resolution on, and the
-	// buffer is what turns that report into a returned error below.
+	// stdout is discarded — arcave's own output contract is JSON there. stderr is a
+	// buffer for now: it is the only channel docker/cli reports a failed endpoint
+	// resolution on, and the buffer turns that report into an error below.
 	var initErr bytes.Buffer
 	dockerCli, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -527,13 +397,9 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
 	}
 
-	// The connection is built here rather than left to dockerCli.Client(), which
-	// resolves lazily and answers a failure with os.Exit(1). NewAPIClientFromFlags
-	// runs the same resolution — the same context store, the same endpoint, the
-	// same client options, so DOCKER_API_VERSION is still honoured — and returns
-	// an error instead of killing the process. Injecting the result back means the
-	// CLI (and therefore the compose library built over it) uses this very client
-	// rather than constructing a second one behind the exit.
+	// Built here rather than left to dockerCli.Client(), which answers a failure
+	// with os.Exit(1). NewAPIClientFromFlags runs the same resolution and returns an
+	// error; injecting it back keeps the CLI and compose on this very client.
 	apiClient, err := command.NewAPIClientFromFlags(clientOpts, dockerCli.ConfigFile())
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %w", cfg.Host, cfg.Context, err)
@@ -543,25 +409,19 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	}
 
 	// Initialize can log a benign warning of its own (a malformed
-	// ~/.docker/config.json), so the buffer is cleared here: from this point on
-	// anything in it comes from the CLI's own resolution, and nothing else.
+	// ~/.docker/config.json), so from here on the buffer holds only the resolution.
 	initErr.Reset()
 
-	// One resolution is still the CLI's alone: even with the client injected, its
-	// sync.Once opens with getDockerEndPoint, and a failure there is reported only
-	// by printing to the error stream — after which Client() calls os.Exit(1).
-	// Force that Once here, through DockerEndpoint rather than Client(): both run
-	// it, but DockerEndpoint prints the cause and returns. Forcing it *here* is
-	// what matters, since the compose library calls Client() itself, well past any
-	// error handling of arcave's.
+	// Force the CLI's own endpoint resolution now, while its failure is still
+	// arcave's to report: DockerEndpoint and Client() run the same sync.Once, but
+	// Client() prints the cause and exits, and compose calls it itself.
 	dockerCli.DockerEndpoint()
 	if initErr.Len() > 0 {
 		return nil, nil, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %s",
 			cfg.Host, cfg.Context, strings.TrimSpace(initErr.String()))
 	}
 
-	// Resolution succeeded, so the error stream becomes compose's progress
-	// channel for the rest of the run — nothing must accumulate in the buffer.
+	// Resolution succeeded, so the error stream becomes compose's progress channel.
 	if err := command.WithErrorStream(progressOut)(dockerCli); err != nil {
 		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
 	}

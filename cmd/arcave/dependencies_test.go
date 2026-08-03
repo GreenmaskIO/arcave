@@ -22,25 +22,36 @@ import (
 func TestCDCOptions(t *testing.T) {
 	tests := []struct {
 		name string
-		cfg  *config.CDCBackend
+		cfg  config.CDCBackend
 		want cdc.Options
 	}{
 		{
-			name: "a project that never names cdc has no section, and no options",
-			want: cdc.Options{},
+			// A project that never names cdc carries no section, and still gets a
+			// runnable image: an old cdc savepoint is rolled back through cdc
+			// whatever snapshot.backend says now.
+			name: "an absent section resolves to the defaults",
+			cfg:  config.CDCWithDefaults(nil),
+			want: cdc.Options{
+				Image:       config.DefaultResticImage,
+				Overwrite:   config.OverwriteAlways,
+				Incremental: true,
+			},
 		},
 		{
 			name: "wipe is not incremental, whatever overwrite says",
-			cfg: &config.CDCBackend{
+			cfg: config.CDCBackend{
 				RestoreMode: config.RestoreModeWipe,
 				Overwrite:   config.OverwriteAlways,
 				Image:       config.DefaultResticImage,
 			},
-			want: cdc.Options{Image: config.DefaultResticImage, Overwrite: config.OverwriteAlways},
+			want: cdc.Options{
+				Image:     config.DefaultResticImage,
+				Overwrite: config.OverwriteAlways,
+			},
 		},
 		{
 			name: "incremental carries its overwrite policy through",
-			cfg: &config.CDCBackend{
+			cfg: config.CDCBackend{
 				RestoreMode: config.RestoreModeIncremental,
 				Overwrite:   config.OverwriteIfChanged,
 				Image:       "restic/restic:0.18.0",
@@ -59,77 +70,6 @@ func TestCDCOptions(t *testing.T) {
 			got := cdcOptions(tt.cfg)
 
 			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// The same translation for the restic data plane. The unix transport and basic
-// auth are in the config schema and not implemented, so this is where a project
-// naming one is stopped — before the command touches anything.
-func TestCDCDataPlane(t *testing.T) {
-	tests := []struct {
-		name    string
-		cfg     *config.CDCBackend
-		want    config.DataPlane
-		wantErr string
-	}{
-		{
-			name: "a project that never names cdc has no section, so the defaults stand in",
-			want: config.DataPlane{
-				Address:       config.DefaultDataPlaneAddress,
-				ContainerHost: config.DefaultDataPlaneContainerHost,
-			},
-		},
-		{
-			name: "the tcp arm carries its address and the container's name for the host",
-			cfg: &config.CDCBackend{DataPlane: config.DataPlane{
-				Transport:     config.DataPlaneTransportTCP,
-				Address:       "127.0.0.1:18080",
-				ContainerHost: config.DefaultDataPlaneContainerHost,
-				Auth:          config.DataPlaneAuthNone,
-			}},
-			want: config.DataPlane{
-				Transport:     config.DataPlaneTransportTCP,
-				Address:       "127.0.0.1:18080",
-				ContainerHost: config.DefaultDataPlaneContainerHost,
-				Auth:          config.DataPlaneAuthNone,
-			},
-		},
-		{
-			name: "a unix transport is refused",
-			cfg: &config.CDCBackend{DataPlane: config.DataPlane{
-				Transport:       config.DataPlaneTransportUnix,
-				Socket:          "/tmp/arcave.sock",
-				ContainerSocket: config.DefaultDataPlaneContainerSocket,
-				Auth:            config.DataPlaneAuthNone,
-			}},
-			wantErr: "transport \"unix\" is not implemented",
-		},
-		{
-			name: "basic auth is refused",
-			cfg: &config.CDCBackend{DataPlane: config.DataPlane{
-				Transport: config.DataPlaneTransportTCP,
-				Address:   config.DefaultDataPlaneAddress,
-				Auth:      config.DataPlaneAuthBasic,
-				Username:  config.DefaultDataPlaneUsername,
-			}},
-			wantErr: "auth \"basic\" is not implemented",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got, err := cdcDataPlane(tt.cfg)
-
-			// Assert
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
-				assert.Equal(t, config.DataPlane{}, got)
-				return
-			}
-			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
