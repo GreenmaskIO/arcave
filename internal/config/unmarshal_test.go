@@ -159,102 +159,37 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, SnapshotBackendCDC, cfg.Snapshot.Backend)
 				assert.Equal(t, model.SnapshotBackendCDC, cfg.Snapshot.BackendKind())
 				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, RestoreModeWipe, cfg.Backends.CDC.RestoreMode)
-				assert.Equal(t, OverwriteIfChanged, cfg.Backends.CDC.Overwrite)
+				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
+				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
 				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
-				// The data plane defaults with it, on the tcp arm only.
-				assert.Equal(t, DataPlane{
-					Transport:     DataPlaneTransportTCP,
-					Address:       DefaultDataPlaneAddress,
-					ContainerHost: DefaultDataPlaneContainerHost,
-					Auth:          DataPlaneAuthNone,
-				}, cfg.Backends.CDC.DataPlane)
+				// Both ends of the loopback hop default with it.
+				assert.Equal(t, DefaultCDCServerAddress, cfg.Backends.CDC.ServerAddress)
+				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
 			},
 		},
 		{
-			name: "the data plane section is read, and the keys it omits still default",
-			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n    data_plane:\n" +
-				"      address: 127.0.0.1:18080\n",
+			name: "the server address is read, and the container host still defaults",
+			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    server_address: 127.0.0.1:18080\n",
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, DataPlane{
-					Transport:     DataPlaneTransportTCP,
-					Address:       "127.0.0.1:18080",
-					ContainerHost: DefaultDataPlaneContainerHost,
-					Auth:          DataPlaneAuthNone,
-				}, cfg.Backends.CDC.DataPlane)
+				assert.Equal(t, "127.0.0.1:18080", cfg.Backends.CDC.ServerAddress)
+				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
 			},
 		},
 		{
-			// A credential the project names is carried as it is; nothing fills
-			// one, and the wiring refuses the mode outright.
-			name: "basic auth is read, username and all",
-			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n    data_plane:\n" +
-				"      auth: basic\n      password: hunter2\n",
-			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, DataPlane{
-					Transport:     DataPlaneTransportTCP,
-					Address:       DefaultDataPlaneAddress,
-					ContainerHost: DefaultDataPlaneContainerHost,
-					Auth:          DataPlaneAuthBasic,
-					Username:      DefaultDataPlaneUsername,
-					Password:      "hunter2",
-				}, cfg.Backends.CDC.DataPlane)
-			},
-		},
-		{
-			// The unix arm defaults to no auth: on a socket the authorisation is
-			// the file's permissions, and the tcp keys stay absent so validation
-			// does not trip over an arm the project did not name.
-			name: "the unix arm defaults to its own keys",
-			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n    data_plane:\n" +
-				"      transport: unix\n      socket: /tmp/arcave.sock\n",
-			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.CDC)
-				assert.Equal(t, DataPlane{
-					Transport:       DataPlaneTransportUnix,
-					Socket:          "/tmp/arcave.sock",
-					ContainerSocket: DefaultDataPlaneContainerSocket,
-					Auth:            DataPlaneAuthNone,
-				}, cfg.Backends.CDC.DataPlane)
-			},
-		},
-		{
-			name:       "a transport arcave cannot serve is rejected",
-			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      transport: quic\n",
-			wantErrMsg: "unsupported backends.cdc.data_plane.transport",
-		},
-		{
-			name:       "an auth mode restic cannot present is rejected",
-			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      auth: bearer\n",
-			wantErrMsg: "unsupported backends.cdc.data_plane.auth",
-		},
-		{
-			// A key of the arm the transport does not name is an error rather
-			// than a value silently ignored.
-			name:       "a socket under the tcp arm is rejected",
-			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      socket: /tmp/arcave.sock\n",
-			wantErrMsg: "belong to transport unix",
-		},
-		{
-			name: "an address under the unix arm is rejected",
-			yaml: "version: 1\nbackends:\n  cdc:\n    data_plane:\n" +
-				"      transport: unix\n      address: 127.0.0.1:0\n",
-			wantErrMsg: "belong to transport tcp",
-		},
-		{
-			name:       "an address that is not host:port is rejected",
-			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      address: 18080\n",
+			// The address is bound at wiring time, so a value that cannot split
+			// fails here rather than halfway through a command.
+			name:       "a server address that is not host:port is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    server_address: 18080\n",
 			wantErrMsg: "is not a host:port address",
 		},
 		{
-			// Credentials with nothing to authenticate are a mistake worth
-			// naming: the user believes the endpoint is closed and it is not.
-			name: "a password under auth: none is rejected",
-			yaml: "version: 1\nbackends:\n  cdc:\n    data_plane:\n" +
-				"      auth: none\n      password: hunter2\n",
-			wantErrMsg: "password are set but auth is none",
+			// The transport is tcp and nothing else, so the union that used to
+			// carry it is gone: its keys are unknown ones now, and named as such.
+			name:       "the withdrawn data_plane block is rejected as an unknown key",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    data_plane:\n      transport: unix\n",
+			wantErrMsg: "data_plane",
 		},
 		{
 			name: "the cdc section is read, and the keys it omits still default",
@@ -275,7 +210,7 @@ func TestUnmarshal(t *testing.T) {
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Backends.CDC)
 				assert.Equal(t, "restic/restic:0.18.0", cfg.Backends.CDC.Image)
-				assert.Equal(t, RestoreModeWipe, cfg.Backends.CDC.RestoreMode)
+				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
 			},
 		},
 		{

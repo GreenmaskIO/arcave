@@ -117,6 +117,74 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 	return nil
 }
 
+// scratchCmd is what the scratch container runs: it exists to hold the volume,
+// so it exits at once and is only ever copied in and out of.
+var scratchCmd = []string{"true"}
+
+// withScratchContainer runs fn against a throwaway container with addr mounted
+// at scratchMount, and removes it when fn returns.
+func withScratchContainer(
+	ctx context.Context, api dockerAPI, addr model.VolumeAddress, fn func(id string) error,
+) error {
+	id, remove, err := startScratchContainer(ctx, api, addr)
+	if err != nil {
+		return err
+	}
+	defer remove()
+
+	return fn(id)
+}
+
+// startScratchContainer creates a container holding addr at scratchMount, runs
+// it to exit, and returns its id together with its removal. The caller runs the
+// removal — a stream copied out of the container has to outlive the call that
+// opened it.
+//
+// The run to exit is not ceremony: the daemon populates a volume when the
+// container that mounts it starts, so copying before that would read a mount
+// nothing has set up yet.
+func startScratchContainer(
+	ctx context.Context, api dockerAPI, addr model.VolumeAddress,
+) (id string, remove func(), err error) {
+	if addr.Source == "" {
+		return "", nil, fmt.Errorf("cannot reach a %q volume with no source", addr.Kind)
+	}
+	if err := ensureImage(ctx, api, scratchImage); err != nil {
+		return "", nil, err
+	}
+
+	created, err := api.ContainerCreate(ctx,
+		&container.Config{Image: scratchImage, Cmd: scratchCmd},
+		&container.HostConfig{Binds: []string{addr.Source + ":" + scratchMount}},
+		nil, nil, "")
+	if err != nil {
+		return "", nil, fmt.Errorf("create %s container: %w", scratchImage, err)
+	}
+	remove = func() {
+		// The removal must outlive a cancelled run: on the run's own ctx the daemon
+		// would refuse it, leaving the container behind with nobody to remove it.
+		if err := api.ContainerRemove(
+			context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true},
+		); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Str("container", created.ID).Str("image", scratchImage).
+				Msg("remove scratch container")
+		}
+	}
+
+	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		remove()
+		return "", nil, fmt.Errorf("start %s container: %w", scratchImage, err)
+	}
+	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		remove()
+		return "", nil, fmt.Errorf("wait for %s container: %w", scratchImage, err)
+	case <-statusCh:
+	}
+	return created.ID, remove, nil
+}
+
 // ensureImage pulls ref unless the daemon already has it. The pull stream is
 // drained rather than reported: the daemon only completes the pull once the
 // stream is consumed, and arcave has no progress UI to render it into.

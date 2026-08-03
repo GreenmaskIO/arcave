@@ -317,7 +317,7 @@ func TestService_CreateSavepoint_DropsWhatAPartialCaptureWrote(t *testing.T) {
 	runner.On("Up", mock.Anything, time.Duration(0), demoComposeFiles()).Return(nil)
 
 	session := newDirStore(t)
-	docker := &fakeMountStreamer{payload: "pgdata bytes", openErrFor: "app"}
+	docker := &fakeVolumeStreamer{payload: "pgdata bytes", openErrFor: "service/app/etc/cfg"}
 	registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker))
 	require.NoError(t, err)
 	repo := savepointrepo.New(session)
@@ -415,15 +415,16 @@ func TestService_CreateSavepoint_RefusesANonEmptyDirectory(t *testing.T) {
 	backend.AssertExpectations(t)
 }
 
-// A create covers exactly what its own rollback would: capturing a volume the
-// backend cannot reach would produce a savepoint no rollback could apply.
-func TestService_CreateSavepoint_SkipsAnUnreachableVolume(t *testing.T) {
+// A named volume no service mounts is covered like any other: a backend
+// addresses a volume by name, so having no container to read it through is no
+// longer a reason to leave it out of the savepoint.
+func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	// Arrange
 	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Volumes: []model.NamedVolume{
 			{Key: "db", Name: "demo_db", UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
-			// Mounted by no service: no container to reach its data through.
+			// Mounted by no service — docker created it, so it can hold data.
 			{Key: "orphan", Name: "demo_orphan"},
 		},
 	}}
@@ -439,12 +440,15 @@ func TestService_CreateSavepoint_SkipsAnUnreachableVolume(t *testing.T) {
 		return r.ID.Validate() == nil
 	})).Return(nil)
 
-	backend := &mockBackend{volume: model.Volume{ObjectID: "volume/demo_db"}}
-	backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
-		Return(model.SnapshotStat{Volume: backend.volume, Type: model.SnapshotBackendCopy}, nil).Once()
 	registry := &mockRegistry{}
-	// Once: no backend is built for the volume the savepoint leaves out.
-	registry.On("New", matchSpec(model.BackendTierSavepoint, "volume/demo_db")).Return(backend, nil).Once()
+	backends := make([]*mockBackend, 0, 2)
+	for _, objectID := range []string{"volume/demo_db", "volume/demo_orphan"} {
+		backend := &mockBackend{volume: model.Volume{ObjectID: objectID}}
+		backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+			Return(model.SnapshotStat{Volume: backend.volume, Type: model.SnapshotBackendCopy}, nil).Once()
+		registry.On("New", matchSpec(model.BackendTierSavepoint, objectID)).Return(backend, nil).Once()
+		backends = append(backends, backend)
+	}
 
 	svc := New(repo, locker, inspector, runner, registry, newDirStore(t), newDirStore(t), model.SnapshotBackendCopy)
 	logs := &syncBuffer{}
@@ -455,16 +459,19 @@ func TestService_CreateSavepoint_SkipsAnUnreachableVolume(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, savepoint.Stats, 1)
-	assert.Equal(t, "volume/demo_db", savepoint.Stats[0].Volume.ObjectID)
-	assert.Contains(t, logs.String(), "demo_orphan")
-	assert.Contains(t, logs.String(), "volume will not be backed up")
+	require.Len(t, savepoint.Stats, 2)
+	assert.ElementsMatch(t, []string{"volume/demo_db", "volume/demo_orphan"},
+		[]string{savepoint.Stats[0].Volume.ObjectID, savepoint.Stats[1].Volume.ObjectID})
+	assert.NotContains(t, logs.String(), "volume will not be backed up",
+		"nothing is left out for being unreachable any more")
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	runner.AssertExpectations(t)
 	repo.AssertExpectations(t)
 	registry.AssertExpectations(t)
-	backend.AssertExpectations(t)
+	for _, backend := range backends {
+		backend.AssertExpectations(t)
+	}
 }
 
 // The id is the creation second, and the record lands in the directory that id
@@ -480,7 +487,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	runner.On("Up", mock.Anything, time.Duration(0), demoComposeFiles()).Return(nil)
 
 	session, safety := newDirStore(t), newDirStore(t)
-	registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(&fakeMountStreamer{payload: "pgdata bytes"}))
+	registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(&fakeVolumeStreamer{payload: "pgdata bytes"}))
 	require.NoError(t, err)
 	repo := savepointrepo.New(session)
 	svc := New(repo, locker, inspector, runner, registry, session, safety, model.SnapshotBackendCopy)
@@ -873,28 +880,39 @@ func objectNames(t *testing.T, store storages.Storager) []string {
 	return names
 }
 
-// fakeMountStreamer serves a fixed payload from OpenMount and collects
-// WriteMount's stream; hand-rolled because a mock cannot stream. Guarded, since
+// fakeVolumeStreamer serves a fixed payload from OpenVolume and collects
+// WriteVolume's stream; hand-rolled because a mock cannot stream. Guarded, since
 // the fan-out is concurrent.
-type fakeMountStreamer struct {
+//
+// It addresses every volume by its own ObjectID, which no real engine does — it
+// only has to be unique per volume, so a case can name the one that fails.
+type fakeVolumeStreamer struct {
 	mu      sync.Mutex
 	payload string
 	written strings.Builder
-	// openErrFor is the service whose mount will not open, for a test that needs
-	// one volume of several to fail.
+	// openErrFor is the ObjectID of the volume that will not open, for a test
+	// that needs one volume of several to fail.
 	openErrFor string
 }
 
-func (f *fakeMountStreamer) OpenMount(_ context.Context, _, service, _ string) (io.ReadCloser, error) {
+func (f *fakeVolumeStreamer) ResolveVolumeAddress(
+	_ context.Context, v model.Volume,
+) (model.VolumeAddress, error) {
+	return model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: v.ObjectID}, nil
+}
+
+func (f *fakeVolumeStreamer) OpenVolume(
+	_ context.Context, addr model.VolumeAddress,
+) (io.ReadCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if service != "" && service == f.openErrFor {
-		return nil, errors.New("mount boom")
+	if addr.Source != "" && addr.Source == f.openErrFor {
+		return nil, errors.New("volume boom")
 	}
 	return io.NopCloser(strings.NewReader(f.payload)), nil
 }
 
-func (f *fakeMountStreamer) WriteMount(_ context.Context, _, _, _ string, r io.Reader) error {
+func (f *fakeVolumeStreamer) WriteVolume(_ context.Context, _ model.VolumeAddress, r io.Reader) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	_, err := io.Copy(&f.written, r)

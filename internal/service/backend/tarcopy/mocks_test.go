@@ -5,21 +5,33 @@ import (
 	"io"
 
 	"github.com/stretchr/testify/mock"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
 // tests match ctx with mock.Anything unless they assert on it.
 
-type mockMountStreamer struct{ mock.Mock }
+type mockVolumeStreamer struct{ mock.Mock }
 
-func (m *mockMountStreamer) OpenMount(ctx context.Context, project, service, target string) (io.ReadCloser, error) {
-	args := m.Called(ctx, project, service, target)
+func (m *mockVolumeStreamer) ResolveVolumeAddress(
+	ctx context.Context, v model.Volume,
+) (model.VolumeAddress, error) {
+	args := m.Called(ctx, v)
+	addr, _ := args.Get(0).(model.VolumeAddress)
+	return addr, args.Error(1)
+}
+
+func (m *mockVolumeStreamer) OpenVolume(
+	ctx context.Context, addr model.VolumeAddress,
+) (io.ReadCloser, error) {
+	args := m.Called(ctx, addr)
 	rc, _ := args.Get(0).(io.ReadCloser)
 	return rc, args.Error(1)
 }
 
-func (m *mockMountStreamer) WriteMount(ctx context.Context, project, service, target string, r io.Reader) error {
-	return m.Called(ctx, project, service, target, r).Error(0)
+func (m *mockVolumeStreamer) WriteVolume(ctx context.Context, addr model.VolumeAddress, r io.Reader) error {
+	return m.Called(ctx, addr, r).Error(0)
 }
 
 // failingReader fails mid-stream; a mock cannot, since it only hands the reader over.

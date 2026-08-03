@@ -151,8 +151,7 @@ func TestSnapshotter_Snapshot_TiersShareTheRepository(t *testing.T) {
 			// Arrange
 			shared := newStore(t)
 			runner := &mockRunner{}
-			runner.On("ResolveMountSource", mock.Anything, demoProject, demoService, demoTarget).
-				Return(demoVolName, nil).Once()
+			runner.On("ResolveVolumeAddress", mock.Anything, demoVolume()).Return(demoAddress, nil).Once()
 			runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
 			runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
 				Run(respondWith(backupSummaryLine)).Return(nil).Once()
@@ -165,7 +164,7 @@ func TestSnapshotter_Snapshot_TiersShareTheRepository(t *testing.T) {
 			publisher.On("Register", tt.wantPrefix, matchRepository(t, wantRepo)).Return(nil).Once()
 			publisher.On("Unregister", tt.wantPrefix).Return().Once()
 
-			snapshotter, err := NewFactory(Deps{
+			snapshotter, err := NewFactory(Dependencies{
 				Runner: runner, Publisher: publisher, RepoURLBase: demoRepoURLBase,
 				SharedStore: shared, Options: defaultOptions(),
 			}).New(model.BackendSpec{Volume: demoVolume(), Tier: tt.tier})
@@ -189,13 +188,57 @@ func TestSnapshotter_Snapshot_TiersShareTheRepository(t *testing.T) {
 	}
 }
 
+// A volume no service mounts in full is captured in full anyway: the backend
+// binds the volume itself, so a service's subpath never reaches the bind, the
+// snapshot path, or the --include a restore is scoped by. This is what the
+// container-addressed backend could not do, and why it stopped being one.
+func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
+	// Arrange
+	vol := demoVolume()
+	vol.Named.UsedBy = []model.ServiceReference{
+		{Service: demoService, Target: demoTarget, Subpath: "pgdata"},
+	}
+	shared := newStore(t)
+	runner := &mockRunner{}
+	runner.On("ResolveVolumeAddress", mock.Anything, vol).Return(demoAddress, nil).Once()
+	runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
+	runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
+		Run(respondWith(backupSummaryLine)).Return(nil).Once()
+	publisher := &mockPublisher{}
+	publisher.On("Register", mock.Anything, mock.Anything).Return(nil).Once()
+	publisher.On("Unregister", mock.Anything).Return().Once()
+
+	snapshotter, err := NewFactory(Dependencies{
+		Runner: runner, Publisher: publisher, RepoURLBase: demoRepoURLBase,
+		SharedStore: shared, Options: defaultOptions(),
+	}).New(model.BackendSpec{Volume: vol, Tier: model.BackendTierSavepoint})
+	require.NoError(t, err)
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err = snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+
+	// Assert
+	require.NoError(t, err)
+	backup := runner.Specs()[1]
+	assert.Equal(t, []string{demoVolName + ":" + demoMounted + ":ro"}, backup.Binds,
+		"the bind is the volume, never the subpath a service happens to see")
+	assert.Equal(t, []string{"backup", demoMounted, "--host", demoProject,
+		"--tag", "arcave-savepoint=1780335122", "--json"}, backup.Cmd)
+	for _, arg := range backup.Cmd {
+		assert.NotContains(t, arg, "pgdata/", "no subpath may narrow what the capture covers")
+	}
+	runner.AssertExpectations(t)
+	publisher.AssertExpectations(t)
+}
+
 // The backend is handed a URL base and appends its own prefix — no path and no
 // server object cross the seam. The trailing slash is the restic protocol's, and
 // its loss is the failure this test exists for: nothing would report it, restic
 // would simply talk to the wrong path.
 func TestSnapshotter_repositoryURL(t *testing.T) {
 	// Arrange
-	backend, err := NewFactory(Deps{RepoURLBase: demoRepoURLBase, SharedStore: newStore(t)}).
+	backend, err := NewFactory(Dependencies{RepoURLBase: demoRepoURLBase, SharedStore: newStore(t)}).
 		New(model.BackendSpec{Volume: demoVolume(), Tier: model.BackendTierSavepoint})
 	require.NoError(t, err)
 	snapshotter, ok := backend.(*Snapshotter)
@@ -245,8 +288,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 			if tt.wantWipe {
 				// The wipe is a container of its own and must finish before restic
 				// writes a byte; reversed, the restore would be deleted by its own wipe.
-				wipe := h.runner.On("WipeMount", mock.Anything, demoProject, demoService, demoTarget).
-					Return(nil).Once()
+				wipe := h.runner.On("WipeVolume", mock.Anything, demoAddress).Return(nil).Once()
 				mock.InOrder(wipe, restore)
 			}
 			ctx := zerolog.Nop().WithContext(context.Background())
@@ -416,7 +458,7 @@ func TestSnapshotter_UnpublishesOnFailure(t *testing.T) {
 		{
 			name: "a failed restore",
 			arrange: func(h *harness) {
-				h.runner.On("WipeMount", mock.Anything, demoProject, demoService, demoTarget).Return(nil).Once()
+				h.runner.On("WipeVolume", mock.Anything, demoAddress).Return(nil).Once()
 				h.runner.On("RunOneShot", mock.Anything, matchRestic("restore")).
 					Return(errors.New("restore boom")).Once()
 			},

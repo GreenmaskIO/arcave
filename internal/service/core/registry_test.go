@@ -71,7 +71,7 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(&fakeMountStreamer{}))
+			registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(&fakeVolumeStreamer{}))
 			require.NoError(t, err)
 
 			// Act
@@ -167,7 +167,7 @@ func TestSnapshotBackendRegistry_New_PassesTheSpecThrough(t *testing.T) {
 
 func TestNewSnapshotBackendRegistry_DuplicateKind(t *testing.T) {
 	// Arrange
-	docker := &fakeMountStreamer{}
+	docker := &fakeVolumeStreamer{}
 
 	// Act
 	_, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker), tarcopy.NewFactory(docker))

@@ -26,11 +26,12 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 	archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
 
 	tests := []struct {
-		name    string
-		tier    model.BackendTier
-		reader  io.ReadCloser
-		openErr error
-		verify  func(t *testing.T, stat model.SnapshotStat, err error, sessionStore, safetyStore storages.Storager)
+		name       string
+		tier       model.BackendTier
+		reader     io.ReadCloser
+		openErr    error
+		addressErr error
+		verify     func(t *testing.T, stat model.SnapshotStat, err error, sessionStore, safetyStore storages.Storager)
 	}{
 		{
 			name:   "savepoint tier stores the stream verbatim in the session store",
@@ -57,14 +58,25 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			},
 		},
 		{
-			name:    "a mount that does not open stores nothing",
+			name:    "a volume that does not open stores nothing",
 			tier:    model.BackendTierSavepoint,
 			openErr: errors.New("export boom"),
 			verify: func(t *testing.T, _ model.SnapshotStat, err error, sessionStore, _ storages.Storager) {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "export boom")
-				assert.Contains(t, err.Error(), "open docker mount app /etc/cfg")
-				assert.Empty(t, objectNames(t, sessionStore), "nothing may be stored from a mount that did not open")
+				assert.Contains(t, err.Error(), "open docker volume /host/etc/cfg")
+				assert.Empty(t, objectNames(t, sessionStore), "nothing may be stored from a volume that did not open")
+			},
+		},
+		{
+			name:       "a volume that cannot be addressed stores nothing",
+			tier:       model.BackendTierSavepoint,
+			addressErr: errors.New("no such volume"),
+			verify: func(t *testing.T, _ model.SnapshotStat, err error, sessionStore, _ storages.Storager) {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "address volume service/app/etc/cfg")
+				assert.Contains(t, err.Error(), "no such volume")
+				assert.Empty(t, objectNames(t, sessionStore))
 			},
 		},
 		{
@@ -82,8 +94,12 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			docker := &mockMountStreamer{}
-			docker.On("OpenMount", mock.Anything, testComposeProject, "app", "/etc/cfg").Return(tt.reader, tt.openErr).Once()
+			docker := &mockVolumeStreamer{}
+			docker.On("ResolveVolumeAddress", mock.Anything, volume).
+				Return(bindAddress("/etc/cfg"), tt.addressErr).Once()
+			if tt.addressErr == nil {
+				docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).Return(tt.reader, tt.openErr).Once()
+			}
 			sessionStore, safetyStore := newStore(t, "session"), newStore(t, "safety")
 			snapshotter, err := NewFactory(docker).New(model.BackendSpec{
 				SessionStore: sessionStore,
@@ -119,7 +135,7 @@ func TestSnapshotter_Exists(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			volume := bindVolume("app", "/etc/cfg")
-			docker := &mockMountStreamer{}
+			docker := &mockVolumeStreamer{}
 			sessionStore, safetyStore := newStore(t, "session"), newStore(t, "safety")
 			ctx := context.Background()
 			archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
@@ -143,7 +159,7 @@ func TestSnapshotter_Exists(t *testing.T) {
 	}
 }
 
-// The archive's content goes verbatim into the mount the volume addresses.
+// The archive's content goes verbatim into the volume the record addresses.
 func TestSnapshotter_Restore(t *testing.T) {
 	const payload = "tar-stream-bytes"
 	volume := bindVolume("app", "/etc/cfg")
@@ -154,12 +170,12 @@ func TestSnapshotter_Restore(t *testing.T) {
 		seed       bool // whether the archive is in the store
 		reqPayload any
 		writeErr   error
-		verify     func(t *testing.T, err error, restored string, docker *mockMountStreamer)
+		verify     func(t *testing.T, err error, restored string, docker *mockVolumeStreamer)
 	}{
 		{
-			name: "hands the stored stream to the mount verbatim",
+			name: "hands the stored stream to the volume verbatim",
 			seed: true,
-			verify: func(t *testing.T, err error, restored string, _ *mockMountStreamer) {
+			verify: func(t *testing.T, err error, restored string, _ *mockVolumeStreamer) {
 				require.NoError(t, err)
 				assert.Equal(t, payload, restored)
 			},
@@ -168,24 +184,24 @@ func TestSnapshotter_Restore(t *testing.T) {
 			name:       "an old-core record's payload is never interpreted",
 			seed:       true,
 			reqPayload: map[string]any{"size_bytes": float64(len(payload))},
-			verify: func(t *testing.T, err error, restored string, _ *mockMountStreamer) {
+			verify: func(t *testing.T, err error, restored string, _ *mockVolumeStreamer) {
 				require.NoError(t, err)
 				assert.Equal(t, payload, restored)
 			},
 		},
 		{
-			name:     "a mount refusing the stream fails the restore, wrapped",
+			name:     "a volume refusing the stream fails the restore, wrapped",
 			seed:     true,
 			writeErr: errors.New("import boom"),
-			verify: func(t *testing.T, err error, _ string, _ *mockMountStreamer) {
+			verify: func(t *testing.T, err error, _ string, _ *mockVolumeStreamer) {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "write docker mount app /etc/cfg")
+				assert.Contains(t, err.Error(), "write docker volume /host/etc/cfg")
 				assert.Contains(t, err.Error(), "import boom")
 			},
 		},
 		{
 			name: "a missing capture is a store error, not an empty restore",
-			verify: func(t *testing.T, err error, _ string, docker *mockMountStreamer) {
+			verify: func(t *testing.T, err error, _ string, docker *mockVolumeStreamer) {
 				require.Error(t, err)
 				assert.ErrorIs(t, err, storages.ErrFileNotFound)
 			},
@@ -196,13 +212,14 @@ func TestSnapshotter_Restore(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			var restored strings.Builder
-			docker := &mockMountStreamer{}
+			docker := &mockVolumeStreamer{}
 			sessionStore := newStore(t, "session")
 			ctx := context.Background()
+			docker.On("ResolveVolumeAddress", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
 			if tt.seed {
-				docker.On("WriteMount", mock.Anything, testComposeProject, "app", "/etc/cfg", mock.Anything).
+				docker.On("WriteVolume", mock.Anything, bindAddress("/etc/cfg"), mock.Anything).
 					Run(func(args mock.Arguments) {
-						_, err := io.Copy(&restored, args.Get(4).(io.Reader))
+						_, err := io.Copy(&restored, args.Get(2).(io.Reader))
 						assert.NoError(t, err)
 					}).
 					Return(tt.writeErr).Once()
@@ -245,7 +262,7 @@ func TestSnapshotter_Remove(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			volume := bindVolume("app", "/etc/cfg")
-			docker := &mockMountStreamer{}
+			docker := &mockVolumeStreamer{}
 			sessionStore := newStore(t, "session")
 			ctx := context.Background()
 			if tt.seed {
@@ -320,7 +337,7 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 		for _, tt := range ids {
 			t.Run(op.name+" "+tt.name, func(t *testing.T) {
 				// Arrange
-				docker := &mockMountStreamer{}
+				docker := &mockVolumeStreamer{}
 				sessionStore := newStore(t, "session")
 				snapshotter, err := NewFactory(docker).New(model.BackendSpec{
 					SessionStore: sessionStore,
@@ -343,9 +360,10 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 	}
 }
 
-// Both things fixed for an instance's life are resolved at build: the root the
-// tier names, and the mount the volume's data is reached through. A spec that
-// resolves neither is refused here, never at the first capture.
+// The one thing fixed for an instance's life is resolved at build: the root the
+// tier names. The volume's address is not — reaching the daemon needs a ctx a
+// constructor does not have — so the empty engine mock is the assertion that
+// building a backend contacts nothing.
 func TestFactory_New(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -355,9 +373,19 @@ func TestFactory_New(t *testing.T) {
 		wantErrIs error
 	}{
 		{
-			name:   "a reachable volume and a tier build a snapshotter",
+			name:   "a bind volume and a tier build a snapshotter",
 			volume: bindVolume("app", "/etc/cfg"),
 			tier:   model.BackendTierSavepoint,
+		},
+		{
+			name:   "a named volume nobody mounts builds a snapshotter too",
+			volume: namedVolume("demo_orphan"),
+			tier:   model.BackendTierSavepoint,
+		},
+		{
+			name:   "so does one mounted only at a subpath: it is captured whole",
+			volume: namedVolume("demo_assets", model.ServiceReference{Service: "web", Target: "/srv", Subpath: "public"}),
+			tier:   model.BackendTierSafety,
 		},
 		{
 			name:      "a spec naming no tier resolves to no root",
@@ -365,30 +393,12 @@ func TestFactory_New(t *testing.T) {
 			wantErr:   true,
 			wantErrIs: model.ErrUnknownBackendTier,
 		},
-		{
-			name:    "a named volume nobody mounts has no way in",
-			volume:  namedVolume("demo_orphan"),
-			tier:    model.BackendTierSavepoint,
-			wantErr: true,
-		},
-		{
-			name:    "a named volume mounted only at a subpath has no way in",
-			volume:  namedVolume("demo_assets", model.ServiceReference{Service: "web", Target: "/srv", Subpath: "public"}),
-			tier:    model.BackendTierSavepoint,
-			wantErr: true,
-		},
-		{
-			name:    "a volume with no addressing arm at all has no way in",
-			volume:  model.Volume{ObjectID: "volume/broken", Type: model.VolumeTypeNamed},
-			tier:    model.BackendTierSavepoint,
-			wantErr: true,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			docker := &mockMountStreamer{}
+			docker := &mockVolumeStreamer{}
 
 			// Act
 			snapshotter, err := NewFactory(docker).New(model.BackendSpec{

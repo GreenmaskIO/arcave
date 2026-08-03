@@ -65,44 +65,17 @@ const (
 // --delete/--overwrite need restic ≥0.17.
 const DefaultResticImage = "restic/restic:0.19.1"
 
-// The sockets backends.cdc.data_plane.transport accepts.
+// Where cdc's restic server lives: the two ends of one loopback hop.
 const (
-	// DataPlaneTransportTCP serves the repositories on a host port the container
-	// reaches by name. The default, and the only implemented arm.
-	DataPlaneTransportTCP = "tcp"
-	// DataPlaneTransportUnix serves them on a unix socket bound into the
-	// container. Not implemented: a project naming it fails at wiring time.
-	DataPlaneTransportUnix = "unix"
-)
-
-// How the data plane authenticates a container. The vocabulary is restic's: it
-// presents credentials through the URL's userinfo and can send no header of its
-// own, so a bearer arm would be a key nobody could use.
-const (
-	// DataPlaneAuthNone serves whoever reaches the socket. The default, and the
-	// only implemented arm.
-	DataPlaneAuthNone = "none"
-	// DataPlaneAuthBasic requires the username and password the repository URL
-	// carries. Not implemented: a project naming it fails at wiring time.
-	DataPlaneAuthBasic = "basic"
-)
-
-// The data plane's defaults, filled per transport by ApplyDefaults.
-const (
-	// DefaultDataPlaneAddress binds the loopback on a port the kernel picks. A
+	// DefaultCDCServerAddress binds the loopback on a port the kernel picks. A
 	// fixed port would collide between two arcave processes — a CLI run and an
 	// `arcave mcp` server, or two projects — and give an attacker a predictable
 	// target.
-	DefaultDataPlaneAddress = "127.0.0.1:0"
-	// DefaultDataPlaneContainerHost is how a container on Docker Desktop names
-	// the host loopback. Native Linux does not resolve it, which is what makes
-	// this key the one that gets cdc running there.
-	DefaultDataPlaneContainerHost = "host.docker.internal"
-	// DefaultDataPlaneContainerSocket is where the host's socket is bound inside
-	// the restic container.
-	DefaultDataPlaneContainerSocket = "/run/arcave.sock"
-	// DefaultDataPlaneUsername is the user half of the generated credential.
-	DefaultDataPlaneUsername = "arcave"
+	DefaultCDCServerAddress = "127.0.0.1:0"
+	// DefaultCDCContainerHost is how a container on Docker Desktop names the host
+	// loopback. Native Linux does not resolve it, which is what makes this key
+	// the one that gets cdc running there.
+	DefaultCDCContainerHost = "host.docker.internal"
 )
 
 // The bounds arcave gives compose when it stops and starts the stack. They live
@@ -312,7 +285,8 @@ type Backends struct {
 }
 
 // CDCBackend configures the content-defined-chunking backend: which restic image
-// its one-shot containers run, and how a restore reaches the live mount.
+// its one-shot containers run, how a restore reaches the live mount, and the two
+// ends of the loopback hop a container fetches its repository over.
 type CDCBackend struct {
 	// RestoreMode is wipe (clear the mount, then restore it whole) or incremental
 	// (restore over the live data, letting restic write only the difference).
@@ -321,36 +295,12 @@ type CDCBackend struct {
 	Overwrite string `yaml:"overwrite" mapstructure:"overwrite"`
 	// Image is the restic image every cdc command runs in.
 	Image string `yaml:"image" mapstructure:"image"`
-	// DataPlane is the socket the restic containers reach their repositories
-	// through, and how they authenticate on it.
-	DataPlane DataPlane `yaml:"data_plane" mapstructure:"data_plane"`
-}
-
-// DataPlane configures the HTTP endpoint cdc's containers reach their
-// repositories through: which socket it listens on, how a container names it,
-// and how it authenticates. It is a tagged union in all but the tag's name —
-// Transport selects the arm, and a key of the other arm is an error rather than
-// a value silently ignored.
-type DataPlane struct {
-	// Transport is tcp (a host port) or unix (a socket file).
-	Transport string `yaml:"transport" mapstructure:"transport"`
-	// Address is the tcp arm's bind address. Port 0 lets the kernel pick.
-	Address string `yaml:"address,omitempty" mapstructure:"address"`
-	// ContainerHost is the tcp arm's host name *as the container sees it*, which
-	// is not the address arcave binds: a container cannot reach 127.0.0.1.
-	ContainerHost string `yaml:"container_host,omitempty" mapstructure:"container_host"`
-	// Socket is the unix arm's socket path on the host.
-	Socket string `yaml:"socket,omitempty" mapstructure:"socket"`
-	// ContainerSocket is where that socket is bound inside the container — the
-	// unix arm's counterpart to ContainerHost, and required for the same reason:
-	// the path a container sees is not the path on the host.
-	ContainerSocket string `yaml:"container_socket,omitempty" mapstructure:"container_socket"`
-	// Auth is basic or none, and defaults to none.
-	Auth string `yaml:"auth" mapstructure:"auth"`
-	// Username is the basic-auth user.
-	Username string `yaml:"username,omitempty" mapstructure:"username"`
-	// Password is the basic-auth credential.
-	Password string `yaml:"password,omitempty" mapstructure:"password"`
+	// ServerAddress is what arcave's restic server binds. Port 0 lets the kernel
+	// pick, which is what keeps two arcave processes from colliding.
+	ServerAddress string `yaml:"server_address" mapstructure:"server_address"`
+	// ContainerHost is that server's host name *as the container sees it*, which
+	// is never the address arcave binds: a container cannot reach 127.0.0.1.
+	ContainerHost string `yaml:"container_host" mapstructure:"container_host"`
 }
 
 // Validate checks the arms that are present. An absent arm is not an error: a
@@ -362,7 +312,8 @@ func (b Backends) Validate() error {
 	return b.CDC.Validate()
 }
 
-// Validate rejects a mode or an overwrite policy the backend cannot act on.
+// Validate rejects a mode or an overwrite policy the backend cannot act on, and
+// a server address it cannot bind.
 func (c CDCBackend) Validate() error {
 	switch c.RestoreMode {
 	case RestoreModeWipe, RestoreModeIncremental:
@@ -379,76 +330,18 @@ func (c CDCBackend) Validate() error {
 	if c.Image == "" {
 		return fmt.Errorf("backends.cdc.image is required")
 	}
-	return c.DataPlane.Validate()
-}
-
-// Validate rejects a transport or an auth mode arcave cannot serve, and a key
-// that belongs to the arm the transport does not name. An ignored key is not on
-// offer here: a user who sets backends.cdc.data_plane.socket and gets a tcp
-// endpoint anyway has been told nothing.
-func (d DataPlane) Validate() error {
-	switch d.Transport {
-	case DataPlaneTransportTCP:
-		if err := d.validateTCP(); err != nil {
-			return err
-		}
-	case DataPlaneTransportUnix:
-		if err := d.validateUnix(); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("unsupported backends.cdc.data_plane.transport %q (supported: %s, %s)",
-			d.Transport, DataPlaneTransportTCP, DataPlaneTransportUnix)
-	}
-	return d.validateAuth()
-}
-
-func (d DataPlane) validateTCP() error {
-	if d.Socket != "" || d.ContainerSocket != "" {
-		return fmt.Errorf("backends.cdc.data_plane.socket and container_socket belong to transport %s, but the transport is %s",
-			DataPlaneTransportUnix, DataPlaneTransportTCP)
-	}
-	if d.Address == "" {
-		return fmt.Errorf("backends.cdc.data_plane.address is required")
+	if c.ServerAddress == "" {
+		return fmt.Errorf("backends.cdc.server_address is required")
 	}
 	// The address is bound, so it must split into host and port here rather than
 	// at listen time, halfway through wiring a command.
-	if _, _, err := net.SplitHostPort(d.Address); err != nil {
-		return fmt.Errorf("backends.cdc.data_plane.address %q is not a host:port address: %w", d.Address, err)
+	if _, _, err := net.SplitHostPort(c.ServerAddress); err != nil {
+		return fmt.Errorf("backends.cdc.server_address %q is not a host:port address: %w", c.ServerAddress, err)
 	}
-	if d.ContainerHost == "" {
-		return fmt.Errorf("backends.cdc.data_plane.container_host is required")
-	}
-	return nil
-}
-
-func (d DataPlane) validateUnix() error {
-	if d.Address != "" || d.ContainerHost != "" {
-		return fmt.Errorf("backends.cdc.data_plane.address and container_host belong to transport %s, but the transport is %s",
-			DataPlaneTransportTCP, DataPlaneTransportUnix)
-	}
-	if d.ContainerSocket == "" {
-		return fmt.Errorf("backends.cdc.data_plane.container_socket is required")
+	if c.ContainerHost == "" {
+		return fmt.Errorf("backends.cdc.container_host is required")
 	}
 	return nil
-}
-
-func (d DataPlane) validateAuth() error {
-	switch d.Auth {
-	case DataPlaneAuthNone:
-		if d.Username != "" || d.Password != "" {
-			return fmt.Errorf("backends.cdc.data_plane.username and password are set but auth is %s", DataPlaneAuthNone)
-		}
-		return nil
-	case DataPlaneAuthBasic:
-		if d.Username == "" {
-			return fmt.Errorf("backends.cdc.data_plane.username is required")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported backends.cdc.data_plane.auth %q (supported: %s, %s)",
-			d.Auth, DataPlaneAuthNone, DataPlaneAuthBasic)
-	}
 }
 
 // Log is the project's default logging configuration, persisted under the "log"
@@ -524,52 +417,37 @@ func (c *Config) applyCDCDefaults() {
 	if c.Backends.CDC == nil && c.Snapshot.Backend != SnapshotBackendCDC {
 		return
 	}
-	cdc := CDCBackend{}
-	if c.Backends.CDC != nil {
-		cdc = *c.Backends.CDC
-	}
-	if cdc.RestoreMode == "" {
-		cdc.RestoreMode = RestoreModeWipe
-	}
-	if cdc.Overwrite == "" {
-		cdc.Overwrite = OverwriteIfChanged
-	}
-	if cdc.Image == "" {
-		cdc.Image = DefaultResticImage
-	}
-	cdc.DataPlane.applyDefaults()
+	cdc := CDCWithDefaults(c.Backends.CDC)
 	c.Backends.CDC = &cdc
 }
 
-// applyDefaults fills the data plane's keys for the transport it names, and only
-// those: a key of the other arm is an error, so defaulting both arms would make
-// every project fail its own validation. The receiver is already a copy of the
-// arm applyCDCDefaults is filling, so mutating it in place reaches nothing.
-//
-// The default auth is none on both arms, since nothing implements another one.
-func (d *DataPlane) applyDefaults() {
-	if d.Transport == "" {
-		d.Transport = DataPlaneTransportTCP
+// CDCWithDefaults resolves the backends.cdc section into the values arcave acts
+// on, absent section included — a rollback restores through the backend its
+// record names, so cdc has to be buildable even where snapshot.backend is
+// fullcopy and the project carries no block. It is the single home of these
+// defaults: ApplyDefaults fills the config through it, and the DI root reads the
+// effective section through it, so neither side can hold a copy that drifts.
+func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
+	c := CDCBackend{}
+	if cfg != nil {
+		c = *cfg
 	}
-	switch d.Transport {
-	case DataPlaneTransportTCP:
-		if d.Address == "" {
-			d.Address = DefaultDataPlaneAddress
-		}
-		if d.ContainerHost == "" {
-			d.ContainerHost = DefaultDataPlaneContainerHost
-		}
-	case DataPlaneTransportUnix:
-		if d.ContainerSocket == "" {
-			d.ContainerSocket = DefaultDataPlaneContainerSocket
-		}
+	if c.RestoreMode == "" {
+		c.RestoreMode = RestoreModeIncremental
 	}
-	if d.Auth == "" {
-		d.Auth = DataPlaneAuthNone
+	if c.Overwrite == "" {
+		c.Overwrite = OverwriteAlways
 	}
-	if d.Auth == DataPlaneAuthBasic && d.Username == "" {
-		d.Username = DefaultDataPlaneUsername
+	if c.Image == "" {
+		c.Image = DefaultResticImage
 	}
+	if c.ServerAddress == "" {
+		c.ServerAddress = DefaultCDCServerAddress
+	}
+	if c.ContainerHost == "" {
+		c.ContainerHost = DefaultCDCContainerHost
+	}
+	return c
 }
 
 // Validate checks the sections whose values arcave must be able to act on. It runs

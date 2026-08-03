@@ -46,6 +46,10 @@ const (
 		`"total_bytes":10485760,"bytes_restored":10485760}`
 )
 
+// demoAddress is what the engine answers for demoVolume: a named volume is its
+// docker name, whatever any service mounts it at.
+var demoAddress = model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: demoVolName}
+
 // demoVolume is the unit under test.
 func demoVolume() model.Volume {
 	return model.Volume{
@@ -92,15 +96,14 @@ func newHarness(t *testing.T, tier model.BackendTier, opts Options) *harness {
 	require.NoError(t, err)
 
 	runner := &mockRunner{}
-	runner.On("ResolveMountSource", mock.Anything, demoProject, demoService, demoTarget).
-		Return(demoVolName, nil).Maybe()
+	runner.On("ResolveVolumeAddress", mock.Anything, demoVolume()).Return(demoAddress, nil).Maybe()
 	publisher := &mockPublisher{}
 	// Both are Maybe: half the contract's calls publish nothing at all, and a case
 	// that is about the publishing counts the calls itself.
 	publisher.On("Register", repositoryPrefix(tier, demoObjectID), matchRepository(t, repo)).Return(nil).Maybe()
 	publisher.On("Unregister", repositoryPrefix(tier, demoObjectID)).Return().Maybe()
 
-	snapshotter, err := NewFactory(Deps{
+	snapshotter, err := NewFactory(Dependencies{
 		Runner:      runner,
 		Publisher:   publisher,
 		RepoURLBase: demoRepoURLBase,

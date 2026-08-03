@@ -80,11 +80,12 @@ const (
 		"modes cannot be combined, and at least one is required. Pass dry_run to see what would " +
 		"be deleted without deleting anything. Deletion is permanent."
 	descRollback = "Restore the environment to a savepoint, selected by id, by name, or by the " +
-		"literal 'latest'. DESTRUCTIVE: every mount it covers is wiped and replaced with the " +
-		"savepoint's data, so any change made since that savepoint is lost — including in bind " +
-		"mounts, which are the user's own host folders. arcave takes a safety backup of the live " +
-		"state first and replays it automatically if the rollback fails, so a failed rollback " +
-		"leaves the environment as it was. Services are stopped and started again."
+		"literal 'latest'. DESTRUCTIVE: every volume it covers is wiped whole and replaced with " +
+		"the savepoint's data, so any change made since that savepoint is lost — including in " +
+		"bind mounts, which are the user's own host folders, and including the parts of a volume " +
+		"a service only sees a subpath of. arcave takes a safety backup of the live state first " +
+		"and replays it automatically if the rollback fails, so a failed rollback leaves the " +
+		"environment as it was. Services are stopped and started again."
 	// descRecommend carries the workflow, not just the trigger: arcave exposes no
 	// tool that applies a recommendation — editing the user's compose files is the
 	// agent's job, done with its own editing tools after asking the user what to

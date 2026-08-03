@@ -32,19 +32,23 @@ const resticPassword = "arcave"
 // mountRoot is where the volume is mounted inside the restic container. The
 // object id nests under it, so a restore with --target / lands exactly in the
 // mounted volume.
+//
+// It is the path inside every snapshot, and therefore what restic picks a parent
+// by: changing it would cost every existing repository its increment.
 const mountRoot = "/m"
 
-// ContainerRunner is what this backend needs from the Docker engine.
-// *docker.Engine satisfies it.
+// ContainerRunner is what this backend needs from the Docker engine: it runs
+// restic's own containers, so all it wants of a volume is what to bind and, for
+// a wipe-mode restore, a way to clear it. *docker.Engine satisfies it.
 type ContainerRunner interface {
 	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
-	ResolveMountSource(ctx context.Context, project, service, target string) (string, error)
-	WipeMount(ctx context.Context, project, service, target string) error
+	ResolveVolumeAddress(ctx context.Context, v model.Volume) (model.VolumeAddress, error)
+	WipeVolume(ctx context.Context, addr model.VolumeAddress) error
 }
 
-// RepoPublisher serves one repository under a name for as long as an operation
+// repositoryPublisher serves one repository under a name for as long as an operation
 // needs it. *registry.Registry satisfies it.
-type RepoPublisher interface {
+type repositoryPublisher interface {
 	Register(name string, repo resticmodel.Repository) error
 	Unregister(name string)
 }
@@ -59,12 +63,12 @@ type Options struct {
 	Overwrite string
 }
 
-// Deps is everything the factory is built over. A struct rather than a parameter
+// Dependencies is everything the factory is built over. A struct rather than a parameter
 // list: the seams have no natural order, so a new one cannot silently swap with
 // an existing one at a call site.
-type Deps struct {
+type Dependencies struct {
 	Runner    ContainerRunner
-	Publisher RepoPublisher
+	Publisher repositoryPublisher
 	// RepoURLBase is the restic repository URL minus its path; a caller appends
 	// "<prefix>/" to address one repository. A value and not a seam onto the
 	// server: everything in it is known before the first backend is built, so
@@ -77,23 +81,19 @@ type Deps struct {
 // Factory builds cdc snapshotters over one repository URL base and one shared
 // store.
 type Factory struct {
-	deps Deps
+	deps Dependencies
 }
 
 // NewFactory builds the factory over collaborators it does not own: the server
 // the URL base names is already listening, and is closed by whoever started it.
-func NewFactory(deps Deps) *Factory { return &Factory{deps: deps} }
+func NewFactory(deps Dependencies) *Factory { return &Factory{deps: deps} }
 
 func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendCDC }
 
-// New resolves what is fixed for an instance's life: the volume's repository,
-// the mount its data is reached through, and the publish prefix. A volume with
-// no way in fails here rather than at the first capture.
+// New resolves what is fixed for an instance's life: the volume's repository
+// and the publish prefix. The volume's own address is not — resolving it may
+// reach the daemon, and a constructor has no ctx to do that on.
 func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
-	mount, err := captureMount(spec.Volume)
-	if err != nil {
-		return nil, err
-	}
 	// Both tiers address the same repository: restic picks a parent snapshot by
 	// host and paths, so a safety backup is an increment over that volume's
 	// savepoints. Only the tier label tells the two apart.
@@ -103,7 +103,6 @@ func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 	}
 	return &Snapshotter{
 		volume: spec.Volume,
-		mount:  mount,
 		// The two halves of the same repository: what a restic container reaches
 		// over the protocol, and what arcave addresses as objects of its own.
 		repository: resticrepo.New(repoStore),

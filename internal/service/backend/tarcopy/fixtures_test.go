@@ -22,16 +22,12 @@ func bindVolume(service, target string) model.Volume {
 		ComposeProject: testComposeProject,
 		Type:           model.VolumeTypeBind,
 		Backend:        model.SnapshotBackendCopy,
-		Bind:           &model.VolumePropertiesBind{Service: service, Target: target},
+		Bind:           &model.VolumePropertiesBind{Service: service, Target: target, Source: "/host" + target},
 	}
 }
 
-func anonVolume(service, target string) model.Volume {
-	return model.Volume{
-		ObjectID:       model.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}.ObjectID(service),
-		ComposeProject: testComposeProject,
-		Type:           model.VolumeTypeAnon,
-		Backend:        model.SnapshotBackendCopy,
-		Anon:           &model.VolumePropertiesAnon{Service: service, Target: target},
-	}
+// bindAddress is what the engine answers for a bindVolume: compose-go resolves
+// a bind source to an absolute host path, so no lookup is involved.
+func bindAddress(target string) model.VolumeAddress {
+	return model.VolumeAddress{Kind: model.VolumeAddressBind, Source: "/host" + target}
 }

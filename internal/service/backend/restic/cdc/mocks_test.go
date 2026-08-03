@@ -31,13 +31,14 @@ func (m *mockRunner) RunOneShot(ctx context.Context, spec model.OneShotSpec) err
 	return m.Called(ctx, spec).Error(0)
 }
 
-func (m *mockRunner) ResolveMountSource(ctx context.Context, project, service, target string) (string, error) {
-	args := m.Called(ctx, project, service, target)
-	return args.String(0), args.Error(1)
+func (m *mockRunner) ResolveVolumeAddress(ctx context.Context, v model.Volume) (model.VolumeAddress, error) {
+	args := m.Called(ctx, v)
+	addr, _ := args.Get(0).(model.VolumeAddress)
+	return addr, args.Error(1)
 }
 
-func (m *mockRunner) WipeMount(ctx context.Context, project, service, target string) error {
-	return m.Called(ctx, project, service, target).Error(0)
+func (m *mockRunner) WipeVolume(ctx context.Context, addr model.VolumeAddress) error {
+	return m.Called(ctx, addr).Error(0)
 }
 
 // Specs returns the runs in the order they happened.

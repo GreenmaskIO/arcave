@@ -10,12 +10,12 @@ import (
 )
 
 func TestFactory_Kind(t *testing.T) {
-	assert.Equal(t, model.SnapshotBackendCDC, NewFactory(Deps{}).Kind())
+	assert.Equal(t, model.SnapshotBackendCDC, NewFactory(Dependencies{}).Kind())
 }
 
 // The repository is the volume's, under the shared root, and it is resolved at
-// construction: a volume with no way in fails here rather than at the first
-// capture, while the project is still running.
+// construction — unlike the volume's address, which needs a ctx the constructor
+// does not have.
 func TestFactory_New(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -45,14 +45,15 @@ func TestFactory_New(t *testing.T) {
 			wantPrefix: "safety-service-app-etc-cfg",
 		},
 		{
-			name: "a volume with no way in is refused at construction",
+			name: "a named volume no service mounts is built like any other",
 			volume: model.Volume{
 				ObjectID: "volume/orphan",
 				Type:     model.VolumeTypeNamed,
 				Named:    &model.VolumePropertiesNamed{VolumeName: "orphan"},
 			},
-			tier:    model.BackendTierSavepoint,
-			wantErr: "no mount to reach its data through",
+			tier:       model.BackendTierSavepoint,
+			wantRepo:   repoNamespace + "/volume/orphan",
+			wantPrefix: "savepoint-volume-orphan",
 		},
 	}
 
@@ -60,7 +61,7 @@ func TestFactory_New(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			shared := newStore(t)
-			factory := NewFactory(Deps{SharedStore: shared, Options: defaultOptions()})
+			factory := NewFactory(Dependencies{SharedStore: shared, Options: defaultOptions()})
 
 			// Act
 			backend, err := factory.New(model.BackendSpec{Volume: tt.volume, Tier: tt.tier})

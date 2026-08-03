@@ -684,7 +684,7 @@ func TestService_Rollback_OverRealStores(t *testing.T) {
 	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil)
 
 	session, safety := newDirStore(t), newDirStore(t)
-	docker := &fakeMountStreamer{payload: "live bytes"}
+	docker := &fakeVolumeStreamer{payload: "live bytes"}
 	registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker))
 	require.NoError(t, err)
 	svc := New(repo, locker, inspector, runner, registry, session, safety, model.SnapshotBackendCopy)

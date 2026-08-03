@@ -18,9 +18,11 @@ const savepointTag = "arcave-savepoint"
 // Snapshotter captures one volume into one restic repository. Its tier shows up
 // in the publish prefix and the capture's labels, never in the repository: both
 // tiers write to the same one.
+//
+// It binds the volume into a container of its own, so no service container is
+// involved and the volume is always captured whole.
 type Snapshotter struct {
 	volume model.Volume
-	mount  captureMountRef
 	// repository is what a restic container reaches over the protocol; admin is
 	// the same repository addressed as objects, without a container.
 	repository resticmodel.Repository
@@ -29,13 +31,13 @@ type Snapshotter struct {
 	// mounted is where the volume sits inside the restic container, and therefore
 	// the path inside every snapshot.
 	mounted string
-	deps    Deps
+	deps    Dependencies
 }
 
 func (s *Snapshotter) Volume() model.Volume { return s.volume }
 
 // Snapshot backs the volume up, initialising the repository on the first
-// capture. The volume is mounted read-only.
+// capture. The volume is bound whole and mounted read-only.
 func (s *Snapshotter) Snapshot(
 	ctx context.Context, req model.BackendSnapshotRequest,
 ) (model.SnapshotStat, error) {
@@ -43,7 +45,7 @@ func (s *Snapshotter) Snapshot(
 		return model.SnapshotStat{}, err
 	}
 
-	source, err := s.bindSource(ctx)
+	addr, err := s.address(ctx)
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
@@ -67,7 +69,7 @@ func (s *Snapshotter) Snapshot(
 
 	summary, err := run.run(ctx, resticCmd{
 		args:  s.backupArgs(req),
-		binds: []string{source + ":" + s.mounted + ":ro"},
+		binds: []string{addr.Source + ":" + s.mounted + ":ro"},
 	})
 	if err != nil {
 		return model.SnapshotStat{}, err
@@ -121,7 +123,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 		return err
 	}
 
-	source, err := s.bindSource(ctx)
+	addr, err := s.address(ctx)
 	if err != nil {
 		return err
 	}
@@ -129,8 +131,8 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	// The wipe must finish before restic writes a byte; it is a container of its
 	// own and needs no repository.
 	if !s.deps.Options.Incremental {
-		if err := s.deps.Runner.WipeMount(ctx, s.volume.ComposeProject, s.mount.service, s.mount.target); err != nil {
-			return fmt.Errorf("clear the mount before restore: %w", err)
+		if err := s.deps.Runner.WipeVolume(ctx, addr); err != nil {
+			return fmt.Errorf("clear the volume before restore: %w", err)
 		}
 	}
 
@@ -147,7 +149,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	}
 	_, err = run.run(ctx, resticCmd{
 		args:  append(args, "--json"),
-		binds: []string{source + ":" + s.mounted},
+		binds: []string{addr.Source + ":" + s.mounted},
 	})
 	return err
 }
@@ -208,14 +210,18 @@ func (s *Snapshotter) repositoryURL() string {
 	return s.deps.RepoURLBase + "/" + s.prefix + "/"
 }
 
-// bindSource resolves what the restic container binds to see the volume: the
-// docker volume name, or the host path of a bind mount.
-func (s *Snapshotter) bindSource(ctx context.Context) (string, error) {
-	source, err := s.deps.Runner.ResolveMountSource(ctx, s.volume.ComposeProject, s.mount.service, s.mount.target)
+// address resolves what the restic container binds to see the volume. Resolved
+// per operation rather than held on the instance: it may cost a round trip to
+// the daemon, and only the two operations that move bytes need it.
+//
+// The volume is addressed whole, whatever subpath a service happens to mount —
+// so a capture holds all of it, and a restore puts all of it back.
+func (s *Snapshotter) address(ctx context.Context) (model.VolumeAddress, error) {
+	addr, err := s.deps.Runner.ResolveVolumeAddress(ctx, s.volume)
 	if err != nil {
-		return "", fmt.Errorf("resolve %s mount %s: %w", s.mount.service, s.mount.target, err)
+		return model.VolumeAddress{}, fmt.Errorf("address volume %s: %w", s.volume.ObjectID, err)
 	}
-	return source, nil
+	return addr, nil
 }
 
 // sortedKeys orders a label set, so the command line is stable across runs.

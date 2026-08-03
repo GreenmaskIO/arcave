@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
@@ -120,7 +121,7 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 		shared:      shared,
 		opts:        opts,
 	}
-	e.factory = cdc.NewFactory(cdc.Deps{
+	e.factory = cdc.NewFactory(cdc.Dependencies{
 		Runner:      engine,
 		Publisher:   repos,
 		RepoURLBase: e.repoURLBase,
@@ -169,20 +170,51 @@ func incrementalOptions() cdc.Options {
 func (e *env) newVolume(t *testing.T, service, target string) model.Volume {
 	t.Helper()
 
+	name := e.newFilledVolume(t, service)
+	createLabelledContainer(t, e.cli, service, name, target)
+	return namedVolume(name, model.ServiceReference{Service: service, Target: target})
+}
+
+// newBareVolume creates a filled named volume with no container mounting it at
+// all — what a `docker compose down` leaves behind, and what a backend
+// addressing the volume by name still reaches.
+func (e *env) newBareVolume(t *testing.T, service, target string) model.Volume {
+	t.Helper()
+
+	name := e.newFilledVolume(t, service)
+	return namedVolume(name, model.ServiceReference{Service: service, Target: target})
+}
+
+// newSubpathVolume creates a filled named volume whose only container sees a
+// subdirectory of it. The subdirectory has to exist before the container is
+// created — the daemon refuses a subpath that is not there — so the fill runs
+// first.
+func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) model.Volume {
+	t.Helper()
+
+	name := e.newFilledVolume(t, service)
+	createSubpathContainer(t, e.cli, service, name, target, subpath)
+	return namedVolume(name, model.ServiceReference{Service: service, Target: target, Subpath: subpath})
+}
+
+// newFilledVolume creates one named volume and seeds it.
+func (e *env) newFilledVolume(t *testing.T, service string) string {
+	t.Helper()
+
 	name := itProject + "-" + service + "-" + randomSuffix(t)
 	createVolume(t, e.cli, name)
-	createLabelledContainer(t, e.cli, service, name, target)
 	e.fill(t, name)
+	return name
+}
 
+// namedVolume is the unit the backend is built for, assembled by hand.
+func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
 	return model.Volume{
 		ObjectID:       "volume/" + name,
 		ComposeProject: itProject,
 		Type:           model.VolumeTypeNamed,
 		Backend:        model.SnapshotBackendCDC,
-		Named: &model.VolumePropertiesNamed{
-			VolumeName: name,
-			UsedBy:     []model.ServiceReference{{Service: service, Target: target}},
-		},
+		Named:          &model.VolumePropertiesNamed{VolumeName: name, UsedBy: usedBy},
 	}
 }
 
@@ -380,6 +412,35 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service, name, ta
 			},
 		},
 		&container.HostConfig{Binds: []string{name + ":" + target}},
+		nil, nil, name+"-holder")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	})
+}
+
+// createSubpathContainer is createLabelledContainer for a container that sees
+// only a subdirectory of the volume. Subpath lives in HostConfig.Mounts and
+// nowhere else: the daemon does not report it back on the container's .Mounts,
+// so nothing but the compose file ever knows about it.
+func createSubpathContainer(t *testing.T, cli *client.Client, service, name, target, subpath string) {
+	t.Helper()
+
+	created, err := cli.ContainerCreate(context.Background(),
+		&container.Config{
+			Image: busyboxImage,
+			Cmd:   []string{"sh", "-c", "sleep 3600"},
+			Labels: map[string]string{
+				"com.docker.compose.project": itProject,
+				"com.docker.compose.service": service,
+			},
+		},
+		&container.HostConfig{Mounts: []mount.Mount{{
+			Type:          mount.TypeVolume,
+			Source:        name,
+			Target:        target,
+			VolumeOptions: &mount.VolumeOptions{Subpath: subpath},
+		}}},
 		nil, nil, name+"-holder")
 	require.NoError(t, err)
 	t.Cleanup(func() {

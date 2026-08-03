@@ -21,7 +21,12 @@ var skipReasons = map[model.VolumeType]string{
 // resolveBackupVolumes reads the compose project and returns the units a
 // savepoint of it covers. Every workflow comes through here: a create that
 // resolved its own would capture volumes its rollback leaves alone. The skips
-// are logged here so FindBackupVolumes and reachableVolumes stay pure.
+// are logged here so FindBackupVolumes stays pure.
+//
+// Nothing is dropped for being unreachable any more: a backend addresses a
+// volume directly, so a volume no container mounts — or mounts only at a
+// subpath — is captured like any other, and a volume the daemon does not have
+// fails its own operation rather than disappearing from the set.
 func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []string) ([]model.Volume, error) {
 	res, err := s.composeInspector.Introspect(ctx, composeFiles...)
 	if err != nil {
@@ -32,9 +37,8 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []strin
 	if err != nil {
 		return nil, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
-	volumes, unreachable := reachableVolumes(volumes)
 
-	for _, sk := range append(skipped, unreachable...) {
+	for _, sk := range skipped {
 		zerolog.Ctx(ctx).Warn().
 			Str("service", sk.Service).
 			Str("target", sk.Target).
@@ -159,44 +163,4 @@ func anonProperties(service string, sv model.ServiceVolume) *model.VolumePropert
 		ReadOnly: sv.ReadOnly,
 		Subpath:  subpath,
 	}
-}
-
-// reachableVolumes drops the units today's backends cannot get at, returning
-// them as skips. Kept out of FindBackupVolumes: reachability is the backends'
-// property, not the domain's. One rule covers both today, and splits the day one
-// of them reaches what the other cannot.
-func reachableVolumes(volumes []model.Volume) ([]model.Volume, []model.SkippedVolume) {
-	var (
-		kept    []model.Volume
-		skipped []model.SkippedVolume
-	)
-	for _, v := range volumes {
-		reason := unreachableReason(v)
-		if reason == "" {
-			kept = append(kept, v)
-			continue
-		}
-		// No service or target to name — that is the diagnosis — so the reason
-		// carries the volume's own name instead.
-		skipped = append(skipped, model.SkippedVolume{RawType: "volume", Reason: reason})
-	}
-	return kept, skipped
-}
-
-// unreachableReason returns why no backend can reach v's data, or "".
-// Only a named volume can be unreachable: a bind or anonymous one is its own
-// single mount.
-func unreachableReason(v model.Volume) string {
-	if v.Type != model.VolumeTypeNamed || v.Named == nil {
-		return ""
-	}
-	if len(v.Named.UsedBy) == 0 {
-		return fmt.Sprintf("named volume %s is mounted by no service; there is no container to reach its data through", v.Named.VolumeName)
-	}
-	for _, ref := range v.Named.UsedBy {
-		if ref.Subpath == "" {
-			return ""
-		}
-	}
-	return fmt.Sprintf("named volume %s is only ever mounted at a subpath; backing it up would capture part of the volume", v.Named.VolumeName)
 }

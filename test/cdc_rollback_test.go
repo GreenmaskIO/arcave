@@ -237,7 +237,7 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, resticServer.Close()) })
 
-	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Deps{
+	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
 		Runner:      engine,
 		Publisher:   repos,
 		RepoURLBase: rest.RepositoryURLBase(cdcContainerHost, resticPort),
