@@ -8,12 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
 
 func TestSnapshotBackendRegistry_New(t *testing.T) {
 	session, safety := newDirStore(t), newDirStore(t)
-	// Carries a mount: tarcopy resolves the one it captures through at build time,
+	// Carries a mount: fullcopy resolves the one it captures through at build time,
 	// so a volume with no way in never gets as far as a backend instance.
 	volume := model.Volume{
 		ObjectID: "volume/demo_pgdata",
@@ -39,7 +39,7 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 				Volume:       volume,
 				Tier:         model.BackendTierSavepoint,
 			},
-			wantType: tarcopy.Snapshotter{},
+			wantType: fullcopy.Snapshotter{},
 		},
 		{
 			name: "an unregistered backend is ErrUnknownBackend",
@@ -71,7 +71,7 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(&fakeVolumeStreamer{}))
+			registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{}))
 			require.NoError(t, err)
 
 			// Act
@@ -170,7 +170,7 @@ func TestNewSnapshotBackendRegistry_DuplicateKind(t *testing.T) {
 	docker := &fakeVolumeStreamer{}
 
 	// Act
-	_, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker), tarcopy.NewFactory(docker))
+	_, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker), fullcopy.NewFactory(docker))
 
 	// Assert
 	require.ErrorIs(t, err, ErrBackendAlreadyRegistered)

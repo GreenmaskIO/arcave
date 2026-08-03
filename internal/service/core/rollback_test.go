@@ -14,7 +14,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	savepointrepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
 
 func TestService_Rollback_RestoresAndDropsTheSafetyBackup(t *testing.T) {
@@ -662,7 +662,7 @@ func TestService_Rollback_RejectsAnUnsafeIDBeforeAnyBackend(t *testing.T) {
 // the safety tree is gone.
 func TestService_Rollback_OverRealStores(t *testing.T) {
 	// Arrange
-	// The full literal stays inline: real tarcopy addressing needs the compose
+	// The full literal stays inline: real fullcopy addressing needs the compose
 	// project and the mount, not the trimmed mock-test form.
 	vol := model.Volume{
 		ObjectID:       "volume/demo_db",
@@ -685,7 +685,7 @@ func TestService_Rollback_OverRealStores(t *testing.T) {
 
 	session, safety := newDirStore(t), newDirStore(t)
 	docker := &fakeVolumeStreamer{payload: "live bytes"}
-	registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker))
+	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
 	require.NoError(t, err)
 	svc := New(repo, locker, inspector, runner, registry, session, safety, model.SnapshotBackendCopy)
 

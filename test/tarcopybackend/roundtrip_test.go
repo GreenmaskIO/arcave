@@ -1,4 +1,4 @@
-// Package tarcopybackend drives the tarcopy backend against a real daemon: one
+// Package tarcopybackend drives the fullcopy backend against a real daemon: one
 // volume, one instance, real containers, a real store. It is the only thing
 // that proves the whole-volume archive is round: that docker cp against a
 // container of arcave's own reads the volume, and that extracting the archive
@@ -27,12 +27,12 @@ import (
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
 
 const (
 	// itProject is the compose project name the container labels carry.
-	itProject = "arcave-tarcopy-vol-it"
+	itProject = "arcave-fullcopy-vol-it"
 	// busyboxImage fills, mutates and hashes the volumes.
 	busyboxImage = "busybox"
 	// idFirst is the id every case captures under — a constant, not the clock, so
@@ -79,8 +79,8 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 			captured := e.hash(t, vol)
 			require.Contains(t, captured, "/data/blob", "the volume must hold a file outside any subpath")
 
-			payload, ok := stat.Payload.(tarcopy.Payload)
-			require.True(t, ok, "the stat carries no tarcopy payload: %T", stat.Payload)
+			payload, ok := stat.Payload.(fullcopy.Payload)
+			require.True(t, ok, "the stat carries no fullcopy payload: %T", stat.Payload)
 			assert.Positive(t, payload.SizeBytes, "an archive of a filled volume cannot be empty")
 
 			e.mutate(t, vol)
@@ -117,13 +117,13 @@ func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 	assert.Error(t, inspectErr, "the refused capture must not have created the volume it refused")
 }
 
-// env is one tarcopy factory over a live daemon and an observable store.
+// env is one fullcopy factory over a live daemon and an observable store.
 type env struct {
 	ctx     context.Context
 	cli     *client.Client
 	engine  *dockerclient.Engine
 	store   storages.Storager
-	factory *tarcopy.Factory
+	factory *fullcopy.Factory
 }
 
 func newEnv(t *testing.T) *env {
@@ -139,7 +139,7 @@ func newEnv(t *testing.T) *env {
 		cli:     cli,
 		engine:  engine,
 		store:   store,
-		factory: tarcopy.NewFactory(engine),
+		factory: fullcopy.NewFactory(engine),
 	}
 }
 
@@ -265,13 +265,13 @@ func newDaemonClient(t *testing.T) *client.Client {
 	t.Helper()
 
 	if testing.Short() {
-		t.Skip("skipping the tarcopy backend volume-level test in short mode")
+		t.Skip("skipping the fullcopy backend volume-level test in short mode")
 	}
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	require.NoError(t, err)
 	if _, err := cli.Ping(context.Background()); err != nil {
 		_ = cli.Close()
-		t.Skip("skipping the tarcopy backend volume-level test: no reachable docker daemon: " + err.Error())
+		t.Skip("skipping the fullcopy backend volume-level test: no reachable docker daemon: " + err.Error())
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli

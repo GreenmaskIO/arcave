@@ -30,10 +30,10 @@ import (
 	arcrepo "github.com/greenmaskio/arcave/internal/repository/arc"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
-	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
@@ -138,7 +138,7 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	// The one place a volume's Backend becomes an instance, and the only place
 	// that names the engine — through the seam its backend declares.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
-		tarcopy.NewFactory(engine),
+		fullcopy.NewFactory(engine),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:    engine,
 			Publisher: resticRepos,

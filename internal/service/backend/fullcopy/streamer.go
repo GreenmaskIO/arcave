@@ -1,4 +1,4 @@
-// Package tarcopy captures a volume wholesale: one tar archive per volume per
+// Package fullcopy captures a volume wholesale: one tar archive per volume per
 // snapshot, under <snapshotID>/<objectID>/, streamed through the Docker engine
 // and stored verbatim so ownership and permissions survive a restore.
 //
@@ -8,7 +8,7 @@
 //
 // Wholesale is what the name carries: the whole volume in one archive, as
 // against cdc, which writes only the chunks that changed.
-package tarcopy
+package fullcopy
 
 import (
 	"context"
@@ -41,7 +41,7 @@ type VolumeStreamer interface {
 	WriteVolume(ctx context.Context, addr model.VolumeAddress, r io.Reader) error
 }
 
-// Factory builds tarcopy snapshotters over one shared Docker engine.
+// Factory builds fullcopy snapshotters over one shared Docker engine.
 type Factory struct {
 	docker VolumeStreamer
 }

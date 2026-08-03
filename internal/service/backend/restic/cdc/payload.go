@@ -13,7 +13,7 @@ var errInvalidSnapshotRef = errors.New("invalid restic snapshot id")
 
 // Payload is what a cdc capture reports in its SnapshotStat, and the only way a
 // restore can address its data: a restic snapshot id is content-derived, so
-// unlike a tarcopy archive key it cannot be recomputed.
+// unlike a fullcopy archive key it cannot be recomputed.
 //
 // The two sizes stay separate: DataAdded is what this capture cost the store
 // (near zero for an increment), TotalBytesProcessed the volume's logical size.

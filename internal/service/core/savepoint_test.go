@@ -19,7 +19,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	savepointrepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
 
 func TestService_CreateSavepoint(t *testing.T) {
@@ -318,7 +318,7 @@ func TestService_CreateSavepoint_DropsWhatAPartialCaptureWrote(t *testing.T) {
 
 	session := newDirStore(t)
 	docker := &fakeVolumeStreamer{payload: "pgdata bytes", openErrFor: "service/app/etc/cfg"}
-	registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker))
+	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
 	require.NoError(t, err)
 	repo := savepointrepo.New(session)
 	svc := New(repo, locker, inspector, runner, registry, session, newDirStore(t), model.SnapshotBackendCopy)
@@ -487,7 +487,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	runner.On("Up", mock.Anything, time.Duration(0), demoComposeFiles()).Return(nil)
 
 	session, safety := newDirStore(t), newDirStore(t)
-	registry, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(&fakeVolumeStreamer{payload: "pgdata bytes"}))
+	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{payload: "pgdata bytes"}))
 	require.NoError(t, err)
 	repo := savepointrepo.New(session)
 	svc := New(repo, locker, inspector, runner, registry, session, safety, model.SnapshotBackendCopy)

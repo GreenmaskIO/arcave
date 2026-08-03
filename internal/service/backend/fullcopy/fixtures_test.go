@@ -1,4 +1,4 @@
-package tarcopy
+package fullcopy
 
 import (
 	"github.com/greenmaskio/arcave/internal/model"
