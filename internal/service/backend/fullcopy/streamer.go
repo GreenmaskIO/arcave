@@ -60,7 +60,7 @@ func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 	if err != nil {
 		return nil, err
 	}
-	return Snapshotter{volume: spec.Volume, store: store, docker: f.docker}, nil
+	return &Snapshotter{volume: spec.Volume, store: store, docker: f.docker}, nil
 }
 
 // Snapshotter captures one volume into one tier's root.
@@ -70,10 +70,10 @@ type Snapshotter struct {
 	docker VolumeStreamer
 }
 
-func (s Snapshotter) Volume() model.Volume { return s.volume }
+func (s *Snapshotter) Volume() model.Volume { return s.volume }
 
 // Snapshot streams the whole volume out and stores it verbatim.
-func (s Snapshotter) Snapshot(
+func (s *Snapshotter) Snapshot(
 	ctx context.Context, req model.BackendSnapshotRequest,
 ) (model.SnapshotStat, error) {
 	capture, err := s.captureStore(req.SnapshotID)
@@ -111,7 +111,7 @@ func (s Snapshotter) Snapshot(
 
 // Restore hands the stored tar stream to WriteVolume, which wipes the volume
 // and extracts into it. req.Payload is not read: the key is recomputed.
-func (s Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
+func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
 	capture, err := s.captureStore(req.SnapshotID)
 	if err != nil {
 		return err
@@ -141,7 +141,7 @@ func (s Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReques
 // address is what a container binds to reach this volume. Resolved per call
 // rather than held on the instance: it may cost a round trip to the daemon, and
 // only the two methods that move bytes need it.
-func (s Snapshotter) address(ctx context.Context) (model.VolumeAddress, error) {
+func (s *Snapshotter) address(ctx context.Context) (model.VolumeAddress, error) {
 	addr, err := s.docker.ResolveVolumeAddress(ctx, s.volume)
 	if err != nil {
 		return model.VolumeAddress{}, fmt.Errorf("address volume %s: %w", s.volume.ObjectID, err)
@@ -149,7 +149,7 @@ func (s Snapshotter) address(ctx context.Context) (model.VolumeAddress, error) {
 	return addr, nil
 }
 
-func (s Snapshotter) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
+func (s *Snapshotter) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
 	capture, err := s.captureStore(req.SnapshotID)
 	if err != nil {
 		return false, err
@@ -163,7 +163,7 @@ func (s Snapshotter) Exists(ctx context.Context, req model.BackendExistsRequest)
 
 // Remove deletes the archive and stops: a Storager may not delete its own root,
 // so the caller sweeps the directory. An archive already gone is not an error.
-func (s Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
+func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
 	capture, err := s.captureStore(req.SnapshotID)
 	if err != nil {
 		return err
@@ -177,7 +177,7 @@ func (s Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest)
 // captureStore narrows the tier's root to the one capture a request addresses.
 // It is the only place an id becomes a storage key, so the id gate stands here:
 // the destructive paths render a key through it too.
-func (s Snapshotter) captureStore(snapshotID model.SavepointID) (storages.Storager, error) {
+func (s *Snapshotter) captureStore(snapshotID model.SavepointID) (storages.Storager, error) {
 	if err := snapshotID.Validate(); err != nil {
 		return nil, err
 	}

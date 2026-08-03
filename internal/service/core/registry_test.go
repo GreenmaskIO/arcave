@@ -39,7 +39,7 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 				Volume:       volume,
 				Tier:         model.BackendTierSavepoint,
 			},
-			wantType: fullcopy.Snapshotter{},
+			wantType: &fullcopy.Snapshotter{},
 		},
 		{
 			name: "an unregistered backend is ErrUnknownBackend",
