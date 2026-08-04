@@ -17,19 +17,25 @@ func TestServiceVolume_StorageID(t *testing.T) {
 			name:    "named volume is identified by its docker name",
 			service: "db",
 			volume:  ServiceVolume{Type: VolumeTypeNamed, VolumeName: "demo_pgdata", Target: "/var/lib/postgresql/data"},
-			want:    "volume/demo_pgdata",
+			want:    "volume-named-demo_pgdata",
 		},
 		{
 			name:    "bind mount is identified by service and target",
 			service: "app",
 			volume:  ServiceVolume{Type: VolumeTypeBind, Source: "/host/cfg", Target: "/etc/cfg"},
-			want:    "service/app/etc/cfg",
+			want:    "volume-service-app-etc-cfg",
 		},
 		{
 			name:    "anonymous volume is identified by service and target",
 			service: "db",
 			volume:  ServiceVolume{Type: VolumeTypeAnon, Target: "/data"},
-			want:    "service/db/data",
+			want:    "volume-service-db-data",
+		},
+		{
+			name:    "a target of several segments flattens into one",
+			service: "db",
+			volume:  ServiceVolume{Type: VolumeTypeAnon, Target: "/var/lib/postgresql/data"},
+			want:    "volume-service-db-var-lib-postgresql-data",
 		},
 		{
 			name:    "tmpfs has no identity",
@@ -65,7 +71,7 @@ func TestServiceVolume_StorageID(t *testing.T) {
 			name:    "a volume and a service of the same name do not collide",
 			service: "db",
 			volume:  ServiceVolume{Type: VolumeTypeBind, Source: "/host/db", Target: "/db"},
-			want:    "service/db/db",
+			want:    "volume-service-db-db",
 		},
 	}
 
@@ -90,6 +96,6 @@ func TestNamedVolume_StorageID(t *testing.T) {
 	got := named.ObjectID()
 
 	// Assert
-	assert.Equal(t, "volume/demo_pgdata", got)
+	assert.Equal(t, "volume-named-demo_pgdata", got)
 	assert.Equal(t, got, reference.ObjectID("db"))
 }

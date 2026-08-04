@@ -47,7 +47,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h := newHarness(t, model.BackendTierSavepoint, defaultOptions())
+			h := newHarness(t, defaultOptions())
 			ctx := zerolog.Nop().WithContext(context.Background())
 			for key, body := range tt.plant {
 				require.NoError(t, h.repo.PutObject(ctx, key, strings.NewReader(body)))
@@ -65,7 +65,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, model.SnapshotBackendCDC, stat.Type)
 			assert.Equal(t, Payload{
-				SnapshotRef:         "3f8a1c0d9b",
+				SnapshotObjectID:    "3f8a1c0d9b",
 				DataAdded:           1048576,
 				TotalBytesProcessed: 10485760,
 			}, stat.Payload)
@@ -75,9 +75,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			if _, planted := tt.plant["snapshots/ff0"]; planted {
 				assert.NotEmpty(t, objectsUnder(t, h.repo, snapshotsPath), "clearing locks must not touch snapshots")
 			}
-			h.publisher.AssertNumberOfCalls(t, "Unregister", 1) // published for the operation only
 			h.runner.AssertExpectations(t)
-			h.publisher.AssertExpectations(t)
 		})
 	}
 }
@@ -87,7 +85,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 // and a read-only mount, since a backup has no business writing.
 func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 	// Arrange
-	h := newHarness(t, model.BackendTierSafety, defaultOptions())
+	h := newHarness(t, defaultOptions())
 	h.runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
 	h.runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
 		Run(respondWith(backupSummaryLine)).Return(nil).Once()
@@ -96,7 +94,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 	// Act
 	_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{
 		SnapshotID: "1780335122",
-		Labels:     map[string]string{"team": "payments", "arcave-tier": "safety"},
+		Labels:     map[string]string{"team": "payments", "arcave-safety-snapshot": "true"},
 	})
 
 	// Assert
@@ -114,78 +112,61 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 		"backup", demoMounted,
 		"--host", demoProject,
 		"--tag", "arcave-savepoint=1780335122",
-		"--tag", "arcave-tier=safety",
+		"--tag", "arcave-safety-snapshot=true",
 		"--tag", "team=payments",
 		"--json",
 	}, backup.Cmd)
 	assert.Equal(t, []string{demoVolName + ":" + demoMounted + ":ro"}, backup.Binds)
 
-	// This harness is the safety tier, so the repository URL carries that tier's
-	// publish prefix — the base is the same one every instance is handed.
-	wantRepoURL := demoRepoURLBase + "/" + repositoryPrefix(model.BackendTierSafety, demoObjectID) + "/"
+	// Every run of one instance addresses one repository, at the volume's own
+	// ObjectID under the base the DI root handed down.
 	for i, spec := range specs {
 		assert.Equal(t, demoImage, spec.Image, "run %d", i)
 		assert.ElementsMatch(t,
-			[]string{"RESTIC_REPOSITORY=" + wantRepoURL, "RESTIC_PASSWORD=" + resticPassword},
+			[]string{"RESTIC_REPOSITORY=" + demoRepoURL, "RESTIC_PASSWORD=" + resticPassword},
 			spec.Env, "run %d", i)
 	}
 	h.runner.AssertExpectations(t)
-	h.publisher.AssertExpectations(t)
 }
 
-// Both tiers back the same volume up the same way, into the same repository:
-// that is what makes a safety backup an increment over the savepoints, since
-// restic picks a parent by host and paths. Only the publish prefix differs.
-func TestSnapshotter_Snapshot_TiersShareTheRepository(t *testing.T) {
-	tests := []struct {
-		name       string
-		tier       model.BackendTier
-		wantPrefix string
-	}{
-		{name: "savepoint", tier: model.BackendTierSavepoint, wantPrefix: "savepoint-volume-demo_pgdata"},
-		{name: "safety", tier: model.BackendTierSafety, wantPrefix: "safety-volume-demo_pgdata"},
-	}
+// A safety snapshot differs from a savepoint by its label and by nothing else:
+// same repository, same --host, same path. That is what makes it an increment
+// over the savepoints of that volume, since restic picks a parent by host and
+// paths — and the label is what makes one a killed rollback abandoned findable
+// with a plain `restic snapshots`.
+func TestSnapshotter_Snapshot_SafetySnapshotDiffersOnlyByItsLabel(t *testing.T) {
+	// Arrange
+	savepoint := newHarness(t, defaultOptions())
+	savepoint.runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
+	savepoint.runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
+		Run(respondWith(backupSummaryLine)).Return(nil).Once()
+	safety := newHarness(t, defaultOptions())
+	safety.runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
+	safety.runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
+		Run(respondWith(backupSummaryLine)).Return(nil).Once()
+	ctx := zerolog.Nop().WithContext(context.Background())
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			shared := newStore(t)
-			runner := &mockRunner{}
-			runner.On("ResolveVolumeAddress", mock.Anything, demoVolume()).Return(demoAddress, nil).Once()
-			runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
-			runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
-				Run(respondWith(backupSummaryLine)).Return(nil).Once()
+	// Act
+	_, err := savepoint.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+	require.NoError(t, err)
+	_, err = safety.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{
+		SnapshotID: "1780335123",
+		Labels:     map[string]string{"arcave-safety-snapshot": "true"},
+	})
+	require.NoError(t, err)
 
-			// The repository is the volume's, not the tier's: both tiers register the
-			// same root under different prefixes.
-			wantRepo, err := shared.SubStorage(repoNamespace+"/"+demoObjectID, true)
-			require.NoError(t, err)
-			publisher := &mockPublisher{}
-			publisher.On("Register", tt.wantPrefix, matchRepository(t, wantRepo)).Return(nil).Once()
-			publisher.On("Unregister", tt.wantPrefix).Return().Once()
-
-			snapshotter, err := NewFactory(Dependencies{
-				Runner: runner, Publisher: publisher, RepoURLBase: demoRepoURLBase,
-				SharedStore: shared, Options: defaultOptions(),
-			}).New(model.BackendSpec{Volume: demoVolume(), Tier: tt.tier})
-			require.NoError(t, err)
-			ctx := zerolog.Nop().WithContext(context.Background())
-
-			// Act
-			_, err = snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
-
-			// Assert
-			require.NoError(t, err)
-			assert.Equal(t, []string{"backup", demoMounted, "--host", demoProject,
-				"--tag", "arcave-savepoint=1780335122", "--json"}, runner.Specs()[1].Cmd,
-				"host and path are what restic picks a parent by, so both tiers name the same ones")
-			// Only the publish prefix tells the two instances apart, and it is the
-			// only part of the URL that differs.
-			assert.Contains(t, runner.Specs()[1].Env, "RESTIC_REPOSITORY="+demoRepoURLBase+"/"+tt.wantPrefix+"/")
-			runner.AssertExpectations(t)
-			publisher.AssertExpectations(t)
-		})
-	}
+	// Assert
+	assert.Equal(t, []string{"backup", demoMounted, "--host", demoProject,
+		"--tag", "arcave-savepoint=1780335122", "--json"}, savepoint.runner.Specs()[1].Cmd)
+	assert.Equal(t, []string{"backup", demoMounted, "--host", demoProject,
+		"--tag", "arcave-savepoint=1780335123", "--tag", "arcave-safety-snapshot=true", "--json"},
+		safety.runner.Specs()[1].Cmd,
+		"host and path are what restic picks a parent by, so the two name the same ones")
+	assert.Contains(t, savepoint.runner.Specs()[1].Env, "RESTIC_REPOSITORY="+demoRepoURL)
+	assert.Contains(t, safety.runner.Specs()[1].Env, "RESTIC_REPOSITORY="+demoRepoURL,
+		"a safety snapshot addresses the very repository the savepoints live in")
+	savepoint.runner.AssertExpectations(t)
+	safety.runner.AssertExpectations(t)
 }
 
 // A volume no service mounts in full is captured in full anyway: the backend
@@ -198,20 +179,16 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 	vol.Named.UsedBy = []model.ServiceReference{
 		{Service: demoService, Target: demoTarget, Subpath: "pgdata"},
 	}
-	shared := newStore(t)
 	runner := &mockRunner{}
-	runner.On("ResolveVolumeAddress", mock.Anything, vol).Return(demoAddress, nil).Once()
+	runner.On("ResolveMountSource", mock.Anything, vol).Return(demoAddress, nil).Once()
 	runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
 	runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
 		Run(respondWith(backupSummaryLine)).Return(nil).Once()
-	publisher := &mockPublisher{}
-	publisher.On("Register", mock.Anything, mock.Anything).Return(nil).Once()
-	publisher.On("Unregister", mock.Anything).Return().Once()
 
 	snapshotter, err := NewFactory(Dependencies{
-		Runner: runner, Publisher: publisher, RepoURLBase: demoRepoURLBase,
-		SharedStore: shared, Options: defaultOptions(),
-	}).New(model.BackendSpec{Volume: vol, Tier: model.BackendTierSavepoint})
+		Runner: runner, RepoURLBase: demoRepoURLBase,
+		RepositoryRoot: newStore(t), Options: defaultOptions(),
+	}).New(model.BackendSpec{Volume: vol})
 	require.NoError(t, err)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -229,17 +206,16 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 		assert.NotContains(t, arg, "pgdata/", "no subpath may narrow what the capture covers")
 	}
 	runner.AssertExpectations(t)
-	publisher.AssertExpectations(t)
 }
 
-// The backend is handed a URL base and appends its own prefix — no path and no
-// server object cross the seam. The trailing slash is the restic protocol's, and
-// its loss is the failure this test exists for: nothing would report it, restic
-// would simply talk to the wrong path.
+// The backend is handed a URL base and appends the volume's own ObjectID — no
+// path and no server object cross the seam. The trailing slash is the restic
+// protocol's, and its loss is the failure this test exists for: nothing would
+// report it, restic would simply talk to the wrong path.
 func TestSnapshotter_repositoryURL(t *testing.T) {
 	// Arrange
-	backend, err := NewFactory(Dependencies{RepoURLBase: demoRepoURLBase, SharedStore: newStore(t)}).
-		New(model.BackendSpec{Volume: demoVolume(), Tier: model.BackendTierSavepoint})
+	backend, err := NewFactory(Dependencies{RepoURLBase: demoRepoURLBase, RepositoryRoot: newStore(t)}).
+		New(model.BackendSpec{Volume: demoVolume()})
 	require.NoError(t, err)
 	snapshotter, ok := backend.(*Snapshotter)
 	require.True(t, ok)
@@ -282,7 +258,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h := newHarness(t, model.BackendTierSavepoint, tt.opts)
+			h := newHarness(t, tt.opts)
 			restore := h.runner.On("RunOneShot", mock.Anything, matchRestic("restore")).
 				Run(respondWith(restoreSummaryLine)).Return(nil).Once()
 			if tt.wantWipe {
@@ -296,7 +272,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 			// Act
 			err := h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
 				SnapshotID: "1780335122",
-				Payload:    Payload{SnapshotRef: "3f8a1c0d9b"},
+				Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
 			})
 
 			// Assert
@@ -308,9 +284,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 				"a restore writes, so the mount is not read-only")
 			// In incremental mode no WipeMount expectation is declared, so a wipe
 			// would fail the run where it happened.
-			h.publisher.AssertNumberOfCalls(t, "Unregister", 1)
 			h.runner.AssertExpectations(t)
-			h.publisher.AssertExpectations(t)
 		})
 	}
 }
@@ -320,7 +294,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 // that shape as readily as the struct it wrote.
 func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	// Arrange
-	h := newHarness(t, model.BackendTierSavepoint, Options{Image: demoImage, Incremental: true, Overwrite: "always"})
+	h := newHarness(t, Options{Image: demoImage, Incremental: true, Overwrite: "always"})
 	h.runner.On("RunOneShot", mock.Anything, matchRestic("restore")).
 		Run(respondWith(restoreSummaryLine)).Return(nil).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -340,7 +314,6 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	require.Len(t, h.runner.Specs(), 1)
 	assert.Contains(t, h.runner.Specs()[0].Cmd, "3f8a1c0d9b")
 	h.runner.AssertExpectations(t)
-	h.publisher.AssertExpectations(t)
 }
 
 // Exists trusts the commit marker: the record is written last, after every
@@ -349,7 +322,7 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 // empty mocks are the assertion.
 func TestSnapshotter_Exists(t *testing.T) {
 	// Arrange
-	h := newHarness(t, model.BackendTierSavepoint, defaultOptions())
+	h := newHarness(t, defaultOptions())
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -358,9 +331,7 @@ func TestSnapshotter_Exists(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.True(t, ok)
-	h.publisher.AssertNumberOfCalls(t, "Register", 0) // a pre-flight publishes nothing
 	h.runner.AssertExpectations(t)
-	h.publisher.AssertExpectations(t)
 }
 
 // Remove is server-side: dropping a snapshot object is byte for byte what
@@ -374,12 +345,12 @@ func TestSnapshotter_Remove(t *testing.T) {
 	}{
 		{
 			name:        "a capture's snapshot is dropped",
-			payload:     Payload{SnapshotRef: "3f8a1c0d9b"},
+			payload:     Payload{SnapshotObjectID: "3f8a1c0d9b"},
 			wantDeleted: true,
 		},
 		{
 			name:    "a snapshot already gone is not an error",
-			payload: Payload{SnapshotRef: "deadbeef"},
+			payload: Payload{SnapshotObjectID: "deadbeef"},
 		},
 		{
 			name:    "a failed capture reported no payload, so there is nothing to drop",
@@ -394,7 +365,7 @@ func TestSnapshotter_Remove(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h := newHarness(t, model.BackendTierSavepoint, defaultOptions())
+			h := newHarness(t, defaultOptions())
 			ctx := zerolog.Nop().WithContext(context.Background())
 			require.NoError(t, h.repo.PutObject(ctx, "snapshots/3f8a1c0d9b", strings.NewReader("snapshot")))
 			require.NoError(t, h.repo.PutObject(ctx, "snapshots/0011", strings.NewReader("another")))
@@ -413,16 +384,15 @@ func TestSnapshotter_Remove(t *testing.T) {
 			} else {
 				assert.ElementsMatch(t, []string{"0011", "3f8a1c0d9b"}, remaining)
 			}
-			h.publisher.AssertNumberOfCalls(t, "Register", 0) // a remove never publishes the repository
 			h.runner.AssertExpectations(t)
-			h.publisher.AssertExpectations(t)
 		})
 	}
 }
 
-// Whatever fails, the repository stops being served: a prefix left registered
-// would collide with the next operation that wants it.
-func TestSnapshotter_UnpublishesOnFailure(t *testing.T) {
+// A failure of the run reaches the caller with its cause: the operations are
+// what a whole workflow's error is attributed by, and a restic run that printed
+// no summary is as much a failure as one that exited non-zero.
+func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 	tests := []struct {
 		name    string
 		arrange func(h *harness)
@@ -453,7 +423,7 @@ func TestSnapshotter_UnpublishesOnFailure(t *testing.T) {
 				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
 				return err
 			},
-			wantErr: "reported no usable snapshot id",
+			wantErr: "no restic snapshot id",
 		},
 		{
 			name: "a failed restore",
@@ -465,7 +435,7 @@ func TestSnapshotter_UnpublishesOnFailure(t *testing.T) {
 			act: func(ctx context.Context, h *harness) error {
 				return h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
 					SnapshotID: "1780335122",
-					Payload:    Payload{SnapshotRef: "3f8a1c0d9b"},
+					Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
 				})
 			},
 			wantErr: "restore boom",
@@ -475,7 +445,7 @@ func TestSnapshotter_UnpublishesOnFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h := newHarness(t, model.BackendTierSavepoint, defaultOptions())
+			h := newHarness(t, defaultOptions())
 			tt.arrange(h)
 			ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -485,17 +455,15 @@ func TestSnapshotter_UnpublishesOnFailure(t *testing.T) {
 			// Assert
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
-			h.publisher.AssertNumberOfCalls(t, "Unregister", 1) // a prefix left registered collides with the next run
 			h.runner.AssertExpectations(t)
-			h.publisher.AssertExpectations(t)
 		})
 	}
 }
 
-// A request whose ids cannot be trusted reaches neither a storage key nor a
-// container command line. Both gates are allowlists, and both stand ahead of
-// every side effect — the empty runner and publisher are the assertion.
-func TestSnapshotter_RejectsUnsafeIDs(t *testing.T) {
+// The savepoint id becomes a storage key, so it is gated by an allowlist ahead
+// of every side effect; a payload naming no snapshot has nothing to restore or
+// drop. The empty runner is the assertion: neither reaches a container.
+func TestSnapshotter_RejectsUnusableIDs(t *testing.T) {
 	tests := []struct {
 		name string
 		act  func(ctx context.Context, h *harness) error
@@ -508,20 +476,11 @@ func TestSnapshotter_RejectsUnsafeIDs(t *testing.T) {
 			},
 		},
 		{
-			name: "a snapshot ref that is not hex never reaches a restore",
+			name: "a payload naming no snapshot never reaches a restore",
 			act: func(ctx context.Context, h *harness) error {
 				return h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
 					SnapshotID: "1780335122",
-					Payload:    Payload{SnapshotRef: "../../config"},
-				})
-			},
-		},
-		{
-			name: "a snapshot ref that is not hex never reaches a remove",
-			act: func(ctx context.Context, h *harness) error {
-				return h.snapshotter.Remove(ctx, model.BackendRemoveRequest{
-					SnapshotID: "1780335122",
-					Payload:    Payload{SnapshotRef: "../../config"},
+					Payload:    Payload{SnapshotObjectID: ""},
 				})
 			},
 		},
@@ -530,7 +489,7 @@ func TestSnapshotter_RejectsUnsafeIDs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			h := newHarness(t, model.BackendTierSavepoint, defaultOptions())
+			h := newHarness(t, defaultOptions())
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -538,9 +497,7 @@ func TestSnapshotter_RejectsUnsafeIDs(t *testing.T) {
 
 			// Assert
 			require.Error(t, err)
-			h.publisher.AssertNumberOfCalls(t, "Register", 0) // the gate stands in front of every side effect
 			h.runner.AssertExpectations(t)
-			h.publisher.AssertExpectations(t)
 		})
 	}
 }

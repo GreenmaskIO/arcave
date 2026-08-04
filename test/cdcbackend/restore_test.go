@@ -28,7 +28,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 			// Arrange
 			env := newEnv(t, tt.opts)
 			vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-			backend := env.backend(t, vol, model.BackendTierSavepoint)
+			backend := env.backend(t, vol)
 			payload := env.snapshot(t, backend, idFirst, nil)
 			captured := env.hash(t, vol)
 
@@ -53,7 +53,7 @@ func TestSnapshotter_Restore_DecodesAStoredPayload(t *testing.T) {
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-	backend := env.backend(t, vol, model.BackendTierSavepoint)
+	backend := env.backend(t, vol)
 	payload := env.snapshot(t, backend, idFirst, nil)
 	captured := env.hash(t, vol)
 	env.mutate(t, vol)
@@ -72,14 +72,20 @@ func TestSnapshotter_Restore_DecodesAStoredPayload(t *testing.T) {
 // R4: the decode stands in front of the wipe, so a payload the backend cannot read
 // costs nothing — a refusal that had already cleared the mount would destroy the
 // live data for nothing.
+//
+// What counts as unusable is "names no snapshot at all", never "does not look
+// like a restic id": the id format is restic's contract and arcave holds no
+// opinion on it. An id that is present but restic cannot resolve is R5's case —
+// it fails after the wipe, honestly, and the service layer's revert owes the
+// volume.
 func TestSnapshotter_Restore_RefusesAnUnusablePayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		payload any
 	}{
 		{name: "no payload at all", payload: nil},
-		{name: "a ref that is not hex", payload: map[string]any{"restic_snapshot_id": "NOT-HEX"}},
-		{name: "an empty ref", payload: map[string]any{"restic_snapshot_id": ""}},
+		{name: "a payload of another backend", payload: map[string]any{"size_bytes": float64(42)}},
+		{name: "an empty id", payload: map[string]any{"restic_snapshot_id": ""}},
 	}
 
 	for _, tt := range tests {
@@ -87,7 +93,7 @@ func TestSnapshotter_Restore_RefusesAnUnusablePayload(t *testing.T) {
 			// Arrange
 			env := newEnv(t, wipeOptions())
 			vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-			backend := env.backend(t, vol, model.BackendTierSavepoint)
+			backend := env.backend(t, vol)
 			env.snapshot(t, backend, idFirst, nil)
 			live := env.hash(t, vol)
 
@@ -108,9 +114,9 @@ func TestSnapshotter_Restore_SnapshotDeletedBehindArcave(t *testing.T) {
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-	backend := env.backend(t, vol, model.BackendTierSavepoint)
+	backend := env.backend(t, vol)
 	payload := env.snapshot(t, backend, idFirst, nil)
-	require.NoError(t, env.repoStore(t, vol).Delete(env.ctx, path.Join(snapshotsPath, payload.SnapshotRef)))
+	require.NoError(t, env.repoStore(t, vol).Delete(env.ctx, path.Join(snapshotsPath, payload.SnapshotObjectID)))
 
 	// Act
 	err := backend.Restore(env.ctx, model.BackendRestoreRequest{SnapshotID: idFirst, Payload: payload})
@@ -119,7 +125,7 @@ func TestSnapshotter_Restore_SnapshotDeletedBehindArcave(t *testing.T) {
 	require.Error(t, err)
 	var exit *model.ContainerExitError
 	require.ErrorAs(t, err, &exit, "restic itself must be what refused: %v", err)
-	assert.Contains(t, err.Error(), payload.SnapshotRef, "the failure must name the snapshot restic could not find")
+	assert.Contains(t, err.Error(), payload.SnapshotObjectID, "the failure must name the snapshot restic could not find")
 	t.Logf("restic refused with: %v", err)
 }
 

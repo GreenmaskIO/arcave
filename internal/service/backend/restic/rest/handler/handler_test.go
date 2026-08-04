@@ -37,11 +37,11 @@ var errNotFound = fmt.Errorf("%w: %s", model.ErrObjectNotFound, testID)
 // Range table is expressed against.
 var blobBody = []byte("0123456789abcdef")
 
-// The name a repository is served under and one nothing is, both of the shape a
-// caller flattens: a tier and an object id in a single segment.
+// The name a repository is served under and one nothing is, both real arcave
+// ObjectIDs: one path segment, the volume's identity rendered into it.
 const (
-	testRepoName    = "savepoint-volume-pgdata"
-	unknownRepoName = "safety-volume-pgdata"
+	testRepoName    = "volume-named-pgdata"
+	unknownRepoName = "volume-service-app-etc-cfg"
 )
 
 // serving is the resolver a case runs against: repo under testRepoName, nothing
@@ -70,7 +70,7 @@ func TestHandler_CreateRepository(t *testing.T) {
 				store.On("Create", mock.Anything).Return(nil).Once()
 			}
 			h := New(serving(store))
-			request := api.CreateRepositoryRequestObject{RepoName: testRepoName, Params: api.CreateRepositoryParams{Create: tt.create}}
+			request := api.CreateRepositoryRequestObject{ArcaveObjectID: testRepoName, Params: api.CreateRepositoryParams{Create: tt.create}}
 
 			// Act
 			resp, err := h.CreateRepository(context.Background(), request)
@@ -92,7 +92,7 @@ func TestHandler_CreateRepository_AlreadyInitialised(t *testing.T) {
 	store := &mockRepository{}
 	store.On("Create", mock.Anything).Return(model.ErrConfigExists).Once()
 	h := New(serving(store))
-	request := api.CreateRepositoryRequestObject{RepoName: testRepoName, Params: api.CreateRepositoryParams{Create: "true"}}
+	request := api.CreateRepositoryRequestObject{ArcaveObjectID: testRepoName, Params: api.CreateRepositoryParams{Create: "true"}}
 
 	// Act
 	resp, err := h.CreateRepository(context.Background(), request)
@@ -115,8 +115,8 @@ func TestHandler_CreateRepository_StoreFailure(t *testing.T) {
 
 	// Act
 	resp, err := h.CreateRepository(context.Background(), api.CreateRepositoryRequestObject{
-		RepoName: testRepoName,
-		Params:   api.CreateRepositoryParams{Create: "true"},
+		ArcaveObjectID: testRepoName,
+		Params:         api.CreateRepositoryParams{Create: "true"},
 	})
 
 	// Assert
@@ -133,7 +133,7 @@ func TestHandler_DeleteRepository(t *testing.T) {
 	h := New(serving(store))
 
 	// Act
-	resp, err := h.DeleteRepository(context.Background(), api.DeleteRepositoryRequestObject{RepoName: testRepoName})
+	resp, err := h.DeleteRepository(context.Background(), api.DeleteRepositoryRequestObject{ArcaveObjectID: testRepoName})
 
 	// Assert
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestHandler_StatConfig(t *testing.T) {
 			h := New(serving(store))
 
 			// Act
-			resp, err := h.StatConfig(context.Background(), api.StatConfigRequestObject{RepoName: testRepoName})
+			resp, err := h.StatConfig(context.Background(), api.StatConfigRequestObject{ArcaveObjectID: testRepoName})
 
 			// Assert
 			require.NoError(t, err)
@@ -186,7 +186,7 @@ func TestHandler_GetConfig(t *testing.T) {
 		h := New(serving(store))
 
 		// Act
-		resp, err := h.GetConfig(context.Background(), api.GetConfigRequestObject{RepoName: testRepoName})
+		resp, err := h.GetConfig(context.Background(), api.GetConfigRequestObject{ArcaveObjectID: testRepoName})
 
 		// Assert
 		require.NoError(t, err)
@@ -206,7 +206,7 @@ func TestHandler_GetConfig(t *testing.T) {
 		h := New(serving(store))
 
 		// Act
-		resp, err := h.GetConfig(context.Background(), api.GetConfigRequestObject{RepoName: testRepoName})
+		resp, err := h.GetConfig(context.Background(), api.GetConfigRequestObject{ArcaveObjectID: testRepoName})
 
 		// Assert
 		require.NoError(t, err)
@@ -239,7 +239,7 @@ func TestHandler_SaveConfig(t *testing.T) {
 			h := New(serving(store))
 
 			// Act
-			resp, err := h.SaveConfig(context.Background(), api.SaveConfigRequestObject{RepoName: testRepoName, Body: body})
+			resp, err := h.SaveConfig(context.Background(), api.SaveConfigRequestObject{ArcaveObjectID: testRepoName, Body: body})
 
 			// Assert
 			require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestHandler_DeleteConfig(t *testing.T) {
 			h := New(serving(store))
 
 			// Act
-			resp, err := h.DeleteConfig(context.Background(), api.DeleteConfigRequestObject{RepoName: testRepoName})
+			resp, err := h.DeleteConfig(context.Background(), api.DeleteConfigRequestObject{ArcaveObjectID: testRepoName})
 
 			// Assert
 			require.NoError(t, err)
@@ -295,7 +295,7 @@ func TestHandler_ListBlobs(t *testing.T) {
 	h := New(serving(store))
 
 	// Act
-	resp, err := h.ListBlobs(context.Background(), api.ListBlobsRequestObject{RepoName: testRepoName, Type: api.Data})
+	resp, err := h.ListBlobs(context.Background(), api.ListBlobsRequestObject{ArcaveObjectID: testRepoName, Type: api.Data})
 
 	// Assert
 	require.NoError(t, err)
@@ -317,7 +317,7 @@ func TestHandler_ListBlobs_Empty(t *testing.T) {
 	h := New(serving(store))
 
 	// Act
-	resp, err := h.ListBlobs(context.Background(), api.ListBlobsRequestObject{RepoName: testRepoName, Type: api.Locks})
+	resp, err := h.ListBlobs(context.Background(), api.ListBlobsRequestObject{ArcaveObjectID: testRepoName, Type: api.Locks})
 
 	// Assert
 	require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestHandler_ListBlobs_UnknownType(t *testing.T) {
 	h := New(serving(store))
 
 	// Act
-	resp, err := h.ListBlobs(context.Background(), api.ListBlobsRequestObject{RepoName: testRepoName, Type: "packs"})
+	resp, err := h.ListBlobs(context.Background(), api.ListBlobsRequestObject{ArcaveObjectID: testRepoName, Type: "packs"})
 
 	// Assert
 	require.NoError(t, err)
@@ -364,7 +364,7 @@ func TestHandler_HeadBlobs(t *testing.T) {
 			h := New(serving(store))
 
 			// Act
-			resp, err := h.HeadBlobs(context.Background(), api.HeadBlobsRequestObject{RepoName: testRepoName, Type: tt.objectType})
+			resp, err := h.HeadBlobs(context.Background(), api.HeadBlobsRequestObject{ArcaveObjectID: testRepoName, Type: tt.objectType})
 
 			// Assert
 			require.NoError(t, err)
@@ -416,7 +416,7 @@ func TestHandler_StatBlob(t *testing.T) {
 				tt.stat(store)
 			}
 			h := New(serving(store))
-			request := api.StatBlobRequestObject{RepoName: testRepoName, Type: tt.objectType, Name: tt.objectName}
+			request := api.StatBlobRequestObject{ArcaveObjectID: testRepoName, Type: tt.objectType, ResticObjectID: tt.objectName}
 
 			// Act
 			resp, err := h.StatBlob(context.Background(), request)
@@ -521,10 +521,10 @@ func TestHandler_GetBlob(t *testing.T) {
 			}
 			h := New(serving(store))
 			request := api.GetBlobRequestObject{
-				RepoName: testRepoName,
-				Type:     api.Data,
-				Name:     string(testID),
-				Params:   api.GetBlobParams{Range: tt.rangeHeader},
+				ArcaveObjectID: testRepoName,
+				Type:           api.Data,
+				ResticObjectID: string(testID),
+				Params:         api.GetBlobParams{Range: tt.rangeHeader},
 			}
 
 			// Act
@@ -580,7 +580,7 @@ func TestHandler_GetBlob_NotFound(t *testing.T) {
 				tt.stat(store)
 			}
 			h := New(serving(store))
-			request := api.GetBlobRequestObject{RepoName: testRepoName, Type: tt.objectType, Name: tt.objectName}
+			request := api.GetBlobRequestObject{ArcaveObjectID: testRepoName, Type: tt.objectType, ResticObjectID: tt.objectName}
 
 			// Act
 			resp, err := h.GetBlob(context.Background(), request)
@@ -625,7 +625,7 @@ func TestHandler_SaveBlob(t *testing.T) {
 		store.On("SaveBlob", mock.Anything, model.SaveBlobRequest{Type: model.TypeData, ID: testID, Body: body}).
 			Return(nil).Once()
 		h := New(serving(store))
-		request := api.SaveBlobRequestObject{RepoName: testRepoName, Type: api.Data, Name: string(testID), Body: body}
+		request := api.SaveBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: string(testID), Body: body}
 
 		// Act
 		resp, err := h.SaveBlob(context.Background(), request)
@@ -643,7 +643,7 @@ func TestHandler_SaveBlob(t *testing.T) {
 		// Arrange
 		store := &mockRepository{}
 		h := New(serving(store))
-		request := api.SaveBlobRequestObject{RepoName: testRepoName, Type: api.Data, Name: "nope", Body: strings.NewReader("a pack")}
+		request := api.SaveBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: "nope", Body: strings.NewReader("a pack")}
 
 		// Act
 		resp, err := h.SaveBlob(context.Background(), request)
@@ -698,7 +698,7 @@ func TestHandler_DeleteBlob(t *testing.T) {
 				tt.remove(store)
 			}
 			h := New(serving(store))
-			request := api.DeleteBlobRequestObject{RepoName: testRepoName, Type: api.Data, Name: tt.objectName}
+			request := api.DeleteBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: tt.objectName}
 
 			// Act
 			resp, err := h.DeleteBlob(context.Background(), request)
@@ -721,51 +721,51 @@ func TestHandler_SentinelsNeverEscape(t *testing.T) {
 		run  func(context.Context, api.StrictServerInterface) error
 	}{
 		{"CreateRepository", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.CreateRepository(ctx, api.CreateRepositoryRequestObject{RepoName: testRepoName, Params: api.CreateRepositoryParams{Create: "true"}})
+			_, err := h.CreateRepository(ctx, api.CreateRepositoryRequestObject{ArcaveObjectID: testRepoName, Params: api.CreateRepositoryParams{Create: "true"}})
 			return err
 		}},
 		{"DeleteRepository", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.DeleteRepository(ctx, api.DeleteRepositoryRequestObject{RepoName: testRepoName})
+			_, err := h.DeleteRepository(ctx, api.DeleteRepositoryRequestObject{ArcaveObjectID: testRepoName})
 			return err
 		}},
 		{"StatConfig", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.StatConfig(ctx, api.StatConfigRequestObject{RepoName: testRepoName})
+			_, err := h.StatConfig(ctx, api.StatConfigRequestObject{ArcaveObjectID: testRepoName})
 			return err
 		}},
 		{"GetConfig", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.GetConfig(ctx, api.GetConfigRequestObject{RepoName: testRepoName})
+			_, err := h.GetConfig(ctx, api.GetConfigRequestObject{ArcaveObjectID: testRepoName})
 			return err
 		}},
 		{"SaveConfig", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.SaveConfig(ctx, api.SaveConfigRequestObject{RepoName: testRepoName, Body: strings.NewReader("written")})
+			_, err := h.SaveConfig(ctx, api.SaveConfigRequestObject{ArcaveObjectID: testRepoName, Body: strings.NewReader("written")})
 			return err
 		}},
 		{"DeleteConfig", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.DeleteConfig(ctx, api.DeleteConfigRequestObject{RepoName: testRepoName})
+			_, err := h.DeleteConfig(ctx, api.DeleteConfigRequestObject{ArcaveObjectID: testRepoName})
 			return err
 		}},
 		{"ListBlobs", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.ListBlobs(ctx, api.ListBlobsRequestObject{RepoName: testRepoName, Type: api.Data})
+			_, err := h.ListBlobs(ctx, api.ListBlobsRequestObject{ArcaveObjectID: testRepoName, Type: api.Data})
 			return err
 		}},
 		{"HeadBlobs", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.HeadBlobs(ctx, api.HeadBlobsRequestObject{RepoName: testRepoName, Type: api.Data})
+			_, err := h.HeadBlobs(ctx, api.HeadBlobsRequestObject{ArcaveObjectID: testRepoName, Type: api.Data})
 			return err
 		}},
 		{"StatBlob", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.StatBlob(ctx, api.StatBlobRequestObject{RepoName: testRepoName, Type: api.Data, Name: string(testID)})
+			_, err := h.StatBlob(ctx, api.StatBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: string(testID)})
 			return err
 		}},
 		{"GetBlob", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.GetBlob(ctx, api.GetBlobRequestObject{RepoName: testRepoName, Type: api.Data, Name: string(testID)})
+			_, err := h.GetBlob(ctx, api.GetBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: string(testID)})
 			return err
 		}},
 		{"SaveBlob", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.SaveBlob(ctx, api.SaveBlobRequestObject{RepoName: testRepoName, Type: api.Data, Name: string(testID), Body: strings.NewReader("a pack")})
+			_, err := h.SaveBlob(ctx, api.SaveBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: string(testID), Body: strings.NewReader("a pack")})
 			return err
 		}},
 		{"DeleteBlob", func(ctx context.Context, h api.StrictServerInterface) error {
-			_, err := h.DeleteBlob(ctx, api.DeleteBlobRequestObject{RepoName: testRepoName, Type: api.Data, Name: string(testID)})
+			_, err := h.DeleteBlob(ctx, api.DeleteBlobRequestObject{ArcaveObjectID: testRepoName, Type: api.Data, ResticObjectID: string(testID)})
 			return err
 		}},
 	}
@@ -819,8 +819,8 @@ func TestHandler_UnknownRepository(t *testing.T) {
 	}{
 		{name: "CreateRepository", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
 			resp, err := h.CreateRepository(ctx, api.CreateRepositoryRequestObject{
-				RepoName: unknownRepoName,
-				Params:   api.CreateRepositoryParams{Create: "true"},
+				ArcaveObjectID: unknownRepoName,
+				Params:         api.CreateRepositoryParams{Create: "true"},
 			})
 			if err != nil {
 				return nil, err
@@ -828,63 +828,63 @@ func TestHandler_UnknownRepository(t *testing.T) {
 			return resp.VisitCreateRepositoryResponse, nil
 		}},
 		{name: "DeleteRepository", wantStatus: http.StatusNotImplemented, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.DeleteRepository(ctx, api.DeleteRepositoryRequestObject{RepoName: unknownRepoName})
+			resp, err := h.DeleteRepository(ctx, api.DeleteRepositoryRequestObject{ArcaveObjectID: unknownRepoName})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitDeleteRepositoryResponse, nil
 		}},
 		{name: "StatConfig", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.StatConfig(ctx, api.StatConfigRequestObject{RepoName: unknownRepoName})
+			resp, err := h.StatConfig(ctx, api.StatConfigRequestObject{ArcaveObjectID: unknownRepoName})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitStatConfigResponse, nil
 		}},
 		{name: "GetConfig", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.GetConfig(ctx, api.GetConfigRequestObject{RepoName: unknownRepoName})
+			resp, err := h.GetConfig(ctx, api.GetConfigRequestObject{ArcaveObjectID: unknownRepoName})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitGetConfigResponse, nil
 		}},
 		{name: "SaveConfig", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.SaveConfig(ctx, api.SaveConfigRequestObject{RepoName: unknownRepoName, Body: strings.NewReader("written")})
+			resp, err := h.SaveConfig(ctx, api.SaveConfigRequestObject{ArcaveObjectID: unknownRepoName, Body: strings.NewReader("written")})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitSaveConfigResponse, nil
 		}},
 		{name: "DeleteConfig", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.DeleteConfig(ctx, api.DeleteConfigRequestObject{RepoName: unknownRepoName})
+			resp, err := h.DeleteConfig(ctx, api.DeleteConfigRequestObject{ArcaveObjectID: unknownRepoName})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitDeleteConfigResponse, nil
 		}},
 		{name: "ListBlobs", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.ListBlobs(ctx, api.ListBlobsRequestObject{RepoName: unknownRepoName, Type: api.Data})
+			resp, err := h.ListBlobs(ctx, api.ListBlobsRequestObject{ArcaveObjectID: unknownRepoName, Type: api.Data})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitListBlobsResponse, nil
 		}},
 		{name: "HeadBlobs", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.HeadBlobs(ctx, api.HeadBlobsRequestObject{RepoName: unknownRepoName, Type: api.Data})
+			resp, err := h.HeadBlobs(ctx, api.HeadBlobsRequestObject{ArcaveObjectID: unknownRepoName, Type: api.Data})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitHeadBlobsResponse, nil
 		}},
 		{name: "StatBlob", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.StatBlob(ctx, api.StatBlobRequestObject{RepoName: unknownRepoName, Type: api.Data, Name: string(testID)})
+			resp, err := h.StatBlob(ctx, api.StatBlobRequestObject{ArcaveObjectID: unknownRepoName, Type: api.Data, ResticObjectID: string(testID)})
 			if err != nil {
 				return nil, err
 			}
 			return resp.VisitStatBlobResponse, nil
 		}},
 		{name: "GetBlob", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.GetBlob(ctx, api.GetBlobRequestObject{RepoName: unknownRepoName, Type: api.Data, Name: string(testID)})
+			resp, err := h.GetBlob(ctx, api.GetBlobRequestObject{ArcaveObjectID: unknownRepoName, Type: api.Data, ResticObjectID: string(testID)})
 			if err != nil {
 				return nil, err
 			}
@@ -892,10 +892,10 @@ func TestHandler_UnknownRepository(t *testing.T) {
 		}},
 		{name: "SaveBlob", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
 			resp, err := h.SaveBlob(ctx, api.SaveBlobRequestObject{
-				RepoName: unknownRepoName,
-				Type:     api.Data,
-				Name:     string(testID),
-				Body:     strings.NewReader("a pack"),
+				ArcaveObjectID: unknownRepoName,
+				Type:           api.Data,
+				ResticObjectID: string(testID),
+				Body:           strings.NewReader("a pack"),
 			})
 			if err != nil {
 				return nil, err
@@ -903,7 +903,7 @@ func TestHandler_UnknownRepository(t *testing.T) {
 			return resp.VisitSaveBlobResponse, nil
 		}},
 		{name: "DeleteBlob", wantStatus: http.StatusNotFound, run: func(ctx context.Context, h api.StrictServerInterface) (visitor, error) {
-			resp, err := h.DeleteBlob(ctx, api.DeleteBlobRequestObject{RepoName: unknownRepoName, Type: api.Data, Name: string(testID)})
+			resp, err := h.DeleteBlob(ctx, api.DeleteBlobRequestObject{ArcaveObjectID: unknownRepoName, Type: api.Data, ResticObjectID: string(testID)})
 			if err != nil {
 				return nil, err
 			}
@@ -939,7 +939,7 @@ func TestHandler_UnknownRepository_IsJournalled(t *testing.T) {
 	h := New(serving(&mockRepository{}))
 
 	// Act
-	_, err := h.StatConfig(ctx, api.StatConfigRequestObject{RepoName: unknownRepoName})
+	_, err := h.StatConfig(ctx, api.StatConfigRequestObject{ArcaveObjectID: unknownRepoName})
 
 	// Assert
 	require.NoError(t, err)
@@ -956,9 +956,9 @@ func TestHandler_ResolverFailure(t *testing.T) {
 
 	// Act
 	resp, err := h.StatBlob(context.Background(), api.StatBlobRequestObject{
-		RepoName: testRepoName,
-		Type:     api.Data,
-		Name:     string(testID),
+		ArcaveObjectID: testRepoName,
+		Type:           api.Data,
+		ResticObjectID: string(testID),
 	})
 
 	// Assert

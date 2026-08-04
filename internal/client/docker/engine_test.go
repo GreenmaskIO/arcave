@@ -92,14 +92,14 @@ func TestMatchMount(t *testing.T) {
 // What the compose project already answers is never asked of the daemon: a
 // named volume and a bind address themselves, with no container listing at all,
 // which is what lets a savepoint cover a volume no container mounts.
-func TestEngine_ResolveVolumeAddress(t *testing.T) {
+func TestEngine_ResolveMountSource(t *testing.T) {
 	const target = "/var/lib/postgresql/data"
 
 	tests := []struct {
 		name    string
 		volume  model.Volume
 		arrange func(api *mockAPI)
-		want    model.VolumeAddress
+		want    model.MountSource
 		wantErr string
 	}{
 		{
@@ -109,15 +109,15 @@ func TestEngine_ResolveVolumeAddress(t *testing.T) {
 				api.On("VolumeInspect", mock.Anything, "demo_pgdata").
 					Return(volume.Volume{Name: "demo_pgdata"}, nil).Once()
 			},
-			want: model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: "demo_pgdata"},
+			want: model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 		},
 		{
 			name: "a bind is its host path, and the daemon is not asked at all",
 			volume: model.Volume{
-				ObjectID: "service/app/etc/cfg", ComposeProject: "demo", Type: model.VolumeTypeBind,
+				ObjectID: "volume-service-app-etc-cfg", ComposeProject: "demo", Type: model.VolumeTypeBind,
 				Bind: &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
 			},
-			want: model.VolumeAddress{Kind: model.VolumeAddressBind, Source: "/host/cfg"},
+			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
 		},
 		{
 			name:   "a named volume the daemon does not have is refused before anything creates it",
@@ -136,12 +136,12 @@ func TestEngine_ResolveVolumeAddress(t *testing.T) {
 					Return([]container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
 						{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}}, nil).Once()
 			},
-			want: model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: "9f2c0a"},
+			want: model.MountSource{Type: model.MountSourceVolume, Source: "9f2c0a"},
 		},
 		{
 			name: "a bind whose source never resolved falls back to the same lookup",
 			volume: model.Volume{
-				ObjectID: "service/app/etc/cfg", ComposeProject: "demo", Type: model.VolumeTypeBind,
+				ObjectID: "volume-service-app-etc-cfg", ComposeProject: "demo", Type: model.VolumeTypeBind,
 				Bind: &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "./cfg"},
 			},
 			arrange: func(api *mockAPI) {
@@ -149,7 +149,7 @@ func TestEngine_ResolveVolumeAddress(t *testing.T) {
 					Return([]container.Summary{{ID: "app-1", Mounts: []container.MountPoint{
 						{Type: mount.TypeBind, Source: "/host/cfg", Destination: "/etc/cfg"}}}}, nil).Once()
 			},
-			want: model.VolumeAddress{Kind: model.VolumeAddressBind, Source: "/host/cfg"},
+			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
 		},
 		{
 			name:   "an anonymous volume with no container left names the service it needed",
@@ -161,9 +161,9 @@ func TestEngine_ResolveVolumeAddress(t *testing.T) {
 			wantErr: "no container for service",
 		},
 		{
-			name:    "a volume carrying no addressing arm at all",
-			volume:  model.Volume{ObjectID: "volume/broken", ComposeProject: "demo", Type: model.VolumeTypeNamed},
-			wantErr: "no way to address its data",
+			name:    "a volume carrying no way to reach its data",
+			volume:  model.Volume{ObjectID: "volume-named-broken", ComposeProject: "demo", Type: model.VolumeTypeNamed},
+			wantErr: "no way to reach its data",
 		},
 	}
 
@@ -179,12 +179,12 @@ func TestEngine_ResolveVolumeAddress(t *testing.T) {
 			e := &Engine{api: api}
 
 			// Act
-			got, err := e.ResolveVolumeAddress(context.Background(), tt.volume)
+			got, err := e.ResolveMountSource(context.Background(), tt.volume)
 
 			// Assert
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
-				assert.Equal(t, model.VolumeAddress{}, got)
+				assert.Equal(t, model.MountSource{}, got)
 				api.AssertExpectations(t)
 				return
 			}
@@ -212,8 +212,8 @@ func TestEngine_OpenVolume(t *testing.T) {
 	e := &Engine{api: api}
 
 	// Act
-	rc, err := e.OpenVolume(context.Background(), model.VolumeAddress{
-		Kind: model.VolumeAddressVolume, Source: "demo_pgdata"})
+	rc, err := e.OpenVolume(context.Background(), model.MountSource{
+		Type: model.MountSourceVolume, Source: "demo_pgdata"})
 
 	// Assert
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 
 	// Act
 	err := e.WriteVolume(context.Background(),
-		model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: "demo_pgdata"},
+		model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 		strings.NewReader("payload"))
 
 	// Assert
@@ -269,7 +269,7 @@ func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 
 	// Act
 	err := e.WriteVolume(context.Background(),
-		model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: "demo_pgdata"},
+		model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 		strings.NewReader("payload"))
 
 	// Assert
@@ -282,23 +282,23 @@ func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 func TestEngine_WipeVolume(t *testing.T) {
 	tests := []struct {
 		name      string
-		addr      model.VolumeAddress
+		src       model.MountSource
 		wantBinds []string
 		wantErr   string
 	}{
 		{
 			name:      "a volume is cleared by its docker name",
-			addr:      model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: "demo_pgdata"},
+			src:       model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 			wantBinds: []string{"demo_pgdata:" + wipeMountPath},
 		},
 		{
 			name:      "a bind is cleared by its host path",
-			addr:      model.VolumeAddress{Kind: model.VolumeAddressBind, Source: "/host/data"},
+			src:       model.MountSource{Type: model.MountSourceBind, Source: "/host/data"},
 			wantBinds: []string{"/host/data:" + wipeMountPath},
 		},
 		{
 			name:    "an address with no source never reaches the daemon",
-			addr:    model.VolumeAddress{Kind: model.VolumeAddressVolume},
+			src:     model.MountSource{Type: model.MountSourceVolume},
 			wantErr: "no source",
 		},
 	}
@@ -315,7 +315,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			e := &Engine{api: api}
 
 			// Act
-			err := e.WipeVolume(context.Background(), tt.addr)
+			err := e.WipeVolume(context.Background(), tt.src)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -337,18 +337,18 @@ func TestMountAddress(t *testing.T) {
 	tests := []struct {
 		name    string
 		mnt     mountInfo
-		want    model.VolumeAddress
+		want    model.MountSource
 		wantErr string
 	}{
 		{
 			name: "a volume by its docker name",
 			mnt:  mountInfo{Type: "volume", Name: "demo_pgdata"},
-			want: model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: "demo_pgdata"},
+			want: model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 		},
 		{
 			name: "a bind by its host path",
 			mnt:  mountInfo{Type: "bind", Source: "/host/cfg"},
-			want: model.VolumeAddress{Kind: model.VolumeAddressBind, Source: "/host/cfg"},
+			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
 		},
 		{name: "a type no container can bind", mnt: mountInfo{Type: "tmpfs"}, wantErr: "unsupported mount type"},
 		{name: "a volume with no name", mnt: mountInfo{Type: "volume"}, wantErr: "cannot resolve backing storage"},
@@ -357,12 +357,12 @@ func TestMountAddress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := mountAddress(tt.mnt)
+			got, err := mountSourceOf(tt.mnt)
 
 			// Assert
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
-				assert.Equal(t, model.VolumeAddress{}, got)
+				assert.Equal(t, model.MountSource{}, got)
 				return
 			}
 			require.NoError(t, err)
@@ -374,7 +374,7 @@ func TestMountAddress(t *testing.T) {
 // namedVolume and anonVolume are the two arms these tests address a volume by.
 func namedVolume(dockerName string) model.Volume {
 	return model.Volume{
-		ObjectID:       "volume/" + dockerName,
+		ObjectID:       "volume-named-" + dockerName,
 		ComposeProject: "demo",
 		Type:           model.VolumeTypeNamed,
 		Named:          &model.VolumePropertiesNamed{VolumeName: dockerName},
@@ -383,7 +383,7 @@ func namedVolume(dockerName string) model.Volume {
 
 func anonVolume(service, target string) model.Volume {
 	return model.Volume{
-		ObjectID:       "service/" + service + target,
+		ObjectID:       "volume-service-" + service + target,
 		ComposeProject: "demo",
 		Type:           model.VolumeTypeAnon,
 		Anon:           &model.VolumePropertiesAnon{Service: service, Target: target},

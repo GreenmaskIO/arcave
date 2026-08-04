@@ -20,7 +20,7 @@ func New(repos model.RepositoryResolver) api.StrictServerInterface {
 	return &handler{repos: repos}
 }
 
-// CreateRepository answers POST /{repoName}/?create=true: `restic init`'s first
+// CreateRepository answers POST /{arcaveObjectID}/?create=true: `restic init`'s first
 // call, which reports that the repository exists rather than that this call made
 // it.
 func (h *handler) CreateRepository(ctx context.Context, request api.CreateRepositoryRequestObject) (api.CreateRepositoryResponseObject, error) {
@@ -28,10 +28,10 @@ func (h *handler) CreateRepository(ctx context.Context, request api.CreateReposi
 		return api.CreateRepository400Response{}, nil
 	}
 
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.CreateRepository404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -44,20 +44,20 @@ func (h *handler) CreateRepository(ctx context.Context, request api.CreateReposi
 	return api.CreateRepository200Response{}, nil
 }
 
-// DeleteRepository answers DELETE /{repoName}/: not implemented, because a
+// DeleteRepository answers DELETE /{arcaveObjectID}/: not implemented, because a
 // repository's lifetime belongs to the layer that created the store it lives in.
 // It resolves nothing: a 404 would pretend some other name would have worked.
 func (h *handler) DeleteRepository(_ context.Context, _ api.DeleteRepositoryRequestObject) (api.DeleteRepositoryResponseObject, error) {
 	return api.DeleteRepository501Response{}, nil
 }
 
-// StatConfig answers HEAD /{repoName}/config: how a client decides whether the
+// StatConfig answers HEAD /{arcaveObjectID}/config: how a client decides whether the
 // repository is initialised at all, so the size matters as much as the status.
 func (h *handler) StatConfig(ctx context.Context, request api.StatConfigRequestObject) (api.StatConfigResponseObject, error) {
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.StatConfig404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -75,13 +75,13 @@ func (h *handler) StatConfig(ctx context.Context, request api.StatConfigRequestO
 	}, nil
 }
 
-// GetConfig answers GET /{repoName}/config: the one object of a repository that
+// GetConfig answers GET /{arcaveObjectID}/config: the one object of a repository that
 // is addressed by no name and never listed.
 func (h *handler) GetConfig(ctx context.Context, request api.GetConfigRequestObject) (api.GetConfigResponseObject, error) {
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.GetConfig404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -97,13 +97,13 @@ func (h *handler) GetConfig(ctx context.Context, request api.GetConfigRequestObj
 	return api.GetConfig200ApplicationoctetStreamResponse{Body: body}, nil
 }
 
-// SaveConfig answers POST /{repoName}/config: `restic init`'s write, and the one
+// SaveConfig answers POST /{arcaveObjectID}/config: `restic init`'s write, and the one
 // call that refuses to overwrite what is already there.
 func (h *handler) SaveConfig(ctx context.Context, request api.SaveConfigRequestObject) (api.SaveConfigResponseObject, error) {
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.SaveConfig404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -120,13 +120,13 @@ func (h *handler) SaveConfig(ctx context.Context, request api.SaveConfigRequestO
 	return api.SaveConfig200Response{}, nil
 }
 
-// DeleteConfig answers DELETE /{repoName}/config: the only way a repository is
-// unmade, one object at a time, since DELETE /{repoName}/ is not implemented.
+// DeleteConfig answers DELETE /{arcaveObjectID}/config: the only way a repository is
+// unmade, one object at a time, since DELETE /{arcaveObjectID}/ is not implemented.
 func (h *handler) DeleteConfig(ctx context.Context, request api.DeleteConfigRequestObject) (api.DeleteConfigResponseObject, error) {
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.DeleteConfig404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -139,7 +139,7 @@ func (h *handler) DeleteConfig(ctx context.Context, request api.DeleteConfigRequ
 	return api.DeleteConfig200Response{}, nil
 }
 
-// ListBlobs answers GET /{repoName}/{type}/: every object of one namespace, with
+// ListBlobs answers GET /{arcaveObjectID}/{type}/: every object of one namespace, with
 // its size, which is how restic learns what a repository holds.
 func (h *handler) ListBlobs(ctx context.Context, request api.ListBlobsRequestObject) (api.ListBlobsResponseObject, error) {
 	req, err := api.NewRepoListBlobsRequest(request)
@@ -147,10 +147,10 @@ func (h *handler) ListBlobs(ctx context.Context, request api.ListBlobsRequestObj
 		return api.ListBlobs404Response{}, nil
 	}
 
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.ListBlobs404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -168,7 +168,7 @@ func (h *handler) ListBlobs(ctx context.Context, request api.ListBlobsRequestObj
 	return listing, nil
 }
 
-// HeadBlobs answers HEAD /{repoName}/{type}/: present so that a HEAD of a
+// HeadBlobs answers HEAD /{arcaveObjectID}/{type}/: present so that a HEAD of a
 // listing is not a 405. The protocol does not describe it and restic never
 // sends it.
 func (h *handler) HeadBlobs(ctx context.Context, request api.HeadBlobsRequestObject) (api.HeadBlobsResponseObject, error) {
@@ -178,10 +178,10 @@ func (h *handler) HeadBlobs(ctx context.Context, request api.HeadBlobsRequestObj
 
 	// Resolved and dropped: the lookup is here only for its 404 — without it a
 	// HEAD answers 200 for a repository that is not served.
-	_, err := h.repos.Lookup(request.RepoName)
+	_, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.HeadBlobs404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -189,7 +189,7 @@ func (h *handler) HeadBlobs(ctx context.Context, request api.HeadBlobsRequestObj
 	return api.HeadBlobs200Response{}, nil
 }
 
-// StatBlob answers HEAD /{repoName}/{type}/{name}: restic asks it to decide
+// StatBlob answers HEAD /{arcaveObjectID}/{type}/{resticObjectID}: restic asks it to decide
 // whether it already holds a pack.
 func (h *handler) StatBlob(ctx context.Context, request api.StatBlobRequestObject) (api.StatBlobResponseObject, error) {
 	req, err := api.NewRepoStatBlobRequest(request)
@@ -197,10 +197,10 @@ func (h *handler) StatBlob(ctx context.Context, request api.StatBlobRequestObjec
 		return api.StatBlob404Response{}, nil
 	}
 
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.StatBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -218,7 +218,7 @@ func (h *handler) StatBlob(ctx context.Context, request api.StatBlobRequestObjec
 	}, nil
 }
 
-// GetBlob answers GET /{repoName}/{type}/{name}: one object, whole or in part.
+// GetBlob answers GET /{arcaveObjectID}/{type}/{resticObjectID}: one object, whole or in part.
 // The size is read first — the range is clamped against it and both answers
 // render it.
 func (h *handler) GetBlob(ctx context.Context, request api.GetBlobRequestObject) (api.GetBlobResponseObject, error) {
@@ -227,10 +227,10 @@ func (h *handler) GetBlob(ctx context.Context, request api.GetBlobRequestObject)
 		return api.GetBlob404Response{}, nil
 	}
 
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.GetBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -293,7 +293,7 @@ func partialBlob(ctx context.Context, repo model.Repository, req model.OpenBlobR
 	}, nil
 }
 
-// SaveBlob answers POST /{repoName}/{type}/{name}: an upload overwrites rather
+// SaveBlob answers POST /{arcaveObjectID}/{type}/{resticObjectID}: an upload overwrites rather
 // than refusing, since a name is content-addressed and carries the same bytes.
 func (h *handler) SaveBlob(ctx context.Context, request api.SaveBlobRequestObject) (api.SaveBlobResponseObject, error) {
 	req, err := api.NewRepoSaveBlobRequest(request)
@@ -301,10 +301,10 @@ func (h *handler) SaveBlob(ctx context.Context, request api.SaveBlobRequestObjec
 		return api.SaveBlob404Response{}, nil
 	}
 
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.SaveBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -316,7 +316,7 @@ func (h *handler) SaveBlob(ctx context.Context, request api.SaveBlobRequestObjec
 	return api.SaveBlob200Response{}, nil
 }
 
-// DeleteBlob answers DELETE /{repoName}/{type}/{name}: one object of a prune,
+// DeleteBlob answers DELETE /{arcaveObjectID}/{type}/{resticObjectID}: one object of a prune,
 // and the call restic retries.
 func (h *handler) DeleteBlob(ctx context.Context, request api.DeleteBlobRequestObject) (api.DeleteBlobResponseObject, error) {
 	req, err := api.NewRepoDeleteBlobRequest(request)
@@ -325,10 +325,10 @@ func (h *handler) DeleteBlob(ctx context.Context, request api.DeleteBlobRequestO
 		return api.DeleteBlob404Response{}, nil
 	}
 
-	repo, err := h.repos.Lookup(request.RepoName)
+	repo, err := h.repos.Lookup(request.ArcaveObjectID)
 	switch {
 	case errors.Is(err, model.ErrRepositoryNotFound):
-		logRepositoryNotFound(ctx, request.RepoName)
+		logRepositoryNotFound(ctx, request.ArcaveObjectID)
 		return api.DeleteBlob404Response{}, nil
 	case err != nil:
 		return nil, fmt.Errorf("repo lookup: %w", err)
@@ -341,8 +341,8 @@ func (h *handler) DeleteBlob(ctx context.Context, request api.DeleteBlobRequestO
 	return api.DeleteBlob200Response{}, nil
 }
 
-// logRepositoryNotFound is worth an ERROR: no restic run arcave started asks for
-// a repository arcave did not register.
-func logRepositoryNotFound(ctx context.Context, name api.RepoNamePath) {
-	zerolog.Ctx(ctx).Error().Str("repository", name).Msg("repository is not found")
+// logRepositoryNotFound is worth an ERROR: no restic run arcave started addresses
+// a repository the server cannot resolve.
+func logRepositoryNotFound(ctx context.Context, arcaveObjectID api.ArcaveObjectIDPath) {
+	zerolog.Ctx(ctx).Error().Str("repository", arcaveObjectID).Msg("repository is not found")
 }

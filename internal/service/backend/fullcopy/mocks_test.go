@@ -14,24 +14,24 @@ import (
 
 type mockVolumeStreamer struct{ mock.Mock }
 
-func (m *mockVolumeStreamer) ResolveVolumeAddress(
+func (m *mockVolumeStreamer) ResolveMountSource(
 	ctx context.Context, v model.Volume,
-) (model.VolumeAddress, error) {
+) (model.MountSource, error) {
 	args := m.Called(ctx, v)
-	addr, _ := args.Get(0).(model.VolumeAddress)
-	return addr, args.Error(1)
+	src, _ := args.Get(0).(model.MountSource)
+	return src, args.Error(1)
 }
 
 func (m *mockVolumeStreamer) OpenVolume(
-	ctx context.Context, addr model.VolumeAddress,
+	ctx context.Context, src model.MountSource,
 ) (io.ReadCloser, error) {
-	args := m.Called(ctx, addr)
+	args := m.Called(ctx, src)
 	rc, _ := args.Get(0).(io.ReadCloser)
 	return rc, args.Error(1)
 }
 
-func (m *mockVolumeStreamer) WriteVolume(ctx context.Context, addr model.VolumeAddress, r io.Reader) error {
-	return m.Called(ctx, addr, r).Error(0)
+func (m *mockVolumeStreamer) WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error {
+	return m.Called(ctx, src, r).Error(0)
 }
 
 // failingReader fails mid-stream; a mock cannot, since it only hands the reader over.

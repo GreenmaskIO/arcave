@@ -1,7 +1,8 @@
 // Package cdcbackend drives the cdc backend one contract call at a time: one
-// volume, one instance, a real daemon, stock restic containers and the
-// repository registry behind the real endpoint. What only this level buys is the repository in view —
-// the shared store is inmemory, so a case lists the keys restic actually wrote.
+// volume, one instance, a real daemon, stock restic containers and the real
+// endpoint in front of the real repository root. What only this level buys is
+// the repository in view — the shared store is inmemory, so a case lists the
+// keys restic actually wrote.
 // Guarded twice: -short skips, and so does an unreachable daemon.
 package cdcbackend
 
@@ -12,7 +13,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"path"
 	"sort"
 	"sync"
 	"testing"
@@ -32,8 +32,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
-	resticrepo "github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 )
 
 const (
@@ -77,13 +76,16 @@ type env struct {
 	ctx    context.Context
 	cli    *client.Client
 	engine *dockerclient.Engine
-	repos  *registry.Registry
 	// repoURLBase is what the DI root hands a backend: the served endpoint as a
-	// container names it, with a prefix still to append.
+	// container names it, with a volume's ObjectID still to append.
 	repoURLBase string
 	shared      storages.Storager
-	factory     *cdc.Factory
-	opts        cdc.Options
+	// resticRoot is the tree the repositories live in — the one the server
+	// resolves against and the one the factory writes into, exactly as the DI
+	// root wires it.
+	resticRoot storages.Storager
+	factory    *cdc.Factory
+	opts       cdc.Options
 }
 
 // newEnv wires the backend as cmd/arcave does, with the shared store in memory:
@@ -105,8 +107,9 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 	t.Cleanup(func() { assert.NoError(t, shared.Close()) })
 
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	repos := registry.New()
-	server := rest.NewEcho(ctx, repos)
+	resticRoot, err := shared.SubStorage(cdc.RepoNamespace, true)
+	require.NoError(t, err)
+	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	port, err := rest.Serve(server, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, server.Close()) })
@@ -116,17 +119,16 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 		ctx:         ctx,
 		cli:         cli,
 		engine:      engine,
-		repos:       repos,
-		repoURLBase: rest.RepositoryURLBase(containerHost, port),
+		repoURLBase: rest.RepositoryURLBase("", containerHost, port),
 		shared:      shared,
+		resticRoot:  resticRoot,
 		opts:        opts,
 	}
 	e.factory = cdc.NewFactory(cdc.Dependencies{
-		Runner:      engine,
-		Publisher:   repos,
-		RepoURLBase: e.repoURLBase,
-		SharedStore: shared,
-		Options:     opts,
+		Runner:         engine,
+		RepoURLBase:    e.repoURLBase,
+		RepositoryRoot: resticRoot,
+		Options:        opts,
 	})
 	return e
 }
@@ -210,7 +212,7 @@ func (e *env) newFilledVolume(t *testing.T, service string) string {
 // namedVolume is the unit the backend is built for, assembled by hand.
 func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
 	return model.Volume{
-		ObjectID:       "volume/" + name,
+		ObjectID:       "volume-named-" + name,
 		ComposeProject: itProject,
 		Type:           model.VolumeTypeNamed,
 		Backend:        model.SnapshotBackendCDC,
@@ -218,13 +220,13 @@ func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
 	}
 }
 
-// backend builds the instance under test, as the registry does. Both tier stores
-// are nil on purpose: a cdc repository lives beside both trees, so a backend that
-// starts calling TierStore() fails here loudly.
-func (e *env) backend(t *testing.T, vol model.Volume, tier model.BackendTier) model.VolumeSnapshotBackend {
+// backend builds the instance under test, as the registry does. The spec carries
+// no store on purpose: a cdc repository lives outside whatever tree a workflow
+// hands over, so a backend that starts reading spec.Store fails here loudly.
+func (e *env) backend(t *testing.T, vol model.Volume) model.VolumeSnapshotBackend {
 	t.Helper()
 
-	backend, err := e.factory.New(model.BackendSpec{Volume: vol, Tier: tier})
+	backend, err := e.factory.New(model.BackendSpec{Volume: vol})
 	require.NoError(t, err)
 	return backend
 }
@@ -244,11 +246,12 @@ func (e *env) snapshot(
 	return payload
 }
 
-// repoStore re-roots the shared store at one volume's repository, as the factory does.
+// repoStore re-roots the repository root at one volume's repository, as the
+// factory does — and as the server resolves a name on the wire.
 func (e *env) repoStore(t *testing.T, vol model.Volume) storages.Storager {
 	t.Helper()
 
-	store, err := e.shared.SubStorage(path.Join("restic", vol.ObjectID), true)
+	store, err := e.resticRoot.SubStorage(vol.ObjectID, true)
 	require.NoError(t, err)
 	return store
 }
@@ -260,8 +263,8 @@ func (e *env) repoKeys(t *testing.T, vol model.Volume) []string {
 	return objectNames(t, e.repoStore(t, vol), "")
 }
 
-// snapshotRefs is the snapshot objects the repository holds, one per capture.
-func (e *env) snapshotRefs(t *testing.T, vol model.Volume) []string {
+// snapshotObjectIDs is the snapshot objects the repository holds, one per capture.
+func (e *env) snapshotObjectIDs(t *testing.T, vol model.Volume) []string {
 	t.Helper()
 
 	return objectNames(t, e.repoStore(t, vol), snapshotsPath)
@@ -276,21 +279,19 @@ type oracleSnapshot struct {
 	Tags     []string `json:"tags"`
 }
 
-// oracleSnapshots reads the repository with `restic snapshots --json`, through a
-// prefix of its own — an independent reader of what arcave believes it wrote.
+// oracleSnapshots reads the repository with `restic snapshots --json` — an
+// independent reader of what arcave believes it wrote. It addresses the very
+// name the backend does: with no registration to make, "reachable" is a
+// property of the tree the server was given.
 func (e *env) oracleSnapshots(t *testing.T, vol model.Volume) []oracleSnapshot {
 	t.Helper()
-
-	prefix := "oracle-" + randomSuffix(t)
-	require.NoError(t, e.repos.Register(prefix, resticrepo.New(e.repoStore(t, vol))))
-	defer e.repos.Unregister(prefix)
 
 	var stdout, stderr bytes.Buffer
 	err := e.engine.RunOneShot(e.ctx, model.OneShotSpec{
 		Image: e.opts.Image,
 		Cmd:   []string{"snapshots", "--json"},
 		Env: []string{
-			"RESTIC_REPOSITORY=" + e.repoURLBase + "/" + prefix + "/",
+			"RESTIC_REPOSITORY=" + e.repoURLBase + "/" + vol.ObjectID + "/",
 			"RESTIC_PASSWORD=" + resticPassword,
 		},
 		Stdout: &stdout,

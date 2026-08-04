@@ -20,7 +20,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 )
 
@@ -58,25 +57,24 @@ type containerRunner interface {
 }
 
 func TestResticEndToEnd(t *testing.T) {
-	// Arrange: store → repository → registry → served endpoint on the host loopback.
+	// Arrange: repository root → resolver → served endpoint on the host loopback.
 	cli := newDockerClient(t)
 	ctx := t.Context()
 
-	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+	root, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
-	// The prefix is the caller's stable name for the repository, flattened to
-	// one segment — the contract the backend follows for its object ids.
-	const prefix = "service-db-var-lib-data"
-	repos := registry.New()
-	require.NoError(t, repos.Register(prefix, repo.New(store)))
-	defer repos.Unregister(prefix)
+	// The name on the wire is a volume's arcave ObjectID: one segment, and the
+	// name of the directory its repository lives in under the root.
+	const objectID = "volume-service-db-var-lib-data"
+	store, err := root.SubStorage(objectID, true)
+	require.NoError(t, err)
 
-	srv := rest.NewEcho(ctx, repos)
+	srv := rest.NewEcho(ctx, repo.NewResolver(root))
 	port, err := rest.Serve(srv, "")
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, srv.Close()) }()
-	urlBase := rest.RepositoryURLBase(e2eContainerHost, port)
-	repoURL := urlBase + "/" + prefix + "/"
+	urlBase := rest.RepositoryURLBase("", e2eContainerHost, port)
+	repoURL := urlBase + "/" + objectID + "/"
 
 	var runner containerRunner = docker.NewEngine(cli)
 	vol := newDataVolume(t, cli, runner)

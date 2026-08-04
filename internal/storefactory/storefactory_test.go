@@ -87,11 +87,11 @@ func TestNew(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, session.Close()) })
 
 		// Act
-		err = session.PutObject(context.Background(), "100/volume/demo_pgdata/data.tar", strings.NewReader("payload"))
+		err = session.PutObject(context.Background(), "100/volume-named-demo_pgdata/data.tar", strings.NewReader("payload"))
 
 		// Assert
 		require.NoError(t, err)
-		assert.FileExists(t, filepath.Join(root, "snaps", "arcave", "global", "100", "volume", "demo_pgdata", "data.tar"))
+		assert.FileExists(t, filepath.Join(root, "snaps", "arcave", "global", "100", "volume-named-demo_pgdata", "data.tar"))
 	})
 
 	// The store is rooted at the session, not at the namespace: nothing reached

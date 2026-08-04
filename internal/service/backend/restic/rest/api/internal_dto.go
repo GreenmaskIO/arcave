@@ -32,24 +32,24 @@ func NewRepoListBlobsRequest(r ListBlobsRequestObject) (model.ListBlobsRequest, 
 
 // NewRepoStatBlobRequest carries an object's address into the domain.
 func NewRepoStatBlobRequest(r StatBlobRequestObject) (model.StatBlobRequest, error) {
-	return model.NewStatBlobRequest(string(r.Type), string(r.Name))
+	return model.NewStatBlobRequest(string(r.Type), string(r.ResticObjectID))
 }
 
 // NewRepoGetBlobRequest carries a read's address into the domain. A GET begins
 // with a stat — the size decides the range and both answers render it — so what
 // a GET's path carries is that stat's request; the interval follows it.
 func NewRepoGetBlobRequest(r GetBlobRequestObject) (model.StatBlobRequest, error) {
-	return model.NewStatBlobRequest(string(r.Type), string(r.Name))
+	return model.NewStatBlobRequest(string(r.Type), string(r.ResticObjectID))
 }
 
 // NewRepoSaveBlobRequest carries an upload's address and its body into the domain.
 func NewRepoSaveBlobRequest(r SaveBlobRequestObject) (model.SaveBlobRequest, error) {
-	return model.NewSaveBlobRequest(string(r.Type), string(r.Name), r.Body)
+	return model.NewSaveBlobRequest(string(r.Type), string(r.ResticObjectID), r.Body)
 }
 
 // NewRepoDeleteBlobRequest carries an object's address into the domain.
 func NewRepoDeleteBlobRequest(r DeleteBlobRequestObject) (model.DeleteBlobRequest, error) {
-	return model.NewDeleteBlobRequest(string(r.Type), string(r.Name))
+	return model.NewDeleteBlobRequest(string(r.Type), string(r.ResticObjectID))
 }
 
 // Listing renders the listing — name and size per object, the only shape this

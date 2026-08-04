@@ -29,7 +29,8 @@ const readHeaderTimeout = 10 * time.Second
 // context is here for its logger: lecho reads none from a request, and echo's
 // own output must not reach stdout, which is a command's result channel.
 //
-// Nothing here resolves a repository: the operation reading {repoName} looks it up.
+// Nothing here resolves a repository: the operation reading {arcaveObjectID}
+// looks it up.
 func NewEcho(ctx context.Context, repos model.RepositoryResolver) *echo.Echo {
 	logger := lecho.From(*zerolog.Ctx(ctx))
 
@@ -63,7 +64,8 @@ func NewEcho(ctx context.Context, repos model.RepositoryResolver) *echo.Echo {
 
 	// Served from the binary, so a reader sees the document these routes were
 	// generated from. Echo prefers a static segment to a parametric one, so this
-	// shadows {repoName}: no repository is reachable under the name "docs".
+	// shadows {arcaveObjectID} — harmlessly: every ObjectID opens with "volume-",
+	// so none of them is ever "docs".
 	e.GET("/docs/*", echoSwagger.EchoWrapHandler(echoSwagger.InstanceName(docs.InstanceName)))
 
 	return e

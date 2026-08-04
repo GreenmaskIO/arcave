@@ -2,12 +2,19 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
+
+// errObjectIDCollision refuses a project whose volumes render one ObjectID from
+// two different identities. An ObjectID is one path segment, so a target is
+// flattened into it and {app, /var/lib} meets {app-var, /lib} there; the two
+// would share a repository and a capture directory, each overwriting the other.
+var errObjectIDCollision = errors.New("two volumes address the same object id")
 
 // skipReasons says why a mount type is not a unit of backup.
 var skipReasons = map[model.VolumeType]string{
@@ -58,6 +65,10 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []strin
 // anonymous mount, all on backend, deduplicated by ObjectID. The one place
 // ComposeProject is stamped.
 //
+// It is also where an ObjectID collision is caught: this is the only level that
+// sees every volume of the project, so two identities rendering one id are
+// named here as an error rather than quietly merged into one unit.
+//
 // backend is a parameter because it is project config (snapshot.backend),
 // resolved at the DI root. A per-volume choice would plug in here.
 func FindBackupVolumes(
@@ -67,15 +78,18 @@ func FindBackupVolumes(
 		volumes []model.Volume
 		skipped []model.SkippedVolume
 	)
-	seen := map[string]struct{}{}
+	seen := map[string]volumeIdentity{}
 
 	// Named volumes come from the project level: a volume three services mount is
 	// one unit, and only this level knows every mount of it.
 	for _, named := range res.Project.Volumes {
-		if _, ok := seen[named.ObjectID()]; ok {
+		duplicate, err := claimObjectID(seen, named.ObjectID(), volumeIdentity{dockerName: named.Name})
+		if err != nil {
+			return nil, nil, err
+		}
+		if duplicate {
 			continue
 		}
-		seen[named.ObjectID()] = struct{}{}
 		volumes = append(volumes, model.Volume{
 			ObjectID:       named.ObjectID(),
 			ComposeProject: res.Project.Name,
@@ -108,10 +122,13 @@ func FindBackupVolumes(
 			}
 
 			objectID := sv.ObjectID(svc.Name)
-			if _, ok := seen[objectID]; ok {
+			duplicate, err := claimObjectID(seen, objectID, volumeIdentity{service: svc.Name, target: sv.Target})
+			if err != nil {
+				return nil, nil, err
+			}
+			if duplicate {
 				continue
 			}
-			seen[objectID] = struct{}{}
 			volumes = append(volumes, model.Volume{
 				ObjectID:       objectID,
 				ComposeProject: res.Project.Name,
@@ -124,6 +141,38 @@ func FindBackupVolumes(
 	}
 
 	return volumes, skipped, nil
+}
+
+// volumeIdentity is the facts an ObjectID is rendered from — a docker name for a
+// named volume, a service and a target for a bind or anonymous one. Comparable,
+// so two claims of one id are told apart by the identity behind them.
+type volumeIdentity struct {
+	dockerName string
+	service    string
+	target     string
+}
+
+func (id volumeIdentity) String() string {
+	if id.dockerName != "" {
+		return fmt.Sprintf("named volume %q", id.dockerName)
+	}
+	return fmt.Sprintf("service %q at %q", id.service, id.target)
+}
+
+// claimObjectID records that identity addresses objectID, reporting a repeat of
+// the same identity as a duplicate to skip and a different one as an error
+// naming both: they would share one unit of backup and overwrite each other.
+func claimObjectID(seen map[string]volumeIdentity, objectID string, identity volumeIdentity) (bool, error) {
+	prior, taken := seen[objectID]
+	switch {
+	case taken && prior == identity:
+		return true, nil
+	case taken:
+		return false, fmt.Errorf("%w: %s and %s both address %q; rename one of them",
+			errObjectIDCollision, prior, identity, objectID)
+	}
+	seen[objectID] = identity
+	return false, nil
 }
 
 // skipReason falls back to the unknown-type reason, so a VolumeType missing from

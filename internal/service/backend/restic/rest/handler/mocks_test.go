@@ -12,14 +12,14 @@ import (
 var _ model.RepositoryResolver = stubResolver{}
 
 // stubResolver serves one repository under one name. A stub and not a mock:
-// what a name resolves to is the registry's question, not this package's.
+// what a name resolves to is the resolver's question, not this package's.
 type stubResolver struct {
 	name string
 	repo model.Repository
 }
 
-func (s stubResolver) Lookup(name string) (model.Repository, error) {
-	if name != s.name {
+func (s stubResolver) Lookup(arcaveObjectID string) (model.Repository, error) {
+	if arcaveObjectID != s.name {
 		return nil, model.ErrRepositoryNotFound
 	}
 	return s.repo, nil

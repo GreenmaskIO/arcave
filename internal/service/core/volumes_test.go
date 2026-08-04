@@ -44,7 +44,7 @@ func TestFindBackupVolumes(t *testing.T) {
 			},
 			want: []model.Volume{
 				{
-					ObjectID:       "volume/demo_pgdata",
+					ObjectID:       "volume-named-demo_pgdata",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeNamed,
 					Backend:        model.SnapshotBackendCopy,
@@ -54,14 +54,14 @@ func TestFindBackupVolumes(t *testing.T) {
 					},
 				},
 				{
-					ObjectID:       "service/app/etc/cfg",
+					ObjectID:       "volume-service-app-etc-cfg",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeBind,
 					Backend:        model.SnapshotBackendCopy,
 					Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg", ReadOnly: true},
 				},
 				{
-					ObjectID:       "service/db/data",
+					ObjectID:       "volume-service-db-data",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeAnon,
 					Backend:        model.SnapshotBackendCopy,
@@ -94,7 +94,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				}},
 			},
 			want: []model.Volume{{
-				ObjectID:       "volume/demo_assets",
+				ObjectID:       "volume-named-demo_assets",
 				ComposeProject: "demo",
 				Type:           model.VolumeTypeNamed,
 				Backend:        model.SnapshotBackendCopy,
@@ -117,8 +117,8 @@ func TestFindBackupVolumes(t *testing.T) {
 				},
 			},
 			want: []model.Volume{
-				{ObjectID: "volume/demo_orphan", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "demo_orphan"}},
-				{ObjectID: "volume/shared_pgdata", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "shared_pgdata"}},
+				{ObjectID: "volume-named-demo_orphan", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "demo_orphan"}},
+				{ObjectID: "volume-named-shared_pgdata", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "shared_pgdata"}},
 			},
 		},
 		{
@@ -153,7 +153,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				}}},
 			},
 			want: []model.Volume{{
-				ObjectID:       "service/app/etc/cfg",
+				ObjectID:       "volume-service-app-etc-cfg",
 				ComposeProject: "demo",
 				Type:           model.VolumeTypeBind,
 				Backend:        model.SnapshotBackendCopy,
@@ -194,14 +194,14 @@ func TestFindBackupVolumes(t *testing.T) {
 			},
 			want: []model.Volume{
 				{
-					ObjectID:       "service/api/etc/cfg",
+					ObjectID:       "volume-service-api-etc-cfg",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeBind,
 					Backend:        model.SnapshotBackendCopy,
 					Bind:           &model.VolumePropertiesBind{Service: "api", Target: "/etc/cfg", Source: "/host/cfg"},
 				},
 				{
-					ObjectID:       "service/web/etc/cfg",
+					ObjectID:       "volume-service-web-etc-cfg",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeBind,
 					Backend:        model.SnapshotBackendCopy,
@@ -223,6 +223,35 @@ func TestFindBackupVolumes(t *testing.T) {
 			assertOneArmPerType(t, got)
 		})
 	}
+}
+
+// An ObjectID is one segment, so a target is flattened into it and two
+// identities can land on the same id. Sharing a unit of backup between them
+// would have each overwrite the other, so the operation stops and names both.
+func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
+	// Arrange
+	res := model.IntrospectionResult{Project: model.Project{
+		Name: "demo",
+		Services: []model.Service{
+			{Name: "app", Volumes: []model.ServiceVolume{
+				{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/data", Target: "/var/lib/data"},
+			}},
+			{Name: "app-var", Volumes: []model.ServiceVolume{
+				{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/other", Target: "/lib/data"},
+			}},
+		},
+	}}
+
+	// Act
+	got, skipped, err := FindBackupVolumes(res, model.SnapshotBackendCopy)
+
+	// Assert
+	require.ErrorIs(t, err, errObjectIDCollision)
+	assert.Contains(t, err.Error(), `service "app" at "/var/lib/data"`)
+	assert.Contains(t, err.Error(), `service "app-var" at "/lib/data"`)
+	assert.Contains(t, err.Error(), "volume-service-app-var-lib-data")
+	assert.Nil(t, got)
+	assert.Nil(t, skipped)
 }
 
 // The backend is the caller's, stamped on every unit whatever its addressing

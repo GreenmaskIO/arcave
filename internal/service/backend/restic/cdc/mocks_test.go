@@ -8,13 +8,12 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	resticmodel "github.com/greenmaskio/arcave/internal/service/backend/restic/rest/model"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
 // tests match ctx with mock.Anything unless they assert on it.
 
-// mockRunner doubles ContainerRunner and records every spec it was handed: a
+// mockRunner doubles VolumeRunner and records every spec it was handed: a
 // OneShotSpec carries the stdio writers this package creates, so no literal can
 // name one — the expectations match the argv, and the assertions read the
 // recording.
@@ -31,14 +30,14 @@ func (m *mockRunner) RunOneShot(ctx context.Context, spec model.OneShotSpec) err
 	return m.Called(ctx, spec).Error(0)
 }
 
-func (m *mockRunner) ResolveVolumeAddress(ctx context.Context, v model.Volume) (model.VolumeAddress, error) {
+func (m *mockRunner) ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error) {
 	args := m.Called(ctx, v)
-	addr, _ := args.Get(0).(model.VolumeAddress)
-	return addr, args.Error(1)
+	src, _ := args.Get(0).(model.MountSource)
+	return src, args.Error(1)
 }
 
-func (m *mockRunner) WipeVolume(ctx context.Context, addr model.VolumeAddress) error {
-	return m.Called(ctx, addr).Error(0)
+func (m *mockRunner) WipeVolume(ctx context.Context, src model.MountSource) error {
+	return m.Called(ctx, src).Error(0)
 }
 
 // Specs returns the runs in the order they happened.
@@ -46,21 +45,6 @@ func (m *mockRunner) Specs() []model.OneShotSpec {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]model.OneShotSpec(nil), m.specs...)
-}
-
-// mockPublisher doubles the registry both halves of the seam: a withdrawal is a
-// method of its own now, so it is an expectation like any other rather than a
-// counter.
-type mockPublisher struct {
-	mock.Mock
-}
-
-func (m *mockPublisher) Register(name string, repo resticmodel.Repository) error {
-	return m.Called(name, repo).Error(0)
-}
-
-func (m *mockPublisher) Unregister(name string) {
-	m.Called(name)
 }
 
 // matchRestic matches a one-shot run by the restic subcommand it invokes, which

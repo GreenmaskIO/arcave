@@ -33,31 +33,26 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
-// safetyBackupDir is the store safety backups live in, relative to the project root.
-// Never user-configurable: scratch space one rollback creates and deletes.
-var safetyBackupDir = filepath.Join(model.StateDir, "tmp")
-
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
-	savepointStore    storages.Storager
-	safetyBackupStore storages.Storager
-	sharedStore       storages.Storager
-	progressWriter    io.WriteCloser
-	dockerCli         *command.DockerCli
-	dockerClient      client.APIClient
-	composeService    api.Compose
-	engine            *docker.Engine
-	composeRunner     *compose.Client
+	savepointStore storages.Storager
+	sharedStore    storages.Storager
+	progressWriter io.WriteCloser
+	dockerCli      *command.DockerCli
+	dockerClient   client.APIClient
+	composeService api.Compose
+	engine         *docker.Engine
+	composeRunner  *compose.Client
 	// resticServer is held for one reason only — so Close shuts it down. What goes
 	// down to the backend is the URL base, never the object.
 	resticServer *echo.Echo
@@ -78,17 +73,6 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		return nil, fmt.Errorf("initialise savepoint store: %w", err)
 	}
 	opened.add("savepoint store", savepointStore)
-
-	// Not user-configurable, so it is built from a literal directory arm rather
-	// than from cfg — through the same factory, and so the same namespacing.
-	safetyBackupStore, err := storefactory.New(config.Storage{
-		Type:      config.StorageTypeDirectory,
-		Directory: &config.DirectoryStorage{Path: safetyBackupDir},
-	}, projectPath, model.DefaultSession)
-	if err != nil {
-		return nil, fmt.Errorf("initialise safety backup store: %w", err)
-	}
-	opened.add("safety backup store", safetyBackupStore)
 
 	// Beside the sessions rather than under one: a cdc repository that died with
 	// its session would cost a cold full backup.
@@ -124,11 +108,19 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	// is wired whatever snapshot.backend says.
 	cdcCfg := config.CDCWithDefaults(cfg.Backends.CDC)
 
+	// The tree every cdc repository lives in — one directory per volume, named by
+	// its ObjectID. Resolved once and handed to both sides, so "the server serves
+	// exactly the tree cdc writes into" is visible in one place rather than kept
+	// by two call sites agreeing.
+	resticRoot, err := sharedStore.SubStorage(cdc.RepoNamespace, true)
+	if err != nil {
+		return nil, fmt.Errorf("initialise restic repository root: %w", err)
+	}
+
 	// The server cdc's containers fetch their repositories over. It listens for
 	// the whole process, so an address that will not bind fails the command up
 	// front, and the port it took is known here — before the first backend.
-	resticRepos := registry.New()
-	resticServer := rest.NewEcho(ctx, resticRepos)
+	resticServer := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	resticPort, err := rest.Serve(resticServer, cdcCfg.ServerAddress)
 	if err != nil {
 		return nil, fmt.Errorf("start the restic server: %w", err)
@@ -140,22 +132,22 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
 		fullcopy.NewFactory(engine),
 		cdc.NewFactory(cdc.Dependencies{
-			Runner:    engine,
-			Publisher: resticRepos,
+			Runner: engine,
 			// The container's own name for the server, joined to the port it bound:
 			// the value the backend is handed, so nothing below holds the server.
-			RepoURLBase: rest.RepositoryURLBase(cdcCfg.ContainerHost, resticPort),
-			SharedStore: sharedStore,
-			Options:     cdcOptions(cdcCfg),
+			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcCfg.ContainerHost, resticPort),
+			RepositoryRoot: resticRoot,
+			Options:        cdcOptions(cdcCfg),
 		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	// One repository, over the savepoint tier's own store, so a record travels
-	// with its data; the safety tier keeps none. The locker is bound to the
-	// project root here, so the service never names a path.
+	// One repository over the one store, so every record travels with its data —
+	// a rollback's safety snapshot included, being an ordinary savepoint under a
+	// label. The locker is bound to the project root here, so the service never
+	// names a path.
 	svc := core.New(
 		sprepo.New(savepointStore),
 		lock.New(projectPath),
@@ -163,23 +155,21 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 		composeRunner,
 		backendRegistry,
 		savepointStore,
-		safetyBackupStore,
 		cfg.Snapshot.BackendKind(),
 	)
 	opened.keep()
 	return &dependencies{
-		savepointStore:    savepointStore,
-		safetyBackupStore: safetyBackupStore,
-		sharedStore:       sharedStore,
-		progressWriter:    progressWriter,
-		dockerCli:         dockerCli,
-		dockerClient:      dockerClientAPI,
-		composeService:    composeService,
-		engine:            engine,
-		composeRunner:     composeRunner,
-		resticServer:      resticServer,
-		service:           svc,
-		printer:           json.New(os.Stdout),
+		savepointStore: savepointStore,
+		sharedStore:    sharedStore,
+		progressWriter: progressWriter,
+		dockerCli:      dockerCli,
+		dockerClient:   dockerClientAPI,
+		composeService: composeService,
+		engine:         engine,
+		composeRunner:  composeRunner,
+		resticServer:   resticServer,
+		service:        svc,
+		printer:        json.New(os.Stdout),
 	}, nil
 }
 
@@ -218,15 +208,15 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 }
 
 // Close releases the restic server, the Docker engine, the progress writer and
-// every store; only the savepoint store's error is returned. The progress writer
-// is closed after the engine, so a line compose left unterminated is still
-// emitted. dockerClient is not closed — the engine was built over it.
+// the two stores this root owns; only the savepoint store's error is returned.
+// The progress writer is closed after the engine, so a line compose left
+// unterminated is still emitted. dockerClient is not closed — the engine was
+// built over it.
 func (d *dependencies) Close(ctx context.Context) error {
 	shutdownResticServer(ctx, d.resticServer)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
 	closeQuietly(ctx, "shared store", d.sharedStore)
-	closeQuietly(ctx, "safety backup store", d.safetyBackupStore)
 	return d.savepointStore.Close()
 }
 

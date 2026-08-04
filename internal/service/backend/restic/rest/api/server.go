@@ -17,41 +17,41 @@ import (
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// Delete the repository
-	// (DELETE /{repoName}/)
-	DeleteRepository(ctx echo.Context, repoName RepoNamePath) error
+	// (DELETE /{arcaveObjectID}/)
+	DeleteRepository(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error
 	// Create the repository
-	// (POST /{repoName}/)
-	CreateRepository(ctx echo.Context, repoName RepoNamePath, params CreateRepositoryParams) error
+	// (POST /{arcaveObjectID}/)
+	CreateRepository(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, params CreateRepositoryParams) error
 	// Remove the config
-	// (DELETE /{repoName}/config)
-	DeleteConfig(ctx echo.Context, repoName RepoNamePath) error
+	// (DELETE /{arcaveObjectID}/config)
+	DeleteConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error
 	// Read the config
-	// (GET /{repoName}/config)
-	GetConfig(ctx echo.Context, repoName RepoNamePath) error
+	// (GET /{arcaveObjectID}/config)
+	GetConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error
 	// Report the config's size
-	// (HEAD /{repoName}/config)
-	StatConfig(ctx echo.Context, repoName RepoNamePath) error
+	// (HEAD /{arcaveObjectID}/config)
+	StatConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error
 	// Write the config
-	// (POST /{repoName}/config)
-	SaveConfig(ctx echo.Context, repoName RepoNamePath) error
+	// (POST /{arcaveObjectID}/config)
+	SaveConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error
 	// List the objects of one type
-	// (GET /{repoName}/{type}/)
-	ListBlobs(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath) error
+	// (GET /{arcaveObjectID}/{type}/)
+	ListBlobs(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath) error
 	// Answer a listing without its body
-	// (HEAD /{repoName}/{type}/)
-	HeadBlobs(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath) error
+	// (HEAD /{arcaveObjectID}/{type}/)
+	HeadBlobs(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath) error
 	// Remove one object
-	// (DELETE /{repoName}/{type}/{name})
-	DeleteBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath) error
+	// (DELETE /{arcaveObjectID}/{type}/{resticObjectID})
+	DeleteBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath) error
 	// Read one object, whole or in part
-	// (GET /{repoName}/{type}/{name})
-	GetBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath, params GetBlobParams) error
+	// (GET /{arcaveObjectID}/{type}/{resticObjectID})
+	GetBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath, params GetBlobParams) error
 	// Report one object's size
-	// (HEAD /{repoName}/{type}/{name})
-	StatBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath) error
+	// (HEAD /{arcaveObjectID}/{type}/{resticObjectID})
+	StatBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath) error
 	// Write one object
-	// (POST /{repoName}/{type}/{name})
-	SaveBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath) error
+	// (POST /{arcaveObjectID}/{type}/{resticObjectID})
+	SaveBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath) error
 }
 
 // ServerInterfaceWrapper converts echo contexts to parameters.
@@ -62,28 +62,28 @@ type ServerInterfaceWrapper struct {
 // DeleteRepository converts echo context to params.
 func (w *ServerInterfaceWrapper) DeleteRepository(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteRepository(ctx, repoName)
+	err = w.Handler.DeleteRepository(ctx, arcaveObjectID)
 	return err
 }
 
 // CreateRepository converts echo context to params.
 func (w *ServerInterfaceWrapper) CreateRepository(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// Parameter object where we will unmarshal all parameters from the context
@@ -96,83 +96,83 @@ func (w *ServerInterfaceWrapper) CreateRepository(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateRepository(ctx, repoName, params)
+	err = w.Handler.CreateRepository(ctx, arcaveObjectID, params)
 	return err
 }
 
 // DeleteConfig converts echo context to params.
 func (w *ServerInterfaceWrapper) DeleteConfig(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteConfig(ctx, repoName)
+	err = w.Handler.DeleteConfig(ctx, arcaveObjectID)
 	return err
 }
 
 // GetConfig converts echo context to params.
 func (w *ServerInterfaceWrapper) GetConfig(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.GetConfig(ctx, repoName)
+	err = w.Handler.GetConfig(ctx, arcaveObjectID)
 	return err
 }
 
 // StatConfig converts echo context to params.
 func (w *ServerInterfaceWrapper) StatConfig(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.StatConfig(ctx, repoName)
+	err = w.Handler.StatConfig(ctx, arcaveObjectID)
 	return err
 }
 
 // SaveConfig converts echo context to params.
 func (w *ServerInterfaceWrapper) SaveConfig(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.SaveConfig(ctx, repoName)
+	err = w.Handler.SaveConfig(ctx, arcaveObjectID)
 	return err
 }
 
 // ListBlobs converts echo context to params.
 func (w *ServerInterfaceWrapper) ListBlobs(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// ------------- Path parameter "type" -------------
@@ -184,19 +184,19 @@ func (w *ServerInterfaceWrapper) ListBlobs(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ListBlobs(ctx, repoName, pType)
+	err = w.Handler.ListBlobs(ctx, arcaveObjectID, pType)
 	return err
 }
 
 // HeadBlobs converts echo context to params.
 func (w *ServerInterfaceWrapper) HeadBlobs(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// ------------- Path parameter "type" -------------
@@ -208,19 +208,19 @@ func (w *ServerInterfaceWrapper) HeadBlobs(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.HeadBlobs(ctx, repoName, pType)
+	err = w.Handler.HeadBlobs(ctx, arcaveObjectID, pType)
 	return err
 }
 
 // DeleteBlob converts echo context to params.
 func (w *ServerInterfaceWrapper) DeleteBlob(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// ------------- Path parameter "type" -------------
@@ -231,28 +231,28 @@ func (w *ServerInterfaceWrapper) DeleteBlob(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter type: %s", err))
 	}
 
-	// ------------- Path parameter "name" -------------
-	var name ObjectIDPath
+	// ------------- Path parameter "resticObjectID" -------------
+	var resticObjectID ResticObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "name", ctx.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "resticObjectID", ctx.Param("resticObjectID"), &resticObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter name: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter resticObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteBlob(ctx, repoName, pType, name)
+	err = w.Handler.DeleteBlob(ctx, arcaveObjectID, pType, resticObjectID)
 	return err
 }
 
 // GetBlob converts echo context to params.
 func (w *ServerInterfaceWrapper) GetBlob(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// ------------- Path parameter "type" -------------
@@ -263,12 +263,12 @@ func (w *ServerInterfaceWrapper) GetBlob(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter type: %s", err))
 	}
 
-	// ------------- Path parameter "name" -------------
-	var name ObjectIDPath
+	// ------------- Path parameter "resticObjectID" -------------
+	var resticObjectID ResticObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "name", ctx.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "resticObjectID", ctx.Param("resticObjectID"), &resticObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter name: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter resticObjectID: %s", err))
 	}
 
 	// Parameter object where we will unmarshal all parameters from the context
@@ -292,19 +292,19 @@ func (w *ServerInterfaceWrapper) GetBlob(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.GetBlob(ctx, repoName, pType, name, params)
+	err = w.Handler.GetBlob(ctx, arcaveObjectID, pType, resticObjectID, params)
 	return err
 }
 
 // StatBlob converts echo context to params.
 func (w *ServerInterfaceWrapper) StatBlob(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// ------------- Path parameter "type" -------------
@@ -315,28 +315,28 @@ func (w *ServerInterfaceWrapper) StatBlob(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter type: %s", err))
 	}
 
-	// ------------- Path parameter "name" -------------
-	var name ObjectIDPath
+	// ------------- Path parameter "resticObjectID" -------------
+	var resticObjectID ResticObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "name", ctx.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "resticObjectID", ctx.Param("resticObjectID"), &resticObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter name: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter resticObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.StatBlob(ctx, repoName, pType, name)
+	err = w.Handler.StatBlob(ctx, arcaveObjectID, pType, resticObjectID)
 	return err
 }
 
 // SaveBlob converts echo context to params.
 func (w *ServerInterfaceWrapper) SaveBlob(ctx echo.Context) error {
 	var err error
-	// ------------- Path parameter "repoName" -------------
-	var repoName RepoNamePath
+	// ------------- Path parameter "arcaveObjectID" -------------
+	var arcaveObjectID ArcaveObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "repoName", ctx.Param("repoName"), &repoName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "arcaveObjectID", ctx.Param("arcaveObjectID"), &arcaveObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter repoName: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter arcaveObjectID: %s", err))
 	}
 
 	// ------------- Path parameter "type" -------------
@@ -347,16 +347,16 @@ func (w *ServerInterfaceWrapper) SaveBlob(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter type: %s", err))
 	}
 
-	// ------------- Path parameter "name" -------------
-	var name ObjectIDPath
+	// ------------- Path parameter "resticObjectID" -------------
+	var resticObjectID ResticObjectIDPath
 
-	err = runtime.BindStyledParameterWithOptions("simple", "name", ctx.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	err = runtime.BindStyledParameterWithOptions("simple", "resticObjectID", ctx.Param("resticObjectID"), &resticObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter name: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter resticObjectID: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.SaveBlob(ctx, repoName, pType, name)
+	err = w.Handler.SaveBlob(ctx, arcaveObjectID, pType, resticObjectID)
 	return err
 }
 
@@ -388,23 +388,23 @@ func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL 
 		Handler: si,
 	}
 
-	router.DELETE(baseURL+"/:repoName/", wrapper.DeleteRepository)
-	router.POST(baseURL+"/:repoName/", wrapper.CreateRepository)
-	router.DELETE(baseURL+"/:repoName/config", wrapper.DeleteConfig)
-	router.GET(baseURL+"/:repoName/config", wrapper.GetConfig)
-	router.HEAD(baseURL+"/:repoName/config", wrapper.StatConfig)
-	router.POST(baseURL+"/:repoName/config", wrapper.SaveConfig)
-	router.GET(baseURL+"/:repoName/:type/", wrapper.ListBlobs)
-	router.HEAD(baseURL+"/:repoName/:type/", wrapper.HeadBlobs)
-	router.DELETE(baseURL+"/:repoName/:type/:name", wrapper.DeleteBlob)
-	router.GET(baseURL+"/:repoName/:type/:name", wrapper.GetBlob)
-	router.HEAD(baseURL+"/:repoName/:type/:name", wrapper.StatBlob)
-	router.POST(baseURL+"/:repoName/:type/:name", wrapper.SaveBlob)
+	router.DELETE(baseURL+"/:arcaveObjectID/", wrapper.DeleteRepository)
+	router.POST(baseURL+"/:arcaveObjectID/", wrapper.CreateRepository)
+	router.DELETE(baseURL+"/:arcaveObjectID/config", wrapper.DeleteConfig)
+	router.GET(baseURL+"/:arcaveObjectID/config", wrapper.GetConfig)
+	router.HEAD(baseURL+"/:arcaveObjectID/config", wrapper.StatConfig)
+	router.POST(baseURL+"/:arcaveObjectID/config", wrapper.SaveConfig)
+	router.GET(baseURL+"/:arcaveObjectID/:type/", wrapper.ListBlobs)
+	router.HEAD(baseURL+"/:arcaveObjectID/:type/", wrapper.HeadBlobs)
+	router.DELETE(baseURL+"/:arcaveObjectID/:type/:resticObjectID", wrapper.DeleteBlob)
+	router.GET(baseURL+"/:arcaveObjectID/:type/:resticObjectID", wrapper.GetBlob)
+	router.HEAD(baseURL+"/:arcaveObjectID/:type/:resticObjectID", wrapper.StatBlob)
+	router.POST(baseURL+"/:arcaveObjectID/:type/:resticObjectID", wrapper.SaveBlob)
 
 }
 
 type DeleteRepositoryRequestObject struct {
-	RepoName RepoNamePath `json:"repoName"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
 }
 
 type DeleteRepositoryResponseObject interface {
@@ -420,8 +420,8 @@ func (response DeleteRepository501Response) VisitDeleteRepositoryResponse(w http
 }
 
 type CreateRepositoryRequestObject struct {
-	RepoName RepoNamePath `json:"repoName"`
-	Params   CreateRepositoryParams
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Params         CreateRepositoryParams
 }
 
 type CreateRepositoryResponseObject interface {
@@ -461,7 +461,7 @@ func (response CreateRepository500Response) VisitCreateRepositoryResponse(w http
 }
 
 type DeleteConfigRequestObject struct {
-	RepoName RepoNamePath `json:"repoName"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
 }
 
 type DeleteConfigResponseObject interface {
@@ -493,7 +493,7 @@ func (response DeleteConfig500Response) VisitDeleteConfigResponse(w http.Respons
 }
 
 type GetConfigRequestObject struct {
-	RepoName RepoNamePath `json:"repoName"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
 }
 
 type GetConfigResponseObject interface {
@@ -536,7 +536,7 @@ func (response GetConfig500Response) VisitGetConfigResponse(w http.ResponseWrite
 }
 
 type StatConfigRequestObject struct {
-	RepoName RepoNamePath `json:"repoName"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
 }
 
 type StatConfigResponseObject interface {
@@ -574,8 +574,8 @@ func (response StatConfig500Response) VisitStatConfigResponse(w http.ResponseWri
 }
 
 type SaveConfigRequestObject struct {
-	RepoName RepoNamePath `json:"repoName"`
-	Body     io.Reader
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Body           io.Reader
 }
 
 type SaveConfigResponseObject interface {
@@ -615,8 +615,8 @@ func (response SaveConfig500Response) VisitSaveConfigResponse(w http.ResponseWri
 }
 
 type ListBlobsRequestObject struct {
-	RepoName RepoNamePath   `json:"repoName"`
-	Type     ObjectTypePath `json:"type"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Type           ObjectTypePath     `json:"type"`
 }
 
 type ListBlobsResponseObject interface {
@@ -659,8 +659,8 @@ func (response ListBlobs500Response) VisitListBlobsResponse(w http.ResponseWrite
 }
 
 type HeadBlobsRequestObject struct {
-	RepoName RepoNamePath   `json:"repoName"`
-	Type     ObjectTypePath `json:"type"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Type           ObjectTypePath     `json:"type"`
 }
 
 type HeadBlobsResponseObject interface {
@@ -692,9 +692,9 @@ func (response HeadBlobs500Response) VisitHeadBlobsResponse(w http.ResponseWrite
 }
 
 type DeleteBlobRequestObject struct {
-	RepoName RepoNamePath   `json:"repoName"`
-	Type     ObjectTypePath `json:"type"`
-	Name     ObjectIDPath   `json:"name"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Type           ObjectTypePath     `json:"type"`
+	ResticObjectID ResticObjectIDPath `json:"resticObjectID"`
 }
 
 type DeleteBlobResponseObject interface {
@@ -726,10 +726,10 @@ func (response DeleteBlob500Response) VisitDeleteBlobResponse(w http.ResponseWri
 }
 
 type GetBlobRequestObject struct {
-	RepoName RepoNamePath   `json:"repoName"`
-	Type     ObjectTypePath `json:"type"`
-	Name     ObjectIDPath   `json:"name"`
-	Params   GetBlobParams
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Type           ObjectTypePath     `json:"type"`
+	ResticObjectID ResticObjectIDPath `json:"resticObjectID"`
+	Params         GetBlobParams
 }
 
 type GetBlobResponseObject interface {
@@ -819,9 +819,9 @@ func (response GetBlob500Response) VisitGetBlobResponse(w http.ResponseWriter) e
 }
 
 type StatBlobRequestObject struct {
-	RepoName RepoNamePath   `json:"repoName"`
-	Type     ObjectTypePath `json:"type"`
-	Name     ObjectIDPath   `json:"name"`
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Type           ObjectTypePath     `json:"type"`
+	ResticObjectID ResticObjectIDPath `json:"resticObjectID"`
 }
 
 type StatBlobResponseObject interface {
@@ -859,10 +859,10 @@ func (response StatBlob500Response) VisitStatBlobResponse(w http.ResponseWriter)
 }
 
 type SaveBlobRequestObject struct {
-	RepoName RepoNamePath   `json:"repoName"`
-	Type     ObjectTypePath `json:"type"`
-	Name     ObjectIDPath   `json:"name"`
-	Body     io.Reader
+	ArcaveObjectID ArcaveObjectIDPath `json:"arcaveObjectID"`
+	Type           ObjectTypePath     `json:"type"`
+	ResticObjectID ResticObjectIDPath `json:"resticObjectID"`
+	Body           io.Reader
 }
 
 type SaveBlobResponseObject interface {
@@ -896,40 +896,40 @@ func (response SaveBlob500Response) VisitSaveBlobResponse(w http.ResponseWriter)
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// Delete the repository
-	// (DELETE /{repoName}/)
+	// (DELETE /{arcaveObjectID}/)
 	DeleteRepository(ctx context.Context, request DeleteRepositoryRequestObject) (DeleteRepositoryResponseObject, error)
 	// Create the repository
-	// (POST /{repoName}/)
+	// (POST /{arcaveObjectID}/)
 	CreateRepository(ctx context.Context, request CreateRepositoryRequestObject) (CreateRepositoryResponseObject, error)
 	// Remove the config
-	// (DELETE /{repoName}/config)
+	// (DELETE /{arcaveObjectID}/config)
 	DeleteConfig(ctx context.Context, request DeleteConfigRequestObject) (DeleteConfigResponseObject, error)
 	// Read the config
-	// (GET /{repoName}/config)
+	// (GET /{arcaveObjectID}/config)
 	GetConfig(ctx context.Context, request GetConfigRequestObject) (GetConfigResponseObject, error)
 	// Report the config's size
-	// (HEAD /{repoName}/config)
+	// (HEAD /{arcaveObjectID}/config)
 	StatConfig(ctx context.Context, request StatConfigRequestObject) (StatConfigResponseObject, error)
 	// Write the config
-	// (POST /{repoName}/config)
+	// (POST /{arcaveObjectID}/config)
 	SaveConfig(ctx context.Context, request SaveConfigRequestObject) (SaveConfigResponseObject, error)
 	// List the objects of one type
-	// (GET /{repoName}/{type}/)
+	// (GET /{arcaveObjectID}/{type}/)
 	ListBlobs(ctx context.Context, request ListBlobsRequestObject) (ListBlobsResponseObject, error)
 	// Answer a listing without its body
-	// (HEAD /{repoName}/{type}/)
+	// (HEAD /{arcaveObjectID}/{type}/)
 	HeadBlobs(ctx context.Context, request HeadBlobsRequestObject) (HeadBlobsResponseObject, error)
 	// Remove one object
-	// (DELETE /{repoName}/{type}/{name})
+	// (DELETE /{arcaveObjectID}/{type}/{resticObjectID})
 	DeleteBlob(ctx context.Context, request DeleteBlobRequestObject) (DeleteBlobResponseObject, error)
 	// Read one object, whole or in part
-	// (GET /{repoName}/{type}/{name})
+	// (GET /{arcaveObjectID}/{type}/{resticObjectID})
 	GetBlob(ctx context.Context, request GetBlobRequestObject) (GetBlobResponseObject, error)
 	// Report one object's size
-	// (HEAD /{repoName}/{type}/{name})
+	// (HEAD /{arcaveObjectID}/{type}/{resticObjectID})
 	StatBlob(ctx context.Context, request StatBlobRequestObject) (StatBlobResponseObject, error)
 	// Write one object
-	// (POST /{repoName}/{type}/{name})
+	// (POST /{arcaveObjectID}/{type}/{resticObjectID})
 	SaveBlob(ctx context.Context, request SaveBlobRequestObject) (SaveBlobResponseObject, error)
 }
 
@@ -946,10 +946,10 @@ type strictHandler struct {
 }
 
 // DeleteRepository operation middleware
-func (sh *strictHandler) DeleteRepository(ctx echo.Context, repoName RepoNamePath) error {
+func (sh *strictHandler) DeleteRepository(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error {
 	var request DeleteRepositoryRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteRepository(ctx.Request().Context(), request.(DeleteRepositoryRequestObject))
@@ -971,10 +971,10 @@ func (sh *strictHandler) DeleteRepository(ctx echo.Context, repoName RepoNamePat
 }
 
 // CreateRepository operation middleware
-func (sh *strictHandler) CreateRepository(ctx echo.Context, repoName RepoNamePath, params CreateRepositoryParams) error {
+func (sh *strictHandler) CreateRepository(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, params CreateRepositoryParams) error {
 	var request CreateRepositoryRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 	request.Params = params
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -997,10 +997,10 @@ func (sh *strictHandler) CreateRepository(ctx echo.Context, repoName RepoNamePat
 }
 
 // DeleteConfig operation middleware
-func (sh *strictHandler) DeleteConfig(ctx echo.Context, repoName RepoNamePath) error {
+func (sh *strictHandler) DeleteConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error {
 	var request DeleteConfigRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteConfig(ctx.Request().Context(), request.(DeleteConfigRequestObject))
@@ -1022,10 +1022,10 @@ func (sh *strictHandler) DeleteConfig(ctx echo.Context, repoName RepoNamePath) e
 }
 
 // GetConfig operation middleware
-func (sh *strictHandler) GetConfig(ctx echo.Context, repoName RepoNamePath) error {
+func (sh *strictHandler) GetConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error {
 	var request GetConfigRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.GetConfig(ctx.Request().Context(), request.(GetConfigRequestObject))
@@ -1047,10 +1047,10 @@ func (sh *strictHandler) GetConfig(ctx echo.Context, repoName RepoNamePath) erro
 }
 
 // StatConfig operation middleware
-func (sh *strictHandler) StatConfig(ctx echo.Context, repoName RepoNamePath) error {
+func (sh *strictHandler) StatConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error {
 	var request StatConfigRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.StatConfig(ctx.Request().Context(), request.(StatConfigRequestObject))
@@ -1072,10 +1072,10 @@ func (sh *strictHandler) StatConfig(ctx echo.Context, repoName RepoNamePath) err
 }
 
 // SaveConfig operation middleware
-func (sh *strictHandler) SaveConfig(ctx echo.Context, repoName RepoNamePath) error {
+func (sh *strictHandler) SaveConfig(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath) error {
 	var request SaveConfigRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 
 	request.Body = ctx.Request().Body
 
@@ -1099,10 +1099,10 @@ func (sh *strictHandler) SaveConfig(ctx echo.Context, repoName RepoNamePath) err
 }
 
 // ListBlobs operation middleware
-func (sh *strictHandler) ListBlobs(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath) error {
+func (sh *strictHandler) ListBlobs(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath) error {
 	var request ListBlobsRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 	request.Type = pType
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -1125,10 +1125,10 @@ func (sh *strictHandler) ListBlobs(ctx echo.Context, repoName RepoNamePath, pTyp
 }
 
 // HeadBlobs operation middleware
-func (sh *strictHandler) HeadBlobs(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath) error {
+func (sh *strictHandler) HeadBlobs(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath) error {
 	var request HeadBlobsRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 	request.Type = pType
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -1151,12 +1151,12 @@ func (sh *strictHandler) HeadBlobs(ctx echo.Context, repoName RepoNamePath, pTyp
 }
 
 // DeleteBlob operation middleware
-func (sh *strictHandler) DeleteBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath) error {
+func (sh *strictHandler) DeleteBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath) error {
 	var request DeleteBlobRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 	request.Type = pType
-	request.Name = name
+	request.ResticObjectID = resticObjectID
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteBlob(ctx.Request().Context(), request.(DeleteBlobRequestObject))
@@ -1178,12 +1178,12 @@ func (sh *strictHandler) DeleteBlob(ctx echo.Context, repoName RepoNamePath, pTy
 }
 
 // GetBlob operation middleware
-func (sh *strictHandler) GetBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath, params GetBlobParams) error {
+func (sh *strictHandler) GetBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath, params GetBlobParams) error {
 	var request GetBlobRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 	request.Type = pType
-	request.Name = name
+	request.ResticObjectID = resticObjectID
 	request.Params = params
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -1206,12 +1206,12 @@ func (sh *strictHandler) GetBlob(ctx echo.Context, repoName RepoNamePath, pType 
 }
 
 // StatBlob operation middleware
-func (sh *strictHandler) StatBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath) error {
+func (sh *strictHandler) StatBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath) error {
 	var request StatBlobRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 	request.Type = pType
-	request.Name = name
+	request.ResticObjectID = resticObjectID
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
 		return sh.ssi.StatBlob(ctx.Request().Context(), request.(StatBlobRequestObject))
@@ -1233,12 +1233,12 @@ func (sh *strictHandler) StatBlob(ctx echo.Context, repoName RepoNamePath, pType
 }
 
 // SaveBlob operation middleware
-func (sh *strictHandler) SaveBlob(ctx echo.Context, repoName RepoNamePath, pType ObjectTypePath, name ObjectIDPath) error {
+func (sh *strictHandler) SaveBlob(ctx echo.Context, arcaveObjectID ArcaveObjectIDPath, pType ObjectTypePath, resticObjectID ResticObjectIDPath) error {
 	var request SaveBlobRequestObject
 
-	request.RepoName = repoName
+	request.ArcaveObjectID = arcaveObjectID
 	request.Type = pType
-	request.Name = name
+	request.ResticObjectID = resticObjectID
 
 	request.Body = ctx.Request().Body
 

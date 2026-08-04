@@ -26,7 +26,7 @@ func TestServe(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+			e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 
 			// Act
 			port, err := Serve(e, tt.address)
@@ -50,7 +50,7 @@ func TestServe_OccupiedAddress(t *testing.T) {
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, held.Close()) }()
-	e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+	e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 
 	// Act
 	port, err := Serve(e, held.Addr().String())
@@ -65,7 +65,7 @@ func TestServe_OccupiedAddress(t *testing.T) {
 // not an error, since the DI root's unwind may reach it either way.
 func TestServe_CloseReleasesThePort(t *testing.T) {
 	// Arrange
-	e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+	e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 	_, err := Serve(e, "")
 	require.NoError(t, err)
 	target := "http://" + e.ListenerAddr().String() + "/testrepo/config"
@@ -91,6 +91,7 @@ func TestServe_CloseReleasesThePort(t *testing.T) {
 func TestRepositoryURLBase(t *testing.T) {
 	tests := []struct {
 		name          string
+		scheme        string
 		containerHost string
 		port          string
 		want          string
@@ -113,12 +114,26 @@ func TestRepositoryURLBase(t *testing.T) {
 			port:          "8000",
 			want:          "rest:http://[::1]:8000",
 		},
+		{
+			name:          "an empty scheme defaults to http",
+			scheme:        "",
+			containerHost: "127.0.0.1",
+			port:          "8000",
+			want:          "rest:http://127.0.0.1:8000",
+		},
+		{
+			name:          "an explicit scheme is honoured",
+			scheme:        "https",
+			containerHost: "127.0.0.1",
+			port:          "8000",
+			want:          "rest:https://127.0.0.1:8000",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			base := RepositoryURLBase(tt.containerHost, tt.port)
+			base := RepositoryURLBase(tt.scheme, tt.containerHost, tt.port)
 
 			// Assert
 			assert.Equal(t, tt.want, base)

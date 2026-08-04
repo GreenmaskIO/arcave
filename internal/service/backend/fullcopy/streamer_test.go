@@ -18,8 +18,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// The stream lands verbatim at <id>/<objectID>/data.tar of the tier the
-// snapshotter was built for, and the stat reports the bytes actually written.
+// The stream lands verbatim at <id>/<objectID>/data.tar of the store the spec
+// handed over, and the stat reports the bytes actually written.
 func TestSnapshotter_Snapshot(t *testing.T) {
 	const payload = "tar-stream-bytes"
 	volume := bindVolume("app", "/etc/cfg")
@@ -27,63 +27,47 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		tier       model.BackendTier
 		reader     io.ReadCloser
 		openErr    error
 		addressErr error
-		verify     func(t *testing.T, stat model.SnapshotStat, err error, sessionStore, safetyStore storages.Storager)
+		verify     func(t *testing.T, stat model.SnapshotStat, err error, store storages.Storager)
 	}{
 		{
-			name:   "savepoint tier stores the stream verbatim in the session store",
-			tier:   model.BackendTierSavepoint,
+			name:   "the stream is stored verbatim",
 			reader: io.NopCloser(strings.NewReader(payload)),
-			verify: func(t *testing.T, stat model.SnapshotStat, err error, sessionStore, safetyStore storages.Storager) {
+			verify: func(t *testing.T, stat model.SnapshotStat, err error, store storages.Storager) {
 				require.NoError(t, err)
-				assert.Equal(t, []string{archiveKey}, objectNames(t, sessionStore))
-				assert.Empty(t, objectNames(t, safetyStore), "the savepoint tier must not touch the safety store")
-				assert.Equal(t, payload, readObject(t, sessionStore, archiveKey))
+				assert.Equal(t, []string{archiveKey}, objectNames(t, store))
+				assert.Equal(t, payload, readObject(t, store, archiveKey))
 				assert.Equal(t, volume, stat.Volume, "the stat carries the unit it captured")
 				assert.Equal(t, model.SnapshotBackendCopy, stat.Type)
 				assert.Equal(t, Payload{SizeBytes: int64(len(payload))}, stat.Payload)
 			},
 		},
 		{
-			name:   "safety tier routes the same capture into the safety store",
-			tier:   model.BackendTierSafety,
-			reader: io.NopCloser(strings.NewReader(payload)),
-			verify: func(t *testing.T, _ model.SnapshotStat, err error, sessionStore, safetyStore storages.Storager) {
-				require.NoError(t, err)
-				assert.Equal(t, []string{archiveKey}, objectNames(t, safetyStore))
-				assert.Empty(t, objectNames(t, sessionStore), "the safety tier must not touch the session store")
-			},
-		},
-		{
 			name:    "a volume that does not open stores nothing",
-			tier:    model.BackendTierSavepoint,
 			openErr: errors.New("export boom"),
-			verify: func(t *testing.T, _ model.SnapshotStat, err error, sessionStore, _ storages.Storager) {
+			verify: func(t *testing.T, _ model.SnapshotStat, err error, store storages.Storager) {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "export boom")
 				assert.Contains(t, err.Error(), "open docker volume /host/etc/cfg")
-				assert.Empty(t, objectNames(t, sessionStore), "nothing may be stored from a volume that did not open")
+				assert.Empty(t, objectNames(t, store), "nothing may be stored from a volume that did not open")
 			},
 		},
 		{
-			name:       "a volume that cannot be addressed stores nothing",
-			tier:       model.BackendTierSavepoint,
+			name:       "a volume whose mount source cannot be resolved stores nothing",
 			addressErr: errors.New("no such volume"),
-			verify: func(t *testing.T, _ model.SnapshotStat, err error, sessionStore, _ storages.Storager) {
+			verify: func(t *testing.T, _ model.SnapshotStat, err error, store storages.Storager) {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "address volume service/app/etc/cfg")
+				assert.Contains(t, err.Error(), "resolve the mount source of volume volume-service-app-etc-cfg")
 				assert.Contains(t, err.Error(), "no such volume")
-				assert.Empty(t, objectNames(t, sessionStore))
+				assert.Empty(t, objectNames(t, store))
 			},
 		},
 		{
 			name:   "a stream failing mid-copy surfaces as the archive write's error",
-			tier:   model.BackendTierSavepoint,
 			reader: io.NopCloser(failingReader{err: errors.New("stream boom")}),
-			verify: func(t *testing.T, _ model.SnapshotStat, err error, _, _ storages.Storager) {
+			verify: func(t *testing.T, _ model.SnapshotStat, err error, _ storages.Storager) {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "write archive")
 				assert.Contains(t, err.Error(), "stream boom")
@@ -95,40 +79,61 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			docker := &mockVolumeStreamer{}
-			docker.On("ResolveVolumeAddress", mock.Anything, volume).
+			docker.On("ResolveMountSource", mock.Anything, volume).
 				Return(bindAddress("/etc/cfg"), tt.addressErr).Once()
 			if tt.addressErr == nil {
 				docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).Return(tt.reader, tt.openErr).Once()
 			}
-			sessionStore, safetyStore := newStore(t, "session"), newStore(t, "safety")
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{
-				SessionStore: sessionStore,
-				SafetyStore:  safetyStore,
-				Volume:       volume,
-				Tier:         tt.tier,
-			})
+			store := newStore(t, "savepoints")
+			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
 			stat, err := snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "1780335122"})
 
 			// Assert
-			tt.verify(t, stat, err, sessionStore, safetyStore)
+			tt.verify(t, stat, err, store)
 			docker.AssertExpectations(t)
 		})
 	}
 }
 
-// An archive answers only for the tier that wrote it, and Exists never touches
-// the engine.
+// The root the spec named is the whole of what an instance writes to and reads
+// from. It is the only thing that tells a savepoint's instances from a
+// rollback's undo, so an instance reaching the other root would be silent.
+func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
+	// Arrange
+	volume := bindVolume("app", "/etc/cfg")
+	archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
+	docker := &mockVolumeStreamer{}
+	docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
+	docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).
+		Return(io.NopCloser(strings.NewReader("tar-stream-bytes")), nil).Once()
+	named, other := newStore(t, "named"), newStore(t, "other")
+	snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: named, Volume: volume})
+	require.NoError(t, err)
+
+	// Act
+	_, err = snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []string{archiveKey}, objectNames(t, named))
+	assert.Empty(t, objectNames(t, other), "the capture reached a root the spec never named")
+	docker.AssertExpectations(t)
+}
+
+// An archive answers only for the store it was written to, and Exists never
+// touches the engine.
 func TestSnapshotter_Exists(t *testing.T) {
 	tests := []struct {
 		name string
-		tier model.BackendTier
+		// seed is whether the archive is planted in the store the spec names.
+		seed bool
 		want bool
 	}{
-		{name: "the tier that wrote the capture sees it", tier: model.BackendTierSavepoint, want: true},
-		{name: "a savepoint-tier capture does not answer for the safety tier", tier: model.BackendTierSafety, want: false},
+		{name: "the store holding the capture sees it", seed: true, want: true},
+		{name: "another store does not answer for it", seed: false, want: false},
 	}
 
 	for _, tt := range tests {
@@ -136,16 +141,15 @@ func TestSnapshotter_Exists(t *testing.T) {
 			// Arrange
 			volume := bindVolume("app", "/etc/cfg")
 			docker := &mockVolumeStreamer{}
-			sessionStore, safetyStore := newStore(t, "session"), newStore(t, "safety")
+			store, elsewhere := newStore(t, "savepoints"), newStore(t, "elsewhere")
 			ctx := context.Background()
 			archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
-			require.NoError(t, sessionStore.PutObject(ctx, archiveKey, strings.NewReader("tar-stream-bytes")))
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{
-				SessionStore: sessionStore,
-				SafetyStore:  safetyStore,
-				Volume:       volume,
-				Tier:         tt.tier,
-			})
+			seeded := elsewhere
+			if tt.seed {
+				seeded = store
+			}
+			require.NoError(t, seeded.PutObject(ctx, archiveKey, strings.NewReader("tar-stream-bytes")))
+			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
@@ -213,9 +217,9 @@ func TestSnapshotter_Restore(t *testing.T) {
 			// Arrange
 			var restored strings.Builder
 			docker := &mockVolumeStreamer{}
-			sessionStore := newStore(t, "session")
+			store := newStore(t, "savepoints")
 			ctx := context.Background()
-			docker.On("ResolveVolumeAddress", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
+			docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
 			if tt.seed {
 				docker.On("WriteVolume", mock.Anything, bindAddress("/etc/cfg"), mock.Anything).
 					Run(func(args mock.Arguments) {
@@ -223,14 +227,9 @@ func TestSnapshotter_Restore(t *testing.T) {
 						assert.NoError(t, err)
 					}).
 					Return(tt.writeErr).Once()
-				require.NoError(t, sessionStore.PutObject(ctx, archiveKey, strings.NewReader(payload)))
+				require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(payload)))
 			}
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{
-				SessionStore: sessionStore,
-				SafetyStore:  newStore(t, "safety"),
-				Volume:       volume,
-				Tier:         model.BackendTierSavepoint,
-			})
+			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
@@ -263,18 +262,13 @@ func TestSnapshotter_Remove(t *testing.T) {
 			// Arrange
 			volume := bindVolume("app", "/etc/cfg")
 			docker := &mockVolumeStreamer{}
-			sessionStore := newStore(t, "session")
+			store := newStore(t, "savepoints")
 			ctx := context.Background()
 			if tt.seed {
 				archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
-				require.NoError(t, sessionStore.PutObject(ctx, archiveKey, strings.NewReader(payload)))
+				require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(payload)))
 			}
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{
-				SessionStore: sessionStore,
-				SafetyStore:  newStore(t, "safety"),
-				Volume:       volume,
-				Tier:         model.BackendTierSavepoint,
-			})
+			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
@@ -282,7 +276,7 @@ func TestSnapshotter_Remove(t *testing.T) {
 
 			// Assert
 			assert.NoError(t, err)
-			assert.Empty(t, objectNames(t, sessionStore))
+			assert.Empty(t, objectNames(t, store))
 			docker.AssertExpectations(t)
 		})
 	}
@@ -338,13 +332,8 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 			t.Run(op.name+" "+tt.name, func(t *testing.T) {
 				// Arrange
 				docker := &mockVolumeStreamer{}
-				sessionStore := newStore(t, "session")
-				snapshotter, err := NewFactory(docker).New(model.BackendSpec{
-					SessionStore: sessionStore,
-					SafetyStore:  newStore(t, "safety"),
-					Volume:       bindVolume("app", "/etc/cfg"),
-					Tier:         model.BackendTierSavepoint,
-				})
+				store := newStore(t, "savepoints")
+				snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
 				require.NoError(t, err)
 
 				// Act
@@ -353,7 +342,7 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 				// Assert
 				require.Error(t, err)
 				require.ErrorIs(t, err, model.ErrInvalidSavepointID)
-				assert.Empty(t, objectNames(t, sessionStore), "the store must be untouched")
+				assert.Empty(t, objectNames(t, store), "the store must be untouched")
 				docker.AssertExpectations(t)
 			})
 		}
@@ -361,37 +350,33 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 }
 
 // The one thing fixed for an instance's life is resolved at build: the root the
-// tier names. The volume's address is not — reaching the daemon needs a ctx a
-// constructor does not have — so the empty engine mock is the assertion that
-// building a backend contacts nothing.
+// spec handed over. The volume's address is not — reaching the daemon needs a
+// ctx a constructor does not have — so the empty engine mock is the assertion
+// that building a backend contacts nothing.
 func TestFactory_New(t *testing.T) {
 	tests := []struct {
 		name      string
 		volume    model.Volume
-		tier      model.BackendTier
-		wantErr   bool
+		noStore   bool
 		wantErrIs error
 	}{
 		{
-			name:   "a bind volume and a tier build a snapshotter",
+			name:   "a bind volume and a store build a snapshotter",
 			volume: bindVolume("app", "/etc/cfg"),
-			tier:   model.BackendTierSavepoint,
 		},
 		{
 			name:   "a named volume nobody mounts builds a snapshotter too",
 			volume: namedVolume("demo_orphan"),
-			tier:   model.BackendTierSavepoint,
 		},
 		{
 			name:   "so does one mounted only at a subpath: it is captured whole",
 			volume: namedVolume("demo_assets", model.ServiceReference{Service: "web", Target: "/srv", Subpath: "public"}),
-			tier:   model.BackendTierSafety,
 		},
 		{
-			name:      "a spec naming no tier resolves to no root",
+			name:      "a spec carrying no store has nowhere to write",
 			volume:    bindVolume("app", "/etc/cfg"),
-			wantErr:   true,
-			wantErrIs: model.ErrUnknownBackendTier,
+			noStore:   true,
+			wantErrIs: errNoStore,
 		},
 	}
 
@@ -399,21 +384,18 @@ func TestFactory_New(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			docker := &mockVolumeStreamer{}
+			spec := model.BackendSpec{Volume: tt.volume}
+			if !tt.noStore {
+				spec.Store = newStore(t, "savepoints")
+			}
 
 			// Act
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{
-				SessionStore: newStore(t, "session"),
-				SafetyStore:  newStore(t, "safety"),
-				Volume:       tt.volume,
-				Tier:         tt.tier,
-			})
+			snapshotter, err := NewFactory(docker).New(spec)
 
 			// Assert
-			if tt.wantErr {
-				require.Error(t, err)
-				if tt.wantErrIs != nil {
-					assert.ErrorIs(t, err, tt.wantErrIs)
-				}
+			if tt.wantErrIs != nil {
+				require.ErrorIs(t, err, tt.wantErrIs)
+				assert.Nil(t, snapshotter)
 				docker.AssertExpectations(t)
 				return
 			}

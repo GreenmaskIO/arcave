@@ -38,7 +38,7 @@ func record(id model.SavepointID) model.Savepoint {
 		Stats: []model.SnapshotStat{{
 			Type: model.SnapshotBackendCopy,
 			Volume: model.Volume{
-				ObjectID: "volume/myapp_pgdata",
+				ObjectID: "volume-named-myapp_pgdata",
 				Type:     model.VolumeTypeNamed,
 				Backend:  model.SnapshotBackendCopy,
 				Named: &model.VolumePropertiesNamed{

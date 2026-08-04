@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 )
 
@@ -37,32 +36,31 @@ import (
 // conformancePassword opens the repository this test creates and throws away.
 const conformancePassword = "arcave-resticserver-conformance"
 
-// conformancePrefix is a publish prefix of the shape the cdc backend uses.
-const conformancePrefix = "savepoint-volume-pgdata"
+// conformanceObjectID is an arcave ObjectID of the shape the cdc backend serves
+// a repository under — one path segment, and the name of its directory.
+const conformanceObjectID = "volume-named-pgdata"
 
 func TestConformsToRestic(t *testing.T) {
-	// Arrange: store → repository → registry → served endpoint, addressed on the
+	// Arrange: repository root → resolver → served endpoint, addressed on the
 	// loopback, since the client here is a binary on the host rather than a
-	// container.
+	// container. The store the assertions read is the sub-root the ObjectID names
+	// — the very one the resolver hands the protocol.
 	resticBin := requireResticBinary(t)
 
-	root := t.TempDir()
-	store, err := directory.NewStorage(directory.Config{RootPath: root})
+	root, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+	t.Cleanup(func() { assert.NoError(t, root.Close()) })
+	store, err := root.SubStorage(conformanceObjectID, true)
+	require.NoError(t, err)
 
-	repos := registry.New()
-	require.NoError(t, repos.Register(conformancePrefix, repo.New(store)))
-	t.Cleanup(func() { repos.Unregister(conformancePrefix) })
-
-	srv := rest.NewEcho(t.Context(), repos)
+	srv := rest.NewEcho(t.Context(), repo.NewResolver(root))
 	port, err := rest.Serve(srv, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, srv.Close()) })
 
 	// The client here is a binary on the host, so the host it names is the
 	// loopback rather than a container's name for it.
-	repoURL := rest.RepositoryURLBase("127.0.0.1", port) + "/" + conformancePrefix + "/"
+	repoURL := rest.RepositoryURLBase("", "127.0.0.1", port) + "/" + conformanceObjectID + "/"
 	run := resticRunner(t, resticBin, repoURL)
 	fixture := newConformanceFixture(t)
 

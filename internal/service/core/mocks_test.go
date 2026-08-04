@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -95,10 +96,13 @@ func (m *mockBackend) Remove(ctx context.Context, req model.BackendRemoveRequest
 	return m.Called(ctx, req).Error(0)
 }
 
-// matchSpec matches a registry New's BackendSpec argument by tier and volume.
-func matchSpec(tier model.BackendTier, objectID string) any {
+// matchSpec matches a registry New's BackendSpec argument by the root it names
+// and the volume it is for. There is one root now, so the store no longer tells
+// a savepoint's instances from a rollback's undo — it is asserted because every
+// backend must be bound to the store the DI root handed down, and to no other.
+func matchSpec(store storages.Storager, objectID string) any {
 	return mock.MatchedBy(func(spec model.BackendSpec) bool {
-		return spec.Tier == tier && spec.Volume.ObjectID == objectID
+		return spec.Store == store && spec.Volume.ObjectID == objectID
 	})
 }
 
@@ -110,13 +114,14 @@ func matchValidSnapshotID() any {
 	})
 }
 
-// matchSafetySnapshot matches a safety-tier capture request: an id off the clock
-// that passes the gate, carrying the tier label a rollback stamps. That label is
-// the only thing marking the capture as an undo, now that the safety tier
-// commits no record, so it is matched rather than widened away.
+// matchSafetySnapshot matches a safety snapshot's capture request: an id off the
+// clock that passes the gate, carrying the label a rollback stamps. That label
+// is the only thing marking the capture as an undo — the record it commits is an
+// ordinary savepoint's — so it is matched rather than widened away.
 func matchSafetySnapshot() any {
 	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
-		return req.SnapshotID.Validate() == nil && req.Labels[tierLabel] == tierLabelSafety
+		return req.SnapshotID.Validate() == nil &&
+			req.Labels[model.SafetySnapshotLabel] == model.SafetySnapshotLabelValue
 	})
 }
 

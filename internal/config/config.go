@@ -76,6 +76,16 @@ const (
 	// loopback. Native Linux does not resolve it, which is what makes this key
 	// the one that gets cdc running there.
 	DefaultCDCContainerHost = "host.docker.internal"
+	// DefaultCDCServerScheme is the scheme the container fetches its repository
+	// over. arcave's own server speaks plain HTTP; https is for a TLS proxy in
+	// front of it.
+	DefaultCDCServerScheme = SchemeHTTP
+)
+
+// The schemes backends.cdc.server_scheme accepts.
+const (
+	SchemeHTTP  = "http"
+	SchemeHTTPS = "https"
 )
 
 // The bounds arcave gives compose when it stops and starts the stack. They live
@@ -298,6 +308,10 @@ type CDCBackend struct {
 	// ServerAddress is what arcave's restic server binds. Port 0 lets the kernel
 	// pick, which is what keeps two arcave processes from colliding.
 	ServerAddress string `yaml:"server_address" mapstructure:"server_address"`
+	// ServerScheme is the scheme of the repository URL the container fetches
+	// over: http (the default; the server itself speaks nothing else) or https,
+	// for a TLS proxy fronting it.
+	ServerScheme string `yaml:"server_scheme" mapstructure:"server_scheme"`
 	// ContainerHost is that server's host name *as the container sees it*, which
 	// is never the address arcave binds: a container cannot reach 127.0.0.1.
 	ContainerHost string `yaml:"container_host" mapstructure:"container_host"`
@@ -337,6 +351,12 @@ func (c CDCBackend) Validate() error {
 	// at listen time, halfway through wiring a command.
 	if _, _, err := net.SplitHostPort(c.ServerAddress); err != nil {
 		return fmt.Errorf("backends.cdc.server_address %q is not a host:port address: %w", c.ServerAddress, err)
+	}
+	switch c.ServerScheme {
+	case SchemeHTTP, SchemeHTTPS:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.server_scheme %q (supported: %s, %s)",
+			c.ServerScheme, SchemeHTTP, SchemeHTTPS)
 	}
 	if c.ContainerHost == "" {
 		return fmt.Errorf("backends.cdc.container_host is required")
@@ -443,6 +463,9 @@ func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
 	}
 	if c.ServerAddress == "" {
 		c.ServerAddress = DefaultCDCServerAddress
+	}
+	if c.ServerScheme == "" {
+		c.ServerScheme = DefaultCDCServerScheme
 	}
 	if c.ContainerHost == "" {
 		c.ContainerHost = DefaultCDCContainerHost

@@ -8,26 +8,24 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	resticmodel "github.com/greenmaskio/arcave/internal/service/backend/restic/rest/model"
 )
 
 // savepointTag ties a restic snapshot back to the savepoint that took it — the
 // only way to read the repository without arcave's own record.
 const savepointTag = "arcave-savepoint"
 
-// Snapshotter captures one volume into one restic repository. Its tier shows up
-// in the publish prefix and the capture's labels, never in the repository: both
-// tiers write to the same one.
+// Snapshotter captures one volume into one restic repository. A savepoint and a
+// rollback's undo of the same volume write to that one repository, and are told
+// apart by the labels their captures carry — nothing else.
 //
 // It binds the volume into a container of its own, so no service container is
 // involved and the volume is always captured whole.
 type Snapshotter struct {
 	volume model.Volume
-	// repository is what a restic container reaches over the protocol; admin is
-	// the same repository addressed as objects, without a container.
-	repository resticmodel.Repository
-	admin      repoAdmin
-	prefix     string
+	// repo is this instance's repository addressed as objects, without a
+	// container. What a restic container reaches over the protocol is the same
+	// repository, resolved by the server from the volume's ObjectID.
+	repo objectRepo
 	// mounted is where the volume sits inside the restic container, and therefore
 	// the path inside every snapshot.
 	mounted string
@@ -45,53 +43,57 @@ func (s *Snapshotter) Snapshot(
 		return model.SnapshotStat{}, err
 	}
 
-	addr, err := s.address(ctx)
+	mnt, err := s.mountSource(ctx)
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
 
-	run, unpublish, err := s.open(ctx)
+	resticRunner, err := s.openResticRunner(ctx)
 	if err != nil {
-		return model.SnapshotStat{}, err
+		return model.SnapshotStat{}, fmt.Errorf("opening snapshot: %w", err)
 	}
-	defer unpublish()
 
-	initialised, err := s.admin.HasConfig(ctx)
+	initialised, err := s.repo.HasConfig(ctx)
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
 	if !initialised {
 		zerolog.Ctx(ctx).Info().Msg("initialising the restic repository")
-		if _, err := run.run(ctx, resticCmd{args: []string{"init", "--json"}}); err != nil {
+		if _, err := resticRunner.run(ctx, resticCmd{args: []string{"init", "--json"}}); err != nil {
 			return model.SnapshotStat{}, err
 		}
 	}
 
-	summary, err := run.run(ctx, resticCmd{
+	summary, err := resticRunner.run(ctx, resticCmd{
 		args:  s.backupArgs(req),
-		binds: []string{addr.Source + ":" + s.mounted + ":ro"},
+		binds: []string{mnt.Source + ":" + s.mounted + ":ro"},
 	})
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
-	if err := validateSnapshotRef(summary.SnapshotID); err != nil {
-		return model.SnapshotStat{}, fmt.Errorf("restic backup reported no usable snapshot id: %w", err)
+	// The one thing worth checking about the id: restic printed one. An empty id
+	// would be committed into the record and only surface at the rollback that
+	// cannot find its snapshot.
+	if summary.SnapshotID == "" {
+		return model.SnapshotStat{}, errNoSnapshotID
 	}
 
 	return model.SnapshotStat{
 		Volume: s.volume,
 		Type:   model.SnapshotBackendCDC,
 		Payload: Payload{
-			SnapshotRef:         summary.SnapshotID,
+			SnapshotObjectID:    summary.SnapshotID,
 			DataAdded:           summary.DataAdded,
 			TotalBytesProcessed: summary.TotalBytesProcessed,
 		},
 	}, nil
 }
 
-// backupArgs builds the backup command line. --host and the path are the same
-// for both tiers on purpose: restic picks a parent snapshot by them, and a
-// safety backup that missed the parent would reship the whole volume.
+// backupArgs builds the backup command line. --host and the path do not depend
+// on what the capture is for, on purpose: restic picks a parent snapshot by
+// them, and a safety snapshot that missed the parent would reship the whole
+// volume. What it is for shows up in the labels the caller passed, and nowhere
+// else.
 func (s *Snapshotter) backupArgs(req model.BackendSnapshotRequest) []string {
 	args := []string{
 		"backup", s.mounted,
@@ -117,39 +119,42 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	}
 	payload, err := decodePayload(req.Payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode payload: %w", err)
 	}
-	if err := validateSnapshotRef(payload.SnapshotRef); err != nil {
-		return err
+	// A record naming no snapshot is refused ahead of the wipe: there is nothing
+	// to restore, so clearing the volume would destroy live data for nothing. An
+	// id that is present but restic cannot resolve is not arcave's to judge — it
+	// fails as R5 does, after the wipe, and rides the ordinary revert.
+	if payload.SnapshotObjectID == "" {
+		return errNoSnapshotID
 	}
 
-	addr, err := s.address(ctx)
+	mnt, err := s.mountSource(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("mount source: %w", err)
 	}
 
 	// The wipe must finish before restic writes a byte; it is a container of its
 	// own and needs no repository.
 	if !s.deps.Options.Incremental {
-		if err := s.deps.Runner.WipeVolume(ctx, addr); err != nil {
+		if err := s.deps.Runner.WipeVolume(ctx, mnt); err != nil {
 			return fmt.Errorf("clear the volume before restore: %w", err)
 		}
 	}
 
-	run, unpublish, err := s.open(ctx)
+	run, err := s.openResticRunner(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("open restic runner: %w", err)
 	}
-	defer unpublish()
 
-	args := []string{"restore", payload.SnapshotRef, "--target", "/", "--include", s.mounted}
+	args := []string{"restore", payload.SnapshotObjectID, "--target", "/", "--include", s.mounted}
 	if s.deps.Options.Incremental {
 		// Needs restic ≥0.17, which compares content rather than size+mtime.
 		args = append(args, "--delete", "--overwrite", s.deps.Options.Overwrite)
 	}
 	_, err = run.run(ctx, resticCmd{
 		args:  append(args, "--json"),
-		binds: []string{addr.Source + ":" + s.mounted},
+		binds: []string{mnt.Source + ":" + s.mounted},
 	})
 	return err
 }
@@ -173,55 +178,53 @@ func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest
 		zerolog.Ctx(ctx).Debug().Err(err).Msg("nothing to remove: the capture reported no snapshot")
 		return nil
 	}
-	if payload.SnapshotRef == "" {
+	if payload.SnapshotObjectID == "" {
 		return nil
 	}
-	return s.admin.DeleteSnapshot(ctx, payload.SnapshotRef)
+	return s.repo.DeleteSnapshot(ctx, payload.SnapshotObjectID)
 }
 
-// open publishes the repository for the length of one operation, clears whatever
-// locks an earlier run orphaned, and returns the runner bound to the URL a
-// container reaches it at. The unpublish is the caller's to defer.
+// openResticRunner clears whatever locks an earlier run orphaned and returns the runner
+// bound to the URL a container reaches the repository at.
 //
-// The registration lives for one operation rather than for the snapshotter: the
-// server listens for the whole process, but a repository is reachable only while
-// its own operation runs. A request already holding it plays out.
-func (s *Snapshotter) open(ctx context.Context) (runner, func(), error) {
-	if err := s.deps.Publisher.Register(s.prefix, s.repository); err != nil {
-		return runner{}, nil, fmt.Errorf("publish the %s repository: %w", s.volume.ObjectID, err)
-	}
-	unpublish := func() { s.deps.Publisher.Unregister(s.prefix) }
-	if err := s.admin.ClearLocks(ctx); err != nil {
-		unpublish()
-		return runner{}, nil, err
+// Only at the start: restic refreshes its own lock while it works, and those
+// writes are ordinary traffic. Every standing lock here is an orphan — a lock
+// written inside a container carries that container's hostname, so restic in the
+// next one reads it as a stranger's and `unlock` will never pick it — and it is
+// safe to drop because arcave holds the project lock and this repository has no
+// other client by construction.
+func (s *Snapshotter) openResticRunner(ctx context.Context) (runner, error) {
+	if err := s.repo.ClearLocks(ctx); err != nil {
+		return runner{}, err
 	}
 	return runner{
 		containers: s.deps.Runner,
 		image:      s.deps.Options.Image,
 		repoURL:    s.repositoryURL(),
-	}, unpublish, nil
+	}, nil
 }
 
 // repositoryURL addresses this instance's repository on the data plane: the base
-// the DI root resolved, plus the prefix it publishes under. The trailing slash
-// is the restic protocol's, and losing it fails quietly — restic keeps talking,
-// to the wrong path.
+// the DI root resolved, plus the volume's ObjectID — which is the name of the
+// repository's own directory under the root the server resolves against, so
+// there is nothing to register. The trailing slash is the restic protocol's, and
+// losing it fails quietly — restic keeps talking, to the wrong path.
 func (s *Snapshotter) repositoryURL() string {
-	return s.deps.RepoURLBase + "/" + s.prefix + "/"
+	return s.deps.RepoURLBase + "/" + s.volume.ObjectID + "/"
 }
 
-// address resolves what the restic container binds to see the volume. Resolved
-// per operation rather than held on the instance: it may cost a round trip to
-// the daemon, and only the two operations that move bytes need it.
+// mountSource resolves what the restic container mounts to see the volume.
+// Resolved per operation rather than held on the instance: it may cost a round
+// trip to the daemon, and only the two operations that move bytes need it.
 //
-// The volume is addressed whole, whatever subpath a service happens to mount —
-// so a capture holds all of it, and a restore puts all of it back.
-func (s *Snapshotter) address(ctx context.Context) (model.VolumeAddress, error) {
-	addr, err := s.deps.Runner.ResolveVolumeAddress(ctx, s.volume)
+// The volume is mounted whole, whatever subpath a service happens to mount — so
+// a capture holds all of it, and a restore puts all of it back.
+func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error) {
+	mnt, err := s.deps.Runner.ResolveMountSource(ctx, s.volume)
 	if err != nil {
-		return model.VolumeAddress{}, fmt.Errorf("address volume %s: %w", s.volume.ObjectID, err)
+		return model.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
 	}
-	return addr, nil
+	return mnt, nil
 }
 
 // sortedKeys orders a label set, so the command line is stable across runs.

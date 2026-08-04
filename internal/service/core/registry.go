@@ -10,9 +10,7 @@ import (
 var (
 	ErrBackendAlreadyRegistered = errors.New("snapshot backend factory already registered")
 	ErrUnknownBackend           = errors.New("unknown snapshot backend")
-	ErrNoSessionStore           = errors.New("backend spec carries no session store")
-	ErrNoSafetyStore            = errors.New("backend spec carries no safety-backup store")
-	ErrNoBackendTier            = errors.New("backend spec carries no tier")
+	ErrNoStore                  = errors.New("backend spec carries no store")
 )
 
 // SnapshotBackendRegistry resolves a volume's Backend to its factory. It
@@ -35,19 +33,12 @@ func NewSnapshotBackendRegistry(factories ...model.SnapshotBackendFactory) (*Sna
 }
 
 // New builds the backend spec.Volume.Backend names; an unregistered kind is
-// ErrUnknownBackend. Both roots and the tier are required, checked before any
-// factory runs. Each root reaches the factory as it was given: narrowing one
-// here would decide a layout this layer must not know.
+// ErrUnknownBackend. The root is required, checked before any factory runs, and
+// reaches the factory as it was given: narrowing it here would decide a layout
+// this layer must not know.
 func (r *SnapshotBackendRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
-	if spec.SessionStore == nil {
-		return nil, fmt.Errorf("%w: volume %s", ErrNoSessionStore, spec.Volume.ObjectID)
-	}
-	if spec.SafetyStore == nil {
-		return nil, fmt.Errorf("%w: volume %s", ErrNoSafetyStore, spec.Volume.ObjectID)
-	}
-	// A backend branching on the zero value would read it as the savepoint tier.
-	if spec.Tier == "" {
-		return nil, fmt.Errorf("%w: volume %s", ErrNoBackendTier, spec.Volume.ObjectID)
+	if spec.Store == nil {
+		return nil, fmt.Errorf("%w: volume %s", ErrNoStore, spec.Volume.ObjectID)
 	}
 
 	factory, ok := r.factories[spec.Volume.Backend]

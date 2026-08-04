@@ -4,25 +4,22 @@
 // Every restic command runs in a one-shot container of the stock image and
 // reaches its repository over the restic server. State questions ("is it
 // initialised", "drop this snapshot") skip the container: arcave owns the store
-// the repository lives in and answers them server-side (repo_admin.go).
+// the repository lives in and answers them server-side (object_repo.go).
 package cdc
 
 import (
 	"context"
 	"fmt"
 	"path"
-	"strings"
 
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	resticmodel "github.com/greenmaskio/arcave/internal/service/backend/restic/rest/model"
-	resticrepo "github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 )
 
-// repoNamespace is the segment every volume's repository lives under, inside the
+// RepoNamespace is the segment every volume's repository lives under, inside the
 // shared store.
-const repoNamespace = "restic"
+const RepoNamespace = "restic"
 
 // resticPassword opens every repository arcave creates. A constant, not a
 // secret: whoever can read the store can read .arcave too, and a lost password
@@ -37,20 +34,17 @@ const resticPassword = "arcave"
 // by: changing it would cost every existing repository its increment.
 const mountRoot = "/m"
 
-// ContainerRunner is what this backend needs from the Docker engine: it runs
-// restic's own containers, so all it wants of a volume is what to bind and, for
-// a wipe-mode restore, a way to clear it. *docker.Engine satisfies it.
-type ContainerRunner interface {
-	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
-	ResolveVolumeAddress(ctx context.Context, v model.Volume) (model.VolumeAddress, error)
-	WipeVolume(ctx context.Context, addr model.VolumeAddress) error
-}
-
-// repositoryPublisher serves one repository under a name for as long as an operation
-// needs it. *registry.Registry satisfies it.
-type repositoryPublisher interface {
-	Register(name string, repo resticmodel.Repository) error
-	Unregister(name string)
+// VolumeRunner is what this backend needs from the Docker engine: it runs restic
+// in throwaway containers over one volume, so it needs what to mount, a way to
+// run the container, and — for a wipe-mode restore — a way to clear the volume
+// first. *docker.Engine satisfies it.
+//
+// runner.go uses only the embedded half, which is why that half is an interface
+// of its own.
+type VolumeRunner interface {
+	containerRunner
+	ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error)
+	WipeVolume(ctx context.Context, src model.MountSource) error
 }
 
 // Options is the backends.cdc config section, translated at the DI root.
@@ -67,19 +61,21 @@ type Options struct {
 // list: the seams have no natural order, so a new one cannot silently swap with
 // an existing one at a call site.
 type Dependencies struct {
-	Runner    ContainerRunner
-	Publisher repositoryPublisher
+	Runner VolumeRunner
 	// RepoURLBase is the restic repository URL minus its path; a caller appends
-	// "<prefix>/" to address one repository. A value and not a seam onto the
+	// "<object-id>/" to address one repository. A value and not a seam onto the
 	// server: everything in it is known before the first backend is built, so
 	// nothing here has to hold a listener to ask it a question.
 	RepoURLBase string
-	SharedStore storages.Storager
-	Options     Options
+	// RepositoryRoot is the tree the repositories live in — one directory per
+	// volume, named by its ObjectID. It is the very root the server resolves
+	// against, so a name on the wire and a directory here are the same thing.
+	RepositoryRoot storages.Storager
+	Options        Options
 }
 
-// Factory builds cdc snapshotters over one repository URL base and one shared
-// store.
+// Factory builds cdc snapshotters over one repository URL base and one
+// repository root.
 type Factory struct {
 	deps Dependencies
 }
@@ -90,14 +86,11 @@ func NewFactory(deps Dependencies) *Factory { return &Factory{deps: deps} }
 
 func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendCDC }
 
-// New resolves what is fixed for an instance's life: the volume's repository
-// and the publish prefix. The volume's own address is not — resolving it may
-// reach the daemon, and a constructor has no ctx to do that on.
+// New resolves what is fixed for an instance's life: the volume's repository.
+// The volume's own mount source is not — resolving it may reach the daemon, and a
+// constructor has no ctx to do that on.
 func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
-	// Both tiers address the same repository: restic picks a parent snapshot by
-	// host and paths, so a safety backup is an increment over that volume's
-	// savepoints. Only the tier label tells the two apart.
-	repoStore, err := f.deps.SharedStore.SubStorage(path.Join(repoNamespace, spec.Volume.ObjectID), true)
+	repoStore, err := f.deps.RepositoryRoot.SubStorage(spec.Volume.ObjectID, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the %s repository: %w", spec.Volume.ObjectID, err)
 	}
@@ -105,17 +98,8 @@ func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 		volume: spec.Volume,
 		// The two halves of the same repository: what a restic container reaches
 		// over the protocol, and what arcave addresses as objects of its own.
-		repository: resticrepo.New(repoStore),
-		admin:      repoAdmin{store: repoStore},
-		prefix:     repositoryPrefix(spec.Tier, spec.Volume.ObjectID),
-		deps:       f.deps,
-		mounted:    path.Join(mountRoot, spec.Volume.ObjectID),
+		repo:    objectRepo{store: repoStore},
+		deps:    f.deps,
+		mounted: path.Join(mountRoot, spec.Volume.ObjectID),
 	}, nil
-}
-
-// repositoryPrefix names a repository on the registry: one path segment, no "/". The
-// tier is in it so a rollback's two instances of one volume collide loudly
-// instead of one quietly capturing the other's traffic.
-func repositoryPrefix(tier model.BackendTier, objectID string) string {
-	return string(tier) + "-" + strings.ReplaceAll(objectID, "/", "-")
 }

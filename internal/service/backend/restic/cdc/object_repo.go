@@ -17,17 +17,17 @@ const (
 	snapshotsPath = "snapshots"
 )
 
-// repoAdmin is the server-side half of the backend: what can be answered or
+// objectRepo is the server-side half of the backend: what can be answered or
 // repaired by addressing the repository's objects, without a restic run. Its
 // store is already rooted at one repository.
-type repoAdmin struct {
+type objectRepo struct {
 	store storages.Storager
 }
 
 // HasConfig reports whether the repository has been initialised: a repository
 // without a config object is one restic has never seen.
-func (a repoAdmin) HasConfig(ctx context.Context) (bool, error) {
-	exists, err := a.store.Exists(ctx, configKey)
+func (r *objectRepo) HasConfig(ctx context.Context) (bool, error) {
+	exists, err := r.store.Exists(ctx, configKey)
 	if err != nil {
 		return false, fmt.Errorf("stat repository config: %w", err)
 	}
@@ -43,15 +43,15 @@ func (a repoAdmin) HasConfig(ctx context.Context) (bool, error) {
 // repository has no other client, so any lock standing at the start of an
 // operation is an orphan. Only at the start — restic refreshes its own lock
 // while it works.
-func (a repoAdmin) ClearLocks(ctx context.Context) error {
-	locks, err := a.store.List(ctx, locksPrefix)
+func (r *objectRepo) ClearLocks(ctx context.Context) error {
+	locks, err := r.store.List(ctx, locksPrefix)
 	if err != nil {
 		return fmt.Errorf("list repository locks: %w", err)
 	}
 	for _, lock := range locks {
 		key := path.Join(locksPrefix, lock.Name)
 		// List and Delete are two calls: a lock already gone is fine.
-		if err := a.store.Delete(ctx, key); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+		if err := r.store.Delete(ctx, key); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
 			return fmt.Errorf("delete stale repository lock %s: %w", key, err)
 		}
 		zerolog.Ctx(ctx).Debug().Str("lock", key).Msg("cleared a stale restic lock")
@@ -63,13 +63,22 @@ func (a repoAdmin) ClearLocks(ctx context.Context) error {
 // the wire, without the container or its exclusive lock. A snapshot already gone
 // is not an error. It reclaims no space: the chunks it referenced are shared,
 // and only a prune returns bytes.
-func (a repoAdmin) DeleteSnapshot(ctx context.Context, snapshotRef string) error {
-	if err := validateSnapshotRef(snapshotRef); err != nil {
-		return err
+//
+// The delete goes through a store rooted at snapshots/ rather than a key joined
+// onto it, and that is what keeps the id safe without arcave judging its shape:
+// "../config" escapes that root and the store's own guard refuses it, where the
+// same id joined onto the repository root would have stayed inside it and
+// deleted the object the repository is.
+func (r *objectRepo) DeleteSnapshot(ctx context.Context, snapshotObjectID string) error {
+	if snapshotObjectID == "" {
+		return errNoSnapshotID
 	}
-	key := path.Join(snapshotsPath, snapshotRef)
-	if err := a.store.Delete(ctx, key); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
-		return fmt.Errorf("delete snapshot %s: %w", snapshotRef, err)
+	snapshots, err := r.store.SubStorage(snapshotsPath, true)
+	if err != nil {
+		return fmt.Errorf("re-root store at snapshots: %w", err)
+	}
+	if err := snapshots.Delete(ctx, snapshotObjectID); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+		return fmt.Errorf("delete snapshot %s: %w", snapshotObjectID, err)
 	}
 	return nil
 }

@@ -31,7 +31,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 		{
 			name: "Rollback",
 			call: func(svc *Service, ctx context.Context) error {
-				_, err := svc.Rollback(ctx, model.RollbackRequest{Ref: "latest"})
+				_, err := svc.Rollback(ctx, model.RollbackRequest{Latest: ptrBool(true)})
 				return err
 			},
 		},
@@ -52,7 +52,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 			repo, inspector, runner := &mockSavepointRepo{}, &mockInspector{}, &mockComposeRunner{}
 			registry := &mockRegistry{}
 			// Nil stores: a workflow that got as far as a backend would deref one.
-			svc := New(repo, locker, inspector, runner, registry, nil, nil, model.SnapshotBackendCopy)
+			svc := New(repo, locker, inspector, runner, registry, nil, model.SnapshotBackendCopy)
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act

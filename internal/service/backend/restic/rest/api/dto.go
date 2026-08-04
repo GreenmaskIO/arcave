@@ -46,15 +46,15 @@ type BlobList = []Blob
 // addressed as a single object with no name and is never listed.
 type ObjectType string
 
-// ObjectIDPath defines model for ObjectIDPath.
-type ObjectIDPath = string
+// ArcaveObjectIDPath defines model for ArcaveObjectIDPath.
+type ArcaveObjectIDPath = string
 
 // ObjectTypePath The namespaces of a repository. `config` is not one of them: it is
 // addressed as a single object with no name and is never listed.
 type ObjectTypePath = ObjectType
 
-// RepoNamePath defines model for RepoNamePath.
-type RepoNamePath = string
+// ResticObjectIDPath defines model for ResticObjectIDPath.
+type ResticObjectIDPath = string
 
 // CreateRepositoryParams defines parameters for CreateRepository.
 type CreateRepositoryParams struct {

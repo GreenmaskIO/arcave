@@ -54,7 +54,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	}
 
 	// Ahead of the stop: a backend that cannot be built leaves the project running.
-	backends, err := s.buildBackends(volumes, model.BackendTierSavepoint)
+	backends, err := s.buildBackends(volumes)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
@@ -67,15 +67,14 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	// Capture while the services are stopped. On failure they still must come back
 	// up, so the restart is best-effort — a restart failure on top changes nothing
 	// and is only logged — and the capture error is what the caller gets.
-	record, err := s.performSavepoint(
-		ctx, s.savepointRepo, s.savepointStore, backends, req.Name, req.Description, req.Labels)
+	record, err := s.performSavepoint(ctx, backends, req.Name, req.Description, req.Labels)
 	if err != nil {
-		// Nothing was committed, so there is no record to uncommit — only the data
-		// the fan-out got as far as writing, which no savepoint will ever name. A
-		// refused directory is the exception: its objects predate this run, and
-		// keeping them is the point of the refusal.
+		// Nothing was committed, so the uncommit inside dropSavepoint is a no-op and
+		// what it really drops is the data the fan-out got as far as writing, which no
+		// savepoint will ever name. A refused directory is the exception: its objects
+		// predate this run, and keeping them is the point of the refusal.
 		if !errors.Is(err, errCaptureDirectoryNotEmpty) {
-			if dropErr := s.dropCaptures(ctx, s.savepointStore, record, backends); dropErr != nil {
+			if dropErr := s.dropSavepoint(ctx, record, backends); dropErr != nil {
 				log.Warn().Err(dropErr).Str("savepoint", record.ID.String()).Msg("failed to remove the partial capture")
 			}
 		}
@@ -93,9 +92,35 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	return record, nil
 }
 
-// ListSavepoints returns every committed savepoint.
-func (s *Service) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
-	return s.savepointRepo.List(ctx)
+// ListSavepoints returns the committed savepoints req asks for.
+func (s *Service) ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error) {
+	return s.listSavepoints(ctx, req.IncludeSafetySnapshots)
+}
+
+// listSavepoints is core's only read of the repository, so the rule that hides a
+// safety snapshot has one place to be forgotten. Which selector may see one is
+// findSavepoint's and selectSavepointsToRemove's call.
+func (s *Service) listSavepoints(ctx context.Context, includeSafetySnapshots bool) ([]model.Savepoint, error) {
+	records, err := s.savepointRepo.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing savepoints: %w", err)
+	}
+	if includeSafetySnapshots {
+		return records, nil
+	}
+	return visibleSavepoints(records), nil
+}
+
+// visibleSavepoints drops the safety snapshots. Non-nil, so an empty listing
+// marshals as [] rather than null.
+func visibleSavepoints(records []model.Savepoint) []model.Savepoint {
+	visible := make([]model.Savepoint, 0, len(records))
+	for _, r := range records {
+		if !r.IsSafetySnapshot() {
+			visible = append(visible, r)
+		}
+	}
+	return visible
 }
 
 // RemoveSavepoints deletes savepoints selected by req. Combined retention rules
@@ -116,9 +141,11 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 		defer unlock()
 	}
 
-	records, err := s.savepointRepo.List(ctx)
+	// Everything, safety snapshots included: which of them this request may see is
+	// selectSavepointsToRemove's call, and it differs by selector.
+	records, err := s.listSavepoints(ctx, true)
 	if err != nil {
-		return model.RemoveResult{}, fmt.Errorf("listing savepoints: %w", err)
+		return model.RemoveResult{}, err
 	}
 
 	_, removed, err := s.selectSavepointsToRemove(records, req)
@@ -158,6 +185,11 @@ func validateRemoveRequest(req model.RemoveRequest) error {
 
 // selectSavepointsToRemove splits records by req: an explicit id list when
 // given, otherwise the retention rules.
+//
+// The two see different sets. An id list sees every record, safety snapshots
+// included — that is how a killed rollback's shard is cleared. The retention
+// rules scan, and a scan sees only what `savepoint list` shows: an undo must
+// neither count as one of the N newest, nor be swept by an age rule.
 func (s *Service) selectSavepointsToRemove(
 	records []model.Savepoint,
 	req model.RemoveRequest,
@@ -169,7 +201,7 @@ func (s *Service) selectSavepointsToRemove(
 	if err != nil {
 		return nil, nil, err
 	}
-	kept, removed = partitionSavepoints(records, req.RetainRecent, cutoffs)
+	kept, removed = partitionSavepoints(visibleSavepoints(records), req.RetainRecent, cutoffs)
 	return kept, removed, nil
 }
 
@@ -283,14 +315,14 @@ func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) e
 	return nil
 }
 
-// removeSavepoint drops one savepoint from the savepoint tier. The backends are
+// removeSavepoint drops one savepoint from the savepoint store. The backends are
 // built first: one that cannot be built leaves the savepoint whole.
 func (s *Service) removeSavepoint(ctx context.Context, record model.Savepoint) error {
-	backends, err := s.buildBackends(volumesOf(record), model.BackendTierSavepoint)
+	backends, err := s.buildBackends(volumesOf(record))
 	if err != nil {
 		return err
 	}
-	if err := s.dropSavepoint(ctx, s.savepointRepo, s.savepointStore, record, backends); err != nil {
+	if err := s.dropSavepoint(ctx, record, backends); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", record.ID.String()).
 			Msg("savepoint was uncommitted but its data could not be removed; the directory is orphaned")
 		return err
@@ -298,16 +330,34 @@ func (s *Service) removeSavepoint(ctx context.Context, record model.Savepoint) e
 	return nil
 }
 
-// refLatest is the reserved ref that selects the newest savepoint by CreatedAt.
-const refLatest = "latest"
+// findSavepoint resolves a request's selector to one record. Ids win, being
+// unique; a name matching several is an error, never a silent guess.
+//
+// It takes every record so it can apply the visibility rule: an id resolves
+// against all of them — rolling back to a killed rollback's undo is the manual
+// recovery path, spelled by id — while Name and Latest see only what
+// `savepoint list` shows.
+//
+// The caller has run req.Validate, so the branches read nil-ness alone.
+func findSavepoint(records []model.Savepoint, req model.RollbackRequest) (model.Savepoint, error) {
+	if req.ID != nil {
+		for _, r := range records {
+			if r.ID == *req.ID {
+				return r, nil
+			}
+		}
+		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", *req.ID)
+	}
 
-// findSavepoint resolves a ref — refLatest, an exact id, or a name. Ids win,
-// being unique; a name matching several is an error, never a silent guess.
-func findSavepoint(records []model.Savepoint, ref string) (model.Savepoint, error) {
+	records = visibleSavepoints(records)
 	if len(records) == 0 {
 		return model.Savepoint{}, errors.New("no savepoints exist")
 	}
-	if ref == refLatest {
+
+	if req.Name == nil {
+		if req.Latest == nil || !*req.Latest {
+			return model.Savepoint{}, model.ErrRollbackNoSelector
+		}
 		latest := records[0]
 		for _, r := range records[1:] {
 			if r.CreatedAt.After(latest.CreatedAt) {
@@ -316,20 +366,16 @@ func findSavepoint(records []model.Savepoint, ref string) (model.Savepoint, erro
 		}
 		return latest, nil
 	}
-	for _, r := range records {
-		if r.ID.String() == ref {
-			return r, nil
-		}
-	}
+
 	var byName []model.Savepoint
 	for _, r := range records {
-		if r.Name == ref {
+		if r.Name == *req.Name {
 			byName = append(byName, r)
 		}
 	}
 	switch len(byName) {
 	case 0:
-		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", ref)
+		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", *req.Name)
 	case 1:
 		return byName[0], nil
 	default:
@@ -337,6 +383,7 @@ func findSavepoint(records []model.Savepoint, ref string) (model.Savepoint, erro
 		for i, r := range byName {
 			ids[i] = r.ID.String()
 		}
-		return model.Savepoint{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s", len(byName), ref, strings.Join(ids, ", "))
+		return model.Savepoint{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s",
+			len(byName), *req.Name, strings.Join(ids, ", "))
 	}
 }

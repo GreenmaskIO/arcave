@@ -28,6 +28,6 @@ func bindVolume(service, target string) model.Volume {
 
 // bindAddress is what the engine answers for a bindVolume: compose-go resolves
 // a bind source to an absolute host path, so no lookup is involved.
-func bindAddress(target string) model.VolumeAddress {
-	return model.VolumeAddress{Kind: model.VolumeAddressBind, Source: "/host" + target}
+func bindAddress(target string) model.MountSource {
+	return model.MountSource{Type: model.MountSourceBind, Source: "/host" + target}
 }

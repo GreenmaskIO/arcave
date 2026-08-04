@@ -2,7 +2,7 @@
 // snapshot, under <snapshotID>/<objectID>/, streamed through the Docker engine
 // and stored verbatim so ownership and permissions survive a restore.
 //
-// The volume is addressed directly and streamed through a container of arcave's
+// The volume is mounted directly and streamed through a container of arcave's
 // own, so a service container is never involved and a mount's subpath never
 // narrows what the archive holds.
 //
@@ -26,19 +26,23 @@ import (
 // archiveName is the one object a capture consists of.
 const archiveName = "data.tar"
 
+// errNoStore refuses a spec carrying no root. This backend keeps its captures in
+// the tree it was handed, so without one there is nowhere to write.
+var errNoStore = errors.New("backend spec carries no store")
+
 // Payload is a capture's SnapshotStat payload. The size_bytes json tag matches
 // the old core's records, so they read back without a migration.
 type Payload struct {
 	SizeBytes int64 `json:"size_bytes"`
 }
 
-// VolumeStreamer is what the backend needs from the Docker engine: an address
-// for a volume, a stream of the whole volume out, and the same stream wiped and
+// VolumeStreamer is what the backend needs from the Docker engine: the mount
+// source of a volume, a stream of the whole volume out, and the same stream wiped and
 // extracted back in. The concrete *docker.Engine satisfies it.
 type VolumeStreamer interface {
-	ResolveVolumeAddress(ctx context.Context, v model.Volume) (model.VolumeAddress, error)
-	OpenVolume(ctx context.Context, addr model.VolumeAddress) (io.ReadCloser, error)
-	WriteVolume(ctx context.Context, addr model.VolumeAddress, r io.Reader) error
+	ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error)
+	OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error)
+	WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error
 }
 
 // Factory builds fullcopy snapshotters over one shared Docker engine.
@@ -52,18 +56,17 @@ func NewFactory(docker VolumeStreamer) *Factory { return &Factory{docker: docker
 
 func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendCopy }
 
-// New resolves the one thing fixed for an instance's life: the root the tier
-// names. The volume's address is not, and cannot be — resolving it may reach the
-// daemon, and a constructor has no ctx to do that on.
+// New binds the instance to the root the caller handed it — the one thing fixed
+// for its life. The volume's mount source is not, and cannot be: resolving it may
+// reach the daemon, and a constructor has no ctx to do that on.
 func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
-	store, err := spec.TierStore()
-	if err != nil {
-		return nil, err
+	if spec.Store == nil {
+		return nil, errNoStore
 	}
-	return &Snapshotter{volume: spec.Volume, store: store, docker: f.docker}, nil
+	return &Snapshotter{volume: spec.Volume, store: spec.Store, docker: f.docker}, nil
 }
 
-// Snapshotter captures one volume into one tier's root.
+// Snapshotter captures one volume into one root.
 type Snapshotter struct {
 	volume model.Volume
 	store  storages.Storager
@@ -81,14 +84,14 @@ func (s *Snapshotter) Snapshot(
 		return model.SnapshotStat{}, err
 	}
 
-	addr, err := s.address(ctx)
+	mnt, err := s.mountSource(ctx)
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
 
-	src, err := s.docker.OpenVolume(ctx, addr)
+	src, err := s.docker.OpenVolume(ctx, mnt)
 	if err != nil {
-		return model.SnapshotStat{}, fmt.Errorf("open docker volume %s: %w", addr.Source, err)
+		return model.SnapshotStat{}, fmt.Errorf("open docker volume %s: %w", mnt.Source, err)
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
@@ -117,7 +120,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 		return err
 	}
 
-	addr, err := s.address(ctx)
+	mnt, err := s.mountSource(ctx)
 	if err != nil {
 		return err
 	}
@@ -132,21 +135,21 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 		}
 	}()
 
-	if err := s.docker.WriteVolume(ctx, addr, src); err != nil {
-		return fmt.Errorf("write docker volume %s: %w", addr.Source, err)
+	if err := s.docker.WriteVolume(ctx, mnt, src); err != nil {
+		return fmt.Errorf("write docker volume %s: %w", mnt.Source, err)
 	}
 	return nil
 }
 
-// address is what a container binds to reach this volume. Resolved per call
+// mountSource is what a container mounts to reach this volume. Resolved per call
 // rather than held on the instance: it may cost a round trip to the daemon, and
 // only the two methods that move bytes need it.
-func (s *Snapshotter) address(ctx context.Context) (model.VolumeAddress, error) {
-	addr, err := s.docker.ResolveVolumeAddress(ctx, s.volume)
+func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error) {
+	mnt, err := s.docker.ResolveMountSource(ctx, s.volume)
 	if err != nil {
-		return model.VolumeAddress{}, fmt.Errorf("address volume %s: %w", s.volume.ObjectID, err)
+		return model.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
 	}
-	return addr, nil
+	return mnt, nil
 }
 
 func (s *Snapshotter) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
@@ -174,7 +177,7 @@ func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest
 	return nil
 }
 
-// captureStore narrows the tier's root to the one capture a request addresses.
+// captureStore narrows the root to the one capture a request addresses.
 // It is the only place an id becomes a storage key, so the id gate stands here:
 // the destructive paths render a key through it too.
 func (s *Snapshotter) captureStore(snapshotID model.SavepointID) (storages.Storager, error) {

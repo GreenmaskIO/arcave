@@ -7,13 +7,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"testing"
 
 	"github.com/rs/zerolog"
-	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
 )
 
 // testID is a name of the shape restic writes: 64 lowercase hex characters, and
@@ -23,12 +20,15 @@ var (
 	stubBody = []byte("0123456789abcdef")
 )
 
-// The names the route table addresses. An unserved name is a 404 before any
-// operation runs, so every name a case expects an answer from has to be served.
+// The names the route table addresses. A name the resolver does not serve is a
+// 404 before any operation runs, so every name a case expects an answer from has
+// to be one of the first three.
 const (
-	testRepoName    = "testrepo"
-	otherRepoName   = "other"
-	flattenedName   = "safety-volume-pgdata"
+	testRepoName  = "testrepo"
+	otherRepoName = "other"
+	// objectIDName is a real arcave ObjectID: one segment, with the mount path
+	// flattened into it — the shape a name on this wire actually has.
+	objectIDName    = "volume-service-app-var-lib-data"
 	unknownRepoName = "nosuchrepo"
 )
 
@@ -42,27 +42,36 @@ func journalled(w io.Writer) context.Context {
 	return logger.WithContext(context.Background())
 }
 
-// serving is the registry these tests reach a repository through.
-func serving(t *testing.T, repos map[string]model.Repository) *registry.Registry {
-	t.Helper()
-
-	reg := registry.New()
-	for name, repo := range repos {
-		require.NoError(t, reg.Register(name, repo))
-	}
-	return reg
+// serving is the resolver these tests reach a repository through. A double
+// rather than repo.NewResolver over a real store: what this package's tests are
+// about is routing, and a name that resolves to nothing has to be a 404 without
+// a filesystem in the way.
+func serving(repos map[string]model.Repository) model.RepositoryResolver {
+	return stubResolver(repos)
 }
 
 // oneRepository serves repo under every name the route table addresses, so a
 // case about routing says nothing about resolution.
-func oneRepository(t *testing.T, repo model.Repository) *registry.Registry {
-	t.Helper()
-
-	return serving(t, map[string]model.Repository{
+func oneRepository(repo model.Repository) model.RepositoryResolver {
+	return serving(map[string]model.Repository{
 		testRepoName:  repo,
 		otherRepoName: repo,
-		flattenedName: repo,
+		objectIDName:  repo,
 	})
+}
+
+var _ model.RepositoryResolver = stubResolver(nil)
+
+// stubResolver answers with the repository a name is mapped to, and
+// ErrRepositoryNotFound for every other name.
+type stubResolver map[string]model.Repository
+
+func (s stubResolver) Lookup(arcaveObjectID string) (model.Repository, error) {
+	repo, ok := s[arcaveObjectID]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", model.ErrRepositoryNotFound, arcaveObjectID)
+	}
+	return repo, nil
 }
 
 var _ model.Repository = stubRepository{}

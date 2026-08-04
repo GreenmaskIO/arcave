@@ -7,7 +7,7 @@ import (
 )
 
 type savepointListService interface {
-	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
+	ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error)
 }
 
 type SavepointListHandler struct {
@@ -22,10 +22,10 @@ func NewSavepointListHandler(svc savepointListService, printer printer) *Savepoi
 	}
 }
 
-// SavepointList prints all savepoints as a JSON array. It reads only the
-// savepoint store, so it needs no config.
-func (h *SavepointListHandler) SavepointList(ctx context.Context) error {
-	sps, err := h.svc.ListSavepoints(ctx)
+// SavepointList prints the savepoints req asks for as a JSON array. It reads
+// only the savepoint store, so it needs no config.
+func (h *SavepointListHandler) SavepointList(ctx context.Context, req model.ListRequest) error {
+	sps, err := h.svc.ListSavepoints(ctx, req)
 	if err != nil {
 		return err
 	}

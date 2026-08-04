@@ -11,14 +11,23 @@ info:
     This document is the contract, not a description of an implementation: the Go
     server is generated from it. Many repositories are served, each addressed by
     the first segment of the path — the `{path}` of the specification is that
-    segment, and a restic client is pointed at `{address}/{repoName}`.
+    segment, and a restic client is pointed at `{address}/{arcaveObjectID}`.
+
+    That segment is the arcave ObjectID of a volume, and it resolves to the
+    sub-store of the same name under the root this server was configured with.
+    There is no registry: a name is a directory, so nothing has to be published
+    before an operation or withdrawn when it ends, and the configured root — plus
+    the store's own guard, which refuses a key leading outside it — is the whole
+    of what this server can reach.
 servers:
   - url: /
-    description: Many restic repositories, each under its own first path segment
+    description: |
+      Many restic repositories under one root, each in the directory its arcave
+      ObjectID names — the first segment of the path.
 tags:
   - name: "v1"
 paths:
-  /{repoName}/:
+  /{arcaveObjectID}/:
     post:
       operationId: createRepository
       tags: [v1]
@@ -31,7 +40,7 @@ paths:
         `create=true` is required — a bare POST is not an init, and answering it
         200 would report a repository nobody asked for.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
         - name: create
           in: query
           required: true
@@ -56,19 +65,19 @@ paths:
         created the store it lives in, and the protocol provides for a server
         that does not implement removal.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
       responses:
         '501':
           description: Removing a repository is not implemented by this server
 
-  /{repoName}/config:
+  /{arcaveObjectID}/config:
     head:
       operationId: statConfig
       tags: [v1]
       summary: Report the config's size
       description: How a client decides whether the repository is initialised at all.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
       responses:
         '200':
           description: The config exists
@@ -88,7 +97,7 @@ paths:
       tags: [v1]
       summary: Read the config
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
       responses:
         '200':
           description: The config
@@ -110,7 +119,7 @@ paths:
         than replaced: a repository holding data must never be silently
         re-initialised.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
       requestBody:
         required: true
         content:
@@ -133,7 +142,7 @@ paths:
       summary: Remove the config
       description: Idempotent — a config that is already gone is a success.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
       responses:
         '200':
           description: The repository holds no config
@@ -142,7 +151,7 @@ paths:
         '500':
           description: The config could not be removed
 
-  /{repoName}/{type}/:
+  /{arcaveObjectID}/{type}/:
     get:
       operationId: listBlobs
       tags: [v1]
@@ -156,7 +165,7 @@ paths:
         `Accept: application/vnd.x.restic.rest.v2`, so the negotiation only ever
         had one outcome, and the client reads the shape the `Content-Type` names.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
         - $ref: '#/components/parameters/ObjectTypePath'
       responses:
         '200':
@@ -180,7 +189,7 @@ paths:
         Present so that a HEAD of a listing is not a 405. The protocol does not
         describe it and a restic client never sends it.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
         - $ref: '#/components/parameters/ObjectTypePath'
       responses:
         '200':
@@ -190,16 +199,16 @@ paths:
         '500':
           description: The objects could not be listed
 
-  /{repoName}/{type}/{name}:
+  /{arcaveObjectID}/{type}/{resticObjectID}:
     head:
       operationId: statBlob
       tags: [v1]
       summary: Report one object's size
       description: How a client decides whether the repository already holds a pack.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
         - $ref: '#/components/parameters/ObjectTypePath'
-        - $ref: '#/components/parameters/ObjectIDPath'
+        - $ref: '#/components/parameters/ResticObjectIDPath'
       responses:
         '200':
           description: The object exists
@@ -227,9 +236,9 @@ paths:
         malformed spec, more than one range — is ignored and the whole object is
         returned, which RFC 9110 permits and which is safer than a refusal.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
         - $ref: '#/components/parameters/ObjectTypePath'
-        - $ref: '#/components/parameters/ObjectIDPath'
+        - $ref: '#/components/parameters/ResticObjectIDPath'
         - name: Range
           in: header
           required: false
@@ -288,9 +297,9 @@ paths:
         refusing, because a retry after a half-written object is the case that
         matters.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
         - $ref: '#/components/parameters/ObjectTypePath'
-        - $ref: '#/components/parameters/ObjectIDPath'
+        - $ref: '#/components/parameters/ResticObjectIDPath'
       requestBody:
         required: true
         content:
@@ -316,9 +325,9 @@ paths:
         Idempotent — a client retries deletes, and a retry landing after the
         first attempt succeeded must not fail a prune.
       parameters:
-        - $ref: '#/components/parameters/RepoNamePath'
+        - $ref: '#/components/parameters/ArcaveObjectIDPath'
         - $ref: '#/components/parameters/ObjectTypePath'
-        - $ref: '#/components/parameters/ObjectIDPath'
+        - $ref: '#/components/parameters/ResticObjectIDPath'
       responses:
         '200':
           description: |
@@ -335,20 +344,28 @@ paths:
 
 components:
   parameters:
-    RepoNamePath:
-      name: repoName
+    ArcaveObjectIDPath:
+      name: arcaveObjectID
       in: path
       required: true
       description: |
-        The repository this call addresses — the first segment of the path, which
-        is where a client's `{address}/{repoName}` ends up. One segment is the
-        only structural rule; which repository a name resolves to is the server's
-        business.
+        The repository this call addresses, named by the arcave ObjectID of the
+        volume it holds — the stable identity of that volume's data
+        (`volume-named-<docker name>` or `volume-service-<service>-<target>`),
+        and the name of the directory the repository lives in.
 
-        A name no repository is served under is the 404 of every operation that
-        reads one — including a HEAD, which otherwise answers from its path
-        alone. `deleteRepository` is the one exception: it is not implemented for
-        any name, so it answers 501 whatever the name says.
+        The qualifier is not noise: two vocabularies meet on this wire, and a
+        bare "object id" means a different thing in each. This one is arcave's;
+        `resticObjectID` is restic's, the content hash of a blob.
+
+        It is the first segment of the path, which is where a client's
+        `{address}/{arcaveObjectID}` ends up. One segment is the only structural
+        rule; how it resolves to a repository is the server's business.
+
+        A name the server cannot serve a repository for is the 404 of every
+        operation that reads one — including a HEAD, which otherwise answers from
+        its path alone. `deleteRepository` is the one exception: it is not
+        implemented for any name, so it answers 501 whatever the name says.
       schema:
         type: string
         minLength: 1
@@ -359,11 +376,14 @@ components:
       description: The namespace the object lives in.
       schema:
         $ref: '#/components/schemas/ObjectType'
-    ObjectIDPath:
-      name: name
+    ResticObjectIDPath:
+      name: resticObjectID
       in: path
       required: true
-      description: The object's name — the 64 hex characters of its content hash.
+      description: |
+        The object's id in restic's own name space — the 64 hex characters of the
+        blob's content hash, inside the repository `arcaveObjectID` names. The
+        qualifier tells the two id vocabularies of this wire apart.
       schema:
         type: string
         pattern: '^[0-9a-f]{64}$'

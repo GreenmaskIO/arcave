@@ -39,12 +39,6 @@ var (
 	// volume it is expected to cover; which volumes are missing is logged.
 	ErrMissingVolumeInSnapshot = errors.New("snapshot is missing a volume capture")
 
-	// ErrUnknownBackendTier reports a BackendSpec.Tier no backend can place. It
-	// sits beside the registry's own ErrNoBackendTier, which is the zero value:
-	// this one is a tier that is set and unrecognised. BackendSpec.TierStore wraps
-	// it with the offending value.
-	ErrUnknownBackendTier = errors.New("unknown backend tier")
-
 	// ErrUnsupportedConfigVersion reports a config file whose schema version arcave does
 	// not speak. arcave speaks exactly one, so any other value is refused rather than
 	// migrated. A file carrying no version at all is taken to be that one version:

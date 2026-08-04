@@ -26,7 +26,7 @@ import (
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/registry"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -96,7 +96,7 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 			require.Len(t, first.Stats, len(env.volumes))
 			for _, stat := range first.Stats {
 				payload := resticPayload(t, stat)
-				assert.NotEmpty(t, payload.SnapshotRef, "%s", stat.Volume.ObjectID)
+				assert.NotEmpty(t, payload.SnapshotObjectID, "%s", stat.Volume.ObjectID)
 				assert.Positive(t, payload.TotalBytesProcessed, "%s", stat.Volume.ObjectID)
 				// One repository per volume, in the shared tree — a real restic
 				// repository a user can open with a plain restic CLI.
@@ -120,7 +120,7 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 
 			// Rolling back to the first savepoint returns every volume byte for byte.
 			require.NotEqual(t, before, env.hashAll(t), "the mutation must actually change a volume")
-			res, err := env.svc.Rollback(env.ctx, model.RollbackRequest{Ref: first.ID.String()})
+			res, err := env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &first.ID})
 			require.NoError(t, err)
 			assert.Len(t, res.Restored, len(env.volumes))
 			assert.Equal(t, before, env.hashAll(t),
@@ -129,9 +129,9 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 	}
 }
 
-// A rollback that fails after the restore replays the safety backup — which
+// A rollback that fails after the restore replays the safety snapshot — which
 // lives in the very same repository as the savepoints, as an increment over
-// them, addressed by nothing but this process's memory.
+// them, and commits its own record in the one savepoint store.
 func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	// Arrange
 	env := newCDCEnv(t, config.CDCBackend{
@@ -142,7 +142,7 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
 	require.NoError(t, err)
 
-	// The state the safety backup will have to bring back.
+	// The state the safety snapshot will have to bring back.
 	env.mutate(t, env.volumes[0])
 	preRollback := env.hashAll(t)
 
@@ -151,21 +151,25 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	env.compose.failNextUp = errors.New("unhealthy")
 
 	// Act
-	_, err = env.svc.Rollback(env.ctx, model.RollbackRequest{Ref: savepoint.ID.String()})
+	_, err = env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
 
 	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rollback failed")
 	assert.Equal(t, preRollback, env.hashAll(t),
-		"the revert must put back exactly what the safety backup captured")
+		"the revert must put back exactly what the safety snapshot captured")
 	assert.Contains(t, env.logs.String(), "reverted to the pre-rollback state")
 
-	// The safety tier committed no record, and its captures left nothing in the
-	// safety tree: for cdc they were snapshots in the shared repository, dropped
-	// once the revert succeeded.
-	backups, err := sprepo.New(env.safetyStore).List(env.ctx)
+	// A successful revert uncommits the backup, so nothing of it lists — not even
+	// with the flag — and its captures are gone: for cdc they were snapshots in the
+	// shared repository, dropped once the revert succeeded. The savepoint itself
+	// is untouched.
+	committed, err := env.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 	require.NoError(t, err)
-	assert.Empty(t, backups)
+	require.Len(t, committed, 1)
+	assert.Equal(t, savepoint.ID, committed[0].ID)
+	assert.Equal(t, []string{savepoint.ID.String() + "/savepoint.json"}, objectNames(t, env.savepointStore),
+		"the backup's own directory is swept with it")
 }
 
 // cdcEnv is one wired arcave over a live daemon, plus the volumes it captures.
@@ -176,7 +180,6 @@ type cdcEnv struct {
 	logs           *syncBuffer
 	engine         *dockerclient.Engine
 	savepointStore storages.Storager
-	safetyStore    storages.Storager
 	sharedStore    storages.Storager
 	volumes        []cdcVolume
 }
@@ -207,8 +210,9 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		fill(t, engine, v.name)
 	}
 
-	// The stores, exactly as the DI root builds them: the savepoint and safety
-	// trees under a session, the cdc repositories beside it under "shared".
+	// The stores, exactly as the DI root builds them: one tree under a session,
+	// savepoints and a rollback's undo alike, and the cdc repositories beside the
+	// session under "shared".
 	projectRoot := t.TempDir()
 	storageCfg := config.Storage{
 		Type:      config.StorageTypeDirectory,
@@ -217,12 +221,6 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	savepointStore, err := storefactory.New(storageCfg, projectRoot, model.DefaultSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, savepointStore.Close()) })
-	safetyStore, err := storefactory.New(config.Storage{
-		Type:      config.StorageTypeDirectory,
-		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "tmp")},
-	}, projectRoot, model.DefaultSession)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, safetyStore.Close()) })
 	sharedStore, err := storefactory.NewShared(storageCfg, projectRoot)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, sharedStore.Close()) })
@@ -231,17 +229,17 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).Level(zerolog.InfoLevel).WithContext(context.Background())
 
-	repos := registry.New()
-	resticServer := rest.NewEcho(ctx, repos)
+	resticRoot, err := sharedStore.SubStorage(cdc.RepoNamespace, true)
+	require.NoError(t, err)
+	resticServer := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	resticPort, err := rest.Serve(resticServer, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, resticServer.Close()) })
 
 	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
-		Runner:      engine,
-		Publisher:   repos,
-		RepoURLBase: rest.RepositoryURLBase(cdcContainerHost, resticPort),
-		SharedStore: sharedStore,
+		Runner:         engine,
+		RepoURLBase:    rest.RepositoryURLBase("", cdcContainerHost, resticPort),
+		RepositoryRoot: resticRoot,
 		Options: cdc.Options{
 			Image:       cdcCfg.Image,
 			Incremental: cdcCfg.RestoreMode == config.RestoreModeIncremental,
@@ -257,7 +255,6 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		composeRunner,
 		registry,
 		savepointStore,
-		safetyStore,
 		model.SnapshotBackendCDC,
 	)
 
@@ -268,7 +265,6 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		logs:           logs,
 		engine:         engine,
 		savepointStore: savepointStore,
-		safetyStore:    safetyStore,
 		sharedStore:    sharedStore,
 		volumes:        volumes,
 	}

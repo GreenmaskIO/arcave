@@ -97,6 +97,8 @@ Removal runs the same steps in reverse, uncommitting first: `savepoint.json` is
 deleted before the namespace it lives in, so the only observable states are
 "fully present" and "gone".
 
+One store holds everything, a rollback's safety snapshot included: it is an ordinary savepoint, with its own record, marked with the label `arcave-safety-snapshot=true`. The mark is what hides it — `arcave savepoint list` and every scanning selector (`latest`, a name, `--retain-recent`, `--retain-for`, `--before-date`) skip it, while an explicit id reaches it. A rollback deletes its own snapshot on success and after a successful revert; the one left behind by a killed rollback is the last copy of the pre-rollback state, and that asymmetry is the whole reason the record exists. Recovering from it is manual — `arcave savepoint list --include-safety-snapshots` to find the id, `arcave rollback <id>` to apply it, `arcave savepoint remove --ids <id>` to be rid of it. arcave does not finish a rollback it died in the middle of.
+
 ---
 
 ## Rollback Process
@@ -509,6 +511,23 @@ Behavior:
 - Restarts services.
 - Waits for health checks.
 
+##### What a savepoint covers
+
+The unit of backup is the **volume**, not the mount:
+
+- Every named volume the project declares — including `external: true` ones, and including ones no service mounts.
+- Every bind mount and every anonymous volume, one unit per service and target. A named volume three services mount is one unit, captured once.
+- Mounts that are not persistent data are skipped, each reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
+
+A volume is addressed directly — a named volume by its docker name, a bind by its host path — and read and written through a throwaway container of arcave's own. The project's own containers need not be running, or exist at all. The one exception is an **anonymous volume**: its docker name is created per container, so arcave has to ask the daemon through that service's container, and a create or rollback fails if it is gone.
+
+Two things follow that a user with a `subpath:` mount will not expect:
+
+- A volume mounted through `subpath:` is captured **whole**. The subpath is a property of that one mount, and the daemon does not report it back at all — only the compose file knows about it.
+- **A rollback therefore restores the whole volume**, not the subdirectory the service sees. Everything else in that volume goes back to its savepoint state too.
+
+A named volume that does not exist on the daemon is an **error**, not a skip: an empty capture would silently wipe live data at the next rollback. Bring the project up once (`docker compose up`) to create the volumes it declares.
+
 Every savepoint receives a unique immutable identifier — a Unix timestamp integer:
 
 ```text
@@ -534,6 +553,16 @@ Lists available savepoints.
 
 ```bash
 arcave savepoint list
+arcave savepoint list --include-safety-snapshots
+```
+
+Options:
+
+```text
+--include-safety-snapshots   Also list the safety snapshots a rollback takes of the live state.
+                           Hidden by default: one exists only while a rollback runs. One that
+                           outlived its rollback is that rollback's last copy of the
+                           pre-rollback state, and can be rolled back to by id.
 ```
 
 Output:
@@ -582,14 +611,19 @@ Restores the environment to a specified savepoint.
 ```bash
 arcave rollback latest
 arcave rollback 1780335122
+arcave rollback before-migration
 ```
+
+The argument names the savepoint in one of three ways, and which one it is decided by the token itself: `latest` is reserved, a run of decimal digits is an **id** (that being exactly what a savepoint id is), and anything else is a **name**. An id is exact and never falls back to a name — `arcave rollback 1780335122` will not resolve to a savepoint merely *called* `1780335122` — and it is the only form that reaches a safety snapshot. A name matching several savepoints is an error listing the candidate ids, never a silent guess.
 
 Behavior:
 
 - Stops project services.
+- Takes a safety snapshot of the live state, named `safety-snapshot-<id of the savepoint being restored>`, so one left behind by a killed rollback says which savepoint it was undoing.
 - Restores all registered stateful service volumes.
 - Starts project services.
 - Waits for health checks.
+- Deletes the safety snapshot, unless replaying it failed too — the one case where it is the last copy of the pre-rollback state.
 
 ---
 

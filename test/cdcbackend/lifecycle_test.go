@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // I1: a capture writes restic's own layout and nothing else, which is what "open it
@@ -15,7 +13,7 @@ func TestSnapshotter_Snapshot_KeepsTheRepositoryLayout(t *testing.T) {
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-	backend := env.backend(t, vol, model.BackendTierSavepoint)
+	backend := env.backend(t, vol)
 
 	// Act
 	env.snapshot(t, backend, idFirst, nil)
@@ -39,16 +37,16 @@ func TestSnapshotter_Snapshot_KeepsRepositoriesPerVolume(t *testing.T) {
 	second := env.newVolume(t, "app", "/srv/assets")
 
 	// Act
-	firstPayload := env.snapshot(t, env.backend(t, first, model.BackendTierSavepoint), idFirst, nil)
-	secondPayload := env.snapshot(t, env.backend(t, second, model.BackendTierSavepoint), idFirst, nil)
+	firstPayload := env.snapshot(t, env.backend(t, first), idFirst, nil)
+	secondPayload := env.snapshot(t, env.backend(t, second), idFirst, nil)
 
 	// Assert
 	roots := []string{"restic/" + first.ObjectID + "/", "restic/" + second.ObjectID + "/"}
 	for _, key := range objectNames(t, env.shared, "") {
 		assert.Truef(t, hasAnyPrefix(key, roots), "%s lives outside either volume's repository", key)
 	}
-	assert.Equal(t, []string{firstPayload.SnapshotRef}, env.snapshotRefs(t, first))
-	assert.Equal(t, []string{secondPayload.SnapshotRef}, env.snapshotRefs(t, second))
+	assert.Equal(t, []string{firstPayload.SnapshotObjectID}, env.snapshotObjectIDs(t, first))
+	assert.Equal(t, []string{secondPayload.SnapshotObjectID}, env.snapshotObjectIDs(t, second))
 	assert.Contains(t, env.repoKeys(t, first), configKey)
 	assert.Contains(t, env.repoKeys(t, second), configKey)
 }

@@ -33,23 +33,31 @@ const (
 	SnapshotBackendUnknown SnapshotBackendKind = "unknown"
 )
 
-// The two prefixes keep the identity spaces apart: a volume named "db" and a
-// service named "db" must not produce the same StorageID.
+// An ObjectID is one path segment: it is the name of a directory in a store and
+// the name of a repository on the restic wire, and both want a segment rather
+// than a tree. Both prefixes open with "volume-" — everything addressed here is
+// a volume — and the second word says how it is addressed, which keeps the
+// identity spaces apart: a volume named "db" and a service named "db" must not
+// produce the same id.
 const (
-	storageIDVolumePrefix  = "volume/"
-	storageIDServicePrefix = "service/"
+	storageIDNamedPrefix   = "volume-named-"
+	storageIDServicePrefix = "volume-service-"
 )
 
 // namedStorageID identifies a named volume by the volume itself: its data
 // outlives any one container, and several services may mount it.
 func namedStorageID(dockerName string) string {
-	return storageIDVolumePrefix + dockerName
+	return storageIDNamedPrefix + dockerName
 }
 
 // serviceStorageID identifies a bind or anonymous mount by service and target: a
 // bind has no docker name, and an anonymous volume's is created per container.
+//
+// The target is flattened into the segment, so two identities can render the
+// same id ({app, /var/lib} and {app-var, /lib}). Deciding what to do about that
+// needs the whole project's set of volumes, and belongs where that set is known.
 func serviceStorageID(service, target string) string {
-	return storageIDServicePrefix + service + "/" + strings.TrimPrefix(target, "/")
+	return storageIDServicePrefix + service + "-" + strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")
 }
 
 // ServiceVolume is one mount declared by one service — a fact, not a decision.

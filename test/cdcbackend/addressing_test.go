@@ -18,7 +18,7 @@ func TestSnapshotter_NoServiceContainer(t *testing.T) {
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newBareVolume(t, "db", "/var/lib/postgresql/data")
-	backend := env.backend(t, vol, model.BackendTierSavepoint)
+	backend := env.backend(t, vol)
 
 	// Act
 	payload := env.snapshot(t, backend, idFirst, nil)
@@ -45,7 +45,7 @@ func TestSnapshotter_SubpathMountedVolume(t *testing.T) {
 	// sit outside it and no container ever sees them.
 	env := newEnv(t, wipeOptions())
 	vol := env.newSubpathVolume(t, "db", "/var/lib/postgresql/data", "nested")
-	backend := env.backend(t, vol, model.BackendTierSavepoint)
+	backend := env.backend(t, vol)
 
 	payload := env.snapshot(t, backend, idFirst, nil)
 	captured := env.hash(t, vol)

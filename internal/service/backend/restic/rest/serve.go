@@ -12,6 +12,9 @@ import (
 // defaultAddress binds the loopback on a port the kernel picks.
 const defaultAddress = "127.0.0.1:0"
 
+// defaultScheme is what a repository URL carries when the caller names no scheme.
+const defaultScheme = "http"
+
 // Serve binds address — the loopback on a kernel-picked port when it is empty —
 // hands the listener to e and serves in the background, returning the port
 // actually bound. Closing e releases it.
@@ -51,15 +54,12 @@ func serve(e *echo.Echo) {
 	}
 }
 
-// RepositoryURLBase renders the restic repository URL minus its path, naming the
-// host as the *container* resolves it — never the address arcave bound, which a
-// container cannot reach — and the port Serve returned. A caller appends
-// "<prefix>/" to address one repository.
-//
-// The scheme pair is this package's own and not a caller's to spell: it serves
-// plain HTTP, deliberately (the port is the loopback, carrying data whoever can
-// read the store can read anyway), and "rest:" is how restic names a REST
-// repository. Both change here or not at all.
-func RepositoryURLBase(containerHost, port string) string {
-	return "rest:http://" + net.JoinHostPort(containerHost, port)
+// RepositoryURLBase renders the restic repository URL minus its path: restic's
+// "rest:" prefix, scheme (http when empty), and the host as the container
+// resolves it (never the bound address). A caller appends "<prefix>/".
+func RepositoryURLBase(scheme, containerHost, port string) string {
+	if scheme == "" {
+		scheme = defaultScheme
+	}
+	return "rest:" + scheme + "://" + net.JoinHostPort(containerHost, port)
 }

@@ -38,16 +38,23 @@ func TestRunner_run(t *testing.T) {
 		},
 		{
 			name:       "a line that is not JSON is logged rather than dropped",
-			stdout:     []string{"warning: could not read /m/volume/x"},
+			stdout:     []string{"warning: could not read /m/volume-named-x"},
 			wantLogged: []string{"could not read"},
 		},
 		{
-			name:       "an error message goes out at warn",
-			stdout:     []string{`{"message_type":"error","error":{"message":"boom"}}`},
-			wantLogged: []string{"restic reported an error"},
+			name:       "init prints no summary, and its own message is not one",
+			stdout:     []string{initializedLine},
+			wantLogged: []string{"restic stdout"},
+		},
+		// Errors are stderr's, never stdout's, so it is there they are understood:
+		// the item that failed is logged, and the fatal line is kept for the error.
+		{
+			name:       "a per-item error names what it could not read",
+			stderr:     []string{backupItemErrorLine},
+			wantLogged: []string{"restic reported an error", "archival", "/m/volume-named-demo_pgdata/big.bin"},
 		},
 		{
-			name:       "stderr is warned line by line",
+			name:       "stderr that is not JSON is still warned",
 			stderr:     []string{"Fatal: unable to open config file", "Is there a repository at the following location?"},
 			wantLogged: []string{"unable to open config file", "Is there a repository"},
 		},
@@ -79,6 +86,55 @@ func TestRunner_run(t *testing.T) {
 			containers.AssertExpectations(t)
 		})
 	}
+}
+
+// What a user is left with when restic fails is restic's own diagnosis, not the
+// exit status: "exited with status 3" names nothing to act on, while the
+// exit_error line is the sentence the CLI would have ended on. The container
+// error stays in the chain, so a caller can still recover its output.
+func TestRunner_run_ReportsResticsOwnDiagnosis(t *testing.T) {
+	// Arrange
+	// The container error carries a line that is not the diagnosis, so the
+	// message can only have come from the stream this run parsed.
+	exit := &model.ContainerExitError{Image: demoImage, StatusCode: 3, Output: []string{backupStatusLine}}
+	containers := &mockRunner{}
+	containers.On("RunOneShot", mock.Anything, matchRestic("backup")).
+		Run(func(args mock.Arguments) {
+			spec := args.Get(1).(model.OneShotSpec)
+			writeLines(spec.Stderr, []string{backupItemErrorLine, backupExitErrorLine})
+		}).Return(exit).Once()
+	ctx := zerolog.Nop().WithContext(context.Background())
+	r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+
+	// Act
+	_, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}})
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one source file could not be read")
+	var exitErr *model.ContainerExitError
+	require.ErrorAs(t, err, &exitErr, "the container error must survive the wrap")
+	assert.EqualValues(t, 3, exitErr.StatusCode)
+	containers.AssertExpectations(t)
+}
+
+// A failure restic did not narrate — killed mid-run, or an image that is not
+// restic — still reports the container's own exit.
+func TestRunner_run_ReportsAnUnnarratedFailure(t *testing.T) {
+	// Arrange
+	exit := &model.ContainerExitError{Image: demoImage, StatusCode: 137}
+	containers := &mockRunner{}
+	containers.On("RunOneShot", mock.Anything, matchRestic("backup")).Return(exit).Once()
+	ctx := zerolog.Nop().WithContext(context.Background())
+	r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+
+	// Act
+	_, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}})
+
+	// Assert
+	require.ErrorIs(t, err, exit)
+	assert.Contains(t, err.Error(), "exited with status 137")
+	containers.AssertExpectations(t)
 }
 
 // The last line of a run that ended without a trailing newline is still read:

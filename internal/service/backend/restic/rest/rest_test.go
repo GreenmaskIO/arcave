@@ -19,8 +19,8 @@ import (
 // exist, which methods they take, and what a path that names no operation is
 // answered with. It is what the generated route table is pinned by — a listing
 // matching the object route, or the documentation being shadowed by a namespace,
-// would show up here and nowhere else. Every path opens with the {repoName}
-// segment a client is pointed at, served by the registry these run against.
+// would show up here and nowhere else. Every path opens with the {arcaveObjectID}
+// segment a client is pointed at, resolved by the double these run against.
 func TestNewEcho(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -52,7 +52,7 @@ func TestNewEcho(t *testing.T) {
 		// A repository is named by any one segment, and every name that is served
 		// reaches the same routes.
 		{name: "another repository", method: http.MethodGet, target: "/" + otherRepoName + "/data/" + string(testID), wantStatus: http.StatusOK},
-		{name: "a name of the shape a caller flattens", method: http.MethodGet, target: "/" + flattenedName + "/data/", wantStatus: http.StatusOK},
+		{name: "a name of the shape a caller flattens", method: http.MethodGet, target: "/" + objectIDName + "/data/", wantStatus: http.StatusOK},
 
 		// An unserved name is refused before any operation runs — including the
 		// HEADs, which answer from their path alone.
@@ -89,7 +89,7 @@ func TestNewEcho(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+			e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 			rec := httptest.NewRecorder()
 
 			// Act
@@ -108,7 +108,7 @@ func TestNewEcho_ResolvesTheNamedRepository(t *testing.T) {
 	// Arrange
 	first := stubRepository{body: []byte("0123456789abcdef")}
 	second := stubRepository{body: []byte("fedcba9876543210")}
-	e := NewEcho(context.Background(), serving(t, map[string]model.Repository{
+	e := NewEcho(context.Background(), serving(map[string]model.Repository{
 		testRepoName:  first,
 		otherRepoName: second,
 	}))
@@ -118,8 +118,8 @@ func TestNewEcho_ResolvesTheNamedRepository(t *testing.T) {
 		repo     string
 		wantBody string
 	}{
-		{name: "the repository registered first", repo: testRepoName, wantBody: string(first.body)},
-		{name: "the repository registered after it", repo: otherRepoName, wantBody: string(second.body)},
+		{name: "the repository the first name resolves to", repo: testRepoName, wantBody: string(first.body)},
+		{name: "the repository another name resolves to", repo: otherRepoName, wantBody: string(second.body)},
 	}
 
 	for _, tt := range tests {
@@ -142,7 +142,7 @@ func TestNewEcho_ResolvesTheNamedRepository(t *testing.T) {
 // and the protocol have to agree.
 func TestNewEcho_RangeReachesTheHandler(t *testing.T) {
 	// Arrange
-	e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+	e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 	req := httptest.NewRequest(http.MethodGet, "/testrepo/data/"+string(testID), nil)
 	req.Header.Set("Range", "bytes=4-7")
 	rec := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func TestNewEcho_ListingIgnoresAccept(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+			e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 			req := httptest.NewRequest(http.MethodGet, "/testrepo/data/", nil)
 			if tt.accept != "" {
 				req.Header.Set("Accept", tt.accept)
@@ -200,7 +200,7 @@ func TestNewEcho_ListingIgnoresAccept(t *testing.T) {
 func TestNewEcho_JournalsTheCause(t *testing.T) {
 	// Arrange
 	var journal bytes.Buffer
-	e := NewEcho(journalled(&journal), oneRepository(t, failingRepository{}))
+	e := NewEcho(journalled(&journal), oneRepository(failingRepository{}))
 	rec := httptest.NewRecorder()
 
 	// Act
@@ -222,7 +222,7 @@ func TestNewEcho_JournalsTheCause(t *testing.T) {
 func TestNewEcho_JournalsARecoveredPanic(t *testing.T) {
 	// Arrange
 	var journal bytes.Buffer
-	e := NewEcho(journalled(&journal), oneRepository(t, panickingRepository{}))
+	e := NewEcho(journalled(&journal), oneRepository(panickingRepository{}))
 	rec := httptest.NewRecorder()
 
 	// Act
@@ -244,7 +244,7 @@ func TestNewEcho_JournalsARecoveredPanic(t *testing.T) {
 func TestNewEcho_JournalsBothEnds(t *testing.T) {
 	// Arrange
 	var journal bytes.Buffer
-	e := NewEcho(journalled(&journal), oneRepository(t, stubRepository{}))
+	e := NewEcho(journalled(&journal), oneRepository(stubRepository{}))
 	req := httptest.NewRequest(http.MethodGet, "/testrepo/data/"+string(testID), nil)
 	req.Header.Set("Range", "bytes=4-7")
 
@@ -263,7 +263,7 @@ func TestNewEcho_JournalsBothEnds(t *testing.T) {
 
 // TestNewEcho_Docs pins that the documentation is reachable, and what reaching
 // it costs: echo prefers a static segment to a parametric one, so "docs" wins
-// against {repoName} and no repository is addressable under that name. The last
+// against {arcaveObjectID} and no repository is addressable under that name. The last
 // case is that price, and it is what would change silently if the routes were
 // ever mounted the other way round.
 func TestNewEcho_Docs(t *testing.T) {
@@ -279,7 +279,7 @@ func TestNewEcho_Docs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+			e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 			rec := httptest.NewRecorder()
 
 			// Act
@@ -300,7 +300,7 @@ func TestNewEcho_Docs(t *testing.T) {
 func TestNewEcho_JournalsWhatEscapesTheChain(t *testing.T) {
 	// Arrange
 	var journal bytes.Buffer
-	e := NewEcho(journalled(&journal), oneRepository(t, stubRepository{}))
+	e := NewEcho(journalled(&journal), oneRepository(stubRepository{}))
 
 	// Act
 	e.StdLogger.Print("http: panic serving 127.0.0.1:1234")
@@ -316,7 +316,7 @@ func TestNewEcho_JournalsWhatEscapesTheChain(t *testing.T) {
 func TestNewEcho_BaseContextCarriesTheCommandsLogger(t *testing.T) {
 	// Arrange
 	var journal bytes.Buffer
-	e := NewEcho(journalled(&journal), oneRepository(t, stubRepository{}))
+	e := NewEcho(journalled(&journal), oneRepository(stubRepository{}))
 	require.NotNil(t, e.Server.BaseContext)
 
 	// Act
@@ -328,11 +328,12 @@ func TestNewEcho_BaseContextCarriesTheCommandsLogger(t *testing.T) {
 
 // TestNewEcho_DocsShadowsARepositoryOfThatName states that preference as
 // behaviour: a listing addressed to a repository named "docs" is answered by the
-// documentation and never reaches the repository. "docs" is therefore a name the
-// layer that hands out repository names may not use.
+// documentation and never reaches the repository. Nothing has to guard against
+// it — every arcave ObjectID opens with "volume-", so no repository is ever
+// named "docs" — but the shadowing is real and worth saying out loud.
 func TestNewEcho_DocsShadowsARepositoryOfThatName(t *testing.T) {
 	// Arrange
-	e := NewEcho(context.Background(), oneRepository(t, stubRepository{}))
+	e := NewEcho(context.Background(), oneRepository(stubRepository{}))
 	rec := httptest.NewRecorder()
 
 	// Act

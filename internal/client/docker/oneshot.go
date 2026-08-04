@@ -121,12 +121,12 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 // so it exits at once and is only ever copied in and out of.
 var scratchCmd = []string{"true"}
 
-// withScratchContainer runs fn against a throwaway container with addr mounted
+// withScratchContainer runs fn against a throwaway container with src mounted
 // at scratchMount, and removes it when fn returns.
 func withScratchContainer(
-	ctx context.Context, api dockerAPI, addr model.VolumeAddress, fn func(id string) error,
+	ctx context.Context, api dockerAPI, src model.MountSource, fn func(id string) error,
 ) error {
-	id, remove, err := startScratchContainer(ctx, api, addr)
+	id, remove, err := startScratchContainer(ctx, api, src)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func withScratchContainer(
 	return fn(id)
 }
 
-// startScratchContainer creates a container holding addr at scratchMount, runs
+// startScratchContainer creates a container holding src at scratchMount, runs
 // it to exit, and returns its id together with its removal. The caller runs the
 // removal — a stream copied out of the container has to outlive the call that
 // opened it.
@@ -144,10 +144,10 @@ func withScratchContainer(
 // container that mounts it starts, so copying before that would read a mount
 // nothing has set up yet.
 func startScratchContainer(
-	ctx context.Context, api dockerAPI, addr model.VolumeAddress,
+	ctx context.Context, api dockerAPI, src model.MountSource,
 ) (id string, remove func(), err error) {
-	if addr.Source == "" {
-		return "", nil, fmt.Errorf("cannot reach a %q volume with no source", addr.Kind)
+	if src.Source == "" {
+		return "", nil, fmt.Errorf("cannot reach a %q volume with no source", src.Type)
 	}
 	if err := ensureImage(ctx, api, scratchImage); err != nil {
 		return "", nil, err
@@ -155,7 +155,7 @@ func startScratchContainer(
 
 	created, err := api.ContainerCreate(ctx,
 		&container.Config{Image: scratchImage, Cmd: scratchCmd},
-		&container.HostConfig{Binds: []string{addr.Source + ":" + scratchMount}},
+		&container.HostConfig{Binds: []string{src.Source + ":" + scratchMount}},
 		nil, nil, "")
 	if err != nil {
 		return "", nil, fmt.Errorf("create %s container: %w", scratchImage, err)

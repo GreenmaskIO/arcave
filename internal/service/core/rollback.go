@@ -11,26 +11,34 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// safetyBackupName is the Name a rollback's undo carries.
-const safetyBackupName = "safety-backup"
+// safetySnapshotPrefix opens the Name a rollback's undo carries; the id of the
+// savepoint being restored completes it, so one a killed rollback abandoned says
+// which savepoint it was undoing. The id and not the ref the user typed: once
+// resolved, "latest" names no savepoint and a name may be one of several.
+const safetySnapshotPrefix = "safety-snapshot"
 
-// The label a rollback stamps its safety backup with — the only mark of the tier
-// that reaches a backend keeping both tiers in one place, since the safety tier
-// commits no record.
-const (
-	tierLabel       = "arcave-tier"
-	tierLabelSafety = "safety"
-)
+func safetySnapshotName(restoring model.SavepointID) string {
+	return safetySnapshotPrefix + "-" + restoring.String()
+}
 
-func safetyBackupLabels() map[string]string {
-	return map[string]string{tierLabel: tierLabelSafety}
+// safetySnapshotLabels is the mark that makes an ordinary savepoint an undo: it
+// hides the record from every scanning selector, and a backend with somewhere to
+// put it renders it into its own store (cdc into a restic tag).
+func safetySnapshotLabels() map[string]string {
+	return map[string]string{model.SafetySnapshotLabel: model.SafetySnapshotLabelValue}
 }
 
 // Rollback restores the environment to the referenced savepoint: stop, safety
-// backup, restore, start. Any failure replays the safety backup. The project
+// snapshot, restore, start. Any failure replays the safety snapshot. The project
 // lock is held for the whole workflow, taken before anything is read.
 func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error) {
 	log := zerolog.Ctx(ctx)
+
+	// Ahead of the lock: a request that names no savepoint must not make a
+	// concurrent workflow wait to be told so.
+	if err := req.Validate(); err != nil {
+		return model.RollbackResult{}, err
+	}
 
 	unlock, err := s.lockProject(ctx)
 	if err != nil {
@@ -38,25 +46,25 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 	}
 	defer unlock()
 
-	record, err := s.resolveSavepoint(ctx, req.Ref)
+	record, err := s.resolveSavepoint(ctx, req)
 	if err != nil {
 		return model.RollbackResult{}, err
 	}
-	// The live state, decided exactly as a create would: a safety backup covering
+	// The live state, decided exactly as a create would: a safety snapshot covering
 	// less than a savepoint could not put the project back.
 	currentVolumes, err := s.resolveBackupVolumes(ctx, req.ComposeFiles)
 	if err != nil {
 		return model.RollbackResult{}, err
 	}
 
-	// One set of backends per tier: a volume may have been added or dropped
-	// since the savepoint was taken. Both sets are built ahead of the stop: a
-	// backend that cannot be built leaves the project running.
-	savepointBackends, err := s.buildBackends(volumesOf(record), model.BackendTierSavepoint)
+	// Two sets over the one store, because the volume sets differ: one may have
+	// been added or dropped since the savepoint was taken. Both are built ahead of
+	// the stop — a backend that cannot be built leaves the project running.
+	savepointBackends, err := s.buildBackends(volumesOf(record))
 	if err != nil {
 		return model.RollbackResult{}, err
 	}
-	safetyBackends, err := s.buildBackends(currentVolumes, model.BackendTierSafety)
+	safetySnapshotBackends, err := s.buildBackends(currentVolumes)
 	if err != nil {
 		return model.RollbackResult{}, err
 	}
@@ -71,44 +79,46 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 	}
 
 	// A capture of the live state, so a rollback that fails partway can be replayed
-	// back. Dropped on every path but a failed revert, and committing no record:
-	// nothing outlives this call to read one.
+	// back. Dropped on every path but a failed revert, and committing a record —
+	// which is what leaves a killed rollback's undo listable, and so applicable by
+	// hand.
 	log.Info().Msg("backing up current state")
-	safetyBackup, err := s.captureVolumes(
-		ctx, s.safetyBackupStore, safetyBackends, safetyBackupName, "", safetyBackupLabels())
+	safetySnapshot, err := s.performSavepoint(
+		ctx, safetySnapshotBackends, safetySnapshotName(record.ID), "", safetySnapshotLabels())
 	if err != nil {
-		// Nothing changed: restart best-effort and report the backup error. A
-		// refused capture directory holds objects this run did not write, and
-		// keeping them is the point of the refusal, so the abort leaves them.
-		dropBackup := !errors.Is(err, errCaptureDirectoryNotEmpty)
-		if err := s.abortBeforeRestore(ctx, safetyBackup, safetyBackends, req.ComposeFiles, req.WaitTimeout, dropBackup); err != nil {
-			log.Error().Err(err).Msg("services failed to restart after safety backup failure")
+		// Nothing changed: restart best-effort and report the capture error. A refused
+		// capture directory holds objects this run did not write, and keeping them is
+		// the point of the refusal, so the abort leaves them.
+		dropSnapshot := !errors.Is(err, errCaptureDirectoryNotEmpty)
+		if err := s.abortBeforeRestore(ctx, safetySnapshot, safetySnapshotBackends, req.ComposeFiles, req.WaitTimeout, dropSnapshot); err != nil {
+			log.Error().Err(err).Msg("services failed to restart after safety snapshot failure")
 		}
-		return model.RollbackResult{}, fmt.Errorf("pre-rollback safety backup failed, nothing changed: %w", err)
+		return model.RollbackResult{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
 	}
 
 	if err := s.applySavepoint(ctx, record, savepointBackends, req.ComposeFiles, req.WaitTimeout); err != nil {
-		log.Warn().Err(err).Str("safety_backup_id", safetyBackup.ID.String()).
+		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).
 			Msg("rollback failed: reverting to the pre-rollback state")
 
-		revertErr := s.revert(ctx, safetyBackup, safetyBackends, req.ComposeFiles, req.WaitTimeout)
+		revertErr := s.revert(ctx, safetySnapshot, safetySnapshotBackends, req.ComposeFiles, req.WaitTimeout)
 		if revertErr != nil {
-			// The one path that keeps the backup: it is now the last copy of the
+			// The one path that keeps the snapshot: it is now the last copy of the
 			// pre-rollback state.
-			log.Error().Err(revertErr).Str("safety_backup_id", safetyBackup.ID.String()).
-				Msg("revert failed: environment left in an inconsistent state, safety backup retained")
+			log.Error().Err(revertErr).Str("safety_snapshot_id", safetySnapshot.ID.String()).
+				Msg("revert failed: environment left in an inconsistent state, safety snapshot retained; " +
+					"it lists as a savepoint under `arcave savepoint list --include-safety-snapshots` and can be rolled back to by id")
 			return model.RollbackResult{}, fmt.Errorf("rollback failed: %w", err)
 		}
 
-		log.Info().Str("safety_backup_id", safetyBackup.ID.String()).Msg("reverted to the pre-rollback state")
-		if err := s.dropSafetyBackup(ctx, safetyBackup, safetyBackends); err != nil {
-			log.Warn().Err(err).Str("safety_backup_id", safetyBackup.ID.String()).Msg("failed to remove safety backup")
+		log.Info().Str("safety_snapshot_id", safetySnapshot.ID.String()).Msg("reverted to the pre-rollback state")
+		if err := s.dropSavepoint(ctx, safetySnapshot, safetySnapshotBackends); err != nil {
+			log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).Msg("failed to remove safety snapshot")
 		}
 		return model.RollbackResult{}, fmt.Errorf("rollback failed: %w", err)
 	}
 
-	if err := s.dropSafetyBackup(ctx, safetyBackup, safetyBackends); err != nil {
-		log.Warn().Err(err).Str("safety_backup_id", safetyBackup.ID.String()).Msg("failed to remove safety backup")
+	if err := s.dropSavepoint(ctx, safetySnapshot, safetySnapshotBackends); err != nil {
+		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).Msg("failed to remove safety snapshot")
 	}
 	return model.RollbackResult{
 		Savepoint: record,
@@ -116,36 +126,39 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 	}, nil
 }
 
-// resolveSavepoint resolves ref to the record to roll back to. Resolution stays
-// in memory: the store has no index to query.
-func (s *Service) resolveSavepoint(ctx context.Context, ref string) (model.Savepoint, error) {
-	records, err := s.savepointRepo.List(ctx)
+// resolveSavepoint resolves req's selector to the record to roll back to.
+// Resolution stays in memory: the store has no index to query.
+//
+// It reads every record, safety snapshots included, and findSavepoint decides
+// which of them this selector may reach.
+func (s *Service) resolveSavepoint(ctx context.Context, req model.RollbackRequest) (model.Savepoint, error) {
+	records, err := s.listSavepoints(ctx, true)
 	if err != nil {
-		return model.Savepoint{}, fmt.Errorf("listing savepoints: %w", err)
+		return model.Savepoint{}, err
 	}
-	record, err := findSavepoint(records, ref)
+	record, err := findSavepoint(records, req)
 	if err != nil {
-		return model.Savepoint{}, fmt.Errorf("finding savepoint %q: %w", ref, err)
+		return model.Savepoint{}, fmt.Errorf("finding savepoint %q: %w", req.Ref(), err)
 	}
 	return record, nil
 }
 
-// abortBeforeRestore drops the partial backup and restarts the services; nothing
-// was restored, so there is nothing to revert. dropBackup is false when the
-// backup never started because its directory was refused: those objects are not
-// this run's to delete.
+// abortBeforeRestore drops the partial snapshot and restarts the services; nothing
+// was restored, so there is nothing to revert. dropSnapshot is false when the
+// snapshot never started because its id was refused: whatever sits under that id
+// is not this run's to delete.
 func (s *Service) abortBeforeRestore(
 	ctx context.Context,
-	safetyBackup model.Savepoint,
-	safetyBackends []model.VolumeSnapshotBackend,
+	safetySnapshot model.Savepoint,
+	safetySnapshotBackends []model.VolumeSnapshotBackend,
 	composeFiles []string,
 	waitTimeout time.Duration,
-	dropBackup bool,
+	dropSnapshot bool,
 ) error {
 	log := zerolog.Ctx(ctx)
-	if dropBackup {
-		if err := s.dropSafetyBackup(ctx, safetyBackup, safetyBackends); err != nil {
-			log.Warn().Err(err).Str("safety_backup_id", safetyBackup.ID.String()).Msg("failed to remove incomplete safety backup")
+	if dropSnapshot {
+		if err := s.dropSavepoint(ctx, safetySnapshot, safetySnapshotBackends); err != nil {
+			log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).Msg("failed to remove incomplete safety snapshot")
 		}
 	}
 	log.Info().Msg("starting services")
@@ -175,13 +188,13 @@ func (s *Service) applySavepoint(
 	return nil
 }
 
-// revert replays the safety backup: stop, restore every volume through the
+// revert replays the safety snapshot: stop, restore every volume through the
 // instances that captured it, restart. It runs on the caller's context, not the
 // fan-out's — an errgroup cancels its own the moment Wait returns.
 func (s *Service) revert(
 	ctx context.Context,
-	safetyBackup model.Savepoint,
-	safetyBackends []model.VolumeSnapshotBackend,
+	safetySnapshot model.Savepoint,
+	safetySnapshotBackends []model.VolumeSnapshotBackend,
 	composeFiles []string,
 	waitTimeout time.Duration,
 ) error {
@@ -190,10 +203,10 @@ func (s *Service) revert(
 	}
 	// One missing capture would make this a half-revert: a mix of savepoint and
 	// live data.
-	if err := s.requireComplete(ctx, safetyBackup, safetyBackends); err != nil {
-		return fmt.Errorf("safety backup incomplete, nothing reverted: %w", err)
+	if err := s.requireComplete(ctx, safetySnapshot, safetySnapshotBackends); err != nil {
+		return fmt.Errorf("safety snapshot incomplete, nothing reverted: %w", err)
 	}
-	if err := s.restoreVolumes(ctx, safetyBackup, safetyBackends); err != nil {
+	if err := s.restoreVolumes(ctx, safetySnapshot, safetySnapshotBackends); err != nil {
 		return err
 	}
 
@@ -202,14 +215,6 @@ func (s *Service) revert(
 		return fmt.Errorf("restarting services: %w", err)
 	}
 	return nil
-}
-
-// dropSafetyBackup drops the backup's captures and sweeps the tree they shared:
-// dropCaptures over the safety store, with no record to uncommit first.
-func (s *Service) dropSafetyBackup(
-	ctx context.Context, safetyBackup model.Savepoint, safetyBackends []model.VolumeSnapshotBackend,
-) error {
-	return s.dropCaptures(ctx, s.safetyBackupStore, safetyBackup, safetyBackends)
 }
 
 // volumesOf projects a savepoint's stats back to volumes. Non-nil, so an empty

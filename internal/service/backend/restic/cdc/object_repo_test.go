@@ -34,11 +34,11 @@ func TestRepoAdmin_HasConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			admin := repoAdmin{store: newStore(t)}
-			plant(t, admin, tt.plant)
+			repo := objectRepo{store: newStore(t)}
+			plant(t, repo, tt.plant)
 
 			// Act
-			got, err := admin.HasConfig(context.Background())
+			got, err := repo.HasConfig(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -83,11 +83,11 @@ func TestRepoAdmin_ClearLocks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			store := newStore(t)
-			admin := repoAdmin{store: store}
-			plant(t, admin, tt.plant)
+			repo := objectRepo{store: store}
+			plant(t, repo, tt.plant)
 
 			// Act
-			err := admin.ClearLocks(context.Background())
+			err := repo.ClearLocks(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -102,15 +102,18 @@ func TestRepoAdmin_ClearLocks(t *testing.T) {
 func TestRepoAdmin_DeleteSnapshot(t *testing.T) {
 	tests := []struct {
 		name    string
-		ref     string
+		id      string
 		want    []string
 		wantErr bool
 	}{
-		{name: "the named snapshot goes", ref: "3f8a", want: []string{"0011"}},
-		{name: "one already gone is not an error", ref: "deadbeef", want: []string{"0011", "3f8a"}},
+		{name: "the named snapshot goes", id: "3f8a", want: []string{"0011"}},
+		{name: "one already gone is not an error", id: "deadbeef", want: []string{"0011", "3f8a"}},
+		// Nothing here judges the shape of a restic id — that is restic's contract.
+		// The delete is rooted at snapshots/, so an id that climbs out of it is
+		// refused by the store's own guard, config object and all.
 		{
-			name:    "a ref that is not hex is refused before the delete",
-			ref:     "../config",
+			name:    "an id that climbs out of snapshots/ is refused",
+			id:      "../config",
 			want:    []string{"0011", "3f8a"},
 			wantErr: true,
 		},
@@ -120,28 +123,35 @@ func TestRepoAdmin_DeleteSnapshot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			store := newStore(t)
-			admin := repoAdmin{store: store}
-			plant(t, admin, map[string]string{"snapshots/3f8a": "one", "snapshots/0011": "two"})
+			repo := objectRepo{store: store}
+			plant(t, repo, map[string]string{
+				"snapshots/3f8a": "one",
+				"snapshots/0011": "two",
+				configKey:        "restic-config",
+			})
 
 			// Act
-			err := admin.DeleteSnapshot(context.Background(), tt.ref)
+			err := repo.DeleteSnapshot(context.Background(), tt.id)
 
 			// Assert
 			if tt.wantErr {
-				require.ErrorIs(t, err, errInvalidSnapshotRef)
+				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 			}
 			assert.ElementsMatch(t, tt.want, objectsUnder(t, store, snapshotsPath))
+			exists, err := store.Exists(context.Background(), configKey)
+			require.NoError(t, err)
+			assert.True(t, exists, "no id may reach an object other than a snapshot")
 		})
 	}
 }
 
 // plant writes the objects a repository is supposed to already hold.
-func plant(t *testing.T, admin repoAdmin, objects map[string]string) {
+func plant(t *testing.T, repo objectRepo, objects map[string]string) {
 	t.Helper()
 
 	for key, body := range objects {
-		require.NoError(t, admin.store.PutObject(context.Background(), key, strings.NewReader(body)))
+		require.NoError(t, repo.store.PutObject(context.Background(), key, strings.NewReader(body)))
 	}
 }

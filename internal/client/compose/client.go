@@ -105,7 +105,7 @@ func (c *Client) Stop(ctx context.Context, files ...string) error {
 // waitTimeout bounds how long it blocks on health checks: without a bound, a
 // service that never becomes healthy (e.g. a crash-looping container with
 // restart: always) would make Up hang forever, so the bound turns that into an
-// error callers can act on (e.g. rollback reverts to its safety backup). A
+// error callers can act on (e.g. rollback reverts to its safety snapshot). A
 // value <= 0 falls back to the configured Options.
 //
 // The effective bound is logged before compose is called, because this wait is

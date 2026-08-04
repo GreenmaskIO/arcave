@@ -109,3 +109,47 @@ func TestMCPHandler_recommendMCP(t *testing.T) {
 		})
 	}
 }
+
+// The list tool's one input is the flag, and it must reach the service verbatim:
+// hiding safety snapshots is a default, not a rule the adapter enforces. An empty
+// result is answered as [] rather than null, so an agent never has to tell "no
+// savepoints" from "no such field".
+func TestMCPHandler_listSavepointsMCP(t *testing.T) {
+	sps := []model.Savepoint{{ID: "1780335122", Name: "before-migration"}}
+
+	tests := []struct {
+		name string
+		in   listSavepointInput
+		svc  []model.Savepoint
+		want listOutput
+	}{
+		{name: "hidden by default", svc: sps, want: listOutput{Savepoints: sps}},
+		{
+			name: "include_safety_snapshots reaches the service",
+			in:   listSavepointInput{IncludeSafetySnapshots: true},
+			svc:  sps,
+			want: listOutput{Savepoints: sps},
+		},
+		{name: "no savepoints answers an empty array", want: listOutput{Savepoints: []model.Savepoint{}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("ListSavepoints", mock.Anything,
+				model.ListRequest{IncludeSafetySnapshots: tt.in.IncludeSafetySnapshots}).
+				Return(tt.svc, nil).Once()
+			h := NewMCPHandler(svc, nil, nil)
+
+			// Act
+			res, out, err := h.listSavepointsMCP(context.Background(), nil, tt.in)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out)
+			assert.Nil(t, res)
+			svc.AssertExpectations(t)
+		})
+	}
+}

@@ -112,7 +112,7 @@ func (e *Engine) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
 	return runOneShotContainer(ctx, e.api, spec)
 }
 
-// ResolveVolumeAddress answers what a container binds to reach v's data. The
+// ResolveMountSource answers what a container binds to reach v's data. The
 // compose project alone answers for a named volume and a bind; only an
 // anonymous volume — whose docker name is created per container — has to be
 // looked up through the service that mounts it.
@@ -120,29 +120,29 @@ func (e *Engine) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
 // A named volume that does not exist is an error here, before anything creates
 // it: `docker create -v name:/x` would create the volume itself, so an empty
 // capture would silently replace live data at the next rollback.
-func (e *Engine) ResolveVolumeAddress(ctx context.Context, v model.Volume) (model.VolumeAddress, error) {
-	if addr, ok := v.Address(); ok {
-		if addr.Kind == model.VolumeAddressVolume {
-			if _, err := e.api.VolumeInspect(ctx, addr.Source); err != nil {
-				return model.VolumeAddress{}, fmt.Errorf(
-					"docker volume %q does not exist (bring the project up once to create it): %w", addr.Source, err)
+func (e *Engine) ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error) {
+	if src, ok := v.MountSource(); ok {
+		if src.Type == model.MountSourceVolume {
+			if _, err := e.api.VolumeInspect(ctx, src.Source); err != nil {
+				return model.MountSource{}, fmt.Errorf(
+					"docker volume %q does not exist (bring the project up once to create it): %w", src.Source, err)
 			}
 		}
-		return addr, nil
+		return src, nil
 	}
 
 	service, target, ok := v.LookupMount()
 	if !ok {
-		return model.VolumeAddress{}, fmt.Errorf(
-			"volume %s of type %s carries no way to address its data", v.ObjectID, v.Type)
+		return model.MountSource{}, fmt.Errorf(
+			"volume %s of type %s carries no way to reach its data", v.ObjectID, v.Type)
 	}
 	// An anonymous volume exists only as long as the container it was created
 	// for, so this is the one case a missing container is fatal.
 	_, mnt, err := findServiceMount(ctx, e.api, v.ComposeProject, service, target)
 	if err != nil {
-		return model.VolumeAddress{}, err
+		return model.MountSource{}, err
 	}
-	return mountAddress(mnt)
+	return mountSourceOf(mnt)
 }
 
 // OpenVolume streams the whole volume out as a tar, through a throwaway
@@ -152,8 +152,8 @@ func (e *Engine) ResolveVolumeAddress(ctx context.Context, v model.Volume) (mode
 //
 // The caller owns the returned stream: closing it removes the container, which
 // therefore outlives this call.
-func (e *Engine) OpenVolume(ctx context.Context, addr model.VolumeAddress) (io.ReadCloser, error) {
-	id, remove, err := startScratchContainer(ctx, e.api, addr)
+func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error) {
+	id, remove, err := startScratchContainer(ctx, e.api, src)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func (e *Engine) OpenVolume(ctx context.Context, addr model.VolumeAddress) (io.R
 	rc, _, err := e.api.CopyFromContainer(ctx, id, scratchMount)
 	if err != nil {
 		remove()
-		return nil, fmt.Errorf("export volume %s: %w", addr.Source, err)
+		return nil, fmt.Errorf("export volume %s: %w", src.Source, err)
 	}
 	return closeAfter{ReadCloser: rc, after: remove}, nil
 }
@@ -169,18 +169,18 @@ func (e *Engine) OpenVolume(ctx context.Context, addr model.VolumeAddress) (io.R
 // WriteVolume clears the volume and extracts the tar back into it, the mirror of
 // OpenVolume. The archive's top entry is scratchMount's basename, so it is
 // extracted at the container's root and the data lands back in the volume.
-func (e *Engine) WriteVolume(ctx context.Context, addr model.VolumeAddress, r io.Reader) error {
-	if err := e.WipeVolume(ctx, addr); err != nil {
-		return fmt.Errorf("clear volume %s before restore: %w", addr.Source, err)
+func (e *Engine) WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error {
+	if err := e.WipeVolume(ctx, src); err != nil {
+		return fmt.Errorf("clear volume %s before restore: %w", src.Source, err)
 	}
 
-	return withScratchContainer(ctx, e.api, addr, func(id string) error {
+	return withScratchContainer(ctx, e.api, src, func(id string) error {
 		// readOnly hides r's Close from the SDK: CopyToContainer passes the stream to
 		// net/http as the request body, and http.NewRequestWithContext type-asserts it
 		// to io.ReadCloser — so the transport would close the caller's stream, and the
 		// caller's own deferred Close would then fail with "file already closed".
 		if err := e.api.CopyToContainer(ctx, id, "/", readOnly{r}, container.CopyToContainerOptions{}); err != nil {
-			return fmt.Errorf("restore volume %s: %w", addr.Source, err)
+			return fmt.Errorf("restore volume %s: %w", src.Source, err)
 		}
 		return nil
 	})
@@ -188,11 +188,11 @@ func (e *Engine) WriteVolume(ctx context.Context, addr model.VolumeAddress, r io
 
 // WipeVolume clears the volume's contents — WriteVolume's first half on its own,
 // for a backend that writes the data back itself.
-func (e *Engine) WipeVolume(ctx context.Context, addr model.VolumeAddress) error {
-	if addr.Source == "" {
-		return fmt.Errorf("cannot clear a %q volume with no source", addr.Kind)
+func (e *Engine) WipeVolume(ctx context.Context, src model.MountSource) error {
+	if src.Source == "" {
+		return fmt.Errorf("cannot clear a %q volume with no source", src.Type)
 	}
-	return wipeVolume(ctx, e.api, addr)
+	return wipeVolume(ctx, e.api, src)
 }
 
 // closeAfter runs after once the stream it wraps is closed — how a container
@@ -262,32 +262,32 @@ func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
 //
 // It is the wipe *policy* — which image, which command, which bind — over the
 // reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
-func wipeVolume(ctx context.Context, api dockerAPI, addr model.VolumeAddress) error {
+func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error {
 	return runOneShotContainer(ctx, api, model.OneShotSpec{
 		Image: scratchImage,
 		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
 		Cmd: []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",
 			"-exec", "rm", "-rf", "{}", "+"},
-		Binds: []string{addr.Source + ":" + wipeMountPath},
+		Binds: []string{src.Source + ":" + wipeMountPath},
 	})
 }
 
-// mountAddress is the address that reaches a resolved mount's backing storage:
-// volumes by volume name, bind mounts by host path. The one place a daemon-side
-// mount becomes an address, so what a lookup answers cannot disagree with what
-// the compose project answers directly.
-func mountAddress(mnt mountInfo) (model.VolumeAddress, error) {
-	var addr model.VolumeAddress
+// mountSourceOf is what reaches a resolved mount's backing storage: volumes by
+// volume name, bind mounts by host path. The one place a daemon-side mount
+// becomes a MountSource, so what a lookup answers cannot disagree with what the
+// compose project answers directly.
+func mountSourceOf(mnt mountInfo) (model.MountSource, error) {
+	var src model.MountSource
 	switch mnt.Type {
 	case "volume":
-		addr = model.VolumeAddress{Kind: model.VolumeAddressVolume, Source: mnt.Name}
+		src = model.MountSource{Type: model.MountSourceVolume, Source: mnt.Name}
 	case "bind":
-		addr = model.VolumeAddress{Kind: model.VolumeAddressBind, Source: mnt.Source}
+		src = model.MountSource{Type: model.MountSourceBind, Source: mnt.Source}
 	default:
-		return model.VolumeAddress{}, fmt.Errorf("unsupported mount type %q", mnt.Type)
+		return model.MountSource{}, fmt.Errorf("unsupported mount type %q", mnt.Type)
 	}
-	if addr.Source == "" {
-		return model.VolumeAddress{}, fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
+	if src.Source == "" {
+		return model.MountSource{}, fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
 	}
-	return addr, nil
+	return src, nil
 }

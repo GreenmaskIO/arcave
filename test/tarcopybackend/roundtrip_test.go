@@ -147,11 +147,7 @@ func newEnv(t *testing.T) *env {
 func (e *env) backend(t *testing.T, vol model.Volume) model.VolumeSnapshotBackend {
 	t.Helper()
 
-	backend, err := e.factory.New(model.BackendSpec{
-		SessionStore: e.store,
-		Volume:       vol,
-		Tier:         model.BackendTierSavepoint,
-	})
+	backend, err := e.factory.New(model.BackendSpec{Store: e.store, Volume: vol})
 	require.NoError(t, err)
 	return backend
 }
@@ -197,7 +193,7 @@ func (e *env) newFilledVolume(t *testing.T, service string) string {
 // layer sits below the introspector.
 func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
 	return model.Volume{
-		ObjectID:       "volume/" + name,
+		ObjectID:       "volume-named-" + name,
 		ComposeProject: itProject,
 		Type:           model.VolumeTypeNamed,
 		Backend:        model.SnapshotBackendCopy,

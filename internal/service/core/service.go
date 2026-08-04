@@ -31,18 +31,20 @@ type composeRunner interface {
 	Up(ctx context.Context, waitTimeout time.Duration, files ...string) error
 }
 
-// Service orchestrates arcave's savepoint workflows. The savepoint tier keeps a
-// repository beside its store, so a savepoint's record travels with its data; a
-// rollback's safety backup has no record of its own — it lives for the length of
-// one rollback, in this process's memory.
+// Service orchestrates arcave's savepoint workflows over one root. A bare "store"
+// is the right name again — there was a second root once, an undo tree sharing
+// this one's type, and only the names could keep the two apart.
+//
+// Every record travels with its data, in a repository over that one store. A
+// rollback's safety snapshot is an ordinary savepoint there, marked
+// model.SafetySnapshotLabel: hidden from a scanning selector, findable by id.
 type Service struct {
 	savepointRepo           savepointRepository
 	projectLocker           projectLocker
 	composeInspector        composeIntrospector
 	composeRunner           composeRunner
 	snapshotBackendRegistry model.SnapshotBackendRegistry
-	savepointStore          storages.Storager
-	safetyBackupStore       storages.Storager
+	store                   storages.Storager
 	defaultBackend          model.SnapshotBackendKind
 	maxConcurrentOperations int
 }
@@ -53,8 +55,7 @@ func New(
 	composeInspector composeIntrospector,
 	composeRunner composeRunner,
 	snapshotBackendRegistry model.SnapshotBackendRegistry,
-	savepointStore storages.Storager,
-	safetyBackupStore storages.Storager,
+	store storages.Storager,
 	defaultBackend model.SnapshotBackendKind,
 ) *Service {
 	return &Service{
@@ -63,8 +64,7 @@ func New(
 		composeInspector:        composeInspector,
 		composeRunner:           composeRunner,
 		snapshotBackendRegistry: snapshotBackendRegistry,
-		savepointStore:          savepointStore,
-		safetyBackupStore:       safetyBackupStore,
+		store:                   store,
 		defaultBackend:          defaultBackend,
 		maxConcurrentOperations: maxConcurrentOperations,
 	}

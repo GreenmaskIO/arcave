@@ -1,9 +1,10 @@
 package model
 
-// One request per kind of backend operation, tier-blind: the tier is the
-// instance's, not the call's. The Backend prefix keeps them apart from the
-// adapter-level RemoveRequest/RollbackRequest, and SnapshotID addresses either
-// kind of capture — a savepoint's or a safety backup's.
+// One request per kind of backend operation, blind to what the capture is for:
+// the root an instance writes to is bound at construction, never named per call.
+// The Backend prefix keeps them apart from the adapter-level
+// RemoveRequest/RollbackRequest, and SnapshotID addresses either kind of
+// capture — a savepoint's or a safety snapshot's.
 type (
 	BackendSnapshotRequest struct {
 		SnapshotID SavepointID

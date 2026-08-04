@@ -13,13 +13,13 @@ func TestVolume_Address(t *testing.T) {
 		name   string
 		volume Volume
 		wantOK bool
-		want   VolumeAddress
+		want   MountSource
 	}{
 		{
 			name:   "a named volume is its docker name",
 			volume: Volume{Type: VolumeTypeNamed, Named: &VolumePropertiesNamed{VolumeName: "demo_pgdata"}},
 			wantOK: true,
-			want:   VolumeAddress{Kind: VolumeAddressVolume, Source: "demo_pgdata"},
+			want:   MountSource{Type: MountSourceVolume, Source: "demo_pgdata"},
 		},
 		{
 			name: "a named volume nobody mounts is still addressable",
@@ -28,7 +28,7 @@ func TestVolume_Address(t *testing.T) {
 				Named: &VolumePropertiesNamed{VolumeName: "demo_orphan"},
 			},
 			wantOK: true,
-			want:   VolumeAddress{Kind: VolumeAddressVolume, Source: "demo_orphan"},
+			want:   MountSource{Type: MountSourceVolume, Source: "demo_orphan"},
 		},
 		{
 			name: "a named volume mounted only at a subpath is addressed whole",
@@ -40,10 +40,10 @@ func TestVolume_Address(t *testing.T) {
 				},
 			},
 			wantOK: true,
-			want:   VolumeAddress{Kind: VolumeAddressVolume, Source: "demo_assets"},
+			want:   MountSource{Type: MountSourceVolume, Source: "demo_assets"},
 		},
 		{
-			name:   "a named volume carrying no docker name cannot be addressed",
+			name:   "a named volume carrying no docker name has no mount source",
 			volume: Volume{Type: VolumeTypeNamed, Named: &VolumePropertiesNamed{}},
 		},
 		{
@@ -53,7 +53,7 @@ func TestVolume_Address(t *testing.T) {
 				Bind: &VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
 			},
 			wantOK: true,
-			want:   VolumeAddress{Kind: VolumeAddressBind, Source: "/host/cfg"},
+			want:   MountSource{Type: MountSourceBind, Source: "/host/cfg"},
 		},
 		{
 			name: "a relative bind source is not an address",
@@ -78,14 +78,14 @@ func TestVolume_Address(t *testing.T) {
 		},
 		{
 			name:   "a volume with no addressing arm at all",
-			volume: Volume{ObjectID: "volume/broken", Type: VolumeTypeNamed},
+			volume: Volume{ObjectID: "volume-named-broken", Type: VolumeTypeNamed},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, ok := tt.volume.Address()
+			got, ok := tt.volume.MountSource()
 
 			// Assert
 			assert.Equal(t, tt.wantOK, ok)
@@ -93,7 +93,7 @@ func TestVolume_Address(t *testing.T) {
 				assert.Equal(t, tt.want, got)
 				return
 			}
-			assert.Equal(t, VolumeAddress{}, got, "a refused address must carry nothing bindable")
+			assert.Equal(t, MountSource{}, got, "a refused address must carry nothing bindable")
 		})
 	}
 }
@@ -140,7 +140,7 @@ func TestVolume_LookupMount(t *testing.T) {
 		},
 		{
 			name:   "a volume with no addressing arm at all",
-			volume: Volume{ObjectID: "volume/broken", Type: VolumeTypeNamed},
+			volume: Volume{ObjectID: "volume-named-broken", Type: VolumeTypeNamed},
 		},
 	}
 

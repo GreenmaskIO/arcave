@@ -34,7 +34,7 @@ const serverVersion = "0.1.0"
 // declared together here because a single Server owns all four tools.
 type mcpService interface {
 	CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error)
-	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
+	ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error)
 	RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error)
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
 }
@@ -74,7 +74,11 @@ const (
 		"snapshot and started again when it completes."
 	descList = "List the project's savepoints, newest first, with their id, name, description " +
 		"and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
-		"rollback or savepoint_remove."
+		"rollback or savepoint_remove. Safety snapshots — the undo a rollback commits of the live " +
+		"state before it overwrites it — are hidden unless include_safety_snapshots is set: one " +
+		"exists only while a rollback runs, and one that outlived its rollback means that rollback " +
+		"was killed partway. That leftover is the last copy of the pre-rollback state, so list it " +
+		"with the flag and roll back to it by id to recover by hand."
 	descRemove = "Delete savepoints and the snapshot data they hold. Select them either by " +
 		"explicit ids, or by retention rules (retain_recent/retain_for/before_date) — the two " +
 		"modes cannot be combined, and at least one is required. Pass dry_run to see what would " +
@@ -83,7 +87,7 @@ const (
 		"literal 'latest'. DESTRUCTIVE: every volume it covers is wiped whole and replaced with " +
 		"the savepoint's data, so any change made since that savepoint is lost — including in " +
 		"bind mounts, which are the user's own host folders, and including the parts of a volume " +
-		"a service only sees a subpath of. arcave takes a safety backup of the live state first " +
+		"a service only sees a subpath of. arcave takes a safety snapshot of the live state first " +
 		"and replays it automatically if the rollback fails, so a failed rollback leaves the " +
 		"environment as it was. Services are stopped and started again."
 	// descRecommend carries the workflow, not just the trigger: arcave exposes no
@@ -175,11 +179,16 @@ type listOutput struct {
 	Savepoints []model.Savepoint `json:"savepoints" jsonschema:"the project's savepoints"`
 }
 
-// listSavepoints reports every savepoint in the store. It reaches no daemon and
+// listSavepointInput is list's input schema — one flag, and the tool is
+// otherwise argument-free.
+type listSavepointInput struct {
+	IncludeSafetySnapshots bool `json:"include_safety_snapshots,omitempty" jsonschema:"also list the safety snapshots a rollback commits for its own undo; hidden by default"`
+}
+
+// listSavepoints reports the savepoints in the store. It reaches no daemon and
 // takes no lock, so it is safe to call while another workflow is running.
-// MCP requires an object schema, so it is an empty struct rather than nothing.
-func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, listOutput, error) {
-	sps, err := h.svc.ListSavepoints(ctx)
+func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in listSavepointInput) (*mcpsdk.CallToolResult, listOutput, error) {
+	sps, err := h.svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
 	if err != nil {
 		return nil, listOutput{}, err
 	}
@@ -228,11 +237,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
-	res, err := h.svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: h.composeFiles,
-		Ref:          in.Ref,
-		WaitTimeout:  waitTimeout,
-	})
+	res, err := h.svc.Rollback(ctx, newRollbackRequest(in.Ref, h.composeFiles, waitTimeout))
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}

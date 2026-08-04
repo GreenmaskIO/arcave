@@ -2,9 +2,9 @@ package model
 
 import "context"
 
-// VolumeSnapshotBackend is bound to one volume and one BackendTier, never per
-// call: one instance serves a whole workflow, and a rollback reverts through the
-// very instances that took its safety backup.
+// VolumeSnapshotBackend is bound to one volume and one root, never per call: one
+// instance serves a whole workflow, and a rollback reverts through the very
+// instances that took its safety snapshot.
 type VolumeSnapshotBackend interface {
 	// Volume is what the caller attributes its logs and errors by.
 	Volume() Volume
