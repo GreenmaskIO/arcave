@@ -105,8 +105,9 @@ func TestInitService_Init(t *testing.T) {
 			assert.Equal(t, "demo", name)
 			assert.Equal(t, configPath, path)
 			assert.Equal(t, config.Version, saved.Version)
-			// ApplyDefaults fills the name-dependent savepoint dir.
-			assert.Equal(t, filepath.Join(".arcave", "storage", "demo"), saved.Storage.DirectoryPath())
+			// ApplyDefaults fills the savepoint dir; the project is a segment of the
+			// store root, not of the configured path.
+			assert.Equal(t, filepath.Join(".arcave", "storage"), saved.Storage.DirectoryPath())
 			if tt.verify != nil {
 				tt.verify(t, saved)
 			}
@@ -142,8 +143,8 @@ func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 	ci.AssertExpectations(t)
 }
 
-// The project name defaults to the project root's base name, and the savepoint
-// directory follows from it.
+// The project name defaults to the project root's base name, normalized into
+// the charset a store-root segment may carry.
 func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	// Arrange
 	cw, ci := &mockConfig{}, &mockInspector{}
@@ -156,7 +157,7 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	})).Run(func(args mock.Arguments) {
 		saved = args.Get(0).(config.Config)
 	}).Return(nil)
-	svc := NewInitService(filepath.Join("/home", "vadim", "myproj"), cw, ci)
+	svc := NewInitService(filepath.Join("/home", "vadim", "MyProj"), cw, ci)
 
 	// Act
 	name, _, err := svc.Init(context.Background(), config.Config{}, false)
@@ -165,7 +166,7 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "myproj", name)
 	assert.Equal(t, "myproj", saved.Project.Name)
-	assert.Equal(t, filepath.Join(".arcave", "storage", "myproj"), saved.Storage.DirectoryPath())
+	assert.Equal(t, filepath.Join(".arcave", "storage"), saved.Storage.DirectoryPath())
 	cw.AssertExpectations(t)
 	ci.AssertExpectations(t)
 }

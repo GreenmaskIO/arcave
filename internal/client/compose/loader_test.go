@@ -12,7 +12,7 @@ import (
 )
 
 // Load is the one part of this package that reads the disk, so it is exercised
-// against real files parsed by compose-go — no docker daemon involved. Each case
+// against real files parsed by compose-go — no docker arcaved involved. Each case
 // writes its files into a fresh project directory and names the ones Load is
 // handed, so the cases differ only in what is on disk.
 func TestLoader_Load(t *testing.T) {

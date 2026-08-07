@@ -43,6 +43,52 @@ func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 	return func() error { return m.MethodCalled("Release").Error(0) }, nil
 }
 
+// fakeInflight is a stateful stand-in for the marker file, so tests that are not
+// about the gate carry no expectations. Lifecycle tests use mockInflight instead.
+type fakeInflight struct {
+	mu     sync.Mutex
+	marker *model.InflightMarker
+}
+
+func (f *fakeInflight) Get(_ context.Context) (model.InflightMarker, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.marker == nil {
+		return model.InflightMarker{}, false, nil
+	}
+	return *f.marker, true, nil
+}
+
+func (f *fakeInflight) Put(_ context.Context, marker model.InflightMarker) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marker = &marker
+	return nil
+}
+
+func (f *fakeInflight) Clear(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marker = nil
+	return nil
+}
+
+type mockInflight struct{ mock.Mock }
+
+func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, error) {
+	args := m.Called(ctx)
+	marker, _ := args.Get(0).(model.InflightMarker)
+	return marker, args.Bool(1), args.Error(2)
+}
+
+func (m *mockInflight) Put(ctx context.Context, marker model.InflightMarker) error {
+	return m.Called(ctx, marker).Error(0)
+}
+
+func (m *mockInflight) Clear(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
 type mockInspector struct{ mock.Mock }
 
 func (m *mockInspector) Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error) {
@@ -85,11 +131,6 @@ func (m *mockBackend) Snapshot(ctx context.Context, req model.BackendSnapshotReq
 
 func (m *mockBackend) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
 	return m.Called(ctx, req).Error(0)
-}
-
-func (m *mockBackend) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
-	args := m.Called(ctx, req)
-	return args.Bool(0), args.Error(1)
 }
 
 func (m *mockBackend) Remove(ctx context.Context, req model.BackendRemoveRequest) error {

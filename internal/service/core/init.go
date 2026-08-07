@@ -17,7 +17,7 @@ type configWriter interface {
 
 // InitService creates a project's arcave metadata. It shares only the compose
 // inspector with the savepoint workflows and needs neither storage, a snapshot
-// backend nor the Docker engine, so `arcave init` never reaches for a daemon.
+// backend nor the Docker engine, so `arcave init` never reaches for a arcaved.
 type InitService struct {
 	projectRoot         string
 	configWriter        configWriter

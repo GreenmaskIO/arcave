@@ -86,7 +86,11 @@ func TestService_CreateSavepoint(t *testing.T) {
 	// the project running. Reversed, it compiles.
 	stop.NotBefore(newPg, newCfg)
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -160,7 +164,11 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -203,7 +211,11 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 		return spec.Volume.Backend == model.SnapshotBackendCDC
 	})).Return(backend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, newDirStore(t), model.SnapshotBackendCDC)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: newDirStore(t), DefaultBackend: model.SnapshotBackendCDC,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -233,7 +245,11 @@ func TestService_CreateSavepoint_UnknownBackend(t *testing.T) {
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(nil, "volume-named-demo_db")).Return(nil, ErrUnknownBackend)
 
-	svc := New(repo, locker, inspector, runner, registry, nil, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -261,26 +277,20 @@ func TestService_CreateSavepoint_UncommittedOnFailure(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
 	runner.On("Up", mock.Anything, time.Duration(0), demoComposeFiles()).Return(nil).Once()
-	// The drop opens with an uncommit whatever happened. Nothing was committed here,
-	// so it is a no-op — Delete is idempotent, which is what lets one function serve
-	// both the removal of a savepoint and the cleanup of a capture that never was.
 	repo := &mockSavepointRepo{}
-	repo.On("Delete", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool {
-		return id.Validate() == nil
-	})).Return(nil).Once()
 
 	backend := &mockBackend{volume: model.Volume{ObjectID: "volume-named-demo_db"}}
 	backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
 		Return(model.SnapshotStat{}, errors.New("capture boom")).Once()
-	// The drop carries the nil payload the failed capture reported.
-	backend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
-		return req.SnapshotID.Validate() == nil && req.Payload == nil
-	})).Return(nil).Once()
 	store := newDirStore(t)
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -299,10 +309,10 @@ func TestService_CreateSavepoint_UncommittedOnFailure(t *testing.T) {
 	backend.AssertExpectations(t)
 }
 
-// The bytes a half-finished fan-out did write go with it: no record will ever
-// name them. Driven through the real copy backend over a real store, since a
-// mocked capture writes nothing to assert on.
-func TestService_CreateSavepoint_DropsWhatAPartialCaptureWrote(t *testing.T) {
+// The bytes a half-finished fan-out did write stay for a later gc: no record names
+// them, so nothing reads them, and a failure path never deletes data. Driven through
+// the real copy backend over a real store, since a mocked capture writes nothing.
+func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	// Arrange
 	// Two units: the named volume captures, the bind mount's own service fails.
 	introspection := model.IntrospectionResult{Project: model.Project{
@@ -329,7 +339,11 @@ func TestService_CreateSavepoint_DropsWhatAPartialCaptureWrote(t *testing.T) {
 	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -337,8 +351,10 @@ func TestService_CreateSavepoint_DropsWhatAPartialCaptureWrote(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
-	assert.Empty(t, objectNames(t, store),
-		"the archive the surviving volume wrote is dropped and its directory swept")
+	names := objectNames(t, store)
+	require.Len(t, names, 1, "the archive the surviving volume wrote is kept for a gc")
+	assert.True(t, strings.HasSuffix(names[0], "/volume-named-demo_db/data.tar"), "kept = %v", names)
+	// And it lists as nothing: no record names the directory, so it is invisible.
 	committed, err := repo.List(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, committed)
@@ -359,7 +375,11 @@ func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
 	runner := &mockComposeRunner{}
 	registry := &mockRegistry{}
 
-	svc := New(&mockSavepointRepo{}, locker, inspector, runner, registry, nil, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: &mockSavepointRepo{}, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -405,7 +425,11 @@ func TestService_CreateSavepoint_RefusesANonEmptyDirectory(t *testing.T) {
 		orphans = append(orphans, key)
 	}
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -459,7 +483,11 @@ func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 		backends = append(backends, backend)
 	}
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -499,7 +527,11 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{payload: "pgdata bytes"}))
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -526,6 +558,63 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	runner.AssertExpectations(t)
 }
 
+// A savepoint whose services failed to restart stays committed, but the return
+// is the zero record: an error means no value, and the error names the id.
+func TestService_CreateSavepoint_CommittedWhenStartFails(t *testing.T) {
+	// Arrange
+	vol := demoVolume()
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything, demoComposeFiles()).Return(demoIntrospection(), nil).Once()
+	locker := &mockLocker{}
+	expectLock(locker)
+	runner := &mockComposeRunner{}
+	stop := runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
+
+	backend := &mockBackend{volume: vol}
+	snap := backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "pg-payload"}, nil).
+		Once()
+	repo := &mockSavepointRepo{}
+	var savedID model.SavepointID
+	save := repo.On("Save", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+		return r.ID.Validate() == nil
+	})).Run(func(args mock.Arguments) {
+		savedID = args.Get(1).(model.Savepoint).ID
+	}).Return(nil).Once()
+	up := runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).
+		Return(errors.New("unhealthy")).Once()
+	mock.InOrder(stop, snap, save, up)
+
+	store := newDirStore(t)
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
+
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
+		ComposeFiles: demoComposeFiles(),
+		WaitTimeout:  60 * time.Second,
+	})
+
+	// Assert: the record is committed, so neither Delete nor Remove is expected above.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "committed; services failed to start")
+	assert.Contains(t, err.Error(), savedID.String())
+	assert.Zero(t, savepoint)
+	inspector.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	repo.AssertExpectations(t)
+	registry.AssertExpectations(t)
+	backend.AssertExpectations(t)
+}
+
 // A safety snapshot is an ordinary record in the one store, so what keeps it out
 // of a listing is the flag and nothing structural.
 func TestService_ListSavepoints(t *testing.T) {
@@ -547,7 +636,11 @@ func TestService_ListSavepoints(t *testing.T) {
 			// Arrange
 			repo := &mockSavepointRepo{}
 			repo.On("List", mock.Anything).Return([]model.Savepoint{demoRecord(), demoSafetySnapshot()}, nil).Once()
-			svc := New(repo, nil, nil, nil, nil, nil, model.SnapshotBackendCopy)
+			svc := New(Deps{
+				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
+				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
+				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+			})
 
 			// Act
 			got, err := svc.ListSavepoints(zerolog.Nop().WithContext(context.Background()), tt.req)
@@ -597,7 +690,11 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 			// Arrange
 			repo := &mockSavepointRepo{}
 			repo.On("List", mock.Anything).Return([]model.Savepoint{record, backup}, nil).Once()
-			svc := New(repo, nil, nil, nil, nil, nil, model.SnapshotBackendCopy)
+			svc := New(Deps{
+				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
+				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
+				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+			})
 
 			// Act
 			res, err := svc.RemoveSavepoints(zerolog.Nop().WithContext(context.Background()), tt.req)
@@ -636,7 +733,11 @@ func TestService_RemoveSavepoints(t *testing.T) {
 	require.NoError(t, store.PutObject(context.Background(),
 		record.ID.String()+"/volume-named-orphan/data.tar", strings.NewReader("orphan")))
 
-	svc := New(repo, locker, nil, nil, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
+		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -671,7 +772,11 @@ func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
-	svc := New(repo, locker, nil, nil, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
+		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -697,7 +802,11 @@ func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	locker := &mockLocker{}
 	registry := &mockRegistry{}
 
-	svc := New(repo, locker, nil, nil, registry, nil, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
+		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -797,7 +906,11 @@ func TestService_retentionCutoffs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			svc := New(nil, nil, nil, nil, nil, nil, model.SnapshotBackendCopy)
+			svc := New(Deps{
+				SavepointRepo: nil, ProjectLocker: nil, ComposeInspector: nil,
+				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
+				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+			})
 			now := time.Now()
 
 			// Act

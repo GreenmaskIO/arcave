@@ -15,7 +15,7 @@ import (
 )
 
 // mockAPI is a test double for the Docker API client (the dockerAPI seam), so
-// Engine's volume I/O can be exercised without a daemon.
+// Engine's volume I/O can be exercised without a arcaved.
 type mockAPI struct {
 	mock.Mock
 }

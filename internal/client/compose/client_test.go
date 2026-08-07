@@ -17,7 +17,7 @@ import (
 // survives the wrapping.
 var (
 	errLoad    = errors.New("bad compose file")
-	errCompose = errors.New("daemon refused")
+	errCompose = errors.New("arcaved refused")
 )
 
 // testOptions is the resolved project config a Client is normally built with;
@@ -277,7 +277,7 @@ func fixtureProject() *types.Project {
 }
 
 // mockComposeAPI is the dockerComposeAPI double: it records what arcave asks compose
-// to do, so the options are asserted without a daemon.
+// to do, so the options are asserted without a arcaved.
 type mockComposeAPI struct {
 	mock.Mock
 }

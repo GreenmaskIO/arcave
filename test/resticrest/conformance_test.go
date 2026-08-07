@@ -5,7 +5,7 @@
 //
 // It lives outside those packages for that reason, beside the other integration
 // tests. Guarded twice, per test: -short skips, and so does a host with no
-// restic and no reachable daemon.
+// restic and no reachable arcaved.
 package resticrest
 
 import (

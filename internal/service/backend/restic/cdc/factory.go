@@ -17,8 +17,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// RepoNamespace is the segment every volume's repository lives under, inside the
-// shared store.
+// RepoNamespace is the segment every volume's repository lives under — beside
+// the savepoint directories under the stack root, where its non-numeric name
+// cannot collide with a savepoint id.
 const RepoNamespace = "restic"
 
 // resticPassword opens every repository arcave creates. A constant, not a
@@ -87,7 +88,7 @@ func NewFactory(deps Dependencies) *Factory { return &Factory{deps: deps} }
 func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendCDC }
 
 // New resolves what is fixed for an instance's life: the volume's repository.
-// The volume's own mount source is not — resolving it may reach the daemon, and a
+// The volume's own mount source is not — resolving it may reach the arcaved, and a
 // constructor has no ctx to do that on.
 func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
 	repoStore, err := f.deps.RepositoryRoot.SubStorage(spec.Volume.ObjectID, true)

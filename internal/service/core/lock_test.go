@@ -52,7 +52,11 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 			repo, inspector, runner := &mockSavepointRepo{}, &mockInspector{}, &mockComposeRunner{}
 			registry := &mockRegistry{}
 			// Nil stores: a workflow that got as far as a backend would deref one.
-			svc := New(repo, locker, inspector, runner, registry, nil, model.SnapshotBackendCopy)
+			svc := New(Deps{
+				SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+				ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+			})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act

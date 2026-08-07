@@ -159,14 +159,6 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	return err
 }
 
-// Exists answers true without asking the repository: the savepoint record is
-// written last, so a record naming this capture already states that it
-// completed. The blind spot is a snapshot deleted behind arcave's back, which
-// surfaces mid-rollback and rides the ordinary revert.
-func (*Snapshotter) Exists(context.Context, model.BackendExistsRequest) (bool, error) {
-	return true, nil
-}
-
 // Remove drops the capture's snapshot, server-side. A capture that reported no
 // payload has nothing to drop — the ordinary cleanup path of a failed create.
 func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
@@ -215,7 +207,7 @@ func (s *Snapshotter) repositoryURL() string {
 
 // mountSource resolves what the restic container mounts to see the volume.
 // Resolved per operation rather than held on the instance: it may cost a round
-// trip to the daemon, and only the two operations that move bytes need it.
+// trip to the arcaved, and only the two operations that move bytes need it.
 //
 // The volume is mounted whole, whatever subpath a service happens to mount — so
 // a capture holds all of it, and a restore puts all of it back.

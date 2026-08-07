@@ -37,7 +37,7 @@ func TestSnapshotter_NoServiceContainer(t *testing.T) {
 
 // A2: a volume whose only mount exposes a subdirectory is captured and restored
 // whole. The subpath is a property of that one container and lives only in the
-// compose file — the daemon does not even report it back — so a backend that
+// compose file — the arcaved does not even report it back — so a backend that
 // went through the container would have snapshotted a fraction of the volume
 // and, worse, restored a fraction over a wipe of all of it.
 func TestSnapshotter_SubpathMountedVolume(t *testing.T) {

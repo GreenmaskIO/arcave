@@ -51,7 +51,7 @@ func New(projectRoot string) *Locker {
 //
 // ctx is unused by the flock syscall, which cannot block here — LOCK_NB returns
 // at once. It is in the contract because the consumer's seam must survive a
-// locker that reaches a network (a lease in the shared store), which is the only
+// locker that reaches a network (a lease in a network store), which is the only
 // kind of lock that could serialise two *hosts*.
 func (l *Locker) Acquire(ctx context.Context) (release func() error, err error) {
 	path := filepath.Join(l.projectRoot, fileName)

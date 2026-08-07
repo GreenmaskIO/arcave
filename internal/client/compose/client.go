@@ -24,7 +24,7 @@ const (
 
 // dockerComposeAPI is the slice of the compose library's API that Client
 // calls — consumer-side, so a test can assert on the options arcave passes without a
-// daemon. api.Compose satisfies it.
+// arcaved. api.Compose satisfies it.
 type dockerComposeAPI interface {
 	Stop(ctx context.Context, projectName string, options api.StopOptions) error
 	Up(ctx context.Context, project *types.Project, options api.UpOptions) error
@@ -44,7 +44,7 @@ type dockerComposeLoader interface {
 // the compose plugin, so arcave inherits compose's own semantics (depends_on
 // ordering, health aggregation, container recreation) without requiring a docker
 // CLI on the host — which matters for arcave mcp, where the environment may offer
-// nothing but the daemon socket. The semantics are pinned to the compose version
+// nothing but the arcaved socket. The semantics are pinned to the compose version
 // arcave was built against, not to whatever the user happens to have installed.
 //
 // The compose files to act on are passed per call, so a single instance is
@@ -71,8 +71,8 @@ type Options struct {
 	StopTimeout time.Duration
 }
 
-// NewClient returns a runner over the engine's daemon connection, so the
-// lifecycle half of this package targets the daemon resolved for the I/O half by
+// NewClient returns a runner over the engine's arcaved connection, so the
+// lifecycle half of this package targets the arcaved resolved for the I/O half by
 // construction. opts carries the project's bounds; a zero Options is valid and
 // means "this package's defaults".
 func NewClient(svc dockerComposeAPI, loader dockerComposeLoader, opts Options) *Client {

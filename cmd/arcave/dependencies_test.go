@@ -146,7 +146,7 @@ func TestGetDockerOptions(t *testing.T) {
 		{
 			// Cert material is enough to turn TLS on: a caller who names a cert path
 			// wants an encrypted connection even if they never asked to verify the
-			// daemon's certificate, so TLS is enabled and only TLSVerify stays off.
+			// arcaved's certificate, so TLS is enabled and only TLSVerify stays off.
 			name: "a cert path alone enables tls with verify off",
 			cfg:  config.Docker{CertPath: "/certs"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
@@ -170,7 +170,7 @@ func TestGetDockerOptions(t *testing.T) {
 		},
 		{
 			// tls_verify with no cert material is the public-CA case: verify the
-			// daemon against the system roots, present no client certificate.
+			// arcaved against the system roots, present no client certificate.
 			name: "tls verify alone enables tls with no cert material",
 			cfg:  config.Docker{TLSVerify: true},
 			verify: func(t *testing.T, got *flags.ClientOptions) {

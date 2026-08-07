@@ -1,10 +1,10 @@
-// Package tarcopybackend drives the fullcopy backend against a real daemon: one
+// Package tarcopybackend drives the fullcopy backend against a real arcaved: one
 // volume, one instance, real containers, a real store. It is the only thing
 // that proves the whole-volume archive is round: that docker cp against a
 // container of arcave's own reads the volume, and that extracting the archive
 // back at the container's root lands the data where it came from.
 //
-// Guarded twice: -short skips, and so does an unreachable daemon.
+// Guarded twice: -short skips, and so does an unreachable arcaved.
 package tarcopybackend
 
 import (
@@ -99,7 +99,7 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 	}
 }
 
-// A capture of a volume the daemon does not have is refused before anything
+// A capture of a volume the arcaved does not have is refused before anything
 // creates it: an empty capture would wipe live data at the next rollback.
 func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 	// Arrange
@@ -117,7 +117,7 @@ func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 	assert.Error(t, inspectErr, "the refused capture must not have created the volume it refused")
 }
 
-// env is one fullcopy factory over a live daemon and an observable store.
+// env is one fullcopy factory over a live arcaved and an observable store.
 type env struct {
 	ctx     context.Context
 	cli     *client.Client
@@ -256,7 +256,7 @@ func objectNames(t *testing.T, store storages.Storager) []string {
 	return names
 }
 
-// newDaemonClient skips the test unless a docker daemon answers.
+// newDaemonClient skips the test unless a docker arcaved answers.
 func newDaemonClient(t *testing.T) *client.Client {
 	t.Helper()
 
@@ -267,13 +267,13 @@ func newDaemonClient(t *testing.T) *client.Client {
 	require.NoError(t, err)
 	if _, err := cli.Ping(context.Background()); err != nil {
 		_ = cli.Close()
-		t.Skip("skipping the fullcopy backend volume-level test: no reachable docker daemon: " + err.Error())
+		t.Skip("skipping the fullcopy backend volume-level test: no reachable docker arcaved: " + err.Error())
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli
 }
 
-// randomSuffix keeps concurrent copies of these tests apart on one daemon.
+// randomSuffix keeps concurrent copies of these tests apart on one arcaved.
 func randomSuffix(t *testing.T) string {
 	t.Helper()
 
@@ -301,7 +301,7 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service, name, ta
 }
 
 // createSubpathContainer is the same holder seeing only a subdirectory. Subpath
-// lives in HostConfig.Mounts and nowhere else: the daemon does not report it
+// lives in HostConfig.Mounts and nowhere else: the arcaved does not report it
 // back on the container's .Mounts.
 func createSubpathContainer(t *testing.T, cli *client.Client, service, name, target, subpath string) {
 	t.Helper()

@@ -71,7 +71,11 @@ const (
 		"project's Docker Compose stack. Call this before a risky change (a schema migration, a " +
 		"data transformation, a destructive experiment) so the environment can be restored " +
 		"afterwards with the rollback tool. Services are stopped for the duration of the " +
-		"snapshot and started again when it completes."
+		"snapshot and started again when it completes. If the call fails with a message of the " +
+		"form 'savepoint <id> committed; services failed to start', the savepoint EXISTS and is " +
+		"safe to roll back to — only the restart failed, so report that id to the user and " +
+		"investigate the stack (the services are stopped or unhealthy), rather than taking " +
+		"another savepoint."
 	descList = "List the project's savepoints, newest first, with their id, name, description " +
 		"and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
 		"rollback or savepoint_remove. Safety snapshots — the undo a rollback commits of the live " +
@@ -107,7 +111,7 @@ const (
 	descRecommend = "Report volumes the project's services should mount but do not: a service whose " +
 		"image is known to write persistent state to a path with no volume or bind mount on it, so " +
 		"a savepoint would silently fail to capture that state. Strictly read-only — it reads the " +
-		"compose files and the recommender catalog, and touches neither the Docker daemon, nor the " +
+		"compose files and the recommender catalog, and touches neither the Docker arcaved, nor the " +
 		"savepoint storage, nor the project lock. Returns compose_files (the files actually " +
 		"checked) and recommendations, each with service, image, volume (the container path to " +
 		"mount), operation ('AddVolume') and hash (stable id of the finding). An empty " +
@@ -185,7 +189,7 @@ type listSavepointInput struct {
 	IncludeSafetySnapshots bool `json:"include_safety_snapshots,omitempty" jsonschema:"also list the safety snapshots a rollback commits for its own undo; hidden by default"`
 }
 
-// listSavepoints reports the savepoints in the store. It reaches no daemon and
+// listSavepoints reports the savepoints in the store. It reaches no arcaved and
 // takes no lock, so it is safe to call while another workflow is running.
 func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in listSavepointInput) (*mcpsdk.CallToolResult, listOutput, error) {
 	sps, err := h.svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
@@ -269,7 +273,7 @@ type recommendOutput struct {
 }
 
 // recommend reports the persistent volumes the project's services are missing. It
-// reaches no daemon, opens no storage and takes no lock, so it is safe to call at
+// reaches no arcaved, opens no storage and takes no lock, so it is safe to call at
 // any time — including while another workflow is running.
 //
 // The CLI turns "there is advice" into exit status 1; there is no equivalent here

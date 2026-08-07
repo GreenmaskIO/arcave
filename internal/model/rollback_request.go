@@ -13,11 +13,20 @@ var ErrRollbackNoSelector = errors.New("no savepoint selector provided")
 // RollbackRequest carries everything Rollback needs, so callers (CLI, MCP,
 // other services) can invoke it without handing over a whole config.Config.
 type RollbackRequest struct {
-	ComposeFiles []string      // compose files enumerating the services and their mounts
-	ID           *SavepointID  // exact id; wins over the two below
-	Name         *string       // savepoint name; ambiguous names are an error, never a guess
-	Latest       *bool         // when true, the newest savepoint by CreatedAt
-	WaitTimeout  time.Duration // bounds the health check on restart
+	// Target names the LIVE stack to roll back — which provider owns it now. The
+	// savepoint being restored carries its own Target in the record, and a rollback
+	// restores through that one: a savepoint is always put back by the provider
+	// that took it, whatever the project names today.
+	Target *Target
+
+	ID     *SavepointID // exact id; wins over the two below
+	Name   *string      // savepoint name; ambiguous names are an error, never a guess
+	Latest *bool        // when true, the newest savepoint by CreatedAt
+
+	// ComposeFiles and WaitTimeout are the pre-provider-cut fields, still read by
+	// internal/service/core. Superseded by Target and the provider's own config.
+	ComposeFiles []string
+	WaitTimeout  time.Duration
 }
 
 // Validate refuses a request that names no savepoint. A pointer set to the zero

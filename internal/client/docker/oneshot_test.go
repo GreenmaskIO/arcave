@@ -23,12 +23,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// oneShotID is the container ID the mocked daemon hands back for every
+// oneShotID is the container ID the mocked arcaved hands back for every
 // throwaway container in these tests.
 const oneShotID = "oneshot-1"
 
-// The image is pulled only when the daemon does not already have it, and the
-// pull stream is drained: the daemon does not finish a pull nobody reads.
+// The image is pulled only when the arcaved does not already have it, and the
+// pull stream is drained: the arcaved does not finish a pull nobody reads.
 func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
@@ -49,11 +49,11 @@ func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 
 // A non-zero exit carries the container's own output as a typed error, the way
 // the CLI's combined output used to — bounded and demultiplexed, never with the
-// stdcopy framing bytes the daemon wraps a no-TTY stream in.
+// stdcopy framing bytes the arcaved wraps a no-TTY stream in.
 func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	// Arrange
 	var framed bytes.Buffer
-	// The daemon frames log output with stdcopy whenever the container has no TTY,
+	// The arcaved frames log output with stdcopy whenever the container has no TTY,
 	// which every one-shot run is; feeding raw bytes here would hide exactly the
 	// framing bug the demux fixes.
 	_, _ = io.WriteString(stdcopy.NewStdWriter(&framed, stdcopy.Stderr), "rm: permission denied\n")
@@ -79,9 +79,9 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	assert.Equal(t, "busybox container exited with status 137: rm: permission denied", err.Error())
 	assert.NotContains(t, err.Error(), "\x01", "the stdcopy header must be demultiplexed away")
 
-	// The read is bounded at the daemon.
+	// The read is bounded at the arcaved.
 	opts := api.Calls[callIndex(api, "ContainerLogs")].Arguments.Get(2).(container.LogsOptions)
-	assert.Equal(t, "200", opts.Tail, "the log read must be bounded at the daemon")
+	assert.Equal(t, "200", opts.Tail, "the log read must be bounded at the arcaved")
 }
 
 func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
@@ -328,7 +328,7 @@ func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
 }
 
 // RunOneShot is the exported face of the mechanism, for the runner seams the
-// backends declare: the spec's command, environment and binds reach the daemon
+// backends declare: the spec's command, environment and binds reach the arcaved
 // verbatim.
 func TestEngine_RunOneShot(t *testing.T) {
 	// Arrange
@@ -357,7 +357,7 @@ func TestEngine_RunOneShot(t *testing.T) {
 	assert.Equal(t, spec.Binds, hostCfg.Binds)
 }
 
-// expectImagePresent makes the daemon report ref as already pulled.
+// expectImagePresent makes the arcaved report ref as already pulled.
 func expectImagePresent(api *mockAPI, ref string) {
 	api.On("ImageInspect", mock.Anything, ref).Return(image.InspectResponse{}, nil)
 }
@@ -421,9 +421,9 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// fakeHijack stands in for the daemon side of an attached container, with no
-// daemon in sight: whatever runOneShotContainer writes as stdin comes out of stdinR, and
-// whatever the test writes to stdout/stderr is framed exactly the way the daemon
+// fakeHijack stands in for the arcaved side of an attached container, with no
+// arcaved in sight: whatever runOneShotContainer writes as stdin comes out of stdinR, and
+// whatever the test writes to stdout/stderr is framed exactly the way the arcaved
 // multiplexes the two back over one connection.
 type fakeHijack struct {
 	resp types.HijackedResponse

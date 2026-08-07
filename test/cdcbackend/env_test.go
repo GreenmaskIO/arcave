@@ -1,9 +1,9 @@
 // Package cdcbackend drives the cdc backend one contract call at a time: one
-// volume, one instance, a real daemon, stock restic containers and the real
+// volume, one instance, a real arcaved, stock restic containers and the real
 // endpoint in front of the real repository root. What only this level buys is
-// the repository in view — the shared store is inmemory, so a case lists the
+// the repository in view — the stack store is inmemory, so a case lists the
 // keys restic actually wrote.
-// Guarded twice: -short skips, and so does an unreachable daemon.
+// Guarded twice: -short skips, and so does an unreachable arcaved.
 package cdcbackend
 
 import (
@@ -71,7 +71,7 @@ const (
 	dataPrefix    = "data"
 )
 
-// env is one cdc factory over a live daemon and an observable store.
+// env is one cdc factory over a live arcaved and an observable store.
 type env struct {
 	ctx    context.Context
 	cli    *client.Client
@@ -79,7 +79,7 @@ type env struct {
 	// repoURLBase is what the DI root hands a backend: the served endpoint as a
 	// container names it, with a volume's ObjectID still to append.
 	repoURLBase string
-	shared      storages.Storager
+	stackStore  storages.Storager
 	// resticRoot is the tree the repositories live in — the one the server
 	// resolves against and the one the factory writes into, exactly as the DI
 	// root wires it.
@@ -88,7 +88,7 @@ type env struct {
 	opts       cdc.Options
 }
 
-// newEnv wires the backend as cmd/arcave does, with the shared store in memory:
+// newEnv wires the backend as cmd/arcave does, with the stack store in memory:
 // the restic server is started once here and lives for the whole case, exactly as
 // the DI root keeps it for the whole process.
 func newEnv(t *testing.T, opts cdc.Options) *env {
@@ -103,11 +103,11 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 			t.Logf("backend log:\n%s", logs.String())
 		}
 	})
-	shared := inmemory.New("shared")
-	t.Cleanup(func() { assert.NoError(t, shared.Close()) })
+	stackStore := inmemory.New("stack")
+	t.Cleanup(func() { assert.NoError(t, stackStore.Close()) })
 
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	resticRoot, err := shared.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
 	require.NoError(t, err)
 	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	port, err := rest.Serve(server, "")
@@ -120,7 +120,7 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 		cli:         cli,
 		engine:      engine,
 		repoURLBase: rest.RepositoryURLBase("", containerHost, port),
-		shared:      shared,
+		stackStore:  stackStore,
 		resticRoot:  resticRoot,
 		opts:        opts,
 	}
@@ -189,7 +189,7 @@ func (e *env) newBareVolume(t *testing.T, service, target string) model.Volume {
 
 // newSubpathVolume creates a filled named volume whose only container sees a
 // subdirectory of it. The subdirectory has to exist before the container is
-// created — the daemon refuses a subpath that is not there — so the fill runs
+// created — the arcaved refuses a subpath that is not there — so the fill runs
 // first.
 func (e *env) newSubpathVolume(t *testing.T, service, target, subpath string) model.Volume {
 	t.Helper()
@@ -362,7 +362,7 @@ func objectNames(t *testing.T, store storages.Storager, prefix string) []string 
 	return names
 }
 
-// newDaemonClient skips the test unless a docker daemon answers.
+// newDaemonClient skips the test unless a docker arcaved answers.
 func newDaemonClient(t *testing.T) *client.Client {
 	t.Helper()
 
@@ -373,13 +373,13 @@ func newDaemonClient(t *testing.T) *client.Client {
 	require.NoError(t, err)
 	if _, err := cli.Ping(context.Background()); err != nil {
 		_ = cli.Close()
-		t.Skip("skipping the cdc backend volume-level test: no reachable docker daemon: " + err.Error())
+		t.Skip("skipping the cdc backend volume-level test: no reachable docker arcaved: " + err.Error())
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli
 }
 
-// randomSuffix keeps concurrent copies of these tests apart on one daemon.
+// randomSuffix keeps concurrent copies of these tests apart on one arcaved.
 func randomSuffix(t *testing.T) string {
 	t.Helper()
 
@@ -422,7 +422,7 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service, name, ta
 
 // createSubpathContainer is createLabelledContainer for a container that sees
 // only a subdirectory of the volume. Subpath lives in HostConfig.Mounts and
-// nowhere else: the daemon does not report it back on the container's .Mounts,
+// nowhere else: the arcaved does not report it back on the container's .Mounts,
 // so nothing but the compose file ever knows about it.
 func createSubpathContainer(t *testing.T, cli *client.Client, service, name, target, subpath string) {
 	t.Helper()

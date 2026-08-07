@@ -17,7 +17,7 @@ var (
 			"service's image is known to need and the compose file does not declare — state " +
 			"a savepoint would silently fail to capture.\n\n" +
 			"It is read-only: it reads compose files and the recommender catalog, and touches " +
-			"neither the savepoint store nor the Docker daemon.\n\n" +
+			"neither the savepoint store nor the Docker arcaved.\n\n" +
 			"Exits 1 when there is anything to recommend, 0 when there is not.",
 		Args: cobra.NoArgs,
 		RunE: runRecommend,

@@ -19,7 +19,7 @@ type MountSource struct {
 }
 
 // MountSource answers from the compose project alone. ok is false for an
-// anonymous volume, whose docker name is created per container — only the daemon
+// anonymous volume, whose docker name is created per container — only the arcaved
 // knows it — and for a bind whose source is missing or relative; both fall back
 // to LookupMount.
 func (v Volume) MountSource() (MountSource, bool) {
@@ -41,7 +41,7 @@ func (v Volume) MountSource() (MountSource, bool) {
 	}
 }
 
-// LookupMount is the mount the daemon has to be asked through when MountSource
+// LookupMount is the mount the arcaved has to be asked through when MountSource
 // cannot answer. ok is false for a Volume carrying no mount of its own.
 func (v Volume) LookupMount() (service, target string, ok bool) {
 	switch {

@@ -18,7 +18,7 @@ type composeProjectLoader interface {
 }
 
 // Inspector answers "what does this compose project declare?" from the files
-// alone — no daemon, no side effects. It reports volumes at two levels and
+// alone — no arcaved, no side effects. It reports volumes at two levels and
 // decides nothing: every mount type compose knows is reported verbatim, and what
 // a savepoint captures is the consumer's call.
 //

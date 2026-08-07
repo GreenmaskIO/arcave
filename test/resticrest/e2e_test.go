@@ -120,7 +120,7 @@ func TestResticEndToEnd(t *testing.T) {
 	require.Equal(t, mutated, after, "the restored volume must hash identically to the state the latest backup covered")
 }
 
-// newDockerClient skips unless a docker daemon is reachable, and returns its
+// newDockerClient skips unless a docker arcaved is reachable, and returns its
 // client, closed with the test.
 func newDockerClient(t *testing.T) *client.Client {
 	t.Helper()
@@ -131,7 +131,7 @@ func newDockerClient(t *testing.T) *client.Client {
 	require.NoError(t, err)
 	if _, err := cli.Ping(context.Background()); err != nil {
 		_ = cli.Close()
-		t.Skip("skipping the restic transport e2e test: no reachable docker daemon: " + err.Error())
+		t.Skip("skipping the restic transport e2e test: no reachable docker arcaved: " + err.Error())
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli

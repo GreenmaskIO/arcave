@@ -9,7 +9,7 @@ import "io"
 type OneShotSpec struct {
 	Image string
 	Cmd   []string
-	// Env entries are "KEY=value", the daemon's own shape.
+	// Env entries are "KEY=value", the arcaved's own shape.
 	Env []string
 	// Binds are "source:target" mounts: a volume name or a host path.
 	Binds []string

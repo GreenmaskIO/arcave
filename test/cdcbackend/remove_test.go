@@ -9,23 +9,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// E1: Exists answers true without asking the repository anything — the record is
-// the commit marker. Observably: a volume with no repository at all still says yes.
-func TestSnapshotter_Exists(t *testing.T) {
-	// Arrange
-	env := newEnv(t, wipeOptions())
-	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-	backend := env.backend(t, vol)
-	require.Empty(t, env.repoKeys(t, vol), "nothing has been captured, on purpose")
-
-	// Act
-	exists, err := backend.Exists(env.ctx, model.BackendExistsRequest{SnapshotID: idFirst})
-
-	// Assert
-	require.NoError(t, err)
-	assert.True(t, exists)
-}
-
 // D1: a removal drops the one snapshot its payload names, and no bytes — the packs
 // are shared, and space comes back only from a future `arcave savepoint gc`.
 func TestSnapshotter_Remove_DropsOnlyItsOwnSnapshot(t *testing.T) {

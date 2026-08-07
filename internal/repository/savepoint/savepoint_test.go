@@ -149,6 +149,17 @@ func TestRepository_List(t *testing.T) {
 			wantIDs: []string{"1780335122"},
 		},
 		{
+			// cdc keeps its repositories beside the savepoint directories, under
+			// the stack root this repository lists. "restic" is not a savepoint id,
+			// so it is invisible here — which is what makes it a safe neighbour.
+			name: "the cdc repository tree beside the savepoints is invisible",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "restic/volume-demo_pgdata/config", "{}")
+				writeObject(t, root, "restic/volume-demo_pgdata/snapshots/abc", "{}")
+			},
+			wantIDs: []string{"1780335122"},
+		},
+		{
 			name: "a corrupt record is an error, never a silent skip",
 			plant: func(t *testing.T, root string) {
 				writeObject(t, root, "1780335999/savepoint.json", "{not json")

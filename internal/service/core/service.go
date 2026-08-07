@@ -31,6 +31,27 @@ type composeRunner interface {
 	Up(ctx context.Context, waitTimeout time.Duration, files ...string) error
 }
 
+// inflightMarkers is the intent marker's seam: written before a rollback's first
+// destructive write, cleared when the environment is consistent again.
+type inflightMarkers interface {
+	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
+	Put(ctx context.Context, marker model.InflightMarker) error
+	Clear(ctx context.Context) error
+}
+
+// Deps are Service's collaborators. A struct rather than a parameter list: the
+// seams have no natural order, so a new one could silently swap with an existing one.
+type Deps struct {
+	SavepointRepo    savepointRepository
+	ProjectLocker    projectLocker
+	ComposeInspector composeIntrospector
+	ComposeRunner    composeRunner
+	BackendRegistry  model.SnapshotBackendRegistry
+	Inflight         inflightMarkers
+	Store            storages.Storager
+	DefaultBackend   model.SnapshotBackendKind
+}
+
 // Service orchestrates arcave's savepoint workflows over one root. A bare "store"
 // is the right name again — there was a second root once, an undo tree sharing
 // this one's type, and only the names could keep the two apart.
@@ -44,42 +65,41 @@ type Service struct {
 	composeInspector        composeIntrospector
 	composeRunner           composeRunner
 	snapshotBackendRegistry model.SnapshotBackendRegistry
+	inflightMarker          inflightMarkers
 	store                   storages.Storager
 	defaultBackend          model.SnapshotBackendKind
 	maxConcurrentOperations int
 }
 
-func New(
-	savepointRepo savepointRepository,
-	projectLocker projectLocker,
-	composeInspector composeIntrospector,
-	composeRunner composeRunner,
-	snapshotBackendRegistry model.SnapshotBackendRegistry,
-	store storages.Storager,
-	defaultBackend model.SnapshotBackendKind,
-) *Service {
+func New(d Deps) *Service {
 	return &Service{
-		savepointRepo:           savepointRepo,
-		projectLocker:           projectLocker,
-		composeInspector:        composeInspector,
-		composeRunner:           composeRunner,
-		snapshotBackendRegistry: snapshotBackendRegistry,
-		store:                   store,
-		defaultBackend:          defaultBackend,
+		savepointRepo:           d.SavepointRepo,
+		projectLocker:           d.ProjectLocker,
+		composeInspector:        d.ComposeInspector,
+		composeRunner:           d.ComposeRunner,
+		snapshotBackendRegistry: d.BackendRegistry,
+		inflightMarker:          d.Inflight,
+		store:                   d.Store,
+		defaultBackend:          d.DefaultBackend,
 		maxConcurrentOperations: maxConcurrentOperations,
 	}
 }
 
-// lockProject claims the project for a mutating workflow and returns the release
-// to defer. Releasing is best-effort: the returned func logs its own error.
-func (s *Service) lockProject(ctx context.Context) (unlock func(), err error) {
+// withUnlock runs fn with the project lock held, and releases it however fn ends.
+// Releasing is best-effort: a failed release is logged, never returned.
+//
+// A function rather than a method, because Go has no generic methods: every
+// workflow returns its own result type, and the lock must not decide it.
+func withUnlock[T any](ctx context.Context, s *Service, fn func() (T, error)) (T, error) {
 	release, err := s.projectLocker.Acquire(ctx)
 	if err != nil {
-		return nil, err
+		var zero T
+		return zero, err
 	}
-	return func() {
+	defer func() {
 		if err := release(); err != nil {
 			zerolog.Ctx(ctx).Error().Err(err).Msg("release project lock")
 		}
-	}, nil
+	}()
+	return fn()
 }

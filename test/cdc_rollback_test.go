@@ -23,6 +23,7 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
@@ -39,12 +40,17 @@ import (
 // about, and its containers stay created either way, which is the state arcave
 // captures in.
 //
-// It is guarded twice: -short skips it, and so does an unreachable daemon.
+// It is guarded twice: -short skips it, and so does an unreachable arcaved.
 
 const (
 	// cdcProject is the compose project name the container labels carry; arcave
-	// finds a volume's mount through them.
+	// finds a volume's mount through them, and it is the stack segment of the
+	// store root.
 	cdcProject = "arcave-cdc-it"
+	// cdcTenant is the storage tenant — cfg.Project.Name, deliberately spelled
+	// differently from the stack so the two levels of the store root stay
+	// distinguishable in an assertion.
+	cdcTenant = "arcave-it-tenant"
 	// blobKiB is the payload per volume — small enough to run in seconds, large
 	// enough that an increment is visibly smaller than a full capture. Random
 	// bytes, because zeros would deduplicate into a repository proving nothing.
@@ -98,15 +104,16 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 				payload := resticPayload(t, stat)
 				assert.NotEmpty(t, payload.SnapshotObjectID, "%s", stat.Volume.ObjectID)
 				assert.Positive(t, payload.TotalBytesProcessed, "%s", stat.Volume.ObjectID)
-				// One repository per volume, in the shared tree — a real restic
-				// repository a user can open with a plain restic CLI.
-				exists, err := env.sharedStore.Exists(env.ctx, "restic/"+stat.Volume.ObjectID+"/config")
+				// One repository per volume, beside the savepoint directories under
+				// the stack root — a real restic repository a user can open with a
+				// plain restic CLI.
+				exists, err := env.stackStore.Exists(env.ctx, "restic/"+stat.Volume.ObjectID+"/config")
 				require.NoError(t, err)
-				assert.True(t, exists, "%s has no repository under the shared root", stat.Volume.ObjectID)
+				assert.True(t, exists, "%s has no repository under the stack root", stat.Volume.ObjectID)
 			}
-			// The savepoint tree holds records only: a cdc capture's bytes live in
-			// the repository, never under the savepoint's own directory.
-			assert.Equal(t, []string{first.ID.String() + "/savepoint.json"}, objectNames(t, env.savepointStore))
+			// The savepoint's own directory holds the record only: a cdc capture's
+			// bytes live in the repository, never under the savepoint.
+			assert.Equal(t, []string{"savepoint.json"}, objectNames(t, env.stackStore, first.ID.String()))
 
 			// A capture after a small change must ship an increment rather than the
 			// payload again, which is the whole reason this backend exists.
@@ -168,20 +175,22 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, committed, 1)
 	assert.Equal(t, savepoint.ID, committed[0].ID)
-	assert.Equal(t, []string{savepoint.ID.String() + "/savepoint.json"}, objectNames(t, env.savepointStore),
+	assert.Equal(t, []string{"savepoint.json"}, objectNames(t, env.stackStore, savepoint.ID.String()))
+	// Nothing of the backup is left beside the savepoint either: the stack root
+	// holds that one savepoint directory and the repositories, and nothing else.
+	assert.Equal(t, []string{savepoint.ID.String(), cdc.RepoNamespace}, dirNames(t, env.stackStore),
 		"the backup's own directory is swept with it")
 }
 
-// cdcEnv is one wired arcave over a live daemon, plus the volumes it captures.
+// cdcEnv is one wired arcave over a live arcaved, plus the volumes it captures.
 type cdcEnv struct {
-	ctx            context.Context
-	svc            *core.Service
-	compose        *stubComposeRunner
-	logs           *syncBuffer
-	engine         *dockerclient.Engine
-	savepointStore storages.Storager
-	sharedStore    storages.Storager
-	volumes        []cdcVolume
+	ctx        context.Context
+	svc        *core.Service
+	compose    *stubComposeRunner
+	logs       *syncBuffer
+	engine     *dockerclient.Engine
+	stackStore storages.Storager
+	volumes    []cdcVolume
 }
 
 // cdcVolume is one docker volume and the labelled container that mounts it.
@@ -191,7 +200,7 @@ type cdcVolume struct {
 	target  string
 }
 
-// newCDCEnv builds the project, the daemon objects and the wiring, and returns
+// newCDCEnv builds the project, the arcaved objects and the wiring, and returns
 // the service every test in this file drives.
 func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	t.Helper()
@@ -210,26 +219,24 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		fill(t, engine, v.name)
 	}
 
-	// The stores, exactly as the DI root builds them: one tree under a session,
-	// savepoints and a rollback's undo alike, and the cdc repositories beside the
-	// session under "shared".
+	// The store, exactly as the DI root builds it: one tree per stack inside the
+	// session — savepoints, a rollback's undo and the cdc repositories alike. The
+	// tenant is named apart from the stack, so an assertion on the tree shows
+	// both levels rather than one name standing in for two.
 	projectRoot := t.TempDir()
 	storageCfg := config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}
-	savepointStore, err := storefactory.New(storageCfg, projectRoot, model.DefaultSession)
+	stackStore, err := storefactory.New(storageCfg, projectRoot, cdcTenant, model.DefaultSession, cdcProject)
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, savepointStore.Close()) })
-	sharedStore, err := storefactory.NewShared(storageCfg, projectRoot)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, sharedStore.Close()) })
+	t.Cleanup(func() { assert.NoError(t, stackStore.Close()) })
 
 	composeRunner := &stubComposeRunner{}
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).Level(zerolog.InfoLevel).WithContext(context.Background())
 
-	resticRoot, err := sharedStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
 	require.NoError(t, err)
 	resticServer := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	resticPort, err := rest.Serve(resticServer, "")
@@ -248,25 +255,25 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	}))
 	require.NoError(t, err)
 
-	svc := core.New(
-		sprepo.New(savepointStore),
-		lock.New(projectRoot),
-		stubInspector{result: introspectionOf(volumes)},
-		composeRunner,
-		registry,
-		savepointStore,
-		model.SnapshotBackendCDC,
-	)
+	svc := core.New(core.Deps{
+		SavepointRepo:    sprepo.New(stackStore),
+		ProjectLocker:    lock.New(projectRoot),
+		ComposeInspector: stubInspector{result: introspectionOf(volumes)},
+		ComposeRunner:    composeRunner,
+		BackendRegistry:  registry,
+		Inflight:         inflightrepo.New(projectRoot),
+		Store:            stackStore,
+		DefaultBackend:   model.SnapshotBackendCDC,
+	})
 
 	return &cdcEnv{
-		ctx:            ctx,
-		svc:            svc,
-		compose:        composeRunner,
-		logs:           logs,
-		engine:         engine,
-		savepointStore: savepointStore,
-		sharedStore:    sharedStore,
-		volumes:        volumes,
+		ctx:        ctx,
+		svc:        svc,
+		compose:    composeRunner,
+		logs:       logs,
+		engine:     engine,
+		stackStore: stackStore,
+		volumes:    volumes,
 	}
 }
 
@@ -381,7 +388,7 @@ func (s stubInspector) Introspect(context.Context, ...string) (model.Introspecti
 	return s.result, nil
 }
 
-// newDaemonClient skips the test unless a docker daemon answers.
+// newDaemonClient skips the test unless a docker arcaved answers.
 func newDaemonClient(t *testing.T) *client.Client {
 	t.Helper()
 
@@ -392,13 +399,13 @@ func newDaemonClient(t *testing.T) *client.Client {
 	require.NoError(t, err)
 	if _, err := cli.Ping(context.Background()); err != nil {
 		_ = cli.Close()
-		t.Skip("skipping the cdc backend integration test: no reachable docker daemon: " + err.Error())
+		t.Skip("skipping the cdc backend integration test: no reachable docker arcaved: " + err.Error())
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli
 }
 
-// randomSuffix keeps concurrent copies of this test apart on one daemon.
+// randomSuffix keeps concurrent copies of this test apart on one arcaved.
 func randomSuffix(t *testing.T) string {
 	t.Helper()
 
@@ -452,15 +459,30 @@ func fill(t *testing.T, engine *dockerclient.Engine, vol string) {
 			"&& dd if=/dev/urandom of=/data/small bs=1k count=4", blobKiB))
 }
 
-// objectNames lists a store's whole tree.
-func objectNames(t *testing.T, store storages.Storager) []string {
+// objectNames lists the tree under prefix, relative to it.
+func objectNames(t *testing.T, store storages.Storager, prefix string) []string {
 	t.Helper()
 
-	objects, err := store.List(context.Background(), "")
+	objects, err := store.List(context.Background(), prefix)
 	require.NoError(t, err)
 	names := make([]string, 0, len(objects))
 	for _, obj := range objects {
 		names = append(names, obj.Name)
+	}
+	return names
+}
+
+// dirNames lists a store's immediate sub-directories — for the stack root, the
+// savepoint directories plus the reserved neighbour cdc keeps its repositories
+// in.
+func dirNames(t *testing.T, store storages.Storager) []string {
+	t.Helper()
+
+	_, dirs, err := store.ListDir(context.Background())
+	require.NoError(t, err)
+	names := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		names = append(names, dir.Dirname())
 	}
 	return names
 }

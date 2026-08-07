@@ -58,7 +58,7 @@ func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendC
 
 // New binds the instance to the root the caller handed it — the one thing fixed
 // for its life. The volume's mount source is not, and cannot be: resolving it may
-// reach the daemon, and a constructor has no ctx to do that on.
+// reach the arcaved, and a constructor has no ctx to do that on.
 func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
 	if spec.Store == nil {
 		return nil, errNoStore
@@ -142,7 +142,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 }
 
 // mountSource is what a container mounts to reach this volume. Resolved per call
-// rather than held on the instance: it may cost a round trip to the daemon, and
+// rather than held on the instance: it may cost a round trip to the arcaved, and
 // only the two methods that move bytes need it.
 func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error) {
 	mnt, err := s.docker.ResolveMountSource(ctx, s.volume)
@@ -150,18 +150,6 @@ func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error
 		return model.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
 	}
 	return mnt, nil
-}
-
-func (s *Snapshotter) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
-	capture, err := s.captureStore(req.SnapshotID)
-	if err != nil {
-		return false, err
-	}
-	exists, err := capture.Exists(ctx, archiveName)
-	if err != nil {
-		return false, fmt.Errorf("stat archive: %w", err)
-	}
-	return exists, nil
 }
 
 // Remove deletes the archive and stops: a Storager may not delete its own root,

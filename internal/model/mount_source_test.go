@@ -7,7 +7,7 @@ import (
 )
 
 // What the compose project alone can answer: a named volume by its docker name,
-// a bind by its host path. Everything else has to ask the daemon.
+// a bind by its host path. Everything else has to ask the arcaved.
 func TestVolume_Address(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -98,7 +98,7 @@ func TestVolume_Address(t *testing.T) {
 	}
 }
 
-// The fallback the daemon is asked through: only a volume with a mount of its
+// The fallback the arcaved is asked through: only a volume with a mount of its
 // own has one, and a named volume never does — it is addressed by name.
 func TestVolume_LookupMount(t *testing.T) {
 	tests := []struct {

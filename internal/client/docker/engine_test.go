@@ -87,9 +87,9 @@ func TestMatchMount(t *testing.T) {
 }
 
 // Engine's own methods run against the api seam, so they are exercised with a
-// mocked daemon — the coverage that the field being an injected interface buys.
+// mocked arcaved — the coverage that the field being an injected interface buys.
 //
-// What the compose project already answers is never asked of the daemon: a
+// What the compose project already answers is never asked of the arcaved: a
 // named volume and a bind address themselves, with no container listing at all,
 // which is what lets a savepoint cover a volume no container mounts.
 func TestEngine_ResolveMountSource(t *testing.T) {
@@ -112,7 +112,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 		},
 		{
-			name: "a bind is its host path, and the daemon is not asked at all",
+			name: "a bind is its host path, and the arcaved is not asked at all",
 			volume: model.Volume{
 				ObjectID: "volume-service-app-etc-cfg", ComposeProject: "demo", Type: model.VolumeTypeBind,
 				Bind: &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
@@ -120,7 +120,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
 		},
 		{
-			name:   "a named volume the daemon does not have is refused before anything creates it",
+			name:   "a named volume the arcaved does not have is refused before anything creates it",
 			volume: namedVolume("demo_pgdata"),
 			arrange: func(api *mockAPI) {
 				api.On("VolumeInspect", mock.Anything, "demo_pgdata").
@@ -256,7 +256,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 	assert.Equal(t, []string{"demo_pgdata:" + scratchMount}, scratch.host.Binds)
 }
 
-// A volume the daemon refuses to clear stops the restore before the stream is
+// A volume the arcaved refuses to clear stops the restore before the stream is
 // extracted: half-wiped is worse than untouched.
 func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 	// Arrange: no CopyToContainer expectation, so an extract fails the run.
@@ -297,7 +297,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			wantBinds: []string{"/host/data:" + wipeMountPath},
 		},
 		{
-			name:    "an address with no source never reaches the daemon",
+			name:    "an address with no source never reaches the arcaved",
 			src:     model.MountSource{Type: model.MountSourceVolume},
 			wantErr: "no source",
 		},

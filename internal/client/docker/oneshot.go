@@ -55,7 +55,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		return fmt.Errorf("create %s container: %w", spec.Image, err)
 	}
 	defer func() {
-		// The removal must outlive a cancelled run: on the run's own ctx the daemon
+		// The removal must outlive a cancelled run: on the run's own ctx the arcaved
 		// would refuse it, leaving the container running with nobody to stop it.
 		if err := api.ContainerRemove(
 			context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true},
@@ -140,7 +140,7 @@ func withScratchContainer(
 // removal — a stream copied out of the container has to outlive the call that
 // opened it.
 //
-// The run to exit is not ceremony: the daemon populates a volume when the
+// The run to exit is not ceremony: the arcaved populates a volume when the
 // container that mounts it starts, so copying before that would read a mount
 // nothing has set up yet.
 func startScratchContainer(
@@ -161,7 +161,7 @@ func startScratchContainer(
 		return "", nil, fmt.Errorf("create %s container: %w", scratchImage, err)
 	}
 	remove = func() {
-		// The removal must outlive a cancelled run: on the run's own ctx the daemon
+		// The removal must outlive a cancelled run: on the run's own ctx the arcaved
 		// would refuse it, leaving the container behind with nobody to remove it.
 		if err := api.ContainerRemove(
 			context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true},
@@ -185,8 +185,8 @@ func startScratchContainer(
 	return created.ID, remove, nil
 }
 
-// ensureImage pulls ref unless the daemon already has it. The pull stream is
-// drained rather than reported: the daemon only completes the pull once the
+// ensureImage pulls ref unless the arcaved already has it. The pull stream is
+// drained rather than reported: the arcaved only completes the pull once the
 // stream is consumed, and arcave has no progress UI to render it into.
 func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 	if _, err := api.ImageInspect(ctx, ref); err == nil {
@@ -282,17 +282,17 @@ func (rr *recordingReader) Read(p []byte) (int, error) {
 // maxContainerOutputBytes bounds how much of a failed container's log is read
 // back into an error: enough to diagnose the failure, not enough to flood a JSON
 // result or the context of an agent reading an MCP tool result. Tail already
-// caps the line count at the daemon; this caps the bytes a few very long lines
+// caps the line count at the arcaved; this caps the bytes a few very long lines
 // could still add.
 const maxContainerOutputBytes = 8 << 10 // 8 KiB
 
 // containerOutput reads back what a failed container printed — bounded and
-// demultiplexed — so the exit error carries the daemon's own message the way the
+// demultiplexed — so the exit error carries the arcaved's own message the way the
 // CLI's combined output used to. It is best-effort: a failure to read the logs
 // must not replace the exit status being reported, so a problem comes back as a
 // single explanatory line rather than an error.
 func containerOutput(ctx context.Context, api dockerAPI, containerID string) []string {
-	// Tail bounds the read at the daemon. Tty is false for every one-shot run, so
+	// Tail bounds the read at the arcaved. Tty is false for every one-shot run, so
 	// the stream is stdcopy-framed (an 8-byte header per frame) and must be
 	// demultiplexed — reading it raw would put the framing bytes into the message.
 	rc, err := api.ContainerLogs(ctx, containerID, container.LogsOptions{

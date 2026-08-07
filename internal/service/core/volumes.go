@@ -21,7 +21,7 @@ var skipReasons = map[model.VolumeType]string{
 	model.VolumeTypeTmpfs:   "non-persistent (tmpfs lives in RAM)",
 	model.VolumeTypeNPipe:   "a named pipe is a channel, not data",
 	model.VolumeTypeImage:   "read-only image content, reproducible from the image",
-	model.VolumeTypeCluster: "CSI volume: data lives outside the docker daemon",
+	model.VolumeTypeCluster: "CSI volume: data lives outside the docker arcaved",
 	model.VolumeTypeUnknown: "unknown mount type",
 }
 
@@ -32,7 +32,7 @@ var skipReasons = map[model.VolumeType]string{
 //
 // Nothing is dropped for being unreachable any more: a backend addresses a
 // volume directly, so a volume no container mounts — or mounts only at a
-// subpath — is captured like any other, and a volume the daemon does not have
+// subpath — is captured like any other, and a volume the arcaved does not have
 // fails its own operation rather than disappearing from the set.
 func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []string) ([]model.Volume, error) {
 	res, err := s.composeInspector.Introspect(ctx, composeFiles...)

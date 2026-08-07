@@ -29,6 +29,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	arcrepo "github.com/greenmaskio/arcave/internal/repository/arc"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
+	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
@@ -45,8 +46,7 @@ const resticShutdownTimeout = 5 * time.Second
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
-	savepointStore storages.Storager
-	sharedStore    storages.Storager
+	stackStore     storages.Storager
 	progressWriter io.WriteCloser
 	dockerCli      *command.DockerCli
 	dockerClient   client.APIClient
@@ -68,25 +68,33 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	savepointStore, err := storefactory.New(cfg.Storage, projectPath, model.DefaultSession)
+	// The loader comes first because the store root ends at the compose project's
+	// name: nothing arcave holds is addressable until the stack is known. The
+	// loader parses files and touches no arcaved, and the compose runner below
+	// reuses this very instance, so both resolve the same file set.
+	dockerComposeLoader := compose.NewLoader()
+	composeProject, err := dockerComposeLoader.Load(ctx, cfg.Project.ComposeFiles...)
 	if err != nil {
-		return nil, fmt.Errorf("initialise savepoint store: %w", err)
+		return nil, fmt.Errorf("resolve compose project (its name is the stack segment of the store root): %w", err)
 	}
-	opened.add("savepoint store", savepointStore)
 
-	// Beside the sessions rather than under one: a cdc repository that died with
-	// its session would cost a cold full backup.
-	sharedStore, err := storefactory.NewShared(cfg.Storage, projectPath)
+	// One store for the whole stack: savepoint records, fullcopy captures and a
+	// cdc repository root alike. It is rooted inside the session, so a session
+	// holds everything that dies with it.
+	stackStore, err := storefactory.New(
+		cfg.Storage, projectPath,
+		model.ProjectName(cfg.Project.Name), model.DefaultSession, model.StackName(composeProject.Name),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("initialise shared store: %w", err)
+		return nil, fmt.Errorf("initialise stack store: %w", err)
 	}
-	opened.add("shared store", sharedStore)
+	opened.add("stack store", stackStore)
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
 	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
 	opened.add("compose progress writer", progressWriter)
 
-	// One docker/cli instance is the single daemon connection both halves of
+	// One docker/cli instance is the single arcaved connection both halves of
 	// client/docker are built over, so they cannot target different daemons. Its
 	// closers belong to the returned dependencies — never deferred here.
 	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, progressWriter)
@@ -97,7 +105,6 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	opened.add("docker engine", engine)
 
 	composeService := dockercompose.NewComposeService(dockerCli)
-	dockerComposeLoader := compose.NewLoader()
 	composeRunner := compose.NewClient(composeService, dockerComposeLoader, compose.Options{
 		WaitTimeout: cfg.Compose.WaitTimeout,
 		StopTimeout: cfg.Compose.StopTimeout,
@@ -109,10 +116,10 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	cdcCfg := config.CDCWithDefaults(cfg.Backends.CDC)
 
 	// The tree every cdc repository lives in — one directory per volume, named by
-	// its ObjectID. Resolved once and handed to both sides, so "the server serves
-	// exactly the tree cdc writes into" is visible in one place rather than kept
-	// by two call sites agreeing.
-	resticRoot, err := sharedStore.SubStorage(cdc.RepoNamespace, true)
+	// its ObjectID, beside the stack's savepoint directories. Resolved once and
+	// handed to both sides, so "the server serves exactly the tree cdc writes
+	// into" is visible in one place rather than kept by two call sites agreeing.
+	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
 	if err != nil {
 		return nil, fmt.Errorf("initialise restic repository root: %w", err)
 	}
@@ -148,19 +155,20 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	// a rollback's safety snapshot included, being an ordinary savepoint under a
 	// label. The locker is bound to the project root here, so the service never
 	// names a path.
-	svc := core.New(
-		sprepo.New(savepointStore),
-		lock.New(projectPath),
-		introspect.NewInspector(dockerComposeLoader),
-		composeRunner,
-		backendRegistry,
-		savepointStore,
-		cfg.Snapshot.BackendKind(),
-	)
+	svc := core.New(core.Deps{
+		SavepointRepo:    sprepo.New(stackStore),
+		ProjectLocker:    lock.New(projectPath),
+		ComposeInspector: introspect.NewInspector(dockerComposeLoader),
+		ComposeRunner:    composeRunner,
+		BackendRegistry:  backendRegistry,
+		// The marker an interrupted rollback leaves behind, host-local beside the lock.
+		Inflight:       inflightrepo.New(projectPath),
+		Store:          stackStore,
+		DefaultBackend: cfg.Snapshot.BackendKind(),
+	})
 	opened.keep()
 	return &dependencies{
-		savepointStore: savepointStore,
-		sharedStore:    sharedStore,
+		stackStore:     stackStore,
 		progressWriter: progressWriter,
 		dockerCli:      dockerCli,
 		dockerClient:   dockerClientAPI,
@@ -208,16 +216,14 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 }
 
 // Close releases the restic server, the Docker engine, the progress writer and
-// the two stores this root owns; only the savepoint store's error is returned.
-// The progress writer is closed after the engine, so a line compose left
-// unterminated is still emitted. dockerClient is not closed — the engine was
-// built over it.
+// the store this root owns; only the store's error is returned. The progress
+// writer is closed after the engine, so a line compose left unterminated is
+// still emitted. dockerClient is not closed — the engine was built over it.
 func (d *dependencies) Close(ctx context.Context) error {
 	shutdownResticServer(ctx, d.resticServer)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
-	closeQuietly(ctx, "shared store", d.sharedStore)
-	return d.savepointStore.Close()
+	return d.stackStore.Close()
 }
 
 // shutdownResticServer stops serving gracefully: restic in a container reports a
@@ -263,7 +269,7 @@ func closeQuietly(ctx context.Context, name string, c io.Closer) {
 
 func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	if cfg.Host != "" && cfg.Context != "" {
-		return nil, fmt.Errorf("docker.host and docker.context are mutually exclusive: %q already names a daemon, so remove one of the two", cfg.Context)
+		return nil, fmt.Errorf("docker.host and docker.context are mutually exclusive: %q already names a arcaved, so remove one of the two", cfg.Context)
 	}
 
 	opts := flags.NewClientOptions()

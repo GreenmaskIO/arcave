@@ -42,12 +42,12 @@ type VolumePropertiesBind struct {
 
 // VolumePropertiesAnon addresses an anonymous volume — reachable only through
 // its one mount: the docker name is created per container and is not stable, so
-// this is the one arm that has to ask the daemon.
+// this is the one arm that has to ask the arcaved.
 type VolumePropertiesAnon struct {
 	Service  string `json:"service"`
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only,omitempty"`
-	// Subpath is carried for the record and read by nobody: the daemon refuses
+	// Subpath is carried for the record and read by nobody: the arcaved refuses
 	// an anonymous volume with a subpath outright.
 	Subpath string `json:"subpath,omitempty"`
 }

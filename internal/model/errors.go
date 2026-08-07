@@ -35,10 +35,6 @@ var (
 	// SavepointID.Validate wraps it with the offending id.
 	ErrInvalidSavepointID = errors.New("invalid savepoint id")
 
-	// ErrMissingVolumeInSnapshot reports that a snapshot holds no capture for a
-	// volume it is expected to cover; which volumes are missing is logged.
-	ErrMissingVolumeInSnapshot = errors.New("snapshot is missing a volume capture")
-
 	// ErrUnsupportedConfigVersion reports a config file whose schema version arcave does
 	// not speak. arcave speaks exactly one, so any other value is refused rather than
 	// migrated. A file carrying no version at all is taken to be that one version:

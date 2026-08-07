@@ -39,7 +39,7 @@ func NewRecommendHandler(svc RecommendService, printer printer) *RecommendHandle
 
 // Recommend prints the volumes the project's services should mount, as a JSON
 // array — empty when arcave has nothing to advise. It reads only compose files
-// and the recommender catalog, so it touches neither storage nor the daemon.
+// and the recommender catalog, so it touches neither storage nor the arcaved.
 //
 // found reports whether the array carried anything, so the caller can turn "there
 // is advice" into a non-zero exit status without parsing what was printed. It is

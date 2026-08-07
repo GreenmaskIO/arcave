@@ -210,7 +210,7 @@ func (p *ProgressLogger) raw(line string) {
 }
 
 // progressLevel picks the level for one event. Byte-progress ticks are demoted
-// wholesale: pull.go fills Current/Total/Percent from the daemon's own progress
+// wholesale: pull.go fills Current/Total/Percent from the arcaved's own progress
 // messages, and those arrive many times per layer. Demoting them by *content*
 // rather than by remembering the previous status is what keeps this adapter
 // stateless — the alternative, an id-to-status map, is deduplication by another

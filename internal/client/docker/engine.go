@@ -1,6 +1,6 @@
 // Package docker acts on the *running* stack, in contrast to internal/client/
 // compose, which only reads what the compose files declare. It holds the two
-// types arcave needs to reach the daemon, split by what they act on:
+// types arcave needs to reach the arcaved, split by what they act on:
 //
 //   - Engine (engine.go) moves a volume's bytes in and out of the volume
 //     itself, through a throwaway container of its own.
@@ -8,11 +8,11 @@
 //     through the compose library (github.com/docker/compose/v2), since the
 //     Docker API itself has no Compose equivalent.
 //
-// Both reach the daemon through Go libraries — arcave shells out to nothing, so it
-// needs no docker CLI or compose plugin installed, only a reachable daemon.
+// Both reach the arcaved through Go libraries — arcave shells out to nothing, so it
+// needs no docker CLI or compose plugin installed, only a reachable arcaved.
 // They share one client: Engine owns the docker/cli instance that resolves
 // Options (host, context, TLS) into a connection, and ComposeRunner is built
-// over that same instance. Targeting one daemon is therefore a property of the
+// over that same instance. Targeting one arcaved is therefore a property of the
 // construction rather than a contract two halves have to honour by hand, and
 // that shared client is why the two live in one package.
 package docker
@@ -55,7 +55,7 @@ const scratchMount = "/arcave-data"
 const wipeMountPath = "/data"
 
 // dockerAPI is the slice of the Docker API client this package actually calls —
-// consumer-side, so a test can drive Engine with a mock instead of a daemon.
+// consumer-side, so a test can drive Engine with a mock instead of a arcaved.
 // *client.Client (and so docker/cli's client.APIClient) satisfies it.
 type dockerAPI interface {
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
@@ -73,7 +73,7 @@ type dockerAPI interface {
 	Close() error
 }
 
-// Engine is arcave's volume I/O against the Docker daemon: it streams a
+// Engine is arcave's volume I/O against the Docker arcaved: it streams a
 // volume's contents out (OpenVolume) and wipes-and-extracts a stream back in
 // (WriteVolume), through a throwaway container of its own rather than through
 // whichever service happens to mount the volume. These are the operations that
@@ -82,7 +82,7 @@ type dockerAPI interface {
 //
 // It does not resolve that connection: the composition root builds one client
 // from the config and hands the same one to Engine and to the compose service
-// ComposeRunner drives, so targeting a single daemon is a property of the
+// ComposeRunner drives, so targeting a single arcaved is a property of the
 // construction rather than a contract this package has to keep. Resolution lives
 // there because it is where a failure can still be reported — docker/cli answers
 // an unresolvable endpoint with os.Exit(1).
@@ -91,17 +91,17 @@ type dockerAPI interface {
 // snapshot backends; it is concurrency-safe, and its Close belongs to whoever
 // created it.
 type Engine struct {
-	// api is the resolved daemon connection. A test sets it directly, standing in
+	// api is the resolved arcaved connection. A test sets it directly, standing in
 	// for the client the composition root would have built.
 	api dockerAPI
 }
 
-// NewEngine wraps an already-resolved daemon connection.
+// NewEngine wraps an already-resolved arcaved connection.
 func NewEngine(api dockerAPI) *Engine {
 	return &Engine{api: api}
 }
 
-// Close releases the daemon connection.
+// Close releases the arcaved connection.
 func (e *Engine) Close() error { return e.api.Close() }
 
 // RunOneShot drives one throwaway container to completion; a non-zero exit is a
@@ -236,7 +236,7 @@ func findServiceMount(ctx context.Context, api dockerAPI, projectName, service, 
 
 // matchMount finds, among containers, the one that mounts target and returns its
 // ID and that mount's backing-storage details. This is the pure decision split
-// out of findServiceMount so it can be tested without a daemon; ok is false when
+// out of findServiceMount so it can be tested without a arcaved; ok is false when
 // no container mounts target.
 func matchMount(containers []container.Summary, target string) (id string, mnt mountInfo, ok bool) {
 	for _, c := range containers {
@@ -257,7 +257,7 @@ func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
 
 // wipeVolume removes every entry of a volume by running a throwaway root
 // container that mounts it. This is the only host-agnostic way to delete data a
-// service wrote as root: the daemon owns those files, and CopyToContainer only
+// service wrote as root: the arcaved owns those files, and CopyToContainer only
 // merges entries, never deletes them.
 //
 // It is the wipe *policy* — which image, which command, which bind — over the
@@ -273,7 +273,7 @@ func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error
 }
 
 // mountSourceOf is what reaches a resolved mount's backing storage: volumes by
-// volume name, bind mounts by host path. The one place a daemon-side mount
+// volume name, bind mounts by host path. The one place a arcaved-side mount
 // becomes a MountSource, so what a lookup answers cannot disagree with what the
 // compose project answers directly.
 func mountSourceOf(mnt mountInfo) (model.MountSource, error) {

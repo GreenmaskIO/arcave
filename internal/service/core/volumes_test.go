@@ -139,7 +139,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
 				{Service: "app", Target: `\\.\pipe\docker_engine`, RawType: "npipe", Reason: "a named pipe is a channel, not data"},
 				{Service: "app", Target: "/srv/assets", RawType: "image", Reason: "read-only image content, reproducible from the image"},
-				{Service: "app", Target: "/data", RawType: "cluster", Reason: "CSI volume: data lives outside the docker daemon"},
+				{Service: "app", Target: "/data", RawType: "cluster", Reason: "CSI volume: data lives outside the docker arcaved"},
 				{Service: "app", Target: "/new", RawType: "something-new", Reason: "unknown mount type"},
 			},
 		},
