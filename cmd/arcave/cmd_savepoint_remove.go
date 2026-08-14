@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
-
 	"github.com/spf13/cobra"
 
-	"github.com/greenmaskio/arcave/internal/cli"
-	"github.com/greenmaskio/arcave/internal/model"
+	ngcli "github.com/greenmaskio/arcave/internal/ng/cli"
 )
 
 var (
@@ -16,8 +13,8 @@ var (
 	savepointRemoveDryRun       bool
 
 	savepointRemoveCmd = &cobra.Command{
-		Use:   "remove [id...]",
-		Short: "Remove savepoints by ID, or by retention rules",
+		Use:   "remove [uuid...]",
+		Short: "Remove savepoints by id, or by retention rules",
 		Args:  cobra.ArbitraryArgs,
 		RunE:  runSavepointRemove,
 	}
@@ -27,16 +24,20 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewSavepointRemoveHandler(d.service, d.printer)
-		return h.SavepointRemove(ctx, model.RemoveRequest{
-			IDs:          model.SavepointIDs(args),
-			RetainRecent: savepointRemoveRetainRecent,
-			RetainFor:    savepointRemoveRetainFor,
-			BeforeDate:   savepointRemoveBeforeDate,
-			DryRun:       savepointRemoveDryRun,
-		})
-	})
+
+	params := ngcli.SavepointRemoveParams{
+		IDs:        args,
+		RetainFor:  savepointRemoveRetainFor,
+		BeforeDate: savepointRemoveBeforeDate,
+		DryRun:     savepointRemoveDryRun,
+	}
+	// Zero is a retention count the user may mean, so only a changed flag fills it.
+	if cmd.Flags().Changed("retain-recent") {
+		params.RetainRecent = &savepointRemoveRetainRecent
+	}
+
+	h := ngcli.NewSavepointRemoveHandler(newAPI())
+	return h.Remove(cmd.Context(), projectCfg, rootAddressing(), params)
 }
 
 func init() {

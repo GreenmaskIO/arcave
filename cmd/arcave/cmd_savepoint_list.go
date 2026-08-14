@@ -1,16 +1,15 @@
 package main
 
 import (
-	"context"
-
 	"github.com/spf13/cobra"
 
-	"github.com/greenmaskio/arcave/internal/cli"
-	"github.com/greenmaskio/arcave/internal/model"
+	ngcli "github.com/greenmaskio/arcave/internal/ng/cli"
 )
 
 var (
-	savepointListFlagIncludeSafetySnapshots = false
+	savepointListLimit                   int
+	savepointListOffset                  int
+	savepointListIncludeSafetySavepoints bool
 
 	savepointListCmd = &cobra.Command{
 		Use:   "list",
@@ -24,16 +23,21 @@ func runSavepointList(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewSavepointListHandler(d.service, d.printer)
-		return h.SavepointList(ctx, model.ListRequest{
-			IncludeSafetySnapshots: savepointListFlagIncludeSafetySnapshots,
-		})
+
+	h := ngcli.NewSavepointListHandler(newAPI(), newPrinter())
+	return h.List(cmd.Context(), projectCfg, rootAddressing(), ngcli.SavepointListParams{
+		Limit:                   savepointListLimit,
+		Offset:                  savepointListOffset,
+		IncludeSafetySavepoints: savepointListIncludeSafetySavepoints,
 	})
 }
 
 func init() {
-	savepointListCmd.Flags().BoolVar(&savepointListFlagIncludeSafetySnapshots, "include-safety-snapshots", false,
-		"also list the safety snapshots a rollback takes of the live state; one that outlived its rollback can be rolled back to by id")
+	flags := savepointListCmd.Flags()
+	flags.IntVar(&savepointListLimit, "limit", 0, "Maximum number of savepoints to return")
+	flags.IntVar(&savepointListOffset, "offset", 0, "Number of savepoints to skip")
+	flags.BoolVar(&savepointListIncludeSafetySavepoints, "include-safety-savepoints", false,
+		"also list the safety savepoints a rollback takes of the live state; one that outlived its rollback can be rolled back to by id")
+
 	savepointCmd.AddCommand(savepointListCmd)
 }

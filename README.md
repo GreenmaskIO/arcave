@@ -1,222 +1,101 @@
 # arcave
 
-arcave is a local environment lifecycle manager for stateful Docker Compose applications. It adds **savepoints** — consistent snapshots of every stateful volume in your project — so you can iterate on schema migrations, data transformations, and app changes and **roll back** to a known-good state in one command.
+arcave is a lifecycle manager for stateful local environments. It adds **savepoints** — consistent snapshots of every stateful volume in a stack — so you can run a migration, a data transformation or an agent loose on a project and **roll back** to a known-good state in one command.
 
-arcave snapshots the persistent mounts of **all** services in your compose project — named volumes, bind mounts, and anonymous volumes alike. Only non-persistent mounts (tmpfs) are skipped.
+A stack is driven through a **provider**. There is one today, for Docker Compose; the seam exists so a second runtime can be added without the savepoint layer learning about it.
 
-## Install
+## Status: pre-alpha, and the CLI does not do the thing yet
 
-```bash
-make build      # compiles to ./bin/arcave
-```
+**Read this before trying the commands below.** arcave is mid-way through a split from one binary into two — a thin CLI and a control plane service — and the halves are not joined yet.
 
-Then run `./bin/arcave` (the examples below assume it is on your `PATH` as `arcave`).
-
-Requirements: Docker with the Compose plugin (`docker compose`).
-
-## Quick start
-
-```bash
-# 1. Initialise arcave in a project that has a docker-compose.yaml
-arcave init
-
-# 2. Snapshot the current state before a risky change
-arcave savepoint create before-migration
-
-# 3. ...run your migration / experiment...
-
-# 4. If it went wrong, restore the snapshot
-arcave rollback before-migration
-```
-
-`arcave init` writes `.arcave/config.yaml` (project name, compose files, savepoint dir). Useful flags:
-
-```bash
-arcave init --name myapp -f docker-compose.yaml -f docker-compose.override.yaml
-arcave init --savepoint-dir /backups/myapp   # default: .arcave/savepoints/<project-name>
-```
-
-All commands print their result as JSON on stdout.
-
----
-
-## `arcave savepoint`
-
-A savepoint is a consistent snapshot of every mount. Creating one stops the
-services, copies each volume's data into `.arcave/savepoints/<project>/<id>/…`, then
-restarts the services and waits for their health checks.
-
-### Create
-
-```bash
-arcave savepoint create                      # unnamed savepoint
-arcave savepoint create before-migration     # name as a positional argument
-arcave savepoint create --name before-migration --description "pre v2 schema"
-```
-
-Output:
-
-```json
-{
-  "id": "1781632724",
-  "name": "before-migration",
-  "description": "pre v2 schema",
-  "created_at": "2026-06-16T17:58:44.468475Z"
-}
-```
-
-The `id` is a Unix timestamp and is what you pass to `rollback` and `remove`.
-
-### List
-
-```bash
-arcave savepoint list
-```
-
-```json
-[
-  { "id": "1781632724", "name": "before-migration", "description": "", "created_at": "2026-06-16T17:58:44.468475Z" }
-]
-```
-
-### Remove
-
-Remove **by ID** (one or more), or by **retention rules** — the two modes can't be mixed.
-
-```bash
-# by id
-arcave savepoint remove 1781632724
-arcave savepoint remove 1781632724 1781632821
-
-# by retention rule
-arcave savepoint remove --retain-recent 5            # keep the newest 5
-arcave savepoint remove --retain-for 1w2d            # keep anything newer than 1 week 2 days
-arcave savepoint remove --before-date 2026-06-01T00:00:00Z
-
-# preview without deleting
-arcave savepoint remove --retain-recent 5 --dry-run
-```
-
-| Flag | Meaning |
+| What | State |
 |---|---|
-| `--retain-recent N` | keep the newest N savepoints, delete the rest |
-| `--retain-for DUR` | keep savepoints newer than DUR (e.g. `1w2d3h4m5s`) |
-| `--before-date TS` | delete savepoints older than an RFC3339 timestamp |
-| `--dry-run` | show what would be deleted without deleting |
+| `arcave init` | works — writes `.arcave/config.yaml` and nothing else |
+| `control-plane serve` | works — builds the configured providers, listens, serves `GET /api/v1/healthcheck` |
+| every other `arcave` command | **wired to a stub**: prints a canned JSON response and touches nothing |
+| the compose provider's `Capture`/`Restore`/`Discard` | **not implemented** — they return an error |
+| the capture engine (compose, docker, restic, fullcopy, the stores) | built, tested, and currently parked with no caller |
 
-An unknown ID is an error and deletes nothing (no partial deletes). When several
-retention rules are combined, a savepoint survives if **any** rule keeps it.
+So `arcave savepoint create` will print a plausible savepoint and take none. The capture machinery underneath is real — it has integration tests against a live daemon — but nothing calls it while the two binaries are being joined up.
 
----
+Consider this repository readable, not runnable. There is no released version and no compatibility promise: the config schema, the command tree and the on-disk layout all still move.
 
-## `arcave rollback`
-
-Restore the environment to a savepoint — the reverse of `savepoint create`.
+## Build
 
 ```bash
-arcave rollback before-migration   # by name
-arcave rollback 1781632724         # by id
-arcave rollback latest             # the most recently created savepoint
+make build        # -> bin/arcave and bin/control-plane
+make test
+make lint
 ```
 
-The target is resolved as `latest` → exact **ID** → **name**. A name that matches
-more than one savepoint is an error (it lists the candidate IDs) rather than a
-silent guess.
+Requirements: Go, and Docker for anything that reaches a daemon. arcave shells out to nothing — it speaks the Docker API and uses `compose/v2` as a library — so no `docker` CLI or compose plugin has to be installed.
 
-### What it does
+Two packages (`internal/service/stack`, `internal/service/sandbox`) do not compile; they are skeletons for a later increment and are excluded from `make build`, which builds the two commands rather than `./...`.
 
-1. Stops the services.
-2. **Backs up** the current live state of every mount to `.arcave/tmp/<ts>/` first, so a failed rollback can be undone.
-3. Wipes each savepoint mount and extracts its snapshot back.
-4. Starts the services and waits for health checks.
+## The two binaries
 
-### Safety: automatic revert
+**`arcave`** — the client. It resolves the addressing, builds a request, sends it, and prints the JSON answer. It knows nothing of Docker, compose or storage. Its config is the project's own `.arcave/config.yaml`: which project, which control plane to reach, log settings.
 
-If a restore step fails, **or** the services come up unhealthy, arcave automatically
-replays the pre-rollback backup to return the environment to exactly where it
-started, restarts the services, and reports an error. The safety backup is
-deleted on success and **kept** (its path printed) on failure.
+**`control-plane`** — the service. It reads a host-level config (`~/.arcave/control-plane.yaml`), builds one provider per registered entry, and serves the API. This is the half that owns the daemon connection, the capture backends and the stores.
 
-> Rollback is destructive: bind-mounted host folders are wiped and restored too.
+Every command addresses its target the same way, through flags on the root: `--project`, `--session-id` (or `$ARCAVE_SESSION_ID`), `--provider`, `--stack`. All output is JSON on stdout; logs go to stderr.
 
-### Timeouts and progress
+## Command tree
 
-`arcave rollback` waits up to `--wait-timeout` (default **2m**) for services to
-become healthy before deciding a rollback failed and reverting. Increase it for
-slow-starting services:
+```
+arcave init                                  write .arcave/config.yaml
+arcave project apply | list | remove <name>
+arcave session create | list | status
+arcave savepoint create [name] | list | remove [uuid...]
+arcave rollback <savepoint-uuid>
+arcave recommend                             report volumes a service should mount but does not
+arcave provider list
+arcave status                                not implemented
+arcave mcp                                   MCP server over stdio for AI agents
 
-```bash
-arcave rollback latest --wait-timeout 5m
+control-plane serve
 ```
 
-Every bound carries its unit — `90s`, `5m`, `1h30m`, anything Go's
-`time.ParseDuration` accepts. A number without one is an error, not a guess.
+`arcave recommend` is read-only and reports a finding through its **exit code**: 1 when it has advice, 0 when it does not. The JSON still goes to stdout and nothing goes to stderr — a finding is not a failure.
 
-That wait is where a arcave run spends most of its time, so it is not silent: arcave
-logs the deadline it will fail at, and compose's own per-container events arrive
-alongside it as ordinary arcave log records — same stream (**stderr**, leaving
-stdout to the JSON result), same format, same `--log-format`.
+Full UX contract, flags and JSON shapes: [`doc/spec.md`](doc/spec.md).
 
-```text
-INF starting services
-INF waiting for services to become healthy wait_timeout=2m0s
-INF compose kind=Container name=myapp-db-1 status=Started
-INF compose kind=Container name=myapp-db-1 status=Healthy
-```
+## How a savepoint is meant to work
 
-Under `--log-format json` they are records like any other, so a CI job or an
-agent can parse the whole stream instead of picking prose out of it:
+Create: stop the services → capture each volume → write the record. The record is written **last**, and it is the commit marker: a savepoint whose data was written but whose record was not is invisible to `list` and safe to collect.
 
-```json
-{"level":"info","kind":"Container","name":"myapp-db-1","status":"Healthy","message":"compose"}
-```
+Rollback: stop the services → capture the live state as a safety savepoint → wipe and restore each volume → start and wait for health checks. If a restore fails or the services come up unhealthy, arcave replays the safety savepoint to put the environment back where it started. A marker at `.arcave/inflight.json` stands for the length of the destructive window, so a run that was killed inside it is refused by the next command rather than silently continued.
 
-Steps still in flight — `Waiting`, `Starting`, `Creating`, image-pull progress —
-are logged at debug, so `--log-level debug` is how you watch a slow start unfold.
+Two capture backends exist. **fullcopy** stores each volume's tar stream verbatim, one file per volume per savepoint. **cdc** captures into a restic repository that outlives any one savepoint, writing only the chunks that changed — over stock `restic` containers, reaching their repository through a REST server arcave runs itself.
 
-The three settings behind this live in `.arcave/config.yaml` under `compose:`, so a
-project fixes them once instead of passing a flag every time:
-
-| Key | Flag | Default | What it does |
-|---|---|---|---|
-| `compose.wait_timeout` | `--wait-timeout` | `2m` | How long to wait for health checks after a start |
-| `compose.stop_timeout` | `--stop-timeout` | `10s` | How long a container gets to exit before SIGKILL. arcave snapshots the volumes the moment the containers are down, so this is what keeps a database from being captured mid-shutdown |
-| `compose.progress` | `--progress` | `log` | Where compose's own progress goes: `log` (arcave log records, as above), `tty` (compose's own renderer) or `quiet` |
-
-Each is also settable per run through the environment
-(`ARCAVE_COMPOSE_WAIT_TIMEOUT`, `ARCAVE_COMPOSE_STOP_TIMEOUT`,
-`ARCAVE_COMPOSE_PROGRESS`); a changed flag wins over the environment, which wins
-over the file.
-
-Output on success:
-
-```json
-{
-  "rolled_back_to": {
-    "id": "1781632724",
-    "name": "before-migration",
-    "description": "",
-    "created_at": "2026-06-16T17:58:44.468475Z"
-  },
-  "restored": [
-    { "service": "db", "mount_path": "/var/lib/postgresql/data" },
-    { "service": "storage", "mount_path": "/export/data" }
-  ]
-}
-```
-
----
-
-## Where data lives
+## Where things live
 
 ```
 .arcave/
-├── config.yaml                         # project config
-├── manifest.json                       # savepoint index
-└── savepoints/<project>/<id>/<service>/<mount-path>/data.tar
+├── config.yaml        the project's own config
+├── lock               the flock a mutating workflow holds
+└── inflight.json      the interrupted-rollback marker, while one stands
+
+<configured path>/arcave/projects/<project>/sessions/<session>/compose/<stack>/
+├── <savepoint-id>/savepoint.json      the record — written last, deleted first
+├── <savepoint-id>/<object-id>/…       what a backend wrote for that volume
+└── restic/<object-id>/                one restic repository per volume
 ```
 
-`<mount-path>` is the container mount path with `/` replaced by `_` (e.g.
-`/export/data` → `_export_data`); each mount is stored as a single `data.tar`.
-arcave uses `docker compose stop` (never `down`), so containers are preserved and
-nothing on the host is removed beyond the volume data being snapshotted.
+The static `arcave` segment is not configurable: everything a delete can reach is arcave's own data, wherever the path points.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `cmd/arcave`, `cmd/control-plane` | the two binaries |
+| `internal/model` | arcave's own types; imports no other arcave package |
+| `internal/provider` | the provider seam |
+| `internal/provider/docker` | everything docker: the `stack` (compose) provider, the `sandbox` slot, and under `internal/` the machinery they share — the daemon client, the capture backends, the restic REST server, the stores and the repositories |
+| `internal/ng/cli` | one handler per command; the client half |
+| `doc/spec.md` | the CLI UX contract |
+| `CLAUDE.md` | the code doctrine, for humans and agents alike |
+
+## License
+
+Apache 2.0.

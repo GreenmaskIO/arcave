@@ -1,15 +1,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	ngcli "github.com/greenmaskio/arcave/internal/ng/cli"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -20,7 +19,15 @@ var (
 	projectRoot    string        // the working directory initRoot found
 	projectCfg     config.Config // the effective config every command runs on
 	configFound    bool          // whether .arcave/config.yaml existed
+	configErr      error         // a config file that exists but arcave cannot speak
 	rootConfigFile string        // the --config flag's target, read before projectCfg exists
+
+	// The addressing flags every stack-scoped command inherits. Unbound to
+	// viper: no Config field claims those keys.
+	rootFlagProject   string
+	rootFlagSessionID string
+	rootFlagProvider  string
+	rootFlagStack     string
 
 	// rootExitCode is the status a *successful* command exits with. It is zero
 	// unless a command sets it, so nothing changes for the commands that only
@@ -76,14 +83,15 @@ func initRoot() error {
 	}
 	setupViper(cfgViper, configPath)
 
-	// A config arcave cannot speak is held, not raised: it must not stop `arcave init
-	// --override`, which is the fix the error names. requireInitialized raises it
-	// for every command that reads the project instead. Anything else — an
-	// unreadable file, an unknown key — is fatal here, since no command can
-	// proceed and init would overwrite a file the user may not mean to lose.
+	// A config arcave cannot speak is held, not raised: it must not stop
+	// `init --override`, which is the fix. The require* guards raise it elsewhere.
 	projectCfg, configFound, err = resolveConfig(cfgViper, projectRoot)
 	if err != nil {
-		return fmt.Errorf("resolve config: %w", err)
+		configErr, configFound = err, true
+		projectCfg, err = fallbackConfig(cfgViper, projectRoot)
+		if err != nil {
+			return fmt.Errorf("resolve config: %w", err)
+		}
 	}
 	logger, err := utils.SetDefaultContextLogger(projectCfg.Log.Level, projectCfg.Log.Format)
 	if err != nil {
@@ -99,36 +107,33 @@ func initRoot() error {
 	return nil
 }
 
-// requireConfig guards every command that reads an existing project: the
-// config must be present and usable. init carries no such guard — it runs before
-// the config file exists, and it is how an unusable one is replaced.
+// rootAddressing hands the four addressing flags to the adapter verbatim.
+func rootAddressing() ngcli.Addressing {
+	return ngcli.Addressing{
+		Project:   rootFlagProject,
+		SessionID: rootFlagSessionID,
+		Provider:  rootFlagProvider,
+		Stack:     rootFlagStack,
+	}
+}
+
+// requireConfig guards every command that reads the project's own config.
 func requireConfig() error {
+	if err := requireUsableConfig(); err != nil {
+		return err
+	}
 	if !configFound {
 		return fmt.Errorf("config is not found: run 'arcave init' if not yet initialized")
 	}
 	return nil
 }
 
-// withDeps runs fn with the savepoint workflows' dependencies, built for this
-// command and released when it returns. Every command that touches storage or
-// Docker goes through it, so the build/defer-close pair lives in one place.
-//
-// It takes no lock, and neither does any other command-layer helper: serialising
-// a mutating workflow is the workflow's own property, so core.Service claims the
-// project lock itself. A lock taken here would be invisible to `arcave mcp`, which
-// calls the service directly.
-func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
-	ctx := cmd.Context()
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg)
-	if err != nil {
-		return fmt.Errorf("init dependencies: %w", err)
+// requireUsableConfig raises a config file that exists and arcave cannot speak.
+func requireUsableConfig() error {
+	if configErr != nil {
+		return fmt.Errorf("%w (run 'arcave init --override' to replace the config)", configErr)
 	}
-	defer func() {
-		if err := deps.Close(ctx); err != nil {
-			log.Ctx(ctx).Error().Err(err).Msg("close all dependencies")
-		}
-	}()
-	return fn(ctx, deps)
+	return nil
 }
 
 func init() {
@@ -144,26 +149,17 @@ func init() {
 		),
 	)
 
-	// The compose bounds are persistent flags on root, next to --log-level, for
-	// the same reason: they are *config keys*, and one viper key can hold exactly
-	// one flag binding. Declared per command they would collide — `savepoint
-	// create` and `rollback` both want --wait-timeout, and whichever init() ran
-	// last would silently own the key for both, so the other command's flag would
-	// parse and then be ignored. Declared once here, every command that restarts
-	// the stack inherits them and the binding is unambiguous.
-	pf.Duration("wait-timeout", config.DefaultWaitTimeout,
-		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
-	pf.Duration("stop-timeout", config.DefaultStopTimeout,
-		"How long a container gets to exit on its own before it is killed, e.g. 30s")
-	pf.String("progress", config.ProgressLog,
-		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",
-			config.ProgressLog, config.ProgressTTY, config.ProgressQuiet))
+	pf.StringVar(&rootFlagProject, "project", "",
+		"Project to address (default: project.name from the config)")
+	pf.StringVar(&rootFlagSessionID, "session-id", "",
+		fmt.Sprintf("Session to work in (default: $%s)", ngcli.EnvSessionID))
+	pf.StringVar(&rootFlagProvider, "provider", "",
+		"Id of the registered provider to reach (default: the sole project.providers.stacks entry)")
+	pf.StringVar(&rootFlagStack, "stack", "",
+		"Name of the spec to address; the provider finds what belongs to it")
 
 	viperBind(cfgViper, pf, map[string]string{
-		"log-level":    "log.level",
-		"log-format":   "log.format",
-		"wait-timeout": "compose.wait_timeout",
-		"stop-timeout": "compose.stop_timeout",
-		"progress":     "compose.progress",
+		"log-level":  "log.level",
+		"log-format": "log.format",
 	})
 }

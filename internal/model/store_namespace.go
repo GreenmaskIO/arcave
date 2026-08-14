@@ -8,9 +8,9 @@ import "fmt"
 // gate for the same reason every other segment type does: the name becomes a
 // path segment, and the caller is a provider arcave does not control.
 //
-// ProjectName's and StackName's third sibling rather than an alias of either: a
-// namespace is not a tenant and not a stack, and one must never be passed where
-// another is expected.
+// ProjectName's and ResourceName's third sibling rather than an alias of either:
+// a namespace is not a tenant and not a stack, and one must never be passed
+// where another is expected.
 type StoreNamespace string
 
 // Validate accepts a non-empty namespace of the [a-z0-9_-] charset, starting

@@ -2,10 +2,10 @@ package model
 
 import "fmt"
 
-// ProviderKind names which provider owns a stack. It is the config's vocabulary
-// (`stack.provider`) and the store layout's segment alike: a savepoint of a
-// compose stack lives under `compose/<stack>/`, so the kind is not decoration —
-// it is part of every key.
+// ProviderKind names which provider owns a stack: the config's vocabulary
+// (`stack.provider`), and what a savepoint record is stamped with. The store
+// layout is scoped by ProviderFamily instead — two providers of one family share
+// a segment, and the record says which of them wrote a capture.
 type ProviderKind string
 
 // The provider kinds arcave knows. Only ProviderCompose is implemented.
@@ -34,8 +34,8 @@ type Target struct {
 	Provider ProviderKind
 	// Stack is the provider's own project — the compose project name for
 	// ProviderCompose. It is the last segment of the store root, which is why it
-	// carries StackName's gate rather than being a bare string.
-	Stack StackName
+	// carries ResourceName's gate rather than being a bare string.
+	Stack ResourceName
 }
 
 // Validate accepts a target whose provider is implemented and whose stack name

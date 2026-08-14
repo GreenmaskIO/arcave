@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,37 +89,25 @@ func TestRepository_Save(t *testing.T) {
 		{
 			name: "full config",
 			cfg: config.Config{
-				Version: config.Version,
 				Project: config.Project{
-					Name:         "shop",
-					ComposeFiles: []string{"docker-compose.yml", "docker-compose.override.yml"},
+					Name: "shop",
+					Providers: config.Providers{
+						Sandbox: "my-linux-box",
+						Stacks:  []string{"my-linux-box", "ci-2"},
+					},
 				},
-				Compose: config.Compose{
-					WaitTimeout: 5 * time.Minute,
-					StopTimeout: 30 * time.Second,
-					Progress:    config.ProgressTTY,
+				ControlPlane: config.ControlPlane{
+					Address: config.DefaultControlPlaneAddress,
+					Token:   "t0ken",
 				},
-				Storage: config.Storage{
-					Type:      config.StorageTypeDirectory,
-					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
-				},
-				Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
-				Log:      config.Log{Level: "debug", Format: "json"},
+				Log: config.Log{Level: "debug", Format: "json"},
 			},
 		},
 		{
 			name: "zero log settings are omitted",
 			cfg: config.Config{
-				Version: config.Version,
-				Project: config.Project{
-					Name:         "shop",
-					ComposeFiles: []string{"docker-compose.yml"},
-				},
-				Storage: config.Storage{
-					Type:      config.StorageTypeDirectory,
-					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
-				},
-				Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
+				Project:      config.Project{Name: "shop"},
+				ControlPlane: config.ControlPlane{Address: config.DefaultControlPlaneAddress},
 			},
 		},
 	}
@@ -183,19 +170,14 @@ func TestRepository_Save_Overwrites(t *testing.T) {
 	var got config.Config
 	require.NoError(t, yaml.Unmarshal(data, &got))
 	assert.Equal(t, "new", got.Project.Name)
-	assert.Equal(t, ".arcave/savepoints/new", got.Storage.DirectoryPath())
+	assert.Equal(t, []string{"new-box"}, got.Project.Providers.Stacks)
 }
 
 // savedConfig returns a minimal v1 config for the project named name.
 func savedConfig(name string) config.Config {
 	return config.Config{
-		Version: config.Version,
-		Project: config.Project{Name: name},
-		Storage: config.Storage{
-			Type:      config.StorageTypeDirectory,
-			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/" + name},
-		},
-		Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
+		Project:      config.Project{Name: name, Providers: config.Providers{Stacks: []string{name + "-box"}}},
+		ControlPlane: config.ControlPlane{Address: config.DefaultControlPlaneAddress},
 	}
 }
 

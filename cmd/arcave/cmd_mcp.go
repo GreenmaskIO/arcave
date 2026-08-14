@@ -1,31 +1,29 @@
 package main
 
 import (
-	"context"
-
-	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/spf13/cobra"
+
+	ngcli "github.com/greenmaskio/arcave/internal/ng/cli"
 )
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
-	Short: "Start the arcave MCP server for AI agent integration",
+	Short: "Serve arcave's savepoint workflows to an agent over MCP",
 	Args:  cobra.NoArgs,
 	RunE:  runMCP,
 }
 
+// runMCP passes no printer: stdout is the JSON-RPC channel.
 func runMCP(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewMCPHandler(
-			d.service,
-			func(recommenderFiles []string) cli.RecommendService { return newRecommendService(recommenderFiles) },
-			projectCfg.Project.ComposeFiles,
-		)
-		return h.MCPRun(ctx)
-	})
+
+	h, err := ngcli.NewMCPHandler(newAPI(), projectCfg, rootAddressing())
+	if err != nil {
+		return err
+	}
+	return h.MCPRun(cmd.Context())
 }
 
 func init() {

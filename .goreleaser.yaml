@@ -8,7 +8,7 @@
 # linux targets are pure Go, so they cross-compile from macOS just as well as
 # from anywhere else.
 #
-# Windows is deliberately absent: internal/service/lock reaches for
+# Windows is deliberately absent: internal/provider/docker/internal/lock reaches for
 # syscall.Flock, which does not exist there, so arcave does not build for windows
 # at all yet. Adding a windows target means implementing that lock first
 # (LockFileEx), not editing this file.
@@ -65,9 +65,42 @@ builds:
       - linux_riscv64
       - linux_s390x
 
+  # The control plane, on the same matrix and the same flags. Every block below
+  # repeats the one above verbatim because goreleaser has no inheritance between
+  # builds: a value changed in one and forgotten in the other is a real hazard
+  # here, so the two are edited together.
+  #
+  # It pulls in compose/v2 through internal/provider/docker/stack, so the cgo rule
+  # above applies to it identically — this binary is the one that actually needs
+  # it now, the CLI having stopped importing that tree.
+  - id: control-plane
+    main: ./cmd/control-plane
+    binary: control-plane
+    env:
+      - CGO_ENABLED={{ if eq .Os "darwin" }}1{{ else }}0{{ end }}
+      - CC=clang -arch {{ if eq .Arch "amd64" }}x86_64{{ else }}arm64{{ end }}
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.buildDate={{ .Date }}
+    targets:
+      - darwin_amd64
+      - darwin_arm64
+      - linux_amd64
+      - linux_arm64
+      - linux_arm_6
+      - linux_arm_7
+      - linux_ppc64le
+      - linux_riscv64
+      - linux_s390x
+
 archives:
   # No `ids` filter: every build above belongs in the release, and listing them
-  # would be one more place to forget a target.
+  # would be one more place to forget a build. The name template below is what
+  # keeps two builds' artifacts apart — see the note on it.
   - id: arcave
     # `binary` is the "do not archive" format: each build is published as the
     # bare executable, so a user downloads one file and runs it, with no unpack
@@ -78,12 +111,18 @@ archives:
       - binary
     # With `binary` this names the executable itself, not an archive around it.
     #
+    # It leads with `.Binary`, not `.ProjectName`: the project name is the fixed
+    # string `arcave`, so with two builds and no `ids:` filter both would render
+    # the *same* artifact name per target and silently overwrite each other.
+    # `.Binary` is the per-build name, which is what tells `arcave` from
+    # `control-plane`.
+    #
     # The `{{ with .Arm }}` suffix is load-bearing, not decoration: linux_arm_6
     # and linux_arm_7 both render `.Arch` as `arm`, so without the GOARM level
     # the two binaries take the same name and the second silently replaces the
     # first. It renders empty for every non-arm target, so nothing else changes.
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+      {{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
 
 checksum:
   algorithm: sha256

@@ -45,7 +45,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # internal/service/backend/restic/rest skips its conformance test when no
+      # The restic REST package skips its conformance test when no
       # restic binary is on PATH, so without this the suite would go green
       # having never run it.
       - name: Install restic

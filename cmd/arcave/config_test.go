@@ -4,9 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -15,12 +13,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
-
-// versionedConfig prefixes body with the schema version every v1 file carries,
-// so a case only spells out the sections it is about.
-func versionedConfig(body string) string {
-	return "version: 1\n" + body
-}
 
 func TestResolveConfig(t *testing.T) {
 	tests := []struct {
@@ -35,38 +27,32 @@ func TestResolveConfig(t *testing.T) {
 			name:      "defaults when no file",
 			wantFound: false,
 			verify: func(t *testing.T, root string, cfg config.Config) {
-				assert.Equal(t, config.Version, cfg.Version)
 				assert.Equal(t, filepath.Base(root), cfg.Project.Name)
-				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
-				// No project segment: storefactory roots the store at the project itself.
-				assert.Equal(t, filepath.Join(".arcave", "storage"), cfg.Storage.DirectoryPath())
-				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
+				assert.Equal(t, config.DefaultControlPlaneAddress, cfg.ControlPlane.Address)
 				assert.Equal(t, utils.DefaultLogLevel, cfg.Log.Level)
 				assert.Equal(t, utils.DefaultLogFormat, cfg.Log.Format)
 			},
 		},
 		{
 			name: "reads the nested sections",
-			file: versionedConfig("project:\n  name: proj\n  compose_files:\n    - a.yaml\n    - b.yaml\n" +
-				"docker:\n  host: unix:///tmp/d.sock\n" +
-				"storage:\n  type: directory\n  directory:\n    path: /snaps\n" +
-				"snapshot:\n  backend: fullcopy\n" +
-				"log:\n  level: warn\n  format: json\n"),
+			file: "project:\n  name: proj\n  providers:\n" +
+				"    sandbox: my-linux-box\n    stacks: [my-linux-box, ci-2]\n" +
+				"control_plane:\n  address: http://10.0.0.1:7654\n  token: t0ken\n" +
+				"log:\n  level: warn\n  format: json\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "proj", cfg.Project.Name)
-				assert.Equal(t, []string{"a.yaml", "b.yaml"}, cfg.Project.ComposeFiles)
-				assert.Equal(t, "unix:///tmp/d.sock", cfg.Docker.Host)
-				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
-				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
-				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
+				assert.Equal(t, "my-linux-box", cfg.Project.Providers.Sandbox)
+				assert.Equal(t, []string{"my-linux-box", "ci-2"}, cfg.Project.Providers.Stacks)
+				assert.Equal(t, "http://10.0.0.1:7654", cfg.ControlPlane.Address)
+				assert.Equal(t, "t0ken", cfg.ControlPlane.Token)
 				assert.Equal(t, "warn", cfg.Log.Level)
 				assert.Equal(t, "json", cfg.Log.Format)
 			},
 		},
 		{
 			name:      "changed flag beats file",
-			file:      versionedConfig("project:\n  name: proj\nlog:\n  level: warn\n"),
+			file:      "project:\n  name: proj\nlog:\n  level: warn\n",
 			flags:     map[string]string{"log-level": "debug"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -75,7 +61,7 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name:      "env beats file",
-			file:      versionedConfig("log:\n  level: warn\n"),
+			file:      "log:\n  level: warn\n",
 			env:       map[string]string{"ARCAVE_LOG_LEVEL": "debug"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -84,7 +70,7 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name:      "changed flag beats env",
-			file:      versionedConfig("log:\n  level: info\n"),
+			file:      "log:\n  level: info\n",
 			env:       map[string]string{"ARCAVE_LOG_LEVEL": "debug"},
 			flags:     map[string]string{"log-level": "warn"},
 			wantFound: true,
@@ -93,52 +79,11 @@ func TestResolveConfig(t *testing.T) {
 			},
 		},
 		{
-			name:      "init flags feed the config",
-			flags:     map[string]string{"name": "flagproj", "savepoint-dir": "/snaps"},
+			name:      "init's --name feeds the config",
+			flags:     map[string]string{"name": "flagproj"},
 			wantFound: false,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "flagproj", cfg.Project.Name)
-				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
-			},
-		},
-		{
-			// The compose bounds are config keys reached through root-persistent
-			// flags, so the same precedence has to hold for them as for log.level.
-			name:      "the compose section comes from the file",
-			file:      versionedConfig("compose:\n  wait_timeout: 5m\n  stop_timeout: 45s\n  progress: tty\n"),
-			wantFound: true,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
-				assert.Equal(t, 45*time.Second, cfg.Compose.StopTimeout)
-				assert.Equal(t, config.ProgressTTY, cfg.Compose.Progress)
-			},
-		},
-		{
-			name:      "a changed --wait-timeout beats the file",
-			file:      versionedConfig("compose:\n  wait_timeout: 5m\n"),
-			flags:     map[string]string{"wait-timeout": "30s"},
-			wantFound: true,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, 30*time.Second, cfg.Compose.WaitTimeout)
-			},
-		},
-		{
-			// The flag's own default is the *lowest* precedence source, so an
-			// unchanged --wait-timeout must not overwrite the file's value.
-			name:      "an unchanged --progress leaves the file's mode alone",
-			file:      versionedConfig("compose:\n  progress: quiet\n"),
-			wantFound: true,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, config.ProgressQuiet, cfg.Compose.Progress)
-			},
-		},
-		{
-			name:      "env beats the file for a compose bound too",
-			file:      versionedConfig("compose:\n  wait_timeout: 5m\n"),
-			env:       map[string]string{"ARCAVE_COMPOSE_WAIT_TIMEOUT": "90s"},
-			wantFound: true,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, 90*time.Second, cfg.Compose.WaitTimeout)
 			},
 		},
 	}
@@ -170,46 +115,28 @@ func TestResolveConfig(t *testing.T) {
 	}
 }
 
-// A file arcave cannot speak is rejected loudly. arcave speaks exactly one schema
-// version, so a file naming another is stale; a file naming none is taken to be
-// that version and is judged by its keys, which is what rejects the pre-v1 flat
-// layout.
+// A file arcave cannot speak is rejected loudly, by the keys it uses: a value
+// quietly ignored is a setting the user believes is in force.
 func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 	tests := []struct {
 		name    string
 		file    string
-		wantIs  error  // sentinel the error must match
 		wantMsg string // substring the error must carry
 	}{
 		{
-			name:    "the pre-v1 flat layout, by the keys it uses",
+			name:    "the old flat layout, by the keys it uses",
 			file:    "name: proj\ncompose_files:\n  - a.yaml\nsavepoint_dir: /snaps\n",
 			wantMsg: "savepoint_dir",
 		},
 		{
-			name:   "an explicit version zero",
-			file:   "version: 0\nproject:\n  name: proj\n",
-			wantIs: model.ErrUnsupportedConfigVersion,
-		},
-		{
-			name:   "a version from the future",
-			file:   "version: 2\nproject:\n  name: proj\n",
-			wantIs: model.ErrUnsupportedConfigVersion,
-		},
-		{
 			name:    "an unknown key",
-			file:    versionedConfig("project:\n  name: proj\nsavepoint_dir: /snaps\n"),
+			file:    "project:\n  name: proj\nsavepoint_dir: /snaps\n",
 			wantMsg: "savepoint_dir",
 		},
 		{
-			name:    "a storage tag naming an arm arcave does not implement",
-			file:    versionedConfig("storage:\n  type: s3\n"),
-			wantMsg: "unsupported storage.type",
-		},
-		{
-			name:    "a snapshot backend arcave cannot construct",
-			file:    versionedConfig("snapshot:\n  backend: btrfs\n"),
-			wantMsg: "unsupported snapshot.backend",
+			name:    "a section that moved into the provider's settings",
+			file:    "project:\n  name: proj\nstorage:\n  type: directory\n",
+			wantMsg: "storage",
 		},
 	}
 
@@ -225,24 +152,17 @@ func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 			_, _, err := resolveConfig(v, root)
 
 			// Assert
-			require.Error(t, err)
-			if tt.wantIs != nil {
-				assert.ErrorIs(t, err, tt.wantIs)
-			}
-			if tt.wantMsg != "" {
-				assert.Contains(t, err.Error(), tt.wantMsg)
-			}
+			require.ErrorContains(t, err, tt.wantMsg)
 		})
 	}
 }
 
 // Only bound flags feed the config: an unbound flag, even when changed, must not
-// override a lower-precedence source. This is what keeps a command's transient
-// flags (--override, --dry-run) out of the persisted config.
+// override a lower-precedence source.
 func TestResolveConfig_IgnoresUnboundFlags(t *testing.T) {
 	// Arrange
 	root := t.TempDir()
-	writeConfig(t, root, versionedConfig("log:\n  level: warn\n"))
+	writeConfig(t, root, "log:\n  level: warn\n")
 	v := testViper(root)
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	fs.String("log-level", utils.DefaultLogLevel, "") // deliberately NOT bound
@@ -254,6 +174,29 @@ func TestResolveConfig_IgnoresUnboundFlags(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "warn", cfg.Log.Level)
+}
+
+// A refused config file must still leave `arcave init --override` something to
+// write, and not one key of it may come from the file being replaced.
+func TestFallbackConfig(t *testing.T) {
+	// Arrange
+	root := t.TempDir()
+	writeConfig(t, root, "project:\n  name: fromfile\nstorage:\n  type: directory\n")
+	v := testViper(root)
+	fs := boundFlags(t, v)
+	require.NoError(t, fs.Set("log-level", "debug"))
+
+	_, _, err := resolveConfig(v, root)
+	require.Error(t, err, "the file this test is about must be refused")
+
+	// Act
+	cfg, err := fallbackConfig(v, root)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Base(root), cfg.Project.Name, "the refused file contributes nothing")
+	assert.Equal(t, "debug", cfg.Log.Level, "the flags still do")
+	assert.Equal(t, config.DefaultControlPlaneAddress, cfg.ControlPlane.Address)
 }
 
 // viperBind panics on a missing flag, since that is a wiring bug rather than a
@@ -269,18 +212,16 @@ func TestViperBind_PanicsOnMissingFlag(t *testing.T) {
 	})
 }
 
-// testViper returns a viper pointed at root's config file. Each case gets a fresh
-// one, so no case can leak bindings into another and none of them touches the
-// package-level cfgViper the real commands bound their flags to.
+// testViper returns a viper pointed at root's config file. Each case gets a
+// fresh one, so no case leaks bindings into another.
 func testViper(root string) *viper.Viper {
 	v := viper.New()
 	setupViper(v, config.Path(root))
 	return v
 }
 
-// boundFlags returns a flag set carrying the flags a command may bind — the
-// root-persistent log flags plus init's flags — each bound to v exactly as the
-// real commands do. Only changed flags override lower-precedence sources.
+// boundFlags returns the flags a command may bind — the log flags plus init's
+// --name — each bound to v exactly as the real commands do.
 func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	t.Helper()
 
@@ -288,20 +229,10 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs.String("log-level", utils.DefaultLogLevel, "")
 	fs.String("log-format", utils.DefaultLogFormat, "")
 	fs.String("name", "", "")
-	fs.StringSlice("file", []string{"docker-compose.yaml"}, "")
-	fs.String("savepoint-dir", "", "")
-	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
-	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
-	fs.String("progress", config.ProgressLog, "")
 	viperBind(v, fs, map[string]string{
-		"log-level":     "log.level",
-		"log-format":    "log.format",
-		"name":          "project.name",
-		"file":          "project.compose_files",
-		"savepoint-dir": "storage.directory.path",
-		"wait-timeout":  "compose.wait_timeout",
-		"stop-timeout":  "compose.stop_timeout",
-		"progress":      "compose.progress",
+		"log-level":  "log.level",
+		"log-format": "log.format",
+		"name":       "project.name",
 	})
 	return fs
 }

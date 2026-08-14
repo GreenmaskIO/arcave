@@ -1,0 +1,56 @@
+openapi: 3.0.3
+info:
+  # NOTE: Please do not use `allOf` inheritance. Instead, explicitly define properties in schemas.
+  # This serves as a hint for AI agents and maintains better compatibility with some code generators.
+  title: arcave control plane
+  version: 1.0.0
+  description: |
+    The API the arcave CLI reaches the control plane over.
+
+    This document is the contract, not a description of an implementation: the Go
+    server is generated from it, and `internal/httpapi` implements what it
+    generates. A route that is not here does not exist — the mux answers it 404
+    from its own route table.
+
+    It deliberately carries one endpoint. The shape of the rest is decided once
+    the CLI's UX has settled, and every operation added before then would be a
+    guess that somebody starts implementing. What this one endpoint buys is the
+    whole mechanism standing and provable: spec → generator → strict handler →
+    a served route.
+servers:
+  - url: /
+    description: The control plane, on the address its `api.address` names.
+tags:
+  - name: "v1"
+paths:
+  /api/v1/healthcheck:
+    get:
+      operationId: healthcheck
+      tags: [v1]
+      summary: Report that the control plane is serving
+      description: |
+        Answers 200 as long as the process is up and its providers were built —
+        which is what `serve` has already proved by the time it listens. It
+        reaches no provider and touches no resource, so it stays an answer about
+        *this* process and never about a daemon behind it.
+      responses:
+        "200":
+          description: The control plane is serving.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthcheckResponse"
+components:
+  schemas:
+    HealthcheckResponse:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          description: Always `ok`; anything else is a failure to answer at all.
+          example: ok
+        version:
+          type: string
+          description: The build the control plane is running, as `--version` reports it.
+          example: 0.1.0

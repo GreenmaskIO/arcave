@@ -1,0 +1,17 @@
+package: httpapi
+output-options:
+  skip-prune: true
+  include-tags:
+    - v1
+generate:
+  # std-http-server, not echo-server: what a path means, which method it takes
+  # and what the Allow of a 405 is belongs in a route table, not in a framework.
+  # It is the same choice restic/rest already made, for the same reason.
+  std-http-server: true
+  # The handler takes and returns types rather than a ResponseWriter, which is
+  # what makes the generated layer implementable without hand-rolled marshalling.
+  strict-server: true
+  # The spec compiled in, so request validation has something to stand on the day
+  # it is added.
+  embedded-spec: true
+output: server.gen.go

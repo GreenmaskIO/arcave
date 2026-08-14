@@ -1,17 +1,15 @@
 package main
 
 import (
-	"context"
-	"errors"
-
 	"github.com/spf13/cobra"
 
-	"github.com/greenmaskio/arcave/internal/cli"
+	ngcli "github.com/greenmaskio/arcave/internal/ng/cli"
 )
 
 var (
 	savepointCreateName        string
 	savepointCreateDescription string
+	savepointCreateLabels      []string
 
 	savepointCreateCmd = &cobra.Command{
 		Use:   "create [name]",
@@ -22,40 +20,28 @@ var (
 )
 
 func runSavepointCreate(cmd *cobra.Command, args []string) error {
-	name, err := savepointCreateResolveName(args)
-	if err != nil {
-		return err
-	}
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewSavepointCreateHandler(d.service, d.printer)
-		return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription)
-	})
-}
 
-// savepointCreateResolveName reconciles the optional positional name with
-// --name. Supplying both is only an error when they disagree.
-func savepointCreateResolveName(args []string) (string, error) {
-	if len(args) == 0 {
-		return savepointCreateName, nil
-	}
-	if savepointCreateName != "" && savepointCreateName != args[0] {
-		return "", errors.New("savepoint name given both as argument and --name")
-	}
-	return args[0], nil
+	h := ngcli.NewSavepointCreateHandler(newAPI(), newPrinter())
+	return h.Create(cmd.Context(), projectCfg, rootAddressing(), ngcli.SavepointCreateParams{
+		Args:        args,
+		Name:        savepointCreateName,
+		Description: savepointCreateDescription,
+		Labels:      savepointCreateLabels,
+	})
 }
 
 func init() {
 	flags := savepointCreateCmd.Flags()
 	flags.StringVar(&savepointCreateName, "name", "", "Savepoint name")
 	flags.StringVar(&savepointCreateDescription, "description", "", "Savepoint description")
+	// StringArray, not StringSlice: a label value may hold a comma.
+	flags.StringArrayVar(&savepointCreateLabels, "label", nil,
+		"Label to mark the savepoint with, as key=value (repeatable)")
 
-	// Neither is bound to viper: --name would collide with `arcave init --name`
-	// on the shared "name" config key, conflating the project name with this
-	// savepoint's name. Both are per-run values, not project config — unlike
-	// --wait-timeout, which is a config key and lives on rootCmd.
+	// None is bound to viper: --name would collide with `init --name` on the shared "name" key.
 
 	savepointCmd.AddCommand(savepointCreateCmd)
 }

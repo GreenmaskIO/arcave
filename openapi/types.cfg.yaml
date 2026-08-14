@@ -1,0 +1,8 @@
+package: httpapi
+output-options:
+  skip-prune: true
+  include-tags:
+    - v1
+generate:
+  models: true
+output: types.gen.go
