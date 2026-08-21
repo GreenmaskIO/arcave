@@ -94,7 +94,7 @@ func TestFindBackupVolumes_RealLoader(t *testing.T) {
 	require.NoError(t, err)
 
 	// Act
-	volumes, skipped, err := core.FindBackupVolumes(got)
+	volumes, skipped, err := core.FindBackupVolumes(got, model.SnapshotBackendCopy)
 
 	// Assert
 	require.NoError(t, err)
@@ -103,11 +103,11 @@ func TestFindBackupVolumes_RealLoader(t *testing.T) {
 		ids = append(ids, v.ObjectID)
 	}
 	assert.Equal(t, []string{
-		"volume/shared_assets",
-		"volume/introspect-integration_orphan",
-		"volume/introspect-integration_pgdata",
-		"service/db/etc/postgresql/conf.d",
-		"service/db/var/lib/postgresql/scratch",
+		"volume-named-shared_assets",
+		"volume-named-introspect-integration_orphan",
+		"volume-named-introspect-integration_pgdata",
+		"volume-service-db-etc-postgresql-conf.d",
+		"volume-service-db-var-lib-postgresql-scratch",
 	}, ids)
 
 	assert.Equal(t, []model.SkippedVolume{{
@@ -122,16 +122,16 @@ func TestFindBackupVolumes_RealLoader(t *testing.T) {
 	for _, v := range volumes {
 		byID[v.ObjectID] = v
 	}
-	require.NotNil(t, byID["volume/shared_assets"].Named)
-	assert.Equal(t, "shared_assets", byID["volume/shared_assets"].Named.VolumeName)
+	require.NotNil(t, byID["volume-named-shared_assets"].Named)
+	assert.Equal(t, "shared_assets", byID["volume-named-shared_assets"].Named.VolumeName)
 	assert.Equal(t, []model.ServiceReference{
 		{Service: "api", Target: "/srv/assets"},
 		{Service: "web", Target: "/usr/share/nginx/html"},
-	}, byID["volume/shared_assets"].Named.UsedBy)
+	}, byID["volume-named-shared_assets"].Named.UsedBy)
 
-	require.NotNil(t, byID["service/db/etc/postgresql/conf.d"].Bind)
-	assert.Equal(t, bindCfg, byID["service/db/etc/postgresql/conf.d"].Bind.Source)
+	require.NotNil(t, byID["volume-service-db-etc-postgresql-conf.d"].Bind)
+	assert.Equal(t, bindCfg, byID["volume-service-db-etc-postgresql-conf.d"].Bind.Source)
 
-	require.NotNil(t, byID["service/db/var/lib/postgresql/scratch"].Anon)
-	assert.Equal(t, "db", byID["service/db/var/lib/postgresql/scratch"].Anon.Service)
+	require.NotNil(t, byID["volume-service-db-var-lib-postgresql-scratch"].Anon)
+	assert.Equal(t, "db", byID["volume-service-db-var-lib-postgresql-scratch"].Anon.Service)
 }

@@ -2,7 +2,7 @@ package model
 
 import "fmt"
 
-// SavepointID addresses one capture — a savepoint's or a safety backup's — and
+// SavepointID addresses one capture — a savepoint's or a safety snapshot's — and
 // doubles as the directory it lives in. It carries its own gate, so a value that
 // reached a storage key was validated.
 type SavepointID string

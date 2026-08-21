@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -30,21 +31,62 @@ func (m *mockSavepointRepo) Delete(ctx context.Context, id model.SavepointID) er
 	return m.Called(ctx, id).Error(0)
 }
 
-// mockLocker counts releases in a field: release is a closure Acquire returns,
-// not a method an expectation can match.
-type mockLocker struct {
-	mock.Mock
-	released int
-}
+// mockLocker doubles projectLocker. Release is a closure Acquire returns rather
+// than a method of the seam, so it reports itself as one — MethodCalled puts it
+// where testify counts it and mock.InOrder can place it.
+type mockLocker struct{ mock.Mock }
 
 func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 	if err := m.Called(ctx).Error(0); err != nil {
 		return nil, err
 	}
-	return func() error {
-		m.released++
-		return nil
-	}, nil
+	return func() error { return m.MethodCalled("Release").Error(0) }, nil
+}
+
+// fakeInflight is a stateful stand-in for the marker file, so tests that are not
+// about the gate carry no expectations. Lifecycle tests use mockInflight instead.
+type fakeInflight struct {
+	mu     sync.Mutex
+	marker *model.InflightMarker
+}
+
+func (f *fakeInflight) Get(_ context.Context) (model.InflightMarker, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.marker == nil {
+		return model.InflightMarker{}, false, nil
+	}
+	return *f.marker, true, nil
+}
+
+func (f *fakeInflight) Put(_ context.Context, marker model.InflightMarker) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marker = &marker
+	return nil
+}
+
+func (f *fakeInflight) Clear(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marker = nil
+	return nil
+}
+
+type mockInflight struct{ mock.Mock }
+
+func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, error) {
+	args := m.Called(ctx)
+	marker, _ := args.Get(0).(model.InflightMarker)
+	return marker, args.Bool(1), args.Error(2)
+}
+
+func (m *mockInflight) Put(ctx context.Context, marker model.InflightMarker) error {
+	return m.Called(ctx, marker).Error(0)
+}
+
+func (m *mockInflight) Clear(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
 }
 
 type mockInspector struct{ mock.Mock }
@@ -91,19 +133,17 @@ func (m *mockBackend) Restore(ctx context.Context, req model.BackendRestoreReque
 	return m.Called(ctx, req).Error(0)
 }
 
-func (m *mockBackend) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
-	args := m.Called(ctx, req)
-	return args.Bool(0), args.Error(1)
-}
-
 func (m *mockBackend) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
 	return m.Called(ctx, req).Error(0)
 }
 
-// matchSpec matches a registry New's BackendSpec argument by tier and volume.
-func matchSpec(tier model.BackendTier, objectID string) any {
+// matchSpec matches a registry New's BackendSpec argument by the root it names
+// and the volume it is for. There is one root now, so the store no longer tells
+// a savepoint's instances from a rollback's undo — it is asserted because every
+// backend must be bound to the store the DI root handed down, and to no other.
+func matchSpec(store storages.Storager, objectID string) any {
 	return mock.MatchedBy(func(spec model.BackendSpec) bool {
-		return spec.Tier == tier && spec.Volume.ObjectID == objectID
+		return spec.Store == store && spec.Volume.ObjectID == objectID
 	})
 }
 
@@ -115,10 +155,14 @@ func matchValidSnapshotID() any {
 	})
 }
 
-// matchSafetyRecord matches the record a rollback's safety backup commits.
-func matchSafetyRecord() any {
-	return mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.ID.Validate() == nil && r.Name == safetyBackupName
+// matchSafetySnapshot matches a safety snapshot's capture request: an id off the
+// clock that passes the gate, carrying the label a rollback stamps. That label
+// is the only thing marking the capture as an undo — the record it commits is an
+// ordinary savepoint's — so it is matched rather than widened away.
+func matchSafetySnapshot() any {
+	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
+		return req.SnapshotID.Validate() == nil &&
+			req.Labels[model.SafetySnapshotLabel] == model.SafetySnapshotLabelValue
 	})
 }
 

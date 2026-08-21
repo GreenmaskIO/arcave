@@ -1,0 +1,9 @@
+package: api
+output-options:
+  skip-prune: true
+  include-tags:
+    - v1
+generate:
+  echo-server: true
+  strict-server: true
+output: api/server.go

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -32,7 +31,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 		{
 			name: "Rollback",
 			call: func(svc *Service, ctx context.Context) error {
-				_, err := svc.Rollback(ctx, model.RollbackRequest{Ref: "latest"})
+				_, err := svc.Rollback(ctx, model.RollbackRequest{Latest: ptrBool(true)})
 				return err
 			},
 		},
@@ -53,7 +52,11 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 			repo, inspector, runner := &mockSavepointRepo{}, &mockInspector{}, &mockComposeRunner{}
 			registry := &mockRegistry{}
 			// Nil stores: a workflow that got as far as a backend would deref one.
-			svc := New(repo, repo, locker, inspector, runner, registry, nil, nil)
+			svc := New(Deps{
+				SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+				ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+			})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -61,13 +64,8 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 
 			// Assert
 			require.ErrorIs(t, err, model.ErrProjectLocked)
-			inspector.AssertNotCalled(t, "Introspect", mock.Anything, mock.Anything)
-			runner.AssertNotCalled(t, "Stop", mock.Anything, mock.Anything)
-			runner.AssertNotCalled(t, "Up", mock.Anything, mock.Anything, mock.Anything)
-			repo.AssertNotCalled(t, "List", mock.Anything)
-			repo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
-			registry.AssertNotCalled(t, "New", mock.Anything)
-			assert.Zero(t, locker.released, "a lock that was never taken must not be released")
+			// A lock that was never taken must not be released, and the locker carries
+			// no Release expectation — a release would fail the run as an unexpected call.
 			locker.AssertExpectations(t)
 			repo.AssertExpectations(t)
 			inspector.AssertExpectations(t)

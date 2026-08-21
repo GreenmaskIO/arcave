@@ -38,7 +38,7 @@ func record(id model.SavepointID) model.Savepoint {
 		Stats: []model.SnapshotStat{{
 			Type: model.SnapshotBackendCopy,
 			Volume: model.Volume{
-				ObjectID: "volume/myapp_pgdata",
+				ObjectID: "volume-named-myapp_pgdata",
 				Type:     model.VolumeTypeNamed,
 				Backend:  model.SnapshotBackendCopy,
 				Named: &model.VolumePropertiesNamed{
@@ -145,6 +145,17 @@ func TestRepository_List(t *testing.T) {
 			name: "a directory whose name is not a savepoint id is ignored",
 			plant: func(t *testing.T, root string) {
 				writeObject(t, root, "not-a-savepoint/savepoint.json", `{"id":"x"}`)
+			},
+			wantIDs: []string{"1780335122"},
+		},
+		{
+			// cdc keeps its repositories beside the savepoint directories, under
+			// the stack root this repository lists. "restic" is not a savepoint id,
+			// so it is invisible here — which is what makes it a safe neighbour.
+			name: "the cdc repository tree beside the savepoints is invisible",
+			plant: func(t *testing.T, root string) {
+				writeObject(t, root, "restic/volume-demo_pgdata/config", "{}")
+				writeObject(t, root, "restic/volume-demo_pgdata/snapshots/abc", "{}")
 			},
 			wantIDs: []string{"1780335122"},
 		},

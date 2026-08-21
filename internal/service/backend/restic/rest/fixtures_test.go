@@ -1,57 +1,138 @@
 package rest
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"testing"
 
-	"github.com/greenmaskio/storages"
-	"github.com/greenmaskio/storages/directory"
-	"github.com/stretchr/testify/require"
+	"github.com/rs/zerolog"
+
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/model"
 )
 
-// blobID is a syntactically valid object name: exactly 64 lowercase hex
-// characters, which is all the protocol (and validPath) asks of one.
-const blobID = "1111111111111111111111111111111111111111111111111111111111111111"
+// testID is a name of the shape restic writes: 64 lowercase hex characters, and
+// stubBody is what the repository below holds under it.
+var (
+	testID   = model.ObjectID(strings.Repeat("0a1b2c3d", 8))
+	stubBody = []byte("0123456789abcdef")
+)
 
-// otherBlobID is a second valid name, for the cases that need two.
-const otherBlobID = "2222222222222222222222222222222222222222222222222222222222222222"
+// The names the route table addresses. A name the resolver does not serve is a
+// 404 before any operation runs, so every name a case expects an answer from has
+// to be one of the first three.
+const (
+	testRepoName  = "testrepo"
+	otherRepoName = "other"
+	// objectIDName is a real arcave ObjectID: one segment, with the mount path
+	// flattened into it — the shape a name on this wire actually has.
+	objectIDName    = "volume-service-app-var-lib-data"
+	unknownRepoName = "nosuchrepo"
+)
 
-// letteredBlobID is a valid name carrying hex letters, so upper-casing it
-// actually produces a different string. blobID does not: it is all digits, and a
-// case test built on it passes without testing anything.
-const letteredBlobID = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+// errStore is a failure that is none of the protocol's own conditions.
+var errStore = errors.New("store unreachable")
 
-// newStoreHandler returns the handler over a fresh directory store, plus that
-// store so a test can plant objects the handler is then asked about.
-func newStoreHandler(t *testing.T) (http.Handler, storages.Storager) {
-	t.Helper()
-	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
-	require.NoError(t, err)
-	return New(store), store
+// journalled carries a logger the way a command's context does — the only way
+// this package's own lines can be read back.
+func journalled(w io.Writer) context.Context {
+	logger := zerolog.New(w).Level(zerolog.DebugLevel)
+	return logger.WithContext(context.Background())
 }
 
-// put plants an object directly in the store, behind the handler's back.
-func put(t *testing.T, store storages.Storager, key, body string) {
-	t.Helper()
-	require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader(body)))
+// serving is the resolver these tests reach a repository through. A double
+// rather than repo.NewResolver over a real store: what this package's tests are
+// about is routing, and a name that resolves to nothing has to be a 404 without
+// a filesystem in the way.
+func serving(repos map[string]model.Repository) model.RepositoryResolver {
+	return stubResolver(repos)
 }
 
-// do runs one request against h and returns the recorded response.
-func do(t *testing.T, h http.Handler, method, target, body string, headers ...[2]string) *httptest.ResponseRecorder {
-	t.Helper()
-	var reader io.Reader
-	if body != "" {
-		reader = strings.NewReader(body)
+// oneRepository serves repo under every name the route table addresses, so a
+// case about routing says nothing about resolution.
+func oneRepository(repo model.Repository) model.RepositoryResolver {
+	return serving(map[string]model.Repository{
+		testRepoName:  repo,
+		otherRepoName: repo,
+		objectIDName:  repo,
+	})
+}
+
+var _ model.RepositoryResolver = stubResolver(nil)
+
+// stubResolver answers with the repository a name is mapped to, and
+// ErrRepositoryNotFound for every other name.
+type stubResolver map[string]model.Repository
+
+func (s stubResolver) Lookup(arcaveObjectID string) (model.Repository, error) {
+	repo, ok := s[arcaveObjectID]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", model.ErrRepositoryNotFound, arcaveObjectID)
 	}
-	req := httptest.NewRequest(method, target, reader)
-	for _, kv := range headers {
-		req.Header.Set(kv[0], kv[1])
-	}
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
+	return repo, nil
 }
+
+var _ model.Repository = stubRepository{}
+
+// stubRepository answers every operation successfully, for the tests about
+// routing rather than about the protocol's own answers. Its body is what a read
+// returns; the zero value serves stubBody.
+type stubRepository struct{ body []byte }
+
+func (s stubRepository) content() []byte {
+	if s.body == nil {
+		return stubBody
+	}
+	return s.body
+}
+
+func (stubRepository) Create(context.Context) error { return nil }
+
+func (s stubRepository) StatConfig(context.Context) (int64, error) {
+	return int64(len(s.content())), nil
+}
+
+func (s stubRepository) OpenConfig(context.Context) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(s.content())), nil
+}
+
+func (stubRepository) SaveConfig(context.Context, io.Reader) error { return nil }
+
+func (stubRepository) DeleteConfig(context.Context) error { return nil }
+
+func (s stubRepository) ListBlobs(context.Context, model.ListBlobsRequest) ([]model.Blob, error) {
+	return []model.Blob{{Name: string(testID), Size: int64(len(s.content()))}}, nil
+}
+
+func (s stubRepository) StatBlob(context.Context, model.StatBlobRequest) (int64, error) {
+	return int64(len(s.content())), nil
+}
+
+func (s stubRepository) OpenBlobRange(_ context.Context, req model.OpenBlobRangeRequest) (io.ReadCloser, error) {
+	body := s.content()
+	if req.Offset+req.Length > int64(len(body)) {
+		return nil, fmt.Errorf("the range %d+%d is outside the stub", req.Offset, req.Length)
+	}
+	return io.NopCloser(bytes.NewReader(body[req.Offset : req.Offset+req.Length])), nil
+}
+
+func (stubRepository) SaveBlob(context.Context, model.SaveBlobRequest) error {
+	return nil
+}
+
+func (stubRepository) DeleteBlob(context.Context, model.DeleteBlobRequest) error {
+	return nil
+}
+
+// failingRepository answers one operation with a condition the protocol has no
+// status for; everything else it inherits.
+type failingRepository struct{ stubRepository }
+
+func (failingRepository) OpenConfig(context.Context) (io.ReadCloser, error) { return nil, errStore }
+
+// panickingRepository is the other way an operation can fail to answer.
+type panickingRepository struct{ stubRepository }
+
+func (panickingRepository) OpenConfig(context.Context) (io.ReadCloser, error) { panic("boom") }

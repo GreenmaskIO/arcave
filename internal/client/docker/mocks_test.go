@@ -8,6 +8,8 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/mock"
@@ -69,6 +71,16 @@ func (m *mockAPI) ImageInspect(ctx context.Context, imageID string, opts ...clie
 func (m *mockAPI) ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
 	args := m.Called(ctx, ref, options)
 	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+func (m *mockAPI) Info(ctx context.Context) (system.Info, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(system.Info), args.Error(1)
+}
+
+func (m *mockAPI) VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error) {
+	args := m.Called(ctx, volumeID)
+	return args.Get(0).(volume.Volume), args.Error(1)
 }
 
 func (m *mockAPI) Close() error { return m.Called().Error(0) }

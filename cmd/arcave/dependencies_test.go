@@ -14,7 +14,78 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 )
+
+// cdcOptions is the translation that keeps internal/config free of any package
+// carrying a client: the config's own vocabulary in, the backend's own out.
+func TestCDCOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         config.CDCBackend
+		hostNetwork bool
+		want        cdc.Options
+	}{
+		{
+			// A project that never names cdc carries no section, and still gets a
+			// runnable image: an old cdc savepoint is rolled back through cdc
+			// whatever snapshot.backend says now.
+			name: "an absent section resolves to the defaults",
+			cfg:  config.CDCWithDefaults(nil),
+			want: cdc.Options{
+				Image:       config.DefaultResticImage,
+				Overwrite:   config.OverwriteAlways,
+				Incremental: true,
+			},
+		},
+		{
+			name: "wipe is not incremental, whatever overwrite says",
+			cfg: config.CDCBackend{
+				RestoreMode: config.RestoreModeWipe,
+				Overwrite:   config.OverwriteAlways,
+				Image:       config.DefaultResticImage,
+			},
+			want: cdc.Options{
+				Image:     config.DefaultResticImage,
+				Overwrite: config.OverwriteAlways,
+			},
+		},
+		{
+			name: "incremental carries its overwrite policy through",
+			cfg: config.CDCBackend{
+				RestoreMode: config.RestoreModeIncremental,
+				Overwrite:   config.OverwriteIfChanged,
+				Image:       "restic/restic:0.18.0",
+			},
+			want: cdc.Options{
+				Image:       "restic/restic:0.18.0",
+				Incremental: true,
+				Overwrite:   config.OverwriteIfChanged,
+			},
+		},
+		{
+			name:        "the resolved transport carries through",
+			cfg:         config.CDCWithDefaults(nil),
+			hostNetwork: true,
+			want: cdc.Options{
+				Image:       config.DefaultResticImage,
+				Overwrite:   config.OverwriteAlways,
+				Incremental: true,
+				HostNetwork: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := cdcOptions(tt.cfg, tt.hostNetwork)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
 
 // getDockerOptions is what carries the config into docker/cli. An unset option
 // must not be passed through: an empty host would override the environment's

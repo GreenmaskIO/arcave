@@ -40,7 +40,7 @@ func init() {
 	flags.StringSliceP("file", "f", []string{"docker-compose.yaml"},
 		"Docker Compose file (repeatable)")
 	flags.String("savepoint-dir", "",
-		"Savepoint backup directory (default: .arcave/storage/<project_name>)")
+		"Savepoint backup directory (default: .arcave/storage)")
 	flags.BoolVar(&configInitOverride, "override", false,
 		"Overwrite an existing arcave configuration")
 

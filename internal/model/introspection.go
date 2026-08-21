@@ -33,23 +33,31 @@ const (
 	SnapshotBackendUnknown SnapshotBackendKind = "unknown"
 )
 
-// The two prefixes keep the identity spaces apart: a volume named "db" and a
-// service named "db" must not produce the same StorageID.
+// An ObjectID is one path segment: it is the name of a directory in a store and
+// the name of a repository on the restic wire, and both want a segment rather
+// than a tree. Both prefixes open with "volume-" — everything addressed here is
+// a volume — and the second word says how it is addressed, which keeps the
+// identity spaces apart: a volume named "db" and a service named "db" must not
+// produce the same id.
 const (
-	storageIDVolumePrefix  = "volume/"
-	storageIDServicePrefix = "service/"
+	storageIDNamedPrefix   = "volume-named-"
+	storageIDServicePrefix = "volume-service-"
 )
 
 // namedStorageID identifies a named volume by the volume itself: its data
 // outlives any one container, and several services may mount it.
 func namedStorageID(dockerName string) string {
-	return storageIDVolumePrefix + dockerName
+	return storageIDNamedPrefix + dockerName
 }
 
 // serviceStorageID identifies a bind or anonymous mount by service and target: a
 // bind has no docker name, and an anonymous volume's is created per container.
+//
+// The target is flattened into the segment, so two identities can render the
+// same id ({app, /var/lib} and {app-var, /lib}). Deciding what to do about that
+// needs the whole project's set of volumes, and belongs where that set is known.
 func serviceStorageID(service, target string) string {
-	return storageIDServicePrefix + service + "/" + strings.TrimPrefix(target, "/")
+	return storageIDServicePrefix + service + "-" + strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")
 }
 
 // ServiceVolume is one mount declared by one service — a fact, not a decision.
@@ -114,8 +122,9 @@ type BindMount struct {
 // labels can be declared, so a label-driven policy has no other channel to it.
 type VolumeMount struct {
 	NoCopy bool // affects only the volume's first population from the image
-	// Subpath exposes only a subdirectory of the volume through this mount:
-	// reading or restoring through it would silently miss the rest.
+	// Subpath exposes only a subdirectory of the volume through this mount.
+	// Report-only: a backend addresses the volume itself, so a savepoint covers
+	// all of it and a rollback puts all of it back, whatever a service sees.
 	Subpath string
 	Labels  map[string]string
 }
@@ -139,16 +148,16 @@ type Service struct {
 }
 
 // ServiceReference is one mount of a named volume by one service: who to stop,
-// and where the data is reachable inside that service.
+// and where the volume shows up inside that service.
 //
-// The json tags are a contract: a restore picks the mount it writes through from
-// the references the savepoint recorded.
+// The json tags are a contract: the references travel in every savepoint record.
+// No backend reads them to reach the data — a volume is addressed by its docker
+// name — so this is what a savepoint covers, reported, not how it is reached.
 type ServiceReference struct {
 	Service string `json:"service"` // compose service name
 	Target  string `json:"target"`  // mount path inside the container
-	// ReadOnly and Subpath are what the restore planner picks a mount on. Two
-	// mounts of one volume differing in either are two references, not a
-	// duplicate.
+	// ReadOnly and Subpath describe this mount, not the volume: two mounts of one
+	// volume differing in either are two references, not a duplicate.
 	ReadOnly bool   `json:"read_only,omitempty"`
 	Subpath  string `json:"subpath,omitempty"`
 }

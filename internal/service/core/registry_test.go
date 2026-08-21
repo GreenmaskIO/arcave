@@ -8,16 +8,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/cdc"
-	"github.com/greenmaskio/arcave/internal/service/backend/tarcopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
 
 func TestSnapshotBackendRegistry_New(t *testing.T) {
-	session, safety := newDirStore(t), newDirStore(t)
-	// Carries a mount: tarcopy resolves the one it captures through at build time,
+	store := newDirStore(t)
+	// Carries a mount: fullcopy resolves the one it captures through at build time,
 	// so a volume with no way in never gets as far as a backend instance.
 	volume := model.Volume{
-		ObjectID: "volume/demo_pgdata",
+		ObjectID: "volume-named-demo_pgdata",
 		Type:     model.VolumeTypeNamed,
 		Backend:  model.SnapshotBackendCopy,
 		Named: &model.VolumePropertiesNamed{
@@ -33,56 +32,29 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 		wantErr  error
 	}{
 		{
-			name: "a full-copy volume builds the copy backend",
-			spec: model.BackendSpec{
-				SessionStore: session,
-				SafetyStore:  safety,
-				Volume:       volume,
-				Tier:         model.BackendTierSavepoint,
-			},
-			wantType: tarcopy.Snapshotter{},
-		},
-		{
-			name: "a cdc volume builds the cdc backend",
-			spec: model.BackendSpec{
-				SessionStore: session,
-				SafetyStore:  safety,
-				Volume:       model.Volume{ObjectID: "volume/demo_pgdata", Backend: model.SnapshotBackendCDC},
-				Tier:         model.BackendTierSafety,
-			},
-			wantType: cdc.Snapshotter{},
+			name:     "a full-copy volume builds the copy backend",
+			spec:     model.BackendSpec{Store: store, Volume: volume},
+			wantType: &fullcopy.Snapshotter{},
 		},
 		{
 			name: "an unregistered backend is ErrUnknownBackend",
 			spec: model.BackendSpec{
-				SessionStore: session,
-				SafetyStore:  safety,
-				Volume:       model.Volume{ObjectID: "volume/demo_pgdata", Backend: model.SnapshotBackendUnknown},
-				Tier:         model.BackendTierSavepoint,
+				Store:  store,
+				Volume: model.Volume{ObjectID: "volume-named-demo_pgdata", Backend: model.SnapshotBackendUnknown},
 			},
 			wantErr: ErrUnknownBackend,
 		},
 		{
-			name:    "a spec with no session store is refused",
-			spec:    model.BackendSpec{SafetyStore: safety, Volume: volume, Tier: model.BackendTierSavepoint},
-			wantErr: ErrNoSessionStore,
-		},
-		{
-			name:    "a spec with no safety store is refused",
-			spec:    model.BackendSpec{SessionStore: session, Volume: volume, Tier: model.BackendTierSavepoint},
-			wantErr: ErrNoSafetyStore,
-		},
-		{
-			name:    "a spec naming no tier is refused",
-			spec:    model.BackendSpec{SessionStore: session, SafetyStore: safety, Volume: volume},
-			wantErr: ErrNoBackendTier,
+			name:    "a spec with no store is refused",
+			spec:    model.BackendSpec{Volume: volume},
+			wantErr: ErrNoStore,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			registry, err := DefaultRegistry(&fakeMountStreamer{})
+			registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{}))
 			require.NoError(t, err)
 
 			// Act
@@ -99,100 +71,56 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 	}
 }
 
-// The shipped registry knows every kind a volume can name.
-func TestDefaultRegistry(t *testing.T) {
-	// Act
-	registry, err := DefaultRegistry(&fakeMountStreamer{})
-
-	// Assert
-	require.NoError(t, err)
-	for _, kind := range []model.SnapshotBackendKind{model.SnapshotBackendCopy, model.SnapshotBackendCDC} {
-		assert.Contains(t, registry.factories, kind)
-	}
-}
-
-// A spec missing a root or a tier must not reach a factory.
+// A spec missing its root must not reach a factory: the double carries no New
+// expectation, so a dispatch fails the run where it happened.
 func TestSnapshotBackendRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
-	session, safety := newDirStore(t), newDirStore(t)
-	volume := model.Volume{ObjectID: "volume/demo_pgdata", Backend: model.SnapshotBackendCopy}
-
-	tests := []struct {
-		name string
-		spec model.BackendSpec
-	}{
-		{
-			name: "no session store",
-			spec: model.BackendSpec{SafetyStore: safety, Volume: volume, Tier: model.BackendTierSavepoint},
-		},
-		{
-			name: "no safety store",
-			spec: model.BackendSpec{SessionStore: session, Volume: volume, Tier: model.BackendTierSavepoint},
-		},
-		{
-			name: "no tier",
-			spec: model.BackendSpec{SessionStore: session, SafetyStore: safety, Volume: volume},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			factory := &mockBackendFactory{kind: model.SnapshotBackendCopy}
-			registry, err := NewSnapshotBackendRegistry(factory)
-			require.NoError(t, err)
-
-			// Act
-			_, err = registry.New(tt.spec)
-
-			// Assert
-			require.Error(t, err)
-			factory.AssertNotCalled(t, "New", mock.Anything)
-		})
-	}
-}
-
-// Both stores and the tier reach the factory exactly as they were handed in.
-func TestSnapshotBackendRegistry_New_PassesTheSpecThrough(t *testing.T) {
 	// Arrange
-	session, safety := newDirStore(t), newDirStore(t)
-	volume := model.Volume{ObjectID: "volume/demo_db", Backend: model.SnapshotBackendCopy}
-
 	factory := &mockBackendFactory{kind: model.SnapshotBackendCopy}
-	var got model.BackendSpec
-	factory.On("New", model.BackendSpec{
-		SessionStore: session,
-		SafetyStore:  safety,
-		Volume:       volume,
-		Tier:         model.BackendTierSafety,
-	}).Run(func(args mock.Arguments) {
-		got = args.Get(0).(model.BackendSpec)
-	}).Return(&mockBackend{volume: volume}, nil).Once()
 	registry, err := NewSnapshotBackendRegistry(factory)
 	require.NoError(t, err)
 
 	// Act
 	_, err = registry.New(model.BackendSpec{
-		SessionStore: session,
-		SafetyStore:  safety,
-		Volume:       volume,
-		Tier:         model.BackendTierSafety,
+		Volume: model.Volume{ObjectID: "volume-named-demo_pgdata", Backend: model.SnapshotBackendCopy},
 	})
+
+	// Assert
+	require.ErrorIs(t, err, ErrNoStore)
+	factory.AssertExpectations(t)
+}
+
+// The store reaches the factory exactly as it was handed in: narrowing it here
+// would decide a layout this layer must not know.
+func TestSnapshotBackendRegistry_New_PassesTheSpecThrough(t *testing.T) {
+	// Arrange
+	store := newDirStore(t)
+	volume := model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendCopy}
+
+	factory := &mockBackendFactory{kind: model.SnapshotBackendCopy}
+	var got model.BackendSpec
+	factory.On("New", model.BackendSpec{Store: store, Volume: volume}).
+		Run(func(args mock.Arguments) {
+			got = args.Get(0).(model.BackendSpec)
+		}).Return(&mockBackend{volume: volume}, nil).Once()
+	registry, err := NewSnapshotBackendRegistry(factory)
+	require.NoError(t, err)
+
+	// Act
+	_, err = registry.New(model.BackendSpec{Store: store, Volume: volume})
 
 	// Assert
 	require.NoError(t, err)
 	factory.AssertExpectations(t)
-	assert.Same(t, session, got.SessionStore)
-	assert.Same(t, safety, got.SafetyStore)
+	assert.Same(t, store, got.Store)
 	assert.Equal(t, volume, got.Volume)
-	assert.Equal(t, model.BackendTierSafety, got.Tier)
 }
 
 func TestNewSnapshotBackendRegistry_DuplicateKind(t *testing.T) {
 	// Arrange
-	docker := &fakeMountStreamer{}
+	docker := &fakeVolumeStreamer{}
 
 	// Act
-	_, err := NewSnapshotBackendRegistry(tarcopy.NewFactory(docker), cdc.NewFactory(), tarcopy.NewFactory(docker))
+	_, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker), fullcopy.NewFactory(docker))
 
 	// Assert
 	require.ErrorIs(t, err, ErrBackendAlreadyRegistered)

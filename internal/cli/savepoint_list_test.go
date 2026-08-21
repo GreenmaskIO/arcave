@@ -24,6 +24,7 @@ func TestSavepointListHandler_SavepointList(t *testing.T) {
 
 	tests := []struct {
 		name        string
+		req         model.ListRequest // what the command asked for
 		savepoints  []model.Savepoint // what the service returns
 		listErr     error             // the service's error, if any
 		printerErr  error             // the printer's error, if any
@@ -36,6 +37,14 @@ func TestSavepointListHandler_SavepointList(t *testing.T) {
 			listErr:     nil,
 			printerErr:  nil,
 			wantErr:     nil,
+			wantPrinted: []any{sps},
+		},
+		{
+			// The flag is the handler's only input, and it must reach the service
+			// verbatim: matched exactly below, so dropping it fails here.
+			name:        "--include-safety-snapshots reaches the service",
+			req:         model.ListRequest{IncludeSafetySnapshots: true},
+			savepoints:  sps,
 			wantPrinted: []any{sps},
 		},
 		{
@@ -70,11 +79,11 @@ func TestSavepointListHandler_SavepointList(t *testing.T) {
 			p := &capturePrinter{}
 			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
 			svc := &mockService{}
-			svc.On("ListSavepoints").Return(tt.savepoints, tt.listErr)
+			svc.On("ListSavepoints", mock.Anything, tt.req).Return(tt.savepoints, tt.listErr).Once()
 			h := NewSavepointListHandler(svc, p)
 
 			// Act
-			err := h.SavepointList(context.Background())
+			err := h.SavepointList(context.Background(), tt.req)
 
 			// Assert
 			assert.ErrorIs(t, err, tt.wantErr)

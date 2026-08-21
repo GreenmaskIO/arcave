@@ -15,6 +15,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"time"
 
@@ -33,9 +34,76 @@ const Version = 1
 // arm rather than a new set of top-level keys.
 const StorageTypeDirectory = "directory"
 
-// SnapshotBackendFullCopy names the MVP snapshot backend, which stores each
-// mount's tar stream verbatim.
-const SnapshotBackendFullCopy = "fullcopy"
+// The tokens snapshot.backend accepts.
+const (
+	// SnapshotBackendFullCopy stores each mount's tar stream verbatim.
+	SnapshotBackendFullCopy = "fullcopy"
+	// SnapshotBackendCDC captures into a restic repository that outlives any one
+	// savepoint, writing only the chunks that changed.
+	SnapshotBackendCDC = "cdc"
+)
+
+// The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
+const (
+	// RestoreModeWipe clears the mount and restores it whole. The default.
+	RestoreModeWipe = "wipe"
+	// RestoreModeIncremental restores over the live data, writing only what
+	// differs and deleting what the snapshot does not carry.
+	RestoreModeIncremental = "incremental"
+)
+
+// What an incremental restore does with a file that is already there. Ignored by
+// RestoreModeWipe.
+const (
+	// OverwriteIfChanged compares content and rewrites only what differs.
+	OverwriteIfChanged = "if-changed"
+	// OverwriteAlways rewrites every file the snapshot carries.
+	OverwriteAlways = "always"
+)
+
+// DefaultResticImage is the stock image every cdc command runs in.
+// --delete/--overwrite need restic ≥0.17.
+const DefaultResticImage = "restic/restic:0.19.1"
+
+// Where cdc's restic server lives: the two ends of one loopback hop.
+const (
+	// DefaultCDCServerAddress binds the loopback on a port the kernel picks. A
+	// fixed port would collide between two arcave processes — a CLI run and an
+	// `arcave mcp` server, or two projects — and give an attacker a predictable
+	// target.
+	DefaultCDCServerAddress = "127.0.0.1:0"
+	// DefaultCDCContainerHost is how a container on Docker Desktop names the host
+	// loopback. Only the bridge path uses it: a native Linux daemon, where the
+	// name does not resolve, gets host networking instead (network_mode auto).
+	DefaultCDCContainerHost = "host.docker.internal"
+	// DefaultCDCServerScheme is the scheme the container fetches its repository
+	// over. arcave's own server speaks plain HTTP; https is for a TLS proxy in
+	// front of it.
+	DefaultCDCServerScheme = SchemeHTTP
+	// DefaultCDCNetworkMode probes rather than assumes: the same config runs on
+	// Docker Desktop and on a native Linux daemon.
+	DefaultCDCNetworkMode = NetworkModeAuto
+)
+
+// The schemes backends.cdc.server_scheme accepts.
+const (
+	SchemeHTTP  = "http"
+	SchemeHTTPS = "https"
+)
+
+// The modes backends.cdc.network_mode accepts: how a restic container reaches
+// arcave's restic server.
+const (
+	// NetworkModeAuto probes the daemon at wiring time: a native Linux daemon
+	// gets host networking, anything else the bridge and container_host.
+	NetworkModeAuto = "auto"
+	// NetworkModeHost joins the containers to the host's network namespace, so
+	// the server's loopback bind is reachable as 127.0.0.1 (Linux daemons only).
+	NetworkModeHost = "host"
+	// NetworkModeBridge keeps the default network and reaches the host by
+	// container_host — the escape hatch for remote daemons and rootless setups.
+	NetworkModeBridge = "bridge"
+)
 
 // The bounds arcave gives compose when it stops and starts the stack. They live
 // here rather than in the compose client because they are project config now:
@@ -79,6 +147,9 @@ type Config struct {
 	Compose  Compose  `yaml:"compose" mapstructure:"compose"`
 	Storage  Storage  `yaml:"storage" mapstructure:"storage"`
 	Snapshot Snapshot `yaml:"snapshot" mapstructure:"snapshot"`
+	// Backends holds the settings of the individual snapshot backends, one
+	// section per backend, present only for the backends a project configures.
+	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
 	// Log holds the project's default logging settings, honoured by every
 	// command unless overridden by the --log-level/--log-format global flags.
 	Log Log `yaml:"log,omitempty" mapstructure:"log"`
@@ -88,6 +159,16 @@ type Config struct {
 type Project struct {
 	Name         string   `yaml:"name" mapstructure:"name"`
 	ComposeFiles []string `yaml:"compose_files" mapstructure:"compose_files"`
+}
+
+// Validate gates the name, which becomes the tenant segment of every store
+// root. ApplyDefaults has run by then, so an empty name means the project
+// directory normalized to nothing and the user has to say what to call it.
+func (p Project) Validate() error {
+	if err := model.ProjectName(p.Name).Validate(); err != nil {
+		return fmt.Errorf("project.name: %w (set project.name explicitly)", err)
+	}
+	return nil
 }
 
 // Docker is how arcave reaches the daemon. It is honoured by both halves of the
@@ -201,15 +282,121 @@ func (s Storage) DirectoryPath() string {
 	return s.Directory.Path
 }
 
-// Snapshot selects the snapshot backend that owns the read→write pipeline.
+// Snapshot selects the snapshot backend that owns the read→write pipeline. It
+// says which backend a *new* savepoint uses; a rollback reads the backend out of
+// the record it restores, so changing this never orphans an existing savepoint.
 type Snapshot struct {
 	Backend string `yaml:"backend" mapstructure:"backend"`
 }
 
 // Validate rejects a backend arcave cannot construct.
 func (s Snapshot) Validate() error {
-	if s.Backend != SnapshotBackendFullCopy {
-		return fmt.Errorf("unsupported snapshot.backend %q (supported: %s)", s.Backend, SnapshotBackendFullCopy)
+	switch s.Backend {
+	case SnapshotBackendFullCopy, SnapshotBackendCDC:
+		return nil
+	default:
+		return fmt.Errorf("unsupported snapshot.backend %q (supported: %s, %s)",
+			s.Backend, SnapshotBackendFullCopy, SnapshotBackendCDC)
+	}
+}
+
+// BackendKind translates the configured token into the kind a volume carries —
+// the one place the two vocabularies meet. An unknown token yields
+// SnapshotBackendUnknown, which the registry refuses by name; Validate has
+// rejected it long before.
+func (s Snapshot) BackendKind() model.SnapshotBackendKind {
+	switch s.Backend {
+	case SnapshotBackendFullCopy:
+		return model.SnapshotBackendCopy
+	case SnapshotBackendCDC:
+		return model.SnapshotBackendCDC
+	default:
+		return model.SnapshotBackendUnknown
+	}
+}
+
+// Backends is one optional section per snapshot backend. The arms are pointers
+// so a project that never names a backend carries no section for it.
+type Backends struct {
+	CDC *CDCBackend `yaml:"cdc,omitempty" mapstructure:"cdc"`
+}
+
+// CDCBackend configures the content-defined-chunking backend: which restic image
+// its one-shot containers run, how a restore reaches the live mount, and the two
+// ends of the loopback hop a container fetches its repository over.
+type CDCBackend struct {
+	// RestoreMode is wipe (clear the mount, then restore it whole) or incremental
+	// (restore over the live data, letting restic write only the difference).
+	RestoreMode string `yaml:"restore_mode" mapstructure:"restore_mode"`
+	// Overwrite governs an incremental restore only.
+	Overwrite string `yaml:"overwrite" mapstructure:"overwrite"`
+	// Image is the restic image every cdc command runs in.
+	Image string `yaml:"image" mapstructure:"image"`
+	// ServerAddress is what arcave's restic server binds. Port 0 lets the kernel
+	// pick, which is what keeps two arcave processes from colliding.
+	ServerAddress string `yaml:"server_address" mapstructure:"server_address"`
+	// ServerScheme is the scheme of the repository URL the container fetches
+	// over: http (the default; the server itself speaks nothing else) or https,
+	// for a TLS proxy fronting it.
+	ServerScheme string `yaml:"server_scheme" mapstructure:"server_scheme"`
+	// ContainerHost is that server's host name *as the container sees it* on the
+	// bridge path: a bridged container cannot reach 127.0.0.1. Ignored under
+	// host networking.
+	ContainerHost string `yaml:"container_host" mapstructure:"container_host"`
+	// NetworkMode is how a restic container reaches the server: auto (probe the
+	// daemon), host, or bridge.
+	NetworkMode string `yaml:"network_mode" mapstructure:"network_mode"`
+}
+
+// Validate checks the arms that are present. An absent arm is not an error: a
+// project that does not use a backend does not have to configure it.
+func (b Backends) Validate() error {
+	if b.CDC == nil {
+		return nil
+	}
+	return b.CDC.Validate()
+}
+
+// Validate rejects a mode or an overwrite policy the backend cannot act on, and
+// a server address it cannot bind.
+func (c CDCBackend) Validate() error {
+	switch c.RestoreMode {
+	case RestoreModeWipe, RestoreModeIncremental:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.restore_mode %q (supported: %s, %s)",
+			c.RestoreMode, RestoreModeWipe, RestoreModeIncremental)
+	}
+	switch c.Overwrite {
+	case OverwriteIfChanged, OverwriteAlways:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.overwrite %q (supported: %s, %s)",
+			c.Overwrite, OverwriteIfChanged, OverwriteAlways)
+	}
+	if c.Image == "" {
+		return fmt.Errorf("backends.cdc.image is required")
+	}
+	if c.ServerAddress == "" {
+		return fmt.Errorf("backends.cdc.server_address is required")
+	}
+	// The address is bound, so it must split into host and port here rather than
+	// at listen time, halfway through wiring a command.
+	if _, _, err := net.SplitHostPort(c.ServerAddress); err != nil {
+		return fmt.Errorf("backends.cdc.server_address %q is not a host:port address: %w", c.ServerAddress, err)
+	}
+	switch c.ServerScheme {
+	case SchemeHTTP, SchemeHTTPS:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.server_scheme %q (supported: %s, %s)",
+			c.ServerScheme, SchemeHTTP, SchemeHTTPS)
+	}
+	if c.ContainerHost == "" {
+		return fmt.Errorf("backends.cdc.container_host is required")
+	}
+	switch c.NetworkMode {
+	case NetworkModeAuto, NetworkModeHost, NetworkModeBridge:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.network_mode %q (supported: %s, %s, %s)",
+			c.NetworkMode, NetworkModeAuto, NetworkModeHost, NetworkModeBridge)
 	}
 	return nil
 }
@@ -245,7 +432,11 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 		c.Version = Version
 	}
 	if c.Project.Name == "" {
-		c.Project.Name = filepath.Base(projectRoot)
+		// The name becomes a store-root segment, so the directory's own spelling is
+		// normalized rather than taken verbatim: MyApp yields myapp. A basename that
+		// normalizes to nothing stays empty and is reported by Validate, which is the
+		// one place that says "name the project explicitly".
+		c.Project.Name = model.NormalizeProjectName(filepath.Base(projectRoot)).String()
 	}
 	if c.Compose.WaitTimeout == 0 {
 		c.Compose.WaitTimeout = DefaultWaitTimeout
@@ -269,13 +460,64 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 			dir = *c.Storage.Directory
 		}
 		if dir.Path == "" {
-			dir.Path = filepath.Join(model.StateDir, "storage", c.Project.Name)
+			// No project segment here: storefactory roots every store at
+			// arcave/projects/<project>/…, so naming it twice would give
+			// .arcave/storage/demo/arcave/projects/demo/….
+			dir.Path = filepath.Join(model.StateDir, "storage")
 		}
 		c.Storage.Directory = &dir
 	}
 	if c.Snapshot.Backend == "" {
 		c.Snapshot.Backend = SnapshotBackendFullCopy
 	}
+	c.applyCDCDefaults()
+}
+
+// applyCDCDefaults fills the cdc arm only for a project that has one or names cdc
+// as its backend: a full-copy project should carry no block for a backend it
+// never runs. Like the storage arm it fills a copy and re-points, since a Config
+// travels by value and writing through the pointer would reach across the copy.
+func (c *Config) applyCDCDefaults() {
+	if c.Backends.CDC == nil && c.Snapshot.Backend != SnapshotBackendCDC {
+		return
+	}
+	cdc := CDCWithDefaults(c.Backends.CDC)
+	c.Backends.CDC = &cdc
+}
+
+// CDCWithDefaults resolves the backends.cdc section into the values arcave acts
+// on, absent section included — a rollback restores through the backend its
+// record names, so cdc has to be buildable even where snapshot.backend is
+// fullcopy and the project carries no block. It is the single home of these
+// defaults: ApplyDefaults fills the config through it, and the DI root reads the
+// effective section through it, so neither side can hold a copy that drifts.
+func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
+	c := CDCBackend{}
+	if cfg != nil {
+		c = *cfg
+	}
+	if c.RestoreMode == "" {
+		c.RestoreMode = RestoreModeIncremental
+	}
+	if c.Overwrite == "" {
+		c.Overwrite = OverwriteAlways
+	}
+	if c.Image == "" {
+		c.Image = DefaultResticImage
+	}
+	if c.ServerAddress == "" {
+		c.ServerAddress = DefaultCDCServerAddress
+	}
+	if c.ServerScheme == "" {
+		c.ServerScheme = DefaultCDCServerScheme
+	}
+	if c.ContainerHost == "" {
+		c.ContainerHost = DefaultCDCContainerHost
+	}
+	if c.NetworkMode == "" {
+		c.NetworkMode = DefaultCDCNetworkMode
+	}
+	return c
 }
 
 // Validate checks the sections whose values arcave must be able to act on. It runs
@@ -284,13 +526,19 @@ func (c *Config) Validate() error {
 	if c.Version != Version {
 		return model.ErrUnsupportedConfigVersion
 	}
+	if err := c.Project.Validate(); err != nil {
+		return err
+	}
 	if err := c.Compose.Validate(); err != nil {
 		return err
 	}
 	if err := c.Storage.Validate(); err != nil {
 		return err
 	}
-	return c.Snapshot.Validate()
+	if err := c.Snapshot.Validate(); err != nil {
+		return err
+	}
+	return c.Backends.Validate()
 }
 
 // Path returns the absolute config file path for the project rooted at

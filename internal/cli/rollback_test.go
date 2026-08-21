@@ -24,15 +24,16 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		Project: config.Project{ComposeFiles: []string{"docker-compose.yaml"}},
 		Compose: config.Compose{WaitTimeout: waitTimeout},
 	}
+	wantLatest := true
 	wantReq := model.RollbackRequest{
 		ComposeFiles: []string{"docker-compose.yaml"},
-		Ref:          "latest",
+		Latest:       &wantLatest,
 		WaitTimeout:  waitTimeout,
 	}
 	sp := model.Savepoint{ID: "1780335122"}
 	restored := []model.Volume{
 		{
-			ObjectID: "volume/demo_pgdata",
+			ObjectID: "volume-named-demo_pgdata",
 			Type:     model.VolumeTypeNamed,
 			Backend:  model.SnapshotBackendCopy,
 			Named: &model.VolumePropertiesNamed{
@@ -41,7 +42,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			},
 		},
 		{
-			ObjectID: "service/cache/data",
+			ObjectID: "volume-service-cache-data",
 			Type:     model.VolumeTypeAnon,
 			Backend:  model.SnapshotBackendCopy,
 			Anon:     &model.VolumePropertiesAnon{Service: "cache", Target: "/data"},
@@ -126,3 +127,50 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		})
 	}
 }
+
+// The one token both adapters take becomes exactly one of the three selectors,
+// and the classification is the whole of what "1780335122" means to arcave. An
+// id must never be read as a name, or `rollback <id>` would silently resolve to
+// a savepoint that merely calls itself that.
+func TestNewRollbackRequest(t *testing.T) {
+	tests := []struct {
+		name       string
+		ref        string
+		wantID     *model.SavepointID
+		wantName   *string
+		wantLatest *bool
+		wantErr    error
+	}{
+		{name: "the reserved word", ref: "latest", wantLatest: ptr(true)},
+		{name: "a run of digits is an id", ref: "1780335122", wantID: ptr(model.SavepointID("1780335122"))},
+		{name: "anything else is a name", ref: "before-migration", wantName: ptr("before-migration")},
+		// Digits with anything else in them is not an id — SavepointID.Validate
+		// admits digits alone — so it can only be a name.
+		{name: "digits with a suffix are a name", ref: "1780335122-b", wantName: ptr("1780335122-b")},
+		// The empty token needs no case of its own: it lands on the name branch and
+		// Validate refuses it, which is what keeps `arcave rollback ""` from
+		// resolving to anything.
+		{name: "the empty token selects nothing", ref: "", wantName: ptr(""), wantErr: model.ErrRollbackNoSelector},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := newRollbackRequest(tt.ref, []string{"docker-compose.yml"}, 90*time.Second)
+
+			// Assert
+			assert.Equal(t, tt.wantID, got.ID)
+			assert.Equal(t, tt.wantName, got.Name)
+			assert.Equal(t, tt.wantLatest, got.Latest)
+			assert.Equal(t, []string{"docker-compose.yml"}, got.ComposeFiles)
+			assert.Equal(t, 90*time.Second, got.WaitTimeout)
+			assert.ErrorIs(t, got.Validate(), tt.wantErr)
+			// Whatever it chose renders back as the word that was typed, which is what
+			// error messages quote and what a safety snapshot's name carries.
+			assert.Equal(t, tt.ref, got.Ref())
+		})
+	}
+}
+
+// ptr renders a literal as one of RollbackRequest's optional selectors.
+func ptr[T any](v T) *T { return &v }

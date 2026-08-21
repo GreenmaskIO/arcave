@@ -14,18 +14,14 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// buildBackends builds one backend per volume, bound to tier, in input order. All
-// up front: an unregistered backend fails before any byte moves.
-func (s *Service) buildBackends(
-	volumes []model.Volume, tier model.BackendTier,
-) ([]model.VolumeSnapshotBackend, error) {
+// buildBackends builds one backend per volume, all rooted at the one store, in
+// input order. All up front: an unregistered backend fails before any byte moves.
+func (s *Service) buildBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
 	backends := make([]model.VolumeSnapshotBackend, len(volumes))
 	for i, volume := range volumes {
 		backend, err := s.snapshotBackendRegistry.New(model.BackendSpec{
-			SessionStore: s.savepointStore,
-			SafetyStore:  s.safetyBackupStore,
-			Volume:       volume,
-			Tier:         tier,
+			Store:  s.store,
+			Volume: volume,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("building %s backend for volume %s: %w", volume.Backend, volume.ObjectID, err)
@@ -35,44 +31,38 @@ func (s *Service) buildBackends(
 	return backends, nil
 }
 
-// performSavepoint captures every volume and commits the record last: that write
-// is the commit, so a run that died halfway leaves data no record names.
+// captureVolumes takes one capture per backend under a fresh id and returns the
+// uncommitted savepoint they make up. On error the savepoint is zero: what a
+// half-finished fan-out wrote is garbage no caller may address, logged here —
+// the one place that knows the id — and left for a later gc.
 //
-// repo and store are parameters, and must be one tier's pair, because both tiers
-// take savepoints — a rollback's undo is a savepoint in the safety-backup tree,
-// with a record of its own.
-//
-// It opens by refusing a tree the new id already names. A create killed by a
-// crash can have left an orphan there: no record names it, so List cannot see it
-// and the id created from the clock does not avoid it, and its stale archives
-// would otherwise be mixed into this savepoint. Dropping it here would delete
-// data nobody asked to lose, silently — so the run stops instead and names it.
-//
-// The record comes back even on error, filled as far as the fan-out got, for the
-// caller's cleanup to address.
-func (s *Service) performSavepoint(
+// It opens by refusing a tree the new id already names — see requireEmptyTree.
+func (s *Service) captureVolumes(
 	ctx context.Context,
-	repo savepointRepository,
-	store storages.Storager,
 	backends []model.VolumeSnapshotBackend,
 	name, description string,
+	labels map[string]string,
 ) (model.Savepoint, error) {
 	createdAt := time.Now()
 	record := model.Savepoint{
 		ID:          model.SavepointID(strconv.FormatInt(createdAt.Unix(), 10)),
 		Name:        name,
 		Description: description,
+		Labels:      labels,
 		CreatedAt:   createdAt,
 		Stats:       make([]model.SnapshotStat, len(backends)),
 	}
 
-	if err := requireEmptyTree(ctx, store, record.ID); err != nil {
-		return record, err
+	if err := s.requireEmptyTree(ctx, record.ID); err != nil {
+		return model.Savepoint{}, err
 	}
 
 	err := s.forEachBackend(ctx, record.ID, backends, "snapshot",
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: record.ID})
+			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{
+				SnapshotID: record.ID,
+				Labels:     record.Labels,
+			})
 			if err != nil {
 				return fmt.Errorf("capture volume: %w", err)
 			}
@@ -80,41 +70,39 @@ func (s *Service) performSavepoint(
 			return nil
 		})
 	if err != nil {
-		return record, err
-	}
-
-	if err := repo.Save(ctx, record); err != nil {
-		return record, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
+		// No record names what the fan-out wrote, so nothing reads it, and a failure
+		// path is the worst moment to delete data.
+		zerolog.Ctx(ctx).Warn().Str("snapshot_id", record.ID.String()).
+			Msg("the partial capture is retained for a later gc")
+		return model.Savepoint{}, err
 	}
 	return record, nil
 }
 
-// requireComplete gates a restore on every volume of record being there, naming
-// all the gaps at once rather than the first: a half-restore is worse than none.
-func (s *Service) requireComplete(
-	ctx context.Context, record model.Savepoint, backends []model.VolumeSnapshotBackend,
-) error {
-	present := make([]bool, len(backends))
-	err := s.forEachBackend(ctx, record.ID, backends, "exists",
-		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			ok, err := backend.Exists(ctx, model.BackendExistsRequest{SnapshotID: record.ID})
-			if err != nil {
-				return fmt.Errorf("check capture: %w", err)
-			}
-			present[i] = ok
-			return nil
-		})
+// performSavepoint captures every volume and commits the record last: that write
+// is the commit, so a run that died halfway leaves data no record names.
+//
+// A rollback's safety snapshot goes through it too, labelled rather than special:
+// the record is what makes the backup a killed rollback abandoned listable, and
+// therefore rollable-back-to by hand.
+//
+// On error the record is zero: an uncommitted capture is garbage, not a value.
+func (s *Service) performSavepoint(
+	ctx context.Context,
+	backends []model.VolumeSnapshotBackend,
+	name string,
+	description string,
+	labels map[string]string,
+) (model.Savepoint, error) {
+	record, err := s.captureVolumes(ctx, backends, name, description, labels)
 	if err != nil {
-		return err
+		return model.Savepoint{}, err
 	}
-	if missing := absentVolumes(backends, present); len(missing) > 0 {
-		zerolog.Ctx(ctx).Error().
-			Str("snapshot_id", record.ID.String()).
-			Interface("volumes", missing).
-			Msg("no capture exists for these volumes")
-		return model.ErrMissingVolumeInSnapshot
+
+	if err := s.savepointRepo.Save(ctx, record); err != nil {
+		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
 	}
-	return nil
+	return record, nil
 }
 
 // restoreVolumes writes every volume back, each carrying the payload its own
@@ -138,32 +126,20 @@ func (s *Service) restoreVolumes(
 // Reversing that leaves a savepoint that still lists but is half gone, so the
 // order is pinned by a test.
 //
-// repo and store must be one tier's pair.
-func (s *Service) dropSavepoint(
-	ctx context.Context,
-	repo savepointRepository,
-	store storages.Storager,
-	record model.Savepoint,
-	backends []model.VolumeSnapshotBackend,
-) error {
-	if err := repo.Delete(ctx, record.ID); err != nil {
-		return fmt.Errorf("uncommit savepoint %s: %w", record.ID, err)
-	}
-	return s.dropCaptures(ctx, store, record, backends)
-}
-
-// dropCaptures drops each backend's data, then sweeps the directory they shared.
-// It is dropSavepoint without the uncommit, which is what a failed capture wants:
-// no record was ever written, so there is nothing to uncommit.
+// It is also what a failed capture wants: Delete is idempotent — a namespace
+// with no record is already uncommitted — so one function serves both.
 //
 // The sweep runs whatever the backends reported: it is what reclaims an archive a
 // capture that died mid-fan-out left behind, which no stat names.
-func (s *Service) dropCaptures(
+func (s *Service) dropSavepoint(
 	ctx context.Context,
-	store storages.Storager,
 	record model.Savepoint,
 	backends []model.VolumeSnapshotBackend,
 ) error {
+	if err := s.savepointRepo.Delete(ctx, record.ID); err != nil {
+		return fmt.Errorf("uncommit savepoint %s: %w", record.ID, err)
+	}
+
 	removeErr := s.forEachBackend(ctx, record.ID, backends, "remove",
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			if err := backend.Remove(ctx, model.BackendRemoveRequest{
@@ -175,7 +151,7 @@ func (s *Service) dropCaptures(
 			return nil
 		})
 
-	sweepErr := sweepTree(ctx, store, record.ID)
+	sweepErr := s.sweepTree(ctx, record.ID)
 	if sweepErr != nil {
 		sweepErr = fmt.Errorf("remove capture directory %s: %w", record.ID, sweepErr)
 	}
@@ -230,28 +206,17 @@ func volumeOpContext(
 		WithContext(ctx)
 }
 
-func absentVolumes(backends []model.VolumeSnapshotBackend, present []bool) []model.Volume {
-	var missing []model.Volume
-	for i, backend := range backends {
-		if !present[i] {
-			missing = append(missing, backend.Volume())
-		}
-	}
-	return missing
-}
-
-// requireEmptyTree refuses an id whose capture directory already holds objects.
-// Only an interrupted run can have left them — a committed savepoint's id is
-// never created twice — and they are the last copy of whatever it captured, so
-// they are reported rather than deleted. An absent tree lists empty, which is
-// the ordinary case.
-func requireEmptyTree(ctx context.Context, store storages.Storager, id model.SavepointID) error {
-	objects, err := store.List(ctx, id.String())
+// requireEmptyTree refuses an id whose capture directory already holds objects:
+// an interrupted run's remains, or — an id being Unix seconds — a live savepoint
+// captured and rolled back inside one tick. Telling them apart needs the reserved
+// record key, which this layer may not name, so the message advises neither removal.
+func (s *Service) requireEmptyTree(ctx context.Context, id model.SavepointID) error {
+	objects, err := s.store.List(ctx, id.String())
 	if err != nil {
 		return fmt.Errorf("reading the capture directory %s: %w", id, err)
 	}
 	if len(objects) > 0 {
-		return fmt.Errorf("%w: %s holds %d object(s) from an interrupted run; remove it and retry",
+		return fmt.Errorf("%w: %s holds %d object(s) — a savepoint of this same second, or an interrupted run's remains; retry, and check what is there before removing it",
 			errCaptureDirectoryNotEmpty, id, len(objects))
 	}
 	return nil
@@ -260,8 +225,8 @@ func requireEmptyTree(ctx context.Context, store storages.Storager, id model.Sav
 // sweepTree drops a whole capture directory — the one storage key the service
 // addresses itself; everything below it is the backends'. An absent tree is not
 // an error.
-func sweepTree(ctx context.Context, store storages.Storager, id model.SavepointID) error {
-	if err := store.DeleteAll(ctx, id.String()); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+func (s *Service) sweepTree(ctx context.Context, id model.SavepointID) error {
+	if err := s.store.DeleteAll(ctx, id.String()); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
 		return err
 	}
 	return nil

@@ -384,9 +384,9 @@ func TestIntrospect_StorageID(t *testing.T) {
 	require.Len(t, got.Volumes, 1)
 
 	svc := got.Services[0]
-	assert.Equal(t, "volume/demo_db", svc.Volumes[0].ObjectID(svc.Name))
-	assert.Equal(t, "service/db/db", svc.Volumes[1].ObjectID(svc.Name))
-	assert.Equal(t, "volume/demo_db", got.Volumes[0].ObjectID(), "service and project entry must address the same data")
+	assert.Equal(t, "volume-named-demo_db", svc.Volumes[0].ObjectID(svc.Name))
+	assert.Equal(t, "volume-service-db-db", svc.Volumes[1].ObjectID(svc.Name))
+	assert.Equal(t, "volume-named-demo_db", got.Volumes[0].ObjectID(), "service and project entry must address the same data")
 }
 
 // volumeUsers inverts the services' mounts into each named volume's UsedBy,
