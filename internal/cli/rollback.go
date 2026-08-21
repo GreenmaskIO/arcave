@@ -24,12 +24,10 @@ func NewRollbackHandler(svc rollbackService, printer printer) *RollbackHandler {
 	}
 }
 
-// Rollback restores a savepoint and prints what was restored. The bound it
-// waits for before deciding the rollback failed and reverting comes from cfg
-// (compose.wait_timeout, overridden by --wait-timeout), like the compose file
-// list beside it.
+// Rollback restores a savepoint and prints what was restored. The wait bound
+// comes from cfg (compose.wait_timeout, overridden by --wait-timeout).
 func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref string) error {
-	res, err := h.svc.Rollback(ctx, newRollbackRequest(ref, cfg.Project.ComposeFiles, cfg.Compose.WaitTimeout))
+	res, err := h.svc.Rollback(ctx, newRollbackRequest(ref, cfg.Compose.WaitTimeout))
 	if err != nil {
 		return err
 	}
@@ -39,15 +37,10 @@ func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref s
 	})
 }
 
-// newRollbackRequest builds the whole request both adapters send — the CLI from
-// its positional argument and config, the MCP tool from its input fields — so
-// neither can drift on what "1780335122" means, nor forget a field.
-//
-// "latest" is reserved; a run of decimal digits is an id, that being exactly what
-// SavepointID.Validate admits; anything left is a name. An empty ref sets Name
-// to "", which req.Validate refuses, so it needs no case of its own.
-func newRollbackRequest(ref string, composeFiles []string, waitTimeout time.Duration) model.RollbackRequest {
-	req := model.RollbackRequest{ComposeFiles: composeFiles, WaitTimeout: waitTimeout}
+// newRollbackRequest builds the request both adapters send, so neither drifts on
+// what a ref means: "latest" is reserved, digits are an id, the rest is a name.
+func newRollbackRequest(ref string, waitTimeout time.Duration) model.RollbackRequest {
+	req := model.RollbackRequest{WaitTimeout: waitTimeout}
 	switch {
 	case ref == model.RefLatest:
 		latest := true

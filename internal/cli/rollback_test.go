@@ -20,15 +20,11 @@ import (
 const waitTimeout = 90 * time.Second
 
 func TestRollbackHandler_Rollback(t *testing.T) {
-	cfg := config.Config{
-		Project: config.Project{ComposeFiles: []string{"docker-compose.yaml"}},
-		Compose: config.Compose{WaitTimeout: waitTimeout},
-	}
+	cfg := config.Config{Compose: config.Compose{WaitTimeout: waitTimeout}}
 	wantLatest := true
 	wantReq := model.RollbackRequest{
-		ComposeFiles: []string{"docker-compose.yaml"},
-		Latest:       &wantLatest,
-		WaitTimeout:  waitTimeout,
+		Latest:      &wantLatest,
+		WaitTimeout: waitTimeout,
 	}
 	sp := model.Savepoint{ID: "1780335122"}
 	restored := []model.Volume{
@@ -156,13 +152,12 @@ func TestNewRollbackRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newRollbackRequest(tt.ref, []string{"docker-compose.yml"}, 90*time.Second)
+			got := newRollbackRequest(tt.ref, 90*time.Second)
 
 			// Assert
 			assert.Equal(t, tt.wantID, got.ID)
 			assert.Equal(t, tt.wantName, got.Name)
 			assert.Equal(t, tt.wantLatest, got.Latest)
-			assert.Equal(t, []string{"docker-compose.yml"}, got.ComposeFiles)
 			assert.Equal(t, 90*time.Second, got.WaitTimeout)
 			assert.ErrorIs(t, got.Validate(), tt.wantErr)
 			// Whatever it chose renders back as the word that was typed, which is what

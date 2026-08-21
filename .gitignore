@@ -38,7 +38,6 @@ bin/
 dist/
 .vscode
 .user
-examples/demo/.gm
 # restic fixture the demo generates
 examples/demo/repo/
 .idea

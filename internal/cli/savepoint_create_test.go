@@ -13,15 +13,11 @@ import (
 )
 
 func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
-	cfg := config.Config{
-		Project: config.Project{ComposeFiles: []string{"docker-compose.yaml"}},
-		Compose: config.Compose{WaitTimeout: waitTimeout},
-	}
+	cfg := config.Config{Compose: config.Compose{WaitTimeout: waitTimeout}}
 	wantReq := model.CreateSavepointRequest{
-		ComposeFiles: []string{"docker-compose.yaml"},
-		Name:         "before-migration",
-		Description:  "schema v2",
-		WaitTimeout:  waitTimeout,
+		Name:        "before-migration",
+		Description: "schema v2",
+		WaitTimeout: waitTimeout,
 	}
 	sp := model.Savepoint{ID: "1780335122", Name: "before-migration", Description: "schema v2"}
 	svcErr := errors.New("services did not become healthy")

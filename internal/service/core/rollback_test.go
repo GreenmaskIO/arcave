@@ -30,7 +30,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -38,7 +38,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 	commitSafety := expectSafetySnapshotCommit(repo, "1780335122")
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
-	up := runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil).Once()
+	up := runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	removeSafety := safetySnapshotBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
@@ -58,16 +58,15 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	res, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -105,7 +104,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stopBeforeBackup := runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
+	stopBeforeBackup := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -116,11 +115,11 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 		Return(errors.New("restore boom")).Once()
 	// The revert replays the backup under the id its capture reported, and a
 	// successful revert already returned the environment, so the backup goes too.
-	stopForRevert := runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
+	stopForRevert := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
 	restoreSafety := safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
-	up := runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil).Once()
+	up := runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	removeSafety := safetySnapshotBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
@@ -137,7 +136,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	logs := &syncBuffer{}
@@ -145,9 +144,8 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -177,10 +175,10 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	expectSafetySnapshotCommit(repo, "1780335122")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
 	// The first Up is the failed health check; the second is the revert's restart.
-	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(errors.New("unhealthy")).Once()
-	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil).Once()
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(errors.New("unhealthy")).Once()
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -204,16 +202,15 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -241,7 +238,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	// expectation, so an uncommit would fail the run where it happened.
 	expectSafetySnapshotCommit(repo, "1780335122")
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -263,7 +260,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	logs := &syncBuffer{}
@@ -271,9 +268,8 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -303,8 +299,8 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 	repo, inspector, locker := demoResolution(record)
 
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
-	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 
@@ -319,16 +315,15 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -363,11 +358,11 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	require.NoError(t, repo.Save(context.Background(), record))
 
 	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything, demoComposeFiles()).Return(demoIntrospection(), nil)
+	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -390,7 +385,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	logs := &syncBuffer{}
@@ -398,9 +393,8 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -450,12 +444,12 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	captureCtx := func(args mock.Arguments) { upErrs = append(upErrs, args.Get(0).(context.Context).Err()) }
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
 	// The first Up fails the health check, which drives Rollback into revert; the
 	// second Up is revert's own restart, the one under test.
-	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Run(captureCtx).
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Run(captureCtx).
 		Return(errors.New("unhealthy")).Once()
-	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Run(captureCtx).Return(nil).Once()
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Run(captureCtx).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -479,16 +473,15 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -515,8 +508,8 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 	expectSafetySnapshotCommit(repo, "1780335122")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
-	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil)
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -537,7 +530,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	logs := &syncBuffer{}
@@ -545,9 +538,8 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert
@@ -586,16 +578,15 @@ func TestService_Rollback_RejectsAnUnsafeIDBeforeAnyBackend(t *testing.T) {
 
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("../../etc"),
-		WaitTimeout:  time.Second,
+		ID:          ptrID("../../etc"),
+		WaitTimeout: time.Second,
 	})
 
 	// Assert
@@ -632,19 +623,19 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	repo := savepointrepo.New(store)
 	require.NoError(t, repo.Save(context.Background(), record))
 	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything, demoComposeFiles()).Return(demoIntrospection(), nil)
+	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
-	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil)
 
 	docker := &fakeVolumeStreamer{payload: "live bytes"}
 	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
 	require.NoError(t, err)
 	svc := New(Deps{
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 
@@ -655,9 +646,8 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 
 	// Act
 	res, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
+		ID:          ptrID("1780335122"),
+		WaitTimeout: 60 * time.Second,
 	})
 
 	// Assert

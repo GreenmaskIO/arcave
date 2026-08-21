@@ -13,30 +13,27 @@ import (
 // serverVersion is the version arcave reports to the MCP host during initialise.
 const serverVersion = "0.1.0"
 
-// mcpService is the MCP adapter's view of the savepoint workflows.
-type mcpService interface {
+// MCPService is the MCP adapter's view of the savepoint workflows.
+type MCPService interface {
 	CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error)
 	ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error)
 	RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error)
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
 }
 
+// MCPServiceFactory builds the workflows for one compose project, plus the release
+// the tool call invokes on return.
+type MCPServiceFactory func(ctx context.Context, project string) (svc MCPService, release func(), err error)
+
 // MCPHandler serves arcave's savepoint workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
-	svc              mcpService
-	recommendFactory RecommendServiceFactory
-	composeFiles     []string
+	serviceFactory MCPServiceFactory
 }
 
-// NewMCPHandler builds the MCP adapter over svc. The compose files are injected
-// from the resolved project config rather than taken per tool call.
-func NewMCPHandler(svc mcpService, recommendFactory RecommendServiceFactory, composeFiles []string) *MCPHandler {
-	return &MCPHandler{
-		svc:              svc,
-		recommendFactory: recommendFactory,
-		composeFiles:     composeFiles,
-	}
+// NewMCPHandler builds the MCP adapter; the stack a call operates on arrives with the call.
+func NewMCPHandler(serviceFactory MCPServiceFactory) *MCPHandler {
+	return &MCPHandler{serviceFactory: serviceFactory}
 }
 
 // The tool descriptions are written for an agent deciding *when* to call, not
@@ -70,40 +67,11 @@ const (
 		"a service only sees a subpath of. arcave takes a safety snapshot of the live state first " +
 		"and replays it automatically if the rollback fails, so a failed rollback leaves the " +
 		"environment as it was. Services are stopped and started again."
-	// descRecommend carries the whole apply workflow: arcave exposes no tool that
-	// applies a recommendation, so the agent edits the compose files itself, and
-	// this description is the only place it reads how.
-	descRecommend = "Report volumes the project's services should mount but do not: a service whose " +
-		"image is known to write persistent state to a path with no volume or bind mount on it, so " +
-		"a savepoint would silently fail to capture that state. Strictly read-only — it reads the " +
-		"compose files and the recommender catalog, and touches neither the Docker daemon, nor the " +
-		"savepoint storage, nor the project lock. Returns compose_files (the files actually " +
-		"checked) and recommendations, each with service, image, volume (the container path to " +
-		"mount), operation ('AddVolume') and hash (stable id of the finding). An empty " +
-		"recommendations array means there is nothing to advise.\n\n" +
-		"arcave does NOT apply recommendations — you do. When the array is not empty: (1) render the " +
-		"findings to the user as a markdown table, never as raw JSON, with one row per " +
-		"recommendation and the columns '#' (a 1-based number the user can refer to), 'Service', " +
-		"'Image' and 'Volume to add' (the container path); omit operation and hash, which are not " +
-		"for the user to read; name the checked compose_files in a sentence under the table; " +
-		"(2) ask the user two things — which recommendations to apply, and where to put them (one " +
-		"of the files in compose_files, or a new override file docker-compose.arcave.yaml). If your " +
-		"host offers a structured question tool (in Claude Code it is AskUserQuestion), use it and " +
-		"ask both in a single call: the first question multi-select with one option per " +
-		"recommendation labelled '<service> → <volume>', the second single-select with one option " +
-		"per compose file plus 'new docker-compose.arcave.yaml'. That tool allows at most four " +
-		"options per question, so when there are more than four recommendations — or the host has " +
-		"no such tool — ask in plain text instead and let the user answer with the row numbers from " +
-		"the table; (3) edit the chosen file yourself: add a named volume to " +
-		"services.<service>.volumes as '<volume-name>:<volume-path>' and declare <volume-name> " +
-		"under the top-level volumes: key. If you created a new file, add it to project.compose_files " +
-		"in .arcave/config.yaml so savepoint and rollback see the new volumes, and tell the user " +
-		"their own `docker compose` invocations must now pass it with -f."
 )
 
-// createInput is savepoint_create's input schema. The compose files are not a
-// field: they come from the resolved project config, injected into the handler.
+// createInput is savepoint_create's input schema.
 type createInput struct {
+	Project     string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
 	Name        string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by arcave"`
 	Description string `json:"description,omitempty" jsonschema:"what this savepoint captures, e.g. the change it is being taken before"`
 	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
@@ -115,11 +83,16 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
-	sp, err := h.svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
-		ComposeFiles: h.composeFiles,
-		Name:         in.Name,
-		Description:  in.Description,
-		WaitTimeout:  waitTimeout,
+	svc, release, err := h.serviceFactory(ctx, in.Project)
+	if err != nil {
+		return nil, model.Savepoint{}, err
+	}
+	defer release()
+
+	sp, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
+		Name:        in.Name,
+		Description: in.Description,
+		WaitTimeout: waitTimeout,
 	})
 	if err != nil {
 		return nil, model.Savepoint{}, err
@@ -151,13 +124,20 @@ type listOutput struct {
 // listSavepointInput is list's input schema — one flag, and the tool is
 // otherwise argument-free.
 type listSavepointInput struct {
-	IncludeSafetySnapshots bool `json:"include_safety_snapshots,omitempty" jsonschema:"also list the safety snapshots a rollback commits for its own undo; hidden by default"`
+	Project                string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	IncludeSafetySnapshots bool   `json:"include_safety_snapshots,omitempty" jsonschema:"also list the safety snapshots a rollback commits for its own undo; hidden by default"`
 }
 
 // listSavepoints reports the savepoints in the store. It reaches no daemon and
 // takes no lock, so it is safe to call while another workflow is running.
 func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in listSavepointInput) (*mcpsdk.CallToolResult, listOutput, error) {
-	sps, err := h.svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
+	svc, release, err := h.serviceFactory(ctx, in.Project)
+	if err != nil {
+		return nil, listOutput{}, err
+	}
+	defer release()
+
+	sps, err := svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
 	if err != nil {
 		return nil, listOutput{}, err
 	}
@@ -172,6 +152,7 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 // removeSavepointInput selects savepoints to remove, either by explicit IDs or by
 // retention rules (the two modes are mutually exclusive).
 type removeSavepointInput struct {
+	Project      string   `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
 	IDs          []string `json:"ids,omitempty" jsonschema:"savepoint ids to delete; cannot be combined with the retention fields"`
 	RetainRecent int      `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest"`
 	RetainFor    string   `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
@@ -181,7 +162,13 @@ type removeSavepointInput struct {
 
 // removeSavepoints deletes the selected savepoints and reports what went.
 func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResponse, error) {
-	res, err := h.svc.RemoveSavepoints(ctx, model.RemoveRequest{
+	svc, release, err := h.serviceFactory(ctx, in.Project)
+	if err != nil {
+		return nil, model.RemoveResponse{}, err
+	}
+	defer release()
+
+	res, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{
 		IDs:          model.SavepointIDs(in.IDs),
 		RetainRecent: in.RetainRecent,
 		RetainFor:    in.RetainFor,
@@ -196,6 +183,7 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 
 // rollbackInput is rollback's input schema.
 type rollbackInput struct {
+	Project     string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
 	Ref         string `json:"ref" jsonschema:"the savepoint to restore: its id, its name, or the literal 'latest'"`
 	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
 }
@@ -206,7 +194,13 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
-	res, err := h.svc.Rollback(ctx, newRollbackRequest(in.Ref, h.composeFiles, waitTimeout))
+	svc, release, err := h.serviceFactory(ctx, in.Project)
+	if err != nil {
+		return nil, model.RollbackResponse{}, err
+	}
+	defer release()
+
+	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout))
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
@@ -214,52 +208,6 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 		RolledBackTo: res.Savepoint,
 		Restored:     res.Restored,
 	}, nil
-}
-
-// recommendInput is recommend's input schema. Unlike every other tool here it
-// does carry compose_files: recommend reads nothing but the files it is given, so
-// an agent may legitimately check a file set the project config does not name —
-// a compose file it is about to add, say. Omitting the field falls back to the
-// configured set, which is what the other tools always use.
-type recommendInput struct {
-	ComposeFiles     []string `json:"compose_files,omitempty" jsonschema:"Docker Compose files to check; omit to use the project's configured compose files"`
-	RecommenderFiles []string `json:"recommender_files,omitempty" jsonschema:"recommender catalog files to merge over the built-in catalog, in order; omit to use the built-in catalog alone"`
-}
-
-// recommendOutput wraps the recommendations, because MCP structured output must
-// be a JSON object — the CLI prints the bare array Recommendations holds.
-//
-// ComposeFiles reports the files the check actually ran over, resolved fallback
-// and all: the agent has to name them back to the user when it asks which file to
-// add a volume to, and it cannot know the configured set otherwise.
-type recommendOutput struct {
-	ComposeFiles    []string               `json:"compose_files" jsonschema:"the compose files the check ran over"`
-	Recommendations []model.Recommendation `json:"recommendations" jsonschema:"the volumes the project's services should mount but do not"`
-}
-
-// recommend reports the persistent volumes the project's services are missing. It
-// reaches no daemon, opens no storage and takes no lock, so it is safe to call at
-// any time — including while another workflow is running.
-//
-// The CLI turns "there is advice" into exit status 1; there is no equivalent here
-// and none is wanted: a non-empty recommendations array says the same thing, and
-// an MCP tool error means the check itself failed.
-func (h *MCPHandler) recommendMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in recommendInput) (*mcpsdk.CallToolResult, recommendOutput, error) {
-	files := in.ComposeFiles
-	if len(files) == 0 {
-		files = h.composeFiles
-	}
-
-	recs, err := h.recommendFactory(in.RecommenderFiles).Recommend(ctx, files...)
-	if err != nil {
-		return nil, recommendOutput{}, err
-	}
-	// A non-nil empty slice marshals as [] rather than null, so an agent reading
-	// the result never has to tell "nothing to advise" from "no such field".
-	if recs == nil {
-		recs = []model.Recommendation{}
-	}
-	return nil, recommendOutput{ComposeFiles: files, Recommendations: recs}, nil
 }
 
 // Run registers the tools and serves them over stdio until the host closes stdin
@@ -271,7 +219,6 @@ func (h *MCPHandler) MCPRun(ctx context.Context) error {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList}, h.listSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove}, h.removeSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "recommend", Description: descRecommend}, h.recommendMCP)
 
 	return srv.Run(ctx, &mcpsdk.StdioTransport{})
 }

@@ -2,13 +2,8 @@ package model
 
 import "fmt"
 
-// StackName names the docker compose project a store root is scoped by — the
-// name compose itself resolves from the project's files, resolved at wiring
-// time. It carries its own gate, so a value that reached a store was validated.
-//
-// A type of its own beside ProjectName: the storage tenant and the compose stack
-// are different concepts, and conflating them is exactly what a shared string
-// type would invite.
+// StackName names the docker compose project a store root is scoped by, given per
+// invocation (-p/--project-name). Distinct from ProjectName, the storage tenant.
 type StackName string
 
 // Validate accepts a non-empty name of the charset compose imposes on project

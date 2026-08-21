@@ -21,20 +21,24 @@ Requirements: Docker with the Compose plugin (`docker compose`).
 arcave init
 
 # 2. Snapshot the current state before a risky change
-arcave savepoint create before-migration
+arcave -p myapp savepoint create before-migration
 
 # 3. ...run your migration / experiment...
 
 # 4. If it went wrong, restore the snapshot
-arcave rollback before-migration
+arcave -p myapp rollback before-migration
 ```
 
-`arcave init` writes `.arcave/config.yaml` (project name, compose files, savepoint dir). Useful flags:
+`-p/--project-name` names the compose project to act on, as `docker compose ls` lists it; `ARCAVE_PROJECT_NAME` sets it for a shell. arcave reads the running stack from the Docker daemon, so it needs no compose file list of its own — but the stack has to exist: `docker compose stop` is fine, `docker compose down` leaves nothing to read.
+
+`arcave init` writes `.arcave/config.yaml` (project name, savepoint dir). Useful flags:
 
 ```bash
-arcave init --name myapp -f docker-compose.yaml -f docker-compose.override.yaml
+arcave init --name myapp
 arcave init --savepoint-dir /backups/myapp   # default: .arcave/savepoints/<project-name>
 ```
+
+The examples below leave `-p` out for brevity: export `ARCAVE_PROJECT_NAME=myapp` once and every command picks it up.
 
 All commands print their result as JSON on stdout.
 
@@ -218,5 +222,7 @@ Output on success:
 
 `<mount-path>` is the container mount path with `/` replaced by `_` (e.g.
 `/export/data` → `_export_data`); each mount is stored as a single `data.tar`.
-arcave uses `docker compose stop` (never `down`), so containers are preserved and
-nothing on the host is removed beyond the volume data being snapshotted.
+arcave uses `docker compose stop` (never `down`) and starts the same containers
+again, so nothing is recreated and nothing on the host is removed beyond the
+volume data being snapshotted. It reads the stack from the Docker daemon and
+never opens a compose file, so moving or deleting yours changes nothing.

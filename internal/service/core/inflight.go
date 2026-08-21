@@ -53,11 +53,10 @@ func remedyOf(marker model.InflightMarker) string {
 // its remedy. A phase transition rewrites the whole marker.
 func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, target, safety model.SavepointID) error {
 	return s.inflightMarker.Put(ctx, model.InflightMarker{
-		Version: model.InflightMarkerVersion,
-		Phase:   phase,
-		Target:  target,
-		Safety:  safety,
-		At:      time.Now(),
+		Phase:  phase,
+		Target: target,
+		Safety: safety,
+		At:     time.Now(),
 	})
 }
 

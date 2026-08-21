@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -22,13 +24,20 @@ type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
 }
 
+// composeIntrospector reports the live stack it was bound to at construction.
 type composeIntrospector interface {
-	Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error)
+	Introspect(ctx context.Context) (model.IntrospectionResult, error)
 }
 
+// projectAssembler materialises an introspection result into the spec the runner acts on.
+type projectAssembler interface {
+	Assemble(res model.IntrospectionResult) (*types.Project, error)
+}
+
+// composeRunner puts the assembled stack down and back up.
 type composeRunner interface {
-	Stop(ctx context.Context, files ...string) error
-	Up(ctx context.Context, waitTimeout time.Duration, files ...string) error
+	Stop(ctx context.Context, project *types.Project) error
+	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
 }
 
 // inflightMarkers is the intent marker's seam: written before a rollback's first
@@ -45,6 +54,7 @@ type Deps struct {
 	SavepointRepo    savepointRepository
 	ProjectLocker    projectLocker
 	ComposeInspector composeIntrospector
+	ProjectAssembler projectAssembler
 	ComposeRunner    composeRunner
 	BackendRegistry  model.SnapshotBackendRegistry
 	Inflight         inflightMarkers
@@ -61,6 +71,7 @@ type Service struct {
 	savepointRepo           savepointRepository
 	projectLocker           projectLocker
 	composeInspector        composeIntrospector
+	projectAssembler        projectAssembler
 	composeRunner           composeRunner
 	snapshotBackendRegistry model.SnapshotBackendRegistry
 	inflightMarker          inflightMarkers
@@ -74,6 +85,7 @@ func New(d Deps) *Service {
 		savepointRepo:           d.SavepointRepo,
 		projectLocker:           d.ProjectLocker,
 		composeInspector:        d.ComposeInspector,
+		projectAssembler:        d.ProjectAssembler,
 		composeRunner:           d.ComposeRunner,
 		snapshotBackendRegistry: d.BackendRegistry,
 		inflightMarker:          d.Inflight,

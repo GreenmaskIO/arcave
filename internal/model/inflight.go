@@ -5,9 +5,6 @@ import (
 	"time"
 )
 
-// InflightMarkerVersion is stamped into every marker, for the day the shape changes.
-const InflightMarkerVersion = 1
-
 // InflightPhase says how far an interrupted rollback got. The remedy differs by phase.
 type InflightPhase string
 
@@ -20,11 +17,10 @@ const (
 // InflightMarker is the intent record a rollback writes before its first destructive
 // write and clears once the environment is consistent again.
 type InflightMarker struct {
-	Version int           `json:"version"`
-	Phase   InflightPhase `json:"phase"`
-	Target  SavepointID   `json:"target"` // the savepoint being restored
-	Safety  SavepointID   `json:"safety"` // the undo every phase's remedy points at
-	At      time.Time     `json:"at"`
+	Phase  InflightPhase `json:"phase"`
+	Target SavepointID   `json:"target"` // the savepoint being restored
+	Safety SavepointID   `json:"safety"` // the undo every phase's remedy points at
+	At     time.Time     `json:"at"`
 }
 
 // InterruptedRollbackError refuses a mutating workflow while a marker stands. What

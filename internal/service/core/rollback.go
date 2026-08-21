@@ -75,7 +75,7 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("build backends: %w", err)
 	}
-	ws, err := s.prepare(ctx, req.ComposeFiles, req.WaitTimeout)
+	ws, err := s.prepare(ctx, req.WaitTimeout)
 	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", err)
 	}
@@ -192,7 +192,7 @@ func (s *Service) applySavepoint(
 	}
 
 	zerolog.Ctx(ctx).Info().Msg("starting services")
-	if err := s.composeRunner.Up(ctx, ws.waitTimeout, ws.composeFiles...); err != nil {
+	if err := s.composeRunner.Start(ctx, ws.project, ws.waitTimeout); err != nil {
 		return fmt.Errorf("services did not become healthy after restore: %w", err)
 	}
 	return nil

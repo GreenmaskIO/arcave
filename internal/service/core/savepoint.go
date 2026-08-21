@@ -46,7 +46,7 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 		return model.Savepoint{}, err
 	}
 
-	ws, err := s.prepare(ctx, req.ComposeFiles, req.WaitTimeout)
+	ws, err := s.prepare(ctx, req.WaitTimeout)
 	if err != nil {
 		return model.Savepoint{}, err
 	}

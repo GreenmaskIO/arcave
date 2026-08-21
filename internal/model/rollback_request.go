@@ -17,8 +17,7 @@ type RollbackRequest struct {
 	Name   *string      // savepoint name; ambiguous names are an error, never a guess
 	Latest *bool        // when true, the newest savepoint by CreatedAt
 
-	ComposeFiles []string      // compose files enumerating the services and their mounts
-	WaitTimeout  time.Duration // bounds the health check on restart; <= 0 lets the compose runner apply its default
+	WaitTimeout time.Duration // bounds the health check on restart; <= 0 lets the compose runner apply its default
 }
 
 // Validate refuses a request that names no savepoint. A pointer set to the zero

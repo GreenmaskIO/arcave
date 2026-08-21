@@ -1,6 +1,6 @@
 // Package config defines arcave's per-project configuration value type, the pure
 // helpers that seed and validate it, and Unmarshal — the single home of the
-// config policy (version gate, unknown-key rejection, defaults, validation).
+// config policy (unknown-key rejection, defaults, validation).
 // Persistence lives in internal/repository/config; the multi-source merge
 // (flag > env > file) is cmd/arcave's, which hands the loaded viper here.
 //
@@ -24,10 +24,6 @@ import (
 )
 
 const fileName = "config.yaml"
-
-// Version is the schema version of .arcave/config.yaml, and the only one arcave speaks.
-// A file naming any other is refused — see ErrUnsupportedConfigVersion.
-const Version = 1
 
 // StorageTypeDirectory names the local-filesystem arm of the storage union. It
 // is the only arm implemented today; the union exists so adding "s3" is a new
@@ -141,7 +137,6 @@ const (
 // One section per subsystem: a new subsystem adds a section rather than another
 // top-level key.
 type Config struct {
-	Version  int      `yaml:"version" mapstructure:"version"`
 	Project  Project  `yaml:"project" mapstructure:"project"`
 	Docker   Docker   `yaml:"docker,omitempty" mapstructure:"docker"`
 	Compose  Compose  `yaml:"compose" mapstructure:"compose"`
@@ -155,10 +150,10 @@ type Config struct {
 	Log Log `yaml:"log,omitempty" mapstructure:"log"`
 }
 
-// Project identifies the compose project arcave manages.
+// Project names the storage tenant every store root is scoped by. The compose
+// stack is not here: it is named per invocation with -p/--project-name.
 type Project struct {
-	Name         string   `yaml:"name" mapstructure:"name"`
-	ComposeFiles []string `yaml:"compose_files" mapstructure:"compose_files"`
+	Name string `yaml:"name" mapstructure:"name"`
 }
 
 // Validate gates the name, which becomes the tenant segment of every store
@@ -408,13 +403,9 @@ type Log struct {
 	Format string `yaml:"format,omitempty" mapstructure:"format"`
 }
 
-// NewConfig returns a Config seeded with the static defaults, Version included:
-// a fresh project is already at the current schema. A file's own version never
-// reaches this value — Unmarshal gates on it through a separate probe, before
-// any decode into Config.
+// NewConfig returns a Config seeded with the static defaults.
 func NewConfig() Config {
 	return Config{
-		Version: 1,
 		Log: Log{
 			Level:  utils.DefaultLogLevel,
 			Format: utils.DefaultLogFormat,
@@ -428,9 +419,6 @@ func NewConfig() Config {
 // single source of these defaults, shared by resolveConfig (read path) and init
 // (write path).
 func (c *Config) ApplyDefaults(projectRoot string) {
-	if c.Version == 0 {
-		c.Version = Version
-	}
 	if c.Project.Name == "" {
 		// The name becomes a store-root segment, so the directory's own spelling is
 		// normalized rather than taken verbatim: MyApp yields myapp. A basename that
@@ -523,9 +511,6 @@ func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
 // Validate checks the sections whose values arcave must be able to act on. It runs
 // after ApplyDefaults, so an empty section is a default rather than an error.
 func (c *Config) Validate() error {
-	if c.Version != Version {
-		return model.ErrUnsupportedConfigVersion
-	}
 	if err := c.Project.Validate(); err != nil {
 		return err
 	}

@@ -1,9 +1,0 @@
-name: demo
-
-services:
-  app:
-    image: alpine:3
-    volumes:
-      - type: cluster
-        source: csi-data
-        target: /data

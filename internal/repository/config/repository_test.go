@@ -90,11 +90,7 @@ func TestRepository_Save(t *testing.T) {
 		{
 			name: "full config",
 			cfg: config.Config{
-				Version: config.Version,
-				Project: config.Project{
-					Name:         "shop",
-					ComposeFiles: []string{"docker-compose.yml", "docker-compose.override.yml"},
-				},
+				Project: config.Project{Name: "shop"},
 				Compose: config.Compose{
 					WaitTimeout: 5 * time.Minute,
 					StopTimeout: 30 * time.Second,
@@ -111,11 +107,7 @@ func TestRepository_Save(t *testing.T) {
 		{
 			name: "zero log settings are omitted",
 			cfg: config.Config{
-				Version: config.Version,
-				Project: config.Project{
-					Name:         "shop",
-					ComposeFiles: []string{"docker-compose.yml"},
-				},
+				Project: config.Project{Name: "shop"},
 				Storage: config.Storage{
 					Type:      config.StorageTypeDirectory,
 					Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/shop"},
@@ -186,10 +178,9 @@ func TestRepository_Save_Overwrites(t *testing.T) {
 	assert.Equal(t, ".arcave/savepoints/new", got.Storage.DirectoryPath())
 }
 
-// savedConfig returns a minimal v1 config for the project named name.
+// savedConfig returns a minimal config for the project named name.
 func savedConfig(name string) config.Config {
 	return config.Config{
-		Version: config.Version,
 		Project: config.Project{Name: name},
 		Storage: config.Storage{
 			Type:      config.StorageTypeDirectory,

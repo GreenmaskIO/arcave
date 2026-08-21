@@ -1,7 +1,0 @@
-name: introspect-integration
-
-services:
-  db:
-    image: postgres:16
-    volumes:
-      - nowhere:/var/lib/postgresql/data

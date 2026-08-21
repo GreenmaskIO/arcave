@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -15,12 +14,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
-
-// versionedConfig prefixes body with the schema version every v1 file carries,
-// so a case only spells out the sections it is about.
-func versionedConfig(body string) string {
-	return "version: 1\n" + body
-}
 
 func TestResolveConfig(t *testing.T) {
 	tests := []struct {
@@ -35,7 +28,6 @@ func TestResolveConfig(t *testing.T) {
 			name:      "defaults when no file",
 			wantFound: false,
 			verify: func(t *testing.T, root string, cfg config.Config) {
-				assert.Equal(t, config.Version, cfg.Version)
 				assert.Equal(t, filepath.Base(root), cfg.Project.Name)
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				// No project segment: storefactory roots the store at the project itself.
@@ -47,15 +39,14 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name: "reads the nested sections",
-			file: versionedConfig("project:\n  name: proj\n  compose_files:\n    - a.yaml\n    - b.yaml\n" +
+			file: "project:\n  name: proj\n" +
 				"docker:\n  host: unix:///tmp/d.sock\n" +
 				"storage:\n  type: directory\n  directory:\n    path: /snaps\n" +
 				"snapshot:\n  backend: fullcopy\n" +
-				"log:\n  level: warn\n  format: json\n"),
+				"log:\n  level: warn\n  format: json\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "proj", cfg.Project.Name)
-				assert.Equal(t, []string{"a.yaml", "b.yaml"}, cfg.Project.ComposeFiles)
 				assert.Equal(t, "unix:///tmp/d.sock", cfg.Docker.Host)
 				assert.Equal(t, config.StorageTypeDirectory, cfg.Storage.Type)
 				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
@@ -66,7 +57,7 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name:      "changed flag beats file",
-			file:      versionedConfig("project:\n  name: proj\nlog:\n  level: warn\n"),
+			file:      "project:\n  name: proj\nlog:\n  level: warn\n",
 			flags:     map[string]string{"log-level": "debug"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -75,7 +66,7 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name:      "env beats file",
-			file:      versionedConfig("log:\n  level: warn\n"),
+			file:      "log:\n  level: warn\n",
 			env:       map[string]string{"ARCAVE_LOG_LEVEL": "debug"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -84,7 +75,7 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name:      "changed flag beats env",
-			file:      versionedConfig("log:\n  level: info\n"),
+			file:      "log:\n  level: info\n",
 			env:       map[string]string{"ARCAVE_LOG_LEVEL": "debug"},
 			flags:     map[string]string{"log-level": "warn"},
 			wantFound: true,
@@ -105,7 +96,7 @@ func TestResolveConfig(t *testing.T) {
 			// The compose bounds are config keys reached through root-persistent
 			// flags, so the same precedence has to hold for them as for log.level.
 			name:      "the compose section comes from the file",
-			file:      versionedConfig("compose:\n  wait_timeout: 5m\n  stop_timeout: 45s\n  progress: tty\n"),
+			file:      "compose:\n  wait_timeout: 5m\n  stop_timeout: 45s\n  progress: tty\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, 5*time.Minute, cfg.Compose.WaitTimeout)
@@ -115,7 +106,7 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name:      "a changed --wait-timeout beats the file",
-			file:      versionedConfig("compose:\n  wait_timeout: 5m\n"),
+			file:      "compose:\n  wait_timeout: 5m\n",
 			flags:     map[string]string{"wait-timeout": "30s"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -126,7 +117,7 @@ func TestResolveConfig(t *testing.T) {
 			// The flag's own default is the *lowest* precedence source, so an
 			// unchanged --wait-timeout must not overwrite the file's value.
 			name:      "an unchanged --progress leaves the file's mode alone",
-			file:      versionedConfig("compose:\n  progress: quiet\n"),
+			file:      "compose:\n  progress: quiet\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, config.ProgressQuiet, cfg.Compose.Progress)
@@ -134,7 +125,7 @@ func TestResolveConfig(t *testing.T) {
 		},
 		{
 			name:      "env beats the file for a compose bound too",
-			file:      versionedConfig("compose:\n  wait_timeout: 5m\n"),
+			file:      "compose:\n  wait_timeout: 5m\n",
 			env:       map[string]string{"ARCAVE_COMPOSE_WAIT_TIMEOUT": "90s"},
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -170,45 +161,32 @@ func TestResolveConfig(t *testing.T) {
 	}
 }
 
-// A file arcave cannot speak is rejected loudly. arcave speaks exactly one schema
-// version, so a file naming another is stale; a file naming none is taken to be
-// that version and is judged by its keys, which is what rejects the pre-v1 flat
-// layout.
+// A file arcave cannot speak is rejected by the keys it uses — the legacy flat
+// layout included.
 func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 	tests := []struct {
 		name    string
 		file    string
-		wantIs  error  // sentinel the error must match
 		wantMsg string // substring the error must carry
 	}{
 		{
-			name:    "the pre-v1 flat layout, by the keys it uses",
-			file:    "name: proj\ncompose_files:\n  - a.yaml\nsavepoint_dir: /snaps\n",
+			name:    "the legacy flat layout, by the keys it uses",
+			file:    "name: proj\nsavepoint_dir: /snaps\n",
 			wantMsg: "savepoint_dir",
 		},
 		{
-			name:   "an explicit version zero",
-			file:   "version: 0\nproject:\n  name: proj\n",
-			wantIs: model.ErrUnsupportedConfigVersion,
-		},
-		{
-			name:   "a version from the future",
-			file:   "version: 2\nproject:\n  name: proj\n",
-			wantIs: model.ErrUnsupportedConfigVersion,
-		},
-		{
 			name:    "an unknown key",
-			file:    versionedConfig("project:\n  name: proj\nsavepoint_dir: /snaps\n"),
+			file:    "project:\n  name: proj\nsavepoint_dir: /snaps\n",
 			wantMsg: "savepoint_dir",
 		},
 		{
 			name:    "a storage tag naming an arm arcave does not implement",
-			file:    versionedConfig("storage:\n  type: s3\n"),
+			file:    "storage:\n  type: s3\n",
 			wantMsg: "unsupported storage.type",
 		},
 		{
 			name:    "a snapshot backend arcave cannot construct",
-			file:    versionedConfig("snapshot:\n  backend: btrfs\n"),
+			file:    "snapshot:\n  backend: btrfs\n",
 			wantMsg: "unsupported snapshot.backend",
 		},
 	}
@@ -225,13 +203,7 @@ func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 			_, _, err := resolveConfig(v, root)
 
 			// Assert
-			require.Error(t, err)
-			if tt.wantIs != nil {
-				assert.ErrorIs(t, err, tt.wantIs)
-			}
-			if tt.wantMsg != "" {
-				assert.Contains(t, err.Error(), tt.wantMsg)
-			}
+			require.ErrorContains(t, err, tt.wantMsg)
 		})
 	}
 }
@@ -242,7 +214,7 @@ func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 func TestResolveConfig_IgnoresUnboundFlags(t *testing.T) {
 	// Arrange
 	root := t.TempDir()
-	writeConfig(t, root, versionedConfig("log:\n  level: warn\n"))
+	writeConfig(t, root, "log:\n  level: warn\n")
 	v := testViper(root)
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	fs.String("log-level", utils.DefaultLogLevel, "") // deliberately NOT bound
@@ -288,7 +260,6 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs.String("log-level", utils.DefaultLogLevel, "")
 	fs.String("log-format", utils.DefaultLogFormat, "")
 	fs.String("name", "", "")
-	fs.StringSlice("file", []string{"docker-compose.yaml"}, "")
 	fs.String("savepoint-dir", "", "")
 	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
@@ -297,7 +268,6 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 		"log-level":     "log.level",
 		"log-format":    "log.format",
 		"name":          "project.name",
-		"file":          "project.compose_files",
 		"savepoint-dir": "storage.directory.path",
 		"wait-timeout":  "compose.wait_timeout",
 		"stop-timeout":  "compose.stop_timeout",
