@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
@@ -50,7 +51,11 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		// Tty stays false even with stdio: the framed stream is what lets stdout
 		// and stderr be told apart on the way back.
 	}
-	created, err := api.ContainerCreate(ctx, cfg, &container.HostConfig{Binds: spec.Binds}, nil, nil, "")
+	hostCfg := &container.HostConfig{Binds: spec.Binds}
+	if spec.HostNetwork {
+		hostCfg.NetworkMode = network.NetworkHost
+	}
+	created, err := api.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
 	if err != nil {
 		return fmt.Errorf("create %s container: %w", spec.Image, err)
 	}

@@ -50,10 +50,6 @@ const (
 	// resticPassword is the constant every arcave repository uses; a stock container
 	// opening one with it is part of the contract.
 	resticPassword = "arcave"
-	// containerHost is how a container names the host the restic server listens
-	// on — the config default, which the DI root supplies and the transport keeps
-	// no copy of.
-	containerHost = "host.docker.internal"
 )
 
 // The ids the cases capture under — a counter, not the clock, so a failure names
@@ -76,6 +72,9 @@ type env struct {
 	ctx    context.Context
 	cli    *client.Client
 	engine *dockerclient.Engine
+	// hostNetwork is the transport the probe picked; the oracle's own restic
+	// containers must reach the server the same way the backend's do.
+	hostNetwork bool
 	// repoURLBase is what the DI root hands a backend: the served endpoint as a
 	// container names it, with a volume's ObjectID still to append.
 	repoURLBase string
@@ -114,11 +113,14 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, server.Close()) })
 	engine := dockerclient.NewEngine(cli)
+	hostNetwork, containerHost := transport(t, engine)
+	opts.HostNetwork = hostNetwork
 
 	e := &env{
 		ctx:         ctx,
 		cli:         cli,
 		engine:      engine,
+		hostNetwork: hostNetwork,
 		repoURLBase: rest.RepositoryURLBase("", containerHost, port),
 		stackStore:  stackStore,
 		resticRoot:  resticRoot,
@@ -294,8 +296,9 @@ func (e *env) oracleSnapshots(t *testing.T, vol model.Volume) []oracleSnapshot {
 			"RESTIC_REPOSITORY=" + e.repoURLBase + "/" + vol.ObjectID + "/",
 			"RESTIC_PASSWORD=" + resticPassword,
 		},
-		Stdout: &stdout,
-		Stderr: &stderr,
+		HostNetwork: e.hostNetwork,
+		Stdout:      &stdout,
+		Stderr:      &stderr,
 	})
 	require.NoErrorf(t, err, "restic snapshots failed:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 
@@ -377,6 +380,19 @@ func newDaemonClient(t *testing.T) *client.Client {
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli
+}
+
+// transport resolves how this daemon's containers reach the test's server,
+// exactly as the DI root's auto mode does.
+func transport(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool, containerHost string) {
+	t.Helper()
+
+	shared, err := engine.HostLoopbackShared(context.Background())
+	require.NoError(t, err)
+	if shared {
+		return true, "127.0.0.1"
+	}
+	return false, "host.docker.internal"
 }
 
 // randomSuffix keeps concurrent copies of these tests apart on one daemon.

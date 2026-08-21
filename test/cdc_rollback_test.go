@@ -62,10 +62,6 @@ const (
 	mutateKiB = 256
 	// busyboxImage fills, mutates and hashes the volumes.
 	busyboxImage = "busybox"
-	// cdcContainerHost is how a container names the host the restic server listens
-	// on — the config default, which the DI root supplies and the transport keeps
-	// no copy of.
-	cdcContainerHost = "host.docker.internal"
 )
 
 func TestCDCBackend_CreateAndRollback(t *testing.T) {
@@ -216,10 +212,13 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	}
 
 	engine := dockerclient.NewEngine(cli)
+	hostNetwork, containerHost := cdcTransport(t, engine)
 	for _, v := range volumes {
 		createVolume(t, cli, v.name)
-		createLabelledContainer(t, cli, v.service, v)
+		// fill first: its RunOneShot pulls busybox, which the raw create below
+		// requires to be present already.
 		fill(t, engine, v.name)
+		createLabelledContainer(t, cli, v.service, v)
 	}
 
 	// The store, exactly as the DI root builds it: one tree per stack inside the
@@ -248,12 +247,13 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 
 	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
 		Runner:         engine,
-		RepoURLBase:    rest.RepositoryURLBase("", cdcContainerHost, resticPort),
+		RepoURLBase:    rest.RepositoryURLBase("", containerHost, resticPort),
 		RepositoryRoot: resticRoot,
 		Options: cdc.Options{
 			Image:       cdcCfg.Image,
 			Incremental: cdcCfg.RestoreMode == config.RestoreModeIncremental,
 			Overwrite:   cdcCfg.Overwrite,
+			HostNetwork: hostNetwork,
 		},
 	}))
 	require.NoError(t, err)
@@ -406,6 +406,19 @@ func newDaemonClient(t *testing.T) *client.Client {
 	}
 	t.Cleanup(func() { _ = cli.Close() })
 	return cli
+}
+
+// cdcTransport resolves how this daemon's containers reach the test's restic
+// server, exactly as the DI root's auto mode does.
+func cdcTransport(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool, containerHost string) {
+	t.Helper()
+
+	shared, err := engine.HostLoopbackShared(context.Background())
+	require.NoError(t, err)
+	if shared {
+		return true, "127.0.0.1"
+	}
+	return false, "host.docker.internal"
 }
 
 // randomSuffix keeps concurrent copies of this test apart on one daemon.

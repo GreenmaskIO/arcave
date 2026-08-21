@@ -53,6 +53,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y restic
 
+      # The integration suites create busybox containers through raw creates that
+      # never pull, and every restic container runs the default image; pulling
+      # both once here keeps the first test from paying (or flaking on) the pull.
+      - name: Pre-pull integration test images
+        run: |
+          docker pull busybox
+          docker pull restic/restic:0.19.1
+
       - name: Run tests
         run: go test ./...
 

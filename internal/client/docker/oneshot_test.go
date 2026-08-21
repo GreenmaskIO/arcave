@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -355,6 +356,25 @@ func TestEngine_RunOneShot(t *testing.T) {
 	assert.Equal(t, spec.Env, cfg.Env)
 	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
 	assert.Equal(t, spec.Binds, hostCfg.Binds)
+	assert.Empty(t, hostCfg.NetworkMode, "the default network is the daemon's, never named")
+}
+
+// HostNetwork is what lets a restic container reach a server bound on the host
+// loopback of a native Linux daemon, where no name for the host resolves.
+func TestEngine_RunOneShot_HostNetwork(t *testing.T) {
+	// Arrange
+	api := &mockAPI{}
+	expectImagePresent(api, scratchImage)
+	expectOneShotRun(api, 0)
+
+	// Act
+	err := NewEngine(api).RunOneShot(context.Background(), model.OneShotSpec{Image: scratchImage, HostNetwork: true})
+
+	// Assert
+	require.NoError(t, err)
+	api.AssertExpectations(t)
+	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
+	assert.Equal(t, network.NetworkHost, string(hostCfg.NetworkMode))
 }
 
 // expectImagePresent makes the daemon report ref as already pulled.

@@ -190,9 +190,10 @@ func (s *Snapshotter) openResticRunner(ctx context.Context) (runner, error) {
 		return runner{}, err
 	}
 	return runner{
-		containers: s.deps.Runner,
-		image:      s.deps.Options.Image,
-		repoURL:    s.repositoryURL(),
+		containers:  s.deps.Runner,
+		image:       s.deps.Options.Image,
+		repoURL:     s.repositoryURL(),
+		hostNetwork: s.deps.Options.HostNetwork,
 	}, nil
 }
 

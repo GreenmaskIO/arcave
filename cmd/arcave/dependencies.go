@@ -134,6 +134,11 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	}
 	opened.add("restic server", resticServer)
 
+	cdcHostNetwork, cdcContainerHost, err := resolveCDCTransport(ctx, cdcCfg, engine)
+	if err != nil {
+		return nil, err
+	}
+
 	// The one place a volume's Backend becomes an instance, and the only place
 	// that names the engine — through the seam its backend declares.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
@@ -142,9 +147,9 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 			Runner: engine,
 			// The container's own name for the server, joined to the port it bound:
 			// the value the backend is handed, so nothing below holds the server.
-			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcCfg.ContainerHost, resticPort),
+			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcContainerHost, resticPort),
 			RepositoryRoot: resticRoot,
-			Options:        cdcOptions(cdcCfg),
+			Options:        cdcOptions(cdcCfg, cdcHostNetwork),
 		}),
 	)
 	if err != nil {
@@ -181,12 +186,38 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	}, nil
 }
 
-// cdcOptions translates the backends.cdc section into the backend's own options.
-func cdcOptions(cfg config.CDCBackend) cdc.Options {
+// resolveCDCTransport turns backends.cdc.network_mode into the transport the
+// restic containers use: whether they join the host's network namespace, and
+// the host their repository URL names. Auto probes the daemon, but mispicks
+// host networking for a remote Linux daemon — bridge is the escape hatch there.
+func resolveCDCTransport(
+	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine,
+) (hostNetwork bool, containerHost string, err error) {
+	switch cfg.NetworkMode {
+	case config.NetworkModeHost:
+		return true, "127.0.0.1", nil
+	case config.NetworkModeBridge:
+		return false, cfg.ContainerHost, nil
+	default: // config.NetworkModeAuto — Validate admits nothing else.
+		shared, err := engine.HostLoopbackShared(ctx)
+		if err != nil {
+			return false, "", fmt.Errorf("resolve backends.cdc.network_mode %q: %w", cfg.NetworkMode, err)
+		}
+		if shared {
+			return true, "127.0.0.1", nil
+		}
+		return false, cfg.ContainerHost, nil
+	}
+}
+
+// cdcOptions translates the backends.cdc section into the backend's own
+// options, plus the transport resolveCDCTransport picked.
+func cdcOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
+		HostNetwork: hostNetwork,
 	}
 }
 

@@ -178,10 +178,26 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
 				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
 				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
-				// Both ends of the loopback hop default with it.
+				// Both ends of the loopback hop default with it, and how a container
+				// crosses it stays a probe.
 				assert.Equal(t, DefaultCDCServerAddress, cfg.Backends.CDC.ServerAddress)
 				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
+				assert.Equal(t, NetworkModeAuto, cfg.Backends.CDC.NetworkMode)
 			},
+		},
+		{
+			name: "an explicit network mode is read back",
+			yaml: "version: 1\nsnapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    network_mode: host\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, NetworkModeHost, cfg.Backends.CDC.NetworkMode)
+			},
+		},
+		{
+			name:       "a network mode arcave does not offer is rejected",
+			yaml:       "version: 1\nbackends:\n  cdc:\n    network_mode: vpn\n",
+			wantErrMsg: "unsupported backends.cdc.network_mode",
 		},
 		{
 			name: "the server address is read, and the container host still defaults",

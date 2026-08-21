@@ -63,9 +63,10 @@ type containerRunner interface {
 // runner executes restic commands in one-shot containers of the stock image,
 // against one repository URL.
 type runner struct {
-	containers containerRunner
-	image      string
-	repoURL    string
+	containers  containerRunner
+	image       string
+	repoURL     string
+	hostNetwork bool
 }
 
 // run executes one command and returns its summary line, zero-valued when the
@@ -89,9 +90,10 @@ func (r runner) run(ctx context.Context, cmd resticCmd) (resticSummary, error) {
 			"RESTIC_REPOSITORY=" + r.repoURL,
 			"RESTIC_PASSWORD=" + resticPassword,
 		},
-		Binds:  cmd.binds,
-		Stdout: stdout,
-		Stderr: stderr,
+		Binds:       cmd.binds,
+		HostNetwork: r.hostNetwork,
+		Stdout:      stdout,
+		Stderr:      stderr,
 	})
 	// Flushed whatever the outcome: the last line of a failing run is the one
 	// worth having.

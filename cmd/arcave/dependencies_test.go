@@ -21,9 +21,10 @@ import (
 // carrying a client: the config's own vocabulary in, the backend's own out.
 func TestCDCOptions(t *testing.T) {
 	tests := []struct {
-		name string
-		cfg  config.CDCBackend
-		want cdc.Options
+		name        string
+		cfg         config.CDCBackend
+		hostNetwork bool
+		want        cdc.Options
 	}{
 		{
 			// A project that never names cdc carries no section, and still gets a
@@ -62,12 +63,23 @@ func TestCDCOptions(t *testing.T) {
 				Overwrite:   config.OverwriteIfChanged,
 			},
 		},
+		{
+			name:        "the resolved transport carries through",
+			cfg:         config.CDCWithDefaults(nil),
+			hostNetwork: true,
+			want: cdc.Options{
+				Image:       config.DefaultResticImage,
+				Overwrite:   config.OverwriteAlways,
+				Incremental: true,
+				HostNetwork: true,
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := cdcOptions(tt.cfg)
+			got := cdcOptions(tt.cfg, tt.hostNetwork)
 
 			// Assert
 			assert.Equal(t, tt.want, got)

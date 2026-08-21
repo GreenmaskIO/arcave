@@ -73,19 +73,36 @@ const (
 	// target.
 	DefaultCDCServerAddress = "127.0.0.1:0"
 	// DefaultCDCContainerHost is how a container on Docker Desktop names the host
-	// loopback. Native Linux does not resolve it, which is what makes this key
-	// the one that gets cdc running there.
+	// loopback. Only the bridge path uses it: a native Linux daemon, where the
+	// name does not resolve, gets host networking instead (network_mode auto).
 	DefaultCDCContainerHost = "host.docker.internal"
 	// DefaultCDCServerScheme is the scheme the container fetches its repository
 	// over. arcave's own server speaks plain HTTP; https is for a TLS proxy in
 	// front of it.
 	DefaultCDCServerScheme = SchemeHTTP
+	// DefaultCDCNetworkMode probes rather than assumes: the same config runs on
+	// Docker Desktop and on a native Linux daemon.
+	DefaultCDCNetworkMode = NetworkModeAuto
 )
 
 // The schemes backends.cdc.server_scheme accepts.
 const (
 	SchemeHTTP  = "http"
 	SchemeHTTPS = "https"
+)
+
+// The modes backends.cdc.network_mode accepts: how a restic container reaches
+// arcave's restic server.
+const (
+	// NetworkModeAuto probes the daemon at wiring time: a native Linux daemon
+	// gets host networking, anything else the bridge and container_host.
+	NetworkModeAuto = "auto"
+	// NetworkModeHost joins the containers to the host's network namespace, so
+	// the server's loopback bind is reachable as 127.0.0.1 (Linux daemons only).
+	NetworkModeHost = "host"
+	// NetworkModeBridge keeps the default network and reaches the host by
+	// container_host — the escape hatch for remote daemons and rootless setups.
+	NetworkModeBridge = "bridge"
 )
 
 // The bounds arcave gives compose when it stops and starts the stack. They live
@@ -322,9 +339,13 @@ type CDCBackend struct {
 	// over: http (the default; the server itself speaks nothing else) or https,
 	// for a TLS proxy fronting it.
 	ServerScheme string `yaml:"server_scheme" mapstructure:"server_scheme"`
-	// ContainerHost is that server's host name *as the container sees it*, which
-	// is never the address arcave binds: a container cannot reach 127.0.0.1.
+	// ContainerHost is that server's host name *as the container sees it* on the
+	// bridge path: a bridged container cannot reach 127.0.0.1. Ignored under
+	// host networking.
 	ContainerHost string `yaml:"container_host" mapstructure:"container_host"`
+	// NetworkMode is how a restic container reaches the server: auto (probe the
+	// daemon), host, or bridge.
+	NetworkMode string `yaml:"network_mode" mapstructure:"network_mode"`
 }
 
 // Validate checks the arms that are present. An absent arm is not an error: a
@@ -370,6 +391,12 @@ func (c CDCBackend) Validate() error {
 	}
 	if c.ContainerHost == "" {
 		return fmt.Errorf("backends.cdc.container_host is required")
+	}
+	switch c.NetworkMode {
+	case NetworkModeAuto, NetworkModeHost, NetworkModeBridge:
+	default:
+		return fmt.Errorf("unsupported backends.cdc.network_mode %q (supported: %s, %s, %s)",
+			c.NetworkMode, NetworkModeAuto, NetworkModeHost, NetworkModeBridge)
 	}
 	return nil
 }
@@ -486,6 +513,9 @@ func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
 	}
 	if c.ContainerHost == "" {
 		c.ContainerHost = DefaultCDCContainerHost
+	}
+	if c.NetworkMode == "" {
+		c.NetworkMode = DefaultCDCNetworkMode
 	}
 	return c
 }

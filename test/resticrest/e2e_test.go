@@ -37,11 +37,6 @@ const busyboxImage = "busybox"
 
 const e2ePassword = "arcave-e2e"
 
-// e2eContainerHost is how the container names the host this server listens on.
-// It is the config default, spelled here because the transport keeps no default
-// of its own: the name a container resolves is the caller's to supply.
-const e2eContainerHost = "host.docker.internal"
-
 // blobMiB is the volume payload: random bytes, since zeros would deduplicate
 // into a repository that proves nothing. A bind mount is not an option —
 // virtiofs breaks direct-io reads on Docker Desktop.
@@ -54,6 +49,31 @@ const mutateMiB = 12
 // container through it to prove the one method is enough.
 type containerRunner interface {
 	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
+}
+
+// hostNetRunner stamps the resolved transport onto every restic spec. The
+// busybox helpers stay off it: they exchange no network traffic.
+type hostNetRunner struct {
+	containerRunner
+	hostNetwork bool
+}
+
+func (r hostNetRunner) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
+	spec.HostNetwork = r.hostNetwork
+	return r.containerRunner.RunOneShot(ctx, spec)
+}
+
+// e2eTransport resolves how this daemon's containers reach the test's server,
+// exactly as the DI root's auto mode does.
+func e2eTransport(t *testing.T, engine *docker.Engine) (hostNetwork bool, containerHost string) {
+	t.Helper()
+
+	shared, err := engine.HostLoopbackShared(context.Background())
+	require.NoError(t, err)
+	if shared {
+		return true, "127.0.0.1"
+	}
+	return false, "host.docker.internal"
 }
 
 func TestResticEndToEnd(t *testing.T) {
@@ -73,31 +93,35 @@ func TestResticEndToEnd(t *testing.T) {
 	port, err := rest.Serve(srv, "")
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, srv.Close()) }()
-	urlBase := rest.RepositoryURLBase("", e2eContainerHost, port)
+
+	engine := docker.NewEngine(cli)
+	hostNetwork, containerHost := e2eTransport(t, engine)
+	urlBase := rest.RepositoryURLBase("", containerHost, port)
 	repoURL := urlBase + "/" + objectID + "/"
 
-	var runner containerRunner = docker.NewEngine(cli)
+	var runner containerRunner = engine
+	restic := hostNetRunner{containerRunner: runner, hostNetwork: hostNetwork}
 	vol := newDataVolume(t, cli, runner)
 	before := hashVolume(t, runner, vol)
 
 	// Act & Assert: one lifecycle, each step gated on the previous one.
 
 	// Init lands the repository in the Storager, through the whole chain.
-	runRestic(t, runner, repoURL, "", "init")
+	runRestic(t, restic, repoURL, "", "init")
 	exists, err := store.Exists(ctx, "config")
 	require.NoError(t, err)
 	require.True(t, exists, "init must land the repository config in the store")
 
 	// A repository that was never published is refused: the run fails with the
 	// container's own exit.
-	err = resticErr(t, runner, urlBase+"/no-such-prefix/", "", "cat", "config")
+	err = resticErr(t, restic, urlBase+"/no-such-prefix/", "", "cat", "config")
 	require.Error(t, err, "an unregistered prefix must not reach a repository")
 	var exitErr *model.ContainerExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.NotZero(t, exitErr.StatusCode)
 
 	// First backup: the full payload crosses the boundary.
-	first := backupSummaryOf(t, runRestic(t, runner, repoURL, vol, "backup", "--json", "/data"))
+	first := backupSummaryOf(t, runRestic(t, restic, repoURL, vol, "backup", "--json", "/data"))
 	require.Positive(t, first.TotalBytesProcessed)
 	t.Logf("backup #1: %d bytes in %.1fs → %.1f MiB/s",
 		first.TotalBytesProcessed, first.TotalDuration, mibPerSecond(first.TotalBytesProcessed, first.TotalDuration))
@@ -106,7 +130,7 @@ func TestResticEndToEnd(t *testing.T) {
 	mutateVolume(t, runner, vol)
 	mutated := hashVolume(t, runner, vol)
 	require.NotEqual(t, before, mutated, "the mutation must actually change the volume")
-	second := backupSummaryOf(t, runRestic(t, runner, repoURL, vol, "backup", "--json", "/data"))
+	second := backupSummaryOf(t, runRestic(t, restic, repoURL, vol, "backup", "--json", "/data"))
 	t.Logf("backup #2: %d bytes added in %.1fs", second.DataAdded, second.TotalDuration)
 	assert.Less(t, second.DataAdded, first.TotalBytesProcessed/8,
 		"an incremental backup after a ~1%% mutation must not reship the payload")
@@ -114,7 +138,7 @@ func TestResticEndToEnd(t *testing.T) {
 	// Wipe, then restore: the volume comes back byte for byte.
 	wipeVolume(t, runner, vol)
 	restoreStart := time.Now()
-	runRestic(t, runner, repoURL, vol, "restore", "latest", "--target", "/")
+	runRestic(t, restic, repoURL, vol, "restore", "latest", "--target", "/")
 	t.Logf("restore: %s", time.Since(restoreStart).Round(time.Second))
 	after := hashVolume(t, runner, vol)
 	require.Equal(t, mutated, after, "the restored volume must hash identically to the state the latest backup covered")

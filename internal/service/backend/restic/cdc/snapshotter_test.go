@@ -125,6 +125,31 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 		assert.ElementsMatch(t,
 			[]string{"RESTIC_REPOSITORY=" + demoRepoURL, "RESTIC_PASSWORD=" + resticPassword},
 			spec.Env, "run %d", i)
+		assert.False(t, spec.HostNetwork, "run %d: the default transport is the bridge", i)
+	}
+	h.runner.AssertExpectations(t)
+}
+
+// The transport the DI root resolved reaches every restic container.
+func TestSnapshotter_Snapshot_HostNetwork(t *testing.T) {
+	// Arrange
+	opts := defaultOptions()
+	opts.HostNetwork = true
+	h := newHarness(t, opts)
+	h.runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
+	h.runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
+		Run(respondWith(backupSummaryLine)).Return(nil).Once()
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+
+	// Assert
+	require.NoError(t, err)
+	specs := h.runner.Specs()
+	require.Len(t, specs, 2)
+	for i, spec := range specs {
+		assert.True(t, spec.HostNetwork, "run %d", i)
 	}
 	h.runner.AssertExpectations(t)
 }
