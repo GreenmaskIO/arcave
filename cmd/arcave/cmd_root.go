@@ -10,8 +10,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
+
+// projectNameEnv is the environment counterpart of -p/--project-name.
+const projectNameEnv = "ARCAVE_PROJECT_NAME"
 
 // The state every command shares, produced once by initRoot and read from RunE.
 // It is package-level because cobra registers commands from init(), so there is
@@ -22,12 +26,9 @@ var (
 	configFound    bool          // whether .arcave/config.yaml existed
 	rootConfigFile string        // the --config flag's target, read before projectCfg exists
 
-	// rootExitCode is the status a *successful* command exits with. It is zero
-	// unless a command sets it, so nothing changes for the commands that only
-	// ever succeed or fail. `recommend` sets 1 when it has advice to give: that
-	// is a finding, not an error — it belongs on stdout as JSON, and returning
-	// an error to say it would put a second, redundant line on stderr.
-	rootExitCode int
+	// projectName is the compose project every stack-bound command operates on. It
+	// is no config key: one project directory may hold several stacks.
+	projectName string
 )
 
 // The build stamps, filled at link time by goreleaser's -X flags (see
@@ -76,6 +77,11 @@ func initRoot() error {
 	}
 	setupViper(cfgViper, configPath)
 
+	// The flag feeds no config key, so viper never reads the environment for it.
+	if projectName == "" {
+		projectName = os.Getenv(projectNameEnv)
+	}
+
 	// A config arcave cannot speak is held, not raised: it must not stop `arcave init
 	// --override`, which is the fix the error names. requireInitialized raises it
 	// for every command that reads the project instead. Anything else — an
@@ -109,17 +115,23 @@ func requireConfig() error {
 	return nil
 }
 
-// withDeps runs fn with the savepoint workflows' dependencies, built for this
-// command and released when it returns. Every command that touches storage or
-// Docker goes through it, so the build/defer-close pair lives in one place.
-//
-// It takes no lock, and neither does any other command-layer helper: serialising
-// a mutating workflow is the workflow's own property, so core.Service claims the
-// project lock itself. A lock taken here would be invisible to `arcave mcp`, which
-// calls the service directly.
+// requireProjectName guards every command bound to a stack.
+func requireProjectName() error {
+	if projectName == "" {
+		return fmt.Errorf("no compose project named: pass -p/--project-name, or set %s", projectNameEnv)
+	}
+	return nil
+}
+
+// withDeps runs fn with the dependencies for the stack -p named, released when fn
+// returns. It takes no lock: core.Service claims the project lock itself.
 func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
+	if err := requireProjectName(); err != nil {
+		return err
+	}
+
 	ctx := cmd.Context()
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg)
+	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.StackName(projectName))
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
@@ -134,6 +146,9 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&rootConfigFile, "config", "", "config file path")
+	// Unbound, like --config: it steers one run rather than describing the project.
+	pf.StringVarP(&projectName, "project-name", "p", "",
+		fmt.Sprintf("Docker Compose project to operate on, as 'docker compose ls' names it (env %s)", projectNameEnv))
 	pf.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
 	pf.String("log-level", utils.DefaultLogLevel,
 		fmt.Sprintf(

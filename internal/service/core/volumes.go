@@ -25,21 +25,9 @@ var skipReasons = map[model.VolumeType]string{
 	model.VolumeTypeUnknown: "unknown mount type",
 }
 
-// resolveBackupVolumes reads the compose project and returns the units a
-// savepoint of it covers. Every workflow comes through here: a create that
-// resolved its own would capture volumes its rollback leaves alone. The skips
-// are logged here so FindBackupVolumes stays pure.
-//
-// Nothing is dropped for being unreachable any more: a backend addresses a
-// volume directly, so a volume no container mounts — or mounts only at a
-// subpath — is captured like any other, and a volume the daemon does not have
-// fails its own operation rather than disappearing from the set.
-func (s *Service) resolveBackupVolumes(ctx context.Context, composeFiles []string) ([]model.Volume, error) {
-	res, err := s.composeInspector.Introspect(ctx, composeFiles...)
-	if err != nil {
-		return nil, fmt.Errorf("introspecting compose files: %w", err)
-	}
-
+// resolveBackupVolumes returns the units a savepoint of the introspected stack
+// covers. Every workflow comes through here, so create and rollback cannot differ.
+func (s *Service) resolveBackupVolumes(ctx context.Context, res model.IntrospectionResult) ([]model.Volume, error) {
 	volumes, skipped, err := FindBackupVolumes(res, s.defaultBackend)
 	if err != nil {
 		return nil, fmt.Errorf("deciding which volumes to back up: %w", err)

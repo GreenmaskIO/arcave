@@ -32,11 +32,4 @@ var (
 	// ErrInvalidSavepointID reports an id that is not a run of decimal digits.
 	// SavepointID.Validate wraps it with the offending id.
 	ErrInvalidSavepointID = errors.New("invalid savepoint id")
-
-	// ErrUnsupportedConfigVersion reports a config file whose schema version arcave does
-	// not speak. arcave speaks exactly one, so any other value is refused rather than
-	// migrated. A file carrying no version at all is taken to be that one version:
-	// the pre-v1 flat layout is therefore reported by the keys it uses, not by its
-	// missing version.
-	ErrUnsupportedConfigVersion = errors.New("unsupported config version")
 )

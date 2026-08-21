@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -11,29 +10,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 const configPath = "/proj/.arcave/config.yaml"
 
 func TestInitService_Init(t *testing.T) {
-	inspectErr := errors.New("no such compose file")
-
 	tests := []struct {
-		name       string
-		cfg        config.Config
-		override   bool
-		exists     bool  // does .arcave/config.yaml already exist?
-		inspectErr error // what the compose inspector reports
-		wantErr    string
-		verify     func(t *testing.T, saved config.Config)
+		name     string
+		cfg      config.Config
+		override bool
+		exists   bool // does .arcave/config.yaml already exist?
+		wantErr  string
+		verify   func(t *testing.T, saved config.Config)
 	}{
 		{
 			name: "writes the config",
-			cfg: config.Config{Project: config.Project{
-				Name:         "demo",
-				ComposeFiles: []string{"docker-compose.yaml"},
-			}},
+			cfg:  config.Config{Project: config.Project{Name: "demo"}},
 		},
 		{
 			name:    "an initialized project is an error",
@@ -63,31 +55,21 @@ func TestInitService_Init(t *testing.T) {
 				assert.Equal(t, config.SnapshotBackendFullCopy, saved.Snapshot.Backend)
 			},
 		},
-		{
-			name:       "an unverifiable compose project writes nothing",
-			cfg:        config.Config{Project: config.Project{Name: "demo"}},
-			inspectErr: inspectErr,
-			wantErr:    "verifying compose project",
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			cw, ci := &mockConfig{}, &mockInspector{}
+			cw := &mockConfig{}
 			cw.On("Exists").Return(tt.exists, nil)
 			cw.On("Path").Return(configPath).Maybe()
-			// Init only cares that the project loads, so an empty result suffices;
-			// the files reach the inspector verbatim (ApplyDefaults leaves them be).
-			ci.On("Introspect", mock.Anything, tt.cfg.Project.ComposeFiles).
-				Return(model.IntrospectionResult{}, tt.inspectErr).Maybe()
 			var saved config.Config
 			cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
-				return c.Version == config.Version
+				return c.Project.Name != ""
 			})).Run(func(args mock.Arguments) {
 				saved = args.Get(0).(config.Config)
 			}).Return(nil).Maybe()
-			svc := NewInitService("/proj", cw, ci)
+			svc := NewInitService("/proj", cw)
 
 			// Act
 			name, path, err := svc.Init(context.Background(), tt.cfg, tt.override)
@@ -98,13 +80,11 @@ func TestInitService_Init(t *testing.T) {
 				assert.Contains(t, err.Error(), tt.wantErr)
 				cw.AssertNotCalled(t, "Save", mock.Anything)
 				cw.AssertExpectations(t)
-				ci.AssertExpectations(t)
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, "demo", name)
 			assert.Equal(t, configPath, path)
-			assert.Equal(t, config.Version, saved.Version)
 			// ApplyDefaults fills the savepoint dir; the project is a segment of the
 			// store root, not of the configured path.
 			assert.Equal(t, filepath.Join(".arcave", "storage"), saved.Storage.DirectoryPath())
@@ -112,7 +92,6 @@ func TestInitService_Init(t *testing.T) {
 				tt.verify(t, saved)
 			}
 			cw.AssertExpectations(t)
-			ci.AssertExpectations(t)
 		})
 	}
 }
@@ -121,14 +100,13 @@ func TestInitService_Init(t *testing.T) {
 // through the caller's storage-arm pointer.
 func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 	// Arrange
-	cw, ci := &mockConfig{}, &mockInspector{}
+	cw := &mockConfig{}
 	cw.On("Exists").Return(false, nil)
 	cw.On("Path").Return(configPath)
-	ci.On("Introspect", mock.Anything, []string(nil)).Return(model.IntrospectionResult{}, nil)
 	cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
-		return c.Version == config.Version
+		return c.Project.Name != ""
 	})).Return(nil)
-	svc := NewInitService("/proj", cw, ci)
+	svc := NewInitService("/proj", cw)
 	cfg := config.Config{Storage: config.Storage{Directory: &config.DirectoryStorage{}}}
 
 	// Act
@@ -136,28 +114,25 @@ func TestInitService_Init_LeavesTheCallersConfigUntouched(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Zero(t, cfg.Version)
 	assert.Empty(t, cfg.Project.Name)
 	assert.Empty(t, cfg.Storage.DirectoryPath())
 	cw.AssertExpectations(t)
-	ci.AssertExpectations(t)
 }
 
 // The project name defaults to the project root's base name, normalized into
 // the charset a store-root segment may carry.
 func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	// Arrange
-	cw, ci := &mockConfig{}, &mockInspector{}
+	cw := &mockConfig{}
 	cw.On("Exists").Return(false, nil)
 	cw.On("Path").Return(configPath)
-	ci.On("Introspect", mock.Anything, []string(nil)).Return(model.IntrospectionResult{}, nil)
 	var saved config.Config
 	cw.On("Save", mock.MatchedBy(func(c config.Config) bool {
-		return c.Version == config.Version
+		return c.Project.Name != ""
 	})).Run(func(args mock.Arguments) {
 		saved = args.Get(0).(config.Config)
 	}).Return(nil)
-	svc := NewInitService(filepath.Join("/home", "vadim", "MyProj"), cw, ci)
+	svc := NewInitService(filepath.Join("/home", "vadim", "MyProj"), cw)
 
 	// Act
 	name, _, err := svc.Init(context.Background(), config.Config{}, false)
@@ -168,7 +143,6 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	assert.Equal(t, "myproj", saved.Project.Name)
 	assert.Equal(t, filepath.Join(".arcave", "storage"), saved.Storage.DirectoryPath())
 	cw.AssertExpectations(t)
-	ci.AssertExpectations(t)
 }
 
 // mockConfig doubles configWriter; the seam takes no ctx.

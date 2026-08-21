@@ -17,12 +17,8 @@ import (
 // plus the error passthrough. Every case therefore expects an empty printer.
 func TestConfigInitHandler_Init(t *testing.T) {
 	cfg := config.Config{
-		Version: config.Version,
-		Project: config.Project{
-			Name:         "demo",
-			ComposeFiles: []string{"docker-compose.yaml", "docker-compose.override.yaml"},
-		},
-		Docker: config.Docker{Host: "tcp://remote:2375"},
+		Project: config.Project{Name: "demo"},
+		Docker:  config.Docker{Host: "tcp://remote:2375"},
 		Storage: config.Storage{
 			Type:      config.StorageTypeDirectory,
 			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/demo"},

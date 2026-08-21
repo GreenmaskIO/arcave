@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
@@ -91,19 +92,27 @@ func (m *mockInflight) Clear(ctx context.Context) error {
 
 type mockInspector struct{ mock.Mock }
 
-func (m *mockInspector) Introspect(ctx context.Context, files ...string) (model.IntrospectionResult, error) {
-	args := m.Called(ctx, files)
+func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
+	args := m.Called(ctx)
 	return args.Get(0).(model.IntrospectionResult), args.Error(1)
+}
+
+type mockAssembler struct{ mock.Mock }
+
+func (m *mockAssembler) Assemble(res model.IntrospectionResult) (*types.Project, error) {
+	args := m.Called(res)
+	project, _ := args.Get(0).(*types.Project)
+	return project, args.Error(1)
 }
 
 type mockComposeRunner struct{ mock.Mock }
 
-func (m *mockComposeRunner) Stop(ctx context.Context, files ...string) error {
-	return m.Called(ctx, files).Error(0)
+func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) error {
+	return m.Called(ctx, project).Error(0)
 }
 
-func (m *mockComposeRunner) Up(ctx context.Context, waitTimeout time.Duration, files ...string) error {
-	return m.Called(ctx, waitTimeout, files).Error(0)
+func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
+	return m.Called(ctx, project, waitTimeout).Error(0)
 }
 
 type mockRegistry struct{ mock.Mock }

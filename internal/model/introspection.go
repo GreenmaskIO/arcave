@@ -1,6 +1,11 @@
 package model
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+)
 
 // VolumeType is arcave's classification of a mount: a refinement of the compose
 // mount type, not a parallel taxonomy. Compose's "volume" splits into named and
@@ -140,11 +145,40 @@ type ImageMount struct {
 	Subpath string
 }
 
+// Service is one service of the project: what it declares, and the containers
+// the daemon holds for it.
 type Service struct {
 	Name    string
 	Image   string
 	Labels  map[string]string
 	Volumes []ServiceVolume
+	// Containers are the service's replicas, sorted by Number. Empty for a
+	// service the daemon holds nothing for.
+	Containers []Container
+}
+
+// Container is one replica of a service, as the daemon holds it: the raw material
+// the compose spec is rebuilt from.
+type Container struct {
+	ID   string
+	Name string
+	// Number is com.docker.compose.container-number: which replica of the
+	// service this is, counted from 1.
+	Number int
+	Labels map[string]string
+	// Inspect is what `docker container inspect` reports, verbatim.
+	Inspect container.InspectResponse
+}
+
+// Network is one network of the project. Nothing arcave captures lives in one;
+// it is reported because a stack cannot be started again without it.
+type Network struct {
+	// Key is the network's name inside the compose project, Name its name in
+	// docker — the same two levels NamedVolume documents.
+	Key  string
+	Name string
+	// Inspect is what `docker network inspect` reports, verbatim.
+	Inspect network.Inspect
 }
 
 // ServiceReference is one mount of a named volume by one service: who to stop,
@@ -204,11 +238,12 @@ func (v NamedVolume) ObjectID() string {
 }
 
 // Project is the compose project as arcave sees it. Services are sorted by name,
-// volumes by key.
+// volumes and networks by key.
 type Project struct {
 	Name     string
 	Services []Service
 	Volumes  []NamedVolume
+	Networks []Network
 }
 
 type IntrospectionResult struct {

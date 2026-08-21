@@ -18,7 +18,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
-	introspect "github.com/greenmaskio/arcave/internal/service/introspectv2"
 	"github.com/greenmaskio/storages"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
@@ -27,7 +26,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	arcrepo "github.com/greenmaskio/arcave/internal/repository/arc"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
@@ -35,7 +33,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -61,29 +61,19 @@ type dependencies struct {
 }
 
 // initAllDependencies wires the savepoint workflows for the project rooted at
-// projectPath. Every store arrives from storefactory already rooted, so nothing
-// below this line names a directory.
-func initAllDependencies(ctx context.Context, projectPath string, cfg config.Config) (*dependencies, error) {
+// projectPath. Every store arrives from storefactory already rooted.
+func initAllDependencies(
+	ctx context.Context, projectPath string, cfg config.Config, stack model.StackName,
+) (*dependencies, error) {
 	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	// The loader comes first because the store root ends at the compose project's
-	// name: nothing arcave holds is addressable until the stack is known. The
-	// loader parses files and touches no daemon, and the compose runner below
-	// reuses this very instance, so both resolve the same file set.
-	dockerComposeLoader := compose.NewLoader()
-	composeProject, err := dockerComposeLoader.Load(ctx, cfg.Project.ComposeFiles...)
-	if err != nil {
-		return nil, fmt.Errorf("resolve compose project (its name is the stack segment of the store root): %w", err)
-	}
-
 	// One store for the whole stack: savepoint records, fullcopy captures and a
-	// cdc repository root alike. It is rooted inside the session, so a session
-	// holds everything that dies with it.
+	// cdc repository root alike, rooted inside the session that they die with.
 	stackStore, err := storefactory.New(
 		cfg.Storage, projectPath,
-		model.ProjectName(cfg.Project.Name), model.DefaultSession, model.StackName(composeProject.Name),
+		model.ProjectName(cfg.Project.Name), model.DefaultSession, stack,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialise stack store: %w", err)
@@ -104,8 +94,12 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	engine := docker.NewEngine(dockerClientAPI)
 	opened.add("docker engine", engine)
 
+	// Over the same daemon connection the engine uses.
+	inspector := introspect.NewInspector(dockerClientAPI, stack)
+	assembler := composespec.NewAssembler()
+
 	composeService := dockercompose.NewComposeService(dockerCli)
-	composeRunner := compose.NewClient(composeService, dockerComposeLoader, compose.Options{
+	composeRunner := compose.NewClient(composeService, compose.Options{
 		WaitTimeout: cfg.Compose.WaitTimeout,
 		StopTimeout: cfg.Compose.StopTimeout,
 	})
@@ -163,7 +157,8 @@ func initAllDependencies(ctx context.Context, projectPath string, cfg config.Con
 	svc := core.New(core.Deps{
 		SavepointRepo:    sprepo.New(stackStore),
 		ProjectLocker:    lock.New(projectPath),
-		ComposeInspector: introspect.NewInspector(dockerComposeLoader),
+		ComposeInspector: inspector,
+		ProjectAssembler: assembler,
 		ComposeRunner:    composeRunner,
 		BackendRegistry:  backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
@@ -270,25 +265,10 @@ func shutdownResticServer(ctx context.Context, e *echo.Echo) {
 	}
 }
 
-// initServiceDeps wires `arcave init`: somewhere to write the config and a
-// compose project to verify, nothing more. Nothing here holds a resource.
+// initServiceDeps wires `arcave init`: somewhere to write the config, nothing
+// more. Nothing here holds a resource.
 func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
-	svc := core.NewInitService(projectPath, cfgrepo.New(projectPath), introspect.NewInspector(compose.NewLoader()))
-	return svc, json.New(os.Stdout)
-}
-
-// recommendServiceDeps wires `arcave recommend`, which is strictly read-only and
-// holds no resource. recommenderFiles are the optional user catalogs merged over
-// the built-in one, in order; empty when the caller passed none.
-func recommendServiceDeps(recommenderFiles []string) (*core.RecommendService, *json.Printer) {
-	return newRecommendService(recommenderFiles), json.New(os.Stdout)
-}
-
-// newRecommendService builds the recommend service alone, without a printer:
-// `arcave mcp` needs one per tool call — the catalogs arrive with the call — and
-// must not print, its stdout being the JSON-RPC channel.
-func newRecommendService(recommenderFiles []string) *core.RecommendService {
-	return core.NewRecommendService(arcrepo.NewARC(recommenderFiles...), introspect.NewInspector(compose.NewLoader()))
+	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), json.New(os.Stdout)
 }
 
 // closeQuietly closes c and logs any error without failing the caller.

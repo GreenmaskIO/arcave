@@ -3,6 +3,7 @@ package core
 import (
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -16,9 +17,6 @@ const (
 	demoTarget     = "/data"
 	demoVolumeName = "demo_db"
 )
-
-// demoComposeFiles is the file set every workflow request names.
-func demoComposeFiles() []string { return []string{"docker-compose.yml"} }
 
 // demoVolume is the unit, in the form the mock tests address it by.
 func demoVolume() model.Volume {
@@ -48,7 +46,7 @@ func demoSafetySnapshot() model.Savepoint {
 	}
 }
 
-// demoIntrospection is what the compose inspector reports for the project.
+// demoIntrospection is what the inspector reports for the live stack.
 func demoIntrospection() model.IntrospectionResult {
 	return model.IntrospectionResult{Project: model.Project{
 		Name: demoProject,
@@ -57,13 +55,26 @@ func demoIntrospection() model.IntrospectionResult {
 	}}
 }
 
+// demoSpec is what the assembler materialises demoIntrospection into; expectations match it by identity.
+var demoSpec = &types.Project{Name: demoProject}
+
+// demoAssembler materialises demoIntrospection into demoSpec.
+func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
+
+// assemblerFor is demoAssembler for a test that reports its own introspection.
+func assemblerFor(res model.IntrospectionResult) *mockAssembler {
+	assembler := &mockAssembler{}
+	assembler.On("Assemble", res).Return(demoSpec, nil)
+	return assembler
+}
+
 // demoResolution is the three reads every rollback opens with: the records, the
 // introspection, and a free lock.
 func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector, *mockLocker) {
 	repo := &mockSavepointRepo{}
 	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
 	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything, demoComposeFiles()).Return(demoIntrospection(), nil)
+	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
 	expectLock(locker)
 	return repo, inspector, locker

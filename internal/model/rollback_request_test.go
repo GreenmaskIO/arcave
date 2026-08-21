@@ -2,6 +2,7 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,8 +25,8 @@ func TestRollbackRequest_Validate(t *testing.T) {
 		{name: "an empty id", req: RollbackRequest{ID: ptr(SavepointID(""))}, wantErr: true},
 		{name: "an empty name", req: RollbackRequest{Name: ptr("")}, wantErr: true},
 		{name: "latest set to false", req: RollbackRequest{Latest: ptr(false)}, wantErr: true},
-		// Compose files alone are not a selector: every request carries them.
-		{name: "compose files alone", req: RollbackRequest{ComposeFiles: []string{"docker-compose.yml"}}, wantErr: true},
+		// The bound alone is not a selector: every request carries one.
+		{name: "a wait timeout alone", req: RollbackRequest{WaitTimeout: time.Minute}, wantErr: true},
 		// An empty id beside a real name still validates — the empty one is simply
 		// not a selector, and the name is.
 		{name: "an empty id beside a name", req: RollbackRequest{ID: ptr(SavepointID("")), Name: ptr("sp")}},

@@ -15,29 +15,21 @@ type configWriter interface {
 	Path() string
 }
 
-// InitService creates a project's arcave metadata. It shares only the compose
-// inspector with the savepoint workflows and needs neither storage, a snapshot
-// backend nor the Docker engine, so `arcave init` never reaches for a daemon.
+// InitService creates a project's arcave metadata. It writes one file and holds
+// nothing else: no storage, no snapshot backend, no daemon and no compose project.
 type InitService struct {
-	projectRoot         string
-	configWriter        configWriter
-	composeIntrospector composeIntrospector
+	projectRoot  string
+	configWriter configWriter
 }
 
 // NewInitService wires an InitService for the project rooted at projectRoot.
-func NewInitService(projectRoot string, cw configWriter, ci composeIntrospector) *InitService {
-	return &InitService{projectRoot: projectRoot, configWriter: cw, composeIntrospector: ci}
+func NewInitService(projectRoot string, cw configWriter) *InitService {
+	return &InitService{projectRoot: projectRoot, configWriter: cw}
 }
 
-// Init verifies the compose project loads, then writes cfg to
-// .arcave/config.yaml, returning the resolved project name and the file's path.
-// An already-initialised project is an error unless override is set.
-//
-// cfg is persisted verbatim, with no request type of its own: a type mirroring a
-// subset of the config would silently drop the sections it forgot from the file
-// an `arcave init --override` rewrites. override is an argument rather than a
-// config field because it steers this run and is never persisted.
-func (s *InitService) Init(ctx context.Context, cfg config.Config, override bool) (resolvedName, path string, err error) {
+// Init writes cfg to .arcave/config.yaml verbatim, returning the resolved project
+// name and the file's path. An initialised project is an error unless override.
+func (s *InitService) Init(_ context.Context, cfg config.Config, override bool) (resolvedName, path string, err error) {
 	exists, err := s.configWriter.Exists()
 	if err != nil {
 		return "", "", fmt.Errorf("check existing config: %w", err)
@@ -46,15 +38,8 @@ func (s *InitService) Init(ctx context.Context, cfg config.Config, override bool
 		return "", "", fmt.Errorf("project already initialized: %s exists (use --override to overwrite)", s.configWriter.Path())
 	}
 
-	// Stamps the schema version, project name and union tags, so the file is a
-	// complete v1 config. Idempotent: cmd/arcave has run it already, but an MCP
-	// caller may hand over a Config it assembled by hand.
+	// Re-applied here because an MCP caller may hand over a Config it assembled by hand.
 	cfg.ApplyDefaults(s.projectRoot)
-
-	// Read and verify the compose project before writing anything.
-	if _, err := s.composeIntrospector.Introspect(ctx, cfg.Project.ComposeFiles...); err != nil {
-		return "", "", fmt.Errorf("verifying compose project: %w", err)
-	}
 
 	if err := s.configWriter.Save(cfg); err != nil {
 		return "", "", fmt.Errorf("saving config.yaml file: %w", err)

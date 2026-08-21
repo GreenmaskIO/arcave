@@ -84,7 +84,7 @@ cp -a redisdata .arcave/savepoints/myapp/1780335122/redis
 write .arcave/savepoints/myapp/1780335122/savepoint.json
 
 # 5. Start services
-docker compose up -d
+docker compose start
 
 # 6. Wait healthy
 ```
@@ -145,6 +145,26 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
 ---
 
 ## arcave CLI UX
+
+### Global flags
+
+```text
+-p, --project-name        The Docker Compose project to act on, as `docker compose ls` names it.
+                          Required by every command that touches a stack — savepoint create/list/remove
+                          and rollback — and read from ARCAVE_PROJECT_NAME when the flag is absent.
+                          `arcave init` names no stack and does not take it; `arcave mcp` serves
+                          many, so each of its tool calls names its own.
+    --config              Path to the config file (default: .arcave/config.yaml under the project root).
+    --log-level           debug | info | warn.
+    --log-format          text | json.
+    --wait-timeout        How long to wait for services to become healthy after a restart.
+    --stop-timeout        How long a container gets to exit on its own before it is killed.
+    --progress            Where compose's own progress goes: log | tty | quiet.
+```
+
+The project name is deliberately not a config key: one project directory may hold several stacks, and a
+persisted name would pin arcave to one of them. `project.name` in the config is the *storage tenant*, a
+different concept — it scopes the savepoint store, not the stack arcave acts on.
 
 ### Project Initialization
 
@@ -213,7 +233,7 @@ and identifies services that may continue writing into stateful systems.
 Checks:
 
 - `.arcave` directory exists
-- `config.yaml` exists, and its `version` is one arcave speaks
+- `config.yaml` exists
 - the savepoint store is reachable and holds no legacy `manifest.json`
 
 ###### Storage Validation
@@ -291,145 +311,6 @@ which consumes doctor recommendations and updates the project configuration acco
 
 ---
 
-#### arcave recommend
-
-Reports the persistent volumes the project's services should mount and do not — state that lives inside the container
-filesystem and would therefore be silently lost by a savepoint/rollback cycle.
-
-It is the shipped, narrowed form of the `Volume Validation` check above: one question, one output shape, no severity
-model. It is strictly read-only — it parses the compose files and the recommendation catalog and reaches for neither the
-savepoint store, nor the Docker daemon, nor the project lock — so it is safe to run at any time, including while another
-arcave command is working.
-
-```bash
-arcave recommend
-arcave recommend -f docker-compose.yaml -f docker-compose.override.yaml
-arcave recommend --recommender-file ./team-arc.yaml --recommender-file ./my-arc.yaml
-```
-
-##### Flags
-
-```text
--f, --file                Docker Compose file (repeatable). Defaults to the project's configured
-                          compose files; with an explicit -f the command needs no arcave project at all.
-    --recommender-file    A recommendation catalog merged over the built-in one (repeatable;
-                          several are merged left to right).
-```
-
-##### How a recommendation is produced
-
-Each service's image is reduced to its repository — no tag, no digest, no `docker.io/library/` prefix, so `postgres:16`
-becomes `postgres` and `ghcr.io/org/pg:1` becomes `org/pg` — and looked up in the catalog. Every catalog volume the
-service does not already mount something persistent at becomes one recommendation. A named volume, a bind mount and an
-anonymous volume all count as coverage; a tmpfs mount does not, since it persists nothing. A service that only builds,
-or whose image reference will not parse, is skipped.
-
-##### Registries
-
-arcave assumes no default registry and no single one: the domain is dropped from every image before matching, so a
-project pulling from Docker Hub, a corporate registry and ghcr.io in the same compose file matches all of them against
-one catalog.
-
-```text
-postgres:16                                          -> postgres                       (built-in match)
-registry.corp.local/postgres:16                      -> postgres                       (built-in match)
-localhost:5000/redis:7                               -> redis                          (built-in match)
-docker.elastic.co/elasticsearch/elasticsearch:8.13.0 -> elasticsearch/elasticsearch    (built-in match)
-ghcr.io/myorg/mydb:1                                 -> myorg/mydb                     (no entry)
-mycorp.jfrog.io/docker-remote/library/postgres:16    -> docker-remote/library/postgres (no entry)
-```
-
-Docker Hub is special-cased in exactly one respect: it is the only registry that injects a `library/` namespace nobody
-writes, so that prefix is stripped.
-
-The last two lines are the two ways a match is missed, and they are different problems:
-
-- A **private image** is missed on purpose — arcave cannot know what someone's own image stores. Describe it in a
-  catalog of your own.
-- A **pull-through mirror that prefixes the path** (Artifactory, Nexus, Harbor) yields a genuinely different key. Map it
-  onto the entry it belongs to with an alias.
-
-Both are handled by the same file, which a team commits to its repository and passes with `--recommender-file`:
-
-```yaml
-- image: postgres                              # merged into the built-in entry
-  aliases:
-    - docker-remote/library/postgres           # the mirror prefix your registry adds
-- image: myorg/mydb                            # your own image
-  volumes:
-    - /var/lib/mydb
-```
-
-arcave deliberately does *not* guess here by trimming leading path segments until something matches: that would advise
-on anyone's own `ghcr.io/myorg/redis`, and the catalog is additive, so a false positive could not be taken back. An
-entry cannot be pinned to a registry either — two registries serving different layouts under the same path would be
-indistinguishable — which no known setup needs.
-
-##### The ARC catalog
-
-The Arcave Recommender Config is a YAML list. arcave ships one compiled into the binary; each `--recommender-file` is
-merged over the result so far, keyed on the exact image string — a matching entry gains the file's aliases and volumes
-(deduplicated, earlier order first), a new image is appended. Nothing is ever removed, and an alias a later file
-reassigns wins over the earlier mapping, so a personal catalog can layer over a team one and both over arcave's own.
-
-```yaml
-- image: postgres            # normalized repository, the match key
-  aliases:                   # images storing the same state in the same places
-    - pgvector/pgvector
-    - timescale/timescaledb
-  volumes:                   # container paths that state lives at
-    - /var/lib/postgresql/data
-
-- image: minio/minio
-  volumes:
-    - /data
-```
-
-An entry without an `image`, or an unknown key, is an error naming the file and the entry's index.
-
-##### Output
-
-A JSON array on stdout, empty (`[]`, never `null`) when there is nothing to recommend. Services are ordered by name and
-volumes in catalog order, so the output is stable across runs.
-
-```json
-[
-  {
-    "service": "db",
-    "image": "postgres:16",
-    "volume": "/var/lib/postgresql/data",
-    "operation": "add-volume",
-    "hash": "68cf83ec338db99fb410469421d5623bc116ea567d598e65e0e6d76603566892"
-  }
-]
-```
-
-`image` is the compose file's value verbatim, tag and all — not the normalized repository the catalog was matched on.
-
-`hash` identifies the recommendation, not the run: it is the lowercase hex sha256 of
-
-```text
-service + "|" + image + "|" + volume + "|" + operation
-```
-
-so the same finding hashes identically on every invocation and a caller can suppress one it has already seen or acted
-on. Because `image` participates, bumping the image tag produces a new hash — the advice is about that image.
-
-`operation` names what to do. `add-volume` is the only value today; it exists as a field so a future `arcave fix` can
-dispatch on it, and so a second kind of recommendation needs no change to the wire shape.
-
-##### Exit Codes
-
-```text
-0  nothing to recommend (the array is empty)
-1  there are recommendations, or the command failed
-```
-
-The status is a finding, not an error: the JSON array is still written to stdout, and nothing is printed to stderr.
-A caller that needs to tell "has advice" from "failed" reads stdout — a failure produces no JSON.
-
----
-
 #### arcave init
 
 Initializes arcave metadata for the current project.
@@ -467,10 +348,8 @@ the data they describe.
 storage backend — it is what says where the storage backend points.
 
 ```yaml
-version: 1
 project:
   name: myapp
-  compose_files: [docker-compose.yml]
 docker:
   host: unix:///var/run/docker.sock     # "" => read the environment
 storage:
@@ -482,10 +361,7 @@ log: {level: info, format: text}
 ```
 
 `storage` is a tagged union: `type` names the arm, and that arm must be present.
-Unknown keys are an error, not a value silently ignored. A config file without a
-`version`, or with one arcave does not speak, is refused with a message naming
-`arcave init --override` as the fix — arcave never rewrites it silently, since that would
-clobber a path the user set deliberately.
+Unknown keys are an error, not a value silently ignored — arcave never rewrites the file silently, since that would clobber a path the user set deliberately.
 
 A savepoint store may not be `/`, a shallow system directory, `$HOME`, or any
 ancestor of the project.
@@ -515,7 +391,7 @@ Behavior:
 
 The unit of backup is the **volume**, not the mount:
 
-- Every named volume the project declares — including `external: true` ones, and including ones no service mounts.
+- Every named volume of the project the daemon reports — including ones no service mounts, and including `external: true` ones that some service does mount. An external volume nothing mounts is invisible: arcave reads the running stack, and only compose's own volumes carry the project label that would reveal it.
 - Every bind mount and every anonymous volume, one unit per service and target. A named volume three services mount is one unit, captured once.
 - Mounts that are not persistent data are skipped, each reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
 
@@ -523,10 +399,12 @@ A volume is addressed directly — a named volume by its docker name, a bind by 
 
 Two things follow that a user with a `subpath:` mount will not expect:
 
-- A volume mounted through `subpath:` is captured **whole**. The subpath is a property of that one mount, and the daemon does not report it back at all — only the compose file knows about it.
+- A volume mounted through `subpath:` is captured **whole**. The subpath is a property of that one mount, and the daemon does not report it back at all, so arcave — which reads the running stack — never sees one.
 - **A rollback therefore restores the whole volume**, not the subdirectory the service sees. Everything else in that volume goes back to its savepoint state too.
 
 A named volume that does not exist on the daemon is an **error**, not a skip: an empty capture would silently wipe live data at the next rollback. Bring the project up once (`docker compose up`) to create the volumes it declares.
+
+arcave reads the **running stack**, not the compose files — it never opens one, and a project whose files have moved or been deleted works exactly the same. The stack itself, though, has to exist on the daemon. `docker compose stop` is fine — stopped containers still describe the stack, and every workflow stops the services anyway. `docker compose down` is not: it removes the containers, and with them everything arcave knows about the project. A command run against a torn-down stack fails saying so.
 
 Every savepoint receives a unique immutable identifier — a Unix timestamp integer:
 

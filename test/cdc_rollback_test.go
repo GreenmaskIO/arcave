@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
@@ -262,6 +263,7 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		SavepointRepo:    sprepo.New(stackStore),
 		ProjectLocker:    lock.New(projectRoot),
 		ComposeInspector: stubInspector{result: introspectionOf(volumes)},
+		ProjectAssembler: stubAssembler{project: &types.Project{Name: cdcProject}},
 		ComposeRunner:    composeRunner,
 		BackendRegistry:  registry,
 		Inflight:         inflightrepo.New(projectRoot),
@@ -373,9 +375,9 @@ type stubComposeRunner struct {
 	failNextUp error
 }
 
-func (s *stubComposeRunner) Stop(context.Context, ...string) error { return nil }
+func (s *stubComposeRunner) Stop(context.Context, *types.Project) error { return nil }
 
-func (s *stubComposeRunner) Up(context.Context, time.Duration, ...string) error {
+func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration) error {
 	if err := s.failNextUp; err != nil {
 		s.failNextUp = nil
 		return err
@@ -383,11 +385,18 @@ func (s *stubComposeRunner) Up(context.Context, time.Duration, ...string) error 
 	return nil
 }
 
+// stubAssembler: this test never starts the stack, so the spec only names the project.
+type stubAssembler struct{ project *types.Project }
+
+func (s stubAssembler) Assemble(model.IntrospectionResult) (*types.Project, error) {
+	return s.project, nil
+}
+
 // stubInspector reports the project this test built by hand, keeping compose
 // file resolution out of a test about the backend.
 type stubInspector struct{ result model.IntrospectionResult }
 
-func (s stubInspector) Introspect(context.Context, ...string) (model.IntrospectionResult, error) {
+func (s stubInspector) Introspect(context.Context) (model.IntrospectionResult, error) {
 	return s.result, nil
 }
 
