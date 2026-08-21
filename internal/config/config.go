@@ -144,6 +144,16 @@ type Project struct {
 	ComposeFiles []string `yaml:"compose_files" mapstructure:"compose_files"`
 }
 
+// Validate gates the name, which becomes the tenant segment of every store
+// root. ApplyDefaults has run by then, so an empty name means the project
+// directory normalized to nothing and the user has to say what to call it.
+func (p Project) Validate() error {
+	if err := model.ProjectName(p.Name).Validate(); err != nil {
+		return fmt.Errorf("project.name: %w (set project.name explicitly)", err)
+	}
+	return nil
+}
+
 // Docker is how arcave reaches the daemon. It is honoured by both halves of the
 // docker client — the SDK (Engine) and the CLI (ComposeRunner) — so the two can
 // never silently target different daemons. An empty Host means "read the
@@ -395,7 +405,11 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 		c.Version = Version
 	}
 	if c.Project.Name == "" {
-		c.Project.Name = filepath.Base(projectRoot)
+		// The name becomes a store-root segment, so the directory's own spelling is
+		// normalized rather than taken verbatim: MyApp yields myapp. A basename that
+		// normalizes to nothing stays empty and is reported by Validate, which is the
+		// one place that says "name the project explicitly".
+		c.Project.Name = model.NormalizeProjectName(filepath.Base(projectRoot)).String()
 	}
 	if c.Compose.WaitTimeout == 0 {
 		c.Compose.WaitTimeout = DefaultWaitTimeout
@@ -419,7 +433,10 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 			dir = *c.Storage.Directory
 		}
 		if dir.Path == "" {
-			dir.Path = filepath.Join(model.StateDir, "storage", c.Project.Name)
+			// No project segment here: storefactory roots every store at
+			// arcave/projects/<project>/…, so naming it twice would give
+			// .arcave/storage/demo/arcave/projects/demo/….
+			dir.Path = filepath.Join(model.StateDir, "storage")
 		}
 		c.Storage.Directory = &dir
 	}
@@ -478,6 +495,9 @@ func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
 func (c *Config) Validate() error {
 	if c.Version != Version {
 		return model.ErrUnsupportedConfigVersion
+	}
+	if err := c.Project.Validate(); err != nil {
+		return err
 	}
 	if err := c.Compose.Validate(); err != nil {
 		return err

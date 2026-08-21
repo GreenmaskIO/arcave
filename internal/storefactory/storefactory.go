@@ -1,19 +1,10 @@
 // Package storefactory turns a config.Storage union into the storages.Storager
 // the backends write through. It is the one place a configured path becomes a
-// store root, which makes it the one place the store namespace and the session
-// segment are appended.
+// store root, which makes it the one place the store namespace and the segments
+// below it are appended.
 //
-// Nothing above it ever names a directory again: New returns a Storager already
-// rooted at the store, so SubStorage is never called with an absolute path and
-// the filepath.IsAbs check the DI root used to carry — a check no object store
-// could honour — has nowhere left to live. It roots the store at the session and
-// stops there: everything below is the backend's own layout, and pre-narrowing to
-// a savepoint would decide here what only a backend knows.
-//
-// The backends themselves are greenmaskio/storages' (directory today; s3, azure,
-// ssh and inmemory without new work in arcave), and arcave speaks their interface
-// directly: every constructor there returns a store whose keys are already gated
-// against escaping it, so there is nothing left here to adapt or re-wrap.
+// New returns a Storager already rooted at the stack; everything below that is
+// the savepoint layer's and the backends' own layout.
 package storefactory
 
 import (
@@ -28,61 +19,69 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// storeNamespace is the static segment every store is rooted under, appended to
-// whatever the config names. It is not configurable, and it is the whole safety
-// story for destructive operations: arcave deletes inside the store it is given —
-// savepoint namespaces today, a future `arcave savepoint gc` sweeping unrecorded
-// directories tomorrow — and the namespace guarantees by construction that
-// everything under the store root is arcave's own data, wherever the user points
-// the path. Point it at /etc and arcave operates in /etc/arcave; dedicate a
-// bucket to it and arcave stays inside the arcave/ prefix. The library's Guard
-// closes the other direction — no key escapes the root — so the two together
-// bound every delete to arcave-owned keys on any backend, which is what replaced
-// the old validateStoreRoot blocklist: that one enumerated bad filesystem roots
-// and had nothing to say for an object store. Every future arm (s3, …) must
-// root its store under this same segment.
+// storeNamespace is the static segment every arm must root its store under,
+// appended to whatever the config names. It is not configurable: it guarantees
+// everything under the store root is arcave's own data, bounding every delete
+// to it — point the path at /etc and arcave operates in /etc/arcave.
 const storeNamespace = "arcave"
 
-// sharedNamespace sits beside the sessions, for the data a backend keeps across
-// them. It cannot collide with a session: SessionID.Validate admits only
-// "global" or a canonical UUID.
-const sharedNamespace = "shared"
+// The static segments between the namespace and the stack. They name what the
+// value after them is, so one configured path can hold every project a user
+// points at it and a reader of the tree can tell a tenant from a lifetime
+// without knowing arcave's vocabulary.
+const (
+	projectsNamespace = "projects"
+	sessionsNamespace = "sessions"
+	composeNamespace  = "compose"
+)
 
-// New builds the Storager for cfg, rooted at <path>/arcave/<session>, where the
-// session names a lifetime: everything under that root dies with it. For the
+// New builds the Storager for cfg, rooted at
+// <path>/arcave/projects/<project>/sessions/<session>/compose/<stack>. For the
 // directory arm a relative path is resolved against projectRoot; an absolute one
 // is honoured verbatim.
 //
 // The store's prefix is created by the backend (WithCreatePrefix), never its
-// root: a relative path is rooted at projectRoot — which exists by definition —
-// so the whole configured path materializes on first use, while an absolute path
-// must already exist, keeping a typo from quietly growing a fresh tree. The
-// session segment still arrives with the first object written under it.
-func New(cfg config.Storage, projectRoot string, session model.SessionID) (storages.Storager, error) {
-	// The session is rendered into a store root, so it is gated at the layer that
-	// owns the value, before any of it reaches a backend.
+// root: a relative path materializes on first use, while an absolute one must
+// already exist, keeping a typo from quietly growing a fresh tree.
+func New(
+	cfg config.Storage,
+	projectRoot string,
+	project model.ProjectName,
+	session model.SessionID,
+	stack model.StackName,
+) (storages.Storager, error) {
+	// Every segment is rendered into a store root, so each is gated at the layer
+	// that owns the value, before any of it reaches a backend. Validated in path
+	// order, so a config naming two bad segments is reported outermost-first.
+	if err := project.Validate(); err != nil {
+		return nil, fmt.Errorf("validate project name: %w", err)
+	}
 	if err := session.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session id: %w", err)
 	}
-	store, err := getStorager(cfg, projectRoot)
-	if err != nil {
-		return nil, err
+	if err := stack.Validate(); err != nil {
+		return nil, fmt.Errorf("validate stack name: %w", err)
 	}
-	return wrapNamespace(store, session.String())
-}
 
-// NewShared builds the Storager for the data that outlives a session, rooted at
-// <path>/arcave/shared. Identical to New but for that last segment.
-func NewShared(cfg config.Storage, projectRoot string) (storages.Storager, error) {
 	store, err := getStorager(cfg, projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	return wrapNamespace(store, sharedNamespace)
+
+	key := path.Join(
+		projectsNamespace, project.String(),
+		sessionsNamespace, session.String(),
+		composeNamespace, stack.String(),
+	)
+	stackStore, err := store.SubStorage(key, true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root storage at %s: %w", key, err)
+	}
+	return stackStore, nil
 }
 
 // getStorager resolves the config union into a store rooted at <path>/arcave — one arm
-// per storage type, and nothing else: what a segment means is wrapNamespace's, so a
+// per storage type, and nothing else: what the segments below mean is New's, so a
 // new arm lands here alone.
 func getStorager(cfg config.Storage, projectRoot string) (storages.Storager, error) {
 	if err := cfg.Validate(); err != nil {
@@ -104,15 +103,4 @@ func getStorager(cfg config.Storage, projectRoot string) (storages.Storager, err
 		// so adding a storage type without wiring it here fails to compile clean.
 		return nil, fmt.Errorf("unsupported storage.type %q", cfg.Type)
 	}
-}
-
-// wrapNamespace re-roots a namespace store at its last segment: a session's, or the
-// shared one. The segment is validated by whoever owns its vocabulary, before it
-// gets here.
-func wrapNamespace(store storages.Storager, segment string) (storages.Storager, error) {
-	segmentStore, err := store.SubStorage(segment, true)
-	if err != nil {
-		return nil, fmt.Errorf("re-root storage at %s: %w", segment, err)
-	}
-	return segmentStore, nil
 }

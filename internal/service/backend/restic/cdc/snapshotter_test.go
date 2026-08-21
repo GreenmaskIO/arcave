@@ -316,24 +316,6 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	h.runner.AssertExpectations(t)
 }
 
-// Exists trusts the commit marker: the record is written last, after every
-// backend reported success, so a record naming this capture already says the
-// capture completed. Nothing is asked of the store or of a container — the
-// empty mocks are the assertion.
-func TestSnapshotter_Exists(t *testing.T) {
-	// Arrange
-	h := newHarness(t, defaultOptions())
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	ok, err := h.snapshotter.Exists(ctx, model.BackendExistsRequest{SnapshotID: "1780335122"})
-
-	// Assert
-	require.NoError(t, err)
-	assert.True(t, ok)
-	h.runner.AssertExpectations(t)
-}
-
 // Remove is server-side: dropping a snapshot object is byte for byte what
 // `restic forget <id>` does on the wire, so no container and no exclusive lock
 // are involved. A capture that reported nothing has nothing to drop.

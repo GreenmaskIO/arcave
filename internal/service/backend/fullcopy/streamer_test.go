@@ -123,46 +123,6 @@ func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 	docker.AssertExpectations(t)
 }
 
-// An archive answers only for the store it was written to, and Exists never
-// touches the engine.
-func TestSnapshotter_Exists(t *testing.T) {
-	tests := []struct {
-		name string
-		// seed is whether the archive is planted in the store the spec names.
-		seed bool
-		want bool
-	}{
-		{name: "the store holding the capture sees it", seed: true, want: true},
-		{name: "another store does not answer for it", seed: false, want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			volume := bindVolume("app", "/etc/cfg")
-			docker := &mockVolumeStreamer{}
-			store, elsewhere := newStore(t, "savepoints"), newStore(t, "elsewhere")
-			ctx := context.Background()
-			archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
-			seeded := elsewhere
-			if tt.seed {
-				seeded = store
-			}
-			require.NoError(t, seeded.PutObject(ctx, archiveKey, strings.NewReader("tar-stream-bytes")))
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
-			require.NoError(t, err)
-
-			// Act
-			exists, err := snapshotter.Exists(ctx, model.BackendExistsRequest{SnapshotID: "1780335122"})
-
-			// Assert
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, exists)
-			docker.AssertExpectations(t)
-		})
-	}
-}
-
 // The archive's content goes verbatim into the volume the record addresses.
 func TestSnapshotter_Restore(t *testing.T) {
 	const payload = "tar-stream-bytes"
@@ -310,13 +270,6 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 			name: "restore",
 			call: func(ctx context.Context, s model.VolumeSnapshotBackend, id model.SavepointID) error {
 				return s.Restore(ctx, model.BackendRestoreRequest{SnapshotID: id})
-			},
-		},
-		{
-			name: "exists",
-			call: func(ctx context.Context, s model.VolumeSnapshotBackend, id model.SavepointID) error {
-				_, err := s.Exists(ctx, model.BackendExistsRequest{SnapshotID: id})
-				return err
 			},
 		},
 		{

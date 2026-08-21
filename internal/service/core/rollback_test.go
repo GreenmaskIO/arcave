@@ -29,8 +29,6 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 	var safetySnapshotID model.SavepointID
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
-	existsSp := savepointBackend.On("Exists", mock.Anything,
-		model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 	runner := &mockComposeRunner{}
 	stop := runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
@@ -46,20 +44,23 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
 
-	// The whole workflow: pre-flight → stop → back up the live state and commit its
-	// record → restore → start → uncommit the backup and drop it. Every neighbouring
-	// pair compiles when swapped, so the chain is the pin — the pre-flight ahead of
-	// the stop is what leaves the project running when a capture is missing, the
-	// commit after the capture is what makes the record a commit marker, and the
-	// uncommit before the drop is what keeps a half-gone backup from listing.
-	mock.InOrder(existsSp, stop, snapshotSafety, commitSafety, restoreSp, up, uncommitSafety, removeSafety)
+	// The whole workflow: stop → back up the live state and commit its record →
+	// restore → start → uncommit the backup and drop it. Every neighbouring pair
+	// compiles when swapped, so the chain is the pin — the commit after the capture
+	// is what makes the record a commit marker, and the uncommit before the drop is
+	// what keeps a half-gone backup from listing.
+	mock.InOrder(stop, snapshotSafety, commitSafety, restoreSp, up, uncommitSafety, removeSafety)
 
 	// Twice over the one store: one backend per volume per set, and no third build.
 	store := newDirStore(t)
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -103,8 +104,6 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	var safetySnapshotID model.SavepointID
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
-	existsSp := savepointBackend.On("Exists", mock.Anything,
-		model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 	runner := &mockComposeRunner{}
 	stopBeforeBackup := runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
@@ -118,9 +117,6 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	// The revert replays the backup under the id its capture reported, and a
 	// successful revert already returned the environment, so the backup goes too.
 	stopForRevert := runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
-	existsSafety := safetySnapshotBackend.On("Exists", mock.Anything, mock.MatchedBy(func(req model.BackendExistsRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(true, nil).Once()
 	restoreSafety := safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
@@ -130,16 +126,20 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
 
-	// Pre-flight → stop → backup and commit, then the failed restore and the revert:
-	// stop again → its own pre-flight → replay → restart → uncommit and drop.
-	mock.InOrder(existsSp, stopBeforeBackup, snapshotSafety, commitSafety, restoreSp,
-		stopForRevert, existsSafety, restoreSafety, up, uncommitSafety, removeSafety)
+	// Stop → backup and commit, then the failed restore and the revert:
+	// stop again → replay → restart → uncommit and drop.
+	mock.InOrder(stopBeforeBackup, snapshotSafety, commitSafety, restoreSp,
+		stopForRevert, restoreSafety, up, uncommitSafety, removeSafety)
 
 	store := newDirStore(t)
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -183,7 +183,6 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
 
@@ -191,9 +190,6 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
-	safetySnapshotBackend.On("Exists", mock.Anything, mock.MatchedBy(func(req model.BackendExistsRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(true, nil).Once()
 	safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
@@ -206,7 +202,11 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -244,7 +244,6 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
 
 	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
 		Return(errors.New("restore boom")).Once()
@@ -253,9 +252,6 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
-	safetySnapshotBackend.On("Exists", mock.Anything, mock.MatchedBy(func(req model.BackendExistsRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(true, nil).Once()
 	safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(errors.New("revert boom")).Once()
@@ -265,7 +261,11 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -294,41 +294,34 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	safetySnapshotBackend.AssertExpectations(t)
 }
 
-// A failed safety snapshot changes nothing: the partial backup is dropped and the
-// services restarted, with live data never touched.
+// A failed safety snapshot changes nothing: the services are restarted, live data
+// is never touched, and what the partial capture wrote is left for a gc.
 func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 	// Arrange
 	vol := demoVolume()
 	record := demoRecord()
 	repo, inspector, locker := demoResolution(record)
 
-	var safetySnapshotID model.SavepointID
-	// The capture never got to commit, so repo carries no Save — only the uncommit
-	// the drop opens with, which is a no-op against a record that was never written.
-	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil).Once()
 	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{}, errors.New("backup boom")).Once()
-	// The partial backup is dropped, carrying the nil payload the failed
-	// capture reported.
-	safetySnapshotBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
-		return req.SnapshotID == safetySnapshotID && req.Payload == nil
-	})).Return(nil).Once()
 
 	registry := &mockRegistry{}
 	store := newDirStore(t)
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -342,112 +335,9 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
 		"pre-rollback safety snapshot failed, nothing changed: snapshot volume-named-demo_db: capture volume: backup boom")
-	// Nothing may be restored over live data: savepointBackend carries no Restore
-	// expectation, so a restore would fail the run where it happened.
-	repo.AssertExpectations(t)
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
-	safetySnapshotBackend.AssertExpectations(t)
-}
-
-// A missing capture aborts before anything is touched: nothing stopped, backed
-// up or restored.
-func TestService_Rollback_MissingCapture(t *testing.T) {
-	// Arrange
-	vol := demoVolume()
-	record := demoRecord()
-	repo, inspector, locker := demoResolution(record)
-	runner := &mockComposeRunner{}
-
-	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(false, nil).Once()
-	safetySnapshotBackend := &mockBackend{volume: vol}
-
-	registry := &mockRegistry{}
-	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
-
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
-	logs := &syncBuffer{}
-	ctx := zerolog.New(logs).WithContext(context.Background())
-
-	// Act
-	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
-	})
-
-	// Assert
-	require.ErrorIs(t, err, model.ErrMissingVolumeInSnapshot)
-	assert.Contains(t, logs.String(), "no capture exists for these volumes")
-	assert.Contains(t, logs.String(), `"object_id":"volume-named-demo_db"`)
-	// The bracket is closed even on the abort path: its Release expectation is Once().
-	repo.AssertExpectations(t)
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
-	safetySnapshotBackend.AssertExpectations(t)
-}
-
-// A half-revert would leave a mix of savepoint and live data, so a missing
-// capture reverts nothing and keeps the backup.
-func TestService_Rollback_RevertGatedOnACompleteBackup(t *testing.T) {
-	// Arrange
-	vol := demoVolume()
-	record := demoRecord()
-	repo, inspector, locker := demoResolution(record)
-
-	var safetySnapshotID model.SavepointID
-	expectSafetySnapshotCommit(repo, "1780335122")
-	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
-
-	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
-	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
-		Return(errors.New("restore boom")).Once()
-
-	safetySnapshotBackend := &mockBackend{volume: vol}
-	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
-	// The revert's own pre-flight finds the backup incomplete.
-	safetySnapshotBackend.On("Exists", mock.Anything, mock.MatchedBy(func(req model.BackendExistsRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(false, nil).Once()
-
-	registry := &mockRegistry{}
-	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
-
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
-	logs := &syncBuffer{}
-	ctx := zerolog.New(logs).WithContext(context.Background())
-
-	// Act
-	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ComposeFiles: demoComposeFiles(),
-		ID:           ptrID("1780335122"),
-		WaitTimeout:  60 * time.Second,
-	})
-
-	// Assert
-	// A partial revert is worse than none, and the backup is kept for a manual
-	// recovery — record and all: safetySnapshotBackend carries neither a Restore nor a
-	// Remove expectation, and repo no Delete.
-	require.Error(t, err)
-	assert.Contains(t, logs.String(), "safety snapshot incomplete, nothing reverted")
-	assert.Contains(t, logs.String(), "no capture exists for these volumes")
-	assert.Contains(t, logs.String(), "safety snapshot retained")
+	// Nothing may be restored over live data, and the partial capture is not deleted:
+	// no Restore on savepointBackend, no Remove on safetySnapshotBackend, no Delete on
+	// repo — each would fail the run as an unexpected call.
 	repo.AssertExpectations(t)
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -480,7 +370,6 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
 
 	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
 		Return(errors.New("restore boom")).Once()
@@ -490,9 +379,6 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
-	safetySnapshotBackend.On("Exists", mock.Anything, mock.MatchedBy(func(req model.BackendExistsRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(true, nil).Once()
 	// The revert fails, which is the one path that keeps the backup.
 	safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
@@ -502,7 +388,11 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -552,11 +442,13 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	record := demoRecord()
 	repo, inspector, locker := demoResolution(record)
 
+	// Err is read at call time: the revert's own budget context is cancelled when it
+	// returns, so a post-hoc read would see that cancel and not the live restart.
 	var safetySnapshotID model.SavepointID
-	var upCtxs []context.Context
+	var upErrs []error
 	expectSafetySnapshotCommit(repo, "1780335122")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
-	captureCtx := func(args mock.Arguments) { upCtxs = append(upCtxs, args.Get(0).(context.Context)) }
+	captureCtx := func(args mock.Arguments) { upErrs = append(upErrs, args.Get(0).(context.Context).Err()) }
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoComposeFiles()).Return(nil)
 	// The first Up fails the health check, which drives Rollback into revert; the
@@ -566,7 +458,6 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Run(captureCtx).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
 
@@ -574,9 +465,6 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
-	safetySnapshotBackend.On("Exists", mock.Anything, mock.MatchedBy(func(req model.BackendExistsRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(true, nil).Once()
 	safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
@@ -589,7 +477,11 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -601,8 +493,8 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
-	require.Len(t, upCtxs, 2)
-	assert.NoError(t, upCtxs[1].Err(), "revert must restart services with a live context, not the cancelled errgroup one")
+	require.Len(t, upErrs, 2)
+	assert.NoError(t, upErrs[1], "revert must restart services with a live context, not the cancelled errgroup one")
 	repo.AssertExpectations(t)
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -627,7 +519,6 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 	runner.On("Up", mock.Anything, 60*time.Second, demoComposeFiles()).Return(nil)
 
 	savepointBackend := &mockBackend{volume: vol}
-	savepointBackend.On("Exists", mock.Anything, model.BackendExistsRequest{SnapshotID: record.ID}).Return(true, nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
 
@@ -644,7 +535,11 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -671,25 +566,29 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 	safetySnapshotBackend.AssertExpectations(t)
 }
 
-// The id gate stands ahead of the dispatch: an id that could name a parent
-// directory reaches no backend.
+// The id gate stands ahead of the whole workflow: an id that could name a
+// parent directory builds no backend and stops nothing.
 func TestService_Rollback_RejectsAnUnsafeIDBeforeAnyBackend(t *testing.T) {
 	// Arrange
-	vol := demoVolume()
 	record := demoRecord()
 	record.ID = "../../etc"
-	repo, inspector, locker := demoResolution(record)
-	runner := &mockComposeRunner{}
+	repo := &mockSavepointRepo{}
+	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
+	locker := &mockLocker{}
+	expectLock(locker)
 
-	// Neither backend carries an expectation: any dispatch fails the test loudly.
-	savepointBackend := &mockBackend{volume: vol}
-	safetySnapshotBackend := &mockBackend{volume: vol}
+	// Nothing past the gate carries an expectation: an introspection, a build, a
+	// stop or a dispatch fails the test loudly.
+	inspector := &mockInspector{}
+	runner := &mockComposeRunner{}
 	registry := &mockRegistry{}
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -706,8 +605,6 @@ func TestService_Rollback_RejectsAnUnsafeIDBeforeAnyBackend(t *testing.T) {
 	locker.AssertExpectations(t)
 	runner.AssertExpectations(t)
 	registry.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
-	safetySnapshotBackend.AssertExpectations(t)
 }
 
 // A rollback over real copy captures, in the one store both now write into: the
@@ -745,9 +642,13 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	docker := &fakeVolumeStreamer{payload: "live bytes"}
 	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
 	require.NoError(t, err)
-	svc := New(repo, locker, inspector, runner, registry, store, model.SnapshotBackendCopy)
+	svc := New(Deps{
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
 
-	// The capture the pre-flight looks for, at the key the backend renders.
+	// The capture the restore reads, at the key the backend renders.
 	archive := "1780335122/volume-named-demo_db/data.tar"
 	require.NoError(t, store.PutObject(context.Background(), archive, strings.NewReader("savepoint bytes")))
 	ctx := zerolog.Nop().WithContext(context.Background())

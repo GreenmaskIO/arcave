@@ -70,7 +70,7 @@ func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector,
 }
 
 // expectLock declares a free lock and the release that always follows it —
-// lockProject defers the release, so a taken lock is a released one.
+// withUnlock defers the release, so a taken lock is a released one.
 func expectLock(locker *mockLocker) *mock.Call {
 	locker.On("Release").Return(nil).Once()
 	return locker.On("Acquire", mock.Anything).Return(nil).Once()

@@ -21,12 +21,6 @@ type (
 		Payload any
 	}
 
-	// BackendExistsRequest carries no payload: id and volume address a capture on
-	// their own.
-	BackendExistsRequest struct {
-		SnapshotID SavepointID
-	}
-
 	BackendRemoveRequest struct {
 		SnapshotID SavepointID
 		Payload    any

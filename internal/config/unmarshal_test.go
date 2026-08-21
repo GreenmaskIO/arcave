@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,9 @@ func TestUnmarshal(t *testing.T) {
 			verify: func(t *testing.T, cfg Config) {
 				assert.Equal(t, Version, cfg.Version)
 				assert.Equal(t, StorageTypeDirectory, cfg.Storage.Type)
+				// The configured path carries no project segment: storefactory roots
+				// the store at the project itself.
+				assert.Equal(t, filepath.Join(model.StateDir, "storage"), cfg.Storage.DirectoryPath())
 				assert.Equal(t, SnapshotBackendFullCopy, cfg.Snapshot.Backend)
 				// A project that names no compose section still gets bounds: an
 				// unbounded health-check wait is the failure this config exists to
@@ -117,6 +121,18 @@ func TestUnmarshal(t *testing.T) {
 			name:       "an unknown key is rejected once the version is current",
 			yaml:       "version: 1\nsavepoint_dir: /snaps\n",
 			wantErrMsg: "savepoint_dir",
+		},
+		{
+			// The name becomes the tenant segment of every store root, so it is
+			// gated here rather than at the syscall that would have used it.
+			name:       "a project name outside the store-root charset is rejected",
+			yaml:       "version: 1\nproject:\n  name: MyApp\n",
+			wantErrMsg: `invalid project name "MyApp"`,
+		},
+		{
+			name:       "a project name that is a path is rejected",
+			yaml:       "version: 1\nproject:\n  name: ../elsewhere\n",
+			wantErrMsg: "invalid project name",
 		},
 		{
 			name:       "an unimplemented storage arm is rejected",
@@ -256,6 +272,47 @@ func TestUnmarshal(t *testing.T) {
 			if tt.verify != nil {
 				tt.verify(t, cfg)
 			}
+		})
+	}
+}
+
+// A project that names nothing takes its name from the directory it lives in —
+// and that directory is spelled however the user spelled it, while the name is a
+// store-root segment. So it is normalized rather than taken verbatim, and a
+// directory with nothing left after normalization is an error naming the key to
+// set, not a store rooted at "".
+func TestUnmarshal_DefaultsTheProjectNameFromTheDirectory(t *testing.T) {
+	tests := []struct {
+		name        string
+		projectRoot string
+		wantName    string
+		wantErrMsg  string
+	}{
+		{name: "already in the charset", projectRoot: filepath.Join("/home", "v", "demo"), wantName: "demo"},
+		{name: "mixed case", projectRoot: filepath.Join("/home", "v", "MyApp"), wantName: "myapp"},
+		{name: "punctuation", projectRoot: filepath.Join("/home", "v", "my.app v2"), wantName: "myappv2"},
+		{
+			name:        "nothing survives normalization",
+			projectRoot: filepath.Join("/home", "v", "日本語"),
+			wantErrMsg:  "set project.name explicitly",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			v := newViper(t, "version: 1\n")
+
+			// Act
+			cfg, err := Unmarshal(v, tt.projectRoot)
+
+			// Assert
+			if tt.wantErrMsg != "" {
+				require.ErrorContains(t, err, tt.wantErrMsg)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantName, cfg.Project.Name)
 		})
 	}
 }

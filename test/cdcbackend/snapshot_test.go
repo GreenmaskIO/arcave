@@ -53,7 +53,9 @@ func TestSnapshotter_Snapshot_ShipsAnIncrement(t *testing.T) {
 
 	// Assert
 	t.Logf("data added: first %d bytes, second %d bytes", first.DataAdded, second.DataAdded)
-	assert.Less(t, second.DataAdded, first.DataAdded/4,
+	// Half, not a quarter: the edit reships whole chunks, whose size is a per-
+	// repository die roll, and /4 sat inside that spread. A full reship is 2x this.
+	assert.Less(t, second.DataAdded, first.DataAdded/2,
 		"a capture after a ~%d KiB change must not reship the volume", mutateKiB)
 	assert.ElementsMatch(t, []string{first.SnapshotObjectID, second.SnapshotObjectID}, env.snapshotObjectIDs(t, vol),
 		"the two captures are two snapshots in one repository")

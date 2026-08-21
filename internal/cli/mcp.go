@@ -1,19 +1,3 @@
-// Package mcp is the MCP adapter: it exposes arcave's savepoint workflows as tools
-// an AI agent can call natively, mirroring what internal/cli exposes as
-// commands. Like that package it declares its own consumer-side view of the
-// service and imports no internal/service or internal/client package — a tool
-// handler parses its input, builds a model request, calls the service, and
-// returns a shared model wire type for the SDK to marshal.
-//
-// The transport is stdio only: the server runs as a subprocess of its host, so
-// stdout *is* the JSON-RPC channel. Nothing here may write to stdout — there is
-// no model.Printer in this package, deliberately. Logs go to stderr through
-// zerolog, which is safe.
-//
-// Serialisation is not this package's concern either: core.Service claims the
-// project lock itself, so two concurrent mutating tool calls surface
-// model.ErrProjectLocked as a tool error, exactly as two concurrent CLI
-// invocations do.
 package cli
 
 import (
@@ -29,9 +13,7 @@ import (
 // serverVersion is the version arcave reports to the MCP host during initialise.
 const serverVersion = "0.1.0"
 
-// service is this adapter's view of the savepoint workflows — the same four
-// methods internal/cli reaches through one interface per handler. They are
-// declared together here because a single Server owns all four tools.
+// mcpService is the MCP adapter's view of the savepoint workflows.
 type mcpService interface {
 	CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error)
 	ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error)
@@ -39,22 +21,16 @@ type mcpService interface {
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
 }
 
-// Server serves arcave's savepoint workflows over MCP.
+// MCPHandler serves arcave's savepoint workflows as MCP tools over stdio.
+// stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
 	svc              mcpService
 	recommendFactory RecommendServiceFactory
 	composeFiles     []string
 }
 
-// New builds the MCP adapter over svc. The compose files are injected rather
-// than taken per tool call: they are a property of the resolved project config,
-// not something an agent should have to know or could keep in step with it. The
-// adapter takes the file list rather than a config.Config because that is all it
-// needs, and the whole config would drag internal/config into its import graph.
-//
-// recommendFactory is a factory rather than a second service for the reason
-// stated on RecommendServiceFactory: the recommend tool takes its catalogs per
-// call, and a service is bound to its catalog at construction.
+// NewMCPHandler builds the MCP adapter over svc. The compose files are injected
+// from the resolved project config rather than taken per tool call.
 func NewMCPHandler(svc mcpService, recommendFactory RecommendServiceFactory, composeFiles []string) *MCPHandler {
 	return &MCPHandler{
 		svc:              svc,
@@ -71,7 +47,11 @@ const (
 		"project's Docker Compose stack. Call this before a risky change (a schema migration, a " +
 		"data transformation, a destructive experiment) so the environment can be restored " +
 		"afterwards with the rollback tool. Services are stopped for the duration of the " +
-		"snapshot and started again when it completes."
+		"snapshot and started again when it completes. If the call fails with a message of the " +
+		"form 'savepoint <id> committed; services failed to start', the savepoint EXISTS and is " +
+		"safe to roll back to — only the restart failed, so report that id to the user and " +
+		"investigate the stack (the services are stopped or unhealthy), rather than taking " +
+		"another savepoint."
 	descList = "List the project's savepoints, newest first, with their id, name, description " +
 		"and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
 		"rollback or savepoint_remove. Safety snapshots — the undo a rollback commits of the live " +
@@ -90,20 +70,9 @@ const (
 		"a service only sees a subpath of. arcave takes a safety snapshot of the live state first " +
 		"and replays it automatically if the rollback fails, so a failed rollback leaves the " +
 		"environment as it was. Services are stopped and started again."
-	// descRecommend carries the workflow, not just the trigger: arcave exposes no
-	// tool that applies a recommendation — editing the user's compose files is the
-	// agent's job, done with its own editing tools after asking the user what to
-	// apply and where. That decision lives here because this description is the
-	// only place the agent reads it.
-	//
-	// The two questions are asked through the host's own structured-question tool
-	// where there is one, because "apply which of these, and to which file" is
-	// exactly a multi-select plus a single-select. It is named as a preference and
-	// not a requirement: an MCP server does not get to know its host's tool
-	// inventory, arcave is not Claude Code's alone, and that tool caps a question at
-	// four options while a recommendation list has no bound. So the plain-text
-	// fallback is spelled out too, and the numbered table above is what makes it
-	// answerable — it is the fallback's option list.
+	// descRecommend carries the whole apply workflow: arcave exposes no tool that
+	// applies a recommendation, so the agent edits the compose files itself, and
+	// this description is the only place it reads how.
 	descRecommend = "Report volumes the project's services should mount but do not: a service whose " +
 		"image is known to write persistent state to a path with no volume or bind mount on it, so " +
 		"a savepoint would silently fail to capture that state. Strictly read-only — it reads the " +
@@ -133,7 +102,7 @@ const (
 )
 
 // createInput is savepoint_create's input schema. The compose files are not a
-// field: they come from the resolved project config, injected into the Server.
+// field: they come from the resolved project config, injected into the handler.
 type createInput struct {
 	Name        string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by arcave"`
 	Description string `json:"description,omitempty" jsonschema:"what this savepoint captures, e.g. the change it is being taken before"`

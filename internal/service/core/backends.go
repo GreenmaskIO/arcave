@@ -32,12 +32,11 @@ func (s *Service) buildBackends(volumes []model.Volume) ([]model.VolumeSnapshotB
 }
 
 // captureVolumes takes one capture per backend under a fresh id and returns the
-// uncommitted savepoint they make up.
+// uncommitted savepoint they make up. On error the savepoint is zero: what a
+// half-finished fan-out wrote is garbage no caller may address, logged here —
+// the one place that knows the id — and left for a later gc.
 //
 // It opens by refusing a tree the new id already names — see requireEmptyTree.
-//
-// The savepoint comes back even on error, filled as far as the fan-out got, for
-// the caller's cleanup to address.
 func (s *Service) captureVolumes(
 	ctx context.Context,
 	backends []model.VolumeSnapshotBackend,
@@ -55,7 +54,7 @@ func (s *Service) captureVolumes(
 	}
 
 	if err := s.requireEmptyTree(ctx, record.ID); err != nil {
-		return record, err
+		return model.Savepoint{}, err
 	}
 
 	err := s.forEachBackend(ctx, record.ID, backends, "snapshot",
@@ -71,7 +70,11 @@ func (s *Service) captureVolumes(
 			return nil
 		})
 	if err != nil {
-		return record, err
+		// No record names what the fan-out wrote, so nothing reads it, and a failure
+		// path is the worst moment to delete data.
+		zerolog.Ctx(ctx).Warn().Str("snapshot_id", record.ID.String()).
+			Msg("the partial capture is retained for a later gc")
+		return model.Savepoint{}, err
 	}
 	return record, nil
 }
@@ -83,50 +86,23 @@ func (s *Service) captureVolumes(
 // the record is what makes the backup a killed rollback abandoned listable, and
 // therefore rollable-back-to by hand.
 //
-// The record comes back even on error, exactly as captureVolumes returns it.
+// On error the record is zero: an uncommitted capture is garbage, not a value.
 func (s *Service) performSavepoint(
 	ctx context.Context,
 	backends []model.VolumeSnapshotBackend,
-	name, description string,
+	name string,
+	description string,
 	labels map[string]string,
 ) (model.Savepoint, error) {
 	record, err := s.captureVolumes(ctx, backends, name, description, labels)
 	if err != nil {
-		return record, err
+		return model.Savepoint{}, err
 	}
 
 	if err := s.savepointRepo.Save(ctx, record); err != nil {
-		return record, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
+		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
 	}
 	return record, nil
-}
-
-// requireComplete gates a restore on every volume of record being there, naming
-// all the gaps at once rather than the first: a half-restore is worse than none.
-func (s *Service) requireComplete(
-	ctx context.Context, record model.Savepoint, backends []model.VolumeSnapshotBackend,
-) error {
-	present := make([]bool, len(backends))
-	err := s.forEachBackend(ctx, record.ID, backends, "exists",
-		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			ok, err := backend.Exists(ctx, model.BackendExistsRequest{SnapshotID: record.ID})
-			if err != nil {
-				return fmt.Errorf("check capture: %w", err)
-			}
-			present[i] = ok
-			return nil
-		})
-	if err != nil {
-		return err
-	}
-	if missing := absentVolumes(backends, present); len(missing) > 0 {
-		zerolog.Ctx(ctx).Error().
-			Str("snapshot_id", record.ID.String()).
-			Interface("volumes", missing).
-			Msg("no capture exists for these volumes")
-		return model.ErrMissingVolumeInSnapshot
-	}
-	return nil
 }
 
 // restoreVolumes writes every volume back, each carrying the payload its own
@@ -230,22 +206,10 @@ func volumeOpContext(
 		WithContext(ctx)
 }
 
-func absentVolumes(backends []model.VolumeSnapshotBackend, present []bool) []model.Volume {
-	var missing []model.Volume
-	for i, backend := range backends {
-		if !present[i] {
-			missing = append(missing, backend.Volume())
-		}
-	}
-	return missing
-}
-
-// requireEmptyTree refuses an id whose capture directory already holds objects.
-// Two states reach it now that a rollback's undo shares the savepoints' store:
-// an interrupted run's remains, and — an id being Unix seconds — a live savepoint
+// requireEmptyTree refuses an id whose capture directory already holds objects:
+// an interrupted run's remains, or — an id being Unix seconds — a live savepoint
 // captured and rolled back inside one tick. Telling them apart needs the reserved
-// record key, which this layer may not name, so the message advises neither
-// removal. A sortable UUID id would remove the second case outright.
+// record key, which this layer may not name, so the message advises neither removal.
 func (s *Service) requireEmptyTree(ctx context.Context, id model.SavepointID) error {
 	objects, err := s.store.List(ctx, id.String())
 	if err != nil {

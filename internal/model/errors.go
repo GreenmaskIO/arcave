@@ -26,18 +26,12 @@ var (
 	// ErrRetainRecentNegative is returned when the retain-recent count is negative.
 	ErrRetainRecentNegative = errors.New("retain-recent count must be zero or positive")
 	// ErrProjectLocked is returned when another arcave process is already running a
-	// mutating workflow in this project. The service returns it, the lock
-	// implementation produces it, and the adapters match it — so it lives here
-	// rather than in internal/lock, which core must not import.
+	// mutating workflow in this project.
 	ErrProjectLocked = errors.New("another arcave command is already running in this project")
 
 	// ErrInvalidSavepointID reports an id that is not a run of decimal digits.
 	// SavepointID.Validate wraps it with the offending id.
 	ErrInvalidSavepointID = errors.New("invalid savepoint id")
-
-	// ErrMissingVolumeInSnapshot reports that a snapshot holds no capture for a
-	// volume it is expected to cover; which volumes are missing is logged.
-	ErrMissingVolumeInSnapshot = errors.New("snapshot is missing a volume capture")
 
 	// ErrUnsupportedConfigVersion reports a config file whose schema version arcave does
 	// not speak. arcave speaks exactly one, so any other value is refused rather than

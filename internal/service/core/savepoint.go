@@ -27,67 +27,46 @@ var errNoVolumesToBackUp = errors.New("no stateful volumes found; nothing to cap
 // holds data. Unexported for the same reason: nothing matches on it.
 var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 
-// CreateSavepoint stops the project services, captures every volume marked for
-// backup under one id, commits the record, and starts the services again.
+// CreateSavepoint stops the services, captures every volume under one id, commits
+// the record, and starts the services again. The project lock is held throughout.
 //
-// The project lock is held for the whole workflow, and taken first: a caller who
-// cannot have the project must not learn anything about it, and must certainly
-// not stop its services.
-//
-// The volumes are resolved exactly as a rollback resolves them: a savepoint
-// covering a volume its own rollback cannot reach would never roll back.
+// On error the record is zero, whatever the store holds: a savepoint committed
+// before a failed restart is named by the error and found by `savepoint list`.
 func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
+	return withUnlock(ctx, s, func() (model.Savepoint, error) {
+		return s.createSavepoint(ctx, req)
+	})
+}
+
+// createSavepoint is the workflow itself, run with the project lock held.
+func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
 	log := zerolog.Ctx(ctx)
 
-	unlock, err := s.lockProject(ctx)
-	if err != nil {
+	if err := s.requireNoInflight(ctx, ""); err != nil {
 		return model.Savepoint{}, err
 	}
-	defer unlock()
 
-	volumes, err := s.resolveBackupVolumes(ctx, req.ComposeFiles)
-	if err != nil {
-		return model.Savepoint{}, err
-	}
-	if len(volumes) == 0 {
-		return model.Savepoint{}, errNoVolumesToBackUp
-	}
-
-	// Ahead of the stop: a backend that cannot be built leaves the project running.
-	backends, err := s.buildBackends(volumes)
+	ws, err := s.prepare(ctx, req.ComposeFiles, req.WaitTimeout)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
-	log.Info().Msg("stopping services")
-	if err := s.composeRunner.Stop(ctx, req.ComposeFiles...); err != nil {
-		return model.Savepoint{}, fmt.Errorf("stopping services: %w", err)
+	if err := s.stopServices(ctx, ws); err != nil {
+		return model.Savepoint{}, err
 	}
 
-	// Capture while the services are stopped. On failure they still must come back
-	// up, so the restart is best-effort — a restart failure on top changes nothing
-	// and is only logged — and the capture error is what the caller gets.
-	record, err := s.performSavepoint(ctx, backends, req.Name, req.Description, req.Labels)
+	// Capture while the services are stopped. The capture error is what the caller
+	// gets; the restart on top of it is best-effort and only logged.
+	record, err := s.performSavepoint(ctx, ws.backends, req.Name, req.Description, req.Labels)
 	if err != nil {
-		// Nothing was committed, so the uncommit inside dropSavepoint is a no-op and
-		// what it really drops is the data the fan-out got as far as writing, which no
-		// savepoint will ever name. A refused directory is the exception: its objects
-		// predate this run, and keeping them is the point of the refusal.
-		if !errors.Is(err, errCaptureDirectoryNotEmpty) {
-			if dropErr := s.dropSavepoint(ctx, record, backends); dropErr != nil {
-				log.Warn().Err(dropErr).Str("savepoint", record.ID.String()).Msg("failed to remove the partial capture")
-			}
-		}
-		log.Info().Msg("starting services")
-		if err := s.composeRunner.Up(ctx, req.WaitTimeout, req.ComposeFiles...); err != nil {
+		if err := s.startServices(ctx, ws); err != nil {
 			log.Error().Err(err).Msg("services failed to restart after capture failure")
 		}
 		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", err)
 	}
 
-	log.Info().Msg("starting services")
-	if err := s.composeRunner.Up(ctx, req.WaitTimeout, req.ComposeFiles...); err != nil {
-		return model.Savepoint{}, fmt.Errorf("starting services: %w", err)
+	if err := s.startServices(ctx, ws); err != nil {
+		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", record.ID, err)
 	}
 	return record, nil
 }
@@ -133,14 +112,23 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 		return model.RemoveResult{}, err
 	}
 
-	if !req.DryRun {
-		unlock, err := s.lockProject(ctx)
-		if err != nil {
-			return model.RemoveResult{}, err
-		}
-		defer unlock()
+	if req.DryRun {
+		return s.removeSavepoints(ctx, req)
 	}
 
+	return withUnlock(ctx, s, func() (model.RemoveResult, error) {
+		// The gate guards the safety snapshot too: while the marker stands, that
+		// snapshot is the remedy, and no selector may delete it.
+		if err := s.requireNoInflight(ctx, ""); err != nil {
+			return model.RemoveResult{}, err
+		}
+		return s.removeSavepoints(ctx, req)
+	})
+}
+
+// removeSavepoints selects what req names and deletes it; a dry run stops at the
+// selection.
+func (s *Service) removeSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error) {
 	// Everything, safety snapshots included: which of them this request may see is
 	// selectSavepointsToRemove's call, and it differs by selector.
 	records, err := s.listSavepoints(ctx, true)

@@ -152,18 +152,6 @@ func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error
 	return mnt, nil
 }
 
-func (s *Snapshotter) Exists(ctx context.Context, req model.BackendExistsRequest) (bool, error) {
-	capture, err := s.captureStore(req.SnapshotID)
-	if err != nil {
-		return false, err
-	}
-	exists, err := capture.Exists(ctx, archiveName)
-	if err != nil {
-		return false, fmt.Errorf("stat archive: %w", err)
-	}
-	return exists, nil
-}
-
 // Remove deletes the archive and stops: a Storager may not delete its own root,
 // so the caller sweeps the directory. An archive already gone is not an error.
 func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {

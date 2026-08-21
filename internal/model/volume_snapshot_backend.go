@@ -11,7 +11,6 @@ type VolumeSnapshotBackend interface {
 
 	Snapshot(ctx context.Context, req BackendSnapshotRequest) (SnapshotStat, error)
 	Restore(ctx context.Context, req BackendRestoreRequest) error
-	Exists(ctx context.Context, req BackendExistsRequest) (bool, error)
 	Remove(ctx context.Context, req BackendRemoveRequest) error
 }
 

@@ -1,7 +1,7 @@
 // Package cdcbackend drives the cdc backend one contract call at a time: one
 // volume, one instance, a real daemon, stock restic containers and the real
 // endpoint in front of the real repository root. What only this level buys is
-// the repository in view — the shared store is inmemory, so a case lists the
+// the repository in view — the stack store is inmemory, so a case lists the
 // keys restic actually wrote.
 // Guarded twice: -short skips, and so does an unreachable daemon.
 package cdcbackend
@@ -79,7 +79,7 @@ type env struct {
 	// repoURLBase is what the DI root hands a backend: the served endpoint as a
 	// container names it, with a volume's ObjectID still to append.
 	repoURLBase string
-	shared      storages.Storager
+	stackStore  storages.Storager
 	// resticRoot is the tree the repositories live in — the one the server
 	// resolves against and the one the factory writes into, exactly as the DI
 	// root wires it.
@@ -88,7 +88,7 @@ type env struct {
 	opts       cdc.Options
 }
 
-// newEnv wires the backend as cmd/arcave does, with the shared store in memory:
+// newEnv wires the backend as cmd/arcave does, with the stack store in memory:
 // the restic server is started once here and lives for the whole case, exactly as
 // the DI root keeps it for the whole process.
 func newEnv(t *testing.T, opts cdc.Options) *env {
@@ -103,11 +103,11 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 			t.Logf("backend log:\n%s", logs.String())
 		}
 	})
-	shared := inmemory.New("shared")
-	t.Cleanup(func() { assert.NoError(t, shared.Close()) })
+	stackStore := inmemory.New("stack")
+	t.Cleanup(func() { assert.NoError(t, stackStore.Close()) })
 
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	resticRoot, err := shared.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
 	require.NoError(t, err)
 	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	port, err := rest.Serve(server, "")
@@ -120,7 +120,7 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 		cli:         cli,
 		engine:      engine,
 		repoURLBase: rest.RepositoryURLBase("", containerHost, port),
-		shared:      shared,
+		stackStore:  stackStore,
 		resticRoot:  resticRoot,
 		opts:        opts,
 	}

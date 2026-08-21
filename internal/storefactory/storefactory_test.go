@@ -16,12 +16,35 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// The segments a case expects to find between the configured path and the store
+// root. The project and the stack differ on purpose: they are separate concepts,
+// and a test whose two levels read alike would pass with them swapped.
+const (
+	testProject = model.ProjectName("demo")
+	testStack   = model.StackName("mystack")
+)
+
 // directoryStorage returns the directory arm of the storage union, pointed at path.
 func directoryStorage(path string) config.Storage {
 	return config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: path},
 	}
+}
+
+// newStack builds the store every case works over: the full layout, with only
+// the configured path varying.
+func newStack(t *testing.T, cfg config.Storage, projectRoot string) (storages.Storager, error) {
+	t.Helper()
+	return New(cfg, projectRoot, testProject, model.DefaultSession, testStack)
+}
+
+// layout is the path below the configured one that every store is rooted at.
+func layout() string {
+	return filepath.Join("arcave",
+		"projects", testProject.String(),
+		"sessions", model.DefaultSession.String(),
+		"compose", testStack.String())
 }
 
 func TestNew(t *testing.T) {
@@ -31,17 +54,18 @@ func TestNew(t *testing.T) {
 		root := t.TempDir()
 
 		// Act
-		session, err := New(directoryStorage(filepath.Join(".arcave", "savepoints", "demo")), root, model.DefaultSession)
+		stack, err := newStack(t, directoryStorage(filepath.Join(".arcave", "storage")), root)
 
 		// Assert
 		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, session.Close()) })
-		store := filepath.Join(root, ".arcave", "savepoints", "demo", "arcave")
-		assert.Equal(t, filepath.Join(store, model.DefaultSession.String()), session.GetCwd())
-		assert.DirExists(t, store)
-		// The session segment does not exist yet: it arrives with the first object
-		// written under it, since the backend creates the parents of every key.
-		assert.NoDirExists(t, session.GetCwd())
+		t.Cleanup(func() { assert.NoError(t, stack.Close()) })
+		namespace := filepath.Join(root, ".arcave", "storage", "arcave")
+		assert.Equal(t, filepath.Join(root, ".arcave", "storage", layout()), stack.GetCwd())
+		assert.DirExists(t, namespace)
+		// The segments below the namespace do not exist yet: they arrive with the
+		// first object written under them, since the backend creates the parents of
+		// every key.
+		assert.NoDirExists(t, stack.GetCwd())
 	})
 
 	t.Run("an absolute path is honoured verbatim, under the namespace", func(t *testing.T) {
@@ -52,12 +76,12 @@ func TestNew(t *testing.T) {
 		require.NoError(t, os.MkdirAll(abs, 0o755))
 
 		// Act
-		session, err := New(directoryStorage(abs), root, model.DefaultSession)
+		stack, err := newStack(t, directoryStorage(abs), root)
 
 		// Assert
 		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, session.Close()) })
-		assert.Equal(t, filepath.Join(abs, "arcave", model.DefaultSession.String()), session.GetCwd())
+		t.Cleanup(func() { assert.NoError(t, stack.Close()) })
+		assert.Equal(t, filepath.Join(abs, layout()), stack.GetCwd())
 		assert.DirExists(t, filepath.Join(abs, "arcave"))
 	})
 
@@ -68,134 +92,106 @@ func TestNew(t *testing.T) {
 		abs := filepath.Join(t.TempDir(), "no-such-store")
 
 		// Act
-		session, err := New(directoryStorage(abs), t.TempDir(), model.DefaultSession)
+		stack, err := newStack(t, directoryStorage(abs), t.TempDir())
 
 		// Assert
 		require.ErrorIs(t, err, fs.ErrNotExist)
-		assert.Nil(t, session)
+		assert.Nil(t, stack)
 		assert.NoDirExists(t, abs)
 	})
 
-	// The namespace bounds every destructive operation to arcave-owned keys:
-	// whatever the config names, the store lives under <path>/arcave. It is the
-	// invariant that replaced the validateStoreRoot blocklist, so it is pinned.
-	t.Run("the store is rooted under the static arcave namespace and the session", func(t *testing.T) {
+	// The namespace bounds every destructive operation to arcave-owned keys, and
+	// the three segments under it are what keeps one configured path holding many
+	// projects, sessions and stacks. Both are pinned by writing a real key.
+	t.Run("the store is rooted under the namespace, the project, the session and the stack", func(t *testing.T) {
 		// Arrange
 		root := t.TempDir()
-		session, err := New(directoryStorage("snaps"), root, model.DefaultSession)
+		stack, err := newStack(t, directoryStorage("snaps"), root)
 		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, session.Close()) })
+		t.Cleanup(func() { assert.NoError(t, stack.Close()) })
 
 		// Act
-		err = session.PutObject(context.Background(), "100/volume-named-demo_pgdata/data.tar", strings.NewReader("payload"))
+		err = stack.PutObject(context.Background(), "100/volume-named-demo_pgdata/data.tar", strings.NewReader("payload"))
 
 		// Assert
 		require.NoError(t, err)
-		assert.FileExists(t, filepath.Join(root, "snaps", "arcave", "global", "100", "volume-named-demo_pgdata", "data.tar"))
+		assert.FileExists(t, filepath.Join(root, "snaps", layout(), "100", "volume-named-demo_pgdata", "data.tar"))
 	})
 
-	// The store is rooted at the session, not at the namespace: nothing reached
-	// through it can address a sibling session, and the library's guard — not a
-	// convention — is what enforces it.
-	t.Run("the session store cannot reach out of its own tree", func(t *testing.T) {
+	// A cdc repository lives beside the savepoint directories rather than in a
+	// tree of its own: the session is self-contained, so dropping it drops the
+	// repositories with it.
+	t.Run("a backend's own tree lives under the same stack root", func(t *testing.T) {
 		// Arrange
-		session, err := New(directoryStorage("snaps"), t.TempDir(), model.DefaultSession)
+		root := t.TempDir()
+		stack, err := newStack(t, directoryStorage("snaps"), root)
 		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, session.Close()) })
+		t.Cleanup(func() { assert.NoError(t, stack.Close()) })
 
 		// Act
-		_, err = session.SubStorage("../elsewhere", true)
+		restic, err := stack.SubStorage("restic", true)
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, restic.Close()) })
+
+		// Assert
+		assert.Equal(t, filepath.Join(root, "snaps", layout(), "restic"), restic.GetCwd())
+	})
+
+	// The store is rooted at the stack, not at the namespace: nothing reached
+	// through it can address a sibling project, session or stack, and the
+	// library's guard — not a convention — is what enforces it.
+	t.Run("the stack store cannot reach out of its own tree", func(t *testing.T) {
+		// Arrange
+		stack, err := newStack(t, directoryStorage("snaps"), t.TempDir())
+		require.NoError(t, err)
+		t.Cleanup(func() { assert.NoError(t, stack.Close()) })
+
+		// Act
+		_, err = stack.SubStorage("../elsewhere", true)
 
 		// Assert
 		require.ErrorIs(t, err, storages.ErrUnsafeKey)
 	})
 
-	t.Run("an invalid session is refused before a store is opened", func(t *testing.T) {
+	// Every segment is gated before a store is opened, each by the type that owns
+	// its vocabulary. The messages differ, so a failure names which one was wrong.
+	t.Run("an invalid segment is refused before a store is opened", func(t *testing.T) {
+		// Only the segment under test is invalid in each case, so the message
+		// pinned is the gate that fired.
 		tests := []struct {
 			name    string
+			project model.ProjectName
 			session model.SessionID
+			stack   model.StackName
+			wantMsg string
 		}{
-			{name: "empty", session: ""},
-			{name: "a nested path", session: "a/b"},
+			{name: "an empty project", project: "", session: model.DefaultSession, stack: testStack, wantMsg: "invalid project name"},
+			{name: "a nested project", project: "a/b", session: model.DefaultSession, stack: testStack, wantMsg: "invalid project name"},
+			{name: "an upper-case project", project: "MyApp", session: model.DefaultSession, stack: testStack, wantMsg: "invalid project name"},
+			{name: "an escaping project", project: "..", session: model.DefaultSession, stack: testStack, wantMsg: "invalid project name"},
+			{name: "an empty session", project: testProject, session: "", stack: testStack, wantMsg: "invalid session id"},
+			{name: "a nested session", project: testProject, session: "a/b", stack: testStack, wantMsg: "invalid session id"},
+			{name: "an empty stack", project: testProject, session: model.DefaultSession, stack: "", wantMsg: "invalid stack name"},
+			{name: "a nested stack", project: testProject, session: model.DefaultSession, stack: "a/b", wantMsg: "invalid stack name"},
+			{name: "an upper-case stack", project: testProject, session: model.DefaultSession, stack: "MyStack", wantMsg: "invalid stack name"},
+			{name: "an escaping stack", project: testProject, session: model.DefaultSession, stack: "..", wantMsg: "invalid stack name"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				// Arrange
-				root := t.TempDir()
-
 				// Act
-				session, err := New(directoryStorage("snaps"), root, tt.session)
+				store, err := New(directoryStorage("snaps"), t.TempDir(), tt.project, tt.session, tt.stack)
 
 				// Assert
-				require.ErrorContains(t, err, "invalid session id")
-				assert.Nil(t, session, "the gate stands in front of the store")
+				require.ErrorContains(t, err, tt.wantMsg)
+				assert.Nil(t, store, "the gate stands in front of the store")
 			})
 		}
 	})
 
 	t.Run("an arm arcave does not implement is rejected", func(t *testing.T) {
 		// Act
-		_, err := New(config.Storage{Type: "s3"}, t.TempDir(), model.DefaultSession)
-
-		// Assert
-		require.ErrorContains(t, err, "unsupported storage.type")
-	})
-}
-
-// NewShared resolves the same path the same way and roots at "shared" instead of
-// a session: what lives there is a backend's own data, which outlives any one
-// lifetime on purpose.
-func TestNewShared(t *testing.T) {
-	t.Run("the store sits beside the sessions, under the same namespace", func(t *testing.T) {
-		// Arrange
-		root := t.TempDir()
-
-		// Act
-		shared, err := NewShared(directoryStorage("snaps"), root)
-
-		// Assert
-		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, shared.Close()) })
-		assert.Equal(t, filepath.Join(root, "snaps", "arcave", "shared"), shared.GetCwd())
-	})
-
-	// "shared" cannot collide with a session: SessionID.Validate admits only
-	// "global" or a canonical UUID, and this pins that they are siblings rather
-	// than the same tree.
-	t.Run("a session store and the shared store are siblings, never the same", func(t *testing.T) {
-		// Arrange
-		root := t.TempDir()
-
-		// Act
-		session, err := New(directoryStorage("snaps"), root, model.DefaultSession)
-		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, session.Close()) })
-		shared, err := NewShared(directoryStorage("snaps"), root)
-		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, shared.Close()) })
-
-		// Assert
-		assert.NotEqual(t, session.GetCwd(), shared.GetCwd())
-		assert.Equal(t, filepath.Dir(session.GetCwd()), filepath.Dir(shared.GetCwd()))
-	})
-
-	t.Run("the shared store cannot reach out of its own tree", func(t *testing.T) {
-		// Arrange
-		shared, err := NewShared(directoryStorage("snaps"), t.TempDir())
-		require.NoError(t, err)
-		t.Cleanup(func() { assert.NoError(t, shared.Close()) })
-
-		// Act
-		_, err = shared.SubStorage("../global", true)
-
-		// Assert
-		require.ErrorIs(t, err, storages.ErrUnsafeKey)
-	})
-
-	t.Run("an arm arcave does not implement is rejected", func(t *testing.T) {
-		// Act
-		_, err := NewShared(config.Storage{Type: "s3"}, t.TempDir())
+		_, err := newStack(t, config.Storage{Type: "s3"}, t.TempDir())
 
 		// Assert
 		require.ErrorContains(t, err, "unsupported storage.type")
