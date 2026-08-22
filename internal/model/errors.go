@@ -32,4 +32,8 @@ var (
 	// ErrInvalidSavepointID reports an id that is not a run of decimal digits.
 	// SavepointID.Validate wraps it with the offending id.
 	ErrInvalidSavepointID = errors.New("invalid savepoint id")
+
+	// ErrSavepointNoSpec refuses a rollback to a savepoint that carries no compose
+	// spec: there is nothing to rebuild the stack from.
+	ErrSavepointNoSpec = errors.New("savepoint carries no compose spec")
 )

@@ -68,8 +68,8 @@ func TestRepository_Save(t *testing.T) {
 	want := record("1780335122")
 
 	// Act
-	saveErr := repo.Save(ctx, want)
-	got, listErr := repo.List(ctx)
+	saveErr := repo.SaveSavepoint(ctx, want)
+	got, listErr := repo.ListSavepoints(ctx)
 
 	// Assert
 	require.NoError(t, saveErr)
@@ -100,8 +100,8 @@ func TestRepository_Save_RejectsInvalidID(t *testing.T) {
 			repo := New(store)
 
 			// Act
-			saveErr := repo.Save(context.Background(), record(tt.id))
-			deleteErr := repo.Delete(context.Background(), tt.id)
+			saveErr := repo.SaveSavepoint(context.Background(), record(tt.id))
+			deleteErr := repo.DeleteSavepoint(context.Background(), tt.id)
 
 			// Assert
 			require.Error(t, saveErr)
@@ -177,12 +177,12 @@ func TestRepository_List(t *testing.T) {
 			// Every case but the two that must fail carries the one committed
 			// savepoint, so "skipped" is distinguishable from "store is empty".
 			if len(tt.wantIDs) > 0 {
-				require.NoError(t, repo.Save(ctx, record("1780335122")))
+				require.NoError(t, repo.SaveSavepoint(ctx, record("1780335122")))
 			}
 			tt.plant(t, root)
 
 			// Act
-			got, err := repo.List(ctx)
+			got, err := repo.ListSavepoints(ctx)
 
 			// Assert
 			if tt.wantMsg != "" {
@@ -204,11 +204,11 @@ func TestRepository_Delete(t *testing.T) {
 	ctx := context.Background()
 	store, root := newStore(t)
 	repo := New(store)
-	require.NoError(t, repo.Save(ctx, record("1780335122")))
+	require.NoError(t, repo.SaveSavepoint(ctx, record("1780335122")))
 	writeObject(t, root, "1780335122/db/data/data.tar", "payload")
 
 	// Act: the uncommit drops the marker and nothing else.
-	err := repo.Delete(ctx, "1780335122")
+	err := repo.DeleteSavepoint(ctx, "1780335122")
 
 	// Assert
 	require.NoError(t, err)
@@ -216,12 +216,12 @@ func TestRepository_Delete(t *testing.T) {
 	assert.FileExists(t, filepath.Join(root, "1780335122", "db", "data", "data.tar"),
 		"Delete uncommits the savepoint; dropping its data is the backend's job")
 
-	got, err := repo.List(ctx)
+	got, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, got, "an uncommitted savepoint must not list")
 
 	// Delete is idempotent: a namespace with no record is already uncommitted.
-	assert.NoError(t, repo.Delete(ctx, "1780335122"))
+	assert.NoError(t, repo.DeleteSavepoint(ctx, "1780335122"))
 }
 
 // nilIfEmpty normalises an empty slice to nil so a table can spell "no records"
@@ -231,4 +231,52 @@ func nilIfEmpty(ids []string) []string {
 		return nil
 	}
 	return ids
+}
+
+// The spec artifact round-trips verbatim under a reserved key beside the record.
+func TestRepository_SaveSpecAndLoadSpec(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	store, _ := newStore(t)
+	repo := New(store)
+	spec := []byte("name: demo\nservices:\n  db:\n    image: postgres:16\n")
+
+	// Act
+	require.NoError(t, repo.SaveSpec(ctx, "1780335122", spec))
+	got, err := repo.LoadSpec(ctx, "1780335122")
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, spec, got)
+	exists, err := store.Exists(ctx, "1780335122/project.yaml")
+	require.NoError(t, err)
+	assert.True(t, exists, "the artifact is a reserved key at the root of the savepoint's namespace")
+}
+
+// A namespace holding a spec but no record is an uncommitted savepoint.
+func TestRepository_List_SkipsANamespaceWithOnlyASpec(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	store, _ := newStore(t)
+	repo := New(store)
+	require.NoError(t, repo.SaveSpec(ctx, "1780335122", []byte("name: demo\n")))
+
+	// Act
+	records, err := repo.ListSavepoints(ctx)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Empty(t, records)
+}
+
+func TestRepository_LoadSpec_Missing(t *testing.T) {
+	// Arrange
+	store, _ := newStore(t)
+	repo := New(store)
+
+	// Act
+	_, err := repo.LoadSpec(context.Background(), "1780335122")
+
+	// Assert
+	require.Error(t, err)
 }

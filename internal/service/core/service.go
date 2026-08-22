@@ -15,9 +15,11 @@ import (
 const maxConcurrentOperations = 5
 
 type savepointRepository interface {
-	List(ctx context.Context) ([]model.Savepoint, error)
-	Save(ctx context.Context, record model.Savepoint) error
-	Delete(ctx context.Context, id model.SavepointID) error
+	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
+	SaveSavepoint(ctx context.Context, record model.Savepoint) error
+	SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error
+	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
+	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
 }
 
 type projectLocker interface {
@@ -29,15 +31,26 @@ type composeIntrospector interface {
 	Introspect(ctx context.Context) (model.IntrospectionResult, error)
 }
 
-// projectAssembler materialises an introspection result into the spec the runner acts on.
+// projectAssembler materialises the spec the runner acts on — out of a live
+// stack, or out of the artifact a savepoint committed.
 type projectAssembler interface {
 	Assemble(res model.IntrospectionResult) (*types.Project, error)
+	Marshal(project *types.Project) ([]byte, error)
+	Parse(ctx context.Context, spec []byte) (*types.Project, error)
 }
 
-// composeRunner puts the assembled stack down and back up.
+// composeRunner is the stack's lifecycle: stop it, tear it down, build it back
+// from a spec without starting it, start it.
 type composeRunner interface {
 	Stop(ctx context.Context, project *types.Project) error
+	Down(ctx context.Context, project *types.Project) error
+	Create(ctx context.Context, project *types.Project) error
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
+}
+
+// volumeRemover reaps the anonymous volumes a teardown orphans.
+type volumeRemover interface {
+	RemoveVolume(ctx context.Context, name string) error
 }
 
 // inflightMarkers is the intent marker's seam: written before a rollback's first
@@ -56,6 +69,7 @@ type Deps struct {
 	ComposeInspector composeIntrospector
 	ProjectAssembler projectAssembler
 	ComposeRunner    composeRunner
+	VolumeRemover    volumeRemover
 	BackendRegistry  model.SnapshotBackendRegistry
 	Inflight         inflightMarkers
 	Store            storages.Storager
@@ -73,6 +87,7 @@ type Service struct {
 	composeInspector        composeIntrospector
 	projectAssembler        projectAssembler
 	composeRunner           composeRunner
+	volumeRemover           volumeRemover
 	snapshotBackendRegistry model.SnapshotBackendRegistry
 	inflightMarker          inflightMarkers
 	store                   storages.Storager
@@ -87,6 +102,7 @@ func New(d Deps) *Service {
 		composeInspector:        d.ComposeInspector,
 		projectAssembler:        d.ProjectAssembler,
 		composeRunner:           d.ComposeRunner,
+		volumeRemover:           d.VolumeRemover,
 		snapshotBackendRegistry: d.BackendRegistry,
 		inflightMarker:          d.Inflight,
 		store:                   d.Store,

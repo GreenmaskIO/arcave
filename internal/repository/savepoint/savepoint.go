@@ -4,7 +4,7 @@
 // The record is the commit marker. It is written last on create and deleted
 // first on remove, so the only states a reader can observe are "fully present"
 // and "gone". A savepoint whose data was written but whose record never was is
-// incomplete: List skips it, and it is safe to garbage-collect.
+// incomplete: ListSavepoints skips it, and it is safe to garbage-collect.
 //
 // This replaces a single manifest.json holding every savepoint. Storager writes
 // are not atomic on purpose (see the directory backend), so a torn write to a
@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path"
 
 	"github.com/greenmaskio/storages"
@@ -32,10 +33,13 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// recordName is the reserved key at the root of every savepoint namespace. The
-// namespace directory belongs to this layer; a backend may write anything else
-// beneath it, and must never create an Opaque that collides with this key.
-const recordName = "savepoint.json"
+// The reserved keys at the root of every savepoint namespace. The namespace
+// directory belongs to this layer; a backend may write anything else beneath it,
+// and must never create an Opaque that collides with either key.
+const (
+	recordName = "savepoint.json"
+	specName   = "project.yaml" // the compose spec the savepoint was taken under
+)
 
 // Repository reads and writes savepoint records inside store.
 type Repository struct {
@@ -50,10 +54,10 @@ func New(store storages.Storager) *Repository {
 	return &Repository{storage: store}
 }
 
-// Save writes "<id>/savepoint.json". It is the commit: the caller must have
+// SaveSavepoint writes "<id>/savepoint.json". It is the commit: the caller must have
 // written every archive first, because a reader treats this object's existence
 // as proof that the savepoint is whole.
-func (r *Repository) Save(ctx context.Context, savepoint model.Savepoint) error {
+func (r *Repository) SaveSavepoint(ctx context.Context, savepoint model.Savepoint) error {
 	if err := savepoint.ID.Validate(); err != nil {
 		return err
 	}
@@ -69,7 +73,43 @@ func (r *Repository) Save(ctx context.Context, savepoint model.Savepoint) error 
 	return nil
 }
 
-// List returns every committed record.
+// SaveSpec writes "<id>/project.yaml". It must run before SaveSavepoint: the record
+// names the artifact, so a record committed without it would name nothing.
+func (r *Repository) SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error {
+	if err := id.Validate(); err != nil {
+		return err
+	}
+	if err := r.storage.PutObject(ctx, specKey(id), bytes.NewReader(spec)); err != nil {
+		return fmt.Errorf("write savepoint spec %s: %w", id, err)
+	}
+	return nil
+}
+
+// LoadSpec reads one savepoint's compose spec. A missing artifact is an error,
+// not an empty result: a record naming one is a statement that it is there.
+func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error) {
+	if err := id.Validate(); err != nil {
+		return nil, err
+	}
+
+	src, err := r.storage.GetObject(ctx, specKey(id))
+	if err != nil {
+		return nil, fmt.Errorf("read savepoint spec %s: %w", id, err)
+	}
+	defer func() {
+		if err := src.Close(); err != nil {
+			log.Ctx(ctx).Debug().Err(err).Str("savepoint", id.String()).Msg("close savepoint spec")
+		}
+	}()
+
+	spec, err := io.ReadAll(src)
+	if err != nil {
+		return nil, fmt.Errorf("read savepoint spec %s: %w", id, err)
+	}
+	return spec, nil
+}
+
+// ListSavepoints returns every committed record.
 //
 // It walks the store's namespace directories, keeps those whose name is a valid
 // savepoint id, and reads each one's record. A namespace with no record is an
@@ -79,7 +119,7 @@ func (r *Repository) Save(ctx context.Context, savepoint model.Savepoint) error 
 //
 // That is N+1 round-trips rather than a single index read, which is free on a
 // local filesystem and, on an object store, collapses into one prefix listing.
-func (r *Repository) List(ctx context.Context) ([]model.Savepoint, error) {
+func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
 	_, dirs, err := r.storage.ListDir(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list savepoint store: %w", err)
@@ -136,13 +176,13 @@ func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Save
 	return record, true, nil
 }
 
-// Delete removes one savepoint's record. It is the uncommit: the caller must run
+// DeleteSavepoint removes one savepoint's record. It is the uncommit: the caller must run
 // it *before* dropping the savepoint's data, so a crash between the two leaves an
 // orphaned namespace (invisible, collectable) rather than a savepoint that still
 // lists and still resolves but whose archives are half gone.
 //
 // It is idempotent: a namespace with no record is already uncommitted.
-func (r *Repository) Delete(ctx context.Context, id model.SavepointID) error {
+func (r *Repository) DeleteSavepoint(ctx context.Context, id model.SavepointID) error {
 	if err := id.Validate(); err != nil {
 		return err
 	}
@@ -163,4 +203,9 @@ func (r *Repository) Delete(ctx context.Context, id model.SavepointID) error {
 // already validated id, so this never builds a key that escapes the store.
 func recordKey(id model.SavepointID) string {
 	return path.Join(id.String(), recordName)
+}
+
+// specKey is the spec artifact's key, beside the record it belongs to.
+func specKey(id model.SavepointID) string {
+	return path.Join(id.String(), specName)
 }

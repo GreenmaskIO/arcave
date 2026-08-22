@@ -160,6 +160,7 @@ func initAllDependencies(
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,
 		ComposeRunner:    composeRunner,
+		VolumeRemover:    engine,
 		BackendRegistry:  backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:       inflightrepo.New(projectPath),

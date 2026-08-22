@@ -53,6 +53,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 			registry := &mockRegistry{}
 			// Nil stores: a workflow that got as far as a backend would deref one.
 			svc := New(Deps{
+				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 				ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 				Store: nil, DefaultBackend: model.SnapshotBackendCopy,

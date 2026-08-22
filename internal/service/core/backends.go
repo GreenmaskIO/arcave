@@ -79,8 +79,9 @@ func (s *Service) captureVolumes(
 	return record, nil
 }
 
-// performSavepoint captures every volume and commits the record last: that write
-// is the commit, so a run that died halfway leaves data no record names.
+// performSavepoint captures every volume, writes the stack's compose spec, and
+// commits the record last: that write is the commit, so a run that died halfway
+// leaves data no record names.
 //
 // A rollback's safety snapshot goes through it too, labelled rather than special:
 // the record is what makes the backup a killed rollback abandoned listable, and
@@ -90,6 +91,7 @@ func (s *Service) captureVolumes(
 func (s *Service) performSavepoint(
 	ctx context.Context,
 	backends []model.VolumeSnapshotBackend,
+	spec []byte,
 	name string,
 	description string,
 	labels map[string]string,
@@ -99,7 +101,12 @@ func (s *Service) performSavepoint(
 		return model.Savepoint{}, err
 	}
 
-	if err := s.savepointRepo.Save(ctx, record); err != nil {
+	if err := s.savepointRepo.SaveSpec(ctx, record.ID, spec); err != nil {
+		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", record.ID, err)
+	}
+	record.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML}
+
+	if err := s.savepointRepo.SaveSavepoint(ctx, record); err != nil {
 		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
 	}
 	return record, nil
@@ -136,7 +143,7 @@ func (s *Service) dropSavepoint(
 	record model.Savepoint,
 	backends []model.VolumeSnapshotBackend,
 ) error {
-	if err := s.savepointRepo.Delete(ctx, record.ID); err != nil {
+	if err := s.savepointRepo.DeleteSavepoint(ctx, record.ID); err != nil {
 		return fmt.Errorf("uncommit savepoint %s: %w", record.ID, err)
 	}
 

@@ -59,7 +59,8 @@ flowchart TD
     D --> E["Wait until containers exited"]
     E --> F["Clear the savepoint namespace"]
     F --> G["Copy volume data"]
-    G --> H["Commit savepoint.json (written last)"]
+    G --> G2["Write project.yaml (the stack's compose spec)"]
+    G2 --> H["Commit savepoint.json (written last)"]
     H --> I["Start Docker Compose services"]
     I --> J["Wait for health checks"]
     J --> K["Savepoint ready"]
@@ -80,16 +81,19 @@ rm -rf .arcave/savepoints/myapp/1780335122
 cp -a pgdata .arcave/savepoints/myapp/1780335122/postgres
 cp -a redisdata .arcave/savepoints/myapp/1780335122/redis
 
-# 4. Commit the savepoint — the record is written LAST
+# 4. Record the stack this savepoint was taken of
+write .arcave/savepoints/myapp/1780335122/project.yaml
+
+# 5. Commit the savepoint — the record is written LAST
 write .arcave/savepoints/myapp/1780335122/savepoint.json
 
-# 5. Start services
+# 6. Start services
 docker compose start
 
-# 6. Wait healthy
+# 7. Wait healthy
 ```
 
-The record is the commit marker. A crash before step 4 leaves volume data that no
+The record is the commit marker. A crash before step 5 leaves volume data that no
 record names: `arcave savepoint list` skips it, and it is safe to reclaim. There is no
 window in which a savepoint lists without its data.
 
@@ -335,6 +339,7 @@ Result:
 └── savepoints/<project-name>/           # the savepoint store, created by `arcave init`
     └── <savepoint-id>/                  # one self-contained namespace per savepoint
         ├── savepoint.json               # the record — written last, the commit marker
+        ├── project.yaml                  # the stack's compose spec, what a rollback rebuilds from
         └── <service>/<mount-path>/data.tar
 ```
 
@@ -395,7 +400,7 @@ The unit of backup is the **volume**, not the mount:
 - Every bind mount and every anonymous volume, one unit per service and target. A named volume three services mount is one unit, captured once.
 - Mounts that are not persistent data are skipped, each reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
 
-A volume is addressed directly — a named volume by its docker name, a bind by its host path — and read and written through a throwaway container of arcave's own. The project's own containers need not be running, or exist at all. The one exception is an **anonymous volume**: its docker name is created per container, so arcave has to ask the daemon through that service's container, and a create or rollback fails if it is gone.
+A volume is addressed directly — a named volume by its docker name, a bind by its host path — and read and written through a throwaway container of arcave's own. The project's own containers need not be running, only to exist. The one exception is an **anonymous volume**: its docker name is created per container, so arcave has to ask the daemon through that service's container, and a create fails if it is gone. In a rollback the question is asked after the stack has been built back, of the fresh container: the anonymous volume the teardown orphaned is not the one the data goes into, and it is removed once the restore has succeeded.
 
 Two things follow that a user with a `subpath:` mount will not expect:
 
@@ -412,14 +417,18 @@ Every savepoint receives a unique immutable identifier — a Unix timestamp inte
 1780335122
 ```
 
-Metadata stored in `<savepoint-id>/savepoint.json`:
+Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose document committed beside it as `<savepoint-id>/project.yaml` — the stack as it stood, which is what a rollback rebuilds; the digest is checked before a rollback stops anything:
 
 ```json
 {
   "id": "1780335122",
   "name": "before-migration",
   "description": "Before applying migration 2026_001",
-  "created_at": "2026-06-01T19:41:12.123456789Z"
+  "created_at": "2026-06-01T19:41:12.123456789Z",
+  "spec": {
+    "format": "compose-yaml",
+    "digest": "9f2c…"
+  }
 }
 ```
 
@@ -498,10 +507,17 @@ Behavior:
 
 - Stops project services.
 - Takes a safety snapshot of the live state, named `safety-snapshot-<id of the savepoint being restored>`, so one left behind by a killed rollback says which savepoint it was undoing.
-- Restores all registered stateful service volumes.
+- Removes the project's containers and networks. Volumes are kept — one arcave does not capture has no copy anywhere.
+- Creates the containers, networks and volumes the savepoint's own compose spec declares, without starting them.
+- Restores all registered stateful service volumes into them.
 - Starts project services.
 - Waits for health checks.
+- Removes the anonymous volumes the teardown orphaned, and only those a capture was restored into.
 - Deletes the safety snapshot, unless replaying it failed too — the one case where it is the last copy of the pre-rollback state.
+
+A rollback restores the stack the savepoint recorded, not the one that is running: a service added since is gone, one removed comes back, and a changed image, port, environment variable or healthcheck goes back to what it was. The price is that **the containers' writable layer is destroyed** — nothing a service wrote outside a volume survives a rollback, and no savepoint holds a copy of it.
+
+A savepoint taken before arcave recorded compose specs carries none, and a rollback to it is refused rather than guessed at: the stack is rebuilt from the spec the savepoint recorded, and there is nothing honest to rebuild it from.
 
 ---
 

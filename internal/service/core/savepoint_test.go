@@ -66,13 +66,14 @@ func TestService_CreateSavepoint(t *testing.T) {
 		Return(model.SnapshotStat{Volume: cfgBackend.volume, Type: model.SnapshotBackendCopy, Payload: "cfg-payload"}, nil).
 		Once().NotBefore(stop)
 
-	// Stop → every capture → commit → start. Save-last is the commit marker, and
-	// NotBefore(both captures) pins that it lands only after the whole fan-out;
-	// every neighbouring pair compiles when swapped.
+	// Stop → every capture → the spec → commit → start. Save-last is the commit marker,
+	// and NotBefore pins it after the whole fan-out and after the artifact it names.
 	repo := &mockSavepointRepo{}
-	save := repo.On("Save", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.ID.Validate() == nil && r.Name == "before-migration" && r.Description == "trying a schema change"
-	})).Return(nil).Once().NotBefore(snapPg, snapCfg)
+	saveSpec := expectSpecCommit(repo).NotBefore(snapPg, snapCfg)
+	save := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+		return r.ID.Validate() == nil && r.Name == "before-migration" && r.Description == "trying a schema change" &&
+			r.Spec != nil && r.Spec.Format == model.SpecFormatComposeYAML
+	})).Return(nil).Once().NotBefore(saveSpec)
 	runner.On("Start", mock.Anything, demoSpec, 90*time.Second).Return(nil).Once().NotBefore(save)
 
 	store := newDirStore(t)
@@ -87,6 +88,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 	stop.NotBefore(newPg, newCfg)
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: assemblerFor(introspection), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -125,7 +127,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 	}
 
 	// The record committed is the one returned.
-	repo.AssertCalled(t, "Save", mock.Anything, savepoint)
+	repo.AssertCalled(t, "SaveSavepoint", mock.Anything, savepoint)
 
 	assert.Contains(t, logs.String(), "volume will not be backed up")
 	assert.Contains(t, logs.String(), "/scratch")
@@ -151,7 +153,8 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
 	repo := &mockSavepointRepo{}
-	repo.On("Save", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+	expectSpecCommit(repo)
+	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.Labels["team"] == "payments"
 	})).Return(nil).Once()
 
@@ -164,6 +167,7 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -198,7 +202,8 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
 	repo := &mockSavepointRepo{}
-	repo.On("Save", mock.Anything, mock.Anything).Return(nil).Once()
+	expectSpecCommit(repo)
+	repo.On("SaveSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
 
 	cdcVolume := model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendCDC}
 	backend := &mockBackend{volume: cdcVolume}
@@ -210,6 +215,7 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 	})).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: newDirStore(t), DefaultBackend: model.SnapshotBackendCDC,
@@ -243,6 +249,7 @@ func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheStackRunning(t *test
 	runner := &mockComposeRunner{}
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: &mockSavepointRepo{}, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: assembler, ComposeRunner: runner, BackendRegistry: &mockRegistry{},
 		Inflight: &fakeInflight{}, DefaultBackend: model.SnapshotBackendCopy,
@@ -274,6 +281,7 @@ func TestService_CreateSavepoint_UnknownBackend(t *testing.T) {
 	registry.On("New", matchSpec(nil, "volume-named-demo_db")).Return(nil, ErrUnknownBackend)
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
@@ -315,6 +323,7 @@ func TestService_CreateSavepoint_UncommittedOnFailure(t *testing.T) {
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -368,6 +377,7 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: assemblerFor(introspection), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -383,7 +393,7 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	require.Len(t, names, 1, "the archive the surviving volume wrote is kept for a gc")
 	assert.True(t, strings.HasSuffix(names[0], "/volume-named-demo_db/data.tar"), "kept = %v", names)
 	// And it lists as nothing: no record names the directory, so it is invisible.
-	committed, err := repo.List(ctx)
+	committed, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, committed)
 	inspector.AssertExpectations(t)
@@ -404,6 +414,7 @@ func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
 	registry := &mockRegistry{}
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: &mockSavepointRepo{}, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: assemblerFor(empty), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
@@ -454,6 +465,7 @@ func TestService_CreateSavepoint_RefusesANonEmptyDirectory(t *testing.T) {
 	}
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -496,7 +508,8 @@ func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
 	repo := &mockSavepointRepo{}
-	repo.On("Save", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+	repo.On("SaveSpec", mock.Anything, mock.Anything, demoSpecBytes).Return(nil)
+	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil
 	})).Return(nil)
 
@@ -512,6 +525,7 @@ func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	}
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: assemblerFor(introspection), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -556,6 +570,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -571,12 +586,16 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	assert.Equal(t, strconv.FormatInt(savepoint.CreatedAt.Unix(), 10), savepoint.ID.String(),
 		"the id is the creation second, so it doubles as a path-safe directory")
 	assert.ElementsMatch(t,
-		[]string{savepoint.ID.String() + "/savepoint.json", savepoint.ID.String() + "/volume-named-demo_db/data.tar"},
+		[]string{
+			savepoint.ID.String() + "/savepoint.json",
+			savepoint.ID.String() + "/project.yaml",
+			savepoint.ID.String() + "/volume-named-demo_db/data.tar",
+		},
 		objectNames(t, store),
-		"the metadata is committed into the same tree as the captures")
+		"the metadata and the spec are committed into the same tree as the captures")
 
 	// And it reads back: what the caller got is what the store holds.
-	committed, err := repo.List(ctx)
+	committed, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
 	require.Len(t, committed, 1)
 	assert.Equal(t, savepoint.ID, committed[0].ID)
@@ -603,21 +622,23 @@ func TestService_CreateSavepoint_CommittedWhenStartFails(t *testing.T) {
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "pg-payload"}, nil).
 		Once()
 	repo := &mockSavepointRepo{}
+	saveSpec := expectSpecCommit(repo)
 	var savedID model.SavepointID
-	save := repo.On("Save", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+	save := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil
 	})).Run(func(args mock.Arguments) {
 		savedID = args.Get(1).(model.Savepoint).ID
 	}).Return(nil).Once()
 	up := runner.On("Start", mock.Anything, demoSpec, 60*time.Second).
 		Return(errors.New("unhealthy")).Once()
-	mock.InOrder(stop, snap, save, up)
+	mock.InOrder(stop, snap, saveSpec, save, up)
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -662,8 +683,9 @@ func TestService_ListSavepoints(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			repo := &mockSavepointRepo{}
-			repo.On("List", mock.Anything).Return([]model.Savepoint{demoRecord(), demoSafetySnapshot()}, nil).Once()
+			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{demoRecord(), demoSafetySnapshot()}, nil).Once()
 			svc := New(Deps{
+				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
 				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
 				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
@@ -716,8 +738,9 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			repo := &mockSavepointRepo{}
-			repo.On("List", mock.Anything).Return([]model.Savepoint{record, backup}, nil).Once()
+			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record, backup}, nil).Once()
 			svc := New(Deps{
+				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
 				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
 				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
@@ -743,8 +766,8 @@ func TestService_RemoveSavepoints(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	repo := &mockSavepointRepo{}
-	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
-	uncommit := repo.On("Delete", mock.Anything, record.ID).Return(nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
+	uncommit := repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
 
 	// A remove carries the payload the write reported: only its own backend
 	// reads one. NotBefore pins uncommit-first: data-first would leave a
@@ -761,6 +784,7 @@ func TestService_RemoveSavepoints(t *testing.T) {
 		record.ID.String()+"/volume-named-orphan/data.tar", strings.NewReader("orphan")))
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -789,8 +813,8 @@ func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	repo := &mockSavepointRepo{}
-	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("Delete", mock.Anything, record.ID).Return(nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
 
 	backend := &mockBackend{volume: vol}
 	backend.On("Remove", mock.Anything, model.BackendRemoveRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
@@ -800,6 +824,7 @@ func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
@@ -825,11 +850,12 @@ func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	// Arrange
 	record := model.Savepoint{ID: "1780335122", Name: "sp", CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC)}
 	repo := &mockSavepointRepo{}
-	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
 	locker := &mockLocker{}
 	registry := &mockRegistry{}
 
 	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
@@ -934,6 +960,7 @@ func TestService_retentionCutoffs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			svc := New(Deps{
+				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: nil, ProjectLocker: nil, ComposeInspector: nil,
 				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
 				Store: nil, DefaultBackend: model.SnapshotBackendCopy,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -32,11 +33,10 @@ func safetySnapshotLabels() map[string]string {
 }
 
 // Rollback restores the environment to the referenced savepoint: stop, safety
-// snapshot, restore, start. Any failure replays the safety snapshot. The project
-// lock is held for the whole workflow, taken before anything is read.
-//
-// The inflight marker stands across the destructive window: a run killed inside it
-// leaves the marker for the next command's gate.
+// snapshot, tear the stack down, rebuild it from the spec the savepoint recorded,
+// restore, start. Any failure past the teardown replays the safety snapshot; the
+// project lock and the inflight marker stand across the whole workflow. The
+// rebuild discards the containers' writable layer, which no savepoint holds.
 func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error) {
 	// Ahead of the lock: a request that names no savepoint must not make a
 	// concurrent workflow wait to be told so.
@@ -75,6 +75,14 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("build backends: %w", err)
 	}
+
+	// Ahead of the stop: a rollback that cannot say what to rebuild must not tear
+	// anything down.
+	target, err := s.loadSavepointSpec(ctx, record)
+	if err != nil {
+		return model.RollbackResult{}, fmt.Errorf("load the savepoint's compose spec: %w", err)
+	}
+
 	ws, err := s.prepare(ctx, req.WaitTimeout)
 	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", err)
@@ -90,7 +98,7 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	// hand.
 	log.Info().Msg("backing up current state")
 	safetySnapshot, err := s.performSavepoint(
-		ctx, ws.backends, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
+		ctx, ws.backends, ws.spec, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
 	)
 	if err != nil {
 		// Nothing was restored, so there is nothing to revert: restart best-effort and
@@ -102,15 +110,15 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 		return model.RollbackResult{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
 	}
 
-	// The marker must stand before the first destructive write
-	if err := s.putInflightMarker(ctx, model.InflightRestoring, record.ID, safetySnapshot.ID); err != nil {
+	// The marker must stand before the first destructive act, and the teardown is one.
+	if err := s.putInflightMarker(ctx, model.InflightRecreating, record.ID, safetySnapshot.ID); err != nil {
 		if abortErr := s.abortBeforeRestore(ctx, safetySnapshot, ws); abortErr != nil {
 			log.Error().Err(abortErr).Msg("services failed to restart after inflight marker failure")
 		}
 		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
 	}
 
-	if err := s.applySavepoint(ctx, record, savepointBackends, safetySnapshot.ID, ws); err != nil {
+	if err := s.applySavepoint(ctx, record, target, savepointBackends, safetySnapshot.ID, ws); err != nil {
 		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).
 			Msg("rollback failed: reverting to the pre-rollback state")
 
@@ -133,10 +141,12 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 		}
 
 		log.Info().Str("safety_snapshot_id", safetySnapshot.ID.String()).Msg("reverted to the pre-rollback state")
+		s.reapAnonymousVolumes(ctx, ws, volumesOf(safetySnapshot))
 		s.releaseSafetySnapshot(ctx, safetySnapshot, ws.backends)
 		return model.RollbackResult{}, fmt.Errorf("rollback failed: %w", err)
 	}
 
+	s.reapAnonymousVolumes(ctx, ws, volumesOf(record))
 	s.releaseSafetySnapshot(ctx, safetySnapshot, ws.backends)
 	return model.RollbackResult{
 		Savepoint: record,
@@ -172,54 +182,96 @@ func (s *Service) abortBeforeRestore(ctx context.Context, safetySnapshot model.S
 	return s.startServices(ctx, ws)
 }
 
-// applySavepoint restores every volume, then starts and health-checks the
-// services: both failures share the caller's one revert path.
+// applySavepoint tears the stack down, rebuilds it from the savepoint's spec,
+// restores every volume and starts the services; every failure shares the caller's
+// one revert path. The rebuild goes first — an anonymous volume needs its container.
 func (s *Service) applySavepoint(
 	ctx context.Context,
 	record model.Savepoint,
+	target *types.Project,
 	savepointBackends []model.VolumeSnapshotBackend,
 	safetyID model.SavepointID,
 	ws workingSet,
 ) error {
+	if err := s.tearDownStack(ctx, ws.project); err != nil {
+		return err
+	}
+	if err := s.buildStack(ctx, target); err != nil {
+		return err
+	}
+
+	// Mandatory, unlike the phases that only relax one: a marker still reading
+	// "recreating" would tell the next command the data is untouched.
+	if err := s.putInflightMarker(ctx, model.InflightRestoring, record.ID, safetyID); err != nil {
+		return fmt.Errorf("phasing the inflight marker to restoring: %w", err)
+	}
+
 	if err := s.restoreVolumes(ctx, record, savepointBackends); err != nil {
 		return err
 	}
 
-	// Before the restart: a kill during Up must read as "the data is consistent",
-	// not "mid-restore". A failed update keeps the conservative phase, so it warns.
+	// Before the restart: a kill during the start must read as "the data is
+	// consistent", not "mid-restore". A failed update keeps the safer phase.
 	if err := s.putInflightMarker(ctx, model.InflightRestoreDone, record.ID, safetyID); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker forward")
 	}
 
 	zerolog.Ctx(ctx).Info().Msg("starting services")
-	if err := s.composeRunner.Start(ctx, ws.project, ws.waitTimeout); err != nil {
+	if err := s.composeRunner.Start(ctx, target, ws.waitTimeout); err != nil {
 		return fmt.Errorf("services did not become healthy after restore: %w", err)
 	}
 	return nil
 }
 
-// revert replays the safety snapshot: stop, restore every volume through the
-// instances that captured it, restart. It runs on the caller's context, not the
-// fan-out's — an errgroup cancels its own the moment Wait returns.
+// revert replays the safety snapshot through the very instances that took it: tear
+// down, rebuild the stack it was taken of, restore, restart. It runs on the caller's
+// context, not the fan-out's — an errgroup cancels its own the moment Wait returns.
 func (s *Service) revert(
 	ctx context.Context,
 	safetySnapshot model.Savepoint,
 	ws workingSet,
 	target model.SavepointID,
 ) error {
-	// Back to restoring: the revert writes volumes again, so a kill inside it must
-	// not read as "the data is consistent".
-	if err := s.putInflightMarker(ctx, model.InflightRestoring, target, safetySnapshot.ID); err != nil {
+	// Back to recreating: the stack is about to be torn down again.
+	if err := s.putInflightMarker(ctx, model.InflightRecreating, target, safetySnapshot.ID); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker back before revert")
 	}
 
-	if err := s.stopServices(ctx, ws); err != nil {
+	if err := s.tearDownStack(ctx, ws.project); err != nil {
 		return err
+	}
+	if err := s.buildStack(ctx, ws.project); err != nil {
+		return err
+	}
+
+	if err := s.putInflightMarker(ctx, model.InflightRestoring, target, safetySnapshot.ID); err != nil {
+		return fmt.Errorf("phasing the inflight marker to restoring: %w", err)
 	}
 	if err := s.restoreVolumes(ctx, safetySnapshot, ws.backends); err != nil {
 		return err
 	}
+
+	if err := s.putInflightMarker(ctx, model.InflightRestoreDone, target, safetySnapshot.ID); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker forward")
+	}
 	return s.startServices(ctx, ws)
+}
+
+// reapAnonymousVolumes drops the anonymous volumes the teardown orphaned. Only
+// those a capture was restored into: anything else there is its own last copy.
+func (s *Service) reapAnonymousVolumes(ctx context.Context, ws workingSet, restored []model.Volume) {
+	log := zerolog.Ctx(ctx)
+	for _, volume := range restored {
+		name, ok := ws.anonVolumes[volume.ObjectID]
+		if !ok {
+			continue
+		}
+		if err := s.volumeRemover.RemoveVolume(ctx, name); err != nil {
+			log.Warn().Err(err).Str("volume", name).Msg("orphaned anonymous volume left behind")
+			continue
+		}
+		log.Debug().Str("volume", name).Msg("removed the anonymous volume the teardown orphaned")
+	}
 }
 
 // volumesOf projects a savepoint's stats back to volumes. Non-nil, so an empty

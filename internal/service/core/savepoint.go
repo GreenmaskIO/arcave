@@ -57,7 +57,7 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 
 	// Capture while the services are stopped. The capture error is what the caller
 	// gets; the restart on top of it is best-effort and only logged.
-	record, err := s.performSavepoint(ctx, ws.backends, req.Name, req.Description, req.Labels)
+	record, err := s.performSavepoint(ctx, ws.backends, ws.spec, req.Name, req.Description, req.Labels)
 	if err != nil {
 		if err := s.startServices(ctx, ws); err != nil {
 			log.Error().Err(err).Msg("services failed to restart after capture failure")
@@ -80,7 +80,7 @@ func (s *Service) ListSavepoints(ctx context.Context, req model.ListRequest) ([]
 // safety snapshot has one place to be forgotten. Which selector may see one is
 // findSavepoint's and selectSavepointsToRemove's call.
 func (s *Service) listSavepoints(ctx context.Context, includeSafetySnapshots bool) ([]model.Savepoint, error) {
-	records, err := s.savepointRepo.List(ctx)
+	records, err := s.savepointRepo.ListSavepoints(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing savepoints: %w", err)
 	}

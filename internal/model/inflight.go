@@ -9,6 +9,9 @@ import (
 type InflightPhase string
 
 const (
+	// InflightRecreating stands from the teardown until the containers exist again.
+	// The volumes are untouched: the remedy is to rebuild, not to restore.
+	InflightRecreating   InflightPhase = "recreating"
 	InflightRestoring    InflightPhase = "restoring"
 	InflightRestoreDone  InflightPhase = "restore-done"
 	InflightInconsistent InflightPhase = "inconsistent"

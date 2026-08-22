@@ -109,12 +109,15 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			name:   "the daemon's own anonymous label wins",
 			mount:  mountPoint(mount.TypeVolume, "short-name", "", "/data", false),
 			labels: map[string]string{anonymousVolumeLabel: "true"},
-			want:   model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data"},
+			// The generated name is carried: a reaper has no other way to name the volume.
+			want: model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+				Target: "/data", VolumeName: "short-name"},
 		},
 		{
 			name:  "a generated name is anonymous where the label is missing",
 			mount: mountPoint(mount.TypeVolume, anonName, "", "/data", false),
-			want:  model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data"},
+			want: model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
+				Target: "/data", VolumeName: anonName},
 		},
 		{
 			name:  "an unowned, unlabelled volume is an external named one",

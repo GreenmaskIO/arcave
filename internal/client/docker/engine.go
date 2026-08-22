@@ -72,6 +72,7 @@ type dockerAPI interface {
 	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
 	Info(ctx context.Context) (system.Info, error)
 	VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error)
+	VolumeRemove(ctx context.Context, volumeID string, force bool) error
 	Close() error
 }
 
@@ -195,6 +196,18 @@ func (e *Engine) WipeVolume(ctx context.Context, src model.MountSource) error {
 		return fmt.Errorf("cannot clear a %q volume with no source", src.Type)
 	}
 	return wipeVolume(ctx, e.api, src)
+}
+
+// RemoveVolume drops one docker volume by name. Not forced: the daemon's refusal
+// is what tells a still-mounted volume from the orphan the caller meant.
+func (e *Engine) RemoveVolume(ctx context.Context, name string) error {
+	if name == "" {
+		return fmt.Errorf("cannot remove a volume with no name")
+	}
+	if err := e.api.VolumeRemove(ctx, name, false); err != nil {
+		return fmt.Errorf("remove volume %s: %w", name, err)
+	}
+	return nil
 }
 
 // closeAfter runs after once the stream it wraps is closed — how a container

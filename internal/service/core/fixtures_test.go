@@ -30,7 +30,13 @@ func demoRecord() model.Savepoint {
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
 		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendCopy, Payload: "sp-payload"}},
+		Spec:      demoSpecRef(),
 	}
+}
+
+// demoSpecRef names the artifact every committed fixture carries, digest included.
+func demoSpecRef() *model.SpecRef {
+	return &model.SpecRef{Format: model.SpecFormatComposeYAML}
 }
 
 // demoSafetySnapshot is a committed safety snapshot of demoVolume: an ordinary
@@ -43,6 +49,7 @@ func demoSafetySnapshot() model.Savepoint {
 		Labels:    safetySnapshotLabels(),
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
 		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendCopy, Payload: "safety-payload"}},
+		Spec:      demoSpecRef(),
 	}
 }
 
@@ -55,8 +62,15 @@ func demoIntrospection() model.IntrospectionResult {
 	}}
 }
 
-// demoSpec is what the assembler materialises demoIntrospection into; expectations match it by identity.
-var demoSpec = &types.Project{Name: demoProject}
+// demoSpec is what the assembler materialises demoIntrospection into, demoSpecBytes
+// its artifact, and demoTargetSpec what that artifact parses back to. The two
+// projects are distinct values: expectations match them by identity, so a call
+// handed the live stack instead of the savepoint's fails.
+var (
+	demoSpec       = &types.Project{Name: demoProject}
+	demoTargetSpec = &types.Project{Name: demoProject}
+	demoSpecBytes  = []byte("name: demo\n")
+)
 
 // demoAssembler materialises demoIntrospection into demoSpec.
 func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
@@ -65,6 +79,8 @@ func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
 func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 	assembler := &mockAssembler{}
 	assembler.On("Assemble", res).Return(demoSpec, nil)
+	assembler.On("Marshal", demoSpec).Return(demoSpecBytes, nil)
+	assembler.On("Parse", mock.Anything, demoSpecBytes).Return(demoTargetSpec, nil)
 	return assembler
 }
 
@@ -72,7 +88,8 @@ func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 // introspection, and a free lock.
 func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector, *mockLocker) {
 	repo := &mockSavepointRepo{}
-	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoSpecBytes, nil)
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
@@ -87,19 +104,26 @@ func expectLock(locker *mockLocker) *mock.Call {
 	return locker.On("Acquire", mock.Anything).Return(nil).Once()
 }
 
+// expectSpecCommit declares the artifact a capture writes before its record. The
+// id comes off the clock, so only the payload can be named.
+func expectSpecCommit(repo *mockSavepointRepo) *mock.Call {
+	return repo.On("SaveSpec", mock.Anything, mock.Anything, demoSpecBytes).Return(nil).Once()
+}
+
 // expectSafetySnapshotCommit declares the record a rollback commits for its undo:
 // an id off the clock, the name carrying the id of the savepoint being restored,
 // and the label that hides it from every scanning selector.
 func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.SavepointID) *mock.Call {
-	return repo.On("Save", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.ID.Validate() == nil && r.Name == "safety-snapshot-"+restoring.String() && r.IsSafetySnapshot()
+	return repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+		return r.ID.Validate() == nil && r.Name == "safety-snapshot-"+restoring.String() &&
+			r.IsSafetySnapshot() && r.Spec != nil
 	})).Return(nil).Once()
 }
 
 // expectSafetySnapshotUncommit declares the uncommit that opens the backup's drop.
 // id is read at match time, so it may be filled by the capture that runs first.
 func expectSafetySnapshotUncommit(repo *mockSavepointRepo, id *model.SavepointID) *mock.Call {
-	return repo.On("Delete", mock.Anything, mock.MatchedBy(func(got model.SavepointID) bool {
+	return repo.On("DeleteSavepoint", mock.Anything, mock.MatchedBy(func(got model.SavepointID) bool {
 		return got == *id
 	})).Return(nil).Once()
 }
