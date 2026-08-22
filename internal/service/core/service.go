@@ -53,9 +53,17 @@ type volumeRemover interface {
 	RemoveVolume(ctx context.Context, name string) error
 }
 
-// imageCapturer commits one stopped container's writable layer into the store.
-type imageCapturer interface {
+// imageBackend carries one container's writable layer both ways: committed into
+// the store, and loaded back out of it under a tag of its own.
+type imageBackend interface {
 	Capture(ctx context.Context, req model.ImageCaptureRequest) (model.ImageCapture, error)
+	Restore(ctx context.Context, req model.ImageRestoreRequest) (model.ImageRestore, error)
+}
+
+// containerRebuilder recreates one built container from another image — the
+// per-replica half compose's one image per service cannot express.
+type containerRebuilder interface {
+	RecreateWithImage(ctx context.Context, containerID, imageRef string) (string, error)
 }
 
 // inflightMarkers is the intent marker's seam: written before a rollback's first
@@ -69,17 +77,18 @@ type inflightMarkers interface {
 // Deps are Service's collaborators. A struct rather than a parameter list: the
 // seams have no natural order, so a new one could silently swap with an existing one.
 type Deps struct {
-	SavepointRepo    savepointRepository
-	ProjectLocker    projectLocker
-	ComposeInspector composeIntrospector
-	ProjectAssembler projectAssembler
-	ComposeRunner    composeRunner
-	VolumeRemover    volumeRemover
-	ImageCapturer    imageCapturer
-	BackendRegistry  model.SnapshotBackendRegistry
-	Inflight         inflightMarkers
-	Store            storages.Storager
-	DefaultBackend   model.SnapshotBackendKind
+	SavepointRepo      savepointRepository
+	ProjectLocker      projectLocker
+	ComposeInspector   composeIntrospector
+	ProjectAssembler   projectAssembler
+	ComposeRunner      composeRunner
+	VolumeRemover      volumeRemover
+	ImageBackend       imageBackend
+	ContainerRebuilder containerRebuilder
+	BackendRegistry    model.SnapshotBackendRegistry
+	Inflight           inflightMarkers
+	Store              storages.Storager
+	DefaultBackend     model.SnapshotBackendKind
 }
 
 // Service orchestrates arcave's savepoint workflows over one store root.
@@ -94,7 +103,8 @@ type Service struct {
 	projectAssembler        projectAssembler
 	composeRunner           composeRunner
 	volumeRemover           volumeRemover
-	imageCapturer           imageCapturer
+	imageBackend            imageBackend
+	containerRebuilder      containerRebuilder
 	snapshotBackendRegistry model.SnapshotBackendRegistry
 	inflightMarker          inflightMarkers
 	store                   storages.Storager
@@ -110,7 +120,8 @@ func New(d Deps) *Service {
 		projectAssembler:        d.ProjectAssembler,
 		composeRunner:           d.ComposeRunner,
 		volumeRemover:           d.VolumeRemover,
-		imageCapturer:           d.ImageCapturer,
+		imageBackend:            d.ImageBackend,
+		containerRebuilder:      d.ContainerRebuilder,
 		snapshotBackendRegistry: d.BackendRegistry,
 		inflightMarker:          d.Inflight,
 		store:                   d.Store,

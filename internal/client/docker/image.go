@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
+	"github.com/rs/zerolog"
 )
 
 // CommitContainer snapshots a stopped container's writable layer as a new,
@@ -38,4 +41,43 @@ func (e *Engine) RemoveImage(ctx context.Context, imageID string) error {
 		return fmt.Errorf("remove image %s: %w", imageID, err)
 	}
 	return nil
+}
+
+// LoadImage loads one save archive back into the daemon; the response body is read
+// to the end, since an unread one can leave the load unfinished. It reports no id:
+// the archive was saved off a known image, which the caller confirms with ImageExists.
+func (e *Engine) LoadImage(ctx context.Context, r io.Reader) error {
+	resp, err := e.api.ImageLoad(ctx, r, client.ImageLoadWithQuiet(true))
+	if err != nil {
+		return fmt.Errorf("load image archive: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("close image load response")
+		}
+	}()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return fmt.Errorf("read image load response: %w", err)
+	}
+	return nil
+}
+
+// TagImage points ref at an image already in the daemon.
+func (e *Engine) TagImage(ctx context.Context, imageID, ref string) error {
+	if err := e.api.ImageTag(ctx, imageID, ref); err != nil {
+		return fmt.Errorf("tag image %s as %s: %w", imageID, ref, err)
+	}
+	return nil
+}
+
+// ImageExists reports whether the daemon holds the image. A daemon that answers
+// "not found" is not an error — that is the answer.
+func (e *Engine) ImageExists(ctx context.Context, imageID string) (bool, error) {
+	if _, err := e.api.ImageInspect(ctx, imageID); err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect image %s: %w", imageID, err)
+	}
+	return true, nil
 }

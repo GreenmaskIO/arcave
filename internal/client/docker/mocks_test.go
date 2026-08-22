@@ -26,6 +26,11 @@ func (m *mockAPI) ContainerList(ctx context.Context, options container.ListOptio
 	return args.Get(0).([]container.Summary), args.Error(1)
 }
 
+func (m *mockAPI) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
+	args := m.Called(ctx, containerID)
+	return args.Get(0).(container.InspectResponse), args.Error(1)
+}
+
 func (m *mockAPI) ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error) {
 	args := m.Called(ctx, config, hostConfig, networkingConfig, platform, containerName)
 	return args.Get(0).(container.CreateResponse), args.Error(1)
@@ -82,6 +87,15 @@ func (m *mockAPI) ImageSave(ctx context.Context, imageIDs []string, opts ...clie
 	args := m.Called(ctx, imageIDs)
 	rc, _ := args.Get(0).(io.ReadCloser)
 	return rc, args.Error(1)
+}
+
+func (m *mockAPI) ImageLoad(ctx context.Context, input io.Reader, opts ...client.ImageLoadOption) (image.LoadResponse, error) {
+	args := m.Called(ctx, input)
+	return args.Get(0).(image.LoadResponse), args.Error(1)
+}
+
+func (m *mockAPI) ImageTag(ctx context.Context, source, target string) error {
+	return m.Called(ctx, source, target).Error(0)
 }
 
 func (m *mockAPI) ImageRemove(ctx context.Context, imageID string, options image.RemoveOptions) ([]image.DeleteResponse, error) {

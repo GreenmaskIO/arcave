@@ -22,6 +22,7 @@ const (
 	containerID = "c0ffee"
 	imageID     = "sha256:aaaa"
 	archive     = "the save archive, opaque bytes"
+	restoreRef  = "arcave/demo-db-1:sp-1780335122"
 )
 
 // captureKey is where a capture of demoRequest's container lands.
@@ -36,7 +37,18 @@ func demoRequest() model.ImageCaptureRequest {
 	}
 }
 
-func TestCapturer_Capture(t *testing.T) {
+// demoRestoreRequest addresses the capture demoRequest wrote.
+func demoRestoreRequest() model.ImageRestoreRequest {
+	return model.ImageRestoreRequest{
+		SnapshotID: snapshotID,
+		Capture: model.ImageCapture{
+			Service: "db", Replica: 1, ContainerID: containerID, ImageID: imageID,
+		},
+		ImageRef: restoreRef,
+	}
+}
+
+func TestCopier_Capture(t *testing.T) {
 	removeErr := errors.New("image is in use")
 
 	tests := []struct {
@@ -133,7 +145,7 @@ func TestCapturer_Capture(t *testing.T) {
 	}
 }
 
-func TestCapturer_Capture_RejectsAnUnaddressableRequest(t *testing.T) {
+func TestCopier_Capture_RejectsAnUnaddressableRequest(t *testing.T) {
 	tests := []struct {
 		name string
 		req  model.ImageCaptureRequest
@@ -178,6 +190,157 @@ func TestCapturer_Capture_RejectsAnUnaddressableRequest(t *testing.T) {
 	}
 }
 
+func TestCopier_Restore(t *testing.T) {
+	loadErr := errors.New("archive is not a save archive")
+
+	tests := []struct {
+		name   string
+		stored bool
+		expect func(docker *mockContainerImager)
+		verify func(t *testing.T, restored model.ImageRestore, err error)
+	}{
+		{
+			name:   "loads the archive and names it",
+			stored: true,
+			expect: func(docker *mockContainerImager) {
+				missing := docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+				load := docker.On("LoadImage", mock.Anything, mock.Anything).Return(nil).Once()
+				// The load is confirmed by the id the record names, never by the stream.
+				present := docker.On("ImageExists", mock.Anything, imageID).Return(true, nil).Once()
+				tag := docker.On("TagImage", mock.Anything, imageID, restoreRef).Return(nil).Once()
+				mock.InOrder(missing, load, present, tag)
+			},
+			verify: func(t *testing.T, restored model.ImageRestore, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, model.ImageRestore{
+					Service: "db", Replica: 1, ImageID: imageID, ImageRef: restoreRef,
+				}, restored)
+			},
+		},
+		{
+			name:   "an image the daemon already holds is only tagged",
+			stored: true,
+			expect: func(docker *mockContainerImager) {
+				docker.On("ImageExists", mock.Anything, imageID).Return(true, nil).Once()
+				docker.On("TagImage", mock.Anything, imageID, restoreRef).Return(nil).Once()
+			},
+			verify: func(t *testing.T, restored model.ImageRestore, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, restoreRef, restored.ImageRef)
+			},
+		},
+		{
+			name:   "a record naming an archive the store does not hold",
+			stored: false,
+			expect: func(docker *mockContainerImager) {
+				docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+			},
+			verify: func(t *testing.T, restored model.ImageRestore, err error) {
+				require.ErrorIs(t, err, model.ErrSavepointImageMissing)
+				assert.Equal(t, model.ImageRestore{}, restored)
+			},
+		},
+		{
+			name:   "a refused load is not tagged",
+			stored: true,
+			expect: func(docker *mockContainerImager) {
+				docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+				docker.On("LoadImage", mock.Anything, mock.Anything).Return(loadErr).Once()
+			},
+			verify: func(t *testing.T, restored model.ImageRestore, err error) {
+				require.ErrorIs(t, err, loadErr)
+				assert.Equal(t, model.ImageRestore{}, restored)
+			},
+		},
+		{
+			name:   "a load resolving to another image fails here",
+			stored: true,
+			expect: func(docker *mockContainerImager) {
+				docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+				docker.On("LoadImage", mock.Anything, mock.Anything).Return(nil).Once()
+				docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+			},
+			verify: func(t *testing.T, restored model.ImageRestore, err error) {
+				require.ErrorContains(t, err, "does not hold image")
+				assert.Equal(t, model.ImageRestore{}, restored)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			store := newStore(t)
+			if tt.stored {
+				putObject(t, store, captureKey, archive)
+			}
+			docker := &mockContainerImager{}
+			tt.expect(docker)
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			restored, err := New(store, docker).Restore(ctx, demoRestoreRequest())
+
+			// Assert
+			tt.verify(t, restored, err)
+			docker.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCopier_Restore_RejectsAnUnaddressableRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  model.ImageRestoreRequest
+	}{
+		{
+			name: "an id that is not a savepoint id",
+			req: model.ImageRestoreRequest{
+				SnapshotID: "../escape", Capture: demoRestoreRequest().Capture, ImageRef: restoreRef,
+			},
+		},
+		{
+			name: "a capture of an unnamed service",
+			req: model.ImageRestoreRequest{
+				SnapshotID: snapshotID,
+				Capture:    model.ImageCapture{Replica: 1, ImageID: imageID},
+				ImageRef:   restoreRef,
+			},
+		},
+		{
+			name: "a replica number compose never assigns",
+			req: model.ImageRestoreRequest{
+				SnapshotID: snapshotID,
+				Capture:    model.ImageCapture{Service: "db", Replica: 0, ImageID: imageID},
+				ImageRef:   restoreRef,
+			},
+		},
+		{
+			name: "a restore under no reference",
+			req: model.ImageRestoreRequest{
+				SnapshotID: snapshotID, Capture: demoRestoreRequest().Capture,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			store := newStore(t)
+			putObject(t, store, captureKey, archive)
+			docker := &mockContainerImager{}
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			_, err := New(store, docker).Restore(ctx, tt.req)
+
+			// Assert
+			require.Error(t, err)
+			docker.AssertExpectations(t)
+		})
+	}
+}
+
 // TestImagesNamespace_CannotCollideWithAVolume pins images/ as a reserved key: no
 // volume's own directory is ever named "images".
 func TestImagesNamespace_CannotCollideWithAVolume(t *testing.T) {
@@ -216,6 +379,13 @@ func objectNames(t *testing.T, store storages.Storager) []string {
 		names = append(names, obj.Name)
 	}
 	return names
+}
+
+// putObject writes one object, standing in for what a capture left in the store.
+func putObject(t *testing.T, store storages.Storager, key, content string) {
+	t.Helper()
+
+	require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader(content)))
 }
 
 // readObject returns an object's whole content.

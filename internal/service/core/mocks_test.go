@@ -42,15 +42,33 @@ func (m *mockSavepointRepo) DeleteSavepoint(ctx context.Context, id model.Savepo
 	return m.Called(ctx, id).Error(0)
 }
 
-// mockImageCapturer doubles imageCapturer.
-type mockImageCapturer struct{ mock.Mock }
+// mockImageBackend doubles imageBackend.
+type mockImageBackend struct{ mock.Mock }
 
-func (m *mockImageCapturer) Capture(
+func (m *mockImageBackend) Capture(
 	ctx context.Context, req model.ImageCaptureRequest,
 ) (model.ImageCapture, error) {
 	args := m.Called(ctx, req)
 	capture, _ := args.Get(0).(model.ImageCapture)
 	return capture, args.Error(1)
+}
+
+func (m *mockImageBackend) Restore(
+	ctx context.Context, req model.ImageRestoreRequest,
+) (model.ImageRestore, error) {
+	args := m.Called(ctx, req)
+	restored, _ := args.Get(0).(model.ImageRestore)
+	return restored, args.Error(1)
+}
+
+// mockContainerRebuilder doubles containerRebuilder.
+type mockContainerRebuilder struct{ mock.Mock }
+
+func (m *mockContainerRebuilder) RecreateWithImage(
+	ctx context.Context, containerID, imageRef string,
+) (string, error) {
+	args := m.Called(ctx, containerID, imageRef)
+	return args.String(0), args.Error(1)
 }
 
 // mockLocker doubles projectLocker. Release is a closure Acquire returns rather
@@ -208,6 +226,16 @@ func matchSpec(store storages.Storager, objectID string) any {
 func matchValidSnapshotID() any {
 	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
 		return req.SnapshotID.Validate() == nil
+	})
+}
+
+// matchRetargetedImage matches the project a rebuild is handed by the image one of
+// its services is pointed at; the pull policy rides along, since a tag that lives
+// only in the local daemon must never be resolved remotely.
+func matchRetargetedImage(service, ref string) any {
+	return mock.MatchedBy(func(project *types.Project) bool {
+		svc, ok := project.Services[service]
+		return ok && svc.Image == ref && svc.PullPolicy == types.PullPolicyNever
 	})
 }
 

@@ -400,7 +400,7 @@ A savepoint has two halves, and they never overlap: the **volumes** below, and t
 
 The layer capture is not deduplicated yet: each savepoint stores the whole image of each container, base layers and all, and `images[].size_bytes` in the record is what that costs. Data belongs in volumes; the layer capture is what keeps a stack honest when it is not there.
 
-**A rollback does not restore the layer.** It rebuilds the containers from the recorded spec, so the writable layer they had is destroyed — the archive is written and kept, and nothing reads it back yet.
+**A rollback restores the layer.** It loads each stored image back into the daemon before it stops anything, and rebuilds the containers on those images rather than on the base image the spec names.
 
 The unit of backup is the **volume**, not the mount:
 
@@ -526,15 +526,36 @@ Behavior:
 
 - Stops project services.
 - Takes a safety snapshot of the live state, named `safety-snapshot-<id of the savepoint being restored>`, so one left behind by a killed rollback says which savepoint it was undoing.
+- Loads every writable layer the savepoint holds back into the daemon and tags each one `arcave/<project>-<service>-<replica>-<base-image>:sp-<savepoint-id>` — e.g. `arcave/shop-db-1-postgres-16:sp-1780335122`, so `docker images` reads as one row per replica and one tag per savepoint. Every segment is reduced to lower-case alphanumerics joined by dashes, because a docker repository path admits nothing else, and the base image is cut before the 255-character cap is passed. This runs first, with the project still running: an archive the daemon will not take stops the rollback before anything is torn down.
 - Removes the project's containers and networks. Volumes are kept — one arcave does not capture has no copy anywhere.
-- Creates the containers, networks and volumes the savepoint's own compose spec declares, without starting them.
+- Creates the containers, networks and volumes the savepoint's own compose spec declares, without starting them, on the restored images.
+- Rebuilds every replica past the first on its own layer: a compose service names one image, while a layer is captured per replica.
 - Restores all registered stateful service volumes into them.
 - Starts project services.
 - Waits for health checks.
 - Removes the anonymous volumes the teardown orphaned, and only those a capture was restored into.
 - Deletes the safety snapshot, unless replaying it failed too — the one case where it is the last copy of the pre-rollback state.
 
-A rollback restores the stack the savepoint recorded, not the one that is running: a service added since is gone, one removed comes back, and a changed image, port, environment variable or healthcheck goes back to what it was. The price is that **the containers' writable layer is destroyed** — nothing a service wrote outside a volume survives a rollback, and no savepoint holds a copy of it.
+A rollback restores the stack the savepoint recorded, not the one that is running: a service added since is gone, one removed comes back, and a changed image, port, environment variable or healthcheck goes back to what it was. The containers' writable layer goes back with it — what a service wrote outside its mounts is restored from the image the savepoint committed.
+
+The `arcave/…` tags a rollback leaves behind are not collected: the running containers reference them, so nothing can be dropped at the end of the workflow. One tag per (service, replica, savepoint) survives each rollback. A `docker compose up` run by hand afterwards recreates the containers from the user's own compose file and drops the restored layer with them.
+
+Output adds `images`, one entry per restored layer:
+
+```json
+{
+  "rolled_back_to": { "id": "1780335122" },
+  "restored": [],
+  "images": [
+    {
+      "service": "webapp",
+      "replica": 1,
+      "image_id": "sha256:aaaa…",
+      "image_ref": "arcave/demo-webapp-1-myapp-latest:sp-1780335122"
+    }
+  ]
+}
+```
 
 A savepoint taken before arcave recorded compose specs carries none, and a rollback to it is refused rather than guessed at: the stack is rebuilt from the spec the savepoint recorded, and there is nothing honest to rebuild it from.
 

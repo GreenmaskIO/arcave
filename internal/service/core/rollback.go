@@ -32,11 +32,11 @@ func safetySnapshotLabels() map[string]string {
 	return map[string]string{model.SafetySnapshotLabel: model.SafetySnapshotLabelValue}
 }
 
-// Rollback restores the environment to the referenced savepoint: stop, safety
-// snapshot, tear the stack down, rebuild it from the spec the savepoint recorded,
-// restore, start. Any failure past the teardown replays the safety snapshot; the
-// project lock and the inflight marker stand across the whole workflow. The
-// rebuild discards the containers' writable layer, which no savepoint holds.
+// Rollback restores the environment to the referenced savepoint: load its
+// writable layers back into the daemon, stop, safety snapshot, tear the stack
+// down, rebuild it from the spec the savepoint recorded on those layers, restore,
+// start. Any failure past the teardown replays the safety snapshot; the project
+// lock and the inflight marker stand across the whole workflow.
 func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error) {
 	// Ahead of the lock: a request that names no savepoint must not make a
 	// concurrent workflow wait to be told so.
@@ -83,6 +83,14 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 		return model.RollbackResult{}, fmt.Errorf("load the savepoint's compose spec: %w", err)
 	}
 
+	// The load is this workflow's pre-flight, and it is a real one: an archive the
+	// daemon will not take fails here, with the project still running.
+	restored, err := s.restoreImages(ctx, record, target.Name)
+	if err != nil {
+		return model.RollbackResult{}, fmt.Errorf("restore the savepoint's writable layers: %w", err)
+	}
+	target = retargetImages(target, restored)
+
 	ws, err := s.prepare(ctx, req.WaitTimeout)
 	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", err)
@@ -118,7 +126,7 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
 	}
 
-	if err := s.applySavepoint(ctx, record, target, savepointBackends, safetySnapshot.ID, ws); err != nil {
+	if err := s.applySavepoint(ctx, record, target, restored, savepointBackends, safetySnapshot.ID, ws); err != nil {
 		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).
 			Msg("rollback failed: reverting to the pre-rollback state")
 
@@ -151,6 +159,7 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	return model.RollbackResult{
 		Savepoint: record,
 		Restored:  volumesOf(record),
+		Images:    restored,
 	}, nil
 }
 
@@ -189,6 +198,7 @@ func (s *Service) applySavepoint(
 	ctx context.Context,
 	record model.Savepoint,
 	target *types.Project,
+	restored []model.ImageRestore,
 	savepointBackends []model.VolumeSnapshotBackend,
 	safetyID model.SavepointID,
 	ws workingSet,
@@ -197,6 +207,9 @@ func (s *Service) applySavepoint(
 		return err
 	}
 	if err := s.buildStack(ctx, target); err != nil {
+		return err
+	}
+	if err := s.rebuildDivergentReplicas(ctx, restored); err != nil {
 		return err
 	}
 
@@ -223,15 +236,24 @@ func (s *Service) applySavepoint(
 	return nil
 }
 
-// revert replays the safety snapshot through the very instances that took it: tear
-// down, rebuild the stack it was taken of, restore, restart. It runs on the caller's
-// context, not the fan-out's — an errgroup cancels its own the moment Wait returns.
+// revert replays the safety snapshot through the very instances that took it: load
+// its layers back, tear down, rebuild the stack it was taken of on them, restore,
+// restart. It runs on the caller's context, not the fan-out's — an errgroup cancels
+// its own the moment Wait returns.
 func (s *Service) revert(
 	ctx context.Context,
 	safetySnapshot model.Savepoint,
 	ws workingSet,
 	target model.SavepointID,
 ) error {
+	// The safety snapshot holds the layers the live stack had, so the undo has to
+	// put them back — the same parity the capture side already has.
+	restored, err := s.restoreImages(ctx, safetySnapshot, ws.project.Name)
+	if err != nil {
+		return fmt.Errorf("restore the safety snapshot's writable layers: %w", err)
+	}
+	live := retargetImages(ws.project, restored)
+
 	// Back to recreating: the stack is about to be torn down again.
 	if err := s.putInflightMarker(ctx, model.InflightRecreating, target, safetySnapshot.ID); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker back before revert")
@@ -240,7 +262,10 @@ func (s *Service) revert(
 	if err := s.tearDownStack(ctx, ws.project); err != nil {
 		return err
 	}
-	if err := s.buildStack(ctx, ws.project); err != nil {
+	if err := s.buildStack(ctx, live); err != nil {
+		return err
+	}
+	if err := s.rebuildDivergentReplicas(ctx, restored); err != nil {
 		return err
 	}
 

@@ -839,14 +839,14 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 	remover.On("RemoveVolume", mock.Anything, "9f8e7d").Return(nil).Once()
 
 	// The safety snapshot commits the service's layer like any other savepoint.
-	capturer := &mockImageCapturer{}
+	capturer := &mockImageBackend{}
 	capturer.On("Capture", mock.Anything, mock.Anything).Return(model.ImageCapture{Service: "app"}, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover: remover,
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 		ProjectAssembler: assemblerFor(res), ComposeRunner: runner, BackendRegistry: registry,
-		ImageCapturer: capturer, Inflight: &fakeInflight{},
+		ImageBackend: capturer, Inflight: &fakeInflight{},
 		Store: store, DefaultBackend: model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())

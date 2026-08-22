@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -93,7 +94,7 @@ func demoIntrospectionWithContainers() model.IntrospectionResult {
 	return res
 }
 
-// demoImageCapture is what the capturer reports for demoContainerRef.
+// demoImageCapture is what the copier reports for demoContainerRef.
 func demoImageCapture() model.ImageCapture {
 	return model.ImageCapture{
 		Service:     demoService,
@@ -105,14 +106,72 @@ func demoImageCapture() model.ImageCapture {
 	}
 }
 
+// demoRecordWithImages is demoRecord carrying the writable layer of its one replica.
+func demoRecordWithImages() model.Savepoint {
+	record := demoRecord()
+	record.Images = []model.ImageCapture{demoImageCapture()}
+	return record
+}
+
+// demoRestoredRef is the tag a rollback of demoRecord puts on one replica's layer;
+// demoBaseImage's colon is what a docker repository path cannot carry.
+func demoRestoredRef(replica int) string {
+	return fmt.Sprintf("arcave/%s-%s-%d-postgres-16:sp-%s", demoProject, demoService, replica, demoRecord().ID)
+}
+
+// demoImageRestore is what the copier reports for demoImageCapture.
+func demoImageRestore() model.ImageRestore {
+	return model.ImageRestore{
+		Service: demoService, Replica: 1,
+		ImageID: demoImageCapture().ImageID, ImageRef: demoRestoredRef(1),
+	}
+}
+
+// The second replica of demoService, and the layer it carries of its own — what a
+// compose service's one image cannot stand for.
+const (
+	demoSecondContainerID = "cafe"
+	demoSecondImageID     = "sha256:bbbb"
+)
+
+// demoScaledIntrospection is demoIntrospectionWithContainers with demoService
+// scaled to two replicas.
+func demoScaledIntrospection() model.IntrospectionResult {
+	res := demoIntrospectionWithContainers()
+	res.Project.Services[0].Containers = append(res.Project.Services[0].Containers, model.Container{
+		ID:      demoSecondContainerID,
+		Number:  2,
+		Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+	})
+	return res
+}
+
+// demoSecondImageCapture is the second replica's own layer.
+func demoSecondImageCapture() model.ImageCapture {
+	capture := demoImageCapture()
+	capture.Replica = 2
+	capture.ContainerID = demoSecondContainerID
+	capture.ImageID = demoSecondImageID
+	return capture
+}
+
+// demoScaledRecord is a savepoint of the scaled stack: one capture per replica.
+func demoScaledRecord() model.Savepoint {
+	record := demoRecord()
+	record.Images = []model.ImageCapture{demoImageCapture(), demoSecondImageCapture()}
+	return record
+}
+
 // demoSpec is what the assembler materialises demoIntrospection into, demoSpecBytes
 // its artifact, and demoTargetSpec what that artifact parses back to. The two
 // projects are distinct values: expectations match them by identity, so a call
 // handed the live stack instead of the savepoint's fails.
 var (
 	demoSpec       = &types.Project{Name: demoProject}
-	demoTargetSpec = &types.Project{Name: demoProject}
-	demoSpecBytes  = []byte("name: demo\n")
+	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{
+		demoService: {Name: demoService, Image: demoBaseImage},
+	}}
+	demoSpecBytes = []byte("name: demo\n")
 )
 
 // demoAssembler materialises demoIntrospection into demoSpec.
