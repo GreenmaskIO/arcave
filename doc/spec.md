@@ -449,7 +449,7 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
 }
 ```
 
-A record carrying no `images` was taken by a workflow that captures no layer — a rollback's safety snapshot, which has nothing to restore one into.
+A rollback's safety snapshot carries the same two halves as any other savepoint — it differs only in its name, its empty description and the label that hides it from `savepoint list`.
 
 ---
 

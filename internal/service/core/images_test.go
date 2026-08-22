@@ -120,3 +120,74 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 	runner.AssertExpectations(t)
 	registry.AssertExpectations(t)
 }
+
+func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
+	// Arrange
+	introspection := demoIntrospectionWithContainers()
+	vol := demoVolume()
+	record := demoRecord()
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoSpecBytes, nil)
+	locker := &mockLocker{}
+	expectLock(locker)
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil)
+
+	var safetySnapshotID model.SavepointID
+	runner := &mockComposeRunner{}
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	savepointBackend := &mockBackend{volume: vol}
+	safetyBackend := &mockBackend{volume: vol}
+	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
+		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+	capturer := &mockImageCapturer{}
+	// The id is read at match time, filled by the volume capture that runs first.
+	captureSafety := capturer.On("Capture", mock.Anything, mock.MatchedBy(func(req model.ImageCaptureRequest) bool {
+		return req.SnapshotID == safetySnapshotID && req.Container == demoContainerRef()
+	})).Return(demoImageCapture(), nil).Once()
+	specSafety := expectSpecCommit(repo)
+	commitSafety := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+		return r.IsSafetySnapshot() && len(r.Images) == 1 && r.Images[0] == demoImageCapture()
+	})).Return(nil).Once()
+	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
+	restore := savepointBackend.On("Restore", mock.Anything,
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+	start := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
+	removeSafety := safetyBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
+		return req.SnapshotID == safetySnapshotID
+	})).Return(nil).Once()
+
+	// The containers it commits exist only between the stop and the teardown.
+	mock.InOrder(stop, snapshotSafety, captureSafety, specSafety, commitSafety, down, create,
+		restore, start, uncommitSafety, removeSafety)
+
+	store := newDirStore(t)
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetyBackend, nil).Once()
+
+	svc := New(Deps{
+		VolumeRemover: &mockVolumeRemover{},
+		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
+		ProjectAssembler: assemblerFor(introspection), ComposeRunner: runner, BackendRegistry: registry,
+		ImageCapturer: capturer, Inflight: &fakeInflight{},
+		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+	// Assert
+	require.NoError(t, err)
+	repo.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	capturer.AssertExpectations(t)
+	savepointBackend.AssertExpectations(t)
+	safetyBackend.AssertExpectations(t)
+	registry.AssertExpectations(t)
+}

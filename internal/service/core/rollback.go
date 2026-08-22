@@ -97,9 +97,8 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	// which is what leaves a killed rollback's undo listable, and so applicable by
 	// hand.
 	log.Info().Msg("backing up current state")
-	// No containers: a rollback cannot restore a writable layer yet.
 	safetySnapshot, err := s.performSavepoint(
-		ctx, ws.backends, nil, ws.spec, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
+		ctx, ws, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
 	)
 	if err != nil {
 		// Nothing was restored, so there is nothing to revert: restart best-effort and

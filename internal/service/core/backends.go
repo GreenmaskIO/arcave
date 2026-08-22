@@ -84,24 +84,22 @@ func (s *Service) captureVolumes(
 // failure the returned record is zero.
 func (s *Service) performSavepoint(
 	ctx context.Context,
-	backends []model.VolumeSnapshotBackend,
-	containers []model.ContainerRef,
-	spec []byte,
+	ws workingSet,
 	name string,
 	description string,
 	labels map[string]string,
 ) (model.Savepoint, error) {
-	record, err := s.captureVolumes(ctx, backends, name, description, labels)
+	record, err := s.captureVolumes(ctx, ws.backends, name, description, labels)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
-	record.Images, err = s.captureImages(ctx, record.ID, containers)
+	record.Images, err = s.captureImages(ctx, record.ID, ws.containers)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
-	if err := s.savepointRepo.SaveSpec(ctx, record.ID, spec); err != nil {
+	if err := s.savepointRepo.SaveSpec(ctx, record.ID, ws.spec); err != nil {
 		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", record.ID, err)
 	}
 	record.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML}
