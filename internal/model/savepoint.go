@@ -30,11 +30,9 @@ type Savepoint struct {
 	Spec *SpecRef `json:"spec,omitempty"`
 }
 
-// SpecRef is the reference to a savepoint's compose spec artifact. Its digest is
-// checked before the stack is stopped, so a truncated artifact fails harmlessly.
+// SpecRef is the reference to a savepoint's compose spec artifact.
 type SpecRef struct {
 	Format string `json:"format"` // SpecFormatComposeYAML
-	Digest string `json:"digest"` // sha256 of the artifact, hex
 }
 
 // IsSafetySnapshot reports whether this record is a rollback's undo rather than

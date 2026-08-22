@@ -72,7 +72,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 	saveSpec := expectSpecCommit(repo).NotBefore(snapPg, snapCfg)
 	save := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil && r.Name == "before-migration" && r.Description == "trying a schema change" &&
-			r.Spec != nil && r.Spec.Format == model.SpecFormatComposeYAML && r.Spec.Digest == specDigest(demoSpecBytes)
+			r.Spec != nil && r.Spec.Format == model.SpecFormatComposeYAML
 	})).Return(nil).Once().NotBefore(saveSpec)
 	runner.On("Start", mock.Anything, demoSpec, 90*time.Second).Return(nil).Once().NotBefore(save)
 

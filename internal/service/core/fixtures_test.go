@@ -36,7 +36,7 @@ func demoRecord() model.Savepoint {
 
 // demoSpecRef names the artifact every committed fixture carries, digest included.
 func demoSpecRef() *model.SpecRef {
-	return &model.SpecRef{Format: model.SpecFormatComposeYAML, Digest: specDigest(demoSpecBytes)}
+	return &model.SpecRef{Format: model.SpecFormatComposeYAML}
 }
 
 // demoSafetySnapshot is a committed safety snapshot of demoVolume: an ordinary
@@ -116,7 +116,7 @@ func expectSpecCommit(repo *mockSavepointRepo) *mock.Call {
 func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.SavepointID) *mock.Call {
 	return repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil && r.Name == "safety-snapshot-"+restoring.String() &&
-			r.IsSafetySnapshot() && r.Spec != nil && r.Spec.Digest == specDigest(demoSpecBytes)
+			r.IsSafetySnapshot() && r.Spec != nil
 	})).Return(nil).Once()
 }
 

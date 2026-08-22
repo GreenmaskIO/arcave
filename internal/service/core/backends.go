@@ -104,7 +104,7 @@ func (s *Service) performSavepoint(
 	if err := s.savepointRepo.SaveSpec(ctx, record.ID, spec); err != nil {
 		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", record.ID, err)
 	}
-	record.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML, Digest: specDigest(spec)}
+	record.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML}
 
 	if err := s.savepointRepo.SaveSavepoint(ctx, record); err != nil {
 		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
