@@ -30,6 +30,7 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
@@ -161,6 +162,7 @@ func initAllDependencies(
 		ProjectAssembler: assembler,
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    engine,
+		ImageCapturer:    imagecopy.New(stackStore, engine),
 		BackendRegistry:  backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:       inflightrepo.New(projectPath),

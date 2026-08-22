@@ -18,6 +18,8 @@ type workingSet struct {
 	spec        []byte
 	waitTimeout time.Duration
 	backends    []model.VolumeSnapshotBackend
+	// containers are the replicas whose writable layer a capture commits.
+	containers []model.ContainerRef
 	// anonVolumes maps a mount's ObjectID to the docker name behind it — the only
 	// record of what a teardown orphans.
 	anonVolumes map[string]string
@@ -59,6 +61,7 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		spec:        spec,
 		waitTimeout: waitTimeout,
 		backends:    backends,
+		containers:  capturableContainers(res),
 		anonVolumes: anonymousVolumes(res),
 	}, nil
 }
@@ -99,6 +102,21 @@ func (s *Service) startServices(ctx context.Context, ws workingSet) error {
 		return fmt.Errorf("starting services: %w", err)
 	}
 	return nil
+}
+
+// capturableContainers lists every replica of every service, in service order.
+func capturableContainers(res model.IntrospectionResult) []model.ContainerRef {
+	var refs []model.ContainerRef
+	for _, svc := range res.Project.Services {
+		for _, c := range svc.Containers {
+			ref := model.ContainerRef{Service: svc.Name, Replica: c.Number, ID: c.ID}
+			if c.Inspect.Config != nil {
+				ref.BaseImage = c.Inspect.Config.Image
+			}
+			refs = append(refs, ref)
+		}
+	}
+	return refs
 }
 
 // anonymousVolumes indexes the docker names of the stack's anonymous volumes by
