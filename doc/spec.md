@@ -340,7 +340,8 @@ Result:
     └── <savepoint-id>/                  # one self-contained namespace per savepoint
         ├── savepoint.json               # the record — written last, the commit marker
         ├── project.yaml                  # the stack's compose spec, what a rollback rebuilds from
-        └── <service>/<mount-path>/data.tar
+        ├── <service>/<mount-path>/data.tar
+        └── images/<service>/<replica>/image.tar   # the container's committed writable layer
 ```
 
 Each savepoint is one self-contained directory: its record and every archive it
@@ -389,10 +390,17 @@ Behavior:
 
 - Stops project services.
 - Creates snapshots of all registered stateful service volumes.
+- Commits each container's writable layer and stores the image.
 - Restarts services.
 - Waits for health checks.
 
 ##### What a savepoint covers
+
+A savepoint has two halves, and they never overlap: the **volumes** below, and the **writable layer** of every container the stack holds. `docker commit` excludes the contents of every mount by contract, so the layer capture sees exactly the state the volume capture cannot — data a service wrote past all of its mounts.
+
+The layer capture is not deduplicated yet: each savepoint stores the whole image of each container, base layers and all, and `images[].size_bytes` in the record is what that costs. Data belongs in volumes; the layer capture is what keeps a stack honest when it is not there.
+
+**A rollback does not restore the layer.** It rebuilds the containers from the recorded spec, so the writable layer they had is destroyed — the archive is written and kept, and nothing reads it back yet.
 
 The unit of backup is the **volume**, not the mount:
 
@@ -417,7 +425,7 @@ Every savepoint receives a unique immutable identifier — a Unix timestamp inte
 1780335122
 ```
 
-Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose document committed beside it as `<savepoint-id>/project.yaml` — the stack as it stood, which is what a rollback rebuilds; the digest is checked before a rollback stops anything:
+Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose document committed beside it as `<savepoint-id>/project.yaml` — the stack as it stood, which is what a rollback rebuilds. It is read and parsed before a rollback stops anything, so an unloadable one fails while the project is still running:
 
 ```json
 {
@@ -425,12 +433,23 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
   "name": "before-migration",
   "description": "Before applying migration 2026_001",
   "created_at": "2026-06-01T19:41:12.123456789Z",
+  "images": [
+    {
+      "service": "webapp",
+      "replica": 1,
+      "container_id": "3f1a…",
+      "image_id": "sha256:aaaa…",
+      "base_image": "myapp:latest",
+      "size_bytes": 83887104
+    }
+  ],
   "spec": {
-    "format": "compose-yaml",
-    "digest": "9f2c…"
+    "format": "compose-yaml"
   }
 }
 ```
+
+A rollback's safety snapshot carries the same two halves as any other savepoint — it differs only in its name, its empty description and the label that hides it from `savepoint list`.
 
 ---
 

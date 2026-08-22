@@ -25,6 +25,9 @@ type Savepoint struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
 	Stats       []SnapshotStat    `json:"stats,omitempty"` // one per snapshotted volume
+	// Images is one capture per container whose writable layer was committed. It is
+	// empty on records predating image capture and on workflows that take none.
+	Images []ImageCapture `json:"images,omitempty"`
 	// Spec names the compose spec committed beside this record. A savepoint without
 	// one cannot be rolled back to: the stack is rebuilt from the spec.
 	Spec *SpecRef `json:"spec,omitempty"`

@@ -98,7 +98,7 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	// hand.
 	log.Info().Msg("backing up current state")
 	safetySnapshot, err := s.performSavepoint(
-		ctx, ws.backends, ws.spec, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
+		ctx, ws, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
 	)
 	if err != nil {
 		// Nothing was restored, so there is nothing to revert: restart best-effort and

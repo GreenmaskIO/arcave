@@ -29,6 +29,7 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -171,6 +172,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		ProjectAssembler: assembler,
 		ComposeRunner:    runner,
 		VolumeRemover:    engine,
+		ImageCapturer:    imagecopy.New(store, engine),
 		BackendRegistry:  mustRegistry(t, engine),
 		Inflight:         inflightrepo.New(projectRoot),
 		Store:            store,

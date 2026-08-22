@@ -53,6 +53,11 @@ type volumeRemover interface {
 	RemoveVolume(ctx context.Context, name string) error
 }
 
+// imageCapturer commits one stopped container's writable layer into the store.
+type imageCapturer interface {
+	Capture(ctx context.Context, req model.ImageCaptureRequest) (model.ImageCapture, error)
+}
+
 // inflightMarkers is the intent marker's seam: written before a rollback's first
 // destructive write, cleared when the environment is consistent again.
 type inflightMarkers interface {
@@ -70,6 +75,7 @@ type Deps struct {
 	ProjectAssembler projectAssembler
 	ComposeRunner    composeRunner
 	VolumeRemover    volumeRemover
+	ImageCapturer    imageCapturer
 	BackendRegistry  model.SnapshotBackendRegistry
 	Inflight         inflightMarkers
 	Store            storages.Storager
@@ -88,6 +94,7 @@ type Service struct {
 	projectAssembler        projectAssembler
 	composeRunner           composeRunner
 	volumeRemover           volumeRemover
+	imageCapturer           imageCapturer
 	snapshotBackendRegistry model.SnapshotBackendRegistry
 	inflightMarker          inflightMarkers
 	store                   storages.Storager
@@ -103,6 +110,7 @@ func New(d Deps) *Service {
 		projectAssembler:        d.ProjectAssembler,
 		composeRunner:           d.ComposeRunner,
 		volumeRemover:           d.VolumeRemover,
+		imageCapturer:           d.ImageCapturer,
 		snapshotBackendRegistry: d.BackendRegistry,
 		inflightMarker:          d.Inflight,
 		store:                   d.Store,

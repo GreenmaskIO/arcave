@@ -79,29 +79,27 @@ func (s *Service) captureVolumes(
 	return record, nil
 }
 
-// performSavepoint captures every volume, writes the stack's compose spec, and
-// commits the record last: that write is the commit, so a run that died halfway
-// leaves data no record names.
-//
-// A rollback's safety snapshot goes through it too, labelled rather than special:
-// the record is what makes the backup a killed rollback abandoned listable, and
-// therefore rollable-back-to by hand.
-//
-// On error the record is zero: an uncommitted capture is garbage, not a value.
+// performSavepoint captures the volumes and the container layers, writes the
+// compose spec, and commits the record last: that write is the commit, and on any
+// failure the returned record is zero.
 func (s *Service) performSavepoint(
 	ctx context.Context,
-	backends []model.VolumeSnapshotBackend,
-	spec []byte,
+	ws workingSet,
 	name string,
 	description string,
 	labels map[string]string,
 ) (model.Savepoint, error) {
-	record, err := s.captureVolumes(ctx, backends, name, description, labels)
+	record, err := s.captureVolumes(ctx, ws.backends, name, description, labels)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
-	if err := s.savepointRepo.SaveSpec(ctx, record.ID, spec); err != nil {
+	record.Images, err = s.captureImages(ctx, record.ID, ws.containers)
+	if err != nil {
+		return model.Savepoint{}, err
+	}
+
+	if err := s.savepointRepo.SaveSpec(ctx, record.ID, ws.spec); err != nil {
 		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", record.ID, err)
 	}
 	record.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML}

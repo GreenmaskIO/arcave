@@ -42,6 +42,17 @@ func (m *mockSavepointRepo) DeleteSavepoint(ctx context.Context, id model.Savepo
 	return m.Called(ctx, id).Error(0)
 }
 
+// mockImageCapturer doubles imageCapturer.
+type mockImageCapturer struct{ mock.Mock }
+
+func (m *mockImageCapturer) Capture(
+	ctx context.Context, req model.ImageCaptureRequest,
+) (model.ImageCapture, error) {
+	args := m.Called(ctx, req)
+	capture, _ := args.Get(0).(model.ImageCapture)
+	return capture, args.Error(1)
+}
+
 // mockLocker doubles projectLocker. Release is a closure Acquire returns rather
 // than a method of the seam, so it reports itself as one — MethodCalled puts it
 // where testify counts it and mock.InOrder can place it.

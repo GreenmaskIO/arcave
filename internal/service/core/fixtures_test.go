@@ -3,6 +3,8 @@ package core
 import (
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/mock"
 
@@ -60,6 +62,47 @@ func demoIntrospection() model.IntrospectionResult {
 		Volumes: []model.NamedVolume{{Key: "db", Name: demoVolumeName,
 			UsedBy: []model.ServiceReference{{Service: demoService, Target: demoTarget}}}},
 	}}
+}
+
+// The one replica demoIntrospectionWithContainers reports for demoService — the
+// unit an image capture commits.
+const (
+	demoContainerID = "c0ffee"
+	demoBaseImage   = "postgres:16"
+)
+
+// demoContainerRef is that replica in the form a capture request addresses it by.
+func demoContainerRef() model.ContainerRef {
+	return model.ContainerRef{
+		Service: demoService, Replica: 1, ID: demoContainerID, BaseImage: demoBaseImage,
+	}
+}
+
+// demoIntrospectionWithContainers is demoIntrospection with the daemon holding
+// one container for demoService: what a workflow that captures layers sees.
+func demoIntrospectionWithContainers() model.IntrospectionResult {
+	res := demoIntrospection()
+	res.Project.Services = []model.Service{{
+		Name: demoService,
+		Containers: []model.Container{{
+			ID:      demoContainerID,
+			Number:  1,
+			Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+		}},
+	}}
+	return res
+}
+
+// demoImageCapture is what the capturer reports for demoContainerRef.
+func demoImageCapture() model.ImageCapture {
+	return model.ImageCapture{
+		Service:     demoService,
+		Replica:     1,
+		ContainerID: demoContainerID,
+		ImageID:     "sha256:aaaa",
+		BaseImage:   demoBaseImage,
+		SizeBytes:   4096,
+	}
 }
 
 // demoSpec is what the assembler materialises demoIntrospection into, demoSpecBytes

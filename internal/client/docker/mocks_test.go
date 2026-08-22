@@ -63,6 +63,11 @@ func (m *mockAPI) CopyToContainer(ctx context.Context, containerID, dstPath stri
 	return m.Called(ctx, containerID, dstPath, content, options).Error(0)
 }
 
+func (m *mockAPI) ContainerCommit(ctx context.Context, containerID string, options container.CommitOptions) (container.CommitResponse, error) {
+	args := m.Called(ctx, containerID, options)
+	return args.Get(0).(container.CommitResponse), args.Error(1)
+}
+
 func (m *mockAPI) ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error) {
 	args := m.Called(ctx, imageID)
 	return args.Get(0).(image.InspectResponse), args.Error(1)
@@ -71,6 +76,18 @@ func (m *mockAPI) ImageInspect(ctx context.Context, imageID string, opts ...clie
 func (m *mockAPI) ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
 	args := m.Called(ctx, ref, options)
 	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+func (m *mockAPI) ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (io.ReadCloser, error) {
+	args := m.Called(ctx, imageIDs)
+	rc, _ := args.Get(0).(io.ReadCloser)
+	return rc, args.Error(1)
+}
+
+func (m *mockAPI) ImageRemove(ctx context.Context, imageID string, options image.RemoveOptions) ([]image.DeleteResponse, error) {
+	args := m.Called(ctx, imageID, options)
+	deleted, _ := args.Get(0).([]image.DeleteResponse)
+	return deleted, args.Error(1)
 }
 
 func (m *mockAPI) Info(ctx context.Context) (system.Info, error) {
