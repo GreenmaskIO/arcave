@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -24,11 +25,13 @@ const (
 // api.Compose satisfies it.
 type dockerComposeAPI interface {
 	Stop(ctx context.Context, projectName string, options api.StopOptions) error
+	Down(ctx context.Context, projectName string, options api.DownOptions) error
+	Create(ctx context.Context, project *types.Project, options api.CreateOptions) error
 	Start(ctx context.Context, projectName string, options api.StartOptions) error
 }
 
-// Client stops and starts the project's services, the stack to act on passed per call.
-// It calls compose/v2 as a library, so the host needs no docker CLI.
+// Client runs the project's lifecycle, the stack to act on passed per call. It
+// calls compose/v2 as a library, so the host needs no docker CLI.
 type Client struct {
 	api  dockerComposeAPI
 	opts Options
@@ -64,8 +67,39 @@ func (c *Client) Stop(ctx context.Context, project *types.Project) error {
 	return c.api.Stop(ctx, project.Name, api.StopOptions{Project: project, Timeout: &timeout})
 }
 
+// Down removes the project's containers and networks. Volumes are kept: a volume
+// arcave does not capture has no copy anywhere else.
+func (c *Client) Down(ctx context.Context, project *types.Project) error {
+	timeout := c.stopTimeout()
+	zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String()).Msg("removing compose containers and networks")
+
+	return c.api.Down(ctx, project.Name, api.DownOptions{
+		Project:       project,
+		Timeout:       &timeout,
+		RemoveOrphans: true,
+		Volumes:       false,
+	})
+}
+
+// Create builds the project's containers, networks and volumes without starting
+// them. Inherit is off so an anonymous volume is created fresh, not reused.
+func (c *Client) Create(ctx context.Context, project *types.Project) error {
+	timeout := c.stopTimeout()
+	zerolog.Ctx(ctx).Info().Msg("creating compose containers")
+
+	return c.api.Create(ctx, withComposeLabels(project), api.CreateOptions{
+		Timeout:              &timeout,
+		Recreate:             api.RecreateNever,
+		RecreateDependencies: api.RecreateNever,
+		Inherit:              false,
+		RemoveOrphans:        true,
+		QuietPull:            true,
+		AssumeYes:            true,
+	})
+}
+
 // Start starts all project services and waits until they are healthy; a waitTimeout <= 0
-// falls back to Options. Start rather than Up: nothing is recreated, so anonymous volumes survive.
+// falls back to Options. Start rather than Up: what Create built must not be recreated under it.
 func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	waitTimeout = c.waitTimeoutOr(waitTimeout)
 	zerolog.Ctx(ctx).Info().Str("wait_timeout", waitTimeout.String()).
@@ -76,6 +110,26 @@ func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout 
 		Wait:        true,
 		WaitTimeout: waitTimeout,
 	})
+}
+
+// withComposeLabels stamps onto a copy of the project the labels compose puts on
+// every container it creates: the library leaves that to its CLI, and without
+// them nothing finds the stack again.
+func withComposeLabels(project *types.Project) *types.Project {
+	stamped := *project
+	stamped.Services = make(types.Services, len(project.Services))
+	for name, service := range project.Services {
+		service.CustomLabels = types.Labels{
+			api.ProjectLabel:     project.Name,
+			api.ServiceLabel:     name,
+			api.VersionLabel:     api.ComposeVersion,
+			api.WorkingDirLabel:  project.WorkingDir,
+			api.ConfigFilesLabel: strings.Join(project.ComposeFiles, ","),
+			api.OneoffLabel:      "False",
+		}
+		stamped.Services[name] = service
+	}
+	return &stamped
 }
 
 // waitTimeoutOr resolves the bound a call named against the configured one, falling

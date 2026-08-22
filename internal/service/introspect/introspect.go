@@ -239,6 +239,7 @@ func (i *Inspector) serviceVolume(
 		}
 		if anonymous {
 			sv.Type = model.VolumeTypeAnon
+			sv.VolumeName = m.Name
 			break
 		}
 		// External: compose never labelled it, so its compose key is unrecoverable here.

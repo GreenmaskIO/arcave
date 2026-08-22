@@ -73,6 +73,78 @@ func TestClient_Stop(t *testing.T) {
 	}
 }
 
+// The teardown's options are pinned: a wrong value compiles clean and destroys
+// data no savepoint holds.
+func TestClient_Down(t *testing.T) {
+	// Arrange
+	composeAPI := &mockComposeAPI{}
+	composeAPI.On("Down", mock.Anything, "demo", mock.Anything).Return(nil).Once()
+	c := NewClient(composeAPI, testOptions)
+
+	// Act
+	err := c.Down(context.Background(), fixtureProject())
+
+	// Assert
+	require.NoError(t, err)
+	opts := composeAPI.downCall(t)
+	require.NotNil(t, opts.Project)
+	assert.False(t, opts.Volumes, "the teardown must not remove volumes")
+	assert.True(t, opts.RemoveOrphans)
+	assert.Empty(t, opts.Images, "the teardown must not remove images")
+	require.NotNil(t, opts.Timeout)
+	assert.Equal(t, 25*time.Second, *opts.Timeout)
+	composeAPI.AssertExpectations(t)
+}
+
+// Create must not inherit and must not recreate: reusing the anonymous volume
+// Down orphaned would restore into the volume the rollback is discarding.
+func TestClient_Create(t *testing.T) {
+	// Arrange
+	project := fixtureProject()
+	composeAPI := &mockComposeAPI{}
+	composeAPI.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	c := NewClient(composeAPI, testOptions)
+
+	// Act
+	err := c.Create(context.Background(), project)
+
+	// Assert
+	require.NoError(t, err)
+	opts := composeAPI.createCall(t)
+	assert.Equal(t, api.RecreateNever, opts.Recreate)
+	assert.Equal(t, api.RecreateNever, opts.RecreateDependencies)
+	assert.False(t, opts.Inherit)
+	assert.True(t, opts.RemoveOrphans)
+	composeAPI.AssertExpectations(t)
+}
+
+// The compose library leaves its own labels to its CLI; without them the
+// containers carry no project and nothing finds the stack again.
+func TestClient_Create_StampsComposeLabels(t *testing.T) {
+	// Arrange
+	project := fixtureProject()
+	composeAPI := &mockComposeAPI{}
+	composeAPI.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	c := NewClient(composeAPI, testOptions)
+
+	// Act
+	require.NoError(t, c.Create(context.Background(), project))
+
+	// Assert
+	stamped := composeAPI.createProject(t)
+	assert.Equal(t, types.Labels{
+		api.ProjectLabel:     "demo",
+		api.ServiceLabel:     "db",
+		api.VersionLabel:     api.ComposeVersion,
+		api.WorkingDirLabel:  "/work",
+		api.ConfigFilesLabel: "/work/a.yml,/work/b.yml",
+		api.OneoffLabel:      "False",
+	}, stamped.Services["db"].CustomLabels)
+	// The caller's project is left alone: it is the one the workflow still holds.
+	assert.Empty(t, project.Services["db"].CustomLabels)
+	composeAPI.AssertExpectations(t)
+}
+
 func TestClient_Start(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -147,8 +219,6 @@ func assertStartOptions(t *testing.T, composeAPI *mockComposeAPI, wantTimeout ti
 	assert.Equal(t, wantTimeout, opts.WaitTimeout)
 }
 
-// assertError is the shared shape of every case's outcome check: a nil wantErr
-
 // fixtureProject is the two-service project a call is handed.
 func fixtureProject() *types.Project {
 	return &types.Project{
@@ -172,6 +242,14 @@ func (m *mockComposeAPI) Stop(ctx context.Context, projectName string, options a
 	return m.Called(ctx, projectName, options).Error(0)
 }
 
+func (m *mockComposeAPI) Down(ctx context.Context, projectName string, options api.DownOptions) error {
+	return m.Called(ctx, projectName, options).Error(0)
+}
+
+func (m *mockComposeAPI) Create(ctx context.Context, project *types.Project, options api.CreateOptions) error {
+	return m.Called(ctx, project, options).Error(0)
+}
+
 func (m *mockComposeAPI) Start(ctx context.Context, projectName string, options api.StartOptions) error {
 	return m.Called(ctx, projectName, options).Error(0)
 }
@@ -181,6 +259,24 @@ func (m *mockComposeAPI) stopCall(t *testing.T) api.StopOptions {
 	t.Helper()
 	call := m.calledOnce(t, "Stop")
 	return call.Arguments.Get(2).(api.StopOptions)
+}
+
+func (m *mockComposeAPI) downCall(t *testing.T) api.DownOptions {
+	t.Helper()
+	call := m.calledOnce(t, "Down")
+	return call.Arguments.Get(2).(api.DownOptions)
+}
+
+func (m *mockComposeAPI) createCall(t *testing.T) api.CreateOptions {
+	t.Helper()
+	call := m.calledOnce(t, "Create")
+	return call.Arguments.Get(2).(api.CreateOptions)
+}
+
+func (m *mockComposeAPI) createProject(t *testing.T) *types.Project {
+	t.Helper()
+	call := m.calledOnce(t, "Create")
+	return call.Arguments.Get(1).(*types.Project)
 }
 
 // assertError is the shared shape of every case's outcome check: a nil wantErr

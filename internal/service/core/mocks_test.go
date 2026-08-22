@@ -18,17 +18,27 @@ import (
 
 type mockSavepointRepo struct{ mock.Mock }
 
-func (m *mockSavepointRepo) List(ctx context.Context) ([]model.Savepoint, error) {
+func (m *mockSavepointRepo) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
 	args := m.Called(ctx)
 	records, _ := args.Get(0).([]model.Savepoint)
 	return records, args.Error(1)
 }
 
-func (m *mockSavepointRepo) Save(ctx context.Context, record model.Savepoint) error {
+func (m *mockSavepointRepo) SaveSavepoint(ctx context.Context, record model.Savepoint) error {
 	return m.Called(ctx, record).Error(0)
 }
 
-func (m *mockSavepointRepo) Delete(ctx context.Context, id model.SavepointID) error {
+func (m *mockSavepointRepo) SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error {
+	return m.Called(ctx, id, spec).Error(0)
+}
+
+func (m *mockSavepointRepo) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error) {
+	args := m.Called(ctx, id)
+	spec, _ := args.Get(0).([]byte)
+	return spec, args.Error(1)
+}
+
+func (m *mockSavepointRepo) DeleteSavepoint(ctx context.Context, id model.SavepointID) error {
 	return m.Called(ctx, id).Error(0)
 }
 
@@ -105,14 +115,40 @@ func (m *mockAssembler) Assemble(res model.IntrospectionResult) (*types.Project,
 	return project, args.Error(1)
 }
 
+func (m *mockAssembler) Marshal(project *types.Project) ([]byte, error) {
+	args := m.Called(project)
+	spec, _ := args.Get(0).([]byte)
+	return spec, args.Error(1)
+}
+
+func (m *mockAssembler) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
+	args := m.Called(ctx, spec)
+	project, _ := args.Get(0).(*types.Project)
+	return project, args.Error(1)
+}
+
 type mockComposeRunner struct{ mock.Mock }
 
 func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) error {
 	return m.Called(ctx, project).Error(0)
 }
 
+func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) error {
+	return m.Called(ctx, project).Error(0)
+}
+
+func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project) error {
+	return m.Called(ctx, project).Error(0)
+}
+
 func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	return m.Called(ctx, project, waitTimeout).Error(0)
+}
+
+type mockVolumeRemover struct{ mock.Mock }
+
+func (m *mockVolumeRemover) RemoveVolume(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
 }
 
 type mockRegistry struct{ mock.Mock }

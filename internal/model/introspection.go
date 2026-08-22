@@ -80,8 +80,8 @@ type ServiceVolume struct {
 	Source string
 	// Target is the mount path inside the container.
 	Target string
-	// VolumeName is the resolved docker volume name — the reference to this
-	// mount's Project.Volumes entry. Named volumes only.
+	// VolumeName is the resolved docker volume name: a named mount's Project.Volumes
+	// entry, or the name the daemon generated for an anonymous one. Empty otherwise.
 	VolumeName string
 	// ReadOnly does not affect reading the data, but a restore cannot be written
 	// through such a mount.

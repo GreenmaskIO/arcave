@@ -111,9 +111,10 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 				require.NoError(t, err)
 				assert.True(t, exists, "%s has no repository under the stack root", stat.Volume.ObjectID)
 			}
-			// The savepoint's own directory holds the record only: a cdc capture's
-			// bytes live in the repository, never under the savepoint.
-			assert.Equal(t, []string{"savepoint.json"}, objectNames(t, env.stackStore, first.ID.String()))
+			// The savepoint's own directory holds the record and the spec only: a cdc
+			// capture's bytes live in the repository, never under the savepoint.
+			assert.Equal(t, []string{"project.yaml", "savepoint.json"},
+				objectNames(t, env.stackStore, first.ID.String()))
 
 			// A capture after a small change must ship an increment rather than the
 			// payload again, which is the whole reason this backend exists.
@@ -175,7 +176,8 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, committed, 1)
 	assert.Equal(t, savepoint.ID, committed[0].ID)
-	assert.Equal(t, []string{"savepoint.json"}, objectNames(t, env.stackStore, savepoint.ID.String()))
+	assert.Equal(t, []string{"project.yaml", "savepoint.json"},
+		objectNames(t, env.stackStore, savepoint.ID.String()))
 	// Nothing of the backup is left beside the savepoint either: the stack root
 	// holds that one savepoint directory and the repositories, and nothing else.
 	assert.Equal(t, []string{savepoint.ID.String(), cdc.RepoNamespace}, dirNames(t, env.stackStore),
@@ -259,12 +261,14 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	}))
 	require.NoError(t, err)
 
+	project := &types.Project{Name: cdcProject}
 	svc := core.New(core.Deps{
 		SavepointRepo:    sprepo.New(stackStore),
 		ProjectLocker:    lock.New(projectRoot),
 		ComposeInspector: stubInspector{result: introspectionOf(volumes)},
-		ProjectAssembler: stubAssembler{project: &types.Project{Name: cdcProject}},
+		ProjectAssembler: stubAssembler{project: project},
 		ComposeRunner:    composeRunner,
+		VolumeRemover:    stubVolumeRemover{},
 		BackendRegistry:  registry,
 		Inflight:         inflightrepo.New(projectRoot),
 		Store:            stackStore,
@@ -377,6 +381,10 @@ type stubComposeRunner struct {
 
 func (s *stubComposeRunner) Stop(context.Context, *types.Project) error { return nil }
 
+func (s *stubComposeRunner) Down(context.Context, *types.Project) error { return nil }
+
+func (s *stubComposeRunner) Create(context.Context, *types.Project) error { return nil }
+
 func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration) error {
 	if err := s.failNextUp; err != nil {
 		s.failNextUp = nil
@@ -385,12 +393,26 @@ func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration
 	return nil
 }
 
-// stubAssembler: this test never starts the stack, so the spec only names the project.
+// stubAssembler: this test never starts or rebuilds the stack, so the spec only
+// names the project and its artifact is opaque.
 type stubAssembler struct{ project *types.Project }
 
 func (s stubAssembler) Assemble(model.IntrospectionResult) (*types.Project, error) {
 	return s.project, nil
 }
+
+func (s stubAssembler) Marshal(*types.Project) ([]byte, error) {
+	return []byte("name: " + s.project.Name + "\n"), nil
+}
+
+func (s stubAssembler) Parse(context.Context, []byte) (*types.Project, error) {
+	return s.project, nil
+}
+
+// stubVolumeRemover is a no-op: these fixtures mount named volumes only.
+type stubVolumeRemover struct{}
+
+func (stubVolumeRemover) RemoveVolume(context.Context, string) error { return nil }
 
 // stubInspector reports the project this test built by hand, keeping compose
 // file resolution out of a test about the backend.
