@@ -27,6 +27,19 @@ func (m *mockContainerImager) RemoveImage(ctx context.Context, imageID string) e
 	return m.Called(ctx, imageID).Error(0)
 }
 
+func (m *mockContainerImager) LoadImage(ctx context.Context, r io.Reader) error {
+	return m.Called(ctx, r).Error(0)
+}
+
+func (m *mockContainerImager) TagImage(ctx context.Context, imageID, ref string) error {
+	return m.Called(ctx, imageID, ref).Error(0)
+}
+
+func (m *mockContainerImager) ImageExists(ctx context.Context, imageID string) (bool, error) {
+	args := m.Called(ctx, imageID)
+	return args.Bool(0), args.Error(1)
+}
+
 // failingReader fails mid-stream; a mock cannot, since it only hands the reader over.
 type failingReader struct{ err error }
 

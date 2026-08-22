@@ -36,4 +36,8 @@ var (
 	// ErrSavepointNoSpec refuses a rollback to a savepoint that carries no compose
 	// spec: there is nothing to rebuild the stack from.
 	ErrSavepointNoSpec = errors.New("savepoint carries no compose spec")
+
+	// ErrSavepointImageMissing reports a record naming a writable-layer capture
+	// whose archive the store does not hold.
+	ErrSavepointImageMissing = errors.New("savepoint image archive is missing")
 )

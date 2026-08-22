@@ -162,8 +162,11 @@ func initAllDependencies(
 		ProjectAssembler: assembler,
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    engine,
-		ImageCapturer:    imagecopy.New(stackStore, engine),
-		BackendRegistry:  backendRegistry,
+		ImageBackend:     imagecopy.New(stackStore, engine),
+		// The per-replica half of a layer restore: what compose's one image per
+		// service cannot express, the engine rebuilds container by container.
+		ContainerRebuilder: engine,
+		BackendRegistry:    backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:       inflightrepo.New(projectPath),
 		Store:          stackStore,

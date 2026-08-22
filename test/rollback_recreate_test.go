@@ -166,17 +166,18 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
-		SavepointRepo:    sprepo.New(store),
-		ProjectLocker:    lock.New(projectRoot),
-		ComposeInspector: inspector,
-		ProjectAssembler: assembler,
-		ComposeRunner:    runner,
-		VolumeRemover:    engine,
-		ImageCapturer:    imagecopy.New(store, engine),
-		BackendRegistry:  mustRegistry(t, engine),
-		Inflight:         inflightrepo.New(projectRoot),
-		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		SavepointRepo:      sprepo.New(store),
+		ProjectLocker:      lock.New(projectRoot),
+		ComposeInspector:   inspector,
+		ProjectAssembler:   assembler,
+		ComposeRunner:      runner,
+		VolumeRemover:      engine,
+		ImageBackend:       imagecopy.New(store, engine),
+		ContainerRebuilder: engine,
+		BackendRegistry:    mustRegistry(t, engine),
+		Inflight:           inflightrepo.New(projectRoot),
+		Store:              store,
+		DefaultBackend:     model.SnapshotBackendCopy,
 	})
 
 	env := &recreateEnv{
