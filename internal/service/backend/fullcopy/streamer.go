@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // archiveName is the one object a capture consists of.
@@ -101,14 +102,14 @@ func (s *Snapshotter) Snapshot(
 
 	// The counter sits in the stream, so the size reported is the size
 	// actually written.
-	counted := &countingReader{r: src}
+	counted := utils.NewCountingReader(src)
 	if err := capture.PutObject(ctx, archiveName, counted); err != nil {
 		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
 	return model.SnapshotStat{
 		Volume:  s.volume,
 		Type:    model.SnapshotBackendCopy,
-		Payload: Payload{SizeBytes: counted.n},
+		Payload: Payload{SizeBytes: counted.N()},
 	}, nil
 }
 
@@ -177,16 +178,4 @@ func (s *Snapshotter) captureStore(snapshotID model.SavepointID) (storages.Stora
 		return nil, fmt.Errorf("re-root store at capture %s: %w", snapshotID, err)
 	}
 	return capture, nil
-}
-
-// countingReader tallies the bytes read through it.
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
 }

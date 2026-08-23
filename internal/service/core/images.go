@@ -304,7 +304,7 @@ func imageRestoreContext(
 	return zerolog.Ctx(ctx).With().
 		Str("service", capture.Service).
 		Int("replica", capture.Replica).
-		Str("image_id", capture.ImageID).
+		Str("image_id", capture.ImageID.String()).
 		Str("snapshot_id", snapshotID.String()).
 		Str("op", "load").
 		Logger().

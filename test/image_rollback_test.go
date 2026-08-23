@@ -30,6 +30,7 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -154,6 +155,11 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.StackName(project))
 	require.NoError(t, err)
 
+	// The blob store is a sibling of the savepoints inside the stack root, so it
+	// dies with the session the way everything else there does.
+	blobStore, err := store.SubStorage("shared/oci/blobs", true)
+	require.NoError(t, err)
+
 	svc := core.New(core.Deps{
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
@@ -161,7 +167,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		ProjectAssembler:   composespec.NewAssembler(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.New(store, engine),
+		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
 		ContainerRebuilder: engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),

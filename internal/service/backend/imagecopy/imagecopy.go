@@ -1,0 +1,215 @@
+// Package imagecopy is the vocabulary two image backends stand on: where a capture
+// lives, what it reaches the daemon through, and how it describes itself.
+//
+// The backends are its subpackages: fullcopy stores the save archive whole,
+// dedupcopy splits it between a content-addressed blob store shared by every
+// capture and that capture's own metadata.
+package imagecopy
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"path"
+	"strconv"
+
+	"github.com/greenmaskio/storages"
+	"github.com/rs/zerolog"
+
+	"github.com/greenmaskio/arcave/internal/model"
+)
+
+// imageStorage narrows a store root to the one image a savepoint holds for one
+// replica. Both directions address it through here — the capture that writes the
+// image and the restore that reads it back — so the gates stand here.
+func imageStorage(
+	store storages.Storager, snapshotID model.SavepointID, service string, replica int,
+) (storages.Storager, error) {
+	// "images" is a reserved key beside savepoint.json — no volume collides with it,
+	// every volume ObjectID opens "volume-"; "replicas" names what follows it.
+	const (
+		imagesNamespace   = "images"
+		replicasNamespace = "replicas"
+	)
+
+	if err := snapshotID.Validate(); err != nil {
+		return nil, err
+	}
+	if service == "" {
+		return nil, fmt.Errorf("cannot address the image of an unnamed service")
+	}
+	if replica < 1 {
+		return nil, fmt.Errorf("service %s: replica number %d is not a replica", service, replica)
+	}
+
+	key := path.Join(snapshotID.String(), imagesNamespace, service, replicasNamespace, strconv.Itoa(replica))
+	imageStore, err := store.SubStorage(key, true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root store at image %s: %w", key, err)
+	}
+	return imageStore, nil
+}
+
+// ContainerImager is what a backend needs from the Docker engine: commit a stopped
+// container and stream its image out, and load one back and name it.
+type ContainerImager interface {
+	CommitContainer(ctx context.Context, containerID string) (model.ImageDigestID, error)
+	SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error)
+	RemoveImage(ctx context.Context, imageID model.ImageDigestID) error
+	LoadImage(ctx context.Context, r io.Reader) error
+	TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error
+	ImageExists(ctx context.Context, imageID model.ImageDigestID) (bool, error)
+}
+
+// ArchiveLayout decides the shape an image takes in the store: one archive kept
+// whole, or its members split between a shared blob store and this capture. It
+// never speaks to the daemon — it is handed the archive as a stream and renders one
+// back, and those two directions are the whole of its contract.
+type ArchiveLayout interface {
+	Store(ctx context.Context, dst storages.Storager, imageID model.ImageDigestID, archive io.Reader) (StoredSize, error)
+	Load(ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer) error
+}
+
+// Copier carries containers' layers in and out of one store root. Every exchange
+// with the daemon is here; what the bytes look like once stored is the layout's.
+type Copier struct {
+	store  storages.Storager
+	docker ContainerImager
+	layout ArchiveLayout
+}
+
+// NewCopier binds a copier to the stack store it works under and the layout its
+// captures are written in.
+func NewCopier(store storages.Storager, docker ContainerImager, layout ArchiveLayout) *Copier {
+	return &Copier{
+		store:  store,
+		docker: docker,
+		layout: layout,
+	}
+}
+
+// Capture commits one stopped container's writable layer, stores it, and drops the
+// committed image from the daemon.
+func (c *Copier) Capture(ctx context.Context, req model.ImageCaptureRequest) (model.ImageCapture, error) {
+	imageStore, err := imageStorage(c.store, req.SnapshotID, req.Container.Service, req.Container.Replica)
+	if err != nil {
+		return model.ImageCapture{}, err
+	}
+	imageID, err := c.docker.CommitContainer(ctx, req.Container.ID)
+	if err != nil {
+		return model.ImageCapture{}, err
+	}
+
+	size, err := c.storeArchive(ctx, imageStore, imageID)
+	if err != nil {
+		return model.ImageCapture{}, err
+	}
+
+	// Best-effort: the store is the source of truth, and a capture that is written
+	// has succeeded whether or not the daemon's dangling copy could be dropped.
+	if err := c.docker.RemoveImage(ctx, imageID); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("image_id", imageID.String()).
+			Msg("committed image is stored but could not be removed from the daemon")
+	}
+	return model.ImageCapture{
+		Service:     req.Container.Service,
+		Replica:     req.Container.Replica,
+		ContainerID: req.Container.ID,
+		ImageID:     imageID,
+		BaseImage:   req.Container.BaseImage,
+		SizeBytes:   size.Image,
+		StoredBytes: size.Written,
+	}, nil
+}
+
+// storeArchive streams the committed image out of the daemon and hands it to the layout.
+func (c *Copier) storeArchive(
+	ctx context.Context, imageStore storages.Storager, imageID model.ImageDigestID,
+) (StoredSize, error) {
+	archive, err := c.docker.SaveImage(ctx, imageID)
+	if err != nil {
+		return StoredSize{}, err
+	}
+	defer func() {
+		if err := archive.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("close image archive stream")
+		}
+	}()
+	return c.layout.Store(ctx, imageStore, imageID, archive)
+}
+
+// Restore puts one recorded writable layer back into the daemon under req.ImageRef.
+// An image the daemon already holds is only tagged: a load costs the whole archive,
+// and the id in the record identifies it either way.
+func (c *Copier) Restore(ctx context.Context, req model.ImageRestoreRequest) (model.ImageRestore, error) {
+	imageStore, err := imageStorage(c.store, req.SnapshotID, req.Capture.Service, req.Capture.Replica)
+	if err != nil {
+		return model.ImageRestore{}, err
+	}
+	if req.ImageRef == "" {
+		return model.ImageRestore{}, fmt.Errorf("service %s/%d: cannot restore an image under no reference",
+			req.Capture.Service, req.Capture.Replica)
+	}
+
+	present, err := c.docker.ImageExists(ctx, req.Capture.ImageID)
+	if err != nil {
+		return model.ImageRestore{}, err
+	}
+	if !present {
+		if err := c.loadArchive(ctx, imageStore, req.Capture.ImageID); err != nil {
+			return model.ImageRestore{}, err
+		}
+	}
+
+	if err := c.docker.TagImage(ctx, req.Capture.ImageID, req.ImageRef); err != nil {
+		return model.ImageRestore{}, err
+	}
+	return model.ImageRestore{
+		Service:  req.Capture.Service,
+		Replica:  req.Capture.Replica,
+		ImageID:  req.Capture.ImageID,
+		ImageRef: req.ImageRef,
+	}, nil
+}
+
+// loadArchive has the layout render the archive into a pipe the daemon reads from,
+// then confirms the daemon holds the id the record names: a load resolving to
+// another image must fail here and not at the rebuild.
+func (c *Copier) loadArchive(
+	ctx context.Context, imageStore storages.Storager, imageID model.ImageDigestID,
+) error {
+	pr, pw := io.Pipe()
+	defer func() {
+		if err := pr.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("close image archive pipe")
+		}
+	}()
+
+	stored := make(chan error, 1)
+	go func() {
+		err := c.layout.Load(ctx, imageStore, imageID, pw)
+		stored <- err
+		// CloseWithError(nil) closes cleanly, so a layout that finished writing
+		// reaches the reader as a clean EOF.
+		//nolint:errcheck // the error travels to the reader
+		pw.CloseWithError(err)
+	}()
+
+	if err := c.docker.LoadImage(ctx, pr); err != nil {
+		return fmt.Errorf("load image: %w", err)
+	}
+	// The daemon reports a failed load in-band and the reader never sees it, so the
+	// layout's own error is the only account of why: prefer it over anything below.
+	if err := <-stored; err != nil {
+		return err
+	}
+
+	present, err := c.docker.ImageExists(ctx, imageID)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return fmt.Errorf("the loaded archive does not hold image %s", imageID)
+	}
+	return nil
+}
