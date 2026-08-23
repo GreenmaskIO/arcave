@@ -158,8 +158,7 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 	require.Len(t, first.Images, 1)
 
 	firstBlobKeys := blobStoreKeys(t, env.blobStore)
-	firstBlobOnly := blobOnlyKeys(firstBlobKeys)
-	firstBlobCount := len(firstBlobOnly)
+	firstBlobCount := len(blobOnlyKeys(firstBlobKeys))
 	t.Logf("first savepoint: %d blobs, %d total objects", firstBlobCount, len(firstBlobKeys))
 
 	env.mutateContainer(t, "second-epoch")
@@ -169,14 +168,15 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, second.Images, 1)
 
-	secondBlobKeys := blobStoreKeys(t, env.blobStore)
-	secondBlobOnly := blobOnlyKeys(secondBlobKeys)
-	secondBlobCount := len(secondBlobOnly)
+	secondBlobCount := len(blobOnlyKeys(blobStoreKeys(t, env.blobStore)))
+	t.Logf("second savepoint: %d blobs, %d of them new", secondBlobCount, secondBlobCount-firstBlobCount)
 
-	// Assert
-	newBlobs := secondBlobCount - firstBlobCount
-	assert.LessOrEqual(t, newBlobs, 3,
-		"second savepoint should write near-zero new blobs, got %d new (total %d)", newBlobs, secondBlobCount)
+	// Assert: bytes, not blob count — how many metadata blobs a save archive carries
+	// is the daemon's business; the classic image store adds a legacy json per layer.
+	capture := second.Images[0]
+	assert.Less(t, capture.StoredBytes, capture.SizeBytes/10,
+		"the second savepoint stored %d of the archive's %d bytes: the base layer went in again",
+		capture.StoredBytes, capture.SizeBytes)
 
 	assert.NotEmpty(t, first.Images[0].ImageID, "first savepoint image ID")
 	assert.NotEmpty(t, second.Images[0].ImageID, "second savepoint image ID")
