@@ -33,6 +33,11 @@ var (
 	// SavepointID.Validate wraps it with the offending id.
 	ErrInvalidSavepointID = errors.New("invalid savepoint id")
 
+	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
+	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps
+	// it with the offending value.
+	ErrInvalidDigestID = errors.New("invalid image digest id")
+
 	// ErrSavepointNoSpec refuses a rollback to a savepoint that carries no compose
 	// spec: there is nothing to rebuild the stack from.
 	ErrSavepointNoSpec = errors.New("savepoint carries no compose spec")
@@ -40,4 +45,8 @@ var (
 	// ErrSavepointImageMissing reports a record naming a writable-layer capture
 	// whose archive the store does not hold.
 	ErrSavepointImageMissing = errors.New("savepoint image archive is missing")
+
+	// ErrUnsupportedImageArchive reports that an image archive uses a format
+	// this operation does not support (e.g. Docker 24 legacy layout).
+	ErrUnsupportedImageArchive = errors.New("unsupported image archive format")
 )

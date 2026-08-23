@@ -337,11 +337,14 @@ Result:
 ├── config.yaml                          # written by `arcave init`
 ├── lock                                 # flock target; serialises mutating workflows
 └── savepoints/<project-name>/           # the savepoint store, created by `arcave init`
+    ├── shared/oci/blobs/sha256/         # image layers shared by every savepoint here
     └── <savepoint-id>/                  # one self-contained namespace per savepoint
         ├── savepoint.json               # the record — written last, the commit marker
         ├── project.yaml                  # the stack's compose spec, what a rollback rebuilds from
         ├── <service>/<mount-path>/data.tar
-        └── images/<service>/<replica>/image.tar   # the container's committed writable layer
+        └── images/<service>/replicas/<n>/  # the container's committed writable layer
+            ├── image.json               #   what to rebuild it from — written last
+            └── index.json, manifest.json, oci-layout
 ```
 
 Each savepoint is one self-contained directory: its record and every archive it
@@ -398,7 +401,11 @@ Behavior:
 
 A savepoint has two halves, and they never overlap: the **volumes** below, and the **writable layer** of every container the stack holds. `docker commit` excludes the contents of every mount by contract, so the layer capture sees exactly the state the volume capture cannot — data a service wrote past all of its mounts.
 
-The layer capture is not deduplicated yet: each savepoint stores the whole image of each container, base layers and all, and `images[].size_bytes` in the record is what that costs. Data belongs in volumes; the layer capture is what keeps a stack honest when it is not there.
+**Layers are deduplicated.** The save archive is split: its parts go into `shared/oci/blobs/sha256/` under the digests they already carry, and the savepoint keeps only the archive's metadata and `image.json`, a manifest naming what to rebuild from — so the base image every savepoint carries is written once. `images[].size_bytes` is the image's own size and `images[].stored_bytes` is what that capture actually added to the store: the pair is where the saving is visible.
+
+This needs **Docker 25 or newer**, whose `docker save` writes an addressable archive. On an older daemon `savepoint create` refuses the capture and says so; there is no quieter mode to fall back to.
+
+Blobs are shared across savepoints of one stack, never across sessions, and nothing collects them yet — `savepoint remove` frees a savepoint's own namespace and leaves the shared blobs alone. Data belongs in volumes; the layer capture is what keeps a stack honest when it is not there.
 
 **A rollback restores the layer.** It loads each stored image back into the daemon before it stops anything, and rebuilds the containers on those images rather than on the base image the spec names.
 
@@ -440,7 +447,8 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
       "container_id": "3f1a…",
       "image_id": "sha256:aaaa…",
       "base_image": "myapp:latest",
-      "size_bytes": 83887104
+      "size_bytes": 83887104,
+      "stored_bytes": 1048576
     }
   ],
   "spec": {

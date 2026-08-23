@@ -9,12 +9,61 @@ linters:
     - errcheck
     - govet
     - ineffassign
+    - recvcheck
     - staticcheck
     - unused
   settings:
     errcheck:
       check-type-assertions: true
       check-blank: true
+      # errcheck's built-in allowlist hides (*io.Pipe{Reader,Writer}).CloseWithError,
+      # which is how this code reports a failure to the reading half. Turn the list
+      # off and re-add the rest of it verbatim.
+      disable-default-exclusions: true
+      exclude-functions:
+        - (*bytes.Buffer).Write
+        - (*bytes.Buffer).WriteByte
+        - (*bytes.Buffer).WriteRune
+        - (*bytes.Buffer).WriteString
+        - crypto/rand.Read
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+        - fmt.Fprint(*bytes.Buffer)
+        - fmt.Fprintf(*bytes.Buffer)
+        - fmt.Fprintln(*bytes.Buffer)
+        - fmt.Fprint(*strings.Builder)
+        - fmt.Fprintf(*strings.Builder)
+        - fmt.Fprintln(*strings.Builder)
+        - fmt.Fprint(os.Stderr)
+        - fmt.Fprintf(os.Stderr)
+        - fmt.Fprintln(os.Stderr)
+        - math/rand.Read
+        - (*math/rand.Rand).Read
+        - (*strings.Builder).Write
+        - (*strings.Builder).WriteByte
+        - (*strings.Builder).WriteRune
+        - (*strings.Builder).WriteString
+        - (hash.Hash).Write
+        - (*hash/maphash.Hash).Write
+        - (*hash/maphash.Hash).WriteByte
+        - (*hash/maphash.Hash).WriteString
+    recvcheck:
+      # ImageDigestID is the one type that must mix: UnmarshalJSON has to take a
+      # pointer to write through, while every other method reads. The exclusion
+      # names that method rather than the file, so a second mixed type still fails.
+      exclusions:
+        - ImageDigestID.UnmarshalJSON
+    staticcheck:
+      # The default set plus ST1016 — one receiver name per type. The other
+      # stylistic checks stay disabled: they judge naming this code has settled.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1020
+        - -ST1021
+        - -ST1022
   exclusions:
     rules:
       - path: ^internal/utils/testutils/

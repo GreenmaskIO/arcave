@@ -30,6 +30,7 @@ import (
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -165,6 +166,11 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	}, projectRoot, "arcave-recreate-tenant", model.DefaultSession, model.StackName(project))
 	require.NoError(t, err)
 
+	// The blob store is a sibling of the savepoints inside the stack root, so it
+	// dies with the session the way everything else there does.
+	blobStore, err := store.SubStorage("shared/oci/blobs", true)
+	require.NoError(t, err)
+
 	svc := core.New(core.Deps{
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
@@ -172,7 +178,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		ProjectAssembler:   assembler,
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.New(store, engine),
+		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
 		ContainerRebuilder: engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),

@@ -13,13 +13,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestEngine_CommitContainer(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
 	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false}).
-		Return(container.CommitResponse{ID: "sha256:aaaa"}, nil).Once()
+		Return(container.CommitResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -27,7 +29,22 @@ func TestEngine_CommitContainer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, "sha256:aaaa", id)
+	assert.Equal(t, model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), id)
+	api.AssertExpectations(t)
+}
+
+func TestEngine_CommitContainer_RefusesAnAnswerThatIsNotADigest(t *testing.T) {
+	// Arrange
+	api := &mockAPI{}
+	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false}).
+		Return(container.CommitResponse{ID: "postgres:16"}, nil).Once()
+	e := &Engine{api: api}
+
+	// Act
+	_, err := e.CommitContainer(context.Background(), "c0ffee")
+
+	// Assert: a name would be resolved by whatever it points at later on.
+	require.ErrorIs(t, err, model.ErrInvalidDigestID)
 	api.AssertExpectations(t)
 }
 
@@ -52,12 +69,12 @@ func TestEngine_SaveImage(t *testing.T) {
 	// Arrange
 	const archive = "save-archive-bytes"
 	api := &mockAPI{}
-	api.On("ImageSave", mock.Anything, []string{"sha256:aaaa"}).
+	api.On("ImageSave", mock.Anything, []string{"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}).
 		Return(io.NopCloser(strings.NewReader(archive)), nil).Once()
 	e := &Engine{api: api}
 
 	// Act
-	rc, err := e.SaveImage(context.Background(), "sha256:aaaa")
+	rc, err := e.SaveImage(context.Background(), "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	// Assert
 	require.NoError(t, err)
@@ -71,12 +88,12 @@ func TestEngine_SaveImage(t *testing.T) {
 func TestEngine_RemoveImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ImageRemove", mock.Anything, "sha256:aaaa", image.RemoveOptions{}).
-		Return([]image.DeleteResponse{{Deleted: "sha256:aaaa"}}, nil).Once()
+	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", image.RemoveOptions{}).
+		Return([]image.DeleteResponse{{Deleted: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
-	err := e.RemoveImage(context.Background(), "sha256:aaaa")
+	err := e.RemoveImage(context.Background(), "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	// Assert
 	require.NoError(t, err)
@@ -87,12 +104,12 @@ func TestEngine_RemoveImage_ReportsTheDaemonsRefusal(t *testing.T) {
 	// Arrange
 	wantErr := errors.New("image is being used by stopped container")
 	api := &mockAPI{}
-	api.On("ImageRemove", mock.Anything, "sha256:aaaa", image.RemoveOptions{}).
+	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", image.RemoveOptions{}).
 		Return(nil, wantErr).Once()
 	e := &Engine{api: api}
 
 	// Act
-	err := e.RemoveImage(context.Background(), "sha256:aaaa")
+	err := e.RemoveImage(context.Background(), "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	// Assert
 	require.ErrorIs(t, err, wantErr)
@@ -102,7 +119,7 @@ func TestEngine_RemoveImage_ReportsTheDaemonsRefusal(t *testing.T) {
 func TestEngine_LoadImage(t *testing.T) {
 	// Arrange
 	const archive = "save-archive-bytes"
-	body := &trackedBody{ReadCloser: io.NopCloser(strings.NewReader("{\"stream\":\"Loaded image ID: sha256:aaaa\"}"))}
+	body := &trackedBody{ReadCloser: io.NopCloser(strings.NewReader("{\"stream\":\"Loaded image ID: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"))}
 	api := &mockAPI{}
 	api.On("ImageLoad", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -141,11 +158,11 @@ func TestEngine_LoadImage_ReportsTheDaemonsRefusal(t *testing.T) {
 func TestEngine_TagImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ImageTag", mock.Anything, "sha256:aaaa", "arcave/demo-db-1-postgres-16:sp-1780335122").Return(nil).Once()
+	api.On("ImageTag", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "arcave/demo-db-1-postgres-16:sp-1780335122").Return(nil).Once()
 	e := &Engine{api: api}
 
 	// Act
-	err := e.TagImage(context.Background(), "sha256:aaaa", "arcave/demo-db-1-postgres-16:sp-1780335122")
+	err := e.TagImage(context.Background(), "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "arcave/demo-db-1-postgres-16:sp-1780335122")
 
 	// Assert
 	require.NoError(t, err)
@@ -170,12 +187,12 @@ func TestEngine_ImageExists(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
-			api.On("ImageInspect", mock.Anything, "sha256:aaaa").
-				Return(image.InspectResponse{ID: "sha256:aaaa"}, tt.inspectErr).Once()
+			api.On("ImageInspect", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").
+				Return(image.InspectResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, tt.inspectErr).Once()
 			e := &Engine{api: api}
 
 			// Act
-			got, err := e.ImageExists(context.Background(), "sha256:aaaa")
+			got, err := e.ImageExists(context.Background(), "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 			// Assert
 			if tt.wantErr != nil {

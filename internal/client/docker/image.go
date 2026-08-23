@@ -10,24 +10,31 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // CommitContainer snapshots a stopped container's writable layer as a new,
-// untagged image and returns its id.
-func (e *Engine) CommitContainer(ctx context.Context, containerID string) (string, error) {
+// untagged image and returns its id. The daemon's answer is parsed here, the one
+// place an image id enters arcave: what travels on is a digest, never a name.
+func (e *Engine) CommitContainer(ctx context.Context, containerID string) (model.ImageDigestID, error) {
 	// Unpaused: the caller has already stopped the services, and a stopped container
 	// cannot be paused.
 	resp, err := e.api.ContainerCommit(ctx, containerID, container.CommitOptions{Pause: false})
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
-	return resp.ID, nil
+	imageID, err := model.ParseImageDigestID(resp.ID)
+	if err != nil {
+		return "", fmt.Errorf("commit container %s: %w", containerID, err)
+	}
+	return imageID, nil
 }
 
 // SaveImage streams one image out of the daemon as a save archive. The caller
 // owns the stream and closes it.
-func (e *Engine) SaveImage(ctx context.Context, imageID string) (io.ReadCloser, error) {
-	src, err := e.api.ImageSave(ctx, []string{imageID})
+func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
+	src, err := e.api.ImageSave(ctx, []string{imageID.String()})
 	if err != nil {
 		return nil, fmt.Errorf("save image %s: %w", imageID, err)
 	}
@@ -36,8 +43,8 @@ func (e *Engine) SaveImage(ctx context.Context, imageID string) (io.ReadCloser, 
 
 // RemoveImage drops one image from the daemon. Not forced, so an image something
 // still references is refused rather than taken.
-func (e *Engine) RemoveImage(ctx context.Context, imageID string) error {
-	if _, err := e.api.ImageRemove(ctx, imageID, image.RemoveOptions{}); err != nil {
+func (e *Engine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) error {
+	if _, err := e.api.ImageRemove(ctx, imageID.String(), image.RemoveOptions{}); err != nil {
 		return fmt.Errorf("remove image %s: %w", imageID, err)
 	}
 	return nil
@@ -63,17 +70,18 @@ func (e *Engine) LoadImage(ctx context.Context, r io.Reader) error {
 }
 
 // TagImage points ref at an image already in the daemon.
-func (e *Engine) TagImage(ctx context.Context, imageID, ref string) error {
-	if err := e.api.ImageTag(ctx, imageID, ref); err != nil {
+func (e *Engine) TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error {
+	if err := e.api.ImageTag(ctx, imageID.String(), ref); err != nil {
 		return fmt.Errorf("tag image %s as %s: %w", imageID, ref, err)
 	}
 	return nil
 }
 
 // ImageExists reports whether the daemon holds the image. A daemon that answers
-// "not found" is not an error — that is the answer.
-func (e *Engine) ImageExists(ctx context.Context, imageID string) (bool, error) {
-	if _, err := e.api.ImageInspect(ctx, imageID); err != nil {
+// "not found" is not an error — that is the answer. The argument is a digest, so
+// this is an identity check and not a lookup by name.
+func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (bool, error) {
+	if _, err := e.api.ImageInspect(ctx, imageID.String()); err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return false, nil
 		}

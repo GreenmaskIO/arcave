@@ -100,7 +100,7 @@ func demoImageCapture() model.ImageCapture {
 		Service:     demoService,
 		Replica:     1,
 		ContainerID: demoContainerID,
-		ImageID:     "sha256:aaaa",
+		ImageID:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		BaseImage:   demoBaseImage,
 		SizeBytes:   4096,
 	}
@@ -131,7 +131,7 @@ func demoImageRestore() model.ImageRestore {
 // compose service's one image cannot stand for.
 const (
 	demoSecondContainerID = "cafe"
-	demoSecondImageID     = "sha256:bbbb"
+	demoSecondImageID     = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
 // demoScaledIntrospection is demoIntrospectionWithContainers with demoService

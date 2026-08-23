@@ -31,6 +31,7 @@ import (
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
+	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
@@ -151,10 +152,13 @@ func initAllDependencies(
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	// One repository over the one store, so every record travels with its data —
-	// a rollback's safety snapshot included, being an ordinary savepoint under a
-	// label. The locker is bound to the project root here, so the service never
-	// names a path.
+	imageBackend, err := newImageBackend(stackStore, engine)
+	if err != nil {
+		return nil, err
+	}
+
+	// One repository over the one store, so every record travels with its data. The
+	// locker is bound to the project root here, so the service never names a path.
 	svc := core.New(core.Deps{
 		SavepointRepo:    sprepo.New(stackStore),
 		ProjectLocker:    lock.New(projectPath),
@@ -162,7 +166,7 @@ func initAllDependencies(
 		ProjectAssembler: assembler,
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    engine,
-		ImageBackend:     imagecopy.New(stackStore, engine),
+		ImageBackend:     imageBackend,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: engine,
@@ -439,4 +443,19 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
 	}
 	return dockerCli, apiClient, nil
+}
+
+// stackBlobPrefix is relative to the stack store root, so the blobs are shared
+// between that stack's savepoints and nothing wider. It sits beside them rather
+// than inside one: a savepoint id is digits only, so the name cannot collide.
+const stackBlobPrefix = "shared/oci/blobs"
+
+// newImageBackend builds the one image backend: layers are always deduplicated,
+// which needs a daemon of Docker 25 or newer.
+func newImageBackend(stackStore storages.Storager, engine *docker.Engine) (*imagecopy.Copier, error) {
+	blobStore, err := stackStore.SubStorage(stackBlobPrefix, true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
+	}
+	return imagecopy.NewCopier(stackStore, engine, dedupcopy.New(blobStore)), nil
 }
