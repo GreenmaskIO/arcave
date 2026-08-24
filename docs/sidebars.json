@@ -1,0 +1,150 @@
+{
+  "productSidebar": [
+    {
+      "type": "category",
+      "label": "Documentation",
+      "items": [
+        {
+          "type": "doc",
+          "id": "index",
+          "label": "About"
+        },
+        {
+          "type": "doc",
+          "id": "how_it_works",
+          "label": "How arcave works"
+        },
+        {
+          "type": "doc",
+          "id": "concepts",
+          "label": "Concepts"
+        },
+        {
+          "type": "doc",
+          "id": "installation",
+          "label": "Installation"
+        },
+        {
+          "type": "doc",
+          "id": "getting_started",
+          "label": "Getting started"
+        },
+        {
+          "type": "category",
+          "label": "Use cases",
+          "link": {
+            "type": "doc",
+            "id": "use_cases/index"
+          },
+          "items": [
+            {
+              "type": "doc",
+              "id": "use_cases/agent_loops",
+              "label": "Agent iteration loops"
+            },
+            {
+              "type": "doc",
+              "id": "use_cases/environment_branching",
+              "label": "Environment branching"
+            },
+            {
+              "type": "doc",
+              "id": "use_cases/migration_testing",
+              "label": "Testing destructive migrations"
+            },
+            {
+              "type": "doc",
+              "id": "use_cases/fixture_reset",
+              "label": "Resetting fixtures and demos"
+            }
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Examples",
+          "link": {
+            "type": "doc",
+            "id": "examples/index"
+          },
+          "items": [
+            {
+              "type": "doc",
+              "id": "examples/migration_rollback",
+              "label": "Roll back a failed migration"
+            },
+            {
+              "type": "doc",
+              "id": "examples/fixture_reset",
+              "label": "Reset a seeded environment"
+            },
+            {
+              "type": "doc",
+              "id": "examples/retention",
+              "label": "Prune savepoints"
+            },
+            {
+              "type": "doc",
+              "id": "examples/agent_mcp",
+              "label": "Drive arcave from an AI agent"
+            }
+          ]
+        },
+        {
+          "type": "category",
+          "label": "Commands",
+          "link": {
+            "type": "doc",
+            "id": "commands/index"
+          },
+          "items": [
+            {
+              "type": "doc",
+              "id": "commands/init",
+              "label": "init"
+            },
+            {
+              "type": "doc",
+              "id": "commands/savepoint_create",
+              "label": "savepoint create"
+            },
+            {
+              "type": "doc",
+              "id": "commands/savepoint_list",
+              "label": "savepoint list"
+            },
+            {
+              "type": "doc",
+              "id": "commands/savepoint_remove",
+              "label": "savepoint remove"
+            },
+            {
+              "type": "doc",
+              "id": "commands/rollback",
+              "label": "rollback"
+            },
+            {
+              "type": "doc",
+              "id": "commands/mcp",
+              "label": "mcp"
+            }
+          ]
+        },
+        {
+          "type": "doc",
+          "id": "configuration",
+          "label": "Configuration"
+        },
+        {
+          "type": "doc",
+          "id": "limitations",
+          "label": "Limitations"
+        },
+        {
+          "type": "doc",
+          "id": "troubleshooting",
+          "label": "Troubleshooting"
+        }
+      ]
+    }
+  ]
+}
