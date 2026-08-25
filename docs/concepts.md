@@ -56,7 +56,7 @@ Two different things, and conflating them is the most common source of confusion
 They are frequently the same string. They do not have to be.
 
 :::warning
-`ARCAVE_PROJECT_NAME` sets both. It is read directly as the stack name, and viper also maps it onto the `project.name` config key. Exporting it therefore retargets the storage tenant as well — see [Configuration](configuration.md#environment-variables).
+`ARCAVE_PROJECT_NAME` sets both. It is read directly as the stack name, and viper also maps it onto the `project.name` config key. Exporting it therefore retargets the storage tenant as well — see [Configuration](reference/environment_variables.md).
 :::
 
 ## Session
@@ -86,16 +86,16 @@ A **snapshot backend** owns the read-and-write pipeline for one volume. arcave s
 | `fullcopy` | One `data.tar` per volume per savepoint, streamed through the Docker engine. Simple, portable, and every savepoint costs full size. |
 | `cdc` | Content-defined chunking into a per-volume restic repository that outlives any one savepoint. Only changed chunks are written. |
 
-`snapshot.backend` in the config says which backend a **new** savepoint uses. A rollback reads the backend out of the record it is restoring, so changing the setting never orphans an existing savepoint. See [Configuration](configuration.md#snapshot-backends).
+`snapshot.backend` in the config says which backend a **new** savepoint uses. A rollback reads the backend out of the record it is restoring, so changing the setting never orphans an existing savepoint. See [Configuration](reference/configuration.md#snapshot).
 
 ## Inflight marker
 
 `.arcave/inflight.json` records that a rollback is in progress, or died in progress. It is written before the first destructive write and cleared when the environment is consistent again, and it carries the phase — `recreating`, `restoring`, `restore-done` or `inconsistent` — because the remedy differs per phase.
 
-While a marker stands, the next mutating workflow is refused. The one exception is a rollback to that marker's own safety snapshot, which is the remedy. See [Troubleshooting](troubleshooting.md#an-interrupted-rollback).
+While a marker stands, the next mutating workflow is refused. The one exception is a rollback to that marker's own safety snapshot, which is the remedy. See [Troubleshooting](reference/troubleshooting.md#an-interrupted-rollback).
 
 ## Related docs
 
 * [How arcave works](how_it_works.md) — these terms in motion.
-* [Configuration](configuration.md) — the keys that set them.
-* [Commands](commands/index.md) — the commands that use them.
+* [Configuration](reference/configuration.md) — the keys that set them.
+* [Commands](reference/cli/index.md) — the commands that use them.

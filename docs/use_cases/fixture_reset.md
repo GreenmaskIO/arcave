@@ -53,7 +53,7 @@ arcave savepoint remove 1780339981 1780341002  # and remove only those
 ```
 
 :::warning
-Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, prune by id, or keep it in a store of its own via [`storage.directory.path`](../configuration.md#storage-section).
+Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, prune by id, or keep it in a store of its own via [`storage.directory.path`](../reference/configuration.md#storage).
 :::
 
 ## Why the whole stack matters here
@@ -71,4 +71,4 @@ A dump-based reset gets the first of those four.
 
 * [Testing destructive migrations](migration_testing.md) — the same reset around a schema change.
 * [How arcave works](../how_it_works.md#what-a-savepoint-covers) — precisely what is and is not captured.
-* [savepoint remove](../commands/savepoint_remove.md) — retention rules and `--dry-run`.
+* [savepoint remove](../reference/cli/savepoint_remove.md) — retention rules and `--dry-run`.

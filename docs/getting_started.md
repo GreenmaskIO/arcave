@@ -169,6 +169,6 @@ arcave savepoint remove --retain-for 7d --dry-run
 
 * **[Use cases](use_cases/index.md)** — the workflows this is actually for, starting with [agent iteration loops](use_cases/agent_loops.md).
 * **[Examples](examples/index.md)** — complete walkthroughs on a multi-service stack.
-* **[Commands](commands/index.md)** — every flag, every output shape.
-* **[Configuration](configuration.md)** — timeouts, storage, and the incremental `cdc` backend.
-* **[Limitations](limitations.md)** — read this before you build a workflow on arcave.
+* **[Commands](reference/cli/index.md)** — every flag, every output shape.
+* **[Configuration](reference/configuration.md)** — timeouts, storage, and the incremental `cdc` backend.
+* **[Limitations](reference/limitations.md)** — read this before you build a workflow on arcave.

@@ -91,4 +91,4 @@ export ARCAVE_PROJECT_NAME=arcave-demo
 ## Related docs
 
 * [Getting started](../getting_started.md) — the shortest possible version of the first example.
-* [Commands](../commands/index.md) — every flag used below.
+* [Commands](../reference/cli/index.md) — every flag used below.

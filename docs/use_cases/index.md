@@ -47,7 +47,7 @@ Seed the environment once, snapshot it, and return to that exact state for the r
 
 ## Choosing a backend for the loop
 
-How often you snapshot decides which [snapshot backend](../configuration.md#snapshot-backends) you want.
+How often you snapshot decides which [snapshot backend](../reference/configuration.md#snapshot) you want.
 
 | | `fullcopy` | `cdc` |
 |---|---|---|
@@ -61,4 +61,4 @@ For the agent and branching workflows, `cdc` is what makes the loop cheap enough
 
 * [How arcave works](../how_it_works.md) — the mechanism behind these properties.
 * [Examples](../examples/index.md) — the same workflows as complete walkthroughs.
-* [Limitations](../limitations.md) — where each of these stops working.
+* [Limitations](../reference/limitations.md) — where each of these stops working.

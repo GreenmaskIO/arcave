@@ -222,5 +222,5 @@ arcave savepoint remove 1780335122
 ## Related docs
 
 * [Testing destructive migrations](../use_cases/migration_testing.md) — the pattern behind this walkthrough.
-* [rollback](../commands/rollback.md) — the command reference.
+* [rollback](../reference/cli/rollback.md) — the command reference.
 * [Reset a seeded environment](fixture_reset.md) — the next example.

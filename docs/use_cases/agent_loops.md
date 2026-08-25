@@ -36,7 +36,7 @@ Because every command prints JSON on stdout and logs on stderr, `jq -r .id` is e
 
 An agent session has a shape: it runs for a while, produces many intermediate states, and almost all of them are throwaway. Savepoints match that shape.
 
-* **Cheap to create**, with the [`cdc` backend](../configuration.md#snapshot-backends) — only the chunks that changed since the last capture are written. A loop that snapshots twenty times does not cost twenty full copies.
+* **Cheap to create**, with the [`cdc` backend](../reference/configuration.md#snapshot) — only the chunks that changed since the last capture are written. A loop that snapshots twenty times does not cost twenty full copies.
 * **Cheap to discard** — `arcave savepoint remove --retain-recent 5` at the end of a session, or `--retain-for 24h` on a schedule.
 * **Addressable by name** — `attempt-3`, `before-schema-rewrite`, `known-good`. The agent chooses names that mean something to its own reasoning.
 
@@ -90,7 +90,7 @@ Two settings matter when an agent is driving:
 arcave savepoint create attempt-7 --wait-timeout 5m
 ```
 
-[`--wait-timeout`](../configuration.md#compose-section) is how long arcave waits for health checks after restarting. An agent that keeps hitting the default two minutes on a slow-starting stack will read the timeout as a failure and roll back for the wrong reason. Both MCP tools that restart the stack accept `wait_timeout` per call for the same reason.
+[`--wait-timeout`](../reference/configuration.md#compose) is how long arcave waits for health checks after restarting. An agent that keeps hitting the default two minutes on a slow-starting stack will read the timeout as a failure and roll back for the wrong reason. Both MCP tools that restart the stack accept `wait_timeout` per call for the same reason.
 
 ```shell
 arcave --log-format json savepoint create attempt-7
@@ -102,10 +102,10 @@ arcave --log-format json savepoint create attempt-7
 
 arcave gives an agent an **undo**, not a **sandbox**. The agent is still operating on your real Docker daemon, your real volumes and your real ports. A savepoint protects the data; it does not isolate the blast radius. If the agent needs isolation rather than reversibility, it needs a separate environment, and arcave is what makes that environment cheap to reset — not what makes it separate.
 
-The loop also serialises. Every workflow stops the stack and holds the project lock, so one agent iterates at a time per project. Two agents on one stack is not a supported shape — see [Limitations](../limitations.md#one-workflow-at-a-time).
+The loop also serialises. Every workflow stops the stack and holds the project lock, so one agent iterates at a time per project. Two agents on one stack is not a supported shape — see [Limitations](../reference/limitations.md#one-writer-per-project).
 
 ## Related docs
 
-* [arcave mcp](../commands/mcp.md) — the command reference.
+* [arcave mcp](../reference/cli/mcp.md) — the command reference.
 * [Environment branching](environment_branching.md) — when the checkpoints outlive the session.
-* [Limitations](../limitations.md) — the downtime, and what a savepoint does not cover.
+* [Limitations](../reference/limitations.md) — the downtime, and what a savepoint does not cover.

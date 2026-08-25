@@ -36,7 +36,7 @@ The savepoint names and the git branch names are yours to keep in step. arcave d
 ## Where the analogy holds
 
 * **A named point you can return to.** `arcave rollback main-baseline` puts the environment back exactly as it stood, as many times as you like.
-* **Cheap to keep several.** With the [`cdc` backend](../configuration.md#snapshot-backends), each savepoint stores only the chunks that changed since the last one. A dozen branch points on a large volume is not a dozen full copies.
+* **Cheap to keep several.** With the [`cdc` backend](../reference/configuration.md#snapshot), each savepoint stores only the chunks that changed since the last one. A dozen branch points on a large volume is not a dozen full copies.
 * **It covers the whole environment.** Postgres, Redis, MinIO, the app container's writable layer, and the compose spec itself. Switching back does not leave a cache holding the other branch's data, or a service running the other branch's image.
 * **No infrastructure to run.** No copy-on-write filesystem, no volume plugin, no storage appliance, no hosted service. Docker, and — for `cdc` — permission to run a stock `restic` container and expose a loopback port to it.
 
@@ -76,5 +76,5 @@ arcave savepoint remove 1780335122 1780339981
 ## Related docs
 
 * [Agent iteration loops](agent_loops.md) — the same mechanism at a much tighter cadence.
-* [savepoint remove](../commands/savepoint_remove.md) — the retention rules in full.
-* [Limitations](../limitations.md) — the constraints above, stated once for the whole tool.
+* [savepoint remove](../reference/cli/savepoint_remove.md) — the retention rules in full.
+* [Limitations](../reference/limitations.md) — the constraints above, stated once for the whole tool.

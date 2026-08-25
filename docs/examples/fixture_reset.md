@@ -149,4 +149,4 @@ arcave init --override --savepoint-dir /var/lib/arcave-baselines
 
 * [Resetting fixtures and demos](../use_cases/fixture_reset.md) — the pattern.
 * [Prune savepoints with retention rules](retention.md) — the next example.
-* [savepoint remove](../commands/savepoint_remove.md) — the retention rules in full.
+* [savepoint remove](../reference/cli/savepoint_remove.md) — the retention rules in full.

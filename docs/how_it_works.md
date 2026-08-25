@@ -20,7 +20,7 @@ The cost is downtime, proportional to the data being moved plus the time your se
 arcave uses `docker compose stop`, never `down`. Containers are stopped, not removed, and the same containers start again — nothing is recreated and nothing on the host is touched beyond the volume data being captured.
 :::
 
-Two bounds control that window, and both are configurable: [`compose.stop_timeout`](configuration.md#compose-section) is how long a container gets to exit on its own before it is killed, and [`compose.wait_timeout`](configuration.md#compose-section) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
+Two bounds control that window, and both are configurable: [`compose.stop_timeout`](reference/configuration.md#compose) is how long a container gets to exit on its own before it is killed, and [`compose.wait_timeout`](reference/configuration.md#compose) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
 
 ## The two halves of a savepoint
 
@@ -33,7 +33,7 @@ A savepoint captures two things, and they never overlap.
 Data belongs in volumes. The layer capture is what keeps a stack honest when it is not there.
 
 :::warning
-The layer capture is not deduplicated. Each savepoint stores the whole image of each container, base layers included. `images[].size_bytes` in the savepoint record is what that costs — see [Limitations](limitations.md#storage-cost).
+The layer capture is not deduplicated. Each savepoint stores the whole image of each container, base layers included. `images[].size_bytes` in the savepoint record is what that costs — see [Limitations](reference/limitations.md).
 :::
 
 ## What a savepoint covers
@@ -125,7 +125,7 @@ Volumes are **kept** when the containers are removed: a volume arcave did not ca
 
 ## The safety snapshot
 
-Before a rollback overwrites anything, it takes an ordinary savepoint of the live state. It is not a separate tier or a separate store — it is a normal savepoint carrying the label `arcave-safety-snapshot`, named `safety-snapshot-<id of the savepoint being restored>`, hidden from `arcave savepoint list` unless you pass [`--include-safety-snapshots`](commands/savepoint_list.md), and rollback-able by id like any other.
+Before a rollback overwrites anything, it takes an ordinary savepoint of the live state. It is not a separate tier or a separate store — it is a normal savepoint carrying the label `arcave-safety-snapshot`, named `safety-snapshot-<id of the savepoint being restored>`, hidden from `arcave savepoint list` unless you pass [`--include-safety-snapshots`](reference/cli/savepoint_list.md), and rollback-able by id like any other.
 
 If any step past that point fails — a restore error, or services that never become healthy — arcave replays the safety snapshot through the very same backend instances that took it, restarts the services, and reports the original error.
 
@@ -152,7 +152,7 @@ While a marker stands, the next mutating workflow is **refused** — with one ex
 
 The marker is cleared *before* the safety snapshot is dropped, so a failed clear can never leave a marker pointing at a snapshot that no longer exists.
 
-arcave does not finish a rollback it died in the middle of. Recovery is explicit and yours to drive — see [Troubleshooting](troubleshooting.md#an-interrupted-rollback).
+arcave does not finish a rollback it died in the middle of. Recovery is explicit and yours to drive — see [Troubleshooting](reference/troubleshooting.md#an-interrupted-rollback).
 
 ## One project at a time
 
@@ -174,5 +174,5 @@ The `arcave` segment is not configurable, and it is the whole safety story: poin
 
 * [Concepts](concepts.md) — the vocabulary used above.
 * [Getting started](getting_started.md) — run the flow yourself.
-* [Configuration](configuration.md) — the bounds and backends named here.
-* [Limitations](limitations.md) — where this design stops.
+* [Configuration](reference/configuration.md) — the bounds and backends named here.
+* [Limitations](reference/limitations.md) — where this design stops.

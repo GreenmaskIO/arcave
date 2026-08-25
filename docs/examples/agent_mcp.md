@@ -134,7 +134,7 @@ snapshot:
     backend: cdc
 ```
 
-Each volume gets a restic repository that outlives any one savepoint, and a capture writes only the chunks that changed. See [Configuration](../configuration.md#snapshot-backends).
+Each volume gets a restic repository that outlives any one savepoint, and a capture writes only the chunks that changed. See [Configuration](../reference/configuration.md#snapshot).
 
 ## What to tell the agent it cannot do
 
@@ -146,5 +146,5 @@ Each volume gets a restic repository that outlives any one savepoint, and a capt
 ## Related docs
 
 * [Agent iteration loops](../use_cases/agent_loops.md) — the pattern behind this.
-* [arcave mcp](../commands/mcp.md) — the full tool reference.
-* [Limitations](../limitations.md) — the constraints in full.
+* [arcave mcp](../reference/cli/mcp.md) — the full tool reference.
+* [Limitations](../reference/limitations.md) — the constraints in full.
