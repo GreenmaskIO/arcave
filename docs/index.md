@@ -1,20 +1,24 @@
 ---
 title: About arcave
-description: arcave is an open-source CLI that adds savepoints and one-command rollback to stateful Docker Compose projects, built for migration testing and AI-agent development loops.
-keywords: [arcave, docker compose, savepoint, rollback, stateful development, database branching, AI agents, agentic pipeline, development cycle, Open-Source, Greenmask]
+description: arcave gives you ephemeral environments for a Docker Compose stack — save the whole state, come back to it, and branch off any saved point. Plain Docker, any stack, one binary.
+keywords: [arcave, docker compose, ephemeral environments, savepoint, rollback, environment branching, sessions, stateful development, AI agents]
 sidebar_label: About
 slug: /
 ---
 
 # About arcave
 
-## Savepoints and rollback for stateful Docker Compose projects
+## Ephemeral environments for your Docker Compose stack
 
-Snapshot your environment the way you commit your code — and put it back when the experiment goes wrong.
+Your code is versioned. The state your stack accumulates is not — and that asymmetry is why a bad migration costs an afternoon.
 
-**arcave** is an open-source CLI utility that adds **savepoints** to a Docker Compose project. A savepoint is a consistent snapshot of every stateful volume the stack holds, taken with the containers stopped so nothing is captured mid-write. A **rollback** puts those volumes back, restores the containers' writable layer, rebuilds the stack as the savepoint recorded it, and starts it again.
+**arcave** gives a Docker Compose stack the semantics you already have for code: save the whole state, come back to it, and branch off any saved point. Not the source tree — the live environment underneath it. Volumes, container filesystems, and the shape of the stack itself.
 
-Source code is easy to version. The state underneath it is not: a migration that half-applied, a seed script that ran twice, an agent that dropped the wrong table. Recovering usually means recreating the environment or restoring a backup by hand. arcave makes that one command.
+**It runs on the Docker you already have.** No ZFS, no copy-on-write filesystem, no storage appliance, no daemon to reconfigure. Two things: Docker, and the arcave binary.
+
+**Any stack.** Postgres, MySQL, Kafka, Redis, MinIO, your own services — whatever is in your compose file. There is no allowlist and no per-database plugin, because arcave reads the stack your daemon is running rather than guessing at what the services are.
+
+Bring the stack up, get it to a production-like state with real data, save it — and come back to that state in seconds instead of rebuilding it. Try a migration, an experiment, an agent session; when it goes wrong, go back. People and agents do the same thing at different speeds.
 
 ```shell title="The whole idea"
 arcave savepoint create before-migration
@@ -22,32 +26,40 @@ arcave savepoint create before-migration
 arcave rollback before-migration
 ```
 
-## Key features
+```mermaid
+flowchart LR
+    U["docker compose up<br/>seed, migrate, warm up"] --> S["arcave savepoint create<br/>baseline"]
+    S --> W["experiment<br/>migration · agent · test run"]
+    W -->|it worked| N["arcave savepoint create<br/>next"]
+    W -->|it did not| R["arcave rollback baseline"]
+    R --> W
+    S --> B["arcave session create --from baseline<br/>try another way"]
+    B --> W2["a second line of work"]
+```
 
-* **[Whole-stack capture](how_it_works.md#what-a-savepoint-covers)** — named volumes, bind mounts and anonymous volumes, for every service in the project. A named volume three services share is captured once. Non-persistent mounts (`tmpfs`, `npipe`, `image`, `cluster`) are skipped and each skip is reported with its reason.
-* **[The writable layer too](how_it_works.md#the-two-halves-of-a-savepoint)** — arcave commits each container's writable layer alongside the volumes, so data a service wrote *outside* all of its mounts comes back with everything else.
-* **[Rebuilt from the recorded spec](how_it_works.md#what-a-rollback-restores)** — a savepoint stores the compose spec of the stack it was taken from. A rollback rebuilds *that* stack: a service added since is gone, one removed comes back, a changed image or port goes back to what it was.
-* **[Automatic safety snapshot](how_it_works.md#the-safety-snapshot)** — before a rollback touches anything it snapshots the live state. If the restore fails, or the services come up unhealthy, arcave replays that snapshot and reports the failure. You are never left between two states without a way back.
-* **[Incremental snapshots](reference/configuration.md#snapshot)** — the `cdc` backend captures into a per-volume restic repository through stock `restic` containers, writing only the chunks that changed. No copy-on-write filesystem, no storage appliance: Docker and a container image.
-* **[Built for agents](use_cases/agent_loops.md)** — `arcave mcp` exposes savepoint and rollback as MCP tools, so an agent can snapshot before it acts and roll back when validation fails, without shelling out or parsing prose.
-* **[Machine-readable by default](reference/output.md)** — every command prints JSON on stdout and logs on stderr, so a CI job or an agent parses the result instead of scraping it.
-* **Reads the running stack, not your files** — arcave never opens a compose file. Move them, delete them, generate them: nothing changes.
+## What a savepoint holds
 
-## Use cases
+Three things, and they do not overlap:
 
-* **[Agent iteration loops](use_cases/agent_loops.md)** — give an autonomous agent a checkpoint per attempt, so a failed iteration costs a rollback instead of a rebuild.
-* **[Environment branching](use_cases/environment_branching.md)** — a savepoint per feature branch, switched by name. Not database branching in the copy-on-write sense, and the page says exactly where the analogy stops.
-* **[Testing destructive migrations](use_cases/migration_testing.md)** — run the migration for real, against real data, as many times as it takes to get it right.
-* **[Resetting fixtures and demos](use_cases/fixture_reset.md)** — seed once, snapshot, and reset to that state in seconds for the rest of the project's life.
+* **Volumes and mounts** — named volumes, bind mounts and anonymous volumes, for every service in the project. A named volume three services share is captured once.
+* **Container filesystem** — what a service wrote *outside* all of its mounts comes back with everything else.
+* **Stack topology** — the shape of the stack itself, so a rollback rebuilds the services, images, ports and networks the savepoint recorded, not the ones running now.
+
+The stack is stopped while the savepoint is taken, so nothing is captured mid-write and a database comes back without recovery. Taking another one is cheap: container layers are deduplicated and volume data is captured incrementally, so the second savepoint of a stack costs a fraction of the first.
+
+## Sessions and branching
+
+A **session** is an independent line of savepoints inside a project, and you can start one from any savepoint. Keep your baseline in one session and two competing migrations in two others; nothing mixes. That is branching, without a separate verb for it — a branch is a session, and its name is the session's name.
 
 ## Where to start
 
-* **[Installation](installation.md)** — install the binary.
+* **[Installation](installation.md)** — install the binary and check the requirements.
 * **[Getting started](getting_started.md)** — initialise a project, take your first savepoint, roll it back.
+* **[Testing destructive migrations](use_cases/migration_testing.md)** — run the migration for real, against real data, as many times as it takes.
+* **[Agent iteration loops](use_cases/agent_loops.md)** — let an agent take its own savepoint before it acts, and roll back when validation fails.
 * **[How arcave works](how_it_works.md)** — the mechanism, end to end.
 * **[Limitations](reference/limitations.md)** — what arcave does not do, stated plainly, before you build on it.
 
 ## Links
 
 * [GitHub](https://github.com/GreenmaskIO/arcave)
-* [Greenmask](https://greenmask.io)
