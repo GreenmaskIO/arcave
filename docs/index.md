@@ -6,24 +6,17 @@ sidebar_label: About
 slug: /
 ---
 
-import ArcaveLockup from './assets/arcave-lockup-brand-adaptive-safe.svg';
+import ArcaveLockup from './assets/arcave-lockup-brand-on-light.svg';
 
 <a href="https://github.com/GreenmaskIO/arcave">
-  <ArcaveLockup width={520} style={{color: 'var(--ifm-font-color-base)'}} />
+  <ArcaveLockup width={400} />
 </a>
 
 # About arcave
 
 ## Ephemeral environments and branching for your Docker Compose project
 
-<ThemedImage
-  alt="A static environment drifts through seeds, migrations and half-reverted hotfixes until the only way back is to rebuild it; with arcave, sessions branch off a baseline line of named savepoints and move back inside their own line."
-  style={{width: '100%', height: 'auto'}}
-  sources={{
-    light: require('./assets/ephemeral-environments-on-light.svg').default,
-    dark: require('./assets/ephemeral-environments-on-dark.svg').default,
-  }}
-/>
+![A static environment drifts through seeds, migrations and half-reverted hotfixes until the only way back is to rebuild it; with arcave, sessions branch off a baseline line of named savepoints and move back inside their own line.](./assets/ephemeral-environments-on-light.svg)
 
 Your code is versioned. The state your environment accumulates is not — and that asymmetry is why a bad migration costs an afternoon.
 
