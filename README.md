@@ -9,9 +9,9 @@
 
 ## Ephemeral environments and branching for your Docker Compose project
 
-**arcave** saves the whole live state of a running Compose project — every volume, every container filesystem, and the compose spec itself — and puts it back in one command. Get your environment to the state you want, save it, and return to it in seconds instead of rebuilding it.
+**arcave** saves the whole live state of a running Compose project — every volume, every container filesystem, and the compose spec itself — and puts it back in one command. Get your environment to the state you want, save it, and come back to it in seconds.
 
-Any project works: Postgres, MySQL, Kafka, Redis, MinIO, your own services. There is no allowlist — arcave reads the project your daemon is running rather than guessing at what the services are. And it runs on the Docker you already have — no ZFS, no copy-on-write filesystem, no daemon to reconfigure.
+It works on any Compose project, on the Docker you already have.
 
 [![Discord](https://img.shields.io/discord/1179422525294399488?label=Discord&logo=discord)](https://discord.com/invite/rKBKvDECfd)
 
@@ -28,21 +28,21 @@ arcave rollback before-migration
 
 ## Key Features
 
-*   **Whole-project savepoints**: One savepoint holds every stateful volume, every container's writable layer, and the compose spec the project was running under — not one service's data.
-*   **[Consistent by construction](docs/how_it_works.md)**: The services are stopped before a byte is read, so nothing is captured mid-write and a database comes back without a crash-recovery pass on start. One mechanism covers every service in the project, whatever each of them runs.
-*   **[Reversible rollback](docs/reference/cli/rollback.md)**: A rollback takes a safety snapshot of what it is about to overwrite and replays it automatically if anything fails. A failed rollback leaves you where you started, not somewhere new.
+*   **Whole-project savepoints**: One savepoint holds every stateful volume, every container's writable layer, and the compose spec the project was running under.
+*   **[Consistent by construction](docs/how_it_works.md)**: The services are stopped before a byte is read, so nothing is captured mid-write and a database comes back without a crash-recovery pass on start.
+*   **[Reversible rollback](docs/reference/cli/rollback.md)**: A rollback takes a safety snapshot of what it is about to overwrite and replays it automatically if anything fails. A failed rollback leaves you where you started.
 *   **[Sessions and branching](docs/reference/cli/session.md)**: Independent lines of savepoints inside one project. Fork a session off any savepoint and the two lines never mix.
-*   **[Incremental capture](docs/reference/configuration.md#snapshot)**: The `cdc` backend writes only the chunks that changed since the last savepoint. Container filesystems are deduplicated either way — the base layer every savepoint shares is stored once.
+*   **[Incremental capture](docs/reference/configuration.md#snapshot)**: The `cdc` backend writes only the chunks that changed since the last savepoint. Container filesystems are deduplicated whichever backend you pick — the base layer every savepoint shares is stored once.
 *   **[Built for agents](docs/reference/mcp_tools.md)**: `arcave mcp` serves savepoint create, list, remove and rollback as MCP tools, so an agent checkpoints before it acts and rolls back when validation fails.
-*   **Plain Docker**: No ZFS, no copy-on-write filesystem, no storage appliance, no daemon to reconfigure. Docker 25 or newer, and the arcave binary.
-*   **Any compose project**: Postgres, MySQL, Kafka, Redis, MinIO, your own services. No allowlist — arcave reads the project your daemon is running rather than guessing at what the services are.
+*   **Plain Docker**: No ZFS, no copy-on-write filesystem, no storage appliance, no Docker daemon to reconfigure. Docker 25 or newer, and the arcave binary.
+*   **Any compose project**: Postgres, MySQL, Kafka, Redis, MinIO, your own services. No allowlist — arcave reads what your Docker daemon is running.
 
 ## Use Cases
 
-*   **[Testing destructive migrations](docs/use_cases/migration_testing.md)**: Run the migration for real, against real data, and again, and again, until it is right. The reset is one command and does not involve reloading a dump.
+*   **[Testing destructive migrations](docs/use_cases/migration_testing.md)**: Run the migration against real data, again and again, until it is right. The reset is one command.
 *   **[Agent iteration loops](docs/use_cases/agent_loops.md)**: Give an autonomous agent a checkpoint per attempt, and a failed iteration costs a rollback instead of a rebuild.
 *   **[Environment branching](docs/use_cases/environment_branching.md)**: A session per feature branch, forked off a shared baseline and switched by name.
-*   **[Resetting fixtures and demos](docs/use_cases/fixture_reset.md)**: Seed the environment once, save it, and return to that exact state for the rest of the project's life — object storage and cache included, not just the database.
+*   **[Resetting fixtures and demos](docs/use_cases/fixture_reset.md)**: Seed the environment once, save it, and return to that exact state for the rest of the project's life — object storage and cache included.
 
 ## Quick Start
 
