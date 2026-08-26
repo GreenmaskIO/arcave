@@ -61,16 +61,18 @@ They are frequently the same string. They do not have to be.
 
 ## Session
 
-A **session** is the lifetime everything under a store root dies with. It is a path segment between the arcave project and the compose project.
+A **session** is an independent line of savepoints inside a project. `arcave init` puts you in `baseline`, the default session; a fork off any savepoint opens a second line beside it, and the lines do not mix. A branch is a session.
 
-Today there is exactly one session, `global`, and nothing creates another. The segment exists so that a future disposable timeline — a sandbox, a throwaway branch — is a new session rather than a new storage layout. You do not configure it.
+A command works in the session `--session` or `ARCAVE_SESSION` names, by id or by name, and in `baseline` when neither does. A session is also the lifetime everything below it dies with: deleting one deletes its savepoints and the data they name.
+
+See [Sessions and branching](sessions.md).
 
 ## Store
 
 The **store** is where savepoint data lives, rooted at:
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
+<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/
 ```
 
 The `arcave` segment is static and not configurable: it bounds every write and every delete arcave performs to a directory it owns.
