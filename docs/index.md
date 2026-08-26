@@ -16,6 +16,15 @@ import ArcaveLockup from './assets/arcave-lockup-brand-adaptive-safe.svg';
 
 ## Ephemeral environments and branching for your Docker Compose project
 
+<ThemedImage
+  alt="A static environment drifts through seeds, migrations and half-reverted hotfixes until the only way back is to rebuild it; with arcave, sessions branch off a baseline line of named savepoints and move back inside their own line."
+  style={{width: '100%', height: 'auto'}}
+  sources={{
+    light: require('./assets/ephemeral-environments-on-light.svg').default,
+    dark: require('./assets/ephemeral-environments-on-dark.svg').default,
+  }}
+/>
+
 Your code is versioned. The state your environment accumulates is not — and that asymmetry is why a bad migration costs an afternoon.
 
 **arcave** gives a Docker Compose project the semantics you already have for code: save the whole state, come back to it, and branch off any saved point. It does not save your source tree; it saves the live environment underneath it — the volumes, the container filesystems, and the compose specification the project was running under.

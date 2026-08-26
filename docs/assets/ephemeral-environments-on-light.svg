@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 880" role="img" aria-labelledby="ttl desc">
+<style>
+svg{
+  --ink:#1c1e21; --muted:#6b7280; --rule:#d0d3d8;
+  --brand:#5500FE; --on-brand:#ffffff;
+  --danger:#C5221F;
+  --frame:#f5f1ff; --frame-line:#dbccff;
+  --flat:#f4f5f7;
+}
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+text{font-family:var(--sans)}
+.title{font-size:34px;font-weight:700;fill:var(--ink)}
+.sub{font-size:22px;fill:var(--muted)}
+.ses{font-size:24px;font-weight:600;fill:var(--ink)}
+.dim{font-size:22px;fill:var(--muted)}
+.item{font-size:22px;fill:var(--ink)}
+.cap{font-size:22px;fill:var(--ink)}
+.bad{font-size:22px;fill:var(--danger)}
+.node{fill:var(--brand)}
+.nodetext{font-size:24px;font-weight:600;fill:var(--on-brand)}
+.rule{stroke:var(--rule);fill:none}
+.decay{stroke:var(--muted);stroke-width:3;fill:none}
+.flow{stroke:var(--brand);stroke-width:3;fill:none}
+.back{stroke:var(--brand);stroke-width:3;fill:none;stroke-dasharray:9 7}
+.break{stroke:var(--danger);stroke-width:3;fill:none}
+.frame{fill:var(--frame);stroke:var(--frame-line);stroke-width:2}
+.flat{fill:var(--flat);stroke:var(--rule);stroke-width:2}
+.chip{fill:none;stroke:var(--rule);stroke-width:2}
+.actor{font-size:22px;font-weight:600;fill:var(--brand)}
+.f-actor{fill:var(--brand)}
+.f-knock{fill:var(--frame)}
+.f-brand{fill:var(--brand)}
+.f-muted{fill:var(--muted)}
+.f-danger{fill:var(--danger)}
+</style>
+<title id="ttl">Static environments versus ephemeral environments with arcave</title>
+<desc id="desc">On the left, two developers share one static environment: one person’s seed wipes the other’s data, there is no savepoint to go back to, and the only way back is to wipe it and set it up from scratch. On the right, arcave keeps a baseline line of named savepoints — v1.0, v1.1, v2.0 — where every step adds a savepoint, sessions fork off any of them, and each session can move back to a savepoint inside its own line.</desc>
+<defs>
+  <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-brand"/></marker>
+  <marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-muted"/></marker>
+</defs>
+
+<!-- ============ left panel: static ============ -->
+<text class="title" x="40" y="70">Static environment</text>
+<text class="sub" x="40" y="104">one environment, shared by everyone</text>
+
+<g transform="translate(56,146)"><circle cx="12" cy="7" r="5" class="f-muted"/><path class="f-muted" d="M2,22 a10,10 0 0 1 20,0 z"/></g>
+<text class="item" x="92" y="166">user 1</text>
+<g transform="translate(276,146)"><circle cx="12" cy="7" r="5" class="f-muted"/><path class="f-muted" d="M2,22 a10,10 0 0 1 20,0 z"/></g>
+<text class="item" x="312" y="166">user 2</text>
+<path class="decay" d="M80,182 V250" marker-end="url(#am)"/>
+<path class="decay" d="M300,182 V250" marker-end="url(#am)"/>
+
+<rect class="flat" x="56" y="260" width="428" height="160" rx="18"/>
+<text class="ses" x="78" y="300">one shared environment</text>
+<rect class="chip" x="78" y="348" width="124" height="40" rx="12"/>
+<text class="dim" x="140" y="375" text-anchor="middle">postgres</text>
+<rect class="chip" x="218" y="348" width="96" height="40" rx="12"/>
+<text class="dim" x="266" y="375" text-anchor="middle">redis</text>
+<rect class="chip" x="330" y="348" width="78" height="40" rx="12"/>
+<text class="dim" x="369" y="375" text-anchor="middle">app</text>
+
+<path class="f-danger" d="M62,452 l17,30 h-34 z"/>
+<text class="bad" x="98" y="476">user 2's seed wipes user 1's data</text>
+
+<path class="decay" d="M440,530 H92" marker-end="url(#am)" stroke-dasharray="9 7"/>
+<path class="break" stroke-width="4" d="M251,516 l28,28 M279,516 l-28,28"/>
+<text class="cap" x="40" y="596">No savepoint to go back to.</text>
+<text class="dim" x="40" y="626">The state is whatever was left behind.</text>
+
+<g transform="translate(56,738)"><path class="decay" d="M18,4 A14,14 0 1 1 4,15"/><path class="f-muted" d="M4,27 L-3,13 L11,13 z"/></g>
+<text class="cap" x="104" y="762">The only way back: start over.</text>
+<text class="dim" x="104" y="792">Wipe it, seed it — everyone waits.</text>
+
+<line x1="522" y1="46" x2="522" y2="830" class="rule" stroke-width="2"/>
+
+<!-- ============ right panel: ephemeral ============ -->
+<text class="title" x="550" y="70">Ephemeral environments — arcave</text>
+<text class="sub" x="550" y="104">every environment starts from a state you named</text>
+
+<rect class="frame" x="540" y="136" width="724" height="204" rx="18"/>
+<rect class="frame" x="540" y="588" width="724" height="200" rx="18"/>
+
+<text class="ses" x="550" y="164">feat/billing</text>
+<path class="flow" d="M672,210 H841" marker-end="url(#ab)"/>
+<text class="dim" x="756" y="194" text-anchor="middle">+ savepoint</text>
+<path class="flow" d="M957,210 H1126" marker-end="url(#ab)"/>
+<text class="dim" x="1041" y="194" text-anchor="middle">+ savepoint</text>
+<rect class="node" x="560" y="188" width="110" height="44" rx="22"/>
+<text class="nodetext" x="615" y="218" text-anchor="middle">v1.0</text>
+<rect class="node" x="845" y="188" width="110" height="44" rx="22"/>
+<text class="nodetext" x="900" y="218" text-anchor="middle">step-1</text>
+<rect class="node" x="1130" y="188" width="110" height="44" rx="22"/>
+<text class="nodetext" x="1185" y="218" text-anchor="middle">step-2</text>
+<path class="back" d="M1185,236 Q1042,294 907,238" marker-end="url(#ab)"/>
+<text class="dim" x="1042" y="316" text-anchor="middle">rollback to step-1</text>
+<path class="flow" d="M615,434 V240" marker-end="url(#ab)"/>
+<text class="dim" x="633" y="366">fork from v1.0</text>
+<text class="ses" x="550" y="414">baseline</text>
+<path class="flow" d="M672,460 H841" marker-end="url(#ab)"/>
+<text class="dim" x="756" y="444" text-anchor="middle">+ savepoint</text>
+<path class="flow" d="M957,460 H1126" marker-end="url(#ab)"/>
+<text class="dim" x="1041" y="444" text-anchor="middle">+ savepoint</text>
+<rect class="node" x="560" y="438" width="110" height="44" rx="22"/>
+<text class="nodetext" x="615" y="468" text-anchor="middle">v1.0</text>
+<rect class="node" x="845" y="438" width="110" height="44" rx="22"/>
+<text class="nodetext" x="900" y="468" text-anchor="middle">v1.1</text>
+<rect class="node" x="1130" y="438" width="110" height="44" rx="22"/>
+<text class="nodetext" x="1185" y="468" text-anchor="middle">v2.0</text>
+<path class="flow" d="M900,484 V634" marker-end="url(#ab)"/>
+<text class="dim" x="930" y="548">fork from v1.1</text>
+<text class="ses" x="550" y="614">agent/refactor</text>
+<path class="flow" d="M957,660 H1126" marker-end="url(#ab)"/>
+<text class="dim" x="1041" y="644" text-anchor="middle">+ savepoint</text>
+<rect class="node" x="845" y="638" width="110" height="44" rx="22"/>
+<text class="nodetext" x="900" y="668" text-anchor="middle">v1.1</text>
+<rect class="node" x="1130" y="638" width="110" height="44" rx="22"/>
+<text class="nodetext" x="1185" y="668" text-anchor="middle">try-1</text>
+<path class="back" d="M1185,686 Q1042,744 907,688" marker-end="url(#ab)"/>
+<text class="dim" x="1042" y="766" text-anchor="middle">rollback to v1.1</text>
+<text class="cap" x="550" y="816">Fork from any savepoint. Move back inside a line.</text>
+<text class="dim" x="550" y="846">Two lines at once? Give each session its own Docker daemon.</text>
+<g transform="translate(1148,145)"><circle cx="12" cy="7" r="5" class="f-actor"/><path class="f-actor" d="M2,22 a10,10 0 0 1 20,0 z"/></g>
+<text class="actor" x="1250" y="164" text-anchor="end">user 1</text>
+<g transform="translate(1160,597)"><circle cx="12" cy="2.5" r="2" class="f-actor"/><rect x="12" y="3" width="1.5" height="4" class="f-actor"/><rect x="2" y="6" width="20" height="15" rx="5" class="f-actor"/><circle cx="8" cy="13" r="2.2" class="f-knock"/><circle cx="16" cy="13" r="2.2" class="f-knock"/></g>
+<text class="actor" x="1250" y="614" text-anchor="end">agent</text>
+</svg>
