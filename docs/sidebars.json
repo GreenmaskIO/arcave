@@ -91,58 +91,99 @@
         },
         {
           "type": "category",
-          "label": "Commands",
-          "link": {
-            "type": "doc",
-            "id": "commands/index"
-          },
+          "label": "Reference",
           "items": [
             {
-              "type": "doc",
-              "id": "commands/init",
-              "label": "init"
+              "type": "category",
+              "label": "CLI",
+              "link": {
+                "type": "doc",
+                "id": "reference/cli/index"
+              },
+              "items": [
+                {
+                  "type": "doc",
+                  "id": "reference/cli/init",
+                  "label": "init"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/savepoint_create",
+                  "label": "savepoint create"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/savepoint_list",
+                  "label": "savepoint list"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/savepoint_remove",
+                  "label": "savepoint remove"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/rollback",
+                  "label": "rollback"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/session",
+                  "label": "session"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/mcp",
+                  "label": "mcp"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/status",
+                  "label": "status"
+                }
+              ]
             },
             {
               "type": "doc",
-              "id": "commands/savepoint_create",
-              "label": "savepoint create"
+              "id": "reference/configuration",
+              "label": "Configuration"
             },
             {
               "type": "doc",
-              "id": "commands/savepoint_list",
-              "label": "savepoint list"
+              "id": "reference/environment_variables",
+              "label": "Environment variables"
             },
             {
               "type": "doc",
-              "id": "commands/savepoint_remove",
-              "label": "savepoint remove"
+              "id": "reference/output",
+              "label": "Output and exit codes"
             },
             {
               "type": "doc",
-              "id": "commands/rollback",
-              "label": "rollback"
+              "id": "reference/mcp_tools",
+              "label": "MCP tools"
             },
             {
               "type": "doc",
-              "id": "commands/mcp",
-              "label": "mcp"
+              "id": "reference/storage_layout",
+              "label": "Storage layout"
+            },
+            {
+              "type": "doc",
+              "id": "reference/requirements",
+              "label": "Requirements"
+            },
+            {
+              "type": "doc",
+              "id": "reference/limitations",
+              "label": "Limitations"
+            },
+            {
+              "type": "doc",
+              "id": "reference/troubleshooting",
+              "label": "Troubleshooting"
             }
           ]
-        },
-        {
-          "type": "doc",
-          "id": "configuration",
-          "label": "Configuration"
-        },
-        {
-          "type": "doc",
-          "id": "limitations",
-          "label": "Limitations"
-        },
-        {
-          "type": "doc",
-          "id": "troubleshooting",
-          "label": "Troubleshooting"
         }
       ]
     }

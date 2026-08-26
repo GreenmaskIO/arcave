@@ -10,9 +10,9 @@ keywords: [install arcave, arcave binary, arcave cli, docker compose, go install
 
 * **Docker**, with the daemon reachable by the user running arcave.
 * **The Compose plugin** — arcave drives compose as a library, so `docker compose version` should work.
-* For the [`cdc` backend](configuration.md#snapshot-backends) only: the ability to pull and run `restic/restic` containers, and a daemon that can reach a loopback port on your host.
+* For the [`cdc` backend](reference/configuration.md#snapshot) only: the ability to pull and run `restic/restic` containers, and a daemon that can reach a loopback port on your host.
 
-arcave needs no compose file of its own and no changes to your project. It reads the running stack from the daemon.
+arcave needs no compose file of its own and no changes to your project. It reads the running project from the daemon.
 
 ## Via install script
 
@@ -83,4 +83,4 @@ arcave --version
 ## Next steps
 
 * [Getting started](getting_started.md) — initialise a project and take your first savepoint.
-* [Commands](commands/index.md) — the full command reference.
+* [Commands](reference/cli/index.md) — the full command reference.

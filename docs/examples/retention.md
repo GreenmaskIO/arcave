@@ -144,12 +144,12 @@ arcave savepoint remove 1780340557
 ```
 
 :::warning
-Only after you are certain you do not need the pre-rollback state it holds. A safety snapshot that outlived its rollback is the last copy of that state — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback).
+Only after you are certain you do not need the pre-rollback state it holds. A safety snapshot that outlived its rollback is the last copy of that state — see [Troubleshooting](../reference/troubleshooting.md#an-interrupted-rollback).
 :::
 
 ## Reducing what a savepoint costs in the first place
 
-Retention bounds how many savepoints you keep. The [`cdc` backend](../configuration.md#snapshot-backends) bounds what each one costs:
+Retention bounds how many savepoints you keep. The [`cdc` backend](../reference/configuration.md#snapshot) bounds what each one costs:
 
 ```yaml title=".arcave/config.yaml"
 snapshot:
@@ -162,6 +162,6 @@ Existing `fullcopy` savepoints keep working — a rollback reads the backend out
 
 ## Related docs
 
-* [savepoint remove](../commands/savepoint_remove.md) — the command reference.
-* [Configuration](../configuration.md#snapshot-backends) — choosing a backend.
+* [savepoint remove](../reference/cli/savepoint_remove.md) — the command reference.
+* [Configuration](../reference/configuration.md#snapshot) — choosing a backend.
 * [Agent iteration loops](../use_cases/agent_loops.md) — where the savepoints come from.

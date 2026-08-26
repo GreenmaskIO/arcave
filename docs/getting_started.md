@@ -10,11 +10,11 @@ Five minutes, one compose project, and one deliberate mistake to undo.
 
 If you have not installed arcave yet, start at [Installation](installation.md).
 
-## 1. Bring a stack up
+## 1. Bring a compose project up
 
-arcave reads the **running stack** from the Docker daemon — it never opens your compose file. So the stack has to exist before arcave can do anything with it.
+arcave reads the **running project** from the Docker daemon — it never opens your compose file. So the project has to exist before arcave can do anything with it.
 
-```shell title="A minimal stateful stack"
+```shell title="A minimal stateful project"
 docker compose up -d
 docker compose ls        # note the project name in the first column
 ```
@@ -22,7 +22,7 @@ docker compose ls        # note the project name in the first column
 Any project with a persistent volume works. The examples below assume a project named `myapp` with a Postgres service.
 
 :::warning
-`docker compose stop` is fine — a stopped container still describes the stack. `docker compose down` is not: it removes the containers, and with them everything arcave knows about your project. A command run against a torn-down stack fails saying so.
+`docker compose stop` is fine — a stopped container still describes the project. `docker compose down` is not: it removes the containers, and with them everything arcave knows about your project. A command run against a torn-down project fails saying so.
 :::
 
 ## 2. Initialise arcave
@@ -60,16 +60,16 @@ arcave init --savepoint-dir /backups/myapp      # where savepoint data goes
 
 You will want `.arcave/` in your `.gitignore`.
 
-## 3. Name the stack once
+## 3. Name the project once
 
-Every command that touches a stack needs to know which one. Set it once for the shell instead of passing `-p` every time:
+Every command that touches a compose project needs to know which one. Set it once for the shell instead of passing `-p` every time:
 
 ```shell
 export ARCAVE_PROJECT_NAME=myapp
 ```
 
 :::note
-`-p/--project-name` names the **compose project**, as `docker compose ls` lists it. That is a different thing from `project.name` in the config, which names the *storage tenant*. See [Concepts](concepts.md#project-versus-stack) — and note that the environment variable sets both.
+`-p/--project-name` names the **compose project**, as `docker compose ls` lists it. That is a different thing from `project.name` in the config, which names the *storage tenant*. See [Concepts](concepts.md#the-compose-project-versus-the-storage-tenant) — and note that the environment variable sets both.
 :::
 
 ## 4. Take your first savepoint
@@ -136,7 +136,7 @@ arcave rollback before-migration
 }
 ```
 
-The table is back. So is everything else the stack held at 19:41:12.
+The table is back. So is everything else the project held at 19:41:12.
 
 Before overwriting anything, arcave took a **safety snapshot** of the state you are throwing away. If the restore had failed, or the services had come up unhealthy, arcave would have replayed that snapshot automatically and reported the error rather than leaving you between two states. See [How arcave works](how_it_works.md#the-safety-snapshot).
 
@@ -168,7 +168,7 @@ arcave savepoint remove --retain-for 7d --dry-run
 ## What to read next
 
 * **[Use cases](use_cases/index.md)** — the workflows this is actually for, starting with [agent iteration loops](use_cases/agent_loops.md).
-* **[Examples](examples/index.md)** — complete walkthroughs on a multi-service stack.
-* **[Commands](commands/index.md)** — every flag, every output shape.
-* **[Configuration](configuration.md)** — timeouts, storage, and the incremental `cdc` backend.
-* **[Limitations](limitations.md)** — read this before you build a workflow on arcave.
+* **[Examples](examples/index.md)** — complete walkthroughs on a multi-service project.
+* **[Commands](reference/cli/index.md)** — every flag, every output shape.
+* **[Configuration](reference/configuration.md)** — timeouts, storage, and the incremental `cdc` backend.
+* **[Limitations](reference/limitations.md)** — read this before you build a workflow on arcave.

@@ -8,13 +8,13 @@ keywords: [arcave use cases, savepoint workflow, agent development loop, databas
 
 Everything on the pages below rests on three properties of a savepoint.
 
-* **Whole-stack** — a savepoint is not a database dump. It captures every stateful volume in the project, every container's writable layer, and the compose spec of the stack itself. Restoring one puts the *environment* back, not one service's data.
-* **Consistent** — the stack is stopped before a byte is read, so nothing is captured mid-write. No per-engine hooks, no quiescing scripts, no `pg_dump` for Postgres and something else for Redis.
+* **Whole-project** — a savepoint is not a database dump. It captures every stateful volume in the project, every container's writable layer, and the compose spec of the project itself. Restoring one puts the *environment* back, not one service's data.
+* **Consistent** — the project is stopped before a byte is read, so nothing is captured mid-write. The same mechanism covers every service in the project, whatever each of them runs.
 * **Reversible** — a rollback takes a safety snapshot of what it is about to overwrite, and replays it automatically if anything fails. A failed rollback leaves you where you started, not somewhere new.
 
 And on one constraint, which shapes every workflow here:
 
-* **Stopped, not instant** — a savepoint and a rollback both stop and restart the stack. The window is proportional to the data moved plus your services' health-check time. This is not zero-downtime branching, and no page here will pretend otherwise.
+* **Stopped, not instant** — a savepoint and a rollback both stop and restart the project. The window is proportional to the data moved plus your services' health-check time. This is not zero-downtime branching, and no page here will pretend otherwise.
 
 ## Taking one
 
@@ -47,7 +47,7 @@ Seed the environment once, snapshot it, and return to that exact state for the r
 
 ## Choosing a backend for the loop
 
-How often you snapshot decides which [snapshot backend](../configuration.md#snapshot-backends) you want.
+How often you snapshot decides which [snapshot backend](../reference/configuration.md#snapshot) you want.
 
 | | `fullcopy` | `cdc` |
 |---|---|---|
@@ -61,4 +61,4 @@ For the agent and branching workflows, `cdc` is what makes the loop cheap enough
 
 * [How arcave works](../how_it_works.md) — the mechanism behind these properties.
 * [Examples](../examples/index.md) — the same workflows as complete walkthroughs.
-* [Limitations](../limitations.md) — where each of these stops working.
+* [Limitations](../reference/limitations.md) — where each of these stops working.

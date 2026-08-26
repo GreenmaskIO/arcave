@@ -1,18 +1,18 @@
 ---
 title: How arcave works
-description: The arcave savepoint and rollback mechanism end to end — what a savepoint covers, why the stack is stopped, how the record commits, and what the automatic safety snapshot guarantees.
+description: The arcave savepoint and rollback mechanism end to end — what a savepoint covers, why the project is stopped, how the record commits, and what the automatic safety snapshot guarantees.
 keywords: [arcave architecture, savepoint mechanism, docker volume snapshot, rollback, safety snapshot, docker compose, Open-Source, Greenmask]
 ---
 
 # How arcave works
 
-arcave sits between you and the Docker daemon. It does not install an agent, patch a filesystem, or ask for a copy-on-write volume driver. It stops the stack, moves the bytes through the Docker API, and starts the stack again.
+arcave sits between you and the Docker daemon. It does not install an agent, patch a filesystem, or ask for a copy-on-write volume driver. It stops the project, moves the bytes through the Docker API, and starts the project again.
 
-## The stack is stopped, on purpose
+## The project is stopped, on purpose
 
 Every arcave workflow stops the project's services before it reads or writes a byte, and starts them again afterwards.
 
-This is the design's central trade. A running database holds state in memory and in files it is midway through writing; copying those files produces a snapshot that may not restore. Stopping the containers first is what makes "consistent" a claim arcave can actually make, without a per-engine hook for Postgres, MySQL, Redis, Mongo and everything else a compose file might hold.
+This is the design's central trade. A running database holds state in memory and in files it is midway through writing; copying those files produces a snapshot that may not restore. Stopping the containers first is what makes "consistent" a claim arcave can actually make for every service a compose file might hold — Postgres, MySQL, Redis, Mongo and whatever else — rather than one engine at a time.
 
 The cost is downtime, proportional to the data being moved plus the time your services take to become healthy again.
 
@@ -20,7 +20,7 @@ The cost is downtime, proportional to the data being moved plus the time your se
 arcave uses `docker compose stop`, never `down`. Containers are stopped, not removed, and the same containers start again — nothing is recreated and nothing on the host is touched beyond the volume data being captured.
 :::
 
-Two bounds control that window, and both are configurable: [`compose.stop_timeout`](configuration.md#compose-section) is how long a container gets to exit on its own before it is killed, and [`compose.wait_timeout`](configuration.md#compose-section) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
+Two bounds control that window, and both are configurable: [`compose.stop_timeout`](reference/configuration.md#compose) is how long a container gets to exit on its own before it is killed, and [`compose.wait_timeout`](reference/configuration.md#compose) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
 
 ## The two halves of a savepoint
 
@@ -30,10 +30,10 @@ A savepoint captures two things, and they never overlap.
 
 **The writable layer.** Every container's writable layer, committed as an image. `docker commit` excludes the contents of every mount by contract, so the layer capture sees exactly what the volume capture cannot: whatever a service wrote past all of its mounts — a file dropped in `/tmp`, a package installed at runtime, a config the entrypoint rewrote in place.
 
-Data belongs in volumes. The layer capture is what keeps a stack honest when it is not there.
+Data belongs in volumes. The layer capture is what keeps a compose project honest when it is not there.
 
 :::warning
-The layer capture is not deduplicated. Each savepoint stores the whole image of each container, base layers included. `images[].size_bytes` in the savepoint record is what that costs — see [Limitations](limitations.md#storage-cost).
+The layer capture is not deduplicated. Each savepoint stores the whole image of each container, base layers included. `images[].size_bytes` in the savepoint record is what that costs — see [Limitations](reference/limitations.md).
 :::
 
 ## What a savepoint covers
@@ -54,7 +54,7 @@ The one exception is an **anonymous volume**. Its Docker name is generated per c
 A named volume the project declares but the daemon does not have is an **error**, not a skip. An empty capture would silently wipe live data at the next rollback. Bring the project up once (`docker compose up`) so the volumes it declares actually exist.
 :::
 
-An external volume that nothing mounts is invisible to arcave: it reads the running stack, and only compose's own volumes carry the project label that would reveal it.
+An external volume that nothing mounts is invisible to arcave: it reads the running project, and only compose's own volumes carry the project label that would reveal it.
 
 ## The record is the commit marker
 
@@ -63,7 +63,7 @@ Each savepoint is one self-contained directory under the store root, named by it
 ```text title="One savepoint's namespace"
 <savepoint-id>/
 ├── savepoint.json                            # the record — written LAST
-├── project.yaml                              # the stack's compose spec
+├── project.yaml                              # the project's compose spec
 ├── <object-id>/data.tar                      # one archive per volume (fullcopy)
 └── images/<service>/<replica>/image.tar      # the container's writable layer
 ```
@@ -84,11 +84,11 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
 
 ```text title="arcave savepoint create before-migration"
 1.  Claim the project lock
-2.  Read the running stack from the daemon
+2.  Read the running project from the daemon
 3.  Stop the services
 4.  Capture every volume
 5.  Commit each container's writable layer
-6.  Write project.yaml — the stack's compose spec
+6.  Write project.yaml — the project's compose spec
 7.  Write savepoint.json — the commit marker
 8.  Start the services
 9.  Wait for health checks
@@ -96,7 +96,7 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
 
 ## What a rollback restores
 
-A rollback restores **the stack the savepoint recorded**, not the one that is running. A service added since is gone. One removed comes back. A changed image, port, environment variable or healthcheck goes back to what it was. That is why `project.yaml` is committed beside the record: it is what the stack is rebuilt from.
+A rollback restores **the project the savepoint recorded**, not the one that is running. A service added since is gone. One removed comes back. A changed image, port, environment variable or healthcheck goes back to what it was. That is why `project.yaml` is committed beside the record: it is what the project is rebuilt from.
 
 ```text title="arcave rollback before-migration"
  1.  Claim the project lock
@@ -109,7 +109,7 @@ A rollback restores **the stack the savepoint recorded**, not the one that is ru
  8.  Safety snapshot of the live state
  9.  Write the inflight marker
 10.  Remove containers and networks — volumes are kept
-11.  Recreate the stack from the spec, on the restored images
+11.  Recreate the project from the spec, on the restored images
 12.  Wipe and restore every volume
 13.  Start the services and wait for health checks
 14.  Clear the marker, drop the safety snapshot
@@ -125,7 +125,7 @@ Volumes are **kept** when the containers are removed: a volume arcave did not ca
 
 ## The safety snapshot
 
-Before a rollback overwrites anything, it takes an ordinary savepoint of the live state. It is not a separate tier or a separate store — it is a normal savepoint carrying the label `arcave-safety-snapshot`, named `safety-snapshot-<id of the savepoint being restored>`, hidden from `arcave savepoint list` unless you pass [`--include-safety-snapshots`](commands/savepoint_list.md), and rollback-able by id like any other.
+Before a rollback overwrites anything, it takes an ordinary savepoint of the live state. It is not a separate tier or a separate store — it is a normal savepoint carrying the label `arcave-safety-snapshot`, named `safety-snapshot-<id of the savepoint being restored>`, hidden from `arcave savepoint list` unless you pass [`--include-safety-snapshots`](reference/cli/savepoint_list.md), and rollback-able by id like any other.
 
 If any step past that point fails — a restore error, or services that never become healthy — arcave replays the safety snapshot through the very same backend instances that took it, restarts the services, and reports the original error.
 
@@ -145,34 +145,34 @@ A rollback writes `.arcave/inflight.json` before its first destructive write —
 |---|---|
 | `recreating` | From the teardown until the containers exist again. The volumes are still untouched. |
 | `restoring` | Restoring volumes. The environment is partially overwritten. |
-| `restore-done` | Volumes restored, but the stack never came up cleanly. |
+| `restore-done` | Volumes restored, but the project never came up cleanly. |
 | `inconsistent` | The automatic revert itself failed. The safety snapshot is retained. |
 
 While a marker stands, the next mutating workflow is **refused** — with one exception: a rollback to that marker's own safety snapshot, which is the remedy, and is allowed through.
 
 The marker is cleared *before* the safety snapshot is dropped, so a failed clear can never leave a marker pointing at a snapshot that no longer exists.
 
-arcave does not finish a rollback it died in the middle of. Recovery is explicit and yours to drive — see [Troubleshooting](troubleshooting.md#an-interrupted-rollback).
+arcave does not finish a rollback it died in the middle of. Recovery is explicit and yours to drive — see [Troubleshooting](reference/troubleshooting.md#an-interrupted-rollback).
 
 ## One project at a time
 
-Every mutating workflow holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second arcave run against the same project fails immediately rather than queuing behind the first. Two workflows interleaving stop, capture and start on one stack has no correct outcome.
+Every mutating workflow holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second arcave run against the same project fails immediately rather than queuing behind the first. Two workflows interleaving stop, capture and start on one compose project has no correct outcome.
 
 ## Where the data lives
 
 One store holds everything, rooted by the configured path:
 
 ```text title="Store root"
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<stack>/
+<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
 ```
 
 The `arcave` segment is not configurable, and it is the whole safety story: point the path at `/etc` and arcave operates in `/etc/arcave`, never in `/etc`. Every segment below it is validated against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.
 
-`<project>` is the storage tenant, from `project.name` in the config. `<stack>` is the compose project you named with `-p`. They are different concepts — see [Concepts](concepts.md#project-versus-stack).
+`<project>` is the storage tenant, from `project.name` in the config. `<compose-project>` is the compose project you named with `-p`. They are different concepts — see [Concepts](concepts.md#the-compose-project-versus-the-storage-tenant).
 
 ## Related docs
 
 * [Concepts](concepts.md) — the vocabulary used above.
 * [Getting started](getting_started.md) — run the flow yourself.
-* [Configuration](configuration.md) — the bounds and backends named here.
-* [Limitations](limitations.md) — where this design stops.
+* [Configuration](reference/configuration.md) — the bounds and backends named here.
+* [Limitations](reference/limitations.md) — where this design stops.

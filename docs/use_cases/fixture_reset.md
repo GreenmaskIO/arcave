@@ -26,7 +26,7 @@ arcave savepoint create clean --description "seeded baseline, do not delete"
 arcave rollback clean
 ```
 
-That is the entire reset. It covers every stateful volume in the project, plus each container's writable layer, plus the compose spec — so the stack comes back on the same images with the same ports, not just with the same rows.
+That is the entire reset. It covers every stateful volume in the project, plus each container's writable layer, plus the compose spec — so the project comes back on the same images with the same ports, not just with the same rows.
 
 ## Between test runs
 
@@ -53,12 +53,12 @@ arcave savepoint remove 1780339981 1780341002  # and remove only those
 ```
 
 :::warning
-Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, prune by id, or keep it in a store of its own via [`storage.directory.path`](../configuration.md#storage-section).
+Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, prune by id, or keep it in a store of its own via [`storage.directory.path`](../reference/configuration.md#storage).
 :::
 
-## Why the whole stack matters here
+## Why the whole project matters here
 
-This is the use case where whole-stack capture earns its cost most visibly. After a rollback to `clean`:
+This is the use case where whole-project capture earns its cost most visibly. After a rollback to `clean`:
 
 * the database holds exactly the seeded rows,
 * the cache holds exactly the seeded keys — not a stale entry pointing at a row that no longer exists,
@@ -71,4 +71,4 @@ A dump-based reset gets the first of those four.
 
 * [Testing destructive migrations](migration_testing.md) — the same reset around a schema change.
 * [How arcave works](../how_it_works.md#what-a-savepoint-covers) — precisely what is and is not captured.
-* [savepoint remove](../commands/savepoint_remove.md) — retention rules and `--dry-run`.
+* [savepoint remove](../reference/cli/savepoint_remove.md) — retention rules and `--dry-run`.

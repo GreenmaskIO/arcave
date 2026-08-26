@@ -1,12 +1,12 @@
 ---
 title: Roll back a failed migration
-description: A complete arcave walkthrough — snapshot a Postgres, MinIO and Redis stack, run a migration that goes wrong, and restore every service in one command.
+description: A complete arcave walkthrough — snapshot a Postgres, MinIO and Redis project, run a migration that goes wrong, and restore every service in one command.
 keywords: [arcave example, postgres migration, rollback, docker compose, savepoint, Open-Source, Greenmask]
 ---
 
 # Roll back a failed migration
 
-The core loop, end to end, on the [demo stack](index.md#the-stack).
+The core loop, end to end, on the [demo project](index.md#the-project).
 
 ## 1. Put some state in every service
 
@@ -222,5 +222,5 @@ arcave savepoint remove 1780335122
 ## Related docs
 
 * [Testing destructive migrations](../use_cases/migration_testing.md) — the pattern behind this walkthrough.
-* [rollback](../commands/rollback.md) — the command reference.
+* [rollback](../reference/cli/rollback.md) — the command reference.
 * [Reset a seeded environment](fixture_reset.md) — the next example.

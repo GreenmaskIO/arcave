@@ -1,6 +1,6 @@
 ---
 title: Reset a seeded environment
-description: Seed a Postgres, MinIO and Redis stack once, capture it as an arcave savepoint, and return the whole environment to that state in one command.
+description: Seed a Postgres, MinIO and Redis project once, capture it as an arcave savepoint, and return the whole environment to that state in one command.
 keywords: [arcave example, test fixtures, seed data, reset environment, docker compose, minio, redis, Open-Source, Greenmask]
 ---
 
@@ -8,7 +8,7 @@ keywords: [arcave example, test fixtures, seed data, reset environment, docker c
 
 Seeding is slow. Do it once, snapshot, and reset from the snapshot for the rest of the project's life.
 
-Runs against the [demo stack](index.md#the-stack).
+Runs against the [demo project](index.md#the-project).
 
 ## 1. Seed everything, once
 
@@ -100,7 +100,7 @@ docker compose exec -T redis redis-cli MGET tenants:count orders:count cache:war
 3) "1"
 ```
 
-This is the point of whole-stack capture. A `pg_restore` would have given you the first of those three, and left the object store empty and the cache cold.
+This is the point of whole-project capture. A `pg_restore` would have given you the first of those three, and left the object store empty and the cache cold.
 
 ## 6. Wire it into the test suite
 
@@ -149,4 +149,4 @@ arcave init --override --savepoint-dir /var/lib/arcave-baselines
 
 * [Resetting fixtures and demos](../use_cases/fixture_reset.md) — the pattern.
 * [Prune savepoints with retention rules](retention.md) — the next example.
-* [savepoint remove](../commands/savepoint_remove.md) — the retention rules in full.
+* [savepoint remove](../reference/cli/savepoint_remove.md) — the retention rules in full.

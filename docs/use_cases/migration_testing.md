@@ -69,11 +69,11 @@ arcave savepoint remove --retain-recent 3
 ```
 
 :::note
-Budget for the stop-and-start window. Every `savepoint create` and every `rollback` restarts the stack and waits for health checks — up to [`--wait-timeout`](../configuration.md#compose-section), two minutes by default. On a slow-starting stack, raise it rather than letting a timeout read as a migration failure.
+Budget for the stop-and-start window. Every `savepoint create` and every `rollback` restarts the project and waits for health checks — up to [`--wait-timeout`](../reference/configuration.md#compose), two minutes by default. On a slow-starting project, raise it rather than letting a timeout read as a migration failure.
 :::
 
 ## Related docs
 
 * [Resetting fixtures and demos](fixture_reset.md) — the same reset, for seeded data rather than schemas.
-* [savepoint create](../commands/savepoint_create.md) — flags and output.
-* [rollback](../commands/rollback.md) — what a rollback restores, exactly.
+* [savepoint create](../reference/cli/savepoint_create.md) — flags and output.
+* [rollback](../reference/cli/rollback.md) — what a rollback restores, exactly.
