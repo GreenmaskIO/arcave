@@ -76,7 +76,7 @@ The name carries the id of the savepoint that rollback was applying, so a leftov
 |---|---|
 | No `.arcave/config.yaml` | `config is not found: run 'arcave init' if not yet initialized` |
 | No compose project named | `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME` |
-| The daemon is unreachable | The command fails while wiring itself up, before it reads the store. |
+| The Docker daemon is unreachable | The command fails while wiring itself up, before it reads the store. |
 | A record that will not decode | `parse savepoint record 1780335122: …` — a corrupt commit is an error, never a silent skip. |
 | No savepoints | `[]`, exit code `0`. |
 

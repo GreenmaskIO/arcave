@@ -38,7 +38,7 @@ Opens a new line of savepoints. With `--from`, the line starts from an existing 
 
 Three things to know before you run it.
 
-**The fork deploys into the daemon.** It refuses to run while the project is up unless you pass `--force`, and `--force` does not take a safety snapshot first — what you had not saved is gone. This is where a fork differs from [`rollback`](rollback.md), which always takes one.
+**The fork deploys into the Docker daemon.** It refuses to run while the project is up unless you pass `--force`, and `--force` does not take a safety snapshot first — what you had not saved is gone. This is where a fork differs from [`rollback`](rollback.md), which always takes one.
 
 **The commands that follow have to name the session.** `--session=feat/add-new-table`, or `ARCAVE_SESSION` in the shell. A command that names none works in `baseline`.
 

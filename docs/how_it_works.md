@@ -8,6 +8,42 @@ keywords: [arcave architecture, savepoint mechanism, docker volume snapshot, rol
 
 arcave sits between you and the Docker daemon. It does not install an agent, patch a filesystem, or ask for a copy-on-write volume driver. It stops the project, moves the bytes through the Docker API, and starts the project again.
 
+## You, arcave and the Docker daemon
+
+You are between two things: the savepoints arcave keeps, and the live state your Docker daemon is running. Every arcave command moves state across that gap. `savepoint create` reads the live state into a savepoint. `rollback` writes a savepoint back into the daemon. `session create --from` does both: it copies a savepoint into a new session, then deploys that state into the daemon.
+
+```mermaid
+sequenceDiagram
+    participant S as arcave (savepoints)
+    participant U as user
+    participant D as docker daemon (live state)
+
+    U->>D: docker compose up, seed the data
+    Note over D: the project runs on real data
+
+    U->>S: arcave savepoint create v1.0
+    S->>D: stop the services
+    D-->>S: dump volumes, container filesystems, compose spec
+    Note over S: session baseline, savepoint v1.0
+    S->>D: start the services
+
+    U->>S: arcave session create --from=baseline/v1.0 --name=feat/add-new-table
+    Note over S: session feat/add-new-table, savepoint v1.0 copied in
+    S->>D: deploy what savepoint v1.0 recorded
+    Note over D: the project runs on v1.0
+
+    U->>D: write code, run a migration, let an agent work
+    Note over D: the state diverges
+    U->>S: arcave savepoint create step-1
+    Note over S: savepoint step-1
+
+    U->>S: arcave rollback step-1
+    S->>D: restore volumes, layers and spec
+    Note over D: back to what savepoint step-1 recorded
+```
+
+The fork on that diagram is a **session** — an independent line of savepoints. [Sessions and branching](sessions.md) has that half.
+
 ## The project is stopped, on purpose
 
 Every arcave workflow stops the project's services before it reads or writes a byte, and starts them again afterwards.

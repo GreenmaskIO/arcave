@@ -140,7 +140,7 @@ Each volume gets a restic repository that outlives any one savepoint, and a capt
 
 * **It cannot run two workflows at once.** Every mutating call claims the project lock and fails immediately rather than queuing.
 * **It cannot roll back to a point it did not snapshot.** There is no point-in-time recovery — only savepoints that were actually taken.
-* **It is not sandboxed.** arcave gives an undo, not isolation. The agent is operating on the real daemon, the real volumes and the real ports.
+* **It is not sandboxed.** arcave gives an undo, not isolation. The agent is operating on the real Docker daemon, the real volumes and the real ports.
 * **Each call stops the project.** Every `savepoint_create` and `rollback` restarts the services and waits for health checks. This is not a free operation to call in a tight loop.
 
 ## Related docs

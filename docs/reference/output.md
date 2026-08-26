@@ -151,7 +151,7 @@ The one shape three commands are built from: `savepoint create` prints it, `save
 }
 ```
 
-`image_ref` is the reference the restored layer answers to in your local daemon.
+`image_ref` is the reference the restored layer answers to in your local Docker daemon.
 
 ## Reading it
 

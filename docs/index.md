@@ -14,7 +14,7 @@ Your code is versioned. The state your environment accumulates is not — and th
 
 **arcave** gives a Docker Compose project the semantics you already have for code: save the whole state, come back to it, and branch off any saved point. It does not save your source tree; it saves the live environment underneath it — the volumes, the container filesystems, and the compose specification the project was running under.
 
-**It runs on the Docker you already have.** No ZFS, no copy-on-write filesystem, no storage appliance, no daemon to reconfigure. Two things: Docker, and the arcave binary.
+**It runs on the Docker you already have.** No ZFS, no copy-on-write filesystem, no storage appliance, no Docker daemon to reconfigure. Two things: Docker, and the arcave binary.
 
 **Any compose project.** Postgres, MySQL, Kafka, Redis, MinIO, your own services — whatever is in your compose file. There is no allowlist, because arcave reads the project your daemon is running rather than guessing at what the services are.
 
