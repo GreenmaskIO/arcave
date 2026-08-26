@@ -44,20 +44,20 @@ The savepoint names and the git branch names are yours to keep in step. arcave d
 
 This matters more than the part above, because building a workflow on the wrong mental model is expensive later.
 
-**Branches are serial, not concurrent.** There is one environment. Rolling back to `main-baseline` *replaces* the current state — it does not create a second stack you can run alongside the first. You cannot have `feature/billing` and `feature/reporting` both live and both queryable.
+**Branches are serial, not concurrent.** There is one environment. Rolling back to `main-baseline` *replaces* the current state — it does not create a second project you can run alongside the first. You cannot have `feature/billing` and `feature/reporting` both live and both queryable.
 
-**Switching costs downtime.** Every rollback stops the stack, moves data, and starts it again, then waits for health checks. Seconds to minutes depending on volume size — not the sub-second clone that hosted branching services advertise.
+**Switching costs downtime.** Every rollback stops the project, moves data, and starts it again, then waits for health checks. Seconds to minutes depending on volume size — not the sub-second clone that hosted branching services advertise.
 
 **There is no point-in-time recovery.** arcave captures volumes at rest; it does not read WAL, binlogs, or any transaction stream. You can return to a savepoint you took. You cannot return to "11:42 this morning" unless you happened to take one then.
 
 **Nothing merges.** There is no diff between two savepoints and no way to combine them. A savepoint is a point you return to, full stop.
 
-**It is not per-database.** The unit is the whole stack. You cannot branch one service's data while leaving the rest alone — a rollback restores everything the savepoint covered.
+**It is not per-database.** The unit is the whole project. You cannot branch one service's data while leaving the rest alone — a rollback restores everything the savepoint covered.
 
 **It is local, and single-writer.** One project, one lock, one workflow at a time. This is a development-machine tool, not a shared-team environment service.
 
 :::warning
-If you need concurrent branches, instant switching, or point-in-time recovery, you want a database with real branching — Neon, PlanetScale, Dolt. arcave is what you use when you want *most* of the ergonomics without adopting any of them, on a stack that is already Docker Compose.
+If you need concurrent branches, instant switching, or point-in-time recovery, you want a database with real branching — Neon, PlanetScale, Dolt. arcave is what you use when you want *most* of the ergonomics without adopting any of them, on a compose project that is already Docker Compose.
 :::
 
 ## Keeping the branch points tidy

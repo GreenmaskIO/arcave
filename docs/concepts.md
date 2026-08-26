@@ -1,6 +1,6 @@
 ---
 title: Concepts
-description: The arcave vocabulary — savepoint, safety snapshot, project versus stack, session, store, snapshot backend and the inflight marker — in one page.
+description: The arcave vocabulary — savepoint, safety snapshot, the compose project versus the storage tenant, session, store, snapshot backend and the inflight marker — in one page.
 keywords: [arcave concepts, savepoint, safety snapshot, snapshot backend, compose project, storage tenant, Open-Source, Greenmask]
 ---
 
@@ -10,7 +10,7 @@ Seven terms carry the whole tool. This page defines each one and points at the p
 
 ## Savepoint
 
-A **savepoint** is a consistent snapshot of every stateful volume in a Docker Compose project, plus every container's writable layer, plus the compose spec of the stack it was taken from.
+A **savepoint** is a consistent snapshot of every stateful volume in a Docker Compose project, plus every container's writable layer, plus the compose spec of the project it was taken from.
 
 It has an id — a Unix timestamp as decimal digits, assigned by arcave — and optionally a name and a description that you assign.
 
@@ -45,23 +45,23 @@ A **safety snapshot** is an ordinary savepoint that a rollback takes of the live
 
 An explicit id still reaches it. That asymmetry is the point: a safety snapshot that outlived its rollback is the last copy of your pre-rollback state, and you must be able to name it. See [How arcave works](how_it_works.md#the-safety-snapshot).
 
-## Project versus stack
+## The compose project versus the storage tenant
 
 Two different things, and conflating them is the most common source of confusion.
 
-**The stack** is the Docker Compose project arcave acts on — what `docker compose ls` lists. You name it per invocation with `-p/--project-name` or `ARCAVE_PROJECT_NAME`. It is deliberately **not** a config key: one directory may hold several stacks, and a persisted name would pin arcave to one of them.
+**The compose project** is what arcave acts on — what `docker compose ls` lists. You name it per invocation with `-p/--project-name` or `ARCAVE_PROJECT_NAME`. It is deliberately **not** a config key: one directory may hold several compose projects, and a persisted name would pin arcave to one of them.
 
-**The project** is the *storage tenant* — `project.name` in `.arcave/config.yaml`. It scopes the savepoint store, so several projects can share one configured storage path without colliding.
+**The arcave project** is the *storage tenant* — `project.name` in `.arcave/config.yaml`. It scopes the savepoint store, so several compose projects can share one configured storage path without colliding.
 
 They are frequently the same string. They do not have to be.
 
 :::warning
-`ARCAVE_PROJECT_NAME` sets both. It is read directly as the stack name, and viper also maps it onto the `project.name` config key. Exporting it therefore retargets the storage tenant as well — see [Configuration](reference/environment_variables.md).
+`ARCAVE_PROJECT_NAME` sets both. It is read directly as the compose project's name, and viper also maps it onto the `project.name` config key. Exporting it therefore retargets the storage tenant as well — see [Configuration](reference/environment_variables.md).
 :::
 
 ## Session
 
-A **session** is the lifetime everything under a store root dies with. It is a path segment between the project and the stack.
+A **session** is the lifetime everything under a store root dies with. It is a path segment between the arcave project and the compose project.
 
 Today there is exactly one session, `global`, and nothing creates another. The segment exists so that a future disposable timeline — a sandbox, a throwaway branch — is a new session rather than a new storage layout. You do not configure it.
 
@@ -70,7 +70,7 @@ Today there is exactly one session, `global`, and nothing creates another. The s
 The **store** is where savepoint data lives, rooted at:
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<stack>/
+<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
 ```
 
 The `arcave` segment is static and not configurable: it bounds every write and every delete arcave performs to a directory it owns.

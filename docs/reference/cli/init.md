@@ -12,7 +12,7 @@ Writes the configuration every other command requires.
 arcave init [flags]
 ```
 
-`init` names no stack, opens no storage and contacts no Docker daemon. It resolves the effective config from flags, environment and defaults, and writes one file.
+`init` names no compose project, opens no storage and contacts no Docker daemon. It resolves the effective config from flags, environment and defaults, and writes one file.
 
 ## Flags
 
@@ -24,7 +24,7 @@ arcave init [flags]
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
-`--name` names the storage tenant, not the compose stack. The stack is named per invocation with `-p/--project-name`, because one directory may hold several. The directory name is normalised into the tenant charset — `MyApp` becomes `myapp`, and characters outside `[a-z0-9_-]` are dropped.
+`--name` names the storage tenant, not the compose project. The compose project is named per invocation with `-p/--project-name`, because one directory may hold several. The directory name is normalised into the tenant charset — `MyApp` becomes `myapp`, and characters outside `[a-z0-9_-]` are dropped.
 
 ## Output
 

@@ -1,6 +1,6 @@
 ---
 title: Requirements
-description: What arcave needs — Docker 25 or newer, Linux or macOS, a compose stack that exists in the daemon — and the long list of things it does not need.
+description: What arcave needs — Docker 25 or newer, Linux or macOS, a compose project that exists in the daemon — and the long list of things it does not need.
 keywords: [arcave requirements, Docker 25, prerequisites, Linux, macOS, docker compose]
 ---
 
@@ -33,11 +33,11 @@ Released binaries:
 
 **There is no Windows build.** arcave takes its project lock through a system call Windows does not have, so the tool does not build for it at all.
 
-## A compose stack that exists in the daemon
+## A compose project that exists in the daemon
 
-arcave reads the **running stack** from the daemon by the labels compose stamps on what it creates. It never opens a compose file — a file that has moved, been edited or been generated changes nothing.
+arcave reads the **running project** from the daemon by the labels compose stamps on what it creates. It never opens a compose file — a file that has moved, been edited or been generated changes nothing.
 
-The stack does have to be there. `docker compose stop` is fine: stopped containers still describe the stack. `docker compose down` is not — it removes the containers, and with them everything arcave knows about the project:
+The project does have to be there. `docker compose stop` is fine: stopped containers still describe the project. `docker compose down` is not — it removes the containers, and with them everything arcave knows about the project:
 
 ```text
 no containers found for compose project "myapp": bring the stack up once, or name another project with -p
@@ -53,7 +53,7 @@ One `docker compose up -d` answers both.
 
 ## An initialised project
 
-Every command but `init` needs `.arcave/config.yaml` under the working directory, and a compose stack named with `-p/--project-name` or `ARCAVE_PROJECT_NAME`.
+Every command but `init` needs `.arcave/config.yaml` under the working directory, and a compose project named with `-p/--project-name` or `ARCAVE_PROJECT_NAME`.
 
 ## For the `cdc` backend only
 
@@ -66,7 +66,7 @@ Every command but `init` needs `.arcave/config.yaml` under the working directory
 * **Not the `docker` CLI, and not the compose plugin.** arcave speaks to the daemon itself and drives compose itself. A machine with a daemon and the arcave binary is a complete installation.
 * **Not a particular filesystem.** No ZFS, no btrfs, no reflink support, no copy-on-write anything. arcave gets cheap repeat savepoints from deduplication and incremental capture, which work on an ordinary directory on an ordinary disk.
 * **Not a reconfigured daemon.** No storage driver to choose, no experimental features, no privileges beyond what talking to the daemon already takes.
-* **No database-specific hooks.** arcave stops the services and captures the volumes at rest, so nothing has to know that a service is Postgres.
+* **Nothing to write per database.** arcave stops the services and captures the volumes at rest, so a capture needs no engine-specific hook or quiescing script of your own.
 
 ## Next step
 

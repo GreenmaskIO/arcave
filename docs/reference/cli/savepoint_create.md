@@ -1,12 +1,12 @@
 ---
 title: arcave savepoint create
-description: Capture an application-consistent savepoint of a Docker Compose stack — every stateful volume, every container's writable layer, and the compose spec of the stack itself.
+description: Capture an application-consistent savepoint of a Docker Compose project — every stateful volume, every container's writable layer, and the compose spec of the project itself.
 keywords: [arcave savepoint create, volume capture, writable layer, compose spec, docker compose]
 ---
 
 # arcave savepoint create
 
-Captures a savepoint: every stateful volume, every container's writable layer, and the compose spec of the stack.
+Captures a savepoint: every stateful volume, every container's writable layer, and the compose spec of the project.
 
 ```text title="Synopsis"
 arcave savepoint create [name] [flags]
@@ -93,16 +93,16 @@ Full shapes for every command are in [Output](../output.md).
 
 | Condition | What happens |
 |---|---|
-| The stack is not in the daemon | `no containers found for compose project "myapp": bring the stack up once, or name another project with -p` |
+| The project is not in the daemon | `no containers found for compose project "myapp": bring the stack up once, or name another project with -p` |
 | A declared named volume the daemon does not hold | `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`. An error, never a skip: an empty capture would silently replace live data at the next rollback. |
 | An anonymous volume whose container is gone | `no container for service "app" in project "myapp" mounts "/data" (is the project created?)` |
-| The stack has no volume to capture | `no stateful volumes found; nothing to capture` |
+| The project has no volume to capture | `no stateful volumes found; nothing to capture` |
 | Two volumes render one object id | `two volumes address the same object id: service "app" at "/var/lib" and service "app-var" at "/lib" both address "volume-service-app-var-lib"; rename one of them` |
 | The savepoint directory already holds objects | `capture directory is not empty: 1780335122 holds 3 object(s) — a savepoint of this same second, or an interrupted run's remains; retry, and check what is there before removing it` |
 | A daemon older than Docker 25 | `unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape`. See [Requirements](../requirements.md). |
 | An interrupted rollback is marked | `rollback to savepoint 1780335122 was interrupted (restoring)` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
-| The services do not become healthy in `--wait-timeout` | `savepoint 1780335122 committed; services failed to start: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the stack. |
+| The services do not become healthy in `--wait-timeout` | `savepoint 1780335122 committed; services failed to start: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the project. |
 
 A capture that fails before the record is committed leaves no savepoint. What the failed run wrote is named in the log and left in place; the next capture refuses that directory rather than sweeping it.
 
@@ -116,7 +116,7 @@ arcave savepoint create before-migration --description "pre v2 schema"
 ID=$(arcave savepoint create | jq -r .id)
 ```
 
-```shell title="Give a slow stack more time to come back"
+```shell title="Give a slow project more time to come back"
 arcave savepoint create before-migration --wait-timeout 5m
 ```
 

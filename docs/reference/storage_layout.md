@@ -9,7 +9,7 @@ keywords: [arcave storage layout, store root, object id, savepoint directory, de
 Everything arcave stores lives under one root, computed from [`storage.directory.path`](configuration.md#storage):
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<stack>/
+<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
 ```
 
 Four things are named there, outermost first:
@@ -19,19 +19,19 @@ Four things are named there, outermost first:
 | `arcave` | The static namespace every store is rooted under. Not configurable. | — |
 | `<project>` | The storage tenant, `project.name`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
 | `global` | The session — the lifetime everything below it dies with. There is one today. | `global`, or a canonical UUID |
-| `<stack>` | The compose stack, named per invocation with `-p`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
+| `<compose-project>` | The compose project, named per invocation with `-p`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
 
 The static `arcave` segment is what bounds every write and every delete: point the path at `/etc` and arcave operates in `/etc/arcave`. Each segment below it is checked against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.
 
-`compose/` has a reserved sibling for a second timeline that is not built yet, which is why the stack sits one level down rather than at the root.
+`compose/` has a reserved sibling for a second timeline that is not built yet, which is why the compose project sits one level down rather than at the root.
 
-## Inside the stack root
+## Inside a compose project's store root
 
 ```text
-<stack root>/
+<compose-project root>/
   1780335122/                                  a savepoint, named by its id
     savepoint.json                             the record — written last, and it is the commit
-    project.yaml                               the compose spec the stack was captured under
+    project.yaml                               the compose spec the project was captured under
     volume-named-myapp_pgdata/
       data.tar                                 a fullcopy capture of one volume
     images/app/replicas/1/
@@ -69,11 +69,11 @@ two volumes address the same object id: service "app" at "/var/lib" and service 
 
 ## Shared blobs
 
-A container's writable layer is committed as an image and split as it is stored: every blob goes to `shared/oci/blobs/sha256/` under the digest its own name already carries, and only the archive's small metadata stays with the savepoint. The base layer a stack's every savepoint carries is therefore written once, and `stored_bytes` against `size_bytes` in the record is where you see it.
+A container's writable layer is committed as an image and split as it is stored: every blob goes to `shared/oci/blobs/sha256/` under the digest its own name already carries, and only the archive's small metadata stays with the savepoint. The base layer a compose project's every savepoint carries is therefore written once, and `stored_bytes` against `size_bytes` in the record is where you see it.
 
-The blob store is shared by every savepoint of one **stack**, inside the session root. That keeps a session self-contained and dying whole, at the price of no sharing across sessions or stacks.
+The blob store is shared by every savepoint of one **compose project**, inside the session root. That keeps a session self-contained and dying whole, at the price of no sharing across sessions or compose projects.
 
-Nothing collects those blobs. `savepoint remove` frees the savepoint's own directory and leaves the shared store alone, so removing every savepoint of a stack frees no image bytes — see [Limitations](limitations.md#nothing-collects-the-shared-blobs).
+Nothing collects those blobs. `savepoint remove` frees the savepoint's own directory and leaves the shared store alone, so removing every savepoint of a compose project frees no image bytes — see [Limitations](limitations.md#nothing-collects-the-shared-blobs).
 
 ## cdc repositories
 
@@ -81,7 +81,7 @@ The [`cdc` backend](configuration.md#snapshot) keeps one restic repository per v
 
 ## Moving a savepoint
 
-Everything about one savepoint is under its own directory, except the image blobs it shares. Copying a whole stack root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as `storage.directory.path`, `project.name` and `-p` point at the same three segments.
+Everything about one savepoint is under its own directory, except the image blobs it shares. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as `storage.directory.path`, `project.name` and `-p` point at the same three segments.
 
 ## Next step
 

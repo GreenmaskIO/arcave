@@ -69,7 +69,7 @@ arcave savepoint remove --retain-recent 3
 ```
 
 :::note
-Budget for the stop-and-start window. Every `savepoint create` and every `rollback` restarts the stack and waits for health checks — up to [`--wait-timeout`](../reference/configuration.md#compose), two minutes by default. On a slow-starting stack, raise it rather than letting a timeout read as a migration failure.
+Budget for the stop-and-start window. Every `savepoint create` and every `rollback` restarts the project and waits for health checks — up to [`--wait-timeout`](../reference/configuration.md#compose), two minutes by default. On a slow-starting project, raise it rather than letting a timeout read as a migration failure.
 :::
 
 ## Related docs

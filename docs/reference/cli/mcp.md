@@ -14,7 +14,7 @@ arcave mcp
 
 No arguments and no flags of its own. The four tools, their arguments and their output shapes are in [MCP tools](../mcp_tools.md).
 
-`arcave mcp` takes no `-p/--project-name`: one server addresses many stacks, and each tool call names the one it means. It builds nothing at startup — every call wires the store and the daemon clients for the project it names and releases them when the call returns.
+`arcave mcp` takes no `-p/--project-name`: one server addresses many compose projects, and each tool call names the one it means. It builds nothing at startup — every call wires the store and the daemon clients for the project it names and releases them when the call returns.
 
 ## Transport
 
@@ -42,11 +42,11 @@ Start the server **in the project directory**: `.arcave/config.yaml` is resolved
 | Condition | What happens |
 |---|---|
 | No `.arcave/config.yaml` | The server refuses to start: `config is not found: run 'arcave init' if not yet initialized` |
-| A call names a stack that is not in the daemon | The call fails; the server stays up. |
+| A call names a compose project that is not in the daemon | The call fails; the server stays up. |
 | Another arcave run holds the project lock | The call fails at once rather than queuing. |
 | An interrupted rollback is marked | Mutating calls are refused until it is resolved. |
 
-A tool call runs the same workflow the CLI runs, under the same rules: the stack is stopped and started again, the project lock is claimed, and a failed rollback replays its safety snapshot. A savepoint an agent takes is listed and applied by the CLI, and the reverse.
+A tool call runs the same workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a failed rollback replays its safety snapshot. A savepoint an agent takes is listed and applied by the CLI, and the reverse.
 
 ## Examples
 

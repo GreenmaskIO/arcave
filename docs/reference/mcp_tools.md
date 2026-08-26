@@ -6,9 +6,9 @@ keywords: [arcave MCP tools, savepoint_create, rollback, AI agent, model context
 
 # MCP tools
 
-[`arcave mcp`](cli/mcp.md) exposes four tools. Each takes the compose stack it acts on as an argument, so one server addresses every project on the machine.
+[`arcave mcp`](cli/mcp.md) exposes four tools. Each takes the compose project it acts on as an argument, so one server addresses every project on the machine.
 
-Every tool runs the workflow the CLI runs, under the same rules: the stack is stopped and started again, the project lock is claimed, and a rollback that fails replays its safety snapshot. What an agent takes, you list; what you take, an agent rolls back to.
+Every tool runs the workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a rollback that fails replays its safety snapshot. What an agent takes, you list; what you take, an agent rolls back to.
 
 ## `savepoint_create`
 
@@ -16,7 +16,7 @@ Captures a savepoint. The services are stopped for the capture and started again
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose stack, as `docker compose ls` names it. |
+| `project` | yes | The compose project, as `docker compose ls` names it. |
 | `name` | no | A short name to refer to the savepoint by. Ids are assigned by arcave. |
 | `description` | no | What this savepoint is being taken before. |
 | `wait_timeout` | no | How long to wait for services to become healthy on restart, e.g. `2m` or `90s`. Omit for the project's own bound. |
@@ -43,7 +43,7 @@ Reads the store. Stops nothing, and takes no lock.
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose stack. |
+| `project` | yes | The compose project. |
 | `include_safety_snapshots` | no | Also list the safety snapshots a rollback commits of the live state before it overwrites it. Hidden by default. |
 
 Returns an object, because MCP structured output must be one — the array the CLI prints is the `savepoints` field:
@@ -64,7 +64,7 @@ Deletes savepoints and the data they hold. Permanent.
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose stack. |
+| `project` | yes | The compose project. |
 | `ids` | no | Savepoint ids to delete. Cannot be combined with the retention fields. |
 | `retain_recent` | no | Keep this many newest savepoints and delete the rest. |
 | `retain_for` | no | Keep savepoints younger than this duration, e.g. `24h` or `7d`. |
@@ -88,7 +88,7 @@ Returns the environment to a savepoint. Destructive: every volume it covers is w
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose stack. |
+| `project` | yes | The compose project. |
 | `ref` | yes | The savepoint to return to: its id, its name, or the literal `latest`. |
 | `wait_timeout` | no | How long to wait for services to become healthy on restart. Omit for the project's own bound. |
 

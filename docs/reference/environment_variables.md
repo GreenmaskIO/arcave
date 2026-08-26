@@ -21,7 +21,7 @@ These are bound to flags, so they work in any project:
 | `ARCAVE_COMPOSE_WAIT_TIMEOUT` | `compose.wait_timeout` |
 | `ARCAVE_COMPOSE_STOP_TIMEOUT` | `compose.stop_timeout` |
 | `ARCAVE_COMPOSE_PROGRESS` | `compose.progress` |
-| `ARCAVE_PROJECT_NAME` | `project.name` — **and** the compose stack, see below |
+| `ARCAVE_PROJECT_NAME` | `project.name` — **and** the compose project, see below |
 | `ARCAVE_STORAGE_DIRECTORY_PATH` | `storage.directory.path` |
 
 Any other key works when the file declares it. `arcave init` writes `storage.type`, `snapshot.backend` and the `project`, `compose` and `log` sections, so `ARCAVE_SNAPSHOT_BACKEND` overrides a default config out of the box:
@@ -36,22 +36,22 @@ A `backends.cdc` block, which `init` does not write, is the case to watch: until
 
 This one variable names two different things.
 
-* **The compose stack**, which every command but `init` acts on — the same thing `-p/--project-name` names, as `docker compose ls` shows it.
+* **The compose project**, which every command but `init` acts on — the same thing `-p/--project-name` names, as `docker compose ls` shows it.
 * **The storage tenant** `project.name`, the segment of the store path that keeps two projects sharing one storage location apart.
 
 They are usually the same string, and then this is invisible. When they must differ, pass `-p` on the command line and leave the variable unset:
 
-```shell title="One stack, one tenant — the ordinary case"
+```shell title="One compose project, one tenant — the ordinary case"
 export ARCAVE_PROJECT_NAME=myapp
 arcave savepoint create nightly
 ```
 
-```shell title="Two stacks under one tenant"
+```shell title="Two compose projects under one tenant"
 arcave -p myapp-blue savepoint create nightly
 arcave -p myapp-green savepoint create nightly
 ```
 
-Both stacks store under the tenant `project.name` from the config file, in [store roots](storage_layout.md) that differ in their last segment. Exporting `ARCAVE_PROJECT_NAME=myapp-blue` instead would have moved the tenant too, and the green stack's savepoints would have gone somewhere else.
+Both compose projects store under the tenant `project.name` from the config file, in [store roots](storage_layout.md) that differ in their last segment. Exporting `ARCAVE_PROJECT_NAME=myapp-blue` instead would have moved the tenant too, and the green project's savepoints would have gone somewhere else.
 
 ## Variables that are not arcave's
 

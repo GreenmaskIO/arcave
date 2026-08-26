@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Recovering from an interrupted rollback, a held project lock, a torn-down stack, a missing volume, a health-check timeout and cdc container networking.
+description: Recovering from an interrupted rollback, a held project lock, a torn-down project, a missing volume, a health-check timeout and cdc container networking.
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
@@ -56,7 +56,7 @@ Not before. Until then it is the last copy of the pre-rollback state.
 |---|---|
 | `recreating` | Died between the teardown and the containers existing again. The volumes are untouched. |
 | `restoring` | Died while writing volumes. The environment is partly overwritten. |
-| `restore-done` | Every volume was written back; only the start did not finish. Starting the stack and removing `.arcave/inflight.json` is enough, if that is what you want. |
+| `restore-done` | Every volume was written back; only the start did not finish. Starting the project and removing `.arcave/inflight.json` is enough, if that is what you want. |
 | `inconsistent` | The automatic replay failed too. The safety snapshot is retained and is the last copy of the pre-rollback state. |
 
 ## `another arcave command is already running in this project`
@@ -80,7 +80,7 @@ arcave --config /path/to/.arcave/config.yaml savepoint list    # or point at it
 
 ## `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME`
 
-Every command but `init` acts on one compose stack, and nothing guesses which.
+Every command but `init` acts on one compose project, and nothing guesses which.
 
 ```shell
 arcave -p myapp savepoint list
@@ -90,13 +90,13 @@ The name is what `docker compose ls` shows in the first column: the compose file
 
 ## `no containers found for compose project "myapp"`
 
-**What happened.** `docker compose down` was run, or the stack was never brought up. Down removes the containers, and with them everything arcave knows about the project.
+**What happened.** `docker compose down` was run, or the project was never brought up. Down removes the containers, and with them everything arcave knows about the project.
 
 ```shell
 docker compose up -d
 ```
 
-arcave reads the running stack from the daemon, not from your compose files. `docker compose stop` is fine — stopped containers still describe the stack.
+arcave reads the running project from the daemon, not from your compose files. `docker compose stop` is fine — stopped containers still describe the project.
 
 ## `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`
 
@@ -127,14 +127,14 @@ An earlier run was interrupted after it started writing and before it committed 
 If the directory persists, its objects are the last copy of whatever that run captured. Look before removing:
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<stack>/1780335122/
+<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/1780335122/
 ```
 
 If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back.
 
 ## `savepoint 1780335122 committed; services failed to start`
 
-**The savepoint exists and is complete.** Only the restart failed, so note the id and look at the stack: the services are stopped, or unhealthy, or slower than [`--wait-timeout`](configuration.md#compose). Do not take another savepoint to compensate.
+**The savepoint exists and is complete.** Only the restart failed, so note the id and look at the project: the services are stopped, or unhealthy, or slower than [`--wait-timeout`](configuration.md#compose). Do not take another savepoint to compensate.
 
 ```shell
 docker compose ps
@@ -145,7 +145,7 @@ arcave --log-level debug savepoint create retry --wait-timeout 5m
 
 **Symptom.** A savepoint reports a start failure, or a rollback replays itself, after about two minutes.
 
-`compose.wait_timeout` elapsed before every service reported healthy. On a rollback that triggers the automatic replay, so a healthy-but-slow stack is rolled back for the wrong reason.
+`compose.wait_timeout` elapsed before every service reported healthy. On a rollback that triggers the automatic replay, so a healthy-but-slow project is rolled back for the wrong reason.
 
 ```shell title="Raise the bound for one run"
 arcave rollback latest --wait-timeout 5m
@@ -175,7 +175,7 @@ Zero means "unset" and the default applies, so an immediate kill is spelled `1s`
 
 ## A rollback is refused: `savepoint carries no compose spec`
 
-The stack is rebuilt from the compose spec the savepoint recorded, and savepoints taken before arcave recorded one carry none. Their volume data is still on disk, but there is no supported path that puts it back. Take a fresh savepoint.
+The project is rebuilt from the compose spec the savepoint recorded, and savepoints taken before arcave recorded one carry none. Their volume data is still on disk, but there is no supported path that puts it back. Take a fresh savepoint.
 
 ## `unsupported image archive format`
 

@@ -1,14 +1,14 @@
 ---
 title: Index
-description: Worked arcave examples on a multi-service Docker Compose stack — rolling back a failed migration, resetting a seeded environment, pruning savepoints and driving arcave from an AI agent.
+description: Worked arcave examples on a multi-service Docker Compose project — rolling back a failed migration, resetting a seeded environment, pruning savepoints and driving arcave from an AI agent.
 keywords: [arcave examples, docker compose, postgres rollback, minio, redis, savepoint, tutorial, Open-Source, Greenmask]
 ---
 
 # Examples
 
-Complete walkthroughs, each starting from the same stack. Where [Use cases](../use_cases/index.md) explain *when* to reach for a savepoint, these show every command and its output.
+Complete walkthroughs, each starting from the same project. Where [Use cases](../use_cases/index.md) explain *when* to reach for a savepoint, these show every command and its output.
 
-## The stack
+## The project
 
 Every example below runs against one compose project with three different kinds of persistent mount, so a single savepoint exercises all of them.
 
@@ -78,7 +78,7 @@ export ARCAVE_PROJECT_NAME=arcave-demo
 ```
 
 :::note
-`--name demo` is the storage tenant; `ARCAVE_PROJECT_NAME=arcave-demo` is the compose project, as `name:` declares it in the compose file. They differ here on purpose, to keep the two ideas visibly distinct — see [Concepts](../concepts.md#project-versus-stack). Note that exporting the variable also overrides `project.name`, so with both set as above, pass `-p arcave-demo` per command instead if you want the tenant to stay `demo`.
+`--name demo` is the storage tenant; `ARCAVE_PROJECT_NAME=arcave-demo` is the compose project, as `name:` declares it in the compose file. They differ here on purpose, to keep the two ideas visibly distinct — see [Concepts](../concepts.md#the-compose-project-versus-the-storage-tenant). Note that exporting the variable also overrides `project.name`, so with both set as above, pass `-p arcave-demo` per command instead if you want the tenant to stay `demo`.
 :::
 
 ## The examples

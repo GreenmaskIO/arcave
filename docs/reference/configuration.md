@@ -74,7 +74,7 @@ The storage tenant every store root is scoped by.
 
 Validated against an allowlist: it starts with `[a-z0-9]` and continues with `[a-z0-9_-]`. The directory name is normalised into that charset — `MyApp` becomes `myapp` — and a name that normalises to nothing is reported rather than guessed at.
 
-The compose stack is **not** here. It is named per invocation with `-p/--project-name`, because one project directory may hold several stacks and a persisted name would pin arcave to one of them.
+The compose project is **not** here. It is named per invocation with `-p/--project-name`, because one project directory may hold several compose projects and a persisted name would pin arcave to one of them.
 
 ## `docker`
 
@@ -95,7 +95,7 @@ The three `*_file` keys exist for certificates that do not follow the `cert_path
 
 ## `compose`
 
-How patient arcave is with the stack, and how loudly compose reports its own progress.
+How patient arcave is with the project, and how loudly compose reports its own progress.
 
 | Key | Flag | Default | Description |
 |---|---|---|---|
@@ -141,7 +141,7 @@ Where savepoint data is written. A tagged union: `type` names the arm, and that 
 The path you configure is not the path arcave writes to. Every store is rooted under a static `arcave` segment, and the full layout is in [Storage layout](storage_layout.md):
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<stack>/
+<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
 ```
 
 That segment is not configurable, and it is what bounds every write and every delete arcave makes: point the path at `/etc` and arcave operates in `/etc/arcave`. Every segment below it is checked against an allowlist, because a list of what a path segment must *not* be is never provably complete.

@@ -8,7 +8,7 @@ keywords: [arcave example, MCP server, AI agent, agentic pipeline, Claude Code, 
 
 Give an agent an undo button, so a failed iteration costs a rollback instead of a rebuild.
 
-Runs against the [demo stack](index.md#the-stack).
+Runs against the [demo project](index.md#the-project).
 
 ## 1. Initialise the project
 
@@ -47,7 +47,7 @@ Four tools:
 | `savepoint_remove` | Prune |
 | `rollback` | Restore |
 
-Every one takes `project` explicitly — one server serves many stacks, and the agent names the one it means per call.
+Every one takes `project` explicitly — one server serves many compose projects, and the agent names the one it means per call.
 
 ```json title="A savepoint_create call"
 {
@@ -78,7 +78,7 @@ Every one takes `project` explicitly — one server serves many stacks, and the 
 
 Because the environment resets between attempts, attempt 4 is genuinely attempt 4 — not attempt 1 plus the debris of three failures.
 
-## 5. Give slow stacks more time
+## 5. Give slow compose projects more time
 
 ```json title="savepoint_create with an explicit bound"
 {
@@ -88,7 +88,7 @@ Because the environment resets between attempts, attempt 4 is genuinely attempt 
 }
 ```
 
-Both tools that restart the stack accept `wait_timeout`. Without it they use the project's `compose.wait_timeout`, two minutes by default — and an agent that keeps hitting that on a slow-starting stack will read the timeout as a failure and roll back for the wrong reason.
+Both tools that restart the project accept `wait_timeout`. Without it they use the project's `compose.wait_timeout`, two minutes by default — and an agent that keeps hitting that on a slow-starting project will read the timeout as a failure and roll back for the wrong reason.
 
 ## 6. Watch what it is doing
 
@@ -141,7 +141,7 @@ Each volume gets a restic repository that outlives any one savepoint, and a capt
 * **It cannot run two workflows at once.** Every mutating call claims the project lock and fails immediately rather than queuing.
 * **It cannot roll back to a point it did not snapshot.** There is no point-in-time recovery — only savepoints that were actually taken.
 * **It is not sandboxed.** arcave gives an undo, not isolation. The agent is operating on the real daemon, the real volumes and the real ports.
-* **Each call stops the stack.** Every `savepoint_create` and `rollback` restarts the services and waits for health checks. This is not a free operation to call in a tight loop.
+* **Each call stops the project.** Every `savepoint_create` and `rollback` restarts the services and waits for health checks. This is not a free operation to call in a tight loop.
 
 ## Related docs
 

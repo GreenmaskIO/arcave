@@ -57,7 +57,7 @@ It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child proc
 | `savepoint_remove` | Delete by `ids`, or by `retain_recent` / `retain_for` / `before_date`. Supports `dry_run`. |
 | `rollback` | Restore to `ref` — an id, a name, or `latest`. |
 
-Every tool takes `project` explicitly: one server serves many stacks, and the agent names the one it means per call.
+Every tool takes `project` explicitly: one server serves many compose projects, and the agent names the one it means per call.
 
 ```json title=".mcp.json / claude_desktop_config.json"
 {
@@ -90,7 +90,7 @@ Two settings matter when an agent is driving:
 arcave savepoint create attempt-7 --wait-timeout 5m
 ```
 
-[`--wait-timeout`](../reference/configuration.md#compose) is how long arcave waits for health checks after restarting. An agent that keeps hitting the default two minutes on a slow-starting stack will read the timeout as a failure and roll back for the wrong reason. Both MCP tools that restart the stack accept `wait_timeout` per call for the same reason.
+[`--wait-timeout`](../reference/configuration.md#compose) is how long arcave waits for health checks after restarting. An agent that keeps hitting the default two minutes on a slow-starting project will read the timeout as a failure and roll back for the wrong reason. Both MCP tools that restart the project accept `wait_timeout` per call for the same reason.
 
 ```shell
 arcave --log-format json savepoint create attempt-7
@@ -102,7 +102,7 @@ arcave --log-format json savepoint create attempt-7
 
 arcave gives an agent an **undo**, not a **sandbox**. The agent is still operating on your real Docker daemon, your real volumes and your real ports. A savepoint protects the data; it does not isolate the blast radius. If the agent needs isolation rather than reversibility, it needs a separate environment, and arcave is what makes that environment cheap to reset — not what makes it separate.
 
-The loop also serialises. Every workflow stops the stack and holds the project lock, so one agent iterates at a time per project. Two agents on one stack is not a supported shape — see [Limitations](../reference/limitations.md#one-writer-per-project).
+The loop also serialises. Every workflow stops the project and holds the project lock, so one agent iterates at a time per project. Two agents on one compose project is not a supported shape — see [Limitations](../reference/limitations.md#one-writer-per-project).
 
 ## Related docs
 

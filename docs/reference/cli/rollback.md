@@ -1,6 +1,6 @@
 ---
 title: arcave rollback
-description: Return a Docker Compose environment to an arcave savepoint — its volumes, its containers' writable layers and the stack topology it recorded — behind an automatic safety snapshot.
+description: Return a Docker Compose environment to an arcave savepoint — its volumes, its containers' writable layers and the compose spec it recorded — behind an automatic safety snapshot.
 keywords: [arcave rollback, savepoint, safety snapshot, compose spec, volume data]
 ---
 
@@ -14,7 +14,7 @@ arcave rollback <savepoint-id|name|latest>
 
 Exactly one argument is required.
 
-arcave rebuilds the stack the savepoint recorded, puts the captured writable layers back, and writes every captured volume back into it, behind a safety snapshot it replays by itself if anything fails. The whole sequence, its phases and their remedies are [`concepts/rollback_and_safety.md`](../../concepts/rollback_and_safety.md).
+arcave rebuilds the project the savepoint recorded, puts the captured writable layers back, and writes every captured volume back into it, behind a safety snapshot it replays by itself if anything fails. The whole sequence, its phases and their remedies are [`concepts/rollback_and_safety.md`](../../concepts/rollback_and_safety.md).
 
 **A rollback is destructive.** Every volume it covers is wiped before it is written back — bind mounts, which are your own host directories, included; a volume a service reaches through `subpath:` goes back whole. Anything written since the savepoint is gone.
 
@@ -86,7 +86,7 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
 | `restored` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
 | `images` | One entry per writable layer loaded back, with the local reference it now answers to. |
 
-Each restored layer is tagged `arcave/<stack>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. Those tags are not collected — see [Limitations](../limitations.md#nothing-collects-what-a-rollback-leaves-in-the-daemon).
+Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. Those tags are not collected — see [Limitations](../limitations.md#nothing-collects-what-a-rollback-leaves-in-the-daemon).
 
 ## Errors
 
@@ -97,7 +97,7 @@ Each restored layer is tagged `arcave/<stack>-<service>-<replica>-<base image>:s
 | The name is not there | `finding savepoint "clean": savepoint not found: clean` |
 | The name matches several | `finding savepoint "clean": 2 savepoints are named "clean"; roll back by id instead: 1780335122, 1780339981` |
 | `latest` with an empty store | `finding savepoint "latest": no savepoints exist` |
-| The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 1780335122`. The stack is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
+| The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 1780335122`. The project is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
 | A stored layer the daemon will not take | `restore the savepoint's writable layers: …` — raised **before** anything is stopped. |
 | An interrupted rollback is marked | `require no inflight: rollback to savepoint 1780335122 was interrupted (restoring)` — except a rollback to that marker's own safety snapshot, which is the remedy and passes. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
@@ -105,7 +105,7 @@ Each restored layer is tagged `arcave/<stack>-<service>-<replica>-<base image>:s
 | Anything fails after that | `rollback failed: …`, after the safety snapshot has been replayed. You are where you started. |
 | The replay fails too | The same error, with the safety snapshot **kept**, its id in the log, and the marker phased `inconsistent`. It is now the last copy of the pre-rollback state — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 
-Everything that can fail is done while the stack is still up: both backend sets are built, the recorded spec is parsed, and every stored layer is loaded into the daemon before the first container is stopped.
+Everything that can fail is done while the project is still up: both backend sets are built, the recorded spec is parsed, and every stored layer is loaded into the daemon before the first container is stopped.
 
 ## Examples
 
@@ -121,7 +121,7 @@ arcave rollback clean
 ./migrate up || arcave rollback before-migration
 ```
 
-```shell title="Give a slow stack more time before arcave calls it a failure"
+```shell title="Give a slow project more time before arcave calls it a failure"
 arcave rollback latest --wait-timeout 5m
 ```
 
