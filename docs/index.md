@@ -6,17 +6,10 @@ sidebar_label: About
 slug: /
 ---
 
-import ThemedImage from '@theme/ThemedImage';
+import ArcaveLockup from './assets/arcave-lockup-brand-adaptive-safe.svg';
 
 <a href="https://github.com/GreenmaskIO/arcave">
-  <ThemedImage
-    alt="arcave"
-    width="520"
-    sources={{
-      light: require('./assets/arcave-lockup-brand-on-light-safe.svg').default,
-      dark: require('./assets/arcave-lockup-brand-on-dark-safe.svg').default,
-    }}
-  />
+  <ArcaveLockup width={520} style={{color: 'var(--ifm-font-color-base)'}} />
 </a>
 
 # About arcave
