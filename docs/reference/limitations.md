@@ -44,7 +44,7 @@ Nothing outside the project moves. A cloud database, a webhook already delivered
 
 ## A `subpath:` mount is captured and put back whole
 
-The unit is the volume, not the mount. A service that sees only a subdirectory through `subpath:` still has the whole volume captured, and a rollback puts the whole volume back — including everything another service reaches through a different subpath of it. The daemon does not report a mount's subpath, so arcave, which reads the running project, never sees one.
+The unit is the volume, not the mount. A service that sees only a subdirectory through `subpath:` still has the whole volume captured, and a rollback puts the whole volume back — including everything another service reaches through a different subpath of it. The Docker daemon does not report a mount's subpath, so arcave, which reads the running project, never sees one.
 
 ## An anonymous volume needs its container
 
@@ -58,7 +58,7 @@ arcave finds a project's volumes by compose's own labels. An `external: true` vo
 
 Image blobs are shared by every savepoint of a compose project. `savepoint remove` frees that savepoint's own directory and leaves the shared store alone, so deleting every savepoint of a compose project frees no image bytes. Removing that store root by hand is what reclaims them today. See [Storage layout](storage_layout.md#shared-blobs).
 
-## Nothing collects what a rollback leaves in the daemon
+## Nothing collects what a rollback leaves in the Docker daemon
 
 A rollback tags each restored layer `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`. The running containers reference those tags, so nothing can drop them when the workflow ends: one tag per service, replica and savepoint survives each rollback. A `docker compose up` run by hand afterwards recreates the containers from your own compose file and drops the restored layer with them.
 

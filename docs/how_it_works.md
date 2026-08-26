@@ -8,6 +8,42 @@ keywords: [arcave architecture, savepoint mechanism, docker volume snapshot, rol
 
 arcave sits between you and the Docker daemon. It does not install an agent, patch a filesystem, or ask for a copy-on-write volume driver. It stops the project, moves the bytes through the Docker API, and starts the project again.
 
+## You, arcave and the Docker daemon
+
+You are between two things: the savepoints arcave keeps, and the live state your Docker daemon is running. Every arcave command moves state across that gap. `savepoint create` reads the live state into a savepoint. `rollback` writes a savepoint back into the daemon. `session create --from` does both: it copies a savepoint into a new session, then deploys that state into the daemon.
+
+```mermaid
+sequenceDiagram
+    participant S as arcave (savepoints)
+    participant U as user
+    participant D as docker daemon (live state)
+
+    U->>D: docker compose up, seed the data
+    Note over D: the project runs on real data
+
+    U->>S: arcave savepoint create v1.0
+    S->>D: stop the services
+    D-->>S: dump volumes, container filesystems, compose spec
+    Note over S: session baseline, savepoint v1.0
+    S->>D: start the services
+
+    U->>S: arcave session create --from=baseline/v1.0 --name=feat/add-new-table
+    Note over S: session feat/add-new-table, savepoint v1.0 copied in
+    S->>D: deploy what savepoint v1.0 recorded
+    Note over D: the project runs on v1.0
+
+    U->>D: write code, run a migration, let an agent work
+    Note over D: the state diverges
+    U->>S: arcave savepoint create step-1
+    Note over S: savepoint step-1
+
+    U->>S: arcave rollback step-1
+    S->>D: restore volumes, layers and spec
+    Note over D: back to what savepoint step-1 recorded
+```
+
+The fork on that diagram is a **session** — an independent line of savepoints. [Sessions and branching](sessions.md) has that half.
+
 ## The project is stopped, on purpose
 
 Every arcave workflow stops the project's services before it reads or writes a byte, and starts them again afterwards.
@@ -32,9 +68,7 @@ A savepoint captures two things, and they never overlap.
 
 Data belongs in volumes. The layer capture is what keeps a compose project honest when it is not there.
 
-:::warning
-The layer capture is not deduplicated. Each savepoint stores the whole image of each container, base layers included. `images[].size_bytes` in the savepoint record is what that costs — see [Limitations](reference/limitations.md).
-:::
+Layer captures are deduplicated: the base layer every savepoint shares is stored once, so `images[].size_bytes` in the savepoint record is the layer's own size and `images[].stored_bytes` is what the capture actually added.
 
 ## What a savepoint covers
 
@@ -56,19 +90,11 @@ A named volume the project declares but the daemon does not have is an **error**
 
 An external volume that nothing mounts is invisible to arcave: it reads the running project, and only compose's own volumes carry the project label that would reveal it.
 
+Volume data is moved one of two ways, chosen by [`snapshot.backend`](reference/configuration.md#snapshot). `fullcopy` streams each mount through the Docker API. `cdc` writes only the chunks that changed since the last savepoint, so the second savepoint of a project costs a fraction of the first, and a rollback rewrites less.
+
 ## The record is the commit marker
 
-Each savepoint is one self-contained directory under the store root, named by its id:
-
-```text title="One savepoint's namespace"
-<savepoint-id>/
-├── savepoint.json                            # the record — written LAST
-├── project.yaml                              # the project's compose spec
-├── <object-id>/data.tar                      # one archive per volume (fullcopy)
-└── images/<service>/<replica>/image.tar      # the container's writable layer
-```
-
-`savepoint.json` is written **last**, after every archive beside it is complete, and deleted **first** when a savepoint is removed. That single ordering rule is what makes the whole thing safe to interrupt:
+Each savepoint is one self-contained directory, and the record inside it — `savepoint.json` — is what makes the savepoint exist. It is written **last**, after every archive beside it is complete, and deleted **first** when a savepoint is removed. That single ordering rule is what makes the whole thing safe to interrupt:
 
 * A run killed before the record is written leaves data that no record names. `arcave savepoint list` does not show it, and nothing will ever restore it.
 * A removal killed after the record is deleted leaves data that no record names — the same harmless state.
@@ -158,21 +184,10 @@ arcave does not finish a rollback it died in the middle of. Recovery is explicit
 
 Every mutating workflow holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second arcave run against the same project fails immediately rather than queuing behind the first. Two workflows interleaving stop, capture and start on one compose project has no correct outcome.
 
-## Where the data lives
-
-One store holds everything, rooted by the configured path:
-
-```text title="Store root"
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
-```
-
-The `arcave` segment is not configurable, and it is the whole safety story: point the path at `/etc` and arcave operates in `/etc/arcave`, never in `/etc`. Every segment below it is validated against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.
-
-`<project>` is the storage tenant, from `project.name` in the config. `<compose-project>` is the compose project you named with `-p`. They are different concepts — see [Concepts](concepts.md#the-compose-project-versus-the-storage-tenant).
-
 ## Related docs
 
 * [Concepts](concepts.md) — the vocabulary used above.
 * [Getting started](getting_started.md) — run the flow yourself.
 * [Configuration](reference/configuration.md) — the bounds and backends named here.
+* [Storage layout](reference/storage_layout.md) — where the captures are written, if you need to look.
 * [Limitations](reference/limitations.md) — where this design stops.

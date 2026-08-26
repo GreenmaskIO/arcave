@@ -127,7 +127,7 @@ An earlier run was interrupted after it started writing and before it committed 
 If the directory persists, its objects are the last copy of whatever that run captured. Look before removing:
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/1780335122/
+<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/1780335122/
 ```
 
 If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back.

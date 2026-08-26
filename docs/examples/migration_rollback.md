@@ -71,7 +71,7 @@ INF compose kind=Container name=arcave-demo-postgres-1 status=Healthy
 }
 ```
 
-All three services were captured — including the anonymous volume behind Redis, which arcave had to ask the daemon about through the `redis` container.
+All three services were captured — including the anonymous volume behind Redis, which arcave had to ask the Docker daemon about through the `redis` container.
 
 ## 3. Run a migration that goes wrong
 

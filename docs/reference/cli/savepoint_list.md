@@ -34,7 +34,7 @@ arcave savepoint list | jq -r 'max_by(.created_at).id'
 
 A safety snapshot is an ordinary savepoint carrying the label `arcave-safety-snapshot: "true"`. The label hides it from this listing and from every scanning selector — `latest`, a name lookup, `--retain-recent`, `--retain-for`, `--before-date`. An explicit id still reaches one, in `rollback` and in `savepoint remove`, whether or not this flag was passed.
 
-It is hidden because one normally exists only *while* a rollback runs. One that outlived its rollback is the last copy of that rollback's pre-rollback state, and this flag is how you find its id. See [`concepts/rollback_and_safety.md`](../../concepts/rollback_and_safety.md).
+It is hidden because one normally exists only *while* a rollback runs. One that outlived its rollback is the last copy of that rollback's pre-rollback state, and this flag is how you find its id. See [the safety snapshot](../../how_it_works.md#the-safety-snapshot).
 
 ## Output
 
@@ -76,7 +76,7 @@ The name carries the id of the savepoint that rollback was applying, so a leftov
 |---|---|
 | No `.arcave/config.yaml` | `config is not found: run 'arcave init' if not yet initialized` |
 | No compose project named | `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME` |
-| The daemon is unreachable | The command fails while wiring itself up, before it reads the store. |
+| The Docker daemon is unreachable | The command fails while wiring itself up, before it reads the store. |
 | A record that will not decode | `parse savepoint record 1780335122: …` — a corrupt commit is an error, never a silent skip. |
 | No savepoints | `[]`, exit code `0`. |
 

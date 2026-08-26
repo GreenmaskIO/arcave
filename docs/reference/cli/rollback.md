@@ -14,7 +14,7 @@ arcave rollback <savepoint-id|name|latest>
 
 Exactly one argument is required.
 
-arcave rebuilds the project the savepoint recorded, puts the captured writable layers back, and writes every captured volume back into it, behind a safety snapshot it replays by itself if anything fails. The whole sequence, its phases and their remedies are [`concepts/rollback_and_safety.md`](../../concepts/rollback_and_safety.md).
+arcave rebuilds the project the savepoint recorded, puts the captured writable layers back, and writes every captured volume back into it, behind a safety snapshot it replays by itself if anything fails. The whole sequence, its phases and their remedies are in [How arcave works](../../how_it_works.md#what-a-rollback-restores).
 
 **A rollback is destructive.** Every volume it covers is wiped before it is written back — bind mounts, which are your own host directories, included; a volume a service reaches through `subpath:` goes back whole. Anything written since the savepoint is gone.
 
@@ -86,7 +86,7 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
 | `restored` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
 | `images` | One entry per writable layer loaded back, with the local reference it now answers to. |
 
-Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. Those tags are not collected — see [Limitations](../limitations.md#nothing-collects-what-a-rollback-leaves-in-the-daemon).
+Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. Those tags are not collected — see [Limitations](../limitations.md#nothing-collects-what-a-rollback-leaves-in-the-docker-daemon).
 
 ## Errors
 
@@ -98,7 +98,7 @@ Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<bas
 | The name matches several | `finding savepoint "clean": 2 savepoints are named "clean"; roll back by id instead: 1780335122, 1780339981` |
 | `latest` with an empty store | `finding savepoint "latest": no savepoints exist` |
 | The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 1780335122`. The project is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
-| A stored layer the daemon will not take | `restore the savepoint's writable layers: …` — raised **before** anything is stopped. |
+| A stored layer the Docker daemon will not take | `restore the savepoint's writable layers: …` — raised **before** anything is stopped. |
 | An interrupted rollback is marked | `require no inflight: rollback to savepoint 1780335122 was interrupted (restoring)` — except a rollback to that marker's own safety snapshot, which is the remedy and passes. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The safety snapshot fails | `pre-rollback safety snapshot failed, nothing changed: …`. The services are started again. |

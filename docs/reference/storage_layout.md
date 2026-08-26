@@ -9,7 +9,7 @@ keywords: [arcave storage layout, store root, object id, savepoint directory, de
 Everything arcave stores lives under one root, computed from [`storage.directory.path`](configuration.md#storage):
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
+<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/
 ```
 
 Four things are named there, outermost first:
@@ -18,7 +18,7 @@ Four things are named there, outermost first:
 |---|---|---|
 | `arcave` | The static namespace every store is rooted under. Not configurable. | — |
 | `<project>` | The storage tenant, `project.name`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
-| `global` | The session — the lifetime everything below it dies with. There is one today. | `global`, or a canonical UUID |
+| `<session>` | The session — the line of savepoints, and the lifetime everything below it dies with. | `global`, or a canonical UUID |
 | `<compose-project>` | The compose project, named per invocation with `-p`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
 
 The static `arcave` segment is what bounds every write and every delete: point the path at `/etc` and arcave operates in `/etc/arcave`. Each segment below it is checked against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.
@@ -46,7 +46,7 @@ The static `arcave` segment is what bounds every write and every delete: point t
 
 A savepoint id is a run of decimal digits — the Unix second the capture started — so a directory that is not one is never mistaken for a savepoint, and `shared/` and `restic/` cannot collide with a savepoint of any age.
 
-**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. That rule and its consequences are [`concepts/savepoint_lifecycle.md`](../concepts/savepoint_lifecycle.md).
+**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
 
 ## Object ids
 

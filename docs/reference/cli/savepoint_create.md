@@ -12,7 +12,7 @@ Captures a savepoint: every stateful volume, every container's writable layer, a
 arcave savepoint create [name] [flags]
 ```
 
-The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. The sequence is [`concepts/savepoint_lifecycle.md`](../../concepts/savepoint_lifecycle.md); what ends up inside is [`concepts/what_a_savepoint_contains.md`](../../concepts/what_a_savepoint_contains.md).
+The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. The sequence is [the savepoint flow](../../how_it_works.md#the-savepoint-flow); what ends up inside is [what a savepoint covers](../../how_it_works.md#what-a-savepoint-covers).
 
 ## Flags
 
@@ -93,7 +93,7 @@ Full shapes for every command are in [Output](../output.md).
 
 | Condition | What happens |
 |---|---|
-| The project is not in the daemon | `no containers found for compose project "myapp": bring the stack up once, or name another project with -p` |
+| The project is not in the Docker daemon | `no containers found for compose project "myapp": bring the stack up once, or name another project with -p` |
 | A declared named volume the daemon does not hold | `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`. An error, never a skip: an empty capture would silently replace live data at the next rollback. |
 | An anonymous volume whose container is gone | `no container for service "app" in project "myapp" mounts "/data" (is the project created?)` |
 | The project has no volume to capture | `no stateful volumes found; nothing to capture` |

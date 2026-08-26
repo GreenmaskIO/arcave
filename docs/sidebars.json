@@ -21,6 +21,11 @@
         },
         {
           "type": "doc",
+          "id": "sessions",
+          "label": "Sessions and branching"
+        },
+        {
+          "type": "doc",
           "id": "installation",
           "label": "Installation"
         },

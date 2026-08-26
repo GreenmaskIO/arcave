@@ -1,6 +1,6 @@
 ---
 title: Requirements
-description: What arcave needs — Docker 25 or newer, Linux or macOS, a compose project that exists in the daemon — and the long list of things it does not need.
+description: What arcave needs — Docker 25 or newer, Linux or macOS, a compose project that exists in the Docker daemon — and the long list of things it does not need.
 keywords: [arcave requirements, Docker 25, prerequisites, Linux, macOS, docker compose]
 ---
 
@@ -33,7 +33,7 @@ Released binaries:
 
 **There is no Windows build.** arcave takes its project lock through a system call Windows does not have, so the tool does not build for it at all.
 
-## A compose project that exists in the daemon
+## A compose project that exists in the Docker daemon
 
 arcave reads the **running project** from the daemon by the labels compose stamps on what it creates. It never opens a compose file — a file that has moved, been edited or been generated changes nothing.
 

@@ -141,7 +141,7 @@ Where savepoint data is written. A tagged union: `type` names the arm, and that 
 The path you configure is not the path arcave writes to. Every store is rooted under a static `arcave` segment, and the full layout is in [Storage layout](storage_layout.md):
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/global/compose/<compose-project>/
+<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/
 ```
 
 That segment is not configurable, and it is what bounds every write and every delete arcave makes: point the path at `/etc` and arcave operates in `/etc/arcave`. Every segment below it is checked against an allowlist, because a list of what a path segment must *not* be is never provably complete.
