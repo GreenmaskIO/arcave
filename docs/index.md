@@ -6,6 +6,19 @@ sidebar_label: About
 slug: /
 ---
 
+import ThemedImage from '@theme/ThemedImage';
+
+<a href="https://github.com/GreenmaskIO/arcave">
+  <ThemedImage
+    alt="arcave"
+    width="520"
+    sources={{
+      light: require('./assets/arcave-lockup-brand-on-light-safe.svg').default,
+      dark: require('./assets/arcave-lockup-brand-on-dark-safe.svg').default,
+    }}
+  />
+</a>
+
 # About arcave
 
 ## Ephemeral environments and branching for your Docker Compose project
