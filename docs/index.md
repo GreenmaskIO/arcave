@@ -96,13 +96,13 @@ The fork deploys that state into the daemon, and the commands that follow name t
 %%{init: {"flowchart": {"wrappingWidth": 340}} }%%
 flowchart LR
     subgraph sA["session — ses_id: 11, ses_name: baseline"]
-        A1(["sp_name: v1.0<br/>sp_id: 21"]) -- "arcave savepoint create v1.1" --> A2(["sp_name: v1.1<br/>sp_id: 22"])
+        A1(["sp_name: v1.0<br/>sp_id: 21"]) -- "savepoint create v1.1" --> A2(["sp_name: v1.1<br/>sp_id: 22"])
     end
     A1 --> F["arcave session create<br/>--from=baseline/v1.0<br/>--name=feat/add-new-table"]
-    F -- "copied in as the new line's first savepoint" --> B1
-    F -- "deployed on that state" --> E["the Docker Compose project<br/>running on what v1.0 recorded"]
+    F -- "copied in" --> B1
+    F -- "deployed" --> E["the compose project<br/>running on what v1.0 recorded"]
     subgraph sB["session — ses_id: 12, ses_name: feat/add-new-table"]
-        B1(["sp_name: v1.0<br/>sp_id: 23"]) -- "arcave savepoint create step-1" --> B2(["sp_name: step-1<br/>sp_id: 24"]) -- "arcave savepoint create step-2" --> B3(["sp_name: step-2<br/>sp_id: 25"])
+        B1(["sp_name: v1.0<br/>sp_id: 23"]) -- "savepoint create step-1" --> B2(["sp_name: step-1<br/>sp_id: 24"]) -- "savepoint create step-2" --> B3(["sp_name: step-2<br/>sp_id: 25"])
     end
 ```
 

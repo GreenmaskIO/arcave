@@ -46,7 +46,7 @@ The static `arcave` segment is what bounds every write and every delete: point t
 
 A savepoint id is a run of decimal digits — the Unix second the capture started — so a directory that is not one is never mistaken for a savepoint, and `shared/` and `restic/` cannot collide with a savepoint of any age.
 
-**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. That rule and its consequences are [`concepts/savepoint_lifecycle.md`](../concepts/savepoint_lifecycle.md).
+**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
 
 ## Object ids
 

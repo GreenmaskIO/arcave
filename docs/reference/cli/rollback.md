@@ -14,7 +14,7 @@ arcave rollback <savepoint-id|name|latest>
 
 Exactly one argument is required.
 
-arcave rebuilds the project the savepoint recorded, puts the captured writable layers back, and writes every captured volume back into it, behind a safety snapshot it replays by itself if anything fails. The whole sequence, its phases and their remedies are [`concepts/rollback_and_safety.md`](../../concepts/rollback_and_safety.md).
+arcave rebuilds the project the savepoint recorded, puts the captured writable layers back, and writes every captured volume back into it, behind a safety snapshot it replays by itself if anything fails. The whole sequence, its phases and their remedies are in [How arcave works](../../how_it_works.md#what-a-rollback-restores).
 
 **A rollback is destructive.** Every volume it covers is wiped before it is written back — bind mounts, which are your own host directories, included; a volume a service reaches through `subpath:` goes back whole. Anything written since the savepoint is gone.
 
