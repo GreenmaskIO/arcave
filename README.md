@@ -34,7 +34,7 @@ arcave rollback before-migration
 *   **[Sessions and branching](docs/reference/cli/session.md)**: Independent lines of savepoints inside one project. Fork a session off any savepoint and the two lines never mix.
 *   **[Incremental capture](docs/reference/configuration.md#snapshot)**: The `cdc` backend writes only the chunks that changed since the last savepoint. Container filesystems are deduplicated whichever backend you pick — the base layer every savepoint shares is stored once.
 *   **[Built for agents](docs/reference/mcp_tools.md)**: `arcave mcp` serves savepoint create, list, remove and rollback as MCP tools, so an agent checkpoints before it acts and rolls back when validation fails.
-*   **Plain Docker**: No ZFS, no copy-on-write filesystem, no storage appliance, no Docker daemon to reconfigure. Docker 25 or newer, and the arcave binary.
+*   **Plain Docker**: No ZFS, no copy-on-write filesystem, no storage appliance, no Docker daemon to reconfigure — the daemon you already run, and the arcave binary.
 *   **Any compose project**: Postgres, MySQL, Kafka, Redis, MinIO, your own services. No allowlist — arcave reads what your Docker daemon is running.
 
 ## Use Cases
