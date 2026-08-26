@@ -8,19 +8,17 @@ slug: /
 
 import ArcaveLockup from './assets/arcave-lockup-brand-on-light.svg';
 
-<a href="https://github.com/GreenmaskIO/arcave">
-  <ArcaveLockup width={400} />
-</a>
+<ArcaveLockup width={320} style={{display: 'block', marginBottom: '2rem'}} />
 
-# About arcave
+# About
 
-## Ephemeral environments and branching for your Docker Compose project
-
-![A static environment drifts through seeds, migrations and half-reverted hotfixes until the only way back is to rebuild it; with arcave, sessions branch off a baseline line of named savepoints and move back inside their own line.](./assets/ephemeral-environments-on-light.svg)
+**Ephemeral environments and branching for your Docker Compose project.**
 
 Your code is versioned. The state your environment accumulates is not — and that asymmetry is why a bad migration costs an afternoon.
 
 **arcave** gives a Docker Compose project the semantics you already have for code: save the whole state, come back to it, and branch off any saved point. It does not save your source tree; it saves the live environment underneath it — the volumes, the container filesystems, and the compose specification the project was running under.
+
+![A static environment drifts through seeds, migrations and half-reverted hotfixes until the only way back is to rebuild it; with arcave, sessions branch off a baseline line of named savepoints and move back inside their own line.](./assets/ephemeral-environments-on-light.svg)
 
 **It runs on the Docker you already have.** No ZFS, no copy-on-write filesystem, no storage appliance, no Docker daemon to reconfigure. Two things: Docker, and the arcave binary.
 
@@ -59,8 +57,6 @@ Every service of the compose project is stopped, the whole environment is captur
 ## Sessions
 
 Savepoints live in a **session** — an independent line of them inside the project. `arcave init` puts you in `baseline`, and a fork off any savepoint opens a second line beside it: that is what a branch is here.
-
-[Sessions and branching](sessions.md) has the model in full.
 
 ## Where to start
 

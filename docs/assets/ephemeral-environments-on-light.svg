@@ -6,7 +6,6 @@ svg{
   --danger:#C5221F;
   --frame:#f5f1ff; --frame-line:#dbccff;
   --flat:#f4f5f7;
-}
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 }
 text{font-family:var(--sans)}
