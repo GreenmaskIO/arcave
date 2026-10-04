@@ -44,7 +44,7 @@ func richService() model.Service {
 			{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", VolumeName: "demo_pgdata", Target: "/var/lib/postgresql/data"},
 			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "9f8e7d", Target: "/tmp/scratch"},
 			{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/seed", Target: "/docker-entrypoint-initdb.d", ReadOnly: true,
-				Bind: &model.BindMount{Propagation: "rprivate"}},
+				Bind: &model.BindMount{Propagation: "rprivate", CreateHostPath: true}},
 		},
 		Containers: []model.Container{{
 			ID:     fixtureContainerID,
@@ -186,6 +186,66 @@ func TestServiceConfig_Volumes(t *testing.T) {
 		Type: "bind", Source: "/srv/demo/seed", Target: "/docker-entrypoint-initdb.d", ReadOnly: true,
 		Bind: &types.ServiceVolumeBind{CreateHostPath: true},
 	}, cfg.Volumes[2])
+}
+
+func TestServiceVolume_Options(t *testing.T) {
+	tests := []struct {
+		name  string
+		mount model.ServiceVolume
+		want  types.ServiceVolumeConfig
+	}{
+		{
+			name: "a named volume's options",
+			mount: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", Volume: &model.VolumeMount{
+					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
+				}},
+			want: types.ServiceVolumeConfig{Type: "volume", Source: "pgdata", Target: "/data",
+				Volume: &types.ServiceVolumeVolume{
+					NoCopy: true, Subpath: "pg", Labels: types.Mapping{"tier": "db"},
+				}},
+		},
+		{
+			name: "a bind's options, the default propagation left out",
+			mount: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
+				Target: "/etc/cfg", Bind: &model.BindMount{
+					SELinux: "z", Propagation: "rprivate", CreateHostPath: true, Recursive: "readonly",
+				}},
+			want: types.ServiceVolumeConfig{Type: "bind", Source: "/host", Target: "/etc/cfg",
+				Bind: &types.ServiceVolumeBind{SELinux: "z", CreateHostPath: true, Recursive: "readonly"}},
+		},
+		{
+			name: "a bind that must not create its host path",
+			mount: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host",
+				Target: "/etc/cfg", Bind: &model.BindMount{Propagation: "rshared"}},
+			want: types.ServiceVolumeConfig{Type: "bind", Source: "/host", Target: "/etc/cfg",
+				Bind: &types.ServiceVolumeBind{Propagation: "rshared"}},
+		},
+		{
+			name: "a tmpfs mount's size and mode",
+			mount: model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
+				Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+			want: types.ServiceVolumeConfig{Type: "tmpfs", Target: "/run",
+				Tmpfs: &types.ServiceVolumeTmpfs{Size: 1 << 20, Mode: 0o1777}},
+		},
+		{
+			name: "an image mount's subpath",
+			mount: model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
+				Target: "/assets", ReadOnly: true, Image: &model.ImageMount{Subpath: "static"}},
+			want: types.ServiceVolumeConfig{Type: "image", Source: "assets:1", Target: "/assets",
+				ReadOnly: true, Image: &types.ServiceVolumeImage{SubPath: "static"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := serviceVolume(tt.mount)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestDeclaredNetworkMode(t *testing.T) {

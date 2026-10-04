@@ -15,9 +15,6 @@
 // Package introspect reports a compose stack as the daemon holds it, in one pass: services,
 // their mounts, the project's volumes and networks, the images its containers run on, and
 // `docker info`. Answers are kept verbatim. It reads no compose file and no config.
-//
-// TODO: read HostConfig.Mounts and HostConfig.Tmpfs for the subpath, nocopy, bind
-// flags and tmpfs mounts that .Mounts drops.
 package introspect
 
 import (
@@ -72,8 +69,8 @@ func NewInspector(api dockerAPI, stack model.DockerComposeProjectName) *Inspecto
 	return &Inspector{api: api, stack: stack}
 }
 
-// Introspect reports the stack, stopped containers included. It cannot see a mount's subpath, an
-// external volume named like a generated one, an unmounted foreign volume, or a torn-down stack.
+// Introspect reports the stack, stopped containers included. It cannot see an external volume
+// named like a generated one, an unmounted foreign volume, or a torn-down stack.
 func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
 	replicas, err := i.replicas(ctx)
 	if err != nil {
@@ -218,7 +215,7 @@ func (i *Inspector) service(
 	if err != nil {
 		return model.Service{}, err
 	}
-	mounts, err := i.serviceVolumes(ctx, replicas[0].Mounts, volumes)
+	mounts, err := i.serviceVolumes(ctx, replicas[0].Mounts, containers[0].Inspect, volumes)
 	if err != nil {
 		return model.Service{}, err
 	}
@@ -270,14 +267,17 @@ func containerName(names []string) string {
 // serviceVolumes classifies one container's mounts, sorted by target. The rule must keep
 // mirroring client/docker's matchMount, or a capture and its restore address different data.
 func (i *Inspector) serviceVolumes(
-	ctx context.Context, mounts []container.MountPoint, index map[string]volume.Volume,
+	ctx context.Context, mounts []container.MountPoint, inspect container.InspectResponse,
+	index map[string]volume.Volume,
 ) ([]model.ServiceVolume, error) {
+	declared := declaredMounts(inspect)
 	volumes := make([]model.ServiceVolume, 0, len(mounts))
 	for _, m := range mounts {
 		v, err := i.serviceVolume(ctx, m, index)
 		if err != nil {
 			return nil, err
 		}
+		applyMountOptions(&v, m, declared[m.Destination])
 		volumes = append(volumes, v)
 	}
 	slices.SortStableFunc(volumes, func(a, b model.ServiceVolume) int {
@@ -317,7 +317,6 @@ func (i *Inspector) serviceVolume(
 	case mount.TypeBind:
 		sv.Type = model.VolumeTypeBind
 		sv.Source = m.Source
-		sv.Bind = &model.BindMount{Propagation: string(m.Propagation)}
 	case mount.TypeTmpfs:
 		sv.Type = model.VolumeTypeTmpfs
 	case mount.TypeNamedPipe:
@@ -343,6 +342,117 @@ func (i *Inspector) volume(ctx context.Context, name string, index map[string]vo
 	}
 	index[name] = v
 	return v, nil
+}
+
+// declaredMount is one mount as requested, through the mount API (api) or the bind API (flags).
+// source is the path compose gave; Docker Desktop reports its VM's own path in .Mounts.
+type declaredMount struct {
+	api    *mount.Mount
+	source string
+	flags  []string
+}
+
+// declaredMounts indexes the container's mount requests by target; .Mounts drops their options.
+func declaredMounts(inspect container.InspectResponse) map[string]declaredMount {
+	declared := map[string]declaredMount{}
+	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+		return declared
+	}
+	for _, bind := range inspect.HostConfig.Binds {
+		if source, target, flags, ok := parseBind(bind); ok {
+			declared[target] = declaredMount{source: source, flags: flags}
+		}
+	}
+	for idx := range inspect.HostConfig.Mounts {
+		m := &inspect.HostConfig.Mounts[idx]
+		declared[m.Target] = declaredMount{api: m, source: m.Source}
+	}
+	return declared
+}
+
+// parseBind splits a bind API entry, `source:target[:flags]`.
+func parseBind(bind string) (source, target string, flags []string, ok bool) {
+	parts := strings.Split(bind, ":")
+	switch {
+	case len(parts) >= 3 && strings.HasPrefix(parts[len(parts)-2], "/"):
+		return strings.Join(parts[:len(parts)-2], ":"), parts[len(parts)-2],
+			strings.Split(parts[len(parts)-1], ","), true
+	case len(parts) >= 2:
+		return strings.Join(parts[:len(parts)-1], ":"), parts[len(parts)-1], nil, true
+	default:
+		return "", "", nil, false
+	}
+}
+
+// applyMountOptions fills sv's per-type options and source from the declared mount.
+func applyMountOptions(sv *model.ServiceVolume, m container.MountPoint, declared declaredMount) {
+	switch sv.Type {
+	case model.VolumeTypeNamed, model.VolumeTypeAnon:
+		sv.Volume = volumeOptions(declared)
+	case model.VolumeTypeBind:
+		if declared.source != "" {
+			sv.Source = declared.source
+		}
+		sv.Bind = bindOptions(m, declared)
+	case model.VolumeTypeTmpfs:
+		if declared.api != nil && declared.api.TmpfsOptions != nil {
+			sv.Tmpfs = &model.TmpfsMount{
+				SizeBytes: declared.api.TmpfsOptions.SizeBytes,
+				Mode:      uint32(declared.api.TmpfsOptions.Mode),
+			}
+		}
+	case model.VolumeTypeImage:
+		if declared.api != nil {
+			sv.Source = declared.api.Source
+			if declared.api.ImageOptions != nil {
+				sv.Image = &model.ImageMount{Subpath: declared.api.ImageOptions.Subpath}
+			}
+		}
+	}
+}
+
+// volumeOptions reads nocopy, subpath and the per-mount labels; nil when none was asked for.
+func volumeOptions(declared declaredMount) *model.VolumeMount {
+	if slices.Contains(declared.flags, "nocopy") {
+		return &model.VolumeMount{NoCopy: true}
+	}
+	if declared.api == nil || declared.api.VolumeOptions == nil {
+		return nil
+	}
+	o := declared.api.VolumeOptions
+	if !o.NoCopy && o.Subpath == "" && len(o.Labels) == 0 {
+		return nil
+	}
+	return &model.VolumeMount{NoCopy: o.NoCopy, Subpath: o.Subpath, Labels: o.Labels}
+}
+
+// bindOptions reads a bind's options. The bind API creates a missing host path and the mount
+// API does so only when asked, so a bind of unknown origin is taken as the bind API's.
+func bindOptions(m container.MountPoint, declared declaredMount) *model.BindMount {
+	bind := &model.BindMount{Propagation: string(m.Propagation), CreateHostPath: true}
+	for _, flag := range declared.flags {
+		if flag == "z" || flag == "Z" {
+			bind.SELinux = flag
+		}
+	}
+	if declared.api == nil {
+		return bind
+	}
+	o := declared.api.BindOptions
+	if o == nil {
+		bind.CreateHostPath = false
+		return bind
+	}
+	bind.CreateHostPath = o.CreateMountpoint
+	switch {
+	case o.NonRecursive:
+		bind.Recursive = "disabled"
+	case o.ReadOnlyNonRecursive:
+		bind.Recursive = "writable"
+	case o.ReadOnlyForceRecursive:
+		bind.Recursive = "readonly"
+	}
+	return bind
 }
 
 // owns tells the project's own volume by the label compose stamped on it — the one

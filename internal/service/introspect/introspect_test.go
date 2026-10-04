@@ -78,7 +78,7 @@ func TestInspector_Introspect(t *testing.T) {
 	assert.Equal(t, "db", got.Project.Services[1].Name)
 	assert.Equal(t, []model.ServiceVolume{
 		{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg",
-			ReadOnly: true, Bind: &model.BindMount{}},
+			ReadOnly: true, Bind: &model.BindMount{CreateHostPath: true}},
 		{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/mnt/data",
 			VolumeName: ownedName},
 	}, got.Project.Services[0].Volumes, "mounts sort by target")
@@ -158,7 +158,7 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			name:  "a bind carries the host path and its propagation",
 			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
 			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind",
-				Source: "/host/cfg", Target: "/etc/cfg", Bind: &model.BindMount{}},
+				Source: "/host/cfg", Target: "/etc/cfg", Bind: &model.BindMount{CreateHostPath: true}},
 		},
 		{
 			name:  "tmpfs",
@@ -203,6 +203,115 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, []model.ServiceVolume{want}, got.Project.Services[0].Volumes)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestInspector_Introspect_MountOptions(t *testing.T) {
+	tests := []struct {
+		name  string
+		mount container.MountPoint
+		host  container.HostConfig
+		want  model.ServiceVolume
+	}{
+		{
+			name:  "the mount API carries a volume's nocopy, subpath and labels",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
+				Target: "/data", VolumeOptions: &mount.VolumeOptions{
+					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
+				}}}},
+			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &model.VolumeMount{
+					NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"},
+				}},
+		},
+		{
+			name:  "empty volume options are no options",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
+				Target: "/data", VolumeOptions: &mount.VolumeOptions{}}}},
+			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName},
+		},
+		{
+			name:  "the bind API's nocopy flag",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host:  container.HostConfig{Binds: []string{ownedName + ":/data:rw,nocopy"}},
+			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &model.VolumeMount{NoCopy: true}},
+		},
+		{
+			name:  "the bind API's SELinux relabel",
+			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", true),
+			host:  container.HostConfig{Binds: []string{"/host/cfg:/etc/cfg:ro,Z"}},
+			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", ReadOnly: true, Bind: &model.BindMount{SELinux: "Z", CreateHostPath: true}},
+		},
+		{
+			name:  "a bind through the mount API creates no host path unless asked",
+			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host/cfg",
+				Target: "/etc/cfg"}}},
+			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", Bind: &model.BindMount{}},
+		},
+		{
+			name:  "a bind's recursion and host path creation through the mount API",
+			mount: mountPoint(mount.TypeBind, "", "/host/cfg", "/etc/cfg", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host/cfg",
+				Target: "/etc/cfg", BindOptions: &mount.BindOptions{
+					CreateMountpoint: true, ReadOnlyNonRecursive: true,
+				}}}},
+			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg",
+				Target: "/etc/cfg", Bind: &model.BindMount{CreateHostPath: true, Recursive: "writable"}},
+		},
+		{
+			name:  "a bind's source is the path compose gave, not the one Docker Desktop reports",
+			mount: mountPoint(mount.TypeBind, "", "/host_mnt/srv/cfg", "/etc/cfg", false),
+			host:  container.HostConfig{Binds: []string{"/srv/cfg:/etc/cfg:rw"}},
+			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/cfg",
+				Target: "/etc/cfg", Bind: &model.BindMount{CreateHostPath: true}},
+		},
+		{
+			name:  "a tmpfs mount's size and mode",
+			mount: mountPoint(mount.TypeTmpfs, "", "", "/run", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeTmpfs, Target: "/run",
+				TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}}}},
+			want: model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run",
+				Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+		},
+		{
+			name:  "an image mount's reference and subpath",
+			mount: mountPoint(mount.TypeImage, "", "", "/assets", true),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeImage, Source: "assets:1",
+				Target: "/assets", ReadOnly: true, ImageOptions: &mount.ImageOptions{Subpath: "static"}}}},
+			want: model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1",
+				Target: "/assets", ReadOnly: true, Image: &model.ImageMount{Subpath: "static"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			host := tt.host
+			inspect := inspected("c-db-1", testImageID.String(), tt.mount)
+			inspect.HostConfig = &host
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(summary("c-db-1", "db", "busybox", 1, tt.mount))
+			daemon.expectInspected(inspect)
+			daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+			daemon.expectInfo()
+
+			// Act
+			got, err := NewInspector(daemon, stack).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, []model.ServiceVolume{tt.want}, got.Project.Services[0].Volumes)
 			daemon.AssertExpectations(t)
 		})
 	}

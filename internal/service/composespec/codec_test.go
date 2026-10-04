@@ -30,6 +30,15 @@ import (
 // needs, on a service that declares something of each kind.
 func richResult() model.IntrospectionResult {
 	svc := richService()
+	svc.Volumes[0].Volume = &model.VolumeMount{NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"}}
+	svc.Volumes = append(svc.Volumes,
+		model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/conf", Target: "/etc/conf",
+			Bind: &model.BindMount{Propagation: "rshared", Recursive: "disabled"}},
+		model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run/cache",
+			Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+		model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/assets",
+			ReadOnly: true, Image: &model.ImageMount{Subpath: "static"}},
+	)
 	svc.Containers[0].Labels = map[string]string{
 		api.WorkingDirLabel:  "/srv/demo",
 		api.ConfigFilesLabel: "/srv/demo/compose.yaml",

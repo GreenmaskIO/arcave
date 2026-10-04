@@ -85,13 +85,14 @@ func volumeOptions(from *model.VolumeMount) *types.ServiceVolumeVolume {
 	}
 }
 
-// bindOptions keeps compose creating a missing host path, as it does for a bind
-// declared with no options at all.
+// bindOptions renders a bind's options. With none reported, compose creates a missing
+// host path, as it does for a bind declared with no options at all.
 func bindOptions(from *model.BindMount) *types.ServiceVolumeBind {
 	bind := &types.ServiceVolumeBind{CreateHostPath: true}
 	if from == nil {
 		return bind
 	}
+	bind.CreateHostPath = from.CreateHostPath
 	bind.SELinux = from.SELinux
 	bind.Recursive = from.Recursive
 	if from.Propagation != defaultBindPropagation {
