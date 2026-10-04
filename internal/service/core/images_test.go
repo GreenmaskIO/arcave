@@ -50,15 +50,18 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	capture := capturer.On("Capture", mock.Anything, mock.MatchedBy(func(req model.ImageCaptureRequest) bool {
 		return req.SnapshotID.Validate() == nil && req.Container == demoContainerRef()
 	})).Return(demoImageCapture(), nil).Once()
+	upstream := capturer.On("CaptureUpstream", mock.Anything, demoUpstreamCaptureRequest()).
+		Return(demoUpstreamImage(), nil).Once()
 	spec := expectSpecCommit(repo)
 	commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return len(r.Images) == 1 && r.Images[0] == demoImageCapture()
+		return len(r.Images) == 1 && r.Images[0] == demoImageCapture() &&
+			assert.ObjectsAreEqual([]model.UpstreamImage{demoUpstreamImage()}, r.UpstreamImages)
 	})).Return(nil).Once()
 	start := runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 
-	// The layer is committed while the services are down, after the volumes and
-	// before the spec; the record stays last.
-	mock.InOrder(stop, snapshot, capture, spec, commit, start)
+	// The layer is committed while the services are down, after the volumes; the
+	// upstream follows it, then the spec, and the record stays last.
+	mock.InOrder(stop, snapshot, capture, upstream, spec, commit, start)
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -79,6 +82,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []model.ImageCapture{demoImageCapture()}, savepoint.Images)
+	assert.Equal(t, []model.UpstreamImage{demoUpstreamImage()}, savepoint.UpstreamImages)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	inspector.AssertExpectations(t)
@@ -163,9 +167,12 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	captureSafety := capturer.On("Capture", mock.Anything, mock.MatchedBy(func(req model.ImageCaptureRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Container == demoContainerRef()
 	})).Return(demoImageCapture(), nil).Once()
+	upstreamSafety := capturer.On("CaptureUpstream", mock.Anything, demoUpstreamCaptureRequest()).
+		Return(demoUpstreamImage(), nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.IsSafetySnapshot() && len(r.Images) == 1 && r.Images[0] == demoImageCapture()
+		return r.IsSafetySnapshot() && len(r.Images) == 1 && r.Images[0] == demoImageCapture() &&
+			assert.ObjectsAreEqual([]model.UpstreamImage{demoUpstreamImage()}, r.UpstreamImages)
 	})).Return(nil).Once()
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
@@ -178,7 +185,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	})).Return(nil).Once()
 
 	// The containers it commits exist only between the stop and the teardown.
-	mock.InOrder(stop, snapshotSafety, captureSafety, specSafety, commitSafety, down, create,
+	mock.InOrder(stop, snapshotSafety, captureSafety, upstreamSafety, specSafety, commitSafety, down, create,
 		restore, start, uncommitSafety, removeSafety)
 
 	store := newDirStore(t)
@@ -451,38 +458,28 @@ func TestRestoredImageRef(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "project, service, replica and base image",
+			name:    "project, service, replica and upstream image",
 			project: "demo",
-			capture: model.ImageCapture{Service: "db", Replica: 1, BaseImage: "postgres:16"},
+			capture: model.ImageCapture{Service: "db", Replica: 1, UpstreamImageRef: "postgres:16"},
 			want:    "arcave/demo-db-1-postgres-16:sp-1780335122",
 		},
 		{
-			name:    "a registry-qualified base image",
+			name:    "a registry-qualified upstream image",
 			project: "demo",
-			capture: model.ImageCapture{Service: "web", Replica: 2, BaseImage: "ghcr.io/Org/App:1.2.3"},
+			capture: model.ImageCapture{Service: "web", Replica: 2, UpstreamImageRef: "ghcr.io/Org/App:1.2.3"},
 			want:    "arcave/demo-web-2-ghcr-io-org-app-1-2-3:sp-1780335122",
 		},
 		{
 			name:    "an upper-case service, which a repository path refuses",
 			project: "Demo_App",
-			capture: model.ImageCapture{Service: "DB", Replica: 1, BaseImage: "busybox"},
+			capture: model.ImageCapture{Service: "DB", Replica: 1, UpstreamImageRef: "busybox"},
 			want:    "arcave/demo-app-db-1-busybox:sp-1780335122",
 		},
 		{
-			name:    "a record predating the base image is still addressable",
+			name:    "a capture whose upstream could not be traced is still addressable",
 			project: "demo",
 			capture: model.ImageCapture{Service: "db", Replica: 1},
 			want:    "arcave/demo-db-1:sp-1780335122",
-		},
-		{
-			// Without this the name would fold into itself once per rollback and grow
-			// without bound; the base is the tag the previous rollback left.
-			name:    "a base image an earlier rollback left is unwrapped",
-			project: "demo",
-			capture: model.ImageCapture{
-				Service: "db", Replica: 1, BaseImage: "arcave/demo-db-1-postgres-16:sp-1780000000",
-			},
-			want: "arcave/demo-db-1-postgres-16:sp-1780335122",
 		},
 	}
 
@@ -496,10 +493,10 @@ func TestRestoredImageRef(t *testing.T) {
 		})
 	}
 
-	t.Run("a base image too long for the cap is cut, never the identity", func(t *testing.T) {
+	t.Run("an upstream image too long for the cap is cut, never the identity", func(t *testing.T) {
 		// Act
 		got := restoredImageRef("demo", id, model.ImageCapture{
-			Service: "db", Replica: 1, BaseImage: longImage,
+			Service: "db", Replica: 1, UpstreamImageRef: longImage,
 		})
 
 		// Assert
@@ -523,7 +520,7 @@ func TestRestoredImageRef_IsAlwaysNameable(t *testing.T) {
 			for _, base := range bases {
 				// Act
 				got := restoredImageRef(project, "1780335122", model.ImageCapture{
-					Service: service, Replica: 1, BaseImage: base,
+					Service: service, Replica: 1, UpstreamImageRef: base,
 				})
 
 				// Assert

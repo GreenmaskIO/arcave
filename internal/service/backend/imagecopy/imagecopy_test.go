@@ -35,14 +35,30 @@ const (
 	snapshotID  = model.SavepointID("1780335122")
 	containerID = "c0ffee"
 	imageID     = model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	upstreamID  = model.ImageDigestID("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	commitNote  = "arcave savepoint 1780335122"
 )
 
 func demoRequest() model.ImageCaptureRequest {
 	return model.ImageCaptureRequest{
 		SnapshotID: snapshotID,
 		Container: model.ContainerRef{
-			Service: "db", Replica: 1, ID: containerID, BaseImage: "postgres:16",
+			Service: "db", Replica: 1, ID: containerID,
+			UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
 		},
+	}
+}
+
+func demoUpstreamLabels() map[string]string {
+	return map[string]string{
+		model.BaseImageIDLabel:  upstreamID.String(),
+		model.BaseImageRefLabel: "postgres:16",
+	}
+}
+
+func demoUpstream() model.UpstreamImage {
+	return model.UpstreamImage{
+		ID: upstreamID, Refs: []string{"postgres:16"}, RepoDigests: []string{"postgres@sha256:cc"}, SizeBytes: 900,
 	}
 }
 
@@ -58,6 +74,32 @@ func TestImageStorage_AddressesOneImage(t *testing.T) {
 	require.NoError(t, imageStore.PutObject(context.Background(), "probe", strings.NewReader("x")))
 	assert.Equal(t, []string{"1780335122/images/db/replicas/1/probe"}, objectNames(t, store),
 		"the key both backends must agree on")
+}
+
+func TestUpstreamImageStorage_AddressesOneImageByContent(t *testing.T) {
+	// Arrange
+	store := newStore(t)
+
+	// Act
+	imageStore, err := upstreamImageStorage(store, upstreamID)
+
+	// Assert
+	require.NoError(t, err)
+	require.NoError(t, imageStore.PutObject(context.Background(), "probe", strings.NewReader("x")))
+	assert.Equal(t, []string{"shared/oci/images/sha256/" + strings.TrimPrefix(upstreamID.String(), "sha256:") + "/probe"},
+		objectNames(t, store))
+}
+
+func TestUpstreamImageStorage_RejectsAnIDThatIsNoDigest(t *testing.T) {
+	// Arrange
+	store := newStore(t)
+
+	// Act
+	_, err := upstreamImageStorage(store, "../../escape")
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrInvalidDigestID)
+	assert.Empty(t, objectNames(t, store))
 }
 
 func TestImageStorage_RejectsAnUnaddressableImage(t *testing.T) {
@@ -163,7 +205,8 @@ func TestCopier_Capture(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 	store := newStore(t)
 	docker := &mockContainerImager{}
-	commit := docker.On("CommitContainer", mock.Anything, containerID).Return(imageID, nil).Once()
+	commit := docker.On("CommitContainer", mock.Anything, containerID, commitNote, demoUpstreamLabels()).
+		Return(imageID, nil).Once()
 	save := docker.On("SaveImage", mock.Anything, imageID).
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
 	// The daemon's copy goes only once the layout has stored the archive.
@@ -178,7 +221,8 @@ func TestCopier_Capture(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.ImageCapture{
 		Service: "db", Replica: 1, ContainerID: containerID,
-		ImageID: imageID, BaseImage: "postgres:16", SizeBytes: 900, StoredBytes: 100,
+		CommittedImageID: imageID, UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
+		SizeBytes: 900, StoredBytes: 100,
 	}, capture)
 	assert.Equal(t, "archive", layout.stored, "the layout is handed the daemon's stream")
 	docker.AssertExpectations(t)
@@ -188,7 +232,8 @@ func TestCopier_Capture_KeepsTheImageWhenTheLayoutFails(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	docker := &mockContainerImager{}
-	docker.On("CommitContainer", mock.Anything, containerID).Return(imageID, nil).Once()
+	docker.On("CommitContainer", mock.Anything, containerID, commitNote, demoUpstreamLabels()).
+		Return(imageID, nil).Once()
 	docker.On("SaveImage", mock.Anything, imageID).
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
 	layout := &stubLayout{storeErr: errors.New("the store is full")}
@@ -199,6 +244,109 @@ func TestCopier_Capture_KeepsTheImageWhenTheLayoutFails(t *testing.T) {
 
 	// Assert
 	require.ErrorContains(t, err, "the store is full")
+	docker.AssertExpectations(t)
+}
+
+func TestCopier_Capture_StampsNoUpstreamItWasNotTold(t *testing.T) {
+	// Arrange: a broken chain leaves the upstream unknown.
+	ctx := zerolog.Nop().WithContext(context.Background())
+	docker := &mockContainerImager{}
+	docker.On("CommitContainer", mock.Anything, containerID, commitNote, map[string]string(nil)).
+		Return(imageID, nil).Once()
+	docker.On("SaveImage", mock.Anything, imageID).
+		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
+	docker.On("RemoveImage", mock.Anything, imageID).Return(nil).Once()
+	req := demoRequest()
+	req.Container.UpstreamImageID, req.Container.UpstreamImageRef = "", ""
+
+	// Act
+	capture, err := NewCopier(newStore(t), docker, &stubLayout{}).Capture(ctx, req)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Empty(t, capture.UpstreamImageID)
+	docker.AssertExpectations(t)
+}
+
+func TestCopier_CaptureUpstream(t *testing.T) {
+	intact := `{"image_id":"` + upstreamID.String() + `","format":"oci-blobs","members":[{"name":"index.json","kind":"metadata"}]}`
+	tests := []struct {
+		name       string
+		stored     string // the manifest already in the store, verbatim; empty for none
+		inDaemon   bool
+		saveErr    error
+		wantStored bool
+		wantBytes  int64
+		wantSaved  bool
+	}{
+		{name: "already in the store", stored: intact, inDaemon: true, wantStored: true},
+		{
+			name: "a torn manifest is stored again", stored: intact[:40], inDaemon: true,
+			wantStored: true, wantBytes: 40, wantSaved: true,
+		},
+		{
+			name:   "a manifest of another image is stored again",
+			stored: strings.Replace(intact, upstreamID.String(), imageID.String(), 1), inDaemon: true,
+			wantStored: true, wantBytes: 40, wantSaved: true,
+		},
+		{
+			name: "a manifest naming no members is stored again", stored: `{"image_id":"` + upstreamID.String() + `"}`,
+			inDaemon: true, wantStored: true, wantBytes: 40, wantSaved: true,
+		},
+		{name: "in the daemon", inDaemon: true, wantStored: true, wantBytes: 40, wantSaved: true},
+		{name: "nowhere", wantStored: false},
+		{name: "the daemon fails to hand it over", inDaemon: true, saveErr: errors.New("content digest not found")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := zerolog.Nop().WithContext(context.Background())
+			store := newStore(t)
+			if tt.stored != "" {
+				upstreamStore, err := upstreamImageStorage(store, upstreamID)
+				require.NoError(t, err)
+				require.NoError(t, upstreamStore.PutObject(ctx, manifestName, strings.NewReader(tt.stored)))
+			}
+			docker := &mockContainerImager{}
+			if tt.wantSaved || tt.saveErr != nil {
+				docker.On("SaveImage", mock.Anything, upstreamID).
+					Return(io.NopCloser(strings.NewReader("upstream archive")), tt.saveErr).Once()
+			}
+			layout := &stubLayout{size: StoredSize{Image: 900, Written: 40}}
+
+			// Act
+			got, err := NewCopier(store, docker, layout).CaptureUpstream(ctx, model.UpstreamImageCaptureRequest{
+				Image: demoUpstream(), InDaemon: tt.inDaemon,
+			})
+
+			// Assert
+			require.NoError(t, err, "a missing upstream never fails the savepoint")
+			want := demoUpstream()
+			want.Stored, want.StoredBytes = tt.wantStored, tt.wantBytes
+			assert.Equal(t, want, got)
+			if tt.wantSaved {
+				assert.Equal(t, "upstream archive", layout.stored)
+			}
+			docker.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCopier_CaptureUpstream_FailsWhenTheRunIsCancelled(t *testing.T) {
+	// Arrange
+	ctx, cancel := context.WithCancel(zerolog.Nop().WithContext(context.Background()))
+	cancel()
+	docker := &mockContainerImager{}
+	docker.On("SaveImage", mock.Anything, upstreamID).Return(nil, context.Canceled).Once()
+
+	// Act
+	_, err := NewCopier(newStore(t), docker, &stubLayout{}).CaptureUpstream(ctx, model.UpstreamImageCaptureRequest{
+		Image: demoUpstream(), InDaemon: true,
+	})
+
+	// Assert
+	require.ErrorIs(t, err, context.Canceled)
 	docker.AssertExpectations(t)
 }
 
@@ -326,7 +474,7 @@ func demoRestoreRequest() model.ImageRestoreRequest {
 	return model.ImageRestoreRequest{
 		SnapshotID: snapshotID,
 		Capture: model.ImageCapture{
-			Service: "db", Replica: 1, ContainerID: containerID, ImageID: imageID,
+			Service: "db", Replica: 1, ContainerID: containerID, CommittedImageID: imageID,
 		},
 		ImageRef: "arcave/demo:sp-1",
 	}

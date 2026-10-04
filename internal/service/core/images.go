@@ -94,6 +94,46 @@ func (s *Service) captureImages(
 	return captures, nil
 }
 
+// captureUpstreams keeps every distinct upstream image, concurrently, apart from
+// the layers: a savepoint holds its upstreams whether or not it holds a layer.
+func (s *Service) captureUpstreams(
+	ctx context.Context, snapshotID model.SavepointID, reqs []model.UpstreamImageCaptureRequest,
+) ([]model.UpstreamImage, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+
+	images := make([]model.UpstreamImage, len(reqs))
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(s.maxConcurrentOperations)
+	for i, req := range reqs {
+		eg.Go(func() error {
+			opCtx := zerolog.Ctx(egCtx).With().
+				Str("upstream_image_id", req.Image.ID.String()).
+				Str("snapshot_id", snapshotID.String()).
+				Str("op", "save").
+				Logger().
+				WithContext(egCtx)
+			log := zerolog.Ctx(opCtx)
+
+			started := time.Now()
+			log.Info().Msg("upstream image capture started")
+			image, err := s.imageBackend.CaptureUpstream(opCtx, req)
+			if err != nil {
+				return fmt.Errorf("capture upstream image %s: %w", req.Image.ID, err)
+			}
+			images[i] = image
+			log.Info().Dur("duration", time.Since(started)).Bool("stored", image.Stored).
+				Int64("stored_bytes", image.StoredBytes).Msg("upstream image capture finished")
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+	return images, nil
+}
+
 // restoreImages loads every writable layer the record holds back into the daemon,
 // concurrently, and names each under a tag of its own. A record predating image
 // capture restores nothing.
@@ -212,7 +252,7 @@ func restoredImageRepository(project string, capture model.ImageCapture) string 
 	identity := restoredImageNamespace + "/" +
 		joinSegments(refSegment(project), refSegment(capture.Service), strconv.Itoa(capture.Replica))
 
-	base := refSegment(unnestBaseImage(identity, capture.BaseImage))
+	base := refSegment(capture.UpstreamImageRef)
 	room := maxRepositoryPath - len(identity) - 1
 	if base == "" || room <= 0 {
 		return identity
@@ -236,16 +276,6 @@ func joinSegments(segments ...string) string {
 		}
 	}
 	return strings.Join(kept, "-")
-}
-
-// unnestBaseImage recovers the image a replica really came from when its base is a
-// tag an earlier rollback left behind. Without it every rollback would fold its own
-// name into the next one's, and the name would grow without bound.
-func unnestBaseImage(identity, base string) string {
-	if repository, tag, ok := strings.Cut(base, ":"); ok && strings.HasPrefix(tag, restoredTagPrefix) {
-		base = repository
-	}
-	return strings.TrimPrefix(base, identity+"-")
 }
 
 // refSegment reduces one segment to lower-case alphanumerics joined by single
@@ -318,7 +348,7 @@ func imageRestoreContext(
 	return zerolog.Ctx(ctx).With().
 		Str("service", capture.Service).
 		Int("replica", capture.Replica).
-		Str("image_id", capture.ImageID.String()).
+		Str("image_id", capture.CommittedImageID.String()).
 		Str("snapshot_id", snapshotID.String()).
 		Str("op", "load").
 		Logger().

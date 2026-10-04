@@ -193,12 +193,12 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 		"the second savepoint stored %d of the archive's %d bytes: the base layer went in again",
 		capture.StoredBytes, capture.SizeBytes)
 
-	assert.NotEmpty(t, first.Images[0].ImageID, "first savepoint image ID")
-	assert.NotEmpty(t, second.Images[0].ImageID, "second savepoint image ID")
+	assert.NotEmpty(t, first.Images[0].CommittedImageID, "first savepoint image ID")
+	assert.NotEmpty(t, second.Images[0].CommittedImageID, "second savepoint image ID")
 
-	_, err = env.daemon.ImageInspect(env.ctx, first.Images[0].ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, first.Images[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "first image should be gone from daemon: %v", err)
-	_, err = env.daemon.ImageInspect(env.ctx, second.Images[0].ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, second.Images[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "second image should be gone from daemon: %v", err)
 }
 
@@ -218,7 +218,7 @@ func TestSavepoint_TwoSavepoints_BothRestore(t *testing.T) {
 	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
 	require.Len(t, second.Images, 1)
-	require.NotEqual(t, first.Images[0].ImageID, second.Images[0].ImageID,
+	require.NotEqual(t, first.Images[0].CommittedImageID, second.Images[0].CommittedImageID,
 		"the two savepoints must differ, or deduplication is trivially true")
 	assert.Less(t, second.Images[0].StoredBytes, second.Images[0].SizeBytes,
 		"the second savepoint reuses the first one's base layers")

@@ -26,6 +26,7 @@ import (
 	"io"
 	"path"
 	"strconv"
+	"strings"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -64,10 +65,28 @@ func imageStorage(
 	return imageStore, nil
 }
 
+// upstreamImageStorage narrows a store root to one upstream image. It is keyed by
+// content and belongs to no savepoint, so every savepoint naming the image shares
+// one copy; its blobs go to the shared blob store like any capture's.
+func upstreamImageStorage(store storages.Storager, imageID model.ImageDigestID) (storages.Storager, error) {
+	const upstreamNamespace = "shared/oci/images"
+
+	if _, err := model.ParseImageDigestID(imageID.String()); err != nil {
+		return nil, err
+	}
+	algorithm, hex, _ := strings.Cut(imageID.String(), ":")
+	key := path.Join(upstreamNamespace, algorithm, hex)
+	imageStore, err := store.SubStorage(key, true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root store at upstream image %s: %w", key, err)
+	}
+	return imageStore, nil
+}
+
 // ContainerImager is what a backend needs from the Docker engine: commit a stopped
 // container and stream its image out, and load one back and name it.
 type ContainerImager interface {
-	CommitContainer(ctx context.Context, containerID string) (model.ImageDigestID, error)
+	CommitContainer(ctx context.Context, containerID, comment string, labels map[string]string) (model.ImageDigestID, error)
 	SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error)
 	RemoveImage(ctx context.Context, imageID model.ImageDigestID) error
 	LoadImage(ctx context.Context, r io.Reader) error
@@ -103,13 +122,15 @@ func NewCopier(store storages.Storager, docker ContainerImager, layout ArchiveLa
 }
 
 // Capture commits one stopped container's writable layer, stores it, and drops the
-// committed image from the daemon.
+// committed image from the daemon. The commit is stamped with the container's
+// upstream, so a container later rebuilt on this layer still names it.
 func (c *Copier) Capture(ctx context.Context, req model.ImageCaptureRequest) (model.ImageCapture, error) {
 	imageStore, err := imageStorage(c.store, req.SnapshotID, req.Container.Service, req.Container.Replica)
 	if err != nil {
 		return model.ImageCapture{}, err
 	}
-	imageID, err := c.docker.CommitContainer(ctx, req.Container.ID)
+	comment := "arcave savepoint " + req.SnapshotID.String()
+	imageID, err := c.docker.CommitContainer(ctx, req.Container.ID, comment, upstreamLabels(req.Container))
 	if err != nil {
 		return model.ImageCapture{}, err
 	}
@@ -126,14 +147,72 @@ func (c *Copier) Capture(ctx context.Context, req model.ImageCaptureRequest) (mo
 			Msg("committed image is stored but could not be removed from the daemon")
 	}
 	return model.ImageCapture{
-		Service:     req.Container.Service,
-		Replica:     req.Container.Replica,
-		ContainerID: req.Container.ID,
-		ImageID:     imageID,
-		BaseImage:   req.Container.BaseImage,
-		SizeBytes:   size.Image,
-		StoredBytes: size.Written,
+		Service:          req.Container.Service,
+		Replica:          req.Container.Replica,
+		ContainerID:      req.Container.ID,
+		CommittedImageID: imageID,
+		UpstreamImageID:  req.Container.UpstreamImageID,
+		UpstreamImageRef: req.Container.UpstreamImageRef,
+		SizeBytes:        size.Image,
+		StoredBytes:      size.Written,
 	}, nil
+}
+
+// upstreamLabels are the labels a commit carries forward; none for what is
+// unknown, so a layer never names an upstream it was not told.
+func upstreamLabels(container model.ContainerRef) map[string]string {
+	var labels map[string]string
+	if container.UpstreamImageID != "" {
+		labels = map[string]string{model.BaseImageIDLabel: container.UpstreamImageID.String()}
+	}
+	if container.UpstreamImageRef != "" {
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels[model.BaseImageRefLabel] = container.UpstreamImageRef
+	}
+	return labels
+}
+
+// CaptureUpstream keeps one upstream image in the store, once for every savepoint
+// naming it. An image neither the store nor the daemon holds, or one the daemon
+// fails to hand over, is recorded by identity alone: a missing upstream must not
+// cost the savepoint its data.
+func (c *Copier) CaptureUpstream(
+	ctx context.Context, req model.UpstreamImageCaptureRequest,
+) (model.UpstreamImage, error) {
+	image := req.Image
+	image.Stored, image.StoredBytes = false, 0
+
+	upstreamStore, err := upstreamImageStorage(c.store, image.ID)
+	if err != nil {
+		return model.UpstreamImage{}, err
+	}
+	stored, err := intactManifest(ctx, upstreamStore, image.ID)
+	if err != nil {
+		return model.UpstreamImage{}, err
+	}
+	if stored {
+		image.Stored = true
+		return image, nil
+	}
+
+	log := zerolog.Ctx(ctx).With().Str("upstream_image_id", image.ID.String()).Logger()
+	if !req.InDaemon {
+		log.Warn().Msg("the upstream image is in neither the store nor the daemon; only its identity is recorded")
+		return image, nil
+	}
+	size, err := c.storeArchive(ctx, upstreamStore, image.ID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return model.UpstreamImage{}, err
+		}
+		log.Warn().Err(err).Msg("the upstream image could not be stored; only its identity is recorded")
+		return image, nil
+	}
+	image.Stored = true
+	image.StoredBytes = size.Written
+	return image, nil
 }
 
 // storeArchive streams the committed image out of the daemon and hands it to the layout.
@@ -165,23 +244,23 @@ func (c *Copier) Restore(ctx context.Context, req model.ImageRestoreRequest) (mo
 			req.Capture.Service, req.Capture.Replica)
 	}
 
-	present, err := c.docker.ImageExists(ctx, req.Capture.ImageID)
+	present, err := c.docker.ImageExists(ctx, req.Capture.CommittedImageID)
 	if err != nil {
 		return model.ImageRestore{}, err
 	}
 	if !present {
-		if err := c.loadArchive(ctx, imageStore, req.Capture.ImageID); err != nil {
+		if err := c.loadArchive(ctx, imageStore, req.Capture.CommittedImageID); err != nil {
 			return model.ImageRestore{}, err
 		}
 	}
 
-	if err := c.docker.TagImage(ctx, req.Capture.ImageID, req.ImageRef); err != nil {
+	if err := c.docker.TagImage(ctx, req.Capture.CommittedImageID, req.ImageRef); err != nil {
 		return model.ImageRestore{}, err
 	}
 	return model.ImageRestore{
 		Service:  req.Capture.Service,
 		Replica:  req.Capture.Replica,
-		ImageID:  req.Capture.ImageID,
+		ImageID:  req.Capture.CommittedImageID,
 		ImageRef: req.ImageRef,
 	}, nil
 }

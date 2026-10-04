@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/mock"
@@ -84,13 +85,41 @@ func demoIntrospection() model.IntrospectionResult {
 const (
 	demoContainerID = "c0ffee"
 	demoBaseImage   = "postgres:16"
+	demoUpstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
 // demoContainerRef is that replica in the form a capture request addresses it by.
 func demoContainerRef() model.ContainerRef {
 	return model.ContainerRef{
-		Service: demoService, Replica: 1, ID: demoContainerID, BaseImage: demoBaseImage,
+		Service: demoService, Replica: 1, ID: demoContainerID,
+		UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage,
 	}
+}
+
+// demoContainerInspect is a replica running on demoBaseImage.
+func demoContainerInspect() container.InspectResponse {
+	return container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{Image: demoUpstreamID.String()},
+		Config:            &container.Config{Image: demoBaseImage},
+	}
+}
+
+// demoUpstreamCaptureRequest is the one upstream demoIntrospectionWithContainers names.
+func demoUpstreamCaptureRequest() model.UpstreamImageCaptureRequest {
+	return model.UpstreamImageCaptureRequest{
+		Image: model.UpstreamImage{
+			ID: demoUpstreamID, Refs: []string{demoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
+		},
+		InDaemon: true,
+	}
+}
+
+// demoUpstreamImage is what the copier reports for demoUpstreamCaptureRequest.
+func demoUpstreamImage() model.UpstreamImage {
+	image := demoUpstreamCaptureRequest().Image
+	image.Stored = true
+	image.StoredBytes = 512
+	return image
 }
 
 // demoIntrospectionWithContainers is demoIntrospection with the daemon holding
@@ -102,21 +131,28 @@ func demoIntrospectionWithContainers() model.IntrospectionResult {
 		Containers: []model.Container{{
 			ID:      demoContainerID,
 			Number:  1,
-			Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+			Inspect: demoContainerInspect(),
 		}},
 	}}
+	res.Images = map[model.ImageDigestID]image.InspectResponse{
+		demoUpstreamID: {
+			ID: demoUpstreamID.String(), RepoTags: []string{demoBaseImage},
+			RepoDigests: []string{"postgres@sha256:dd"}, Size: 1 << 20,
+		},
+	}
 	return res
 }
 
 // demoImageCapture is what the copier reports for demoContainerRef.
 func demoImageCapture() model.ImageCapture {
 	return model.ImageCapture{
-		Service:     demoService,
-		Replica:     1,
-		ContainerID: demoContainerID,
-		ImageID:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		BaseImage:   demoBaseImage,
-		SizeBytes:   4096,
+		Service:          demoService,
+		Replica:          1,
+		ContainerID:      demoContainerID,
+		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		UpstreamImageID:  demoUpstreamID,
+		UpstreamImageRef: demoBaseImage,
+		SizeBytes:        4096,
 	}
 }
 
@@ -137,7 +173,7 @@ func demoRestoredRef(replica int) string {
 func demoImageRestore() model.ImageRestore {
 	return model.ImageRestore{
 		Service: demoService, Replica: 1,
-		ImageID: demoImageCapture().ImageID, ImageRef: demoRestoredRef(1),
+		ImageID: demoImageCapture().CommittedImageID, ImageRef: demoRestoredRef(1),
 	}
 }
 
@@ -155,7 +191,7 @@ func demoScaledIntrospection() model.IntrospectionResult {
 	res.Project.Services[0].Containers = append(res.Project.Services[0].Containers, model.Container{
 		ID:      demoSecondContainerID,
 		Number:  2,
-		Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+		Inspect: demoContainerInspect(),
 	})
 	return res
 }
@@ -165,7 +201,7 @@ func demoSecondImageCapture() model.ImageCapture {
 	capture := demoImageCapture()
 	capture.Replica = 2
 	capture.ContainerID = demoSecondContainerID
-	capture.ImageID = demoSecondImageID
+	capture.CommittedImageID = demoSecondImageID
 	return capture
 }
 

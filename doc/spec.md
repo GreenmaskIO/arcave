@@ -445,10 +445,21 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
       "service": "webapp",
       "replica": 1,
       "container_id": "3f1a…",
-      "image_id": "sha256:aaaa…",
-      "base_image": "myapp:latest",
+      "committed_image_id": "sha256:aaaa…",
+      "upstream_image_id": "sha256:bbbb…",
+      "upstream_image_ref": "myapp:latest",
       "size_bytes": 83887104,
       "stored_bytes": 1048576
+    }
+  ],
+  "upstream_images": [
+    {
+      "id": "sha256:bbbb…",
+      "refs": ["myapp:latest"],
+      "repo_digests": ["myapp@sha256:cccc…"],
+      "size_bytes": 82838528,
+      "stored_bytes": 14336,
+      "stored": true
     }
   ],
   "spec": {
@@ -456,6 +467,8 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
   }
 }
 ```
+
+`images` holds what `docker commit` made of each container: its upstream plus the writable layer. `upstream_images` holds each distinct image the compose file named, once, whether or not a layer was captured over it. `stored: false` means neither the store nor the daemon had it, so only its identity is recorded.
 
 A rollback's safety snapshot carries the same two halves as any other savepoint — it differs only in its name, its empty description and the label that hides it from `savepoint list`.
 

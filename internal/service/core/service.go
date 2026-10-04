@@ -71,6 +71,7 @@ type volumeRemover interface {
 // the store, and loaded back out of it under a tag of its own.
 type imageBackend interface {
 	Capture(ctx context.Context, req model.ImageCaptureRequest) (model.ImageCapture, error)
+	CaptureUpstream(ctx context.Context, req model.UpstreamImageCaptureRequest) (model.UpstreamImage, error)
 	Restore(ctx context.Context, req model.ImageRestoreRequest) (model.ImageRestore, error)
 }
 

@@ -97,6 +97,25 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	require.Len(t, rebuilt, 1)
 	assert.Equal(t, "original", env.read(t, rebuilt[0], layerMarker), "the writable layer")
 	assert.Equal(t, "original", env.read(t, rebuilt[0], volumeMarker), "the volume beside it")
+
+	// The restored layer names its upstream, so a savepoint taken on it still does.
+	restored, err := env.daemon.ImageInspect(env.ctx, res.Images[0].ImageRef)
+	require.NoError(t, err)
+	require.NotNil(t, restored.Config)
+	assert.Equal(t, savepoint.Images[0].UpstreamImageID.String(), restored.Config.Labels[model.BaseImageIDLabel])
+	assert.Equal(t, "busybox", restored.Config.Labels[model.BaseImageRefLabel])
+
+	next, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "on-the-layer"})
+	require.NoError(t, err)
+	require.Len(t, next.Images, 1)
+	assert.Equal(t, "busybox", next.Images[0].UpstreamImageRef)
+	assert.Equal(t, savepoint.Images[0].UpstreamImageID, next.Images[0].UpstreamImageID)
+	require.Len(t, next.UpstreamImages, 1)
+	assert.True(t, next.UpstreamImages[0].Stored)
+	assert.Zero(t, next.UpstreamImages[0].StoredBytes, "the upstream is already in the store")
+	t.Logf("upstream %s: first capture stored %d of %d bytes, second stored %d",
+		next.UpstreamImages[0].ID, savepoint.UpstreamImages[0].StoredBytes,
+		savepoint.UpstreamImages[0].SizeBytes, next.UpstreamImages[0].StoredBytes)
 }
 
 func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {

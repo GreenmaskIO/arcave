@@ -67,6 +67,14 @@ func (m *mockImageBackend) Capture(
 	return capture, args.Error(1)
 }
 
+func (m *mockImageBackend) CaptureUpstream(
+	ctx context.Context, req model.UpstreamImageCaptureRequest,
+) (model.UpstreamImage, error) {
+	args := m.Called(ctx, req)
+	image, _ := args.Get(0).(model.UpstreamImage)
+	return image, args.Error(1)
+}
+
 func (m *mockImageBackend) Restore(
 	ctx context.Context, req model.ImageRestoreRequest,
 ) (model.ImageRestore, error) {

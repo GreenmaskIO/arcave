@@ -19,13 +19,20 @@ package model
 // this label is what still points past it to the true base.
 const BaseImageIDLabel = "io.arcave.base-image-id"
 
+// BaseImageRefLabel names, beside BaseImageIDLabel, the reference the user's compose
+// file named that image by.
+const BaseImageRefLabel = "io.arcave.base-image-ref"
+
 // ContainerRef names one replica of one service. Replica is
 // com.docker.compose.container-number, counted from 1.
 type ContainerRef struct {
-	Service   string
-	Replica   int
-	ID        string
-	BaseImage string // what the container was created from; an arcave/…:sp-<id> tag after a rollback
+	Service string // compose service name
+	Replica int    // replica number, from 1
+	ID      string // container id
+	// The upstream: the image the compose file named; empty when it can no longer
+	// be traced.
+	UpstreamImageID  ImageDigestID // sha256 digest of the upstream's config
+	UpstreamImageRef string        // the upstream's name, e.g. postgres:16; never a digest
 }
 
 // ImageCaptureRequest is one commit-and-store, addressed by savepoint and container.
@@ -34,17 +41,43 @@ type ImageCaptureRequest struct {
 	Container  ContainerRef
 }
 
+// UpstreamImage is one image a compose file named, kept in a savepoint so a
+// container can be rebuilt without its layer. It travels in the savepoint record,
+// so its json tags are the wire contract.
+type UpstreamImage struct {
+	ID          ImageDigestID `json:"id"`                     // sha256 digest of the image config; the store key
+	Refs        []string      `json:"refs,omitempty"`         // names, e.g. postgres:16
+	RepoDigests []string      `json:"repo_digests,omitempty"` // registry digests, e.g. postgres@sha256:…
+	SizeBytes   int64         `json:"size_bytes,omitempty"`   // image size as the daemon reports it
+	StoredBytes int64         `json:"stored_bytes,omitempty"` // bytes this savepoint added; 0 when already stored
+	// Stored is whether the store holds the bytes; false when neither the store nor
+	// the daemon had them, and only the identity is recorded.
+	Stored bool `json:"stored"`
+}
+
+// UpstreamImageCaptureRequest is one upstream image to keep. InDaemon is whether
+// the daemon held it when the stack was introspected.
+type UpstreamImageCaptureRequest struct {
+	Image    UpstreamImage
+	InDaemon bool
+}
+
 // ImageCapture is one container's writable layer, committed and stored. It
 // travels in the savepoint record, so its json tags are the wire contract.
 type ImageCapture struct {
-	Service     string        `json:"service"`
-	Replica     int           `json:"replica"`
-	ContainerID string        `json:"container_id"`
-	ImageID     ImageDigestID `json:"image_id"`
-	BaseImage   string        `json:"base_image,omitempty"`
-	SizeBytes   int64         `json:"size_bytes"`
+	Service     string `json:"service"`      // compose service name
+	Replica     int    `json:"replica"`      // replica number, from 1
+	ContainerID string `json:"container_id"` // the container committed
+	// CommittedImageID is the image `docker commit` made: the upstream plus the
+	// writable layer. sha256 digest; what a rollback loads and tags.
+	CommittedImageID ImageDigestID `json:"committed_image_id"`
+	UpstreamImageID  ImageDigestID `json:"upstream_image_id,omitempty"`  // sha256 digest of the upstream's config
+	UpstreamImageRef string        `json:"upstream_image_ref,omitempty"` // the upstream's name, e.g. postgres:16; never a digest
+	SizeBytes        int64         `json:"size_bytes"`                   // the committed image's archive size
 	// StoredBytes is what this capture added to the store; below SizeBytes when
-	// deduplication found the bytes already there.
+	// deduplication found the bytes already there. A blob shared by replicas
+	// captured in parallel counts toward whichever wrote it first, so only the
+	// savepoint's total is stable.
 	StoredBytes int64 `json:"stored_bytes,omitempty"`
 }
 

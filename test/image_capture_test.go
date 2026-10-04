@@ -82,8 +82,9 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	capture := savepoint.Images[0]
 	assert.Equal(t, "app", capture.Service)
 	assert.Equal(t, 1, capture.Replica)
-	assert.NotEmpty(t, capture.ImageID)
-	assert.Equal(t, "busybox", capture.BaseImage)
+	assert.NotEmpty(t, capture.CommittedImageID)
+	assert.Equal(t, "busybox", capture.UpstreamImageRef)
+	assert.NotEmpty(t, capture.UpstreamImageID)
 	assert.Positive(t, capture.SizeBytes)
 
 	// The capture's own manifest, and the metadata the archive carried.
@@ -105,8 +106,18 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	}
 	assert.Positive(t, shared, "the archive's blobs went to the shared store")
 
+	// The upstream is kept once, by content, beside the blobs it shares with the layer.
+	require.Len(t, savepoint.UpstreamImages, 1)
+	upstream := savepoint.UpstreamImages[0]
+	assert.Equal(t, capture.UpstreamImageID, upstream.ID)
+	assert.Contains(t, upstream.Refs, "busybox")
+	assert.True(t, upstream.Stored)
+	upstreamDir := filepath.Join("shared", "oci", "images", "sha256",
+		strings.TrimPrefix(upstream.ID.String(), "sha256:"))
+	assert.Contains(t, keys, filepath.Join(upstreamDir, "image.json"))
+
 	// The committed image is gone from the daemon: the store is the only copy.
-	_, err = env.daemon.ImageInspect(env.ctx, capture.ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, capture.CommittedImageID.String())
 	assert.True(t, cerrdefs.IsNotFound(err), "the committed image outlived the capture: %v", err)
 }
 
