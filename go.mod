@@ -15,6 +15,7 @@ require (
 	github.com/greenmaskio/storages v0.3.1
 	github.com/labstack/echo/v4 v4.15.1
 	github.com/labstack/gommon v0.4.2
+	github.com/moby/docker-image-spec v1.3.1
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/oapi-codegen/runtime v1.6.0
 	github.com/opencontainers/image-spec v1.1.1
@@ -126,7 +127,6 @@ require (
 	github.com/miolini/datacounter v1.0.3 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/moby/buildkit v0.25.1 // indirect
-	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.1.0 // indirect
 	github.com/moby/locker v1.0.1 // indirect
 	github.com/moby/patternmatcher v0.6.0 // indirect

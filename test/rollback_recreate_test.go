@@ -32,6 +32,7 @@ import (
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -143,6 +144,7 @@ type recreateEnv struct {
 	svc       *core.Service
 	compose   *composeclient.Client
 	engine    *dockerclient.Engine
+	daemon    *client.Client
 	inspector *introspect.Inspector
 	assembler *composespec.Assembler
 	project   string
@@ -167,7 +169,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	progress.Mode = progress.ModeQuiet
 
 	engine := dockerclient.NewEngine(daemonAPI)
-	inspector := introspect.NewInspector(daemonAPI, model.StackName(project))
+	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -177,7 +179,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	store, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-recreate-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-recreate-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
 	// The blob store is a sibling of the savepoints inside the stack root, so it
@@ -205,13 +207,17 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		svc:       svc,
 		compose:   runner,
 		engine:    engine,
+		daemon:    daemonAPI,
 		inspector: inspector,
 		assembler: assembler,
 		project:   project,
 		hostDir:   t.TempDir(),
 		port:      freePort(t),
 	}
-	t.Cleanup(func() { env.down(t) })
+	t.Cleanup(func() {
+		env.down(t)
+		removeProjectNetworks(t, env.daemon, env.project)
+	})
 	return env
 }
 

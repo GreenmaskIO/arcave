@@ -99,7 +99,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	stackStore, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
 	blobStore, err := stackStore.SubStorage(sharedBlobPrefix, true)
@@ -108,7 +108,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	svc := core.New(core.Deps{
 		SavepointRepo:      sprepo.New(stackStore),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.StackName(project)),
+		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
 		ProjectAssembler:   composespec.NewAssembler(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
@@ -132,6 +132,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	}
 	t.Cleanup(func() {
 		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
+		removeProjectNetworks(t, env.daemon, env.project)
 	})
 	return env
 }
@@ -258,7 +259,7 @@ func (e *ociDedupEnv) mutateContainer(t *testing.T, content string) {
 func (e *ociDedupEnv) containerID(t *testing.T) string {
 	t.Helper()
 
-	res, err := introspect.NewInspector(e.daemon, model.StackName(e.project)).Introspect(e.ctx)
+	res, err := introspect.NewInspector(e.daemon, model.DockerComposeProjectName(e.project)).Introspect(e.ctx)
 	require.NoError(t, err)
 	require.Len(t, res.Project.Services, 1)
 	require.Len(t, res.Project.Services[0].Containers, 1)

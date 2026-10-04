@@ -26,6 +26,7 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 
@@ -62,7 +63,7 @@ func New(
 	projectRoot string,
 	project model.ProjectName,
 	session model.SessionID,
-	stack model.StackName,
+	stack model.DockerComposeProjectName,
 ) (storages.Storager, error) {
 	// Every segment is rendered into a store root, so each is gated at the layer
 	// that owns the value, before any of it reaches a backend. Validated in path
@@ -73,8 +74,8 @@ func New(
 	if err := session.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session id: %w", err)
 	}
-	if err := stack.Validate(); err != nil {
-		return nil, fmt.Errorf("validate stack name: %w", err)
+	if err := validateComposeProjectName(stack); err != nil {
+		return nil, fmt.Errorf("validate compose project name: %w", err)
 	}
 
 	store, err := getStorager(cfg, projectRoot)
@@ -92,6 +93,23 @@ func New(
 		return nil, fmt.Errorf("re-root storage at %s: %w", key, err)
 	}
 	return stackStore, nil
+}
+
+// validateComposeProjectName accepts a name compose itself would produce — one its own
+// normalization leaves unchanged — rendering as a single path segment. The charset is
+// compose's to own; the segment rule is the store's.
+func validateComposeProjectName(name model.DockerComposeProjectName) error {
+	s := name.String()
+	if s == "" {
+		return fmt.Errorf("invalid compose project name: must not be empty")
+	}
+	if normalized := loader.NormalizeProjectName(s); normalized != s {
+		return fmt.Errorf("invalid compose project name %q: compose would name it %q", s, normalized)
+	}
+	if path.Base(s) != s || s == "." || s == ".." {
+		return fmt.Errorf("invalid compose project name %q: must be a single path segment", s)
+	}
+	return nil
 }
 
 // getStorager resolves the config union into a store rooted at <path>/arcave — one arm

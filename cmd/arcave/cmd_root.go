@@ -145,7 +145,7 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	}
 
 	ctx := cmd.Context()
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.StackName(projectName))
+	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(projectName))
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}

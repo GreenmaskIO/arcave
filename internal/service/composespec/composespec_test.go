@@ -33,9 +33,12 @@ func TestAssembler_Assemble(t *testing.T) {
 		Name: "demo",
 		Services: []model.Service{
 			{
-				Name:   "db",
-				Image:  "postgres:16",
-				Labels: map[string]string{api.ServiceLabel: "db", "tier": "data"},
+				Name:  "db",
+				Image: "postgres:16",
+				Labels: map[string]string{
+					api.ServiceLabel: "db", "tier": "data",
+					"desktop.docker.io/ports.scheme": "v2", "desktop.docker.io/ports/5432/tcp": ":5432",
+				},
 				Containers: []model.Container{{
 					Name: "demo-db-1",
 					Labels: map[string]string{
@@ -86,7 +89,7 @@ func TestAssembler_Assemble(t *testing.T) {
 	require.Len(t, project.Services, 2)
 	assert.Equal(t, "postgres:16", project.Services["db"].Image)
 	assert.Equal(t, pullPolicyMissing, project.Services["db"].PullPolicy)
-	// Compose re-stamps its own labels on create; only the user's survive.
+	// Compose and Docker Desktop re-stamp their own labels on create; only the user's survive.
 	assert.Equal(t, types.Labels{"tier": "data"}, project.Services["db"].Labels)
 	// Scale is the replica count: compose skips a service scaled to zero.
 	require.NotNil(t, project.Services["db"].Scale)
@@ -108,10 +111,74 @@ func TestAssembler_Assemble(t *testing.T) {
 	assert.Equal(t, "bridge", back.Driver)
 	assert.True(t, back.Internal)
 	assert.Equal(t, types.Options{"com.docker.network.bridge.name": "br-demo"}, back.DriverOpts)
-	assert.Equal(t, "default", back.Ipam.Driver)
-	require.Len(t, back.Ipam.Config, 1)
-	assert.Equal(t, "172.28.0.0/16", back.Ipam.Config[0].Subnet)
-	assert.Equal(t, "172.28.0.1", back.Ipam.Config[0].Gateway)
+	// No container holds a static address in it, so the daemon picks the range again.
+	assert.Equal(t, types.IPAMConfig{Driver: "default"}, back.Ipam)
+}
+
+func TestAssembler_Assemble_NetworkPools(t *testing.T) {
+	pools := network.IPAM{
+		Driver: "default",
+		Config: []network.IPAMConfig{{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"}},
+	}
+
+	tests := []struct {
+		name     string
+		endpoint *network.EndpointSettings // the second replica's endpoint in demo_back
+		want     types.IPAMConfig
+	}{
+		{
+			name:     "an allocated address leaves the pool to the daemon",
+			endpoint: &network.EndpointSettings{},
+			want:     types.IPAMConfig{Driver: "default"},
+		},
+		{
+			name:     "a static IPv4 address keeps the pool it came from",
+			endpoint: &network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: "172.28.0.10"}},
+			want: types.IPAMConfig{Driver: "default", Config: []*types.IPAMPool{
+				{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"},
+			}},
+		},
+		{
+			name:     "a static IPv6 address keeps the pool too",
+			endpoint: &network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{IPv6Address: "fd00::10"}},
+			want: types.IPAMConfig{Driver: "default", Config: []*types.IPAMPool{
+				{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			replica := func(id string, endpoint *network.EndpointSettings) model.Container {
+				return model.Container{Name: id, Inspect: container.InspectResponse{
+					ContainerJSONBase: &container.ContainerJSONBase{ID: id},
+					NetworkSettings: &container.NetworkSettings{
+						Networks: map[string]*network.EndpointSettings{"demo_back": endpoint},
+					},
+				}}
+			}
+			res := model.IntrospectionResult{Project: model.Project{
+				Name: "demo",
+				Services: []model.Service{{
+					Name:  "web",
+					Image: "nginx:1",
+					Containers: []model.Container{
+						replica("demo-web-1", &network.EndpointSettings{}),
+						replica("demo-web-2", tt.endpoint),
+					},
+				}},
+				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{IPAM: pools}}},
+			}}
+
+			// Act
+			project, err := NewAssembler().Assemble(res)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, project.Networks["back"].Ipam)
+		})
+	}
 }
 
 // A network the project attaches to but does not own carries no compose label, so
@@ -156,7 +223,7 @@ func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 	assert.Equal(t, []string{"front"}, attached["back"].Aliases)
 }
 
-// Required stays false: a dependency whose containers are gone must not fail the graph.
+// A dependency the stack no longer holds is dropped, so every one kept is required.
 func TestAssembler_Assemble_DependsOn(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -167,30 +234,30 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 		{
 			name:  "a service alone falls back to the default condition",
 			label: "db",
-			want:  types.DependsOnConfig{"db": {Condition: dependencyCondition, Restart: true}},
+			want:  types.DependsOnConfig{"db": {Condition: dependencyCondition, Restart: true, Required: true}},
 		},
 		{
 			name:  "service and condition",
 			label: "db:service_healthy",
-			want:  types.DependsOnConfig{"db": {Condition: "service_healthy", Restart: true}},
+			want:  types.DependsOnConfig{"db": {Condition: "service_healthy", Restart: true, Required: true}},
 		},
 		{
 			name:  "service, condition and restart",
 			label: "db:service_healthy:false",
-			want:  types.DependsOnConfig{"db": {Condition: "service_healthy", Restart: false}},
+			want:  types.DependsOnConfig{"db": {Condition: "service_healthy", Restart: false, Required: true}},
 		},
 		{
 			name:  "several dependencies",
 			label: "db:service_healthy:true,cache:service_started:true",
 			want: types.DependsOnConfig{
-				"db":    {Condition: "service_healthy", Restart: true},
-				"cache": {Condition: "service_started", Restart: true},
+				"db":    {Condition: "service_healthy", Restart: true, Required: true},
+				"cache": {Condition: "service_started", Restart: true, Required: true},
 			},
 		},
 		{
 			name:  "a dependency the stack no longer holds is dropped",
 			label: "db:service_healthy,gone:service_started",
-			want:  types.DependsOnConfig{"db": {Condition: "service_healthy", Restart: true}},
+			want:  types.DependsOnConfig{"db": {Condition: "service_healthy", Restart: true, Required: true}},
 		},
 	}
 
@@ -216,9 +283,6 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, project.Services["app"].DependsOn)
-			for name, dep := range project.Services["app"].DependsOn {
-				assert.False(t, dep.Required, "dependency %q must not be required", name)
-			}
 		})
 	}
 }

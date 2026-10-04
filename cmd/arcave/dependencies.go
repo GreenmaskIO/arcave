@@ -79,7 +79,7 @@ type dependencies struct {
 // initAllDependencies wires the savepoint workflows for the project rooted at
 // projectPath. Every store arrives from storefactory already rooted.
 func initAllDependencies(
-	ctx context.Context, projectPath string, cfg config.Config, stack model.StackName,
+	ctx context.Context, projectPath string, cfg config.Config, stack model.DockerComposeProjectName,
 ) (*dependencies, error) {
 	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial

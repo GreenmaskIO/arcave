@@ -157,7 +157,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	progress.Mode = progress.ModeQuiet
 
 	engine := dockerclient.NewEngine(daemonAPI)
-	inspector := introspect.NewInspector(daemonAPI, model.StackName(project))
+	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -166,7 +166,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	store, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
 	// The blob store is a sibling of the savepoints inside the stack root, so it
@@ -199,6 +199,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	}
 	t.Cleanup(func() {
 		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
+		removeProjectNetworks(t, env.daemon, env.project)
 		env.removeRestoredImages(t)
 	})
 	return env

@@ -35,7 +35,7 @@ import (
 // and a test whose two levels read alike would pass with them swapped.
 const (
 	testProject = model.ProjectName("demo")
-	testStack   = model.StackName("mystack")
+	testStack   = model.DockerComposeProjectName("mystack")
 )
 
 // directoryStorage returns the directory arm of the storage union, pointed at path.
@@ -176,7 +176,7 @@ func TestNew(t *testing.T) {
 			name    string
 			project model.ProjectName
 			session model.SessionID
-			stack   model.StackName
+			stack   model.DockerComposeProjectName
 			wantMsg string
 		}{
 			{name: "an empty project", project: "", session: model.DefaultSession, stack: testStack, wantMsg: "invalid project name"},
@@ -185,10 +185,11 @@ func TestNew(t *testing.T) {
 			{name: "an escaping project", project: "..", session: model.DefaultSession, stack: testStack, wantMsg: "invalid project name"},
 			{name: "an empty session", project: testProject, session: "", stack: testStack, wantMsg: "invalid session id"},
 			{name: "a nested session", project: testProject, session: "a/b", stack: testStack, wantMsg: "invalid session id"},
-			{name: "an empty stack", project: testProject, session: model.DefaultSession, stack: "", wantMsg: "invalid stack name"},
-			{name: "a nested stack", project: testProject, session: model.DefaultSession, stack: "a/b", wantMsg: "invalid stack name"},
-			{name: "an upper-case stack", project: testProject, session: model.DefaultSession, stack: "MyStack", wantMsg: "invalid stack name"},
-			{name: "an escaping stack", project: testProject, session: model.DefaultSession, stack: "..", wantMsg: "invalid stack name"},
+			{name: "an empty stack", project: testProject, session: model.DefaultSession, stack: "", wantMsg: "invalid compose project name"},
+			{name: "a nested stack", project: testProject, session: model.DefaultSession, stack: "a/b", wantMsg: "invalid compose project name"},
+			{name: "an upper-case stack", project: testProject, session: model.DefaultSession, stack: "MyStack", wantMsg: "invalid compose project name"},
+			{name: "an escaping stack", project: testProject, session: model.DefaultSession, stack: "..", wantMsg: "invalid compose project name"},
+			{name: "a stack with a leading dash", project: testProject, session: model.DefaultSession, stack: "-stack", wantMsg: "invalid compose project name"},
 		}
 
 		for _, tt := range tests {

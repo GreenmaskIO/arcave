@@ -44,7 +44,7 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 // mcpServiceFactory wires the savepoint workflows for the project a tool call
 // named, and returns the release that closes them when that call returns.
 func mcpServiceFactory(ctx context.Context, project string) (cli.MCPService, func(), error) {
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.StackName(project))
+	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(project))
 	if err != nil {
 		return nil, nil, fmt.Errorf("init dependencies: %w", err)
 	}

@@ -18,7 +18,10 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 )
 
 // VolumeType is arcave's classification of a mount: a refinement of the compose
@@ -260,8 +263,18 @@ type Project struct {
 	Networks []Network
 }
 
+// IntrospectionResult is everything a workflow reads from the daemon about a stack, taken
+// in one pass before anything is stopped. Daemon answers are verbatim.
 type IntrospectionResult struct {
 	Project Project
+	// Daemon is what `docker info` reports.
+	Daemon system.Info
+	// Images are the images the stack's containers run on and the base images those name
+	// by BaseImageIDLabel, keyed by id, verbatim.
+	Images map[ImageDigestID]image.InspectResponse
+	// Volumes are the volumes the project owns and every other volume a container mounts,
+	// keyed by docker name, verbatim.
+	Volumes map[string]volume.Volume
 }
 
 // SkippedVolume is a mount the backup decision did not take, reported so callers

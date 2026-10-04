@@ -275,6 +275,33 @@ func TestNewEcho_JournalsBothEnds(t *testing.T) {
 	}
 }
 
+// TestNewEcho_JournalsServedRequestsAtDebug pins that a request answered is
+// silent at INFO — restic issues one per blob — while a 500 is not.
+func TestNewEcho_JournalsServedRequestsAtDebug(t *testing.T) {
+	tests := []struct {
+		name      string
+		repo      model.Repository
+		wantEmpty bool
+	}{
+		{name: "served", repo: stubRepository{}, wantEmpty: true},
+		{name: "failed", repo: failingRepository{}, wantEmpty: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			var journal bytes.Buffer
+			ctx := zerolog.New(&journal).Level(zerolog.InfoLevel).WithContext(context.Background())
+			e := NewEcho(ctx, oneRepository(tt.repo))
+
+			// Act
+			e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/testrepo/config", nil))
+
+			// Assert
+			assert.Equal(t, tt.wantEmpty, journal.Len() == 0, journal.String())
+		})
+	}
+}
+
 // TestNewEcho_Docs pins that the documentation is reachable, and what reaching
 // it costs: echo prefers a static segment to a parametric one, so "docs" wins
 // against {arcaveObjectID} and no repository is addressable under that name. The last

@@ -145,7 +145,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	store, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
 	blobStore, err := store.SubStorage("shared/oci/blobs", true)
@@ -154,7 +154,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	svc := core.New(core.Deps{
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.StackName(project)),
+		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
 		ProjectAssembler:   composespec.NewAssembler(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
@@ -176,6 +176,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	}
 	t.Cleanup(func() {
 		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
+		removeProjectNetworks(t, env.daemon, env.project)
 	})
 	return env
 }

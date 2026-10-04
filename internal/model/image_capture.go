@@ -14,13 +14,18 @@
 
 package model
 
+// BaseImageIDLabel names, on an image arcave committed, the id of the image the user's
+// compose file named: after a rollback the container runs on an arcave/…:sp-<id> tag, and
+// this label is what still points past it to the true base.
+const BaseImageIDLabel = "io.arcave.base-image-id"
+
 // ContainerRef names one replica of one service. Replica is
 // com.docker.compose.container-number, counted from 1.
 type ContainerRef struct {
 	Service   string
 	Replica   int
 	ID        string
-	BaseImage string // what the container was created from
+	BaseImage string // what the container was created from; an arcave/…:sp-<id> tag after a rollback
 }
 
 // ImageCaptureRequest is one commit-and-store, addressed by savepoint and container.

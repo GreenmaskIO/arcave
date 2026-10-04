@@ -16,25 +16,43 @@ package rest
 
 import (
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/rs/zerolog"
 	"github.com/ziflex/lecho/v3"
 )
 
-// enrichLogger reports both ends of every request, stamps the request's logger into
-// its context, and is the only place the cause of a 500 is written down.
+// enrichLogger stamps the request's logger into its context and reports the
+// request's start. Its completion line is skipped: journalAnswered writes it.
 func enrichLogger(logger *lecho.Logger) echo.MiddlewareFunc {
 	return lecho.Middleware(lecho.Config{
 		Logger: logger,
-		// Levels are lecho's: an operation that answered logs at the logger's
-		// own level, an error escaping one at ERROR — so 404s are not noise.
-		//
-		// HandleError lets the error handler pick the status before the line is
-		// written, or the journal reports one it decided itself.
-		HandleError: true,
 		Enricher: func(_ echo.Context, l zerolog.Context) zerolog.Context {
 			return l.Str("component", "restic-rest")
 		},
-		BeforeNext: logStarted,
+		BeforeNext:       logStarted,
+		AfterNextSkipper: func(echo.Context) bool { return true },
+	})
+}
+
+// journalAnswered reports the end of every request — at DEBUG when an operation
+// answered, at ERROR when an error escaped one — and is the only place the
+// cause of a 500 is written down.
+func journalAnswered() echo.MiddlewareFunc {
+	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		// HandleError lets the error handler pick the status before the line is
+		// written, or the journal reports one it decided itself.
+		HandleError:      true,
+		LogLatency:       true,
+		LogRemoteIP:      true,
+		LogHost:          true,
+		LogMethod:        true,
+		LogURI:           true,
+		LogUserAgent:     true,
+		LogStatus:        true,
+		LogError:         true,
+		LogContentLength: true,
+		LogResponseSize:  true,
+		LogValuesFunc:    logAnswered,
 	})
 }
 
@@ -56,4 +74,24 @@ func logStarted(c echo.Context) {
 		evt = evt.Int64("content_length", r.ContentLength)
 	}
 	evt.Msg("restic rest request")
+}
+
+// logAnswered writes one completion line through the logger enrichLogger stamped.
+func logAnswered(c echo.Context, v middleware.RequestLoggerValues) error {
+	logger := zerolog.Ctx(c.Request().Context())
+	evt := logger.Debug()
+	if v.Error != nil {
+		evt = logger.Err(v.Error)
+	}
+	evt.Str("remote_ip", v.RemoteIP).
+		Str("host", v.Host).
+		Str("method", v.Method).
+		Str("uri", v.URI).
+		Str("user_agent", v.UserAgent).
+		Int("status", v.Status).
+		Dur("latency", v.Latency).
+		Str("bytes_in", v.ContentLength).
+		Int64("bytes_out", v.ResponseSize).
+		Msg("restic rest response")
+	return nil
 }

@@ -35,6 +35,9 @@ const (
 	// composeLabelPrefix marks what compose stamps itself. Compose re-stamps it on
 	// create, so the spec must not declare it as the user's own.
 	composeLabelPrefix = "com.docker.compose."
+	// desktopLabelPrefix marks what Docker Desktop stamps on every container it creates;
+	// it is the daemon's, not the user's, and means nothing outside Desktop.
+	desktopLabelPrefix = "desktop.docker.io/"
 	// pullPolicyMissing keeps a vanished image loud: create must fail rather than
 	// quietly build or start something else.
 	pullPolicyMissing = "missing"
@@ -63,7 +66,7 @@ func (a *Assembler) Assemble(res model.IntrospectionResult) (*types.Project, err
 		ComposeFiles: files,
 		Services:     services(res.Project.Services, keys),
 		Volumes:      volumes(res.Project.Volumes),
-		Networks:     networks(res.Project.Networks, keys),
+		Networks:     networks(res.Project.Networks, keys, staticAddressNetworks(res.Project.Services)),
 	}, nil
 }
 
@@ -81,8 +84,8 @@ func services(introspected []model.Service, netKeys map[string]string) types.Ser
 	return services
 }
 
-// dependsOn parses compose's `service:condition:restart` dependency label. Required stays false
-// and a dependency the stack no longer holds is dropped: neither may fail the graph.
+// dependsOn parses compose's `service:condition:restart` dependency label. A dependency the
+// stack no longer holds is dropped, so every one kept exists and is required, as compose's default.
 func dependsOn(label string, known map[string]bool) types.DependsOnConfig {
 	if label == "" {
 		return nil
@@ -93,7 +96,7 @@ func dependsOn(label string, known map[string]bool) types.DependsOnConfig {
 		if !known[parts[0]] {
 			continue
 		}
-		dependency := types.ServiceDependency{Condition: dependencyCondition, Restart: true}
+		dependency := types.ServiceDependency{Condition: dependencyCondition, Restart: true, Required: true}
 		if len(parts) > 1 {
 			dependency.Condition = parts[1]
 		}
@@ -133,7 +136,9 @@ func volumes(introspected []model.NamedVolume) types.Volumes {
 
 // networks renders the networks: section, the foreign ones keyed by docker name
 // and marked external — the introspector sees only what carries the project label.
-func networks(introspected []model.Network, keys map[string]string) types.Networks {
+// networks renders the networks: section. A network's address pools are declared only where
+// a container holds a static address in it; elsewhere the daemon picks a free range again.
+func networks(introspected []model.Network, keys map[string]string, static map[string]bool) types.Networks {
 	owned := make(map[string]bool, len(introspected))
 	networks := make(types.Networks, len(keys))
 	for _, n := range introspected {
@@ -143,7 +148,7 @@ func networks(introspected []model.Network, keys map[string]string) types.Networ
 			Name:       n.Name,
 			Driver:     n.Inspect.Driver,
 			DriverOpts: n.Inspect.Options,
-			Ipam:       ipam(n.Inspect.IPAM),
+			Ipam:       ipam(n.Inspect.IPAM, static[n.Name]),
 			Internal:   n.Inspect.Internal,
 			Attachable: n.Inspect.Attachable,
 			EnableIPv6: &enableIPv6,
@@ -158,10 +163,13 @@ func networks(introspected []model.Network, keys map[string]string) types.Networ
 	return networks
 }
 
-// ipam carries the address pool verbatim, auto-assigned subnets included: a
-// service holding a static address needs the pool it was allocated from.
-func ipam(from network.IPAM) types.IPAMConfig {
+// ipam carries the driver, and the pools verbatim only when withPools: a static address needs
+// the pool it was allocated from, while pinning an auto-assigned one risks an overlap on create.
+func ipam(from network.IPAM, withPools bool) types.IPAMConfig {
 	config := types.IPAMConfig{Driver: from.Driver}
+	if !withPools {
+		return config
+	}
 	for _, pool := range from.Config {
 		config.Config = append(config.Config, &types.IPAMPool{
 			Subnet:             pool.Subnet,
@@ -171,6 +179,33 @@ func ipam(from network.IPAM) types.IPAMConfig {
 		})
 	}
 	return config
+}
+
+// staticAddressNetworks are the docker names of the networks in which any replica holds a
+// static address.
+func staticAddressNetworks(services []model.Service) map[string]bool {
+	static := map[string]bool{}
+	for _, svc := range services {
+		for _, c := range svc.Containers {
+			if c.Inspect.NetworkSettings == nil {
+				continue
+			}
+			for name, endpoint := range c.Inspect.NetworkSettings.Networks {
+				if hasStaticAddress(endpoint) {
+					static[name] = true
+				}
+			}
+		}
+	}
+	return static
+}
+
+// hasStaticAddress reports whether an endpoint was given an address rather than allocated one.
+func hasStaticAddress(endpoint *network.EndpointSettings) bool {
+	if endpoint == nil || endpoint.IPAMConfig == nil {
+		return false
+	}
+	return endpoint.IPAMConfig.IPv4Address != "" || endpoint.IPAMConfig.IPv6Address != ""
 }
 
 // networkKeys maps a network's docker name to its key in the project. A network
@@ -214,12 +249,12 @@ func projectOrigin(services []model.Service) (workingDir string, files []string)
 	return workingDir, files
 }
 
-// userLabels drops what compose stamps itself, leaving the declaration. nil when
+// userLabels drops what compose and Docker Desktop stamp themselves, leaving the declaration. nil when
 // nothing is left, so an empty map never renders.
 func userLabels(labels map[string]string) types.Labels {
 	kept := types.Labels{}
 	for k, v := range labels {
-		if !strings.HasPrefix(k, composeLabelPrefix) {
+		if !strings.HasPrefix(k, composeLabelPrefix) && !strings.HasPrefix(k, desktopLabelPrefix) {
 			kept[k] = v
 		}
 	}

@@ -23,9 +23,8 @@ import (
 // `project.name` of .arcave/config.yaml. It carries its own gate, so a value
 // that reached a store was validated.
 //
-// StackName's twin, and deliberately a separate type: the tenant and the compose
-// stack are different concepts that happen to share a charset, and one segment
-// must never be passed where the other is expected.
+// Deliberately not DockerComposeProjectName: the tenant and the compose stack are
+// different concepts, and one segment must never be passed where the other is expected.
 type ProjectName string
 
 // Validate accepts a non-empty name of the charset compose imposes on project
@@ -61,7 +60,7 @@ func NormalizeProjectName(s string) ProjectName {
 	return ProjectName(strings.TrimLeft(b.String(), "-_"))
 }
 
-// validateNameSegment holds the charset rule ProjectName and StackName share.
+// validateNameSegment holds ProjectName's charset rule.
 // The message names the condition alone; each type wraps it with its own
 // subject.
 func validateNameSegment(s string) error {
