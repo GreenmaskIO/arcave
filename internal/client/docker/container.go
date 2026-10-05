@@ -73,7 +73,7 @@ func declaredHostname(inspect container.InspectResponse) string {
 }
 
 // imagePlatform carries the platform of the image the container was created from,
-// so an emulated stack rebuilds emulated. Nil when the daemon reports none, which
+// so an emulated replica rebuilds emulated. Nil when the daemon reports none, which
 // is what compose itself passes for a service declaring no platform.
 func imagePlatform(inspect container.InspectResponse) *ocispec.Platform {
 	if inspect.ImageManifestDescriptor == nil {

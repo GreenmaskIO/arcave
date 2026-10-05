@@ -53,7 +53,7 @@ func (s *Service) requireNoInflight(ctx context.Context, remedyTarget model.Save
 func remedyOf(marker model.InflightMarker) string {
 	switch marker.Phase {
 	case model.InflightRestoreDone:
-		return "every volume was restored and only the services were not started: start the stack, then remove " +
+		return "every volume was restored and only the services were not started: start the compose project, then remove " +
 			".arcave/inflight.json — or roll back to the safety snapshot to undo the rollback"
 	case model.InflightInconsistent:
 		return "the rollback failed and its revert failed too: roll back to the safety snapshot to return " +

@@ -23,7 +23,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// loadSavepointSpec reads the stack a savepoint was taken of. Every failure here
+// loadSavepointSpec reads the compose project a savepoint was taken of. Every failure here
 // happens before anything is stopped.
 func (s *Service) loadSavepointSpec(ctx context.Context, record model.Savepoint) (*types.Project, error) {
 	if record.Spec == nil {

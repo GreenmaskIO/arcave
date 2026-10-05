@@ -71,7 +71,7 @@ func demoSafetySnapshot() model.Savepoint {
 	}
 }
 
-// demoIntrospection is what the inspector reports for the live stack.
+// demoIntrospection is what the inspector reports for the live compose project.
 func demoIntrospection() model.IntrospectionResult {
 	return model.IntrospectionResult{Project: model.Project{
 		Name: demoProject,
@@ -205,7 +205,7 @@ func demoSecondImageCapture() model.ImageCapture {
 	return capture
 }
 
-// demoScaledRecord is a savepoint of the scaled stack: one capture per replica.
+// demoScaledRecord is a savepoint of the scaled compose project: one capture per replica.
 func demoScaledRecord() model.Savepoint {
 	record := demoRecord()
 	record.Images = []model.ImageCapture{demoImageCapture(), demoSecondImageCapture()}
@@ -215,7 +215,7 @@ func demoScaledRecord() model.Savepoint {
 // demoSpec is what the assembler materialises demoIntrospection into, demoSpecBytes
 // its artifact, and demoTargetSpec what that artifact parses back to. The two
 // projects are distinct values: expectations match them by identity, so a call
-// handed the live stack instead of the savepoint's fails.
+// handed the live compose project instead of the savepoint's fails.
 var (
 	demoSpec       = &types.Project{Name: demoProject}
 	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{

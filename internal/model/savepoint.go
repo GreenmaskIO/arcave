@@ -46,7 +46,7 @@ type Savepoint struct {
 	// whether or not a layer was captured over it.
 	UpstreamImages []UpstreamImage `json:"upstream_images,omitempty"`
 	// Spec names the compose spec committed beside this record. A savepoint without
-	// one cannot be rolled back to: the stack is rebuilt from the spec.
+	// one cannot be rolled back to: the compose project is rebuilt from the spec.
 	Spec *SpecRef `json:"spec,omitempty"`
 }
 

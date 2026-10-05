@@ -32,8 +32,8 @@ var mcpCmd = &cobra.Command{
 	RunE:  runMCP,
 }
 
-// runMCP builds no dependencies of its own: one server serves many stacks, and a
-// stack is named per tool call.
+// runMCP builds no dependencies of its own: one server serves many compose projects, and a
+// compose project is named per tool call.
 func runMCP(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err

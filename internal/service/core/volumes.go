@@ -39,7 +39,7 @@ var skipReasons = map[model.VolumeType]string{
 	model.VolumeTypeUnknown: "unknown mount type",
 }
 
-// resolveBackupVolumes returns the units a savepoint of the introspected stack
+// resolveBackupVolumes returns the units a savepoint of the introspected compose project
 // covers. Every workflow comes through here, so create and rollback cannot differ.
 func (s *Service) resolveBackupVolumes(ctx context.Context, res model.IntrospectionResult) ([]model.Volume, error) {
 	volumes, skipped, err := FindBackupVolumes(res, s.defaultBackend)

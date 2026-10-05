@@ -223,7 +223,7 @@ func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 	assert.Equal(t, []string{"front"}, attached["back"].Aliases)
 }
 
-// A dependency the stack no longer holds is dropped, so every one kept is required.
+// A dependency the compose project no longer holds is dropped, so every one kept is required.
 func TestAssembler_Assemble_DependsOn(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -255,7 +255,7 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 			},
 		},
 		{
-			name:  "a dependency the stack no longer holds is dropped",
+			name:  "a dependency the compose project no longer holds is dropped",
 			label: "db:service_healthy,gone:service_started",
 			want:  types.DependsOnConfig{"db": {Condition: "service_healthy", Restart: true, Required: true}},
 		},

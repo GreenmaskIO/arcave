@@ -111,7 +111,7 @@ type Copier struct {
 	layout ArchiveLayout
 }
 
-// NewCopier binds a copier to the stack store it works under and the layout its
+// NewCopier binds a copier to the compose project store it works under and the layout its
 // captures are written in.
 func NewCopier(store storages.Storager, docker ContainerImager, layout ArchiveLayout) *Copier {
 	return &Copier{

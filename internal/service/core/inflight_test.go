@@ -365,7 +365,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
 		Return(errors.New("restore boom")).Once()
-	// The revert rebuilds the live stack and fails replaying its own capture: no
+	// The revert rebuilds the live compose project and fails replaying its own capture: no
 	// start follows.
 	downForRevert := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	createForRevert := runner.On("Create", mock.Anything, demoSpec).Return(nil).Once()

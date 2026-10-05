@@ -65,7 +65,7 @@ func TestEngine_RecreateWithImage(t *testing.T) {
 	assert.Equal(t, []string{"back"}, gotHostConfig.Binds)
 	assert.Equal(t, []string{"NET_ADMIN"}, []string(gotHostConfig.CapAdd), "the host config goes over whole")
 	assert.Equal(t, &ocispec.Platform{OS: "linux", Architecture: "arm64"}, gotPlatform,
-		"an emulated stack rebuilds emulated")
+		"an emulated replica rebuilds emulated")
 
 	endpoint := gotNetworking.EndpointsConfig["demo_back"]
 	require.NotNil(t, endpoint)

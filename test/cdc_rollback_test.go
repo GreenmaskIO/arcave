@@ -51,7 +51,7 @@ import (
 // This is the cdc backend's proof, wired the way cmd/arcave wires it: real
 // stores, the real repository registry behind the real loopback endpoint, the real docker
 // engine, and stock restic containers on the far side. Only the two compose
-// halves are doubled — starting and stopping a stack proves nothing this test is
+// halves are doubled — starting and stopping a compose project proves nothing this test is
 // about, and its containers stay created either way, which is the state arcave
 // captures in.
 //
@@ -59,13 +59,13 @@ import (
 
 const (
 	// cdcProject is the compose project name the container labels carry; arcave
-	// finds a volume's mount through them, and it is the stack segment of the
+	// finds a volume's mount through them, and it is the compose project segment of the
 	// store root.
 	cdcProject = "arcave-cdc-it"
-	// cdcTenant is the storage tenant — cfg.Project.Name, deliberately spelled
-	// differently from the stack so the two levels of the store root stay
+	// cdcArcaveProject is the arcave project — cfg.Project.Name, deliberately spelled
+	// differently from the compose project so the two levels of the store root stay
 	// distinguishable in an assertion.
-	cdcTenant = "arcave-it-tenant"
+	cdcArcaveProject = "arcave-it-tenant"
 	// blobKiB is the payload per volume — small enough to run in seconds, large
 	// enough that an increment is visibly smaller than a full capture. Random
 	// bytes, because zeros would deduplicate into a repository proving nothing.
@@ -119,16 +119,16 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 				assert.NotEmpty(t, payload.SnapshotObjectID, "%s", stat.Volume.ObjectID)
 				assert.Positive(t, payload.TotalBytesProcessed, "%s", stat.Volume.ObjectID)
 				// One repository per volume, beside the savepoint directories under
-				// the stack root — a real restic repository a user can open with a
+				// the compose project root — a real restic repository a user can open with a
 				// plain restic CLI.
-				exists, err := env.stackStore.Exists(env.ctx, "restic/"+stat.Volume.ObjectID+"/config")
+				exists, err := env.composeProjectStore.Exists(env.ctx, "restic/"+stat.Volume.ObjectID+"/config")
 				require.NoError(t, err)
-				assert.True(t, exists, "%s has no repository under the stack root", stat.Volume.ObjectID)
+				assert.True(t, exists, "%s has no repository under the compose project root", stat.Volume.ObjectID)
 			}
 			// The savepoint's own directory holds the record and the spec only: a cdc
 			// capture's bytes live in the repository, never under the savepoint.
 			assert.Equal(t, []string{"project.yaml", "savepoint.json"},
-				objectNames(t, env.stackStore, first.ID.String()))
+				objectNames(t, env.composeProjectStore, first.ID.String()))
 
 			// A capture after a small change must ship an increment rather than the
 			// payload again, which is the whole reason this backend exists.
@@ -168,7 +168,7 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	env.mutate(t, env.volumes[0])
 	preRollback := env.hashAll(t)
 
-	// The stack never comes up healthy after the restore, which is a failed
+	// The compose project never comes up healthy after the restore, which is a failed
 	// rollback however clean the restore was.
 	env.compose.failNextUp = errors.New("unhealthy")
 
@@ -191,22 +191,22 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	require.Len(t, committed, 1)
 	assert.Equal(t, savepoint.ID, committed[0].ID)
 	assert.Equal(t, []string{"project.yaml", "savepoint.json"},
-		objectNames(t, env.stackStore, savepoint.ID.String()))
-	// Nothing of the backup is left beside the savepoint either: the stack root
+		objectNames(t, env.composeProjectStore, savepoint.ID.String()))
+	// Nothing of the backup is left beside the savepoint either: the compose project root
 	// holds that one savepoint directory and the repositories, and nothing else.
-	assert.Equal(t, []string{savepoint.ID.String(), cdc.RepoNamespace}, dirNames(t, env.stackStore),
+	assert.Equal(t, []string{savepoint.ID.String(), cdc.RepoNamespace}, dirNames(t, env.composeProjectStore),
 		"the backup's own directory is swept with it")
 }
 
 // cdcEnv is one wired arcave over a live daemon, plus the volumes it captures.
 type cdcEnv struct {
-	ctx        context.Context
-	svc        *core.Service
-	compose    *stubComposeRunner
-	logs       *syncBuffer
-	engine     *dockerclient.Engine
-	stackStore storages.Storager
-	volumes    []cdcVolume
+	ctx                 context.Context
+	svc                 *core.Service
+	compose             *stubComposeRunner
+	logs                *syncBuffer
+	engine              *dockerclient.Engine
+	composeProjectStore storages.Storager
+	volumes             []cdcVolume
 }
 
 // cdcVolume is one docker volume and the labelled container that mounts it.
@@ -238,24 +238,24 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		createLabelledContainer(t, cli, v.service, v)
 	}
 
-	// The store, exactly as the DI root builds it: one tree per stack inside the
+	// The store, exactly as the DI root builds it: one tree per compose project inside the
 	// session — savepoints, a rollback's undo and the cdc repositories alike. The
-	// tenant is named apart from the stack, so an assertion on the tree shows
+	// arcave project is named apart from the compose project, so an assertion on the tree shows
 	// both levels rather than one name standing in for two.
 	projectRoot := t.TempDir()
 	storageCfg := config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}
-	stackStore, err := storefactory.New(storageCfg, projectRoot, cdcTenant, model.DefaultSession, cdcProject)
+	composeProjectStore, err := storefactory.New(storageCfg, projectRoot, cdcArcaveProject, model.DefaultSession, cdcProject)
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, stackStore.Close()) })
+	t.Cleanup(func() { assert.NoError(t, composeProjectStore.Close()) })
 
 	composeRunner := &stubComposeRunner{}
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).Level(zerolog.InfoLevel).WithContext(context.Background())
 
-	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
 	require.NoError(t, err)
 	resticServer := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	resticPort, err := rest.Serve(resticServer, "")
@@ -277,7 +277,7 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 
 	project := &types.Project{Name: cdcProject}
 	svc := core.New(core.Deps{
-		SavepointRepo:    sprepo.New(stackStore),
+		SavepointRepo:    sprepo.New(composeProjectStore),
 		ProjectLocker:    lock.New(projectRoot),
 		ComposeInspector: stubInspector{result: introspectionOf(volumes)},
 		ProjectAssembler: stubAssembler{project: project},
@@ -285,18 +285,18 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		VolumeRemover:    stubVolumeRemover{},
 		BackendRegistry:  registry,
 		Inflight:         inflightrepo.New(projectRoot),
-		Store:            stackStore,
+		Store:            composeProjectStore,
 		DefaultBackend:   model.SnapshotBackendCDC,
 	})
 
 	return &cdcEnv{
-		ctx:        ctx,
-		svc:        svc,
-		compose:    composeRunner,
-		logs:       logs,
-		engine:     engine,
-		stackStore: stackStore,
-		volumes:    volumes,
+		ctx:                 ctx,
+		svc:                 svc,
+		compose:             composeRunner,
+		logs:                logs,
+		engine:              engine,
+		composeProjectStore: composeProjectStore,
+		volumes:             volumes,
 	}
 }
 
@@ -383,7 +383,7 @@ func totalDataAdded(t *testing.T, record model.Savepoint) int64 {
 	return total
 }
 
-// stubComposeRunner stands in for the stack's lifecycle: this test keeps its
+// stubComposeRunner stands in for the compose project's lifecycle: this test keeps its
 // containers created and stopped throughout, which is the state a real run
 // captures in anyway.
 type stubComposeRunner struct {
@@ -407,7 +407,7 @@ func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration
 	return nil
 }
 
-// stubAssembler: this test never starts or rebuilds the stack, so the spec only
+// stubAssembler: this test never starts or rebuilds the compose project, so the spec only
 // names the project and its artifact is opaque.
 type stubAssembler struct{ project *types.Project }
 
@@ -533,7 +533,7 @@ func objectNames(t *testing.T, store storages.Storager, prefix string) []string 
 	return names
 }
 
-// dirNames lists a store's immediate sub-directories — for the stack root, the
+// dirNames lists a store's immediate sub-directories — for the compose project root, the
 // savepoint directories plus the reserved neighbour cdc keeps its repositories
 // in.
 func dirNames(t *testing.T, store storages.Storager) []string {

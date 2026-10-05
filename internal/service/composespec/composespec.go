@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package composespec builds the compose spec of a live stack from
+// Package composespec builds the compose spec of a live compose project from
 // model.IntrospectionResult, complete enough to create it anew. It reads no file.
 package composespec
 
@@ -52,10 +52,10 @@ type Assembler struct{}
 
 func NewAssembler() *Assembler { return &Assembler{} }
 
-// Assemble builds the compose spec of the introspected stack.
+// Assemble builds the compose spec of the introspected compose project.
 func (a *Assembler) Assemble(res model.IntrospectionResult) (*types.Project, error) {
 	if len(res.Project.Services) == 0 {
-		return nil, fmt.Errorf("stack %q has no services to act on", res.Project.Name)
+		return nil, fmt.Errorf("compose project %q has no services to act on", res.Project.Name)
 	}
 
 	keys := networkKeys(res.Project.Networks, res.Project.Services)
@@ -85,7 +85,7 @@ func services(introspected []model.Service, netKeys map[string]string) types.Ser
 }
 
 // dependsOn parses compose's `service:condition:restart` dependency label. A dependency the
-// stack no longer holds is dropped, so every one kept exists and is required, as compose's default.
+// compose project no longer holds is dropped, so every one kept exists and is required, as compose's default.
 func dependsOn(label string, known map[string]bool) types.DependsOnConfig {
 	if label == "" {
 		return nil
@@ -231,7 +231,7 @@ func networkKeys(introspected []model.Network, services []model.Service) map[str
 }
 
 // projectOrigin recovers the directory and files compose stamps on what it
-// creates: without them the docker CLI no longer finds the stack from its path.
+// creates: without them the docker CLI no longer finds the compose project from its path.
 func projectOrigin(services []model.Service) (workingDir string, files []string) {
 	for _, svc := range services {
 		for _, c := range svc.Containers {

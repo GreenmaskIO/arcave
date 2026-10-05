@@ -251,7 +251,7 @@ func declaredAliases(aliases []string, containerID string, generated []string) [
 	return kept
 }
 
-// exposedPorts renders EXPOSE, sorted so one stack renders one spec.
+// exposedPorts renders EXPOSE, sorted so one compose project renders one spec.
 func exposedPorts(set nat.PortSet) types.StringOrNumberList {
 	if len(set) == 0 {
 		return nil

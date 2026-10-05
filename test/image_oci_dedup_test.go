@@ -59,19 +59,19 @@ import (
 // service's own command rewrites that one on every start.
 const epochMarker = "/epoch-marker"
 
-// sharedBlobPrefix is where the shared blob store sits under one stack root.
+// sharedBlobPrefix is where the shared blob store sits under one compose project root.
 const sharedBlobPrefix = "shared/oci/blobs"
 
-// ociDedupEnv is the stack for OCI blob-store deduplication tests.
+// ociDedupEnv is the compose project for OCI blob-store deduplication tests.
 type ociDedupEnv struct {
-	ctx         context.Context
-	svc         *core.Service
-	compose     *composeclient.Client
-	daemon      *client.Client
-	stackStore  storages.Storager
-	blobStore   storages.Storager
-	projectRoot string
-	project     string
+	ctx                 context.Context
+	svc                 *core.Service
+	compose             *composeclient.Client
+	daemon              *client.Client
+	composeProjectStore storages.Storager
+	blobStore           storages.Storager
+	projectRoot         string
+	project             string
 }
 
 func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
@@ -96,39 +96,39 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	})
 
 	projectRoot := t.TempDir()
-	stackStore, err := storefactory.New(config.Storage{
+	composeProjectStore, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	blobStore, err := stackStore.SubStorage(sharedBlobPrefix, true)
+	blobStore, err := composeProjectStore.SubStorage(sharedBlobPrefix, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
-		SavepointRepo:      sprepo.New(stackStore),
+		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
 		ProjectAssembler:   composespec.NewAssembler(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.NewCopier(stackStore, engine, dedupcopy.New(blobStore)),
+		ImageBackend:       imagecopy.NewCopier(composeProjectStore, engine, dedupcopy.New(blobStore)),
 		ContainerRebuilder: engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
-		Store:              stackStore,
+		Store:              composeProjectStore,
 		DefaultBackend:     model.SnapshotBackendCopy,
 	})
 
 	env := &ociDedupEnv{
-		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
-		svc:         svc,
-		compose:     runner,
-		daemon:      daemonAPI,
-		stackStore:  stackStore,
-		blobStore:   blobStore,
-		projectRoot: projectRoot,
-		project:     project,
+		ctx:                 zerolog.New(io.Discard).WithContext(context.Background()),
+		svc:                 svc,
+		compose:             runner,
+		daemon:              daemonAPI,
+		composeProjectStore: composeProjectStore,
+		blobStore:           blobStore,
+		projectRoot:         projectRoot,
+		project:             project,
 	}
 	t.Cleanup(func() {
 		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
@@ -255,7 +255,7 @@ func (e *ociDedupEnv) mutateContainer(t *testing.T, content string) {
 	e.exec(t, e.containerID(t), "sh", "-c", fmt.Sprintf("printf %%s %s > %s", content, epochMarker))
 }
 
-// containerID is the stack's one container.
+// containerID is the compose project's one container.
 func (e *ociDedupEnv) containerID(t *testing.T) string {
 	t.Helper()
 

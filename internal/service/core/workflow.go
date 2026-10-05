@@ -41,12 +41,12 @@ type workingSet struct {
 	anonVolumes map[string]string
 }
 
-// prepare introspects the stack, renders its spec and builds one backend per live
+// prepare introspects the compose project, renders its spec and builds one backend per live
 // volume. A capture covering nothing is refused here.
 func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (workingSet, error) {
 	res, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
-		return workingSet{}, fmt.Errorf("introspecting the stack: %w", err)
+		return workingSet{}, fmt.Errorf("introspecting the compose project: %w", err)
 	}
 
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
@@ -94,22 +94,22 @@ func (s *Service) stopServices(ctx context.Context, ws workingSet) error {
 	return nil
 }
 
-// tearDownStack removes the stack's containers and networks. It goes by project
+// composeDown removes the compose project's containers and networks. It goes by project
 // name, so it also takes down what a failed rebuild left standing.
-func (s *Service) tearDownStack(ctx context.Context, project *types.Project) error {
-	zerolog.Ctx(ctx).Info().Msg("removing the stack")
+func (s *Service) composeDown(ctx context.Context, project *types.Project) error {
+	zerolog.Ctx(ctx).Info().Msg("removing the compose project")
 	if err := s.composeRunner.Down(ctx, project); err != nil {
-		return fmt.Errorf("removing the stack: %w", err)
+		return fmt.Errorf("removing the compose project: %w", err)
 	}
 	return nil
 }
 
-// buildStack creates the containers of project without starting them: the data is
+// composeCreate creates the containers of project without starting them: the data is
 // restored into them first.
-func (s *Service) buildStack(ctx context.Context, project *types.Project) error {
-	zerolog.Ctx(ctx).Info().Msg("rebuilding the stack from the savepoint's spec")
+func (s *Service) composeCreate(ctx context.Context, project *types.Project) error {
+	zerolog.Ctx(ctx).Info().Msg("creating the compose project from the spec")
 	if err := s.composeRunner.Create(ctx, project); err != nil {
-		return fmt.Errorf("rebuilding the stack: %w", err)
+		return fmt.Errorf("creating the compose project: %w", err)
 	}
 	return nil
 }
@@ -123,7 +123,7 @@ func (s *Service) startServices(ctx context.Context, ws workingSet) error {
 	return nil
 }
 
-// anonymousVolumes indexes the docker names of the stack's anonymous volumes by
+// anonymousVolumes indexes the docker names of the compose project's anonymous volumes by
 // the identity their data is captured under.
 func anonymousVolumes(res model.IntrospectionResult) map[string]string {
 	names := map[string]string{}

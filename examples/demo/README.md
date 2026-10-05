@@ -33,7 +33,7 @@ Run everything from this directory (`examples/demo/`) so arcave finds
 ```bash
 cd examples/demo
 
-# 1. Start the stack (builds the app image, pulls postgres/minio/redis).
+# 1. Start the compose project (builds the app image, pulls postgres/minio/redis).
 #    --wait blocks until every service is healthy.
 docker compose up -d --wait
 
@@ -92,7 +92,7 @@ rm -rf .arcave                        # remove arcave metadata, savepoints and r
 ## Notes
 
 - Only the app (`8080`) publishes a host port, to avoid clashing with other
-  local stacks. Postgres/Redis/MinIO are reached over the compose network. To
+  local compose projects. Postgres/Redis/MinIO are reached over the compose network. To
   use the MinIO web console, uncomment the `ports` block for `minio` in
   `docker-compose.yaml`.
 - Rollback is **destructive**: every mount it restores is wiped first, so a

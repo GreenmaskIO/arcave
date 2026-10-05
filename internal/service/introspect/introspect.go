@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package introspect reports a compose stack as the daemon holds it, in one pass: services,
+// Package introspect reports a compose project as the daemon holds it, in one pass: services,
 // their mounts, the project's volumes and networks, the images its containers run on, and
 // `docker info`. Answers are kept verbatim. It reads no compose file and no config.
 package introspect
@@ -59,48 +59,48 @@ type dockerAPI interface {
 	Info(ctx context.Context) (system.Info, error)
 }
 
-// Inspector reports the one stack it is constructed with.
+// Inspector reports the one compose project it is constructed with.
 type Inspector struct {
-	api   dockerAPI
-	stack model.DockerComposeProjectName
+	api            dockerAPI
+	composeProject model.DockerComposeProjectName
 }
 
-func NewInspector(api dockerAPI, stack model.DockerComposeProjectName) *Inspector {
-	return &Inspector{api: api, stack: stack}
+func NewInspector(api dockerAPI, composeProject model.DockerComposeProjectName) *Inspector {
+	return &Inspector{api: api, composeProject: composeProject}
 }
 
-// Introspect reports the stack, stopped containers included. It cannot see an external volume
-// named like a generated one, an unmounted foreign volume, or a torn-down stack.
+// Introspect reports the compose project, stopped containers included. It cannot see an external volume
+// named like a generated one, an unmounted foreign volume, or a torn-down compose project.
 func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
 	replicas, err := i.replicas(ctx)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read containers of compose project %q: %w", i.stack, err)
+		return model.IntrospectionResult{}, fmt.Errorf("read containers of compose project %q: %w", i.composeProject, err)
 	}
 
 	// volumesIndex holds every volume the project names or uses: its own named volumes first,
 	// then each external or anonymous one a service or any of its replicas mounts.
 	volumesIndex, err := i.ownedVolumes(ctx)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read volumes of compose project %q: %w", i.stack, err)
+		return model.IntrospectionResult{}, fmt.Errorf("read volumes of compose project %q: %w", i.composeProject, err)
 	}
 
 	services, err := i.services(ctx, replicas, volumesIndex)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read services of compose project %q: %w", i.stack, err)
+		return model.IntrospectionResult{}, fmt.Errorf("read services of compose project %q: %w", i.composeProject, err)
 	}
 
 	if err := i.mountedVolumes(ctx, services, volumesIndex); err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read volumes mounted in compose project %q: %w", i.stack, err)
+		return model.IntrospectionResult{}, fmt.Errorf("read volumes mounted in compose project %q: %w", i.composeProject, err)
 	}
 
 	networks, err := i.networks(ctx)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read networks of compose project %q: %w", i.stack, err)
+		return model.IntrospectionResult{}, fmt.Errorf("read networks of compose project %q: %w", i.composeProject, err)
 	}
 
 	images, err := i.images(ctx, services)
 	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read images of compose project %q: %w", i.stack, err)
+		return model.IntrospectionResult{}, fmt.Errorf("read images of compose project %q: %w", i.composeProject, err)
 	}
 
 	info, err := i.api.Info(ctx)
@@ -110,7 +110,7 @@ func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 
 	return model.IntrospectionResult{
 		Project: model.Project{
-			Name:     i.stack.String(),
+			Name:     i.composeProject.String(),
 			Services: services,
 			Volumes:  i.namedVolumes(services, volumesIndex),
 			Networks: networks,
@@ -121,7 +121,7 @@ func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	}, nil
 }
 
-// replicas lists the stack's containers, stopped ones included, without the one-off
+// replicas lists the compose project's containers, stopped ones included, without the one-off
 // containers `docker compose run` leaves behind.
 func (i *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
 	summaries, err := i.api.ContainerList(ctx, container.ListOptions{
@@ -133,18 +133,18 @@ func (i *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
 	}
 	replicas := keepProjectContainers(summaries)
 	if len(replicas) == 0 {
-		return nil, errors.New("no containers found: bring the stack up once, or name another project with -p")
+		return nil, errors.New("no containers found: bring the compose project up once, or name another project with -p")
 	}
 	return replicas, nil
 }
 
-// projectFilter selects what compose stamped with this stack's name.
+// projectFilter selects what compose stamped with this compose project's name.
 func (i *Inspector) projectFilter() filters.Args {
-	return filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+i.stack.String()))
+	return filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+i.composeProject.String()))
 }
 
 // keepProjectContainers drops the one-off containers.
-// Filtered here, not in the daemon query: a compose too old to set the label would drop the stack.
+// Filtered here, not in the daemon query: a compose too old to set the label would drop the compose project.
 func keepProjectContainers(summaries []container.Summary) []container.Summary {
 	kept := make([]container.Summary, 0, len(summaries))
 	for _, s := range summaries {
@@ -173,7 +173,7 @@ func (i *Inspector) ownedVolumes(ctx context.Context) (map[string]volume.Volume,
 	return volumes, nil
 }
 
-// services reports the stack's services, sorted by name.
+// services reports the compose project's services, sorted by name.
 func (i *Inspector) services(
 	ctx context.Context, containers []container.Summary, volumes map[string]volume.Volume,
 ) ([]model.Service, error) {
@@ -458,7 +458,7 @@ func bindOptions(m container.MountPoint, declared declaredMount) *model.BindMoun
 // owns tells the project's own volume by the label compose stamped on it — the one
 // ownedVolumes lists by.
 func (i *Inspector) owns(v volume.Volume) bool {
-	return v.Labels[api.ProjectLabel] == i.stack.String()
+	return v.Labels[api.ProjectLabel] == i.composeProject.String()
 }
 
 // isAnonymous tells an anonymous volume from an external one by the daemon's label,

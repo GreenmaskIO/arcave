@@ -121,7 +121,7 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	assert.True(t, cerrdefs.IsNotFound(err), "the committed image outlived the capture: %v", err)
 }
 
-// imageCaptureEnv is the stack this test drives, wired the way cmd/arcave wires it.
+// imageCaptureEnv is the compose project this test drives, wired the way cmd/arcave wires it.
 type imageCaptureEnv struct {
 	ctx     context.Context
 	svc     *core.Service

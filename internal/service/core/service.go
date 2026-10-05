@@ -40,20 +40,20 @@ type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
 }
 
-// composeIntrospector reports the live stack it was bound to at construction.
+// composeIntrospector reports the live compose project it was bound to at construction.
 type composeIntrospector interface {
 	Introspect(ctx context.Context) (model.IntrospectionResult, error)
 }
 
 // projectAssembler materialises the spec the runner acts on — out of a live
-// stack, or out of the artifact a savepoint committed.
+// compose project, or out of the artifact a savepoint committed.
 type projectAssembler interface {
 	Assemble(res model.IntrospectionResult) (*types.Project, error)
 	Marshal(project *types.Project) ([]byte, error)
 	Parse(ctx context.Context, spec []byte) (*types.Project, error)
 }
 
-// composeRunner is the stack's lifecycle: stop it, tear it down, build it back
+// composeRunner is the compose project's lifecycle: stop it, tear it down, build it back
 // from a spec without starting it, start it.
 type composeRunner interface {
 	Stop(ctx context.Context, project *types.Project) error

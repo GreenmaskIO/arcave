@@ -51,7 +51,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, "1780335122")
-	// The teardown takes the live stack down; the rebuild puts back the recorded one.
+	// The teardown takes the live compose project down; the rebuild puts back the recorded one.
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
@@ -63,7 +63,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 	})).Return(nil).Once()
 
 	// The whole workflow: stop → back up the live state, write its spec and commit
-	// its record → tear the stack down → rebuild it from the savepoint's spec →
+	// its record → tear the compose project down → rebuild it from the savepoint's spec →
 	// restore → start → uncommit the backup and drop it. Every neighbouring pair
 	// compiles when swapped, so the chain is the pin.
 	mock.InOrder(stop, snapshotSafety, specSafety, commitSafety, down, create,
@@ -135,7 +135,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
 		Return(errors.New("restore boom")).Once()
-	// The revert rebuilds the stack the backup was taken of and replays it under the
+	// The revert rebuilds the compose project the backup was taken of and replays it under the
 	// id its capture reported; a successful revert drops the backup too.
 	downForRevert := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	createForRevert := runner.On("Create", mock.Anything, demoSpec).Return(nil).Once()
@@ -185,7 +185,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	safetySnapshotBackend.AssertExpectations(t)
 }
 
-// Services that never come up healthy revert too: an unhealthy stack after a
+// Services that never come up healthy revert too: an unhealthy compose project after a
 // clean restore is still a failed rollback.
 func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	// Arrange
@@ -202,7 +202,7 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
-	// The rollback rebuilds the savepoint's stack; the revert rebuilds the live one.
+	// The rollback rebuilds the savepoint's compose project; the revert rebuilds the live one.
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	runner.On("Create", mock.Anything, demoSpec).Return(nil).Once()
 	// The first start is the failed health check; the second is the revert's restart.

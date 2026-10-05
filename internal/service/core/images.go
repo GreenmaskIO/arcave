@@ -215,7 +215,7 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, restored []model
 
 	res, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
-		return fmt.Errorf("introspecting the rebuilt stack: %w", err)
+		return fmt.Errorf("introspecting the rebuilt compose project: %w", err)
 	}
 	built := builtContainers(res)
 
@@ -223,7 +223,7 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, restored []model
 		key := replicaKey{service: image.Service, replica: image.Replica}
 		containerID, ok := built[key]
 		if !ok {
-			return fmt.Errorf("the rebuilt stack holds no replica %d of service %s to restore its layer into",
+			return fmt.Errorf("the rebuilt compose project holds no replica %d of service %s to restore its layer into",
 				image.Replica, image.Service)
 		}
 		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, containerID, image.ImageRef)
@@ -316,7 +316,7 @@ func divergentReplicas(restored []model.ImageRestore) []model.ImageRestore {
 	return divergent
 }
 
-// builtContainers indexes the stack's containers by the replica each one is.
+// builtContainers indexes the compose project's containers by the replica each one is.
 func builtContainers(res model.IntrospectionResult) map[replicaKey]string {
 	built := map[replicaKey]string{}
 	for _, svc := range res.Project.Services {

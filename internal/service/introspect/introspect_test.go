@@ -41,9 +41,9 @@ import (
 )
 
 const (
-	stack     = model.DockerComposeProjectName("demo")
-	anonName  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	ownedName = "demo_pgdata"
+	composeProject = model.DockerComposeProjectName("demo")
+	anonName       = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	ownedName      = "demo_pgdata"
 
 	testImageID     = model.ImageDigestID("sha256:1111111111111111111111111111111111111111111111111111111111111111")
 	testBaseImageID = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
@@ -64,7 +64,7 @@ func TestInspector_Introspect(t *testing.T) {
 	daemon.expectNetworks(network.Summary{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}})
 	daemon.expectImage(testImageID, nil)
 	daemon.expectInfo()
-	inspector := NewInspector(daemon, stack)
+	inspector := NewInspector(daemon, composeProject)
 
 	// Act
 	got, err := inspector.Introspect(context.Background())
@@ -109,7 +109,7 @@ func TestInspector_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
 	daemon.expectInfo()
 
 	// Act
-	got, err := NewInspector(daemon, stack).Introspect(context.Background())
+	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -198,7 +198,7 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			}
 
 			// Act
-			got, err := NewInspector(daemon, stack).Introspect(context.Background())
+			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -307,7 +307,7 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 			daemon.expectInfo()
 
 			// Act
-			got, err := NewInspector(daemon, stack).Introspect(context.Background())
+			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -333,7 +333,7 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	daemon.expectInfo()
 
 	// Act
-	got, err := NewInspector(daemon, stack).Introspect(context.Background())
+	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -364,7 +364,7 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 			daemon.expectContainers(tt.containers...)
 
 			// Act
-			_, err := NewInspector(daemon, stack).Introspect(context.Background())
+			_, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.Error(t, err)
@@ -503,7 +503,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 			tt.setup(daemon)
 
 			// Act
-			_, err := NewInspector(daemon, stack).Introspect(context.Background())
+			_, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			wantErr := tt.wantErr
@@ -586,7 +586,7 @@ func TestInspector_Introspect_Images(t *testing.T) {
 			daemon.expectInfo()
 
 			// Act
-			got, err := NewInspector(daemon, stack).Introspect(context.Background())
+			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -660,7 +660,7 @@ func TestInspector_Introspect_Volumes(t *testing.T) {
 			}
 
 			// Act
-			got, err := NewInspector(daemon, stack).Introspect(context.Background())
+			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
@@ -682,7 +682,7 @@ func TestInspector_Introspect_Daemon(t *testing.T) {
 	daemon.On("Info", mock.Anything).Return(info, nil).Once()
 
 	// Act
-	got, err := NewInspector(daemon, stack).Introspect(context.Background())
+	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 	// Assert
 	require.NoError(t, err)
@@ -690,7 +690,7 @@ func TestInspector_Introspect_Daemon(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
-// replica is one container of the stack: its summary and its inspect agree on the mounts.
+// replica is one container of the compose project: its summary and its inspect agree on the mounts.
 type replica struct {
 	id, service, image string
 	mounts             []container.MountPoint
@@ -703,7 +703,7 @@ func summary(id, service, image string, number int, mounts ...container.MountPoi
 		Names: []string{"/" + id},
 		Image: image,
 		Labels: map[string]string{
-			api.ProjectLabel:         stack.String(),
+			api.ProjectLabel:         composeProject.String(),
 			api.ServiceLabel:         service,
 			api.ContainerNumberLabel: strconv.Itoa(number),
 		},
@@ -740,7 +740,7 @@ func imageInspect(id model.ImageDigestID, labels map[string]string) image.Inspec
 // ownedVolume is a volume compose created for the project, carrying its compose key.
 func ownedVolume(name, key string) volume.Volume {
 	return volume.Volume{Name: name, Labels: map[string]string{
-		api.ProjectLabel: stack.String(),
+		api.ProjectLabel: composeProject.String(),
 		api.VolumeLabel:  key,
 	}}
 }

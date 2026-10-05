@@ -188,7 +188,7 @@ type Container struct {
 }
 
 // Network is one network of the project. Nothing arcave captures lives in one;
-// it is reported because a stack cannot be started again without it.
+// it is reported because a compose project cannot be started again without it.
 type Network struct {
 	// Key is the network's name inside the compose project, Name its name in
 	// docker — the same two levels NamedVolume documents.
@@ -263,13 +263,13 @@ type Project struct {
 	Networks []Network
 }
 
-// IntrospectionResult is everything a workflow reads from the daemon about a stack, taken
+// IntrospectionResult is everything a workflow reads from the daemon about a compose project, taken
 // in one pass before anything is stopped. Daemon answers are verbatim.
 type IntrospectionResult struct {
 	Project Project
 	// Daemon is what `docker info` reports.
 	Daemon system.Info
-	// Images are the images the stack's containers run on and the base images those name
+	// Images are the images the compose project's containers run on and the base images those name
 	// by BaseImageIDLabel, keyed by id, verbatim.
 	Images map[ImageDigestID]image.InspectResponse
 	// Volumes are the volumes the project owns and every other volume a container mounts,

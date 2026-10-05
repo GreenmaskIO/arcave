@@ -44,7 +44,7 @@ type dockerComposeAPI interface {
 	Start(ctx context.Context, projectName string, options api.StartOptions) error
 }
 
-// Client runs the project's lifecycle, the stack to act on passed per call. It
+// Client runs the project's lifecycle, the compose project to act on passed per call. It
 // calls compose/v2 as a library, so the host needs no docker CLI.
 type Client struct {
 	api  dockerComposeAPI
@@ -128,7 +128,7 @@ func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout 
 
 // withComposeLabels stamps onto a copy of the project the labels compose puts on
 // every container it creates: the library leaves that to its CLI, and without
-// them nothing finds the stack again.
+// them nothing finds the compose project again.
 func withComposeLabels(project *types.Project) *types.Project {
 	stamped := *project
 	stamped.Services = make(types.Services, len(project.Services))

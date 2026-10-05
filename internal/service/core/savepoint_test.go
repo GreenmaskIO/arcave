@@ -251,7 +251,7 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 	backend.AssertExpectations(t)
 }
 
-func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheStackRunning(t *testing.T) {
+func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheComposeProjectRunning(t *testing.T) {
 	// Arrange
 	assembleErr := errors.New("compose files are gone")
 	inspector := &mockInspector{}

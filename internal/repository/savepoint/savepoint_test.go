@@ -164,7 +164,7 @@ func TestRepository_List(t *testing.T) {
 		},
 		{
 			// cdc keeps its repositories beside the savepoint directories, under
-			// the stack root this repository lists. "restic" is not a savepoint id,
+			// the compose project root this repository lists. "restic" is not a savepoint id,
 			// so it is invisible here — which is what makes it a safe neighbour.
 			name: "the cdc repository tree beside the savepoints is invisible",
 			plant: func(t *testing.T, root string) {

@@ -123,7 +123,7 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 	env := newImageRollbackEnv(t)
 	env.up(t, 2)
 	before := env.replicas(t)
-	require.Len(t, before, 2, "the stack is scaled to two replicas")
+	require.Len(t, before, 2, "the compose project is scaled to two replicas")
 	env.write(t, before[0], "replica-1")
 	env.write(t, before[1], "replica-2")
 
@@ -149,7 +149,7 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 	assert.Equal(t, "replica-2", env.read(t, rebuilt[1], layerMarker))
 }
 
-// imageRollbackEnv is the stack these tests drive, wired the way cmd/arcave wires it.
+// imageRollbackEnv is the compose project these tests drive, wired the way cmd/arcave wires it.
 type imageRollbackEnv struct {
 	ctx       context.Context
 	svc       *core.Service
@@ -188,7 +188,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	// The blob store is a sibling of the savepoints inside the stack root, so it
+	// The blob store is a sibling of the savepoints inside the compose project root, so it
 	// dies with the session the way everything else there does.
 	blobStore, err := store.SubStorage("shared/oci/blobs", true)
 	require.NoError(t, err)

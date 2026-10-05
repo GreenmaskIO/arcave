@@ -27,7 +27,7 @@ package model
 type Volume struct {
 	ObjectID string `json:"object_id"` // stable identity: ServiceVolume.ObjectID() / NamedVolume.ObjectID()
 	// ComposeProject is the project name at capture time — how docker locates
-	// the stack's containers.
+	// the compose project's containers.
 	ComposeProject string              `json:"compose_project"`
 	Type           VolumeType          `json:"type"`
 	Backend        SnapshotBackendKind `json:"backend"`

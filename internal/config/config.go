@@ -115,7 +115,7 @@ const (
 	NetworkModeBridge = "bridge"
 )
 
-// The bounds arcave gives compose when it stops and starts the stack. They live
+// The bounds arcave gives compose when it stops and starts the compose project. They live
 // here rather than in the compose client because they are project config now:
 // the client applies them, but the user names them, and cmd/arcave advertises
 // them as the --wait-timeout/--stop-timeout defaults.
@@ -165,7 +165,7 @@ type Config struct {
 }
 
 // Project names the storage tenant every store root is scoped by. The compose
-// stack is not here: it is named per invocation with -p/--project-name.
+// compose project is not here: it is named per invocation with -p/--project-name.
 type Project struct {
 	Name string `yaml:"name" mapstructure:"name"`
 }
@@ -174,7 +174,7 @@ type Project struct {
 // root. ApplyDefaults has run by then, so an empty name means the project
 // directory normalized to nothing and the user has to say what to call it.
 func (p Project) Validate() error {
-	if err := model.ProjectName(p.Name).Validate(); err != nil {
+	if err := model.ArcaveProjectName(p.Name).Validate(); err != nil {
 		return fmt.Errorf("project.name: %w (set project.name explicitly)", err)
 	}
 	return nil
@@ -201,15 +201,15 @@ type Docker struct {
 // Compose is how arcave drives the project's lifecycle — the two bounds it gives
 // `docker compose stop`/`up`, and how loudly compose reports its own progress.
 // Unlike Docker, which says *which* daemon to reach, this section says how
-// patient arcave is with the stack once it has it.
+// patient arcave is with the compose project once it has it.
 //
 // It is a section of its own rather than fields on Project because Project
-// identifies the stack (its name, its files) while these are the knobs a user
+// identifies the compose project (its name, its files) while these are the knobs a user
 // turns when a service is slow: a savepoint that reports nothing for two minutes
 // and a database killed mid-shutdown are both fixed from here.
 type Compose struct {
 	// WaitTimeout bounds the health-check wait after a start. Every command that
-	// restarts the stack advertises it as --wait-timeout; a request naming its own
+	// restarts the compose project advertises it as --wait-timeout; a request naming its own
 	// bound (an MCP tool call) overrides it.
 	WaitTimeout time.Duration `yaml:"wait_timeout" mapstructure:"wait_timeout"`
 	// StopTimeout is how long a container gets to exit on its own before compose
@@ -438,7 +438,7 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 		// normalized rather than taken verbatim: MyApp yields myapp. A basename that
 		// normalizes to nothing stays empty and is reported by Validate, which is the
 		// one place that says "name the project explicitly".
-		c.Project.Name = model.NormalizeProjectName(filepath.Base(projectRoot)).String()
+		c.Project.Name = model.NormalizeArcaveProjectName(filepath.Base(projectRoot)).String()
 	}
 	if c.Compose.WaitTimeout == 0 {
 		c.Compose.WaitTimeout = DefaultWaitTimeout

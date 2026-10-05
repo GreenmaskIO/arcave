@@ -81,7 +81,7 @@ Every command but `init` needs three things:
 `savepoint create` and `rollback` additionally need the project to **exist in the daemon**: arcave reads the running project rather than your compose files. `docker compose stop` is fine — stopped containers still describe the project. `docker compose down` is not:
 
 ```text
-no containers found for compose project "myapp": bring the stack up once, or name another project with -p
+no containers found for compose project "myapp": bring the compose project up once, or name another project with -p
 ```
 
 Every mutating command claims a non-blocking lock on `.arcave/lock`. A second run against the same project fails at once rather than queuing:

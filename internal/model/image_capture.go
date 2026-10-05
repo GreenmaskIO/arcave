@@ -56,7 +56,7 @@ type UpstreamImage struct {
 }
 
 // UpstreamImageCaptureRequest is one upstream image to keep. InDaemon is whether
-// the daemon held it when the stack was introspected.
+// the daemon held it when the compose project was introspected.
 type UpstreamImageCaptureRequest struct {
 	Image    UpstreamImage
 	InDaemon bool
@@ -91,7 +91,7 @@ type ImageRestoreRequest struct {
 }
 
 // ImageRestore is one writable layer put back into the daemon: ImageID digests its
-// content, ImageRef is the docker reference the rebuilt stack names it by. It
+// content, ImageRef is the docker reference the rebuilt compose project names it by. It
 // travels in the rollback response, so its json tags are the wire contract.
 type ImageRestore struct {
 	Service  string        `json:"service"`

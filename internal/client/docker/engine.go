@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package docker acts on the *running* stack, in contrast to internal/client/
+// Package docker acts on the *running* compose project, in contrast to internal/client/
 // compose, which only reads what the compose files declare. It holds the two
 // types arcave needs to reach the daemon, split by what they act on:
 //

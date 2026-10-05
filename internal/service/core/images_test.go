@@ -223,7 +223,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 
 	var safetySnapshotID model.SavepointID
 	images := &mockImageBackend{}
-	// The load runs on the live stack: it is this workflow's pre-flight.
+	// The load runs on the live compose project: it is this workflow's pre-flight.
 	restoreImage := images.On("Restore", mock.Anything, model.ImageRestoreRequest{
 		SnapshotID: record.ID, Capture: demoImageCapture(), ImageRef: demoRestoredRef(1),
 	}).Return(demoImageRestore(), nil).Once()
@@ -237,7 +237,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	// The stack is rebuilt on the restored layer, and never off a registry.
+	// The compose project is rebuilt on the restored layer, and never off a registry.
 	target := matchRetargetedImage(demoService, demoRestoredRef(1))
 	create := runner.On("Create", mock.Anything, target).Return(nil).Once()
 	restoreVolume := savepointBackend.On("Restore", mock.Anything,
@@ -286,8 +286,8 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	vol := demoVolume()
 	record := demoScaledRecord()
 	repo, _, locker := demoResolution(record)
-	// Two reads: the live stack the workflow prepares against, then the fixup's own
-	// read of the stack compose has just created.
+	// Two reads: the live compose project the workflow prepares against, then the fixup's own
+	// read of what compose has just created.
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil).Once()
 	inspector.On("Introspect", mock.Anything).Return(demoScaledIntrospection(), nil).Once()

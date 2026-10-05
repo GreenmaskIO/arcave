@@ -15,7 +15,7 @@
 package model
 
 // DockerComposeProjectName names the docker compose project a store root is scoped by, given per
-// invocation (-p/--project-name). Distinct from ProjectName, the storage tenant. Compose owns
+// invocation (-p/--project-name). Distinct from ArcaveProjectName, the project of the arcave config. Compose owns
 // its charset, so storefactory gates it by compose's own normalization.
 type DockerComposeProjectName string
 

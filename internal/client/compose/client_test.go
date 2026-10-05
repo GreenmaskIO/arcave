@@ -133,7 +133,7 @@ func TestClient_Create(t *testing.T) {
 }
 
 // The compose library leaves its own labels to its CLI; without them the
-// containers carry no project and nothing finds the stack again.
+// containers carry no project and nothing finds the compose project again.
 func TestClient_Create_StampsComposeLabels(t *testing.T) {
 	// Arrange
 	project := fixtureProject()

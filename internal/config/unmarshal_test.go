@@ -118,12 +118,12 @@ func TestUnmarshal(t *testing.T) {
 			// gated here rather than at the syscall that would have used it.
 			name:       "a project name outside the store-root charset is rejected",
 			yaml:       "project:\n  name: MyApp\n",
-			wantErrMsg: `invalid project name "MyApp"`,
+			wantErrMsg: `invalid arcave project name "MyApp"`,
 		},
 		{
 			name:       "a project name that is a path is rejected",
 			yaml:       "project:\n  name: ../elsewhere\n",
-			wantErrMsg: "invalid project name",
+			wantErrMsg: "invalid arcave project name",
 		},
 		{
 			name:       "an unimplemented storage arm is rejected",

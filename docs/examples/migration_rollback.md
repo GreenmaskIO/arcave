@@ -107,7 +107,7 @@ INF image restore finished service=postgres replica=1
 INF stopping services
 INF backing up current state
 INF removing compose containers and networks
-INF rebuilding the stack from the savepoint's spec
+INF creating the compose project from the spec
 INF creating compose containers
 INF volume operation started object_id=volume-named-arcave-demo_pgdata
 INF volume operation finished object_id=volume-named-arcave-demo_pgdata

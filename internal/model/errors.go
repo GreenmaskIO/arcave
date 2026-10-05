@@ -53,7 +53,7 @@ var (
 	ErrInvalidDigestID = errors.New("invalid image digest id")
 
 	// ErrSavepointNoSpec refuses a rollback to a savepoint that carries no compose
-	// spec: there is nothing to rebuild the stack from.
+	// spec: there is nothing to rebuild the compose project from.
 	ErrSavepointNoSpec = errors.New("savepoint carries no compose spec")
 
 	// ErrSavepointImageMissing reports a record naming a writable-layer capture

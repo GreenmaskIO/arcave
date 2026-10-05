@@ -26,7 +26,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// richResult is the stack the round-trip is measured on: every section a rebuild
+// richResult is the compose project the round-trip is measured on: every section a rebuild
 // needs, on a service that declares something of each kind.
 func richResult() model.IntrospectionResult {
 	svc := richService()
@@ -66,7 +66,7 @@ func richResult() model.IntrospectionResult {
 }
 
 // The artifact has to survive its own loader: what Marshal writes is the only
-// statement of the stack a rollback doing `down` has left.
+// statement of the compose project a rollback doing `down` has left.
 func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
 	// Arrange
 	assembler := NewAssembler()

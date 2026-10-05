@@ -33,7 +33,7 @@ var (
 	}
 )
 
-// runConfigInit creates the config the other commands require: it names no stack
+// runConfigInit creates the config the other commands require: it names no compose project
 // and opens neither the storage backend nor the Docker engine.
 func runConfigInit(cmd *cobra.Command, _ []string) error {
 	if configFound && !configInitOverride {

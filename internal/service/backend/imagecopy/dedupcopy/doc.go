@@ -46,10 +46,10 @@ one pass over the stream enough — no decompression, no hashing to find a key.
 
 # Where it goes
 
-Blobs are shared by every capture under one stack; the three metadata members and
+Blobs are shared by every capture under one compose project; the three metadata members and
 the manifest belong to the capture that wrote them.
 
-	<stack root>/
+	<compose project root>/
 	  shared/oci/blobs/sha256/<digest>   every layer, config and manifest, once
 	  <savepoint-id>/
 	    savepoint.json
@@ -65,10 +65,10 @@ none, and nothing reads a capture without one.
 
 # A capture, then a second
 
-The first savepoint of a service writes every blob. Paths are under the same stack
+The first savepoint of a service writes every blob. Paths are under the same compose project
 root as above:
 
-	<stack root>/
+	<compose project root>/
 	  shared/oci/blobs/sha256/025fe19496…   4.1 MB   the base layer
 	  shared/oci/blobs/sha256/2cbc9a9102…   2.0 KB   what the container wrote
 	  shared/oci/blobs/sha256/ccc80d1f1f…   1.4 KB   the config
@@ -85,7 +85,7 @@ postgres:16.
 # What it does not do
 
 Nothing collects blobs. `savepoint remove` frees a savepoint's own namespace and
-leaves the shared store alone, so removing every savepoint of a stack frees no
+leaves the shared store alone, so removing every savepoint of a compose project frees no
 image bytes. A gc is its own command and its own decision; `image.json` exists in
 part so that command has something to mark from.
 */
