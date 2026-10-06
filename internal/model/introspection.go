@@ -15,6 +15,7 @@
 package model
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -57,13 +58,14 @@ const (
 
 // An ObjectID is one path segment: it is the name of a directory in a store and
 // the name of a repository on the restic wire, and both want a segment rather
-// than a tree. Both prefixes open with "volume-" — everything addressed here is
+// than a tree. Every prefix opens with "volume-" — everything addressed here is
 // a volume — and the second word says how it is addressed, which keeps the
 // identity spaces apart: a volume named "db" and a service named "db" must not
 // produce the same id.
 const (
 	storageIDNamedPrefix   = "volume-named-"
 	storageIDServicePrefix = "volume-service-"
+	storageIDAnonPrefix    = "volume-anon-"
 )
 
 // namedStorageID identifies a named volume by the volume itself: its data
@@ -72,14 +74,25 @@ func namedStorageID(dockerName string) string {
 	return storageIDNamedPrefix + dockerName
 }
 
-// serviceStorageID identifies a bind or anonymous mount by service and target: a
-// bind has no docker name, and an anonymous volume's is created per container.
+// serviceStorageID identifies a bind by service and target: a bind has no docker
+// name, and every replica of the service mounts the same host path.
 //
 // The target is flattened into the segment, so two identities can render the
 // same id ({app, /var/lib} and {app-var, /lib}). Deciding what to do about that
 // needs the whole project's set of volumes, and belongs where that set is known.
 func serviceStorageID(service, target string) string {
-	return storageIDServicePrefix + service + "-" + strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")
+	return storageIDServicePrefix + service + "-" + flattenTarget(target)
+}
+
+// anonStorageID identifies an anonymous volume by service, replica and target:
+// docker creates one per container, so every replica holds its own data.
+func anonStorageID(service string, replica int, target string) string {
+	return storageIDAnonPrefix + service + "-" + strconv.Itoa(replica) + "-" + flattenTarget(target)
+}
+
+// flattenTarget renders a mount path as part of one path segment.
+func flattenTarget(target string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")
 }
 
 // ServiceVolume is one mount declared by one service — a fact, not a decision.
@@ -103,6 +116,9 @@ type ServiceVolume struct {
 	// ReadOnly does not affect reading the data, but a restore cannot be written
 	// through such a mount.
 	ReadOnly bool
+	// Replica is the number of the replica an anonymous volume belongs to; 0 for
+	// every other type, which the replicas of a service share.
+	Replica int
 
 	// At most one of these is non-nil, matching Type (Volume serves both named and
 	// anon); nil when compose declared no options of that type. Verbatim facts.
@@ -123,8 +139,10 @@ func (v ServiceVolume) ObjectID(service string) string {
 	switch v.Type {
 	case VolumeTypeNamed:
 		return namedStorageID(v.VolumeName)
-	case VolumeTypeBind, VolumeTypeAnon:
+	case VolumeTypeBind:
 		return serviceStorageID(service, v.Target)
+	case VolumeTypeAnon:
+		return anonStorageID(service, v.Replica, v.Target)
 	default:
 		return ""
 	}
@@ -165,9 +183,11 @@ type ImageMount struct {
 // Service is one service of the project: what it declares, and the containers
 // the daemon holds for it.
 type Service struct {
-	Name    string
-	Image   string
-	Labels  map[string]string
+	Name   string
+	Image  string
+	Labels map[string]string
+	// Volumes are the first replica's mounts plus every later replica's anonymous
+	// volumes, sorted by (Target, Replica).
 	Volumes []ServiceVolume
 	// Containers are the service's replicas, sorted by Number. Empty for a
 	// service the daemon holds nothing for.

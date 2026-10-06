@@ -18,6 +18,7 @@
 package introspect
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -39,6 +40,7 @@ import (
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -218,8 +220,7 @@ func groupByService(summaries []container.Summary) map[string][]container.Summar
 	return byService
 }
 
-// service reports one service from its replicas. The mounts come from the first replica:
-// replicas mount the same declarations. A volume a mount names is read through the index.
+// service reports one service from its replicas.
 func (i *Inspector) service(
 	ctx context.Context, name string, replicas []container.Summary, volumes map[string]volume.Volume,
 ) (model.Service, error) {
@@ -227,7 +228,7 @@ func (i *Inspector) service(
 	if err != nil {
 		return model.Service{}, err
 	}
-	mounts, err := i.serviceVolumes(ctx, replicas[0], containers[0].Inspect, volumes)
+	mounts, err := i.replicaMounts(ctx, name, replicas, containers, volumes)
 	if err != nil {
 		return model.Service{}, err
 	}
@@ -238,6 +239,45 @@ func (i *Inspector) service(
 		Volumes:    mounts,
 		Containers: containers,
 	}, nil
+}
+
+// replicaMounts reports the mounts of a service's replicas, sorted by (target, replica).
+//
+// Replicas are created from one declaration, so the first replica's mounts stand for all
+// of them: a bind or a named volume is one and the same for every replica. An anonymous
+// volume is not — docker creates one per container — so every replica's is reported,
+// numbered by its replica. A mount the first replica does not declare alike is warned of:
+// the spec is the first replica's, so a rollback rebuilds the replica without it.
+func (i *Inspector) replicaMounts(
+	ctx context.Context, service string, replicas []container.Summary, containers []model.Container,
+	volumes map[string]volume.Volume,
+) ([]model.ServiceVolume, error) {
+	var first, mounts []model.ServiceVolume
+	for idx, replica := range replicas {
+		own, err := i.serviceVolumes(ctx, replica, containers[idx].Inspect, volumes)
+		if err != nil {
+			return nil, err
+		}
+		if idx == 0 {
+			first, mounts = own, slices.Clone(own)
+			continue
+		}
+		for _, v := range undeclaredMounts(first, own) {
+			zerolog.Ctx(ctx).Warn().Str("service", service).Int("replica", containers[idx].Number).
+				Str("target", v.Target).Str("type", string(v.Type)).
+				Str("fix", "docker compose up -d --force-recreate "+service).
+				Msg("the first replica does not declare this mount; a rollback rebuilds the replica with the first replica's mounts")
+		}
+		for _, v := range own {
+			if v.Type == model.VolumeTypeAnon {
+				mounts = append(mounts, v)
+			}
+		}
+	}
+	slices.SortStableFunc(mounts, func(a, b model.ServiceVolume) int {
+		return cmp.Or(strings.Compare(a.Target, b.Target), a.Replica-b.Replica)
+	})
+	return mounts, nil
 }
 
 // containers inspects each replica and carries the raw response verbatim.
@@ -293,12 +333,33 @@ func (i *Inspector) serviceVolumes(
 			return nil, err
 		}
 		applyMountOptions(&v, m, declared[m.Destination])
+		if v.Type == model.VolumeTypeAnon {
+			v.Replica = replicaNumber(replica.Labels)
+		}
 		volumes = append(volumes, v)
 	}
 	slices.SortStableFunc(volumes, func(a, b model.ServiceVolume) int {
 		return strings.Compare(a.Target, b.Target)
 	})
 	return volumes, nil
+}
+
+// undeclaredMounts are the mounts of a later replica the first does not declare with the
+// same type at the same target. An anonymous volume at a target the first leaves free is
+// not one: it is captured, and the replica's own layer declares it back.
+func undeclaredMounts(first, own []model.ServiceVolume) []model.ServiceVolume {
+	var undeclared []model.ServiceVolume
+	for _, v := range own {
+		at := slices.IndexFunc(first, func(f model.ServiceVolume) bool { return f.Target == v.Target })
+		if at >= 0 && first[at].Type == v.Type {
+			continue // declared alike
+		}
+		if at < 0 && v.Type == model.VolumeTypeAnon {
+			continue // captured, and the replica's own layer declares it back
+		}
+		undeclared = append(undeclared, v)
+	}
+	return undeclared
 }
 
 // serviceVolume classifies one mount; a volume mount is the project's own, anonymous, or external.

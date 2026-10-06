@@ -17,6 +17,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -216,6 +217,76 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	repo.AssertExpectations(t)
 	registry.AssertExpectations(t)
 	backend.AssertExpectations(t)
+}
+
+// Every replica's anonymous volume is a unit of its own, captured by its own backend.
+func TestService_CreateSavepoint_AnonymousVolumePerReplica(t *testing.T) {
+	// Arrange
+	anon := func(replica int) model.ServiceVolume {
+		return model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
+	}
+	introspection := model.IntrospectionResult{Project: model.Project{
+		Name: "demo",
+		Services: []model.Service{{
+			Name:    "worker",
+			Volumes: []model.ServiceVolume{anon(1), anon(2), anon(3)},
+		}},
+	}}
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
+	locker := &mockLocker{}
+	expectLock(locker)
+	runner := &mockComposeRunner{}
+	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
+	repo := &mockSavepointRepo{}
+	expectSpecCommit(repo)
+	repo.On("SaveSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
+
+	store := newDirStore(t)
+	registry := &mockRegistry{}
+	var backends []*mockBackend
+	for replica := 1; replica <= 3; replica++ {
+		objectID := fmt.Sprintf("volume-anon-worker-%d-cache", replica)
+		backend := &mockBackend{volume: model.Volume{ObjectID: objectID}}
+		backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+			Return(model.SnapshotStat{Volume: backend.volume, Type: model.SnapshotBackendCopy}, nil).Once()
+		registry.On("New", mock.MatchedBy(func(spec model.BackendSpec) bool {
+			return spec.Store == store && spec.Volume.ObjectID == objectID &&
+				spec.Volume.Anon != nil && spec.Volume.Anon.Replica == replica
+		})).Return(backend, nil).Once()
+		backends = append(backends, backend)
+	}
+
+	svc := New(Deps{
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assemblerFor(introspection),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Len(t, savepoint.Stats, 3)
+	inspector.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	repo.AssertExpectations(t)
+	registry.AssertExpectations(t)
+	for _, backend := range backends {
+		backend.AssertExpectations(t)
+	}
 }
 
 // The backend a new savepoint captures with is the configured one, not a

@@ -55,15 +55,15 @@ func (v Volume) MountSource() (MountSource, bool) {
 	}
 }
 
-// LookupMount is the mount the daemon has to be asked through when MountSource
-// cannot answer. ok is false for a Volume carrying no mount of its own.
-func (v Volume) LookupMount() (service, target string, ok bool) {
+// LookupMount is the mount to ask the daemon about when MountSource cannot answer;
+// replica 0 means any replica. ok is false for a Volume with no mount of its own.
+func (v Volume) LookupMount() (service string, replica int, target string, ok bool) {
 	switch {
 	case v.Anon != nil:
-		return v.Anon.Service, v.Anon.Target, true
+		return v.Anon.Service, v.Anon.Replica, v.Anon.Target, true
 	case v.Bind != nil:
-		return v.Bind.Service, v.Bind.Target, true
+		return v.Bind.Service, 0, v.Bind.Target, true
 	default:
-		return "", "", false
+		return "", 0, "", false
 	}
 }

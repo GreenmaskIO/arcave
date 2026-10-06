@@ -65,7 +65,7 @@ func (s assembly) baseConfig(svc model.Service) types.ServiceConfig {
 		Scale:      &scale,
 		DependsOn:  s.dependsOn(svc.Labels[api.DependenciesLabel]),
 		PullPolicy: pullPolicyMissing,
-		Volumes:    serviceVolumes(svc.Volumes),
+		Volumes:    serviceVolumes(declaredVolumes(svc)),
 	}
 }
 

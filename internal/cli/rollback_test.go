@@ -52,10 +52,10 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			},
 		},
 		{
-			ObjectID: "volume-service-cache-data",
+			ObjectID: "volume-anon-cache-1-data",
 			Type:     model.VolumeTypeAnon,
 			Backend:  model.SnapshotBackendCopy,
-			Anon:     &model.VolumePropertiesAnon{Service: "cache", Target: "/data"},
+			Anon:     &model.VolumePropertiesAnon{Service: "cache", Replica: 1, Target: "/data"},
 		},
 	}
 	svcErr := errors.New("savepoint not found")

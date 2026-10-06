@@ -59,6 +59,7 @@ type VolumePropertiesBind struct {
 // this is the one arm that has to ask the daemon.
 type VolumePropertiesAnon struct {
 	Service  string `json:"service"`
+	Replica  int    `json:"replica"` // the replica the volume was created for, from 1
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only,omitempty"`
 	// Subpath is carried for the record and read by nobody: the daemon refuses

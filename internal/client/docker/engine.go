@@ -35,6 +35,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -54,6 +55,7 @@ import (
 const (
 	composeProjectLabel = "com.docker.compose.project"
 	composeServiceLabel = "com.docker.compose.service"
+	composeNumberLabel  = "com.docker.compose.container-number"
 )
 
 // scratchImage is the throwaway image every volume operation runs: small,
@@ -154,14 +156,14 @@ func (e *Engine) ResolveMountSource(ctx context.Context, v model.Volume) (model.
 		return src, nil
 	}
 
-	service, target, ok := v.LookupMount()
+	service, replica, target, ok := v.LookupMount()
 	if !ok {
 		return model.MountSource{}, fmt.Errorf(
 			"volume %s of type %s carries no way to reach its data", v.ObjectID, v.Type)
 	}
 	// An anonymous volume exists only as long as the container it was created
 	// for, so this is the one case a missing container is fatal.
-	_, mnt, err := findServiceMount(ctx, e.api, v.ComposeProject, service, target)
+	mnt, err := findServiceMount(ctx, e.api, v.ComposeProject, service, replica, target)
 	if err != nil {
 		return model.MountSource{}, err
 	}
@@ -250,38 +252,42 @@ type mountInfo struct {
 	Source string // host path (bind mounts)
 }
 
-// findServiceMount returns the ID of the project's container for service that
-// mounts target, along with that mount's backing-storage details. Stopped
-// containers are included, since export and restore run while services are down.
-func findServiceMount(ctx context.Context, api dockerAPI, projectName, service, target string) (id string, mnt mountInfo, err error) {
+// findServiceMount returns the backing-storage details of the mount at target in the
+// project's container for service. Stopped containers are included, since export
+// and restore run while services are down.
+func findServiceMount(
+	ctx context.Context, api dockerAPI, projectName, service string, replica int, target string,
+) (mountInfo, error) {
 	f := filters.NewArgs(
 		filters.Arg("label", composeProjectLabel+"="+projectName),
 		filters.Arg("label", composeServiceLabel+"="+service),
 	)
 	containers, err := api.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
 	if err != nil {
-		return "", mountInfo{}, fmt.Errorf("list containers for service %q: %w", service, err)
+		return mountInfo{}, fmt.Errorf("list containers for service %q: %w", service, err)
 	}
-	id, mnt, ok := matchMount(containers, target)
+	mnt, ok := matchMount(containers, replica, target)
 	if !ok {
-		return "", mountInfo{}, fmt.Errorf("no container for service %q in project %q mounts %q (is the project created?)", service, projectName, target)
+		return mountInfo{}, fmt.Errorf("no container for service %q replica %d in project %q mounts %q (is the project created?)",
+			service, replica, projectName, target)
 	}
-	return id, mnt, nil
+	return mnt, nil
 }
 
-// matchMount finds, among containers, the one that mounts target and returns its
-// ID and that mount's backing-storage details. This is the pure decision split
-// out of findServiceMount so it can be tested without a daemon; ok is false when
-// no container mounts target.
-func matchMount(containers []container.Summary, target string) (id string, mnt mountInfo, ok bool) {
+// matchMount returns the details of the mount at target in the container that mounts it;
+// a non-zero replica admits only that container. ok is false when none does.
+func matchMount(containers []container.Summary, replica int, target string) (mountInfo, bool) {
 	for _, c := range containers {
+		if replica != 0 && c.Labels[composeNumberLabel] != strconv.Itoa(replica) {
+			continue
+		}
 		for _, m := range c.Mounts {
 			if m.Destination == target {
-				return c.ID, mountInfo{Type: string(m.Type), Name: m.Name, Source: m.Source}, true
+				return mountInfo{Type: string(m.Type), Name: m.Name, Source: m.Source}, true
 			}
 		}
 	}
-	return "", mountInfo{}, false
+	return mountInfo{}, false
 }
 
 // readOnly wraps a reader so that no io.Reader method set other than Read is

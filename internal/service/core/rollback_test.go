@@ -879,15 +879,15 @@ func TestService_Rollback_RefusesASavepointWithNoSpec(t *testing.T) {
 // into are reaped, anything else is its own last copy.
 func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 	// Arrange
-	anonVol := model.Volume{ObjectID: "volume-service-app-scratch", Backend: model.SnapshotBackendCopy}
+	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendCopy}
 	res := model.IntrospectionResult{Project: model.Project{
 		Name: demoProject,
 		Services: []model.Service{{
 			Name: "app",
 			Volumes: []model.ServiceVolume{
-				{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/scratch", VolumeName: "9f8e7d"},
+				{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/scratch", VolumeName: "9f8e7d", Replica: 1},
 			},
-			Containers: []model.Container{{Name: "demo-app-1"}},
+			Containers: []model.Container{{Name: "demo-app-1", Number: 1}},
 		}},
 	}}
 	record := demoRecord()

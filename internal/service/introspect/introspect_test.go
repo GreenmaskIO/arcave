@@ -15,6 +15,7 @@
 package introspect
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"maps"
@@ -33,6 +34,7 @@ import (
 	"github.com/docker/docker/client"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -230,13 +232,13 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			labels: map[string]string{anonymousVolumeLabel: "true"},
 			// The generated name is carried: a reaper has no other way to name the volume.
 			want: model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
-				Target: "/data", VolumeName: "short-name"},
+				Target: "/data", Replica: 1, VolumeName: "short-name"},
 		},
 		{
 			name:  "a generated name is anonymous where the label is missing",
 			mount: mountPoint(mount.TypeVolume, anonName, "", "/data", false),
 			want: model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume",
-				Target: "/data", VolumeName: anonName},
+				Target: "/data", Replica: 1, VolumeName: anonName},
 		},
 		{
 			name:  "an unowned, unlabelled volume is an external named one",
@@ -470,6 +472,150 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	assert.Equal(t, 2, got.Project.Services[0].Containers[1].Number)
 	assert.Equal(t, "c-web-1", got.Project.Services[0].Containers[0].Name)
 	daemon.AssertExpectations(t)
+}
+
+func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
+	anon := func(name string) volume.Volume {
+		return volume.Volume{Name: name, Labels: map[string]string{anonymousVolumeLabel: ""}}
+	}
+	cache := func(name string) container.MountPoint {
+		return mountPoint(mount.TypeVolume, name, "", "/cache", false)
+	}
+	data := mountPoint(mount.TypeVolume, ownedName, "", "/data", false)
+	wantAnon := func(name string, replica int) model.ServiceVolume {
+		return model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache",
+			VolumeName: name, Replica: replica}
+	}
+	wantData := model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+		Target: "/data", VolumeName: ownedName}
+
+	tests := []struct {
+		name     string
+		replicas []replica
+		want     []model.ServiceVolume
+		wantWarn string // the target warned of
+	}{
+		{
+			name: "every replica's anonymous volume is its own, a shared mount is reported once",
+			replicas: []replica{
+				{id: "c-worker-1", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-1"), data}},
+				{id: "c-worker-2", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-2"), data}},
+				{id: "c-worker-3", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-3"), data}},
+			},
+			want: []model.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2), wantAnon("anon-3", 3), wantData},
+		},
+		{
+			name: "a bind the first replica does not declare is warned of, the anonymous volumes still reported",
+			replicas: []replica{
+				{id: "c-worker-1", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-1")}},
+				{id: "c-worker-2", service: "worker", image: testImageID.String(),
+					mounts: []container.MountPoint{cache("anon-2"), mountPoint(mount.TypeBind, "", "/host/logs", "/logs", false)}},
+			},
+			want:     []model.ServiceVolume{wantAnon("anon-1", 1), wantAnon("anon-2", 2)},
+			wantWarn: "/logs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			daemon.expectReplicas(tt.replicas...)
+			daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
+			for _, r := range tt.replicas {
+				for _, m := range r.mounts {
+					if m.Type == mount.TypeVolume && m.Name != ownedName {
+						daemon.On("VolumeInspect", mock.Anything, m.Name).Return(anon(m.Name), nil).Once()
+					}
+				}
+			}
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+			daemon.expectInfo()
+			var logs bytes.Buffer
+			ctx := zerolog.New(&logs).WithContext(context.Background())
+
+			// Act
+			got, err := NewInspector(daemon, composeProject).Introspect(ctx)
+
+			// Assert
+			require.NoError(t, err)
+			require.Len(t, got.Project.Services, 1)
+			assert.Equal(t, tt.want, got.Project.Services[0].Volumes)
+			if tt.wantWarn != "" {
+				assert.Contains(t, logs.String(), `"replica":2`)
+				assert.Contains(t, logs.String(), `"target":"`+tt.wantWarn+`"`)
+				assert.Contains(t, logs.String(), "docker compose up -d --force-recreate worker")
+			} else {
+				assert.Empty(t, logs.String())
+			}
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestUndeclaredMounts(t *testing.T) {
+	anon := func(target string) model.ServiceVolume {
+		return model.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}
+	}
+	bind := func(target string) model.ServiceVolume {
+		return model.ServiceVolume{Type: model.VolumeTypeBind, Target: target}
+	}
+
+	tests := []struct {
+		name  string
+		first []model.ServiceVolume
+		own   []model.ServiceVolume
+		want  []model.ServiceVolume
+	}{
+		{
+			name:  "the same mounts",
+			first: []model.ServiceVolume{anon("/cache"), bind("/logs")},
+			own:   []model.ServiceVolume{anon("/cache"), bind("/logs")},
+		},
+		{
+			name:  "an extra anonymous volume is captured and comes back through the layer",
+			first: []model.ServiceVolume{anon("/cache")},
+			own:   []model.ServiceVolume{anon("/cache"), anon("/extra")},
+		},
+		{
+			name:  "a mount the replica lacks is given back by the spec",
+			first: []model.ServiceVolume{anon("/cache"), bind("/logs")},
+			own:   []model.ServiceVolume{anon("/cache")},
+		},
+		{
+			name:  "an extra bind is neither captured nor in the spec",
+			first: []model.ServiceVolume{anon("/cache")},
+			own:   []model.ServiceVolume{anon("/cache"), bind("/logs")},
+			want:  []model.ServiceVolume{bind("/logs")},
+		},
+		{
+			name:  "a bind where the first has an anonymous volume",
+			first: []model.ServiceVolume{anon("/cache")},
+			own:   []model.ServiceVolume{bind("/cache")},
+			want:  []model.ServiceVolume{bind("/cache")},
+		},
+		{
+			name:  "an anonymous volume where the first has a bind",
+			first: []model.ServiceVolume{bind("/cache")},
+			own:   []model.ServiceVolume{anon("/cache")},
+			want:  []model.ServiceVolume{anon("/cache")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := undeclaredMounts(tt.first, tt.own)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestInspector_Introspect_NoContainers(t *testing.T) {

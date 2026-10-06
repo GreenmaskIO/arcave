@@ -47,7 +47,8 @@ func richService() model.Service {
 		Labels: map[string]string{api.ServiceLabel: "db", api.DependenciesLabel: "cache:service_healthy:true"},
 		Volumes: []model.ServiceVolume{
 			{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", VolumeName: "demo_pgdata", Target: "/var/lib/postgresql/data"},
-			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "9f8e7d", Target: "/tmp/scratch"},
+			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "9f8e7d", Target: "/tmp/scratch", Replica: 1},
+			{Type: model.VolumeTypeAnon, RawType: "volume", VolumeName: "1a2b3c", Target: "/tmp/scratch", Replica: 2},
 			{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/seed", Target: "/docker-entrypoint-initdb.d", ReadOnly: true,
 				Bind: &model.BindMount{Propagation: "rprivate", CreateHostPath: true}},
 		},
@@ -189,8 +190,8 @@ func TestServiceConfig_Volumes(t *testing.T) {
 	assert.Equal(t, types.ServiceVolumeConfig{
 		Type: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data",
 	}, cfg.Volumes[0])
-	// An anonymous volume renders as a bare target: naming the one `down` orphaned
-	// would make compose reuse it.
+	// An anonymous volume renders as a bare target, once for all replicas: naming the
+	// one `down` orphaned would make compose reuse it.
 	assert.Equal(t, types.ServiceVolumeConfig{Type: "volume", Target: "/tmp/scratch"}, cfg.Volumes[1])
 	assert.Equal(t, types.ServiceVolumeConfig{
 		Type: "bind", Source: "/srv/demo/seed", Target: "/docker-entrypoint-initdb.d", ReadOnly: true,

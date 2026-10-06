@@ -124,7 +124,8 @@ func FindBackupVolumes(
 			}
 
 			objectID := sv.ObjectID(svc.Name)
-			duplicate, err := claimObjectID(seen, objectID, volumeIdentity{service: svc.Name, target: sv.Target})
+			duplicate, err := claimObjectID(seen, objectID,
+				volumeIdentity{service: svc.Name, replica: sv.Replica, target: sv.Target})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -145,20 +146,24 @@ func FindBackupVolumes(
 	return volumes, skipped, nil
 }
 
-// volumeIdentity is the facts an ObjectID is rendered from — a docker name for a
-// named volume, a service and a target for a bind or anonymous one. Comparable,
-// so two claims of one id are told apart by the identity behind them.
+// volumeIdentity is the facts an ObjectID is rendered from: docker name (named),
+// service and target (bind), plus replica (anonymous). Comparable.
 type volumeIdentity struct {
 	dockerName string
 	service    string
+	replica    int
 	target     string
 }
 
 func (id volumeIdentity) String() string {
-	if id.dockerName != "" {
+	switch {
+	case id.dockerName != "":
 		return fmt.Sprintf("named volume %q", id.dockerName)
+	case id.replica != 0:
+		return fmt.Sprintf("service %q replica %d at %q", id.service, id.replica, id.target)
+	default:
+		return fmt.Sprintf("service %q at %q", id.service, id.target)
 	}
-	return fmt.Sprintf("service %q at %q", id.service, id.target)
 }
 
 // claimObjectID records that identity addresses objectID, reporting a repeat of
@@ -210,6 +215,7 @@ func anonProperties(service string, sv model.ServiceVolume) *model.VolumePropert
 	}
 	return &model.VolumePropertiesAnon{
 		Service:  service,
+		Replica:  sv.Replica,
 		Target:   sv.Target,
 		ReadOnly: sv.ReadOnly,
 		Subpath:  subpath,
