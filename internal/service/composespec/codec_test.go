@@ -16,6 +16,7 @@ package composespec
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -69,16 +70,16 @@ func richResult() model.IntrospectionResult {
 
 // The artifact has to survive its own loader: what Marshal writes is the only
 // statement of the compose project a rollback doing `down` has left.
-func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
+func TestCodec_MarshalParse_RoundTrip(t *testing.T) {
 	// Arrange
-	assembler := NewAssembler()
-	assembled, err := assembler.Assemble(context.Background(), richResult())
+	codec := NewCodec()
+	assembled, err := NewAssembler().Assemble(context.Background(), richResult())
 	require.NoError(t, err)
 
 	// Act
-	spec, err := assembler.Marshal(assembled)
+	spec, err := codec.Marshal(assembled)
 	require.NoError(t, err)
-	parsed, err := assembler.Parse(context.Background(), spec)
+	parsed, err := codec.Parse(context.Background(), spec)
 
 	// Assert
 	require.NoError(t, err)
@@ -94,7 +95,12 @@ func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
 	assert.Equal(t, before.User, after.User)
 	assert.Equal(t, before.Hostname, after.Hostname)
 	assert.Equal(t, before.WorkingDir, after.WorkingDir)
-	assert.Equal(t, before.Ports, after.Ports)
+	// The loader fills the port mode the assembler leaves to it.
+	wantPorts := slices.Clone(before.Ports)
+	for i := range wantPorts {
+		wantPorts[i].Mode = "ingress"
+	}
+	assert.Equal(t, wantPorts, after.Ports)
 	assert.Equal(t, before.Restart, after.Restart)
 	assert.Equal(t, before.HealthCheck, after.HealthCheck)
 	assert.Equal(t, before.Labels, after.Labels)
@@ -121,18 +127,22 @@ func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
 	assert.Equal(t, assembled.Networks["back"].Name, parsed.Networks["back"].Name)
 	assert.Equal(t, assembled.Networks["back"].Ipam, parsed.Networks["back"].Ipam)
 
-	// The artifact is a fixed point: what the loader normalises, the assembler
-	// already wrote, so a re-render of the parsed project is the same document.
-	again, err := assembler.Marshal(parsed)
+	// The loader's normalisation settles in one pass: the parsed project re-renders
+	// to a document that parses back to itself.
+	again, err := codec.Marshal(parsed)
 	require.NoError(t, err)
-	assert.Equal(t, string(spec), string(again))
+	reparsed, err := codec.Parse(context.Background(), again)
+	require.NoError(t, err)
+	settled, err := codec.Marshal(reparsed)
+	require.NoError(t, err)
+	assert.Equal(t, string(again), string(settled))
 }
 
 // The daemon tells an empty request from none, so the artifact has to as well: an empty
 // volume: or network entry must not come back nil, nor a nil one empty.
-func TestAssembler_MarshalParse_EmptyOptions(t *testing.T) {
+func TestCodec_MarshalParse_EmptyOptions(t *testing.T) {
 	// Arrange
-	assembler := NewAssembler()
+	codec := NewCodec()
 	project := &types.Project{
 		Name: "demo",
 		Services: types.Services{"app": {
@@ -148,9 +158,9 @@ func TestAssembler_MarshalParse_EmptyOptions(t *testing.T) {
 	}
 
 	// Act
-	spec, err := assembler.Marshal(project)
+	spec, err := codec.Marshal(project)
 	require.NoError(t, err)
-	parsed, err := assembler.Parse(context.Background(), spec)
+	parsed, err := codec.Parse(context.Background(), spec)
 
 	// Assert
 	require.NoError(t, err)
@@ -163,7 +173,7 @@ func TestAssembler_MarshalParse_EmptyOptions(t *testing.T) {
 
 // A service reference, a predefined network mode and a link are what compose's loader
 // validates against the services: they have to come back as written.
-func TestAssembler_MarshalParse_SharedNamespaces(t *testing.T) {
+func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 	// Arrange
 	const dbID = "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9"
 	replica := func(id, name string, host container.HostConfig) model.Container {
@@ -187,14 +197,14 @@ func TestAssembler_MarshalParse_SharedNamespaces(t *testing.T) {
 			})}},
 		},
 	}}
-	assembler := NewAssembler()
-	assembled, err := assembler.Assemble(context.Background(), res)
+	codec := NewCodec()
+	assembled, err := NewAssembler().Assemble(context.Background(), res)
 	require.NoError(t, err)
 
 	// Act
-	spec, err := assembler.Marshal(assembled)
+	spec, err := codec.Marshal(assembled)
 	require.NoError(t, err)
-	parsed, err := assembler.Parse(context.Background(), spec)
+	parsed, err := codec.Parse(context.Background(), spec)
 
 	// Assert
 	require.NoError(t, err)
@@ -209,22 +219,22 @@ func TestAssembler_MarshalParse_SharedNamespaces(t *testing.T) {
 		assert.Equal(t, assembled.Services[name].DependsOn, parsed.Services[name].DependsOn, name)
 	}
 
-	again, err := assembler.Marshal(parsed)
+	again, err := codec.Marshal(parsed)
 	require.NoError(t, err)
 	assert.Equal(t, string(spec), string(again))
 }
 
-func TestAssembler_Marshal_NoProject(t *testing.T) {
+func TestCodec_Marshal_NoProject(t *testing.T) {
 	// Act
-	_, err := NewAssembler().Marshal(nil)
+	_, err := NewCodec().Marshal(nil)
 
 	// Assert
 	assert.ErrorIs(t, err, errNoProject)
 }
 
-func TestAssembler_Parse_Junk(t *testing.T) {
+func TestCodec_Parse_Junk(t *testing.T) {
 	// Act
-	_, err := NewAssembler().Parse(context.Background(), []byte("services: [nope\n"))
+	_, err := NewCodec().Parse(context.Background(), []byte("services: [nope\n"))
 
 	// Assert
 	require.Error(t, err)

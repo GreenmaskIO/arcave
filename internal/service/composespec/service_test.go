@@ -149,7 +149,7 @@ func TestServiceConfig(t *testing.T) {
 	assert.Empty(t, cfg.ContainerName)
 
 	assert.Equal(t, []types.ServicePortConfig{
-		{Mode: portModeIngress, Target: 5432, Protocol: "tcp", Published: "15432", HostIP: "127.0.0.1"},
+		{Target: 5432, Protocol: "tcp", Published: "15432", HostIP: "127.0.0.1"},
 	}, cfg.Ports)
 	assert.Equal(t, "on-failure:3", cfg.Restart)
 	// A compose network's name is not a network_mode: the networks: section carries it.

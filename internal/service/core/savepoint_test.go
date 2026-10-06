@@ -102,10 +102,17 @@ func TestService_CreateSavepoint(t *testing.T) {
 	stop.NotBefore(newPg, newCfg)
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(introspection), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assemblerFor(introspection),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -181,10 +188,17 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -229,10 +243,17 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 	})).Return(backend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: newDirStore(t), DefaultBackend: model.SnapshotBackendCDC,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            newDirStore(t),
+		DefaultBackend:   model.SnapshotBackendCDC,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -263,10 +284,16 @@ func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheComposeProjectRunnin
 	runner := &mockComposeRunner{}
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: &mockSavepointRepo{}, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: assembler, ComposeRunner: runner, BackendRegistry: &mockRegistry{},
-		Inflight: &fakeInflight{}, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    &mockSavepointRepo{},
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assembler,
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  &mockRegistry{},
+		Inflight:         &fakeInflight{},
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -295,10 +322,17 @@ func TestService_CreateSavepoint_UnknownBackend(t *testing.T) {
 	registry.On("New", matchSpec(nil, "volume-named-demo_db")).Return(nil, ErrUnknownBackend)
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            nil,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -337,10 +371,17 @@ func TestService_CreateSavepoint_UncommittedOnFailure(t *testing.T) {
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -391,10 +432,17 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(introspection), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assemblerFor(introspection),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -428,10 +476,17 @@ func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
 	registry := &mockRegistry{}
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: &mockSavepointRepo{}, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(empty), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    &mockSavepointRepo{},
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assemblerFor(empty),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            nil,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -479,10 +534,17 @@ func TestService_CreateSavepoint_RefusesANonEmptyDirectory(t *testing.T) {
 	}
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -539,10 +601,17 @@ func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	}
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(introspection), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assemblerFor(introspection),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -584,10 +653,17 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -652,10 +728,17 @@ func TestService_CreateSavepoint_CommittedWhenStartFails(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 

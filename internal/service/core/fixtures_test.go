@@ -212,28 +212,39 @@ func demoScaledRecord() model.Savepoint {
 	return record
 }
 
-// demoSpec is what the assembler materialises demoIntrospection into, demoSpecBytes
-// its artifact, and demoTargetSpec what that artifact parses back to. The two
-// projects are distinct values: expectations match them by identity, so a call
-// handed the live compose project instead of the savepoint's fails.
+// demoAssembled is what the assembler materialises demoIntrospection into, demoSpecBytes
+// its artifact and demoSpec what that artifact parses back to — the live compose project
+// a workflow acts on. demoTargetSpecBytes is a savepoint's artifact and demoTargetSpec
+// what it parses back to. The projects are distinct values: expectations match them by
+// identity, so a call handed the assembled project, or the live one instead of the
+// savepoint's, fails.
 var (
+	demoAssembled  = &types.Project{Name: demoProject}
 	demoSpec       = &types.Project{Name: demoProject}
 	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{
 		demoService: {Name: demoService, Image: demoBaseImage},
 	}}
-	demoSpecBytes = []byte("name: demo\n")
+	demoSpecBytes       = []byte("name: demo\n")
+	demoTargetSpecBytes = []byte("name: demo\nservices: {db: {image: postgres:16}}\n")
 )
 
-// demoAssembler materialises demoIntrospection into demoSpec.
+// demoAssembler materialises demoIntrospection into demoAssembled.
 func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
 
 // assemblerFor is demoAssembler for a test that reports its own introspection.
 func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 	assembler := &mockAssembler{}
-	assembler.On("Assemble", mock.Anything, res).Return(demoSpec, nil)
-	assembler.On("Marshal", demoSpec).Return(demoSpecBytes, nil)
-	assembler.On("Parse", mock.Anything, demoSpecBytes).Return(demoTargetSpec, nil)
+	assembler.On("Assemble", mock.Anything, res).Return(demoAssembled, nil)
 	return assembler
+}
+
+// demoCodec renders demoAssembled and parses both artifacts back.
+func demoCodec() *mockCodec {
+	codec := &mockCodec{}
+	codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil)
+	codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil)
+	codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil)
+	return codec
 }
 
 // demoResolution is the three reads every rollback opens with: the records, the
@@ -241,7 +252,7 @@ func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector, *mockLocker) {
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoSpecBytes, nil)
+	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil)
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}

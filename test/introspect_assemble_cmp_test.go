@@ -126,7 +126,7 @@ func normalizeIntrospection(res model.IntrospectionResult, declaredMACs map[stri
 	}
 	out.Project.Networks = make([]model.Network, len(res.Project.Networks))
 	for i, network := range res.Project.Networks {
-		network.Inspect.Labels = withoutConfigHash(network.Inspect.Labels)
+		network.Inspect.Labels = comparableLabels(network.Inspect.Labels)
 		if !n.static[network.Name] {
 			network.Inspect.IPAM.Config = nil
 		}
@@ -193,7 +193,7 @@ func newNormalizer(res model.IntrospectionResult) normalizer {
 
 func (n normalizer) service(svc model.Service) model.Service {
 	out := svc
-	out.Labels = withoutConfigHash(svc.Labels)
+	out.Labels = comparableLabels(svc.Labels)
 	out.Volumes = make([]model.ServiceVolume, len(svc.Volumes))
 	for i, v := range svc.Volumes {
 		v.VolumeName = n.volumeName(v.VolumeName)
@@ -212,7 +212,7 @@ func (n normalizer) service(svc model.Service) model.Service {
 func (n normalizer) container(c model.Container) model.Container {
 	out := c
 	out.ID = n.id(c.ID)
-	out.Labels = withoutConfigHash(c.Labels)
+	out.Labels = comparableLabels(c.Labels)
 	out.Inspect = n.inspect(c.Inspect)
 	return out
 }
@@ -243,7 +243,7 @@ func (n normalizer) inspect(in container.InspectResponse) container.InspectRespo
 	if in.Config != nil {
 		cfg := *in.Config
 		cfg.Hostname = n.hostname(cfg.Hostname)
-		cfg.Labels = withoutConfigHash(cfg.Labels)
+		cfg.Labels = comparableLabels(cfg.Labels)
 		cfg.Env = sortedOrNil(cfg.Env)
 		out.Config = &cfg
 	}
@@ -393,15 +393,22 @@ func (n normalizer) volumeName(name string) string {
 	return name
 }
 
-// withoutConfigHash drops the hash compose stamps of the spec a container was created from,
-// and Docker Desktop's mirror of the mounts, numbered in the order compose happened to send them.
-func withoutConfigHash(labels map[string]string) map[string]string {
+// comparableLabels drops the hash compose stamps of the spec a container was created from
+// and Docker Desktop's mirror of the mounts, numbered in the order compose happened to send
+// them; it sorts the dependency label, which compose joins in map order.
+func comparableLabels(labels map[string]string) map[string]string {
 	if labels == nil {
 		return nil
 	}
 	out := make(map[string]string, len(labels))
 	for k, v := range labels {
-		if k != api.ConfigHashLabel && !strings.HasPrefix(k, "desktop.docker.io/") {
+		switch {
+		case k == api.ConfigHashLabel || strings.HasPrefix(k, "desktop.docker.io/"):
+		case k == api.DependenciesLabel:
+			entries := strings.Split(v, ",")
+			slices.Sort(entries)
+			out[k] = strings.Join(entries, ",")
+		default:
 			out[k] = v
 		}
 	}

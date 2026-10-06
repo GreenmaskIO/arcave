@@ -110,6 +110,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
 		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
 		ImageBackend:       imagecopy.NewCopier(composeProjectStore, engine, dedupcopy.New(blobStore)),
@@ -141,7 +142,7 @@ func (e *ociDedupEnv) up(t *testing.T) {
 	t.Helper()
 
 	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
-	project, err := composespec.NewAssembler().Parse(e.ctx, []byte(document))
+	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))

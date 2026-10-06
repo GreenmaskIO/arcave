@@ -26,7 +26,8 @@ import (
 )
 
 // workingSet is what a mutating workflow operates on: the introspection taken once
-// before the stop, its rendered spec, the request's bound, and one backend per volume.
+// before the stop, its rendered spec and the project parsed from it, the request's
+// bound, and one backend per volume.
 type workingSet struct {
 	project     *types.Project
 	spec        []byte
@@ -41,8 +42,8 @@ type workingSet struct {
 	anonVolumes map[string]string
 }
 
-// prepare introspects the compose project, renders its spec and builds one backend per live
-// volume. A capture covering nothing is refused here.
+// prepare introspects the compose project, renders its spec, parses it back and builds one
+// backend per live volume. A capture covering nothing is refused here.
 func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (workingSet, error) {
 	res, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
@@ -50,13 +51,19 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 	}
 
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
-	project, err := s.projectAssembler.Assemble(ctx, res)
+	assembled, err := s.projectAssembler.Assemble(ctx, res)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("assembling the compose spec: %w", err)
 	}
-	spec, err := s.projectAssembler.Marshal(project)
+	spec, err := s.specCodec.Marshal(assembled)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("rendering the compose spec: %w", err)
+	}
+	// Through the loader, as a rollback reads the artifact: the live compose project is
+	// acted on as these very bytes describe it.
+	project, err := s.specCodec.Parse(ctx, spec)
+	if err != nil {
+		return workingSet{}, fmt.Errorf("parsing the compose spec: %w", err)
 	}
 
 	volumes, err := s.resolveBackupVolumes(ctx, res)

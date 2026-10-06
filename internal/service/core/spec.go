@@ -38,7 +38,7 @@ func (s *Service) loadSavepointSpec(ctx context.Context, record model.Savepoint)
 		return nil, err
 	}
 
-	project, err := s.projectAssembler.Parse(ctx, spec)
+	project, err := s.specCodec.Parse(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("parsing the compose spec of savepoint %s: %w", record.ID, err)
 	}

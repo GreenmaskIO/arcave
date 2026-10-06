@@ -113,6 +113,7 @@ func initAllDependencies(
 	// Over the same daemon connection the engine uses.
 	inspector := introspect.NewInspector(dockerClientAPI, composeProject)
 	assembler := composespec.NewAssembler()
+	codec := composespec.NewCodec()
 
 	composeService := dockercompose.NewComposeService(dockerCli)
 	composeRunner := compose.NewClient(composeService, compose.Options{
@@ -178,6 +179,7 @@ func initAllDependencies(
 		ProjectLocker:    lock.New(projectPath),
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,
+		SpecCodec:        codec,
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    engine,
 		ImageBackend:     imageBackend,

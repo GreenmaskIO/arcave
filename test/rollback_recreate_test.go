@@ -146,7 +146,7 @@ type recreateEnv struct {
 	engine    *dockerclient.Engine
 	daemon    *client.Client
 	inspector *introspect.Inspector
-	assembler *composespec.Assembler
+	codec     *composespec.Codec
 	project   string
 	hostDir   string
 	port      int
@@ -173,7 +173,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
-	assembler := composespec.NewAssembler()
+	codec := composespec.NewCodec()
 
 	projectRoot := t.TempDir()
 	store, err := storefactory.New(config.Storage{
@@ -191,7 +191,8 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,
-		ProjectAssembler:   assembler,
+		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          codec,
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
 		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
@@ -209,7 +210,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		engine:    engine,
 		daemon:    daemonAPI,
 		inspector: inspector,
-		assembler: assembler,
+		codec:     codec,
 		project:   project,
 		hostDir:   t.TempDir(),
 		port:      freePort(t),
@@ -234,7 +235,7 @@ func (e *recreateEnv) spec(t *testing.T, mode string, port int) *types.Project {
 	t.Helper()
 
 	document := fmt.Sprintf(recreateSpec, e.project, mode, port, e.hostDir)
-	project, err := e.assembler.Parse(e.ctx, []byte(document))
+	project, err := e.codec.Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	return project
 }

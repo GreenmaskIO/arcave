@@ -198,6 +198,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,
 		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
 		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
@@ -228,7 +229,7 @@ func (e *imageRollbackEnv) up(t *testing.T, replicas int) {
 	t.Helper()
 
 	document := fmt.Sprintf(imageRollbackSpec, e.project, replicas)
-	project, err := composespec.NewAssembler().Parse(e.ctx, []byte(document))
+	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))

@@ -58,10 +58,17 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	runner := &mockComposeRunner{}
 	registry := &mockRegistry{}
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: standingMarker(t, model.InflightRestoring),
-		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         standingMarker(t, model.InflightRestoring),
+		Store:            nil,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -115,10 +122,17 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	runner := &mockComposeRunner{}
 	registry := &mockRegistry{}
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: standingMarker(t, model.InflightRestoring),
-		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         standingMarker(t, model.InflightRestoring),
+		Store:            nil,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -173,10 +187,17 @@ func TestService_Rollback_RemedyPassesTheGateAndClearsTheMarker(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: inflight,
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         inflight,
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -253,10 +274,17 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: inflight,
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         inflight,
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -316,10 +344,17 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: inflight,
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         inflight,
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -380,10 +415,17 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
 
 	svc := New(Deps{
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(), ComposeRunner: runner, BackendRegistry: registry, Inflight: inflight,
-		Store: store, DefaultBackend: model.SnapshotBackendCopy,
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         inflight,
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 

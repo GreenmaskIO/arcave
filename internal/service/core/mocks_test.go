@@ -166,13 +166,15 @@ func (m *mockAssembler) Assemble(ctx context.Context, res model.IntrospectionRes
 	return project, args.Error(1)
 }
 
-func (m *mockAssembler) Marshal(project *types.Project) ([]byte, error) {
+type mockCodec struct{ mock.Mock }
+
+func (m *mockCodec) Marshal(project *types.Project) ([]byte, error) {
 	args := m.Called(project)
 	spec, _ := args.Get(0).([]byte)
 	return spec, args.Error(1)
 }
 
-func (m *mockAssembler) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
+func (m *mockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
 	args := m.Called(ctx, spec)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)

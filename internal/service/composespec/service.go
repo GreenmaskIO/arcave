@@ -34,9 +34,6 @@ const (
 	// nanoCPUs is the unit HostConfig.NanoCPUs counts in; compose spells the same
 	// limit in whole CPUs.
 	nanoCPUs = 1e9
-	// portModeIngress is what compose's loader fills a published port with; the
-	// assembler writes it so a spec equals the one parsed back from its artifact.
-	portModeIngress = "ingress"
 	// defaultShmSize is the /dev/shm the daemon gives a container that asks for none.
 	defaultShmSize = 64 << 20
 	// desktopOperatingSystem is what `docker info` reports on Docker Desktop.
@@ -471,7 +468,6 @@ func publishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
 		}
 		for _, host := range hosts {
 			published = append(published, types.ServicePortConfig{
-				Mode:      portModeIngress,
 				Target:    uint32(target),
 				Protocol:  port.Proto(),
 				Published: host.HostPort,

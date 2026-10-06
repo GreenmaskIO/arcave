@@ -133,7 +133,7 @@ func runFidelityCase(t *testing.T, tc fidelityCase) {
 			}
 		}()
 		// The project is named per run; a want names it only through the placeholder.
-		want, err := e.assembler.Parse(e.ctx, []byte(e.render("name: {{project}}\n"+tc.want)))
+		want, err := e.codec.Parse(e.ctx, []byte(e.render("name: {{project}}\n"+tc.want)))
 		require.NoError(t, err, "want must parse")
 		delete(want.Extensions, "x-base")
 		if want.Extensions[originExtension] == nil {
@@ -175,6 +175,7 @@ type fidelityEnv struct {
 	runner    *composeclient.Client
 	inspector *introspect.Inspector
 	assembler *composespec.Assembler
+	codec     *composespec.Codec
 	project   string
 	dir       string
 	// volumes are every volume an introspection saw: a Down leaves the anonymous ones behind.
@@ -211,6 +212,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 		}),
 		inspector: introspect.NewInspector(daemon, model.DockerComposeProjectName(project)),
 		assembler: composespec.NewAssembler(),
+		codec:     composespec.NewCodec(),
 		project:   project,
 		dir:       t.TempDir(),
 		volumes:   map[string]bool{},
@@ -347,7 +349,7 @@ func (e *fidelityEnv) assemble(t *testing.T, res model.IntrospectionResult) (*ty
 func (e *fidelityEnv) reparse(t *testing.T, project *types.Project) *types.Project {
 	t.Helper()
 
-	parsed, err := e.assembler.Parse(e.ctx, e.marshal(t, project))
+	parsed, err := e.codec.Parse(e.ctx, e.marshal(t, project))
 	require.NoError(t, err, "parse the rendered spec")
 	return parsed
 }
@@ -355,7 +357,7 @@ func (e *fidelityEnv) reparse(t *testing.T, project *types.Project) *types.Proje
 func (e *fidelityEnv) marshal(t *testing.T, project *types.Project) []byte {
 	t.Helper()
 
-	document, err := e.assembler.Marshal(project)
+	document, err := e.codec.Marshal(project)
 	require.NoError(t, err, "marshal")
 	return document
 }

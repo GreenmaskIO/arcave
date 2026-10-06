@@ -357,9 +357,10 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, project.Services["app"].DependsOn)
 			// Every condition has to survive compose's own loader, or the savepoint cannot be rolled back to.
-			spec, err := assembler.Marshal(project)
+			codec := NewCodec()
+			spec, err := codec.Marshal(project)
 			require.NoError(t, err)
-			parsed, err := assembler.Parse(context.Background(), spec)
+			parsed, err := codec.Parse(context.Background(), spec)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, parsed.Services["app"].DependsOn)
 		})

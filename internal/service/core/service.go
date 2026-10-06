@@ -45,10 +45,14 @@ type composeIntrospector interface {
 	Introspect(ctx context.Context) (model.IntrospectionResult, error)
 }
 
-// projectAssembler materialises the spec the runner acts on — out of a live
-// compose project, or out of the artifact a savepoint committed.
+// projectAssembler builds the spec of a live compose project out of its introspection.
 type projectAssembler interface {
 	Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error)
+}
+
+// specCodec moves a spec through the artifact a savepoint commits; Parse is compose's
+// loader, so every project the runner acts on has been through it.
+type specCodec interface {
 	Marshal(project *types.Project) ([]byte, error)
 	Parse(ctx context.Context, spec []byte) (*types.Project, error)
 }
@@ -96,6 +100,7 @@ type Deps struct {
 	ProjectLocker      projectLocker
 	ComposeInspector   composeIntrospector
 	ProjectAssembler   projectAssembler
+	SpecCodec          specCodec
 	ComposeRunner      composeRunner
 	VolumeRemover      volumeRemover
 	ImageBackend       imageBackend
@@ -116,6 +121,7 @@ type Service struct {
 	projectLocker           projectLocker
 	composeInspector        composeIntrospector
 	projectAssembler        projectAssembler
+	specCodec               specCodec
 	composeRunner           composeRunner
 	volumeRemover           volumeRemover
 	imageBackend            imageBackend
@@ -133,6 +139,7 @@ func New(d Deps) *Service {
 		projectLocker:           d.ProjectLocker,
 		composeInspector:        d.ComposeInspector,
 		projectAssembler:        d.ProjectAssembler,
+		specCodec:               d.SpecCodec,
 		composeRunner:           d.ComposeRunner,
 		volumeRemover:           d.VolumeRemover,
 		imageBackend:            d.ImageBackend,

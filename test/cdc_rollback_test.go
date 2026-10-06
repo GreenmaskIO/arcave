@@ -275,12 +275,13 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	}))
 	require.NoError(t, err)
 
-	project := &types.Project{Name: cdcProject}
+	spec := stubAssembler{project: &types.Project{Name: cdcProject}}
 	svc := core.New(core.Deps{
 		SavepointRepo:    sprepo.New(composeProjectStore),
 		ProjectLocker:    lock.New(projectRoot),
 		ComposeInspector: stubInspector{result: introspectionOf(volumes)},
-		ProjectAssembler: stubAssembler{project: project},
+		ProjectAssembler: spec,
+		SpecCodec:        spec,
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    stubVolumeRemover{},
 		BackendRegistry:  registry,
@@ -407,8 +408,8 @@ func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration
 	return nil
 }
 
-// stubAssembler: this test never starts or rebuilds the compose project, so the spec only
-// names the project and its artifact is opaque.
+// stubAssembler is the assembler and the codec both: this test never starts or rebuilds
+// the compose project, so the spec only names the project and its artifact is opaque.
 type stubAssembler struct{ project *types.Project }
 
 func (s stubAssembler) Assemble(context.Context, model.IntrospectionResult) (*types.Project, error) {
