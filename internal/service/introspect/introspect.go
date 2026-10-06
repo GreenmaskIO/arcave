@@ -109,6 +109,11 @@ func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 		return model.IntrospectionResult{}, fmt.Errorf("read images of compose project %q: %w", i.composeProject, err)
 	}
 
+	referenced, err := i.referenced(ctx, services)
+	if err != nil {
+		return model.IntrospectionResult{}, fmt.Errorf("read containers compose project %q refers to: %w", i.composeProject, err)
+	}
+
 	info, err := i.api.Info(ctx)
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon info: %w", err)
@@ -121,9 +126,10 @@ func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 			Volumes:  i.namedVolumes(services, volumesIndex),
 			Networks: networks,
 		},
-		Daemon:  info,
-		Images:  images,
-		Volumes: volumesIndex,
+		Daemon:     info,
+		Images:     images,
+		Volumes:    volumesIndex,
+		Referenced: referenced,
 	}, nil
 }
 
@@ -630,6 +636,63 @@ func baseImageID(inspect image.InspectResponse) (model.ImageDigestID, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+// referenced inspects each distinct container outside the project a replica refers to, keyed by
+// id. One the daemon no longer has is left out; that is not an error.
+func (i *Inspector) referenced(
+	ctx context.Context, services []model.Service,
+) (map[string]container.InspectResponse, error) {
+	referenced := map[string]container.InspectResponse{}
+	for _, ref := range foreignReferences(services) {
+		inspect, err := i.api.ContainerInspect(ctx, ref)
+		if cerrdefs.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect container %s: %w", ref, err)
+		}
+		if inspect.ContainerJSONBase != nil {
+			referenced[inspect.ID] = inspect
+		}
+	}
+	return referenced, nil
+}
+
+// foreignReferences are the distinct containers the replicas name in a container: namespace
+// mode or in volumes_from that are no replica of the project, in discovery order.
+func foreignReferences(services []model.Service) []string {
+	own := map[string]bool{}
+	for _, svc := range services {
+		for _, c := range svc.Containers {
+			own[c.ID] = true
+			own[c.Name] = true
+		}
+	}
+	var refs []string
+	add := func(ref string) {
+		if ref != "" && !own[ref] && !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	for _, svc := range services {
+		for _, c := range svc.Containers {
+			if c.Inspect.ContainerJSONBase == nil || c.Inspect.HostConfig == nil {
+				continue
+			}
+			h := c.Inspect.HostConfig
+			for _, mode := range []string{string(h.NetworkMode), string(h.IpcMode), string(h.PidMode)} {
+				if ref, ok := strings.CutPrefix(mode, types.ContainerPrefix); ok {
+					add(ref)
+				}
+			}
+			for _, entry := range h.VolumesFrom {
+				ref, _, _ := strings.Cut(entry, ":")
+				add(ref)
+			}
+		}
+	}
+	return refs
 }
 
 // namedVolumes lists the volumes compose owns, an unmounted one included, plus the external

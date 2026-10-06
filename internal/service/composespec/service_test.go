@@ -258,8 +258,11 @@ func TestServiceVolume_Options(t *testing.T) {
 	}
 }
 
-// dbReplicaID is a full container id of the project's db service.
-const dbReplicaID = "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9"
+// Full container ids: a replica of the project's db service, and a container outside the project.
+const (
+	dbReplicaID = "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9"
+	vpnID       = "5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d"
+)
 
 func TestDeclaredNetworkMode(t *testing.T) {
 	replicas := map[string]string{dbReplicaID: "db"}
@@ -280,20 +283,23 @@ func TestDeclaredNetworkMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, declaredNetworkMode(tt.mode, replicas))
+			assert.Equal(t, tt.want, declaredNetworkMode(tt.mode, replicas, nil))
 		})
 	}
 }
 
 func TestDeclaredNamespace(t *testing.T) {
 	replicas := map[string]string{dbReplicaID: "db"}
+	foreign := map[string]string{vpnID: "vpn", "vpn": "vpn"}
 	tests := []struct {
 		name string
 		mode string
 		want string
 	}{
 		{name: "a replica of the project", mode: "container:" + dbReplicaID, want: "service:db"},
-		{name: "a foreign container id", mode: "container:0123456789ab", want: "container:0123456789ab"},
+		{name: "a foreign container id, named", mode: "container:" + vpnID, want: "container:vpn"},
+		{name: "a foreign container name", mode: "container:vpn", want: "container:vpn"},
+		{name: "a foreign container id, gone", mode: "container:0123456789ab", want: "container:0123456789ab"},
 		{name: "a container name", mode: "container:sidecar", want: "container:sidecar"},
 		{name: "host", mode: "host", want: "host"},
 		{name: "empty", mode: "", want: ""},
@@ -301,7 +307,7 @@ func TestDeclaredNamespace(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, declaredNamespace(tt.mode, replicas))
+			assert.Equal(t, tt.want, declaredNamespace(tt.mode, replicas, foreign))
 		})
 	}
 }

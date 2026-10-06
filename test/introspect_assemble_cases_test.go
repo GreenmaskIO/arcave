@@ -252,7 +252,7 @@ services:
 ` + defaultNetwork,
 		},
 		{
-			// The daemon resolves the name to the id; the spec breaks once that container is recreated.
+			// The daemon resolves the name to the id; the spec declares the name back.
 			name: "network_mode container: outside the project",
 			compose: `
 services:
@@ -262,7 +262,6 @@ services:
 services:
   app: {<<: *base, scale: 1, network_mode: "container:{{project}}-outside"}
 `,
-			knownDefect: map[string]string{"pass1": "container: names a container outside the project by id"},
 			setup:       func(t *testing.T, e *fidelityEnv) { e.runOutsideContainer(t, "outside", "") },
 		},
 		{

@@ -27,6 +27,7 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -70,6 +71,9 @@ type assembly struct {
 	replicas map[string]string
 	// containers maps a replica's container name to its service: a link names its target by name.
 	containers map[string]string
+	// foreign maps a container outside the project, by id and by name, to its name: compose
+	// writes a container: namespace as the id it resolved the name to.
+	foreign map[string]string
 }
 
 func newAssembly(res model.IntrospectionResult) assembly {
@@ -80,6 +84,13 @@ func newAssembly(res model.IntrospectionResult) assembly {
 		healthchecked: map[string]bool{},
 		replicas:      map[string]string{},
 		containers:    map[string]string{},
+		foreign:       map[string]string{},
+	}
+	for id, inspect := range res.Referenced {
+		if name := strings.TrimPrefix(inspect.Name, "/"); name != "" {
+			s.foreign[id] = name
+			s.foreign[name] = name
+		}
 	}
 	for _, svc := range res.Project.Services {
 		s.known[svc.Name] = true
@@ -105,6 +116,7 @@ func (a *Assembler) Assemble(ctx context.Context, res model.IntrospectionResult)
 	}
 
 	s := newAssembly(res)
+	s.warnOnMissingContainers(ctx)
 	workingDir, files := projectOrigin(res.Project.Services)
 	return &types.Project{
 		Name:         res.Project.Name,
@@ -124,6 +136,29 @@ func (s assembly) services(ctx context.Context) types.Services {
 		s.warnOnDivergentReplicas(ctx, svc, services[svc.Name])
 	}
 	return services
+}
+
+// warnOnMissingContainers reports, once each, a container: namespace naming a container the
+// daemon no longer has: the spec keeps the id, and a rollback fails to create on it.
+func (s assembly) warnOnMissingContainers(ctx context.Context) {
+	var warned []string
+	for _, svc := range s.res.Project.Services {
+		for _, c := range svc.Containers {
+			if c.Inspect.ContainerJSONBase == nil || c.Inspect.HostConfig == nil {
+				continue
+			}
+			h := c.Inspect.HostConfig
+			for _, mode := range []string{string(h.NetworkMode), string(h.IpcMode), string(h.PidMode)} {
+				ref, ok := strings.CutPrefix(mode, types.ContainerPrefix)
+				if !ok || s.replicas[ref] != "" || s.foreign[ref] != "" || slices.Contains(warned, ref) {
+					continue
+				}
+				warned = append(warned, ref)
+				zerolog.Ctx(ctx).Warn().Str("service", svc.Name).Str("container", ref).
+					Msg("a namespace refers to a container the daemon no longer has; a rollback cannot create the service until it is back")
+			}
+		}
+	}
 }
 
 // dependsOn parses compose's `service:condition:restart` dependency label. A dependency the

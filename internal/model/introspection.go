@@ -275,6 +275,9 @@ type IntrospectionResult struct {
 	// Volumes are the volumes the project owns and every other volume a container mounts,
 	// keyed by docker name, verbatim.
 	Volumes map[string]volume.Volume
+	// Referenced are the containers outside the project a replica names in container: network,
+	// ipc or pid mode or in volumes_from, keyed by id, verbatim. One the daemon no longer has is absent.
+	Referenced map[string]container.InspectResponse
 }
 
 // SkippedVolume is a mount the backup decision did not take, reported so callers

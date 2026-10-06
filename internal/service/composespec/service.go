@@ -149,7 +149,7 @@ func (s assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.In
 
 	cfg.Ports = publishedPorts(h.PortBindings)
 	cfg.Restart = restartPolicy(h.RestartPolicy)
-	cfg.NetworkMode = declaredNetworkMode(string(h.NetworkMode), s.replicas)
+	cfg.NetworkMode = declaredNetworkMode(string(h.NetworkMode), s.replicas, s.foreign)
 	cfg.Logging = logging(h.LogConfig, daemon.LoggingDriver)
 	cfg.ExtraHosts = extraHosts(h.ExtraHosts)
 	cfg.Tmpfs = tmpfsMounts(h.Tmpfs, cfg.Volumes)
@@ -175,8 +175,8 @@ func (s assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.In
 		cfg.Runtime = h.Runtime
 	}
 	cfg.Isolation = string(h.Isolation)
-	cfg.Ipc = declaredNamespace(string(h.IpcMode), s.replicas)
-	cfg.Pid = declaredNamespace(string(h.PidMode), s.replicas)
+	cfg.Ipc = declaredNamespace(string(h.IpcMode), s.replicas, s.foreign)
+	cfg.Pid = declaredNamespace(string(h.PidMode), s.replicas, s.foreign)
 	cfg.Uts = string(h.UTSMode)
 	cfg.UserNSMode = string(h.UsernsMode)
 	cfg.Cgroup = string(h.CgroupnsMode)
@@ -316,23 +316,27 @@ func declaredSecurityOpt(h *container.HostConfig) []string {
 
 // declaredNetworkMode keeps only a mode the user could have written; a compose
 // network's name lands there too, and the networks: section already carries it.
-func declaredNetworkMode(mode string, replicas map[string]string) string {
+func declaredNetworkMode(mode string, replicas, foreign map[string]string) string {
 	if slices.Contains(predefinedNetworks, mode) ||
 		strings.HasPrefix(mode, types.ContainerPrefix) || strings.HasPrefix(mode, types.ServicePrefix) {
-		return declaredNamespace(mode, replicas)
+		return declaredNamespace(mode, replicas, foreign)
 	}
 	return ""
 }
 
-// declaredNamespace turns compose's container:<id> back into the service:<name> it
-// resolved, since Down removes that container; one outside the project stays as named.
-func declaredNamespace(mode string, replicas map[string]string) string {
+// declaredNamespace turns compose's container:<id> back into what it resolved: the service:<name>
+// of a replica, since Down removes that container, or the name of one outside the project, since
+// its id changes once it is recreated. An id neither resolves to stays as written.
+func declaredNamespace(mode string, replicas, foreign map[string]string) string {
 	id, ok := strings.CutPrefix(mode, types.ContainerPrefix)
 	if !ok {
 		return mode
 	}
 	if service, ok := replicas[id]; ok {
 		return types.ServicePrefix + service
+	}
+	if name, ok := foreign[id]; ok {
+		return types.ContainerPrefix + name
 	}
 	return mode
 }

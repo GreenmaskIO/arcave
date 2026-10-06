@@ -431,6 +431,71 @@ func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 	}
 }
 
+func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
+	const goneID = "0123456789ab0123456789ab0123456789ab0123456789ab0123456789ab0123"
+	tests := []struct {
+		name       string
+		referenced map[string]container.InspectResponse
+		want       string
+		wantWarn   bool
+	}{
+		{
+			name: "a container outside the project is declared by name",
+			referenced: map[string]container.InspectResponse{vpnID: {
+				ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"},
+			}},
+			want: "container:vpn",
+		},
+		{name: "a container the daemon no longer has keeps its id", want: "container:" + vpnID, wantWarn: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			replica := func(id string) model.Container {
+				return model.Container{ID: id, Number: 1, Inspect: container.InspectResponse{
+					ContainerJSONBase: &container.ContainerJSONBase{
+						ID: id, Name: "/demo-app-1", HostConfig: &container.HostConfig{
+							NetworkMode: container.NetworkMode("container:" + vpnID),
+							IpcMode:     container.IpcMode("container:" + vpnID),
+						},
+					},
+					Config: &container.Config{Image: "busybox"},
+				}}
+			}
+			res := model.IntrospectionResult{
+				Project: model.Project{Name: "demo", Services: []model.Service{
+					{Name: "app", Containers: []model.Container{replica(goneID)}},
+				}},
+				Referenced: tt.referenced,
+			}
+			var logs bytes.Buffer
+			ctx := zerolog.New(&logs).WithContext(context.Background())
+
+			// Act
+			project, err := NewAssembler().Assemble(ctx, res)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, project.Services["app"].NetworkMode)
+			assert.Equal(t, tt.want, project.Services["app"].Ipc)
+			if !tt.wantWarn {
+				assert.Empty(t, logs.String())
+				return
+			}
+			var entry struct {
+				Level     string `json:"level"`
+				Service   string `json:"service"`
+				Container string `json:"container"`
+			}
+			require.NoError(t, json.Unmarshal(logs.Bytes(), &entry), "one warning for both namespaces")
+			assert.Equal(t, "warn", entry.Level)
+			assert.Equal(t, "app", entry.Service)
+			assert.Equal(t, vpnID, entry.Container)
+		})
+	}
+}
+
 func TestUserLabels(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -97,6 +97,96 @@ func TestInspector_Introspect(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
+func TestInspector_Introspect_Referenced(t *testing.T) {
+	const (
+		vpnID  = "c-vpn"
+		goneID = "c-gone"
+	)
+	inNamespaces := func(id string, h container.HostConfig) container.InspectResponse {
+		r := inspected(id, testImageID.String())
+		r.HostConfig = &h
+		return r
+	}
+	vpn := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"}}
+
+	tests := []struct {
+		name     string
+		replicas []container.InspectResponse
+		inspects map[string]error // the foreign references inspected, each once; nil error answers vpn
+		want     map[string]container.InspectResponse
+	}{
+		{
+			name: "one inspect per distinct foreign container",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{
+					NetworkMode: "container:" + vpnID, IpcMode: "container:" + vpnID, PidMode: "container:" + vpnID,
+				}),
+				inNamespaces("c-app-2", container.HostConfig{NetworkMode: "container:" + vpnID}),
+			},
+			inspects: map[string]error{vpnID: nil},
+			want:     map[string]container.InspectResponse{vpnID: vpn},
+		},
+		{
+			name: "a replica of the project is no reference",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{
+					NetworkMode: "container:c-app-2", VolumesFrom: []string{"c-app-2:ro"},
+				}),
+				inNamespaces("c-app-2", container.HostConfig{}),
+			},
+			want: map[string]container.InspectResponse{},
+		},
+		{
+			name: "volumes_from names a foreign container",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{VolumesFrom: []string{vpnID + ":ro"}}),
+			},
+			inspects: map[string]error{vpnID: nil},
+			want:     map[string]container.InspectResponse{vpnID: vpn},
+		},
+		{
+			name: "a container the daemon no longer has is left out",
+			replicas: []container.InspectResponse{
+				inNamespaces("c-app-1", container.HostConfig{NetworkMode: "container:" + goneID}),
+			},
+			inspects: map[string]error{goneID: cerrdefs.ErrNotFound},
+			want:     map[string]container.InspectResponse{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			summaries := make([]container.Summary, 0, len(tt.replicas))
+			for n, r := range tt.replicas {
+				summaries = append(summaries, summary(r.ID, "app", "busybox", n+1))
+			}
+			daemon.expectContainers(summaries...)
+			daemon.expectInspected(tt.replicas...)
+			for id, err := range tt.inspects {
+				answer := vpn
+				if err != nil {
+					answer = container.InspectResponse{}
+				}
+				daemon.On("ContainerInspect", mock.Anything, id).Return(answer, err).Once()
+			}
+			daemon.expectVolumes()
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+			daemon.expectInfo()
+
+			// Act
+			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.Referenced)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
 func TestInspector_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
 	// Arrange
 	daemon := &mockDockerAPI{}
