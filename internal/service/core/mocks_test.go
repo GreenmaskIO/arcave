@@ -87,9 +87,9 @@ func (m *mockImageBackend) Restore(
 type mockContainerRebuilder struct{ mock.Mock }
 
 func (m *mockContainerRebuilder) RecreateWithImage(
-	ctx context.Context, containerID, imageRef string,
+	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
 ) (string, error) {
-	args := m.Called(ctx, containerID, imageRef)
+	args := m.Called(ctx, containerID, as, imageRef)
 	return args.String(0), args.Error(1)
 }
 

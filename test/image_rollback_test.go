@@ -228,7 +228,13 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 func (e *imageRollbackEnv) up(t *testing.T, replicas int) {
 	t.Helper()
 
-	document := fmt.Sprintf(imageRollbackSpec, e.project, replicas)
+	e.upDocument(t, fmt.Sprintf(imageRollbackSpec, e.project, replicas))
+}
+
+// upDocument creates and starts the compose project a document describes.
+func (e *imageRollbackEnv) upDocument(t *testing.T, document string) {
+	t.Helper()
+
 	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project))

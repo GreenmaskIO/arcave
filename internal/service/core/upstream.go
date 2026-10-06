@@ -32,7 +32,7 @@ func capturableContainers(ctx context.Context, res model.IntrospectionResult) []
 	var refs []model.ContainerRef
 	for _, svc := range res.Project.Services {
 		for _, c := range svc.Containers {
-			ref := model.ContainerRef{Service: svc.Name, Replica: c.Number, ID: c.ID}
+			ref := model.ContainerRef{Service: svc.Name, Replica: c.Number, ID: c.ID, Name: c.Name}
 			ref.UpstreamImageID, ref.UpstreamImageRef = resolveUpstream(ctx, res, c)
 			refs = append(refs, ref)
 		}

@@ -445,6 +445,7 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
       "service": "webapp",
       "replica": 1,
       "container_id": "3f1a…",
+      "container_name": "demo-webapp-1",
       "committed_image_id": "sha256:aaaa…",
       "upstream_image_id": "sha256:bbbb…",
       "upstream_image_ref": "myapp:latest",
@@ -571,6 +572,7 @@ Output adds `images`, one entry per restored layer:
     {
       "service": "webapp",
       "replica": 1,
+      "container_name": "demo-webapp-1",
       "image_id": "sha256:aaaa…",
       "image_ref": "arcave/demo-webapp-1-myapp-latest:sp-1780335122"
     }

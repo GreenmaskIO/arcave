@@ -79,10 +79,10 @@ type imageBackend interface {
 	Restore(ctx context.Context, req model.ImageRestoreRequest) (model.ImageRestore, error)
 }
 
-// containerRebuilder recreates one built container from another image — the
-// per-replica half compose's one image per service cannot express.
+// containerRebuilder recreates one built container from another image as the replica a
+// savepoint recorded, which compose's one image per service cannot express.
 type containerRebuilder interface {
-	RecreateWithImage(ctx context.Context, containerID, imageRef string) (string, error)
+	RecreateWithImage(ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string) (string, error)
 }
 
 // inflightMarkers is the intent marker's seam: written before a rollback's first

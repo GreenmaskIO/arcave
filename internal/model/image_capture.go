@@ -29,6 +29,7 @@ type ContainerRef struct {
 	Service string // compose service name
 	Replica int    // replica number, from 1
 	ID      string // container id
+	Name    string // container name, without the leading slash
 	// The upstream: the image the compose file named; empty when it can no longer
 	// be traced.
 	UpstreamImageID  ImageDigestID // sha256 digest of the upstream's config
@@ -68,6 +69,10 @@ type ImageCapture struct {
 	Service     string `json:"service"`      // compose service name
 	Replica     int    `json:"replica"`      // replica number, from 1
 	ContainerID string `json:"container_id"` // the container committed
+	// ContainerName is the committed container's name: what a rollback rebuilds
+	// the replica under when compose numbered it otherwise. Kept, not derived from
+	// the number: compose's naming depends on the project and its separator.
+	ContainerName string `json:"container_name"`
 	// CommittedImageID is the image `docker commit` made: the upstream plus the
 	// writable layer. sha256 digest; what a rollback loads and tags.
 	CommittedImageID ImageDigestID `json:"committed_image_id"`
@@ -94,8 +99,16 @@ type ImageRestoreRequest struct {
 // content, ImageRef is the docker reference the rebuilt compose project names it by. It
 // travels in the rollback response, so its json tags are the wire contract.
 type ImageRestore struct {
-	Service  string        `json:"service"`
-	Replica  int           `json:"replica"`
-	ImageID  ImageDigestID `json:"image_id"`
-	ImageRef string        `json:"image_ref"`
+	Service       string        `json:"service"`
+	Replica       int           `json:"replica"`
+	ContainerName string        `json:"container_name"`
+	ImageID       ImageDigestID `json:"image_id"`
+	ImageRef      string        `json:"image_ref"`
+}
+
+// ReplicaIdentity is who a rebuilt container is to be: the name and the
+// com.docker.compose.container-number a savepoint recorded for it.
+type ReplicaIdentity struct {
+	Name   string
+	Number int
 }

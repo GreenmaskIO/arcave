@@ -150,6 +150,7 @@ func (c *Copier) Capture(ctx context.Context, req model.ImageCaptureRequest) (mo
 		Service:          req.Container.Service,
 		Replica:          req.Container.Replica,
 		ContainerID:      req.Container.ID,
+		ContainerName:    req.Container.Name,
 		CommittedImageID: imageID,
 		UpstreamImageID:  req.Container.UpstreamImageID,
 		UpstreamImageRef: req.Container.UpstreamImageRef,
@@ -258,10 +259,11 @@ func (c *Copier) Restore(ctx context.Context, req model.ImageRestoreRequest) (mo
 		return model.ImageRestore{}, err
 	}
 	return model.ImageRestore{
-		Service:  req.Capture.Service,
-		Replica:  req.Capture.Replica,
-		ImageID:  req.Capture.CommittedImageID,
-		ImageRef: req.ImageRef,
+		Service:       req.Capture.Service,
+		Replica:       req.Capture.Replica,
+		ContainerName: req.Capture.ContainerName,
+		ImageID:       req.Capture.CommittedImageID,
+		ImageRef:      req.ImageRef,
 	}, nil
 }
 

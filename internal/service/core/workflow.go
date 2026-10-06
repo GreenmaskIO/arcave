@@ -17,6 +17,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -80,6 +81,7 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 	}
 
 	containers := capturableContainers(ctx, res)
+	warnOnReplicaGaps(ctx, res)
 
 	return workingSet{
 		project:     project,
@@ -128,6 +130,39 @@ func (s *Service) startServices(ctx context.Context, ws workingSet) error {
 		return fmt.Errorf("starting services: %w", err)
 	}
 	return nil
+}
+
+// warnOnReplicaGaps reports each service missing a replica below its highest one:
+// only the replicas there are captured, and a rollback brings back exactly those.
+func warnOnReplicaGaps(ctx context.Context, res model.IntrospectionResult) {
+	for _, svc := range res.Project.Services {
+		numbers := make([]int, 0, len(svc.Containers))
+		for _, c := range svc.Containers {
+			numbers = append(numbers, c.Number)
+		}
+		missing := missingReplicas(numbers)
+		if len(missing) == 0 {
+			continue
+		}
+		slices.Sort(numbers)
+		zerolog.Ctx(ctx).Warn().Str("service", svc.Name).Ints("replicas", numbers).Ints("missing", missing).
+			Msg("some replicas of this service are gone (removed, or exited and cleaned up); " +
+				"only the remaining ones are captured, and a rollback brings back exactly these, under the same names")
+	}
+}
+
+// missingReplicas is the numbers from 1 up to the highest of numbers that no replica holds.
+func missingReplicas(numbers []int) []int {
+	if len(numbers) == 0 {
+		return nil
+	}
+	var missing []int
+	for n := 1; n < slices.Max(numbers); n++ {
+		if !slices.Contains(numbers, n) {
+			missing = append(missing, n)
+		}
+	}
+	return missing
 }
 
 // anonymousVolumes indexes the docker names of the compose project's anonymous volumes by

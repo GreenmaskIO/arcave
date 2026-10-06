@@ -91,9 +91,14 @@ const (
 // demoContainerRef is that replica in the form a capture request addresses it by.
 func demoContainerRef() model.ContainerRef {
 	return model.ContainerRef{
-		Service: demoService, Replica: 1, ID: demoContainerID,
+		Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1),
 		UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage,
 	}
+}
+
+// demoContainerName is the name compose gives replica n of demoService.
+func demoContainerName(n int) string {
+	return fmt.Sprintf("%s-%s-%d", demoProject, demoService, n)
 }
 
 // demoContainerInspect is a replica running on demoBaseImage.
@@ -130,6 +135,7 @@ func demoIntrospectionWithContainers() model.IntrospectionResult {
 		Name: demoService,
 		Containers: []model.Container{{
 			ID:      demoContainerID,
+			Name:    demoContainerName(1),
 			Number:  1,
 			Inspect: demoContainerInspect(),
 		}},
@@ -149,6 +155,7 @@ func demoImageCapture() model.ImageCapture {
 		Service:          demoService,
 		Replica:          1,
 		ContainerID:      demoContainerID,
+		ContainerName:    demoContainerName(1),
 		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		UpstreamImageID:  demoUpstreamID,
 		UpstreamImageRef: demoBaseImage,
@@ -172,7 +179,7 @@ func demoRestoredRef(replica int) string {
 // demoImageRestore is what the copier reports for demoImageCapture.
 func demoImageRestore() model.ImageRestore {
 	return model.ImageRestore{
-		Service: demoService, Replica: 1,
+		Service: demoService, Replica: 1, ContainerName: demoContainerName(1),
 		ImageID: demoImageCapture().CommittedImageID, ImageRef: demoRestoredRef(1),
 	}
 }
@@ -190,6 +197,7 @@ func demoScaledIntrospection() model.IntrospectionResult {
 	res := demoIntrospectionWithContainers()
 	res.Project.Services[0].Containers = append(res.Project.Services[0].Containers, model.Container{
 		ID:      demoSecondContainerID,
+		Name:    demoContainerName(2),
 		Number:  2,
 		Inspect: demoContainerInspect(),
 	})
@@ -201,6 +209,7 @@ func demoSecondImageCapture() model.ImageCapture {
 	capture := demoImageCapture()
 	capture.Replica = 2
 	capture.ContainerID = demoSecondContainerID
+	capture.ContainerName = demoContainerName(2)
 	capture.CommittedImageID = demoSecondImageID
 	return capture
 }

@@ -17,18 +17,24 @@ package docker
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// RecreateWithImage rebuilds one created container from another image, keeping
-// its name, labels, host config and declared endpoints, and returns the new id.
-// The container must be stopped and its data not yet restored: the anonymous
-// volumes compose just made for it go with it.
-func (e *Engine) RecreateWithImage(ctx context.Context, containerID, imageRef string) (string, error) {
+// RecreateWithImage rebuilds a stopped container from imageRef under the given name and replica
+// number, keeping its labels, host config and endpoints; its anonymous volumes are dropped.
+func (e *Engine) RecreateWithImage(
+	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
+) (string, error) {
+	if as.Name == "" || as.Number < 1 {
+		return "", fmt.Errorf("container %s: no replica identity to rebuild it as", containerID)
+	}
 	inspect, err := e.api.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return "", fmt.Errorf("inspect container %s: %w", containerID, err)
@@ -43,9 +49,10 @@ func (e *Engine) RecreateWithImage(ctx context.Context, containerID, imageRef st
 	config := *inspect.Config
 	config.Image = imageRef
 	config.Hostname = declaredHostname(inspect)
+	config.Labels = renumberedLabels(inspect.Config.Labels, as.Number)
 	hostConfig := *inspect.HostConfig
 	name := strings.TrimPrefix(inspect.Name, "/")
-	networking := declaredEndpoints(inspect.NetworkSettings)
+	networking := declaredEndpoints(inspect.NetworkSettings, name, as.Name)
 	platform := imagePlatform(inspect)
 
 	// The empty anonymous volumes compose made for this container go with it; the
@@ -54,11 +61,21 @@ func (e *Engine) RecreateWithImage(ctx context.Context, containerID, imageRef st
 		return "", fmt.Errorf("remove container %s: %w", containerID, err)
 	}
 
-	created, err := e.api.ContainerCreate(ctx, &config, &hostConfig, networking, platform, name)
+	created, err := e.api.ContainerCreate(ctx, &config, &hostConfig, networking, platform, as.Name)
 	if err != nil {
-		return "", fmt.Errorf("recreate container %s from %s: %w", name, imageRef, err)
+		return "", fmt.Errorf("recreate container %s as %s from %s: %w", name, as.Name, imageRef, err)
 	}
 	return created.ID, nil
+}
+
+// renumberedLabels is labels, copied, with the container number set to number.
+func renumberedLabels(labels map[string]string, number int) map[string]string {
+	renumbered := make(map[string]string, len(labels)+1)
+	for k, v := range labels {
+		renumbered[k] = v
+	}
+	renumbered[composeNumberLabel] = strconv.Itoa(number)
+	return renumbered
 }
 
 // declaredHostname drops a hostname the daemon derived from the container being
@@ -82,9 +99,9 @@ func imagePlatform(inspect container.InspectResponse) *ocispec.Platform {
 	return inspect.ImageManifestDescriptor.Platform
 }
 
-// declaredEndpoints keeps what was declared and drops what the daemon assigned:
-// an address or endpoint id belongs to the container being replaced.
-func declaredEndpoints(settings *container.NetworkSettings) *network.NetworkingConfig {
+// declaredEndpoints keeps what was declared, drops the addresses and ids the daemon
+// assigned, and renames the alias compose gave each endpoint from oldName to newName.
+func declaredEndpoints(settings *container.NetworkSettings, oldName, newName string) *network.NetworkingConfig {
 	endpoints := map[string]*network.EndpointSettings{}
 	if settings != nil {
 		for name, endpoint := range settings.Networks {
@@ -94,7 +111,7 @@ func declaredEndpoints(settings *container.NetworkSettings) *network.NetworkingC
 			declared := &network.EndpointSettings{
 				IPAMConfig: endpoint.IPAMConfig,
 				Links:      endpoint.Links,
-				Aliases:    endpoint.Aliases,
+				Aliases:    renamedAliases(endpoint.Aliases, oldName, newName),
 				MacAddress: endpoint.MacAddress,
 				DriverOpts: endpoint.DriverOpts,
 				GwPriority: endpoint.GwPriority,
@@ -106,4 +123,19 @@ func declaredEndpoints(settings *container.NetworkSettings) *network.NetworkingC
 		}
 	}
 	return &network.NetworkingConfig{EndpointsConfig: endpoints}
+}
+
+// renamedAliases is aliases, copied, with oldName replaced by newName.
+func renamedAliases(aliases []string, oldName, newName string) []string {
+	if aliases == nil {
+		return nil
+	}
+	renamed := make([]string, len(aliases))
+	for i, alias := range aliases {
+		if alias == oldName {
+			alias = newName
+		}
+		renamed[i] = alias
+	}
+	return renamed
 }

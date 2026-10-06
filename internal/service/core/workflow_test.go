@@ -72,3 +72,41 @@ func TestService_prepare(t *testing.T) {
 	runner.AssertExpectations(t)
 	registry.AssertExpectations(t)
 }
+
+func TestWarnOnReplicaGaps(t *testing.T) {
+	tests := []struct {
+		name    string
+		numbers []int
+		want    string
+	}{
+		{name: "no gap", numbers: []int{2, 1, 3}},
+		{name: "a gap in the middle", numbers: []int{3, 1},
+			want: `"service":"db","replicas":[1,3],"missing":[2],"message":"some replicas of this service are gone`},
+		{name: "the first replica gone", numbers: []int{2, 3},
+			want: `"service":"db","replicas":[2,3],"missing":[1],"message":"some replicas of this service are gone`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			res := demoIntrospection()
+			svc := model.Service{Name: demoService}
+			for _, n := range tt.numbers {
+				svc.Containers = append(svc.Containers, model.Container{Number: n})
+			}
+			res.Project.Services = []model.Service{svc}
+			logs := &syncBuffer{}
+			ctx := zerolog.New(logs).WithContext(context.Background())
+
+			// Act
+			warnOnReplicaGaps(ctx, res)
+
+			// Assert
+			if tt.want == "" {
+				assert.Empty(t, logs.String())
+				return
+			}
+			assert.Contains(t, logs.String(), tt.want)
+		})
+	}
+}

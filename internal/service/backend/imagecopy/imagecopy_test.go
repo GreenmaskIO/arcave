@@ -43,7 +43,7 @@ func demoRequest() model.ImageCaptureRequest {
 	return model.ImageCaptureRequest{
 		SnapshotID: snapshotID,
 		Container: model.ContainerRef{
-			Service: "db", Replica: 1, ID: containerID,
+			Service: "db", Replica: 1, ID: containerID, Name: "demo-db-1",
 			UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
 		},
 	}
@@ -220,7 +220,7 @@ func TestCopier_Capture(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, model.ImageCapture{
-		Service: "db", Replica: 1, ContainerID: containerID,
+		Service: "db", Replica: 1, ContainerID: containerID, ContainerName: "demo-db-1",
 		CommittedImageID: imageID, UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
 		SizeBytes: 900, StoredBytes: 100,
 	}, capture)
@@ -363,7 +363,9 @@ func TestCopier_Restore_TagsWhatTheDaemonAlreadyHolds(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, "arcave/demo:sp-1", restored.ImageRef)
+	assert.Equal(t, model.ImageRestore{
+		Service: "db", Replica: 1, ContainerName: "demo-db-1", ImageID: imageID, ImageRef: "arcave/demo:sp-1",
+	}, restored, "the restore names the container the replica is rebuilt as")
 	assert.False(t, layout.loaded, "a load costs the whole archive and is not worth taking twice")
 	docker.AssertExpectations(t)
 }
@@ -474,7 +476,8 @@ func demoRestoreRequest() model.ImageRestoreRequest {
 	return model.ImageRestoreRequest{
 		SnapshotID: snapshotID,
 		Capture: model.ImageCapture{
-			Service: "db", Replica: 1, ContainerID: containerID, CommittedImageID: imageID,
+			Service: "db", Replica: 1, ContainerID: containerID, ContainerName: "demo-db-1",
+			CommittedImageID: imageID,
 		},
 		ImageRef: "arcave/demo:sp-1",
 	}
