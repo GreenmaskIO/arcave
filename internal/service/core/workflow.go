@@ -50,7 +50,7 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 	}
 
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
-	project, err := s.projectAssembler.Assemble(res)
+	project, err := s.projectAssembler.Assemble(ctx, res)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("assembling the compose spec: %w", err)
 	}

@@ -18,7 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,7 +72,7 @@ func richResult() model.IntrospectionResult {
 func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
 	// Arrange
 	assembler := NewAssembler()
-	assembled, err := assembler.Assemble(richResult())
+	assembled, err := assembler.Assemble(context.Background(), richResult())
 	require.NoError(t, err)
 
 	// Act
@@ -121,6 +123,92 @@ func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
 
 	// The artifact is a fixed point: what the loader normalises, the assembler
 	// already wrote, so a re-render of the parsed project is the same document.
+	again, err := assembler.Marshal(parsed)
+	require.NoError(t, err)
+	assert.Equal(t, string(spec), string(again))
+}
+
+// The daemon tells an empty request from none, so the artifact has to as well: an empty
+// volume: or network entry must not come back nil, nor a nil one empty.
+func TestAssembler_MarshalParse_EmptyOptions(t *testing.T) {
+	// Arrange
+	assembler := NewAssembler()
+	project := &types.Project{
+		Name: "demo",
+		Services: types.Services{"app": {
+			Name:  "app",
+			Image: "busybox",
+			Volumes: []types.ServiceVolumeConfig{
+				{Type: types.VolumeTypeVolume, Target: "/empty", Volume: &types.ServiceVolumeVolume{}},
+				{Type: types.VolumeTypeVolume, Target: "/none"},
+			},
+			Networks: map[string]*types.ServiceNetworkConfig{"front": {}, "back": nil},
+		}},
+		Networks: types.Networks{"front": {Name: "demo_front"}, "back": {Name: "demo_back"}},
+	}
+
+	// Act
+	spec, err := assembler.Marshal(project)
+	require.NoError(t, err)
+	parsed, err := assembler.Parse(context.Background(), spec)
+
+	// Assert
+	require.NoError(t, err)
+	app := parsed.Services["app"]
+	require.Len(t, app.Volumes, 2)
+	assert.Equal(t, &types.ServiceVolumeVolume{}, app.Volumes[0].Volume)
+	assert.Nil(t, app.Volumes[1].Volume)
+	assert.Equal(t, map[string]*types.ServiceNetworkConfig{"front": {}, "back": nil}, app.Networks)
+}
+
+// A service reference, a predefined network mode and a link are what compose's loader
+// validates against the services: they have to come back as written.
+func TestAssembler_MarshalParse_SharedNamespaces(t *testing.T) {
+	// Arrange
+	const dbID = "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9"
+	replica := func(id, name string, host container.HostConfig) model.Container {
+		return model.Container{ID: id, Name: name, Number: 1, Inspect: container.InspectResponse{
+			ContainerJSONBase: &container.ContainerJSONBase{ID: id, HostConfig: &host},
+			Config:            &container.Config{Image: "alpine:3"},
+		}}
+	}
+	res := model.IntrospectionResult{Project: model.Project{
+		Name: "demo",
+		Services: []model.Service{
+			{Name: "app", Containers: []model.Container{replica("app1", "demo-app-1", container.HostConfig{
+				NetworkMode: container.NetworkMode("container:" + dbID),
+				IpcMode:     container.IpcMode("container:" + dbID),
+				PidMode:     container.PidMode("container:" + dbID),
+			})}},
+			{Name: "db", Containers: []model.Container{replica(dbID, "demo-db-1", container.HostConfig{NetworkMode: "bridge"})}},
+			{Name: "backup", Containers: []model.Container{replica("backup1", "demo-backup-1", container.HostConfig{
+				NetworkMode: "default", VolumesFrom: []string{dbID, "sidecar"},
+				Links: []string{"/demo-db-1:/demo-backup-1/database", "/demo-db-1:/demo-backup-1/db-1"},
+			})}},
+		},
+	}}
+	assembler := NewAssembler()
+	assembled, err := assembler.Assemble(context.Background(), res)
+	require.NoError(t, err)
+
+	// Act
+	spec, err := assembler.Marshal(assembled)
+	require.NoError(t, err)
+	parsed, err := assembler.Parse(context.Background(), spec)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, "service:db", parsed.Services["app"].NetworkMode)
+	assert.Equal(t, "service:db", parsed.Services["app"].Ipc)
+	assert.Equal(t, "service:db", parsed.Services["app"].Pid)
+	assert.Equal(t, "bridge", parsed.Services["db"].NetworkMode)
+	assert.Equal(t, "default", parsed.Services["backup"].NetworkMode)
+	assert.Equal(t, []string{"db", "container:sidecar"}, parsed.Services["backup"].VolumesFrom)
+	assert.Equal(t, []string{"db:database"}, parsed.Services["backup"].Links)
+	for _, name := range []string{"app", "db", "backup"} {
+		assert.Equal(t, assembled.Services[name].DependsOn, parsed.Services[name].DependsOn, name)
+	}
+
 	again, err := assembler.Marshal(parsed)
 	require.NoError(t, err)
 	assert.Equal(t, string(spec), string(again))

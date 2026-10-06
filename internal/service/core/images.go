@@ -28,14 +28,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// restoredImageNamespace opens every tag a rollback puts on a restored layer, so
-// what arcave left in the daemon is one prefix away from being told apart.
-const restoredImageNamespace = "arcave"
-
-// restoredTagPrefix opens the tag half: what the repository does not say is which
-// savepoint the layer came from.
-const restoredTagPrefix = "sp-"
-
 // maxRepositoryPath is docker's own cap on a repository path, the registry domain
 // aside — RepositoryNameTotalLengthMax of github.com/distribution/reference.
 const maxRepositoryPath = 255
@@ -242,14 +234,14 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, restored []model
 // repository carries the identity and the tag the savepoint, so `docker images`
 // reads as one row per savepoint under a row per replica.
 func restoredImageRef(project string, snapshotID model.SavepointID, capture model.ImageCapture) string {
-	return restoredImageRepository(project, capture) + ":" + restoredTagPrefix + snapshotID.String()
+	return restoredImageRepository(project, capture) + ":" + model.LayerTagPrefix + snapshotID.String()
 }
 
 // restoredImageRepository builds the repository half and keeps it addressable: the
 // base image is the one segment carrying no identity, so it is what gets cut when
 // the name would pass docker's cap, and the replica is still named without it.
 func restoredImageRepository(project string, capture model.ImageCapture) string {
-	identity := restoredImageNamespace + "/" +
+	identity := model.LayerImageNamespace + "/" +
 		joinSegments(refSegment(project), refSegment(capture.Service), strconv.Itoa(capture.Replica))
 
 	base := refSegment(capture.UpstreamImageRef)

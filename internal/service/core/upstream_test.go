@@ -117,27 +117,3 @@ func TestUpstreamImages(t *testing.T) {
 		{Image: model.UpstreamImage{ID: goneID, Refs: []string{"redis:7"}}},
 	}, got)
 }
-
-func TestIsLayerRef(t *testing.T) {
-	tests := []struct {
-		ref  string
-		want bool
-	}{
-		{ref: layerRef, want: true},
-		{ref: "arcave/demo-db-1:sp-1780000001", want: true},
-		{ref: "postgres:16"},
-		{ref: "arcave/demo-db-1:latest"},
-		{ref: "arcave/demo-db-1:sp-abc"},
-		{ref: "registry:5000/arcave/x:sp-1780000001"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.ref, func(t *testing.T) {
-			// Act
-			got := isLayerRef(tt.ref)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}

@@ -230,7 +230,7 @@ func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
 // assemblerFor is demoAssembler for a test that reports its own introspection.
 func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 	assembler := &mockAssembler{}
-	assembler.On("Assemble", res).Return(demoSpec, nil)
+	assembler.On("Assemble", mock.Anything, res).Return(demoSpec, nil)
 	assembler.On("Marshal", demoSpec).Return(demoSpecBytes, nil)
 	assembler.On("Parse", mock.Anything, demoSpecBytes).Return(demoTargetSpec, nil)
 	return assembler

@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/compose-spec/compose-go/v2/format"
+	"github.com/compose-spec/compose-go/v2/types"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
@@ -44,6 +46,10 @@ import (
 // anonymousVolumeLabel is the daemon's mark on a volume it created for a container;
 // anonVolumeName is the fallback for daemons that predate it.
 const anonymousVolumeLabel = "com.docker.volume.anonymous"
+
+// desktopBindLabel opens the labels Docker Desktop stamps for each bind it rewrites to its
+// VM's own path: desktop.docker.io/binds/<n>/Source and …/Target.
+const desktopBindLabel = "desktop.docker.io/binds/"
 
 // anonVolumeName matches the name the daemon generates for an anonymous volume.
 var anonVolumeName = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -215,7 +221,7 @@ func (i *Inspector) service(
 	if err != nil {
 		return model.Service{}, err
 	}
-	mounts, err := i.serviceVolumes(ctx, replicas[0].Mounts, containers[0].Inspect, volumes)
+	mounts, err := i.serviceVolumes(ctx, replicas[0], containers[0].Inspect, volumes)
 	if err != nil {
 		return model.Service{}, err
 	}
@@ -256,23 +262,26 @@ func replicaNumber(labels map[string]string) int {
 	return n
 }
 
-// containerName takes the daemon's first name and strips the leading slash.
+// containerName is the container's own name among the daemon's: a legacy link target
+// is also listed as /<linking container>/<alias>, and that may come first.
 func containerName(names []string) string {
-	if len(names) == 0 {
-		return ""
+	for _, name := range names {
+		if own := strings.TrimPrefix(name, "/"); !strings.Contains(own, "/") {
+			return own
+		}
 	}
-	return strings.TrimPrefix(names[0], "/")
+	return ""
 }
 
 // serviceVolumes classifies one container's mounts, sorted by target. The rule must keep
 // mirroring client/docker's matchMount, or a capture and its restore address different data.
 func (i *Inspector) serviceVolumes(
-	ctx context.Context, mounts []container.MountPoint, inspect container.InspectResponse,
+	ctx context.Context, replica container.Summary, inspect container.InspectResponse,
 	index map[string]volume.Volume,
 ) ([]model.ServiceVolume, error) {
-	declared := declaredMounts(inspect)
-	volumes := make([]model.ServiceVolume, 0, len(mounts))
-	for _, m := range mounts {
+	declared := declaredMounts(inspect, replica.Labels)
+	volumes := make([]model.ServiceVolume, 0, len(replica.Mounts))
+	for _, m := range replica.Mounts {
 		v, err := i.serviceVolume(ctx, m, index)
 		if err != nil {
 			return nil, err
@@ -344,23 +353,30 @@ func (i *Inspector) volume(ctx context.Context, name string, index map[string]vo
 	return v, nil
 }
 
-// declaredMount is one mount as requested, through the mount API (api) or the bind API (flags).
+// declaredMount is one mount as requested, through the mount API (api) or the bind API (bind).
 // source is the path compose gave; Docker Desktop reports its VM's own path in .Mounts.
 type declaredMount struct {
 	api    *mount.Mount
+	bind   *types.ServiceVolumeConfig
 	source string
-	flags  []string
 }
 
 // declaredMounts indexes the container's mount requests by target; .Mounts drops their options.
-func declaredMounts(inspect container.InspectResponse) map[string]declaredMount {
+// labels are the container's as listed: Docker Desktop's own show there, not in the inspect.
+func declaredMounts(inspect container.InspectResponse, labels map[string]string) map[string]declaredMount {
 	declared := map[string]declaredMount{}
 	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
 		return declared
 	}
-	for _, bind := range inspect.HostConfig.Binds {
-		if source, target, flags, ok := parseBind(bind); ok {
-			declared[target] = declaredMount{source: source, flags: flags}
+	hostSources := desktopBindSources(labels)
+	for _, entry := range inspect.HostConfig.Binds {
+		// An entry the parser refuses is still reported by .Mounts, only without options.
+		if bind, err := format.ParseVolume(entry); err == nil {
+			source := bind.Source
+			if hostSource, ok := hostSources[bind.Target]; ok {
+				source = hostSource
+			}
+			declared[bind.Target] = declaredMount{bind: &bind, source: source}
 		}
 	}
 	for idx := range inspect.HostConfig.Mounts {
@@ -370,18 +386,30 @@ func declaredMounts(inspect container.InspectResponse) map[string]declaredMount 
 	return declared
 }
 
-// parseBind splits a bind API entry, `source:target[:flags]`.
-func parseBind(bind string) (source, target string, flags []string, ok bool) {
-	parts := strings.Split(bind, ":")
-	switch {
-	case len(parts) >= 3 && strings.HasPrefix(parts[len(parts)-2], "/"):
-		return strings.Join(parts[:len(parts)-2], ":"), parts[len(parts)-2],
-			strings.Split(parts[len(parts)-1], ","), true
-	case len(parts) >= 2:
-		return strings.Join(parts[:len(parts)-1], ":"), parts[len(parts)-1], nil, true
-	default:
-		return "", "", nil, false
+// desktopBindSources maps a bind's target to the host path Docker Desktop recorded before
+// writing its VM's own path into the bind.
+func desktopBindSources(labels map[string]string) map[string]string {
+	sources, targets := map[string]string{}, map[string]string{}
+	for key, value := range labels {
+		rest, ok := strings.CutPrefix(key, desktopBindLabel)
+		if !ok {
+			continue
+		}
+		index, field, _ := strings.Cut(rest, "/")
+		switch field {
+		case "Source":
+			sources[index] = value
+		case "Target":
+			targets[index] = value
+		}
 	}
+	byTarget := make(map[string]string, len(targets))
+	for index, target := range targets {
+		if source, ok := sources[index]; ok {
+			byTarget[target] = source
+		}
+	}
+	return byTarget
 }
 
 // applyMountOptions fills sv's per-type options and source from the declared mount.
@@ -411,18 +439,16 @@ func applyMountOptions(sv *model.ServiceVolume, m container.MountPoint, declared
 	}
 }
 
-// volumeOptions reads nocopy, subpath and the per-mount labels; nil when none was asked for.
+// volumeOptions reads nocopy, subpath and the per-mount labels; nil when the request carried
+// none. Empty options are kept: compose sends them for every volume its file declares.
 func volumeOptions(declared declaredMount) *model.VolumeMount {
-	if slices.Contains(declared.flags, "nocopy") {
+	if declared.bind != nil && declared.bind.Volume != nil && declared.bind.Volume.NoCopy {
 		return &model.VolumeMount{NoCopy: true}
 	}
 	if declared.api == nil || declared.api.VolumeOptions == nil {
 		return nil
 	}
 	o := declared.api.VolumeOptions
-	if !o.NoCopy && o.Subpath == "" && len(o.Labels) == 0 {
-		return nil
-	}
 	return &model.VolumeMount{NoCopy: o.NoCopy, Subpath: o.Subpath, Labels: o.Labels}
 }
 
@@ -430,10 +456,8 @@ func volumeOptions(declared declaredMount) *model.VolumeMount {
 // API does so only when asked, so a bind of unknown origin is taken as the bind API's.
 func bindOptions(m container.MountPoint, declared declaredMount) *model.BindMount {
 	bind := &model.BindMount{Propagation: string(m.Propagation), CreateHostPath: true}
-	for _, flag := range declared.flags {
-		if flag == "z" || flag == "Z" {
-			bind.SELinux = flag
-		}
+	if declared.bind != nil && declared.bind.Bind != nil {
+		bind.SELinux = declared.bind.Bind.SELinux
 	}
 	if declared.api == nil {
 		return bind

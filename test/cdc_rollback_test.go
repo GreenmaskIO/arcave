@@ -411,7 +411,7 @@ func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration
 // names the project and its artifact is opaque.
 type stubAssembler struct{ project *types.Project }
 
-func (s stubAssembler) Assemble(model.IntrospectionResult) (*types.Project, error) {
+func (s stubAssembler) Assemble(context.Context, model.IntrospectionResult) (*types.Project, error) {
 	return s.project, nil
 }
 

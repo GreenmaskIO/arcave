@@ -17,6 +17,7 @@
 package composespec
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strconv"
@@ -24,24 +25,29 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
 const (
-	// dependencyCondition is the default for a dependency whose label omits one.
-	dependencyCondition = "running_or_healthy"
-	// composeLabelPrefix marks what compose stamps itself. Compose re-stamps it on
-	// create, so the spec must not declare it as the user's own.
-	composeLabelPrefix = "com.docker.compose."
-	// desktopLabelPrefix marks what Docker Desktop stamps on every container it creates;
-	// it is the daemon's, not the user's, and means nothing outside Desktop.
-	desktopLabelPrefix = "desktop.docker.io/"
 	// pullPolicyMissing keeps a vanished image loud: create must fail rather than
 	// quietly build or start something else.
 	pullPolicyMissing = "missing"
+	// pullPolicyNever guards an upstream no registry holds: a same-named image there is
+	// someone else's.
+	pullPolicyNever = "never"
 )
+
+// The options the daemon writes into a network created without enable_ipv4 or enable_ipv6,
+// recording the default it applied; a network that declared the field carries none.
+const (
+	enableIPv4Option = "com.docker.network.enable_ipv4"
+	enableIPv6Option = "com.docker.network.enable_ipv6"
+)
+
+var daemonNetworkOptions = []string{enableIPv4Option, enableIPv6Option}
 
 // predefinedNetworks are the daemon's own; a container in one is described by
 // network_mode, never by a networks: entry.
@@ -52,51 +58,87 @@ type Assembler struct{}
 
 func NewAssembler() *Assembler { return &Assembler{} }
 
+// assembly is what rendering one service reads beyond the service itself.
+type assembly struct {
+	res     model.IntrospectionResult
+	netKeys map[string]string
+	known   map[string]bool
+	// healthchecked are the services whose first replica runs a healthcheck.
+	healthchecked map[string]bool
+	// replicas maps a replica's container id to its service: compose writes a service
+	// reference as the id of the replica it resolved it to.
+	replicas map[string]string
+	// containers maps a replica's container name to its service: a link names its target by name.
+	containers map[string]string
+}
+
+func newAssembly(res model.IntrospectionResult) assembly {
+	s := assembly{
+		res:           res,
+		netKeys:       networkKeys(res.Project.Networks, res.Project.Services),
+		known:         make(map[string]bool, len(res.Project.Services)),
+		healthchecked: map[string]bool{},
+		replicas:      map[string]string{},
+		containers:    map[string]string{},
+	}
+	for _, svc := range res.Project.Services {
+		s.known[svc.Name] = true
+		if len(svc.Containers) > 0 && hasHealthCheck(svc.Containers[0].Inspect.Config) {
+			s.healthchecked[svc.Name] = true
+		}
+		for _, c := range svc.Containers {
+			if c.ID != "" {
+				s.replicas[c.ID] = svc.Name
+			}
+			if c.Name != "" {
+				s.containers[strings.TrimPrefix(c.Name, "/")] = svc.Name
+			}
+		}
+	}
+	return s
+}
+
 // Assemble builds the compose spec of the introspected compose project.
-func (a *Assembler) Assemble(res model.IntrospectionResult) (*types.Project, error) {
+func (a *Assembler) Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error) {
 	if len(res.Project.Services) == 0 {
 		return nil, fmt.Errorf("compose project %q has no services to act on", res.Project.Name)
 	}
 
-	keys := networkKeys(res.Project.Networks, res.Project.Services)
+	s := newAssembly(res)
 	workingDir, files := projectOrigin(res.Project.Services)
 	return &types.Project{
 		Name:         res.Project.Name,
 		WorkingDir:   workingDir,
 		ComposeFiles: files,
-		Services:     services(res.Project.Services, keys),
+		Services:     s.services(ctx),
 		Volumes:      volumes(res.Project.Volumes),
-		Networks:     networks(res.Project.Networks, keys, staticAddressNetworks(res.Project.Services)),
+		Networks:     networks(res.Project.Networks, s.netKeys, staticAddressNetworks(res.Project.Services)),
 	}, nil
 }
 
 // services renders one ServiceConfig per introspected service.
-func services(introspected []model.Service, netKeys map[string]string) types.Services {
-	known := make(map[string]bool, len(introspected))
-	for _, svc := range introspected {
-		known[svc.Name] = true
-	}
-
-	services := make(types.Services, len(introspected))
-	for _, svc := range introspected {
-		services[svc.Name] = serviceConfig(svc, netKeys, known)
+func (s assembly) services(ctx context.Context) types.Services {
+	services := make(types.Services, len(s.res.Project.Services))
+	for _, svc := range s.res.Project.Services {
+		services[svc.Name] = s.serviceConfig(svc)
+		s.warnOnDivergentReplicas(ctx, svc, services[svc.Name])
 	}
 	return services
 }
 
 // dependsOn parses compose's `service:condition:restart` dependency label. A dependency the
 // compose project no longer holds is dropped, so every one kept exists and is required, as compose's default.
-func dependsOn(label string, known map[string]bool) types.DependsOnConfig {
+func (s assembly) dependsOn(label string) types.DependsOnConfig {
 	if label == "" {
 		return nil
 	}
 	depends := types.DependsOnConfig{}
 	for _, entry := range strings.Split(label, ",") {
 		parts := strings.Split(entry, ":")
-		if !known[parts[0]] {
+		if !s.known[parts[0]] {
 			continue
 		}
-		dependency := types.ServiceDependency{Condition: dependencyCondition, Restart: true, Required: true}
+		dependency := types.ServiceDependency{Condition: s.defaultCondition(parts[0]), Restart: true, Required: true}
 		if len(parts) > 1 {
 			dependency.Condition = parts[1]
 		}
@@ -112,6 +154,21 @@ func dependsOn(label string, known map[string]bool) types.DependsOnConfig {
 		return nil
 	}
 	return depends
+}
+
+// defaultCondition is the condition of a dependency whose label names none. compose reads it as
+// "healthy if the service has a healthcheck, else running", which no compose file can spell.
+func (s assembly) defaultCondition(service string) string {
+	if s.healthchecked[service] {
+		return types.ServiceConditionHealthy
+	}
+	return types.ServiceConditionStarted
+}
+
+// hasHealthCheck reports a healthcheck the container runs; NONE is compose's disable.
+func hasHealthCheck(config *container.Config) bool {
+	return config != nil && config.Healthcheck != nil && len(config.Healthcheck.Test) > 0 &&
+		config.Healthcheck.Test[0] != "NONE"
 }
 
 // volumes renders the volumes: section. Name is always explicit: it is the docker
@@ -134,24 +191,22 @@ func volumes(introspected []model.NamedVolume) types.Volumes {
 	return volumes
 }
 
-// networks renders the networks: section, the foreign ones keyed by docker name
-// and marked external — the introspector sees only what carries the project label.
-// networks renders the networks: section. A network's address pools are declared only where
-// a container holds a static address in it; elsewhere the daemon picks a free range again.
+// networks renders the networks: section, foreign ones keyed by docker name and external.
+// Address pools are declared only where a container holds a static address.
 func networks(introspected []model.Network, keys map[string]string, static map[string]bool) types.Networks {
 	owned := make(map[string]bool, len(introspected))
 	networks := make(types.Networks, len(keys))
 	for _, n := range introspected {
 		owned[n.Key] = true
-		enableIPv6 := n.Inspect.EnableIPv6
 		networks[n.Key] = types.NetworkConfig{
 			Name:       n.Name,
 			Driver:     n.Inspect.Driver,
-			DriverOpts: n.Inspect.Options,
+			DriverOpts: networkOptions(n.Inspect.Options),
 			Ipam:       ipam(n.Inspect.IPAM, static[n.Name]),
 			Internal:   n.Inspect.Internal,
 			Attachable: n.Inspect.Attachable,
-			EnableIPv6: &enableIPv6,
+			EnableIPv4: declaredIPFamily(n.Inspect.Options, enableIPv4Option, n.Inspect.EnableIPv4),
+			EnableIPv6: declaredIPFamily(n.Inspect.Options, enableIPv6Option, n.Inspect.EnableIPv6),
 			Labels:     userLabels(n.Inspect.Labels),
 		}
 	}
@@ -161,6 +216,28 @@ func networks(introspected []model.Network, keys map[string]string, static map[s
 		}
 	}
 	return networks
+}
+
+// networkOptions drops the options the daemon writes itself; nil when nothing is left.
+func networkOptions(options map[string]string) types.Options {
+	kept := types.Options{}
+	for k, v := range options {
+		if !slices.Contains(daemonNetworkOptions, k) {
+			kept[k] = v
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+// declaredIPFamily is the declared enable_ipv4 or enable_ipv6, or nil for one the daemon defaulted.
+func declaredIPFamily(options map[string]string, defaulted string, enabled bool) *bool {
+	if _, ok := options[defaulted]; ok {
+		return nil
+	}
+	return &enabled
 }
 
 // ipam carries the driver, and the pools verbatim only when withPools: a static address needs
@@ -249,12 +326,25 @@ func projectOrigin(services []model.Service) (workingDir string, files []string)
 	return workingDir, files
 }
 
-// userLabels drops what compose and Docker Desktop stamp themselves, leaving the declaration. nil when
-// nothing is left, so an empty map never renders.
+// userLabels drops what compose, Docker Desktop and arcave stamp themselves, leaving the
+// declaration. nil when nothing is left, so an empty map never renders.
 func userLabels(labels map[string]string) types.Labels {
+	const (
+		// composeLabelPrefix marks what compose stamps itself. Compose re-stamps it on
+		// create, so the spec must not declare it as the user's own.
+		composeLabelPrefix = "com.docker.compose."
+		// desktopLabelPrefix marks what Docker Desktop stamps on every container it creates;
+		// it is the daemon's, not the user's, and means nothing outside Desktop.
+		desktopLabelPrefix = "desktop.docker.io/"
+		// arcaveLabelPrefix marks what arcave stamps on a committed layer; it is the image's
+		// statement about its upstream, not the service's.
+		arcaveLabelPrefix = "io.arcave."
+	)
+
 	kept := types.Labels{}
 	for k, v := range labels {
-		if !strings.HasPrefix(k, composeLabelPrefix) && !strings.HasPrefix(k, desktopLabelPrefix) {
+		if !strings.HasPrefix(k, composeLabelPrefix) && !strings.HasPrefix(k, desktopLabelPrefix) &&
+			!strings.HasPrefix(k, arcaveLabelPrefix) {
 			kept[k] = v
 		}
 	}

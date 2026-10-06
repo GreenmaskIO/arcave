@@ -228,10 +228,18 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 				}},
 		},
 		{
-			name:  "empty volume options are no options",
+			name:  "empty volume options are kept",
 			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
 			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
 				Target: "/data", VolumeOptions: &mount.VolumeOptions{}}}},
+			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
+				Target: "/data", VolumeName: ownedName, Volume: &model.VolumeMount{}},
+		},
+		{
+			name:  "a volume requested without options has none",
+			mount: mountPoint(mount.TypeVolume, ownedName, "", "/data", false),
+			host: container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: ownedName,
+				Target: "/data"}}},
 			want: model.ServiceVolume{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
 				Target: "/data", VolumeName: ownedName},
 		},
@@ -315,6 +323,35 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 			daemon.AssertExpectations(t)
 		})
 	}
+}
+
+func TestInspector_Introspect_DesktopBindSource(t *testing.T) {
+	// Arrange
+	bind := mountPoint(mount.TypeBind, "", "/host_mnt/private/var/conf", "/conf", true)
+	inspect := inspected("c-db-1", testImageID.String(), bind)
+	inspect.HostConfig = &container.HostConfig{Binds: []string{"/host_mnt/private/var/conf:/conf:ro"}}
+	listed := summary("c-db-1", "db", "busybox", 1, bind)
+	// Docker Desktop shows its labels in the container list only.
+	listed.Labels["desktop.docker.io/binds/0/Source"] = "/var/conf"
+	listed.Labels["desktop.docker.io/binds/0/SourceKind"] = "hostFile"
+	listed.Labels["desktop.docker.io/binds/0/Target"] = "/conf"
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(listed)
+	daemon.expectInspected(inspect)
+	daemon.expectVolumes()
+	daemon.expectNetworks()
+	daemon.expectImage(testImageID, nil)
+	daemon.expectInfo()
+
+	// Act
+	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []model.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/var/conf",
+		Target: "/conf", ReadOnly: true, Bind: &model.BindMount{CreateHostPath: true}}},
+		got.Project.Services[0].Volumes)
+	daemon.AssertExpectations(t)
 }
 
 func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
@@ -836,4 +873,30 @@ func (m *mockDockerAPI) ImageInspect(
 func (m *mockDockerAPI) Info(ctx context.Context) (system.Info, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(system.Info), args.Error(1)
+}
+
+func TestContainerName(t *testing.T) {
+	tests := []struct {
+		name  string
+		names []string
+		want  string
+	}{
+		{name: "none", names: nil, want: ""},
+		{name: "the own name", names: []string{"/demo-db-1"}, want: "demo-db-1"},
+		{
+			name:  "a legacy link target lists the link paths first",
+			names: []string{"/demo-app-1/demo-db-1", "/demo-app-1/database", "/demo-db-1"},
+			want:  "demo-db-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := containerName(tt.names)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

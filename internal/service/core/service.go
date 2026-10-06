@@ -48,7 +48,7 @@ type composeIntrospector interface {
 // projectAssembler materialises the spec the runner acts on — out of a live
 // compose project, or out of the artifact a savepoint committed.
 type projectAssembler interface {
-	Assemble(res model.IntrospectionResult) (*types.Project, error)
+	Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error)
 	Marshal(project *types.Project) ([]byte, error)
 	Parse(ctx context.Context, spec []byte) (*types.Project, error)
 }

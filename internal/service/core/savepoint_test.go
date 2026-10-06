@@ -259,7 +259,7 @@ func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheComposeProjectRunnin
 	locker := &mockLocker{}
 	expectLock(locker)
 	assembler := &mockAssembler{}
-	assembler.On("Assemble", demoIntrospection()).Return(nil, assembleErr).Once()
+	assembler.On("Assemble", mock.Anything, demoIntrospection()).Return(nil, assembleErr).Once()
 	runner := &mockComposeRunner{}
 
 	svc := New(Deps{
