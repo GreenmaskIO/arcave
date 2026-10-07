@@ -82,7 +82,7 @@ The savepoint record, as JSON on stdout.
 | `id` | The Unix second the capture started, in decimal digits. What `rollback` and `savepoint remove` take. |
 | `name`, `description` | What you passed, or empty strings. |
 | `created_at` | RFC3339Nano. |
-| `stats` | One entry per captured volume, keyed by `volume.object_id` — the grammar is in [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `copy` or `cdc`. `payload` is the backend's own bookkeeping. |
+| `stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `copy` or `cdc`. `payload` is the backend's own bookkeeping. |
 | `images` | One entry per container whose writable layer was committed. `size_bytes` is the layer's own size; `stored_bytes` is what it added to the store after deduplication. |
 | `spec` | The compose spec committed beside the record. `format` is always `compose-yaml`. |
 | `labels` | Present only on a [safety snapshot](savepoint_list.md#safety-snapshots-are-hidden). |
@@ -95,7 +95,7 @@ Full shapes for every command are in [Output](../output.md).
 |---|---|
 | The project is not in the Docker daemon | `no containers found for compose project "myapp": bring the compose project up once, or name another project with -p` |
 | A declared named volume the daemon does not hold | `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`. An error, never a skip: an empty capture would silently replace live data at the next rollback. |
-| An anonymous volume whose container is gone | `no container for service "app" in project "myapp" mounts "/data" (is the project created?)` |
+| An anonymous volume whose container is gone | `no container for service "app" replica 1 in project "myapp" mounts "/data" (is the project created?)` |
 | The project has no volume to capture | `no stateful volumes found; nothing to capture` |
 | Two volumes render one object id | `two volumes address the same object id: service "app" at "/var/lib" and service "app-var" at "/lib" both address "volume-service-app-var-lib"; rename one of them` |
 | The savepoint directory already holds objects | `capture directory is not empty: 1780335122 holds 3 object(s) — a savepoint of this same second, or an interrupted run's remains; retry, and check what is there before removing it` |

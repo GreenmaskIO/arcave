@@ -106,9 +106,9 @@ The project declares a named volume the daemon does not hold. arcave treats that
 docker compose up -d
 ```
 
-## `no container for service "app" in project "myapp" mounts "/data" (is the project created?)`
+## `no container for service "app" replica 1 in project "myapp" mounts "/data" (is the project created?)`
 
-An anonymous volume can only be reached through the container that owns it, and that container is gone.
+An anonymous volume belongs to one replica and can only be reached through its container, and that container is gone.
 
 ```shell
 docker compose up -d

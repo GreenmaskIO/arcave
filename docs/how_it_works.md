@@ -75,7 +75,8 @@ Layer captures are deduplicated: the base layer every savepoint shares is stored
 The unit of backup is the **volume**, not the mount:
 
 * **Every named volume the daemon reports for the project** — including ones no service mounts, and including `external: true` volumes that some service does mount.
-* **Every bind mount and every anonymous volume**, one unit per service and target.
+* **Every bind mount**, one unit per service and target.
+* **Every anonymous volume**, one unit per replica: each replica has its own.
 * A named volume that three services mount is **one** unit, captured once.
 
 Mounts that are not persistent data are skipped, and each skip is reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
@@ -122,7 +123,7 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
 
 ## What a rollback restores
 
-A rollback restores **the project the savepoint recorded**, not the one that is running. A service added since is gone. One removed comes back. A changed image, port, environment variable or healthcheck goes back to what it was. That is why `project.yaml` is committed beside the record: it is what the project is rebuilt from.
+A rollback restores **the project the savepoint recorded**, not the one that is running. A service added since is gone. One removed comes back. A changed image, port, environment variable or healthcheck goes back to what it was. That is why `project.yaml` is committed beside the record: it is what the project is rebuilt from. Replicas come back under the numbers they had, gaps included. A few compose settings do not survive this — see [Limitations](reference/limitations.md#some-compose-settings-do-not-survive-a-rollback).
 
 ```text title="arcave rollback before-migration"
  1.  Claim the project lock

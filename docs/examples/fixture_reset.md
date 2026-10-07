@@ -48,7 +48,7 @@ arcave savepoint create clean --description "seeded baseline — do not delete"
   "stats": [
     { "volume": { "object_id": "volume-named-arcave-demo_pgdata",    "type": "named", "backend": "copy" }, "type": "copy" },
     { "volume": { "object_id": "volume-named-arcave-demo_miniodata", "type": "named", "backend": "copy" }, "type": "copy" },
-    { "volume": { "object_id": "volume-service-redis-data",         "type": "anon",  "backend": "copy" }, "type": "copy" }
+    { "volume": { "object_id": "volume-anon-redis-1-data",          "type": "anon",  "backend": "copy" }, "type": "copy" }
   ],
   "spec": { "format": "compose-yaml" }
 }

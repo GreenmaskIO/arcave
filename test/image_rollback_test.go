@@ -33,6 +33,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,6 +157,7 @@ type imageRollbackEnv struct {
 	compose   *composeclient.Client
 	inspector *introspect.Inspector
 	daemon    *client.Client
+	store     storages.Storager
 	project   string
 }
 
@@ -215,6 +217,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		compose:   runner,
 		inspector: inspector,
 		daemon:    daemonAPI,
+		store:     store,
 		project:   project,
 	}
 	t.Cleanup(func() {

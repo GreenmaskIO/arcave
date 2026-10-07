@@ -1,6 +1,6 @@
 ---
 title: Storage layout
-description: Where arcave writes — the store root and its segments, the object-id grammar a volume is keyed by, a savepoint's own directory, and the blobs savepoints share.
+description: Where arcave writes — the store root and its segments, a savepoint's own directory, how a volume is named, and the blobs savepoints share.
 keywords: [arcave storage layout, store root, object id, savepoint directory, deduplication, restic]
 ---
 
@@ -50,22 +50,7 @@ A savepoint id is a run of decimal digits — the Unix second the capture starte
 
 ## Object ids
 
-Every volume a savepoint covers is keyed by an **object id**: one path segment, and the same string in the record's `stats[].volume.object_id`, in the store, and in a cdc repository's name.
-
-| Volume | Id | Example |
-|---|---|---|
-| Named | `volume-named-<docker volume name>` | `volume-named-myapp_pgdata` |
-| Bind or anonymous | `volume-service-<service>-<mount path>`, the path's leading `/` dropped and its remaining `/` turned into `-` | `volume-service-app-var-lib-data` |
-
-Both open with `volume-`, so no volume can collide with the reserved `images`, `shared` or `restic` keys. The second word says how the volume is addressed, which keeps the identity spaces apart: a volume called `db` and a service called `db` do not produce the same id.
-
-A named volume is keyed by its **docker** name, not its key in the compose file — `pgdata` in project `myapp` is `myapp_pgdata`, and an `external: true` volume keeps whatever name it was given. That is also why renaming a volume produces a new identity, deliberately: docker creates an empty volume under the new name, and an old capture must not map onto it.
-
-Because a mount path is flattened into the id, two different mounts can render the same one — `{app, /var/lib}` meets `{app-var, /lib}`. arcave refuses that rather than merging them:
-
-```text
-two volumes address the same object id: service "app" at "/var/lib" and service "app-var" at "/lib" both address "volume-service-app-var-lib"; rename one of them
-```
+Each volume in a savepoint is named by its `object_id`, in the output, in the logs and in the store. It says which volume it is: `volume-named-myapp_pgdata` is the named volume `myapp_pgdata`, and `volume-anon-redis-1-data` is the anonymous volume at `/data` of `redis` replica 1.
 
 ## Shared blobs
 

@@ -103,13 +103,13 @@ The one shape three commands are built from: `savepoint create` prints it, `save
 }
 ```
 
-`volume.object_id` is the identity the store is keyed by — the grammar is in [Storage layout](storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`, and the block of that name carries its addressing:
+`volume.object_id` is the volume's name in the store — see [Storage layout](storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`, and the block of that name carries its addressing:
 
 | `type` | Block | Fields |
 |---|---|---|
 | `named` | `named` | `volume_name`, and `used_by[]` of `{service, target, read_only, subpath}` |
 | `bind` | `bind` | `service`, `target`, `source` (the host path), `read_only` |
-| `anon` | `anon` | `service`, `target`, `read_only`, `subpath` |
+| `anon` | `anon` | `service`, `replica`, `target`, `read_only`, `subpath` |
 
 `payload` is the capturing backend's own bookkeeping, and only that backend reads it:
 

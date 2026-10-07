@@ -412,17 +412,19 @@ Blobs are shared across savepoints of one compose project, never across sessions
 The unit of backup is the **volume**, not the mount:
 
 - Every named volume of the project the daemon reports — including ones no service mounts, and including `external: true` ones that some service does mount. An external volume nothing mounts is invisible: arcave reads the running compose project, and only compose's own volumes carry the project label that would reveal it.
-- Every bind mount and every anonymous volume, one unit per service and target. A named volume three services mount is one unit, captured once.
+- Every bind mount, one unit per service and target, and every anonymous volume, one unit per replica. A named volume three services mount is one unit, captured once.
 - Mounts that are not persistent data are skipped, each reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
 
 A volume is addressed directly — a named volume by its docker name, a bind by its host path — and read and written through a throwaway container of arcave's own. The project's own containers need not be running, only to exist. The one exception is an **anonymous volume**: its docker name is created per container, so arcave has to ask the daemon through that service's container, and a create fails if it is gone. In a rollback the question is asked after the compose project has been built back, of the fresh container: the anonymous volume the teardown orphaned is not the one the data goes into, and it is removed once the restore has succeeded.
 
 Two things follow that a user with a `subpath:` mount will not expect:
 
-- A volume mounted through `subpath:` is captured **whole**. The subpath is a property of that one mount, and the daemon does not report it back at all, so arcave — which reads the running compose project — never sees one.
+- A volume mounted through `subpath:` is captured **whole**: the unit is the volume, and the subpath is a property of one mount of it.
 - **A rollback therefore restores the whole volume**, not the subdirectory the service sees. Everything else in that volume goes back to its savepoint state too.
 
 A named volume that does not exist on the daemon is an **error**, not a skip: an empty capture would silently wipe live data at the next rollback. Bring the project up once (`docker compose up`) to create the volumes it declares.
+
+What a rollback cannot bring back of a compose file is listed once, in the user docs: [Limitations](../docs/reference/limitations.md#some-compose-settings-do-not-survive-a-rollback).
 
 arcave reads the **running compose project**, not the compose files — it never opens one, and a project whose files have moved or been deleted works exactly the same. The compose project itself, though, has to exist on the daemon. `docker compose stop` is fine — stopped containers still describe the compose project, and every workflow stops the services anyway. `docker compose down` is not: it removes the containers, and with them everything arcave knows about the project. A command run against a torn-down compose project fails saying so.
 
