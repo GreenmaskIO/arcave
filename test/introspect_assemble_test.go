@@ -77,8 +77,6 @@ type fidelityCase struct {
 	afterUp func(t *testing.T, e *fidelityEnv)
 	// drift applies to R1 what pass 2 is expected to change, ahead of the comparison with R2.
 	drift func(r *model.IntrospectionResult)
-	// noWait starts the compose project without waiting for it to be healthy.
-	noWait bool
 	// knownDefect names the BACKLOG.md row a pass is known to fail on; the pass then asserts
 	// the failure, so the case turns red once the defect is fixed.
 	knownDefect map[string]string
@@ -306,10 +304,6 @@ func (e *fidelityEnv) up(t *testing.T, tc fidelityCase, project *types.Project) 
 	t.Helper()
 
 	require.NoError(t, e.runner.Create(e.ctx, project), "create")
-	if tc.noWait {
-		require.NoError(t, e.compose.Start(e.ctx, project.Name, api.StartOptions{Project: project}), "start")
-		return
-	}
 	require.NoError(t, e.runner.Start(e.ctx, project, 90*time.Second), "start")
 }
 

@@ -262,7 +262,7 @@ services:
 services:
   app: {<<: *base, scale: 1, network_mode: "container:{{project}}-outside"}
 `,
-			setup:       func(t *testing.T, e *fidelityEnv) { e.runOutsideContainer(t, "outside", "") },
+			setup: func(t *testing.T, e *fidelityEnv) { e.runOutsideContainer(t, "outside", "") },
 		},
 		{
 			name: "ipc shareable",
@@ -863,7 +863,6 @@ services:
 ` + defaultNetwork,
 		},
 		{
-			// compose's start --wait refuses a container whose healthcheck is disabled.
 			name: "healthcheck disabled",
 			compose: `
 services:
@@ -886,7 +885,6 @@ services:
     volumes: [{type: volume, target: /data}]
     healthcheck: {disable: true}
 ` + defaultNetwork,
-			noWait: true,
 			drift: func(r *model.IntrospectionResult) {
 				// The spec declares the volume the image gave, so compose now asks for it.
 				replica := &r.Project.Services[0].Containers[0].Inspect
