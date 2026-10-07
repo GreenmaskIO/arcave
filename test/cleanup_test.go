@@ -16,14 +16,55 @@ package test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 )
+
+// removeComposeProject drops everything a test left of project, images included. It goes
+// straight to the daemon: compose.Client.Down keeps volumes on purpose.
+func removeComposeProject(t *testing.T, cli *client.Client, project string) {
+	t.Helper()
+
+	ctx := context.Background()
+	byProject := filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+project))
+
+	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true, Filters: byProject})
+	if assert.NoError(t, err, "list containers of %s", project) {
+		for _, c := range containers {
+			// RemoveVolumes takes the replica's anonymous volumes with it.
+			assert.NoError(t, cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}),
+				"remove container %s", c.ID)
+		}
+	}
+	volumes, err := cli.VolumeList(ctx, volume.ListOptions{Filters: byProject})
+	if assert.NoError(t, err, "list volumes of %s", project) {
+		for _, v := range volumes.Volumes {
+			assert.NoError(t, cli.VolumeRemove(ctx, v.Name, true), "remove volume %s", v.Name)
+		}
+	}
+	removeProjectNetworks(t, cli, project)
+	images, err := cli.ImageList(ctx, image.ListOptions{All: true})
+	if assert.NoError(t, err, "list images") {
+		for _, img := range images {
+			for _, tag := range img.RepoTags {
+				// A rollback's layer tags, and the images compose built for the project.
+				if strings.HasPrefix(tag, "arcave/"+project+"-") || strings.HasPrefix(tag, project+"-") {
+					_, err := cli.ImageRemove(ctx, tag, image.RemoveOptions{PruneChildren: true})
+					assert.NoError(t, err, "remove image %s", tag)
+				}
+			}
+		}
+	}
+}
 
 // removeProjectNetworks drops the networks compose created for project. A Down called by
 // name alone removes the containers but not these, and every leaked one holds an address

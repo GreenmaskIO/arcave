@@ -37,7 +37,6 @@ import (
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
@@ -178,6 +177,9 @@ type fidelityEnv struct {
 	dir       string
 	// volumes are every volume an introspection saw: a Down leaves the anonymous ones behind.
 	volumes map[string]bool
+	// outsideContainers and outsideNetworks are what a case created beside the compose project.
+	outsideContainers []string
+	outsideNetworks   []string
 }
 
 // originExtension is where a spec carries the directory and files it was loaded from.
@@ -220,17 +222,16 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 }
 
 // cleanup removes the compose project with every network and volume it ever had.
+// cleanup removes in an order that frees each thing before it is removed: the containers
+// outside the project, the project, the outside networks, then every volume.
 func (e *fidelityEnv) cleanup(t *testing.T) {
 	ctx := context.Background()
-	assert.NoError(t, e.compose.Down(ctx, e.project, api.DownOptions{RemoveOrphans: true, Volumes: true}))
-	removeProjectNetworks(t, e.daemon, e.project)
-	volumes, err := e.daemon.VolumeList(ctx, volume.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+e.project)),
-	})
-	if assert.NoError(t, err) {
-		for _, v := range volumes.Volumes {
-			e.volumes[v.Name] = true
-		}
+	for _, id := range e.outsideContainers {
+		assert.NoError(t, e.daemon.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}), "remove container %s", id)
+	}
+	removeComposeProject(t, e.daemon, e.project)
+	for _, id := range e.outsideNetworks {
+		assert.NoError(t, e.daemon.NetworkRemove(ctx, id), "remove network %s", id)
 	}
 	for name := range e.volumes {
 		if err := e.daemon.VolumeRemove(ctx, name, true); err != nil && !cerrdefs.IsNotFound(err) {
@@ -425,9 +426,7 @@ func (e *fidelityEnv) runOutsideContainer(t *testing.T, name, network string) {
 		&container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}},
 		hostConfig, nil, nil, e.project+"-"+name)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = e.daemon.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
-	})
+	e.outsideContainers = append(e.outsideContainers, created.ID)
 	require.NoError(t, e.daemon.ContainerStart(e.ctx, created.ID, container.StartOptions{}))
 }
 
@@ -451,5 +450,5 @@ func (e *fidelityEnv) createOutsideNetwork(t *testing.T, name string) {
 
 	created, err := e.daemon.NetworkCreate(e.ctx, e.project+"-"+name, network.CreateOptions{})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = e.daemon.NetworkRemove(context.Background(), created.ID) })
+	e.outsideNetworks = append(e.outsideNetworks, created.ID)
 }

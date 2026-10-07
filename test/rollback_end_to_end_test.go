@@ -21,10 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -174,8 +171,8 @@ func TestRollback_RenumbersAroundAMissingFirstReplica(t *testing.T) {
 	}
 }
 
-// externalVolume creates a volume the compose project declares external, prepared by script,
-// and removes it, with the volumes compose made, once the project is down.
+// externalVolume creates a volume the compose project declares external, prepared by script.
+// Its cleanup takes the project down first: cleanups run newest first, and the volume is in use.
 func (e *imageRollbackEnv) externalVolume(t *testing.T, name, script string) {
 	t.Helper()
 
@@ -183,15 +180,8 @@ func (e *imageRollbackEnv) externalVolume(t *testing.T, name, script string) {
 	require.NoError(t, err)
 	busybox(t, dockerclient.NewEngine(e.daemon), name, script)
 	t.Cleanup(func() {
-		ctx := context.Background()
-		assert.NoError(t, e.compose.Down(ctx, &types.Project{Name: e.project}))
-		volumes, err := e.daemon.VolumeList(ctx, volume.ListOptions{
-			Filters: filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+e.project)),
-		})
-		require.NoError(t, err)
-		for _, v := range append(volumes.Volumes, &volume.Volume{Name: name}) {
-			assert.NoError(t, e.daemon.VolumeRemove(ctx, v.Name, true), "remove volume %s", v.Name)
-		}
+		removeComposeProject(t, e.daemon, e.project)
+		assert.NoError(t, e.daemon.VolumeRemove(context.Background(), name, true), "remove volume %s", name)
 	})
 }
 

@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
@@ -186,10 +185,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		store:   store,
 		project: project,
 	}
-	t.Cleanup(func() {
-		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
-		removeProjectNetworks(t, env.daemon, env.project)
-	})
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 

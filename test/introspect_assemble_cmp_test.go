@@ -87,7 +87,7 @@ var anonVolumeName = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var (
 	ignoredContainerFields = cmpopts.IgnoreFields(container.ContainerJSONBase{},
 		"ID", "Created", "State", "ResolvConfPath", "HostnamePath", "HostsPath", "LogPath",
-		"RestartCount", "GraphDriver")
+		"RestartCount", "GraphDriver", "ExecIDs")
 	ignoredSandboxFields = cmpopts.IgnoreFields(container.NetworkSettings{},
 		"NetworkSettingsBase.SandboxID", "NetworkSettingsBase.SandboxKey")
 	ignoredEndpointFields = cmpopts.IgnoreFields(network.EndpointSettings{},

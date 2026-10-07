@@ -215,10 +215,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		hostDir:   t.TempDir(),
 		port:      freePort(t),
 	}
-	t.Cleanup(func() {
-		env.down(t)
-		removeProjectNetworks(t, env.daemon, env.project)
-	})
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 

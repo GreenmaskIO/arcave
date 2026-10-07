@@ -20,17 +20,14 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/greenmaskio/storages"
@@ -220,11 +217,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		store:     store,
 		project:   project,
 	}
-	t.Cleanup(func() {
-		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
-		removeProjectNetworks(t, env.daemon, env.project)
-		env.removeRestoredImages(t)
-	})
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 
@@ -295,21 +288,4 @@ func (e *imageRollbackEnv) exec(t *testing.T, containerID string, cmd ...string)
 	require.NoError(t, err)
 	require.Zero(t, inspect.ExitCode, out.String())
 	return out.String()
-}
-
-// removeRestoredImages drops the tags a rollback left in the daemon; nothing
-// collects them yet, and the test must not leave them behind.
-func (e *imageRollbackEnv) removeRestoredImages(t *testing.T) {
-	t.Helper()
-
-	images, err := e.daemon.ImageList(context.Background(), image.ListOptions{All: true})
-	require.NoError(t, err)
-	for _, img := range images {
-		for _, tag := range img.RepoTags {
-			if strings.HasPrefix(tag, "arcave/"+e.project+"-") {
-				_, err := e.daemon.ImageRemove(context.Background(), tag, image.RemoveOptions{PruneChildren: true})
-				assert.NoError(t, err)
-			}
-		}
-	}
 }
