@@ -65,7 +65,7 @@ func (s assembly) baseConfig(svc model.Service) types.ServiceConfig {
 		Scale:      &scale,
 		DependsOn:  s.dependsOn(svc.Labels[api.DependenciesLabel]),
 		PullPolicy: pullPolicyMissing,
-		Volumes:    serviceVolumes(declaredVolumes(svc)),
+		Volumes:    serviceVolumes(ownVolumes(declaredVolumes(svc))),
 	}
 }
 
@@ -74,7 +74,6 @@ func (s assembly) applyReplica(cfg *types.ServiceConfig, svcName string, c model
 	s.applyContainerConfig(cfg, c.Inspect)
 	s.applyImage(cfg, c)
 	s.applyHostConfig(cfg, c.Inspect)
-	cfg.Volumes = ownVolumes(cfg.Volumes, c.Inspect)
 	cfg.Expose = unpublished(cfg.Expose, cfg.Ports)
 	applyNetworks(cfg, svcName, c.Inspect, s.netKeys)
 	s.applyLinks(cfg, c)

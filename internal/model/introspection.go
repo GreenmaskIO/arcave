@@ -119,6 +119,9 @@ type ServiceVolume struct {
 	// Replica is the number of the replica an anonymous volume belongs to; 0 for
 	// every other type, which the replicas of a service share.
 	Replica int
+	// InheritedFrom is the id of the container this mount is inherited from through
+	// volumes_from; empty for a mount the container requested itself.
+	InheritedFrom string
 
 	// At most one of these is non-nil, matching Type (Volume serves both named and
 	// anon); nil when compose declared no options of that type. Verbatim facts.

@@ -18,9 +18,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/compose-spec/compose-go/v2/format"
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/docker/api/types/container"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -121,44 +119,14 @@ func bindOptions(from *model.BindMount) *types.ServiceVolumeBind {
 
 // ownVolumes drops the mounts a container inherited through volumes_from: declared as its own,
 // they would be created afresh rather than shared.
-func ownVolumes(volumes []types.ServiceVolumeConfig, inspect container.InspectResponse) []types.ServiceVolumeConfig {
-	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil || len(inspect.HostConfig.VolumesFrom) == 0 {
-		return volumes
-	}
-	requested := requestedTargets(inspect)
-	own := make([]types.ServiceVolumeConfig, 0, len(volumes))
-	for _, v := range volumes {
-		if requested[v.Target] {
-			own = append(own, v)
+func ownVolumes(mounts []model.ServiceVolume) []model.ServiceVolume {
+	own := make([]model.ServiceVolume, 0, len(mounts))
+	for _, m := range mounts {
+		if m.InheritedFrom == "" {
+			own = append(own, m)
 		}
-	}
-	if len(own) == 0 {
-		return nil
 	}
 	return own
-}
-
-// requestedTargets are the targets the container asked to mount itself: through the mount
-// API, the bind API, its image's or its own VOLUME, or tmpfs.
-func requestedTargets(inspect container.InspectResponse) map[string]bool {
-	requested := map[string]bool{}
-	for _, m := range inspect.HostConfig.Mounts {
-		requested[m.Target] = true
-	}
-	for _, bind := range inspect.HostConfig.Binds {
-		if parsed, err := format.ParseVolume(bind); err == nil {
-			requested[parsed.Target] = true
-		}
-	}
-	for target := range inspect.HostConfig.Tmpfs {
-		requested[target] = true
-	}
-	if inspect.Config != nil {
-		for target := range inspect.Config.Volumes {
-			requested[target] = true
-		}
-	}
-	return requested
 }
 
 // tmpfsMounts renders the tmpfs: shorthand, which the daemon reports apart from the

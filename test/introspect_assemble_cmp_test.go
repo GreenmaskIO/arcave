@@ -197,6 +197,7 @@ func (n normalizer) service(svc model.Service) model.Service {
 	out.Volumes = make([]model.ServiceVolume, len(svc.Volumes))
 	for i, v := range svc.Volumes {
 		v.VolumeName = n.volumeName(v.VolumeName)
+		v.InheritedFrom = n.id(v.InheritedFrom)
 		if v.Type == model.VolumeTypeAnon {
 			v.Source = n.volumeName(v.Source)
 		}

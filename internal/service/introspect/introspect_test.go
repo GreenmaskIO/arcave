@@ -558,6 +558,90 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 	}
 }
 
+func TestInspector_Introspect_InheritedMounts(t *testing.T) {
+	const vpnID = "c-vpn"
+	anon := func(name, target string) container.MountPoint {
+		return mountPoint(mount.TypeVolume, name, "/var/lib/docker/volumes/"+name+"/_data", target, false)
+	}
+	vpnBind := mountPoint(mount.TypeBind, "", "/host/vpn", "/vpn", false)
+	withVolumesFrom := func(r container.InspectResponse, volumesFrom ...string) container.InspectResponse {
+		r.HostConfig = &container.HostConfig{VolumesFrom: volumesFrom}
+		return r
+	}
+	vpn := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"},
+		Mounts:            []container.MountPoint{vpnBind},
+	}
+
+	tests := []struct {
+		name    string
+		app     container.InspectResponse
+		foreign bool              // app refers to vpn, which the daemon is asked for
+		want    map[string]string // target -> InheritedFrom, app's mounts
+	}{
+		{
+			name: "a mount of a replica of the project",
+			app:  withVolumesFrom(inspected("c-app-1", testImageID.String(), anon("anon-d", "/data"), anon("anon-a", "/cache")), "c-data-1"),
+			want: map[string]string{"/cache": "", "/data": "c-data-1"},
+		},
+		{
+			name:    "a mount of a container outside the project",
+			app:     withVolumesFrom(inspected("c-app-1", testImageID.String(), vpnBind, anon("anon-a", "/cache")), "vpn:ro"),
+			want:    map[string]string{"/cache": "", "/vpn": vpnID},
+			foreign: true,
+		},
+		{
+			name: "the container's own mount at a target its source also mounts",
+			app:  withVolumesFrom(inspected("c-app-1", testImageID.String(), anon("anon-a", "/data")), "c-data-1"),
+			want: map[string]string{"/data": ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			data := inspected("c-data-1", testImageID.String(), anon("anon-d", "/data"))
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(
+				summary("c-app-1", "app", "busybox", 1, tt.app.Mounts...),
+				summary("c-data-1", "data", "busybox", 1, data.Mounts...),
+			)
+			daemon.expectInspected(tt.app, data)
+			if tt.foreign {
+				daemon.On("ContainerInspect", mock.Anything, "vpn").Return(vpn, nil).Once()
+			}
+			daemon.expectVolumes()
+			var names []string
+			for _, m := range append(slices.Clone(tt.app.Mounts), data.Mounts...) {
+				if m.Type == mount.TypeVolume && !slices.Contains(names, m.Name) {
+					names = append(names, m.Name)
+					daemon.On("VolumeInspect", mock.Anything, m.Name).
+						Return(volume.Volume{Name: m.Name, Labels: map[string]string{anonymousVolumeLabel: ""}}, nil).Once()
+				}
+			}
+			daemon.expectNetworks()
+			daemon.expectImage(testImageID, nil)
+			daemon.expectInfo()
+
+			// Act
+			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			require.Len(t, got.Project.Services, 2)
+			inherited := map[string]string{}
+			for _, v := range got.Project.Services[0].Volumes {
+				inherited[v.Target] = v.InheritedFrom
+			}
+			assert.Equal(t, tt.want, inherited)
+			for _, v := range got.Project.Services[1].Volumes {
+				assert.Empty(t, v.InheritedFrom, "the source's own mount is not inherited")
+			}
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
 func TestUndeclaredMounts(t *testing.T) {
 	anon := func(target string) model.ServiceVolume {
 		return model.ServiceVolume{Type: model.VolumeTypeAnon, Target: target}

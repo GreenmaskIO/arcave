@@ -22,7 +22,6 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/go-connections/nat"
@@ -699,31 +698,17 @@ func TestServiceConfig_NetworkAttachment(t *testing.T) {
 
 func TestServiceConfig_VolumesFrom(t *testing.T) {
 	tests := []struct {
-		name        string
-		volumesFrom []string
-		host        container.HostConfig
-		config      container.Config
-		want        []string
+		name          string
+		inheritedFrom string
+		want          []string
 	}{
 		{
-			name:        "a mount inherited through volumes_from is not the service's own",
-			volumesFrom: []string{"db-id"},
-			want:        nil,
+			name:          "a mount inherited through volumes_from is not the service's own",
+			inheritedFrom: "db-id",
+			want:          nil,
 		},
 		{
-			name:        "a mount the container asked for itself stays",
-			volumesFrom: []string{"db-id"},
-			host:        container.HostConfig{Mounts: []mount.Mount{{Type: mount.TypeVolume, Target: "/cache"}}},
-			want:        []string{"/cache"},
-		},
-		{
-			name:        "an image VOLUME stays",
-			volumesFrom: []string{"db-id"},
-			config:      container.Config{Volumes: map[string]struct{}{"/cache": {}}},
-			want:        []string{"/cache"},
-		},
-		{
-			name: "without volumes_from every mount is the service's own",
+			name: "a mount the container asked for itself stays",
 			want: []string{"/cache"},
 		},
 	}
@@ -731,16 +716,20 @@ func TestServiceConfig_VolumesFrom(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			host, config := tt.host, tt.config
-			host.VolumesFrom = tt.volumesFrom
 			svc := model.Service{
-				Name:    "app",
-				Volumes: []model.ServiceVolume{{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache"}},
+				Name: "app",
+				Volumes: []model.ServiceVolume{{
+					Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1,
+					InheritedFrom: tt.inheritedFrom,
+				}},
 				Containers: []model.Container{{
-					ID: "c1",
+					ID:     "c1",
+					Number: 1,
 					Inspect: container.InspectResponse{
-						ContainerJSONBase: &container.ContainerJSONBase{ID: "c1", HostConfig: &host},
-						Config:            &config,
+						ContainerJSONBase: &container.ContainerJSONBase{
+							ID: "c1", HostConfig: &container.HostConfig{VolumesFrom: []string{"db-id"}},
+						},
+						Config: &container.Config{},
 					},
 				}},
 			}

@@ -115,6 +115,7 @@ func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("read containers compose project %q refers to: %w", i.composeProject, err)
 	}
+	markInherited(services, referenced)
 
 	info, err := i.api.Info(ctx)
 	if err != nil {
@@ -754,6 +755,67 @@ func foreignReferences(services []model.Service) []string {
 		}
 	}
 	return refs
+}
+
+// markInherited sets InheritedFrom on every mount a replica inherited through volumes_from: one its
+// source — a replica of the project or a referenced container — mounts alike at the same target.
+func markInherited(services []model.Service, referenced map[string]container.InspectResponse) {
+	sources := map[string]container.InspectResponse{}
+	for _, svc := range services {
+		for _, c := range svc.Containers {
+			sources[c.ID], sources[c.Name] = c.Inspect, c.Inspect
+		}
+	}
+	for id, inspect := range referenced {
+		sources[id], sources[strings.TrimPrefix(inspect.Name, "/")] = inspect, inspect
+	}
+	for s := range services {
+		svc := &services[s]
+		for v := range svc.Volumes {
+			if c, ok := mountingReplica(*svc, svc.Volumes[v]); ok {
+				svc.Volumes[v].InheritedFrom = inheritedFrom(c.Inspect, svc.Volumes[v].Target, sources)
+			}
+		}
+	}
+}
+
+// mountingReplica is the replica a reported mount was read off: its own for an anonymous
+// volume, the first otherwise.
+func mountingReplica(svc model.Service, sv model.ServiceVolume) (model.Container, bool) {
+	if sv.Type != model.VolumeTypeAnon {
+		if len(svc.Containers) == 0 {
+			return model.Container{}, false
+		}
+		return svc.Containers[0], true
+	}
+	at := slices.IndexFunc(svc.Containers, func(c model.Container) bool { return c.Number == sv.Replica })
+	if at < 0 {
+		return model.Container{}, false
+	}
+	return svc.Containers[at], true
+}
+
+// inheritedFrom is the id of the volumes_from source mounting the same data at target as the
+// container does; empty when none does.
+func inheritedFrom(inspect container.InspectResponse, target string, sources map[string]container.InspectResponse) string {
+	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+		return ""
+	}
+	at := slices.IndexFunc(inspect.Mounts, func(m container.MountPoint) bool { return m.Destination == target })
+	if at < 0 {
+		return ""
+	}
+	own := inspect.Mounts[at]
+	for _, entry := range inspect.HostConfig.VolumesFrom {
+		ref, _, _ := strings.Cut(entry, ":")
+		source, ok := sources[ref]
+		if ok && source.ContainerJSONBase != nil && slices.ContainsFunc(source.Mounts, func(m container.MountPoint) bool {
+			return m.Type == own.Type && m.Name == own.Name && m.Source == own.Source && m.Destination == own.Destination
+		}) {
+			return source.ID
+		}
+	}
+	return ""
 }
 
 // namedVolumes lists the volumes compose owns, an unmounted one included, plus the external

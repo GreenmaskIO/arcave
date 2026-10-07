@@ -116,6 +116,41 @@ func TestFindBackupVolumes(t *testing.T) {
 			},
 		},
 		{
+			name: "a mount inherited through volumes_from is its source's unit, or none from outside the project",
+			project: model.Project{
+				Name: "demo",
+				Services: []model.Service{
+					{
+						Name: "app",
+						Volumes: []model.ServiceVolume{
+							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1, InheritedFrom: "c-data-1"},
+							{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/vpn", Target: "/vpn", InheritedFrom: "c-vpn"},
+						},
+						Containers: []model.Container{{ID: "c-app-1", Number: 1}},
+					},
+					{
+						Name: "data",
+						Volumes: []model.ServiceVolume{
+							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1},
+						},
+						Containers: []model.Container{{ID: "c-data-1", Number: 1}},
+					},
+				},
+			},
+			want: []model.Volume{
+				{
+					ObjectID:       "volume-anon-data-1-data",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeAnon,
+					Backend:        model.SnapshotBackendCopy,
+					Anon:           &model.VolumePropertiesAnon{Service: "data", Replica: 1, Target: "/data"},
+				},
+			},
+			wantSkipped: []model.SkippedVolume{
+				{Service: "app", Target: "/vpn", RawType: "bind", Reason: "inherited from a container outside the project"},
+			},
+		},
+		{
 			name: "every mount of a shared volume travels with the one unit",
 			project: model.Project{
 				Name: "demo",

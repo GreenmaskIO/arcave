@@ -64,8 +64,8 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, res model.Introspect
 // renders them as it likes.
 //
 // Today it applies the defaults only: every named volume and every bind or
-// anonymous mount, all on backend, deduplicated by ObjectID. The one place
-// ComposeProject is stamped.
+// anonymous mount not inherited through volumes_from, all on backend,
+// deduplicated by ObjectID. The one place ComposeProject is stamped.
 //
 // It is also where an ObjectID collision is caught: this is the only level that
 // sees every volume of the project, so two identities rendering one id are
@@ -76,6 +76,9 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, res model.Introspect
 func FindBackupVolumes(
 	res model.IntrospectionResult, backend model.SnapshotBackendKind,
 ) ([]model.Volume, []model.SkippedVolume, error) {
+	// inheritedSkipReason skips a mount inherited from a container the project does not stop or capture.
+	const inheritedSkipReason = "inherited from a container outside the project"
+
 	var (
 		volumes []model.Volume
 		skipped []model.SkippedVolume
@@ -104,13 +107,27 @@ func FindBackupVolumes(
 		})
 	}
 
-	// Bind and anonymous mounts belong to the service that declares them.
+	// Bind and anonymous mounts belong to the service that declares them; one inherited
+	// through volumes_from belongs to its source.
+	inProject := projectContainers(res.Project.Services)
 	for _, svc := range res.Project.Services {
 		for _, sv := range svc.Volumes {
-			switch sv.Type {
-			case model.VolumeTypeNamed:
+			if sv.Type == model.VolumeTypeNamed {
 				// Only a reference to the unit already taken above.
 				continue
+			}
+			if sv.InheritedFrom != "" {
+				if !inProject[sv.InheritedFrom] {
+					skipped = append(skipped, model.SkippedVolume{
+						Service: svc.Name,
+						Target:  sv.Target,
+						RawType: sv.RawType,
+						Reason:  inheritedSkipReason,
+					})
+				}
+				continue
+			}
+			switch sv.Type {
 			case model.VolumeTypeBind, model.VolumeTypeAnon:
 				// A unit of its own.
 			default:
@@ -144,6 +161,17 @@ func FindBackupVolumes(
 	}
 
 	return volumes, skipped, nil
+}
+
+// projectContainers are the ids of the project's replicas.
+func projectContainers(services []model.Service) map[string]bool {
+	ids := map[string]bool{}
+	for _, svc := range services {
+		for _, c := range svc.Containers {
+			ids[c.ID] = true
+		}
+	}
+	return ids
 }
 
 // volumeIdentity is the facts an ObjectID is rendered from: docker name (named),
