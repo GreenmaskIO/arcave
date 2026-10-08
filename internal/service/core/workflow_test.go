@@ -43,7 +43,7 @@ func TestService_prepare(t *testing.T) {
 		codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil).Once(),
 	)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string{demoContainerID}, nil).Once()
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -64,12 +64,13 @@ func TestService_prepare(t *testing.T) {
 	// Act
 	ws, err := svc.prepare(ctx, 0)
 	require.NoError(t, err)
-	err = svc.stopServices(ctx, ws)
+	killed, err := svc.stopServices(ctx, ws)
 
 	// Assert
 	require.NoError(t, err)
 	assert.Same(t, demoSpec, ws.project)
 	assert.Equal(t, demoSpecBytes, ws.spec)
+	assert.Equal(t, []string{demoContainerID}, killed)
 	inspector.AssertExpectations(t)
 	assembler.AssertExpectations(t)
 	codec.AssertExpectations(t)
@@ -77,17 +78,20 @@ func TestService_prepare(t *testing.T) {
 	registry.AssertExpectations(t)
 }
 
-func TestWarnOnReplicaGaps(t *testing.T) {
+func TestReplicaGaps(t *testing.T) {
 	tests := []struct {
 		name    string
 		numbers []int
 		want    string
+		wantGap []model.ReplicaGap
 	}{
 		{name: "no gap", numbers: []int{2, 1, 3}},
 		{name: "a gap in the middle", numbers: []int{3, 1},
-			want: `"service":"db","replicas":[1,3],"missing":[2],"message":"some replicas of this service are gone`},
+			want:    `"service":"db","replicas":[1,3],"missing":[2],"message":"some replicas of this service are gone`,
+			wantGap: []model.ReplicaGap{{Service: demoService, Replicas: []int{1, 3}, Missing: []int{2}}}},
 		{name: "the first replica gone", numbers: []int{2, 3},
-			want: `"service":"db","replicas":[2,3],"missing":[1],"message":"some replicas of this service are gone`},
+			want:    `"service":"db","replicas":[2,3],"missing":[1],"message":"some replicas of this service are gone`,
+			wantGap: []model.ReplicaGap{{Service: demoService, Replicas: []int{2, 3}, Missing: []int{1}}}},
 	}
 
 	for _, tt := range tests {
@@ -103,9 +107,10 @@ func TestWarnOnReplicaGaps(t *testing.T) {
 			ctx := zerolog.New(logs).WithContext(context.Background())
 
 			// Act
-			warnOnReplicaGaps(ctx, res)
+			gaps := replicaGaps(ctx, res)
 
 			// Assert
+			assert.Equal(t, tt.wantGap, gaps)
 			if tt.want == "" {
 				assert.Empty(t, logs.String())
 				return

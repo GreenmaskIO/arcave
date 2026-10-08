@@ -83,17 +83,16 @@ func NewClient(svc dockerComposeAPI, opts Options) *Client {
 	return &Client{api: svc, opts: opts, pollInterval: waitPollInterval}
 }
 
-// Stop stops all project services and returns once the containers have exited,
-// warning of any the stop timeout ran out on and SIGKILLed.
-func (c *Client) Stop(ctx context.Context, project *types.Project) error {
+// Stop stops all project services, waits for the containers to exit, and returns
+// the ids of those the stop timeout SIGKILLed.
+func (c *Client) Stop(ctx context.Context, project *types.Project) ([]string, error) {
 	timeout := c.logStopTimeout(ctx, project, "stopping compose services")
 	running := c.runningContainers(ctx, project)
 
 	if err := c.api.Stop(ctx, project.Name, api.StopOptions{Project: project, Timeout: &timeout}); err != nil {
-		return fmt.Errorf("stop compose services: %w", err)
+		return nil, fmt.Errorf("stop compose services: %w", err)
 	}
-	c.warnKilled(ctx, project, running, timeout)
-	return nil
+	return c.killedContainers(ctx, project, running, timeout), nil
 }
 
 // Down removes the project's containers and networks. Volumes are kept: a volume
@@ -200,18 +199,21 @@ func (c *Client) runningContainers(ctx context.Context, project *types.Project) 
 	return running
 }
 
-// warnKilled warns of every container that was running and exited 137: the stop hit
-// its deadline and SIGKILLed it, so its volumes may hold a crash state.
-func (c *Client) warnKilled(ctx context.Context, project *types.Project, running map[string]bool, timeout time.Duration) {
+// killedContainers warns of and returns every container that was running and exited
+// 137: SIGKILLed at the stop deadline, its volumes may hold a crash state.
+func (c *Client) killedContainers(
+	ctx context.Context, project *types.Project, running map[string]bool, timeout time.Duration,
+) []string {
 	if len(running) == 0 {
-		return
+		return nil
 	}
 	logger := zerolog.Ctx(ctx)
 	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project, All: true})
 	if err != nil {
 		logger.Warn().Err(err).Msg("cannot list stopped containers; a killed one will not be reported")
-		return
+		return nil
 	}
+	var killed []string
 	for _, ctr := range containers {
 		// ExitCode alone: compose reads it from inspect, State from the list, which
 		// the daemon may not have caught up yet when the stop returns.
@@ -224,7 +226,9 @@ func (c *Client) warnKilled(ctx context.Context, project *types.Project, running
 		logger.Warn().Str("container", ctr.Name).Str("stop_timeout", timeout.String()).
 			Msgf("container %s did not exit within %s and was killed; its volumes may hold a crash state — "+
 				"raise compose.stop_timeout or the service's stop_grace_period", ctr.Name, timeout)
+		killed = append(killed, ctr.ID)
 	}
+	return killed
 }
 
 // stopsWithSIGKILL reports a stop_signal whose normal exit is 137.

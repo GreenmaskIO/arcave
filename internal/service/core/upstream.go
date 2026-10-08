@@ -56,6 +56,28 @@ func resolveUpstream(ctx context.Context, res model.IntrospectionResult, c model
 	return id, ref
 }
 
+// unresolvedUpstreams returns the containers whose upstream resolveUpstream could not name.
+func unresolvedUpstreams(res model.IntrospectionResult, containers []model.ContainerRef) []model.UnresolvedUpstream {
+	images := map[string]string{}
+	for _, svc := range res.Project.Services {
+		for _, c := range svc.Containers {
+			if c.Inspect.Config != nil {
+				images[c.ID] = c.Inspect.Config.Image
+			}
+		}
+	}
+	var unresolved []model.UnresolvedUpstream
+	for _, c := range containers {
+		if c.UpstreamImageID != "" {
+			continue
+		}
+		unresolved = append(unresolved, model.UnresolvedUpstream{
+			Service: c.Service, Replica: c.Replica, Container: c.Name, Image: images[c.ID],
+		})
+	}
+	return unresolved
+}
+
 // warnOnComposeImageMismatch reports a container whose image is not the one compose
 // created it from; the image is still what the capture goes by.
 func warnOnComposeImageMismatch(ctx context.Context, c model.Container, imageID model.ImageDigestID) {

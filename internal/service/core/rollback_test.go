@@ -44,7 +44,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -130,7 +130,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stopBeforeBackup := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stopBeforeBackup := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -214,7 +214,7 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	expectSafetySnapshotCommit(repo, "1780335122")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	// The rollback rebuilds the savepoint's compose project; the revert rebuilds the live one.
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
@@ -290,7 +290,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	expectSpecCommit(repo)
 	expectSafetySnapshotCommit(repo, "1780335122")
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	runner.On("Create", mock.Anything, demoSpec).Return(nil).Once()
@@ -362,7 +362,7 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 	repo, inspector, locker := demoResolution(record)
 
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
@@ -434,7 +434,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	runner.On("Create", mock.Anything, demoSpec).Return(nil).Once()
@@ -528,7 +528,7 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	captureCtx := func(args mock.Arguments) { upErrs = append(upErrs, args.Get(0).(context.Context).Err()) }
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	runner.On("Create", mock.Anything, demoSpec).Return(nil).Once()
@@ -604,7 +604,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 	expectSafetySnapshotCommit(repo, "1780335122")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil)
 	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil)
@@ -743,7 +743,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil)
 	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil)
@@ -908,7 +908,7 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 	expectLock(locker)
 
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil)
 	runner.On("Start", mock.Anything, demoTargetSpec, time.Duration(0)).Return(nil)

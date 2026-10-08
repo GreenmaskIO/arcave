@@ -16,7 +16,7 @@ Stopping is what makes the result application-consistent, and it is why arcave i
 
 ## A grace period that is too short captures a crash state, and reports success
 
-arcave captures the volumes the moment the containers are down. Every stop waits up to [`compose.stop_timeout`](configuration.md#compose), or up to the longest `stop_grace_period` a service declares when that is longer. A container that did not finish shutting down inside that bound is killed, and what its volume holds at that instant is what the savepoint carries — a state a database has to recover from on its next start. The command reports success, because from arcave's side nothing failed; the killed container is named in a warning on stderr. On a large cluster, declare the `stop_grace_period` it needs or raise the bound.
+arcave captures the volumes the moment the containers are down. Every stop waits up to [`compose.stop_timeout`](configuration.md#compose), or up to the longest `stop_grace_period` a service declares when that is longer. A container that did not finish shutting down inside that bound is killed, and what its volume holds at that instant is what the savepoint carries — a state a database has to recover from on its next start. The command reports success, because from arcave's side nothing failed; the killed container is named in a warning on stderr and in the savepoint's `not_covered.killed_containers`. On a large cluster, declare the `stop_grace_period` it needs or raise the bound.
 
 ## No point-in-time recovery
 

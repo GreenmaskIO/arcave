@@ -65,13 +65,14 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 		return model.Savepoint{}, err
 	}
 
-	if err := s.stopServices(ctx, ws); err != nil {
+	killed, err := s.stopServices(ctx, ws)
+	if err != nil {
 		return model.Savepoint{}, err
 	}
 
 	// Capture while the services are stopped. The capture error is what the caller
 	// gets; the restart on top of it is best-effort and only logged.
-	record, err := s.performSavepoint(ctx, ws, req.Name, req.Description, req.Labels)
+	record, err := s.performSavepoint(ctx, ws, killed, req.Name, req.Description, req.Labels)
 	if err != nil {
 		if err := s.startServices(ctx, ws); err != nil {
 			log.Error().Err(err).Msg("services failed to restart after capture failure")

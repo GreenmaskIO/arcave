@@ -43,7 +43,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	backend := &mockBackend{volume: vol}
 	snapshot := backend.On("Snapshot", mock.Anything, mock.Anything).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy}, nil).Once()
@@ -92,6 +92,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []model.ImageCapture{demoImageCapture()}, savepoint.Images)
 	assert.Equal(t, []model.UpstreamImage{demoUpstreamImage()}, savepoint.UpstreamImages)
+	assert.Nil(t, savepoint.NotCovered, "everything is covered")
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	inspector.AssertExpectations(t)
@@ -113,7 +114,7 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	// The services come back even though the capture failed: the capture error is
 	// what the caller gets, the restart on top of it is best-effort.
 	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
@@ -172,7 +173,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 
 	var safetySnapshotID model.SavepointID
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string{demoContainerID}, nil).Once()
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
@@ -188,7 +189,10 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	specSafety := expectSpecCommit(repo)
 	commitSafety := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.IsSafetySnapshot() && len(r.Images) == 1 && r.Images[0] == demoImageCapture() &&
-			assert.ObjectsAreEqual([]model.UpstreamImage{demoUpstreamImage()}, r.UpstreamImages)
+			assert.ObjectsAreEqual([]model.UpstreamImage{demoUpstreamImage()}, r.UpstreamImages) &&
+			assert.ObjectsAreEqual(&model.NotCovered{KilledContainers: []model.KilledContainer{
+				{Service: demoService, Replica: 1, Container: demoContainerName(1)},
+			}}, r.NotCovered)
 	})).Return(nil).Once()
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
@@ -251,7 +255,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 		SnapshotID: record.ID, Capture: demoImageCapture(), ImageRef: demoRestoredRef(1),
 	}).Return(demoImageRestore(), nil).Once()
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
@@ -334,7 +338,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	}, nil).Once()
 
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
@@ -406,7 +410,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	rebuilder := &mockContainerRebuilder{}
 
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).

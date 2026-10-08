@@ -182,8 +182,10 @@ func (m *mockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, err
 
 type mockComposeRunner struct{ mock.Mock }
 
-func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) error {
-	return m.Called(ctx, project).Error(0)
+func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) ([]string, error) {
+	args := m.Called(ctx, project)
+	killed, _ := args.Get(0).([]string)
+	return killed, args.Error(1)
 }
 
 func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) error {

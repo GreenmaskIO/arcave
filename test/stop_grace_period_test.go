@@ -66,10 +66,11 @@ func TestClient_Stop_HonoursTheDeclaredGracePeriod(t *testing.T) {
 	project := env.up(t, gracefulSpec)
 
 	// Act
-	err := env.compose.Stop(env.ctx, project)
+	killed, err := env.compose.Stop(env.ctx, project)
 
 	// Assert
 	require.NoError(t, err)
+	assert.Empty(t, killed)
 	inspect, err := env.daemon.ContainerInspect(env.ctx, env.project+"-db-1")
 	require.NoError(t, err)
 	assert.Equal(t, 0, inspect.State.ExitCode, "the service finished its shutdown")
@@ -83,12 +84,13 @@ func TestClient_Stop_WarnsOfAKilledContainer(t *testing.T) {
 	project := env.up(t, stubbornSpec)
 
 	// Act
-	err := env.compose.Stop(env.ctx, project)
+	killed, err := env.compose.Stop(env.ctx, project)
 
 	// Assert
 	require.NoError(t, err, "a killed container is warned of, not failed on")
 	inspect, err := env.daemon.ContainerInspect(env.ctx, env.project+"-db-1")
 	require.NoError(t, err)
+	assert.Equal(t, []string{inspect.ID}, killed)
 	assert.Equal(t, 137, inspect.State.ExitCode)
 	assert.Contains(t, env.logs.String(), fmt.Sprintf("container %s-db-1 did not exit within 1s and was killed", env.project))
 }

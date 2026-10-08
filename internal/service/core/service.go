@@ -60,7 +60,8 @@ type specCodec interface {
 // composeRunner is the compose project's lifecycle: stop it, tear it down, build it back
 // from a spec without starting it, start it.
 type composeRunner interface {
-	Stop(ctx context.Context, project *types.Project) error
+	// Stop returns the ids of the containers its deadline killed.
+	Stop(ctx context.Context, project *types.Project) ([]string, error)
 	Down(ctx context.Context, project *types.Project) error
 	Create(ctx context.Context, project *types.Project) error
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error

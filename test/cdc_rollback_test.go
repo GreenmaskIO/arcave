@@ -394,7 +394,9 @@ type stubComposeRunner struct {
 	failNextUp error
 }
 
-func (s *stubComposeRunner) Stop(context.Context, *types.Project) error { return nil }
+func (s *stubComposeRunner) Stop(context.Context, *types.Project) ([]string, error) {
+	return nil, nil
+}
 
 func (s *stubComposeRunner) Down(context.Context, *types.Project) error { return nil }
 

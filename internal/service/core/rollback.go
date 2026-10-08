@@ -112,7 +112,8 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	}
 	target = retargetImages(target, restored)
 
-	if err := s.stopServices(ctx, ws); err != nil {
+	killed, err := s.stopServices(ctx, ws)
+	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("stop services: %w", err)
 	}
 
@@ -122,7 +123,7 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 	// hand.
 	log.Info().Msg("backing up current state")
 	safetySnapshot, err := s.performSavepoint(
-		ctx, ws, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
+		ctx, ws, killed, safetySnapshotName(record.ID), "", safetySnapshotLabels(),
 	)
 	if err != nil {
 		// Nothing was restored, so there is nothing to revert: restart best-effort and

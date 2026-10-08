@@ -79,7 +79,7 @@ The unit of backup is the **volume**, not the mount:
 * **Every anonymous volume**, one unit per replica: each replica has its own.
 * A named volume that three services mount is **one** unit, captured once.
 
-Mounts that are not persistent data are skipped, and each skip is reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
+Mounts that are not persistent data are skipped, and each skip is reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`. The savepoint's `not_covered` lists them, together with the services that have no volume and the containers the stop had to kill.
 
 A volume is addressed directly — a named volume by its Docker name, a bind mount by its host path — and read and written through a throwaway container of arcave's own. The project's containers need only *exist*; they do not need to be running.
 
