@@ -474,7 +474,9 @@ func randomSuffix(t *testing.T) string {
 	b := make([]byte, 5)
 	_, err := rand.Read(b)
 	require.NoError(t, err)
-	return hex.EncodeToString(b)
+	suffix := hex.EncodeToString(b)
+	issuedSuffixes.Store(suffix, true)
+	return suffix
 }
 
 // createVolume makes an empty named volume, removed with the test.

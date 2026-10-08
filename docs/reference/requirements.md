@@ -8,7 +8,13 @@ keywords: [arcave requirements, Docker 25, prerequisites, Linux, macOS, docker c
 
 ## Docker 25 or newer
 
-arcave captures each container's writable layer by committing it and exporting it, and it stores the export split by content — which needs the OCI layout `docker save` writes from Docker 25 onward. An older daemon exports a shape whose members carry no digest, and the first capture against one is refused rather than guessed at:
+arcave captures each container's writable layer by committing it and exporting it, and it stores the export split by content — which needs the OCI layout `docker save` writes from Docker 25 onward. An older daemon exports a shape whose members carry no digest, so `savepoint create` and `rollback` refuse it before they stop or load anything:
+
+```text
+unsupported docker daemon: the daemon is Docker 24.0.7; capturing container layers needs Docker 25 or newer
+```
+
+`savepoint list` and `savepoint remove` touch no image and keep working. A daemon whose version cannot be read (a dev build) is let through with a warning, and the capture itself still refuses an archive of the old shape:
 
 ```text
 unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape

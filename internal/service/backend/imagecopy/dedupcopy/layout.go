@@ -28,6 +28,10 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 )
 
+// MinDaemonMajor is the first Docker whose `docker save` writes the OCI layout this
+// layout splits by digest.
+const MinDaemonMajor = 25
+
 // Layout splits an archive between the blob store its captures share and each
 // capture's own metadata.
 type Layout struct {

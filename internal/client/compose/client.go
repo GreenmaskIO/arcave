@@ -213,7 +213,9 @@ func (c *Client) warnKilled(ctx context.Context, project *types.Project, running
 		return
 	}
 	for _, ctr := range containers {
-		if !running[ctr.ID] || ctr.State != container.StateExited || ctr.ExitCode != sigkillExitCode {
+		// ExitCode alone: compose reads it from inspect, State from the list, which
+		// the daemon may not have caught up yet when the stop returns.
+		if !running[ctr.ID] || ctr.ExitCode != sigkillExitCode {
 			continue
 		}
 		if service, ok := project.Services[ctr.Service]; ok && stopsWithSIGKILL(service.StopSignal) {

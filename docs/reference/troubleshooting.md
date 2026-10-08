@@ -185,13 +185,19 @@ Zero means "unset" and the default applies, so an immediate kill is spelled `1s`
 
 The project is rebuilt from the compose spec the savepoint recorded, and savepoints taken before arcave recorded one carry none. Their volume data is still on disk, but there is no supported path that puts it back. Take a fresh savepoint.
 
-## `unsupported image archive format`
+## `unsupported docker daemon` or `unsupported image archive format`
+
+```text
+unsupported docker daemon: the daemon is Docker 24.0.7; capturing container layers needs Docker 25 or newer
+```
+
+`savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on a daemon whose version arcave could not read:
 
 ```text
 unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
 ```
 
-The daemon is older than Docker 25. Upgrade it — see [Requirements](requirements.md#docker-25-or-newer).
+Either way the daemon is older than Docker 25. Upgrade it — see [Requirements](requirements.md#docker-25-or-newer).
 
 ## `two volumes address the same object id`
 

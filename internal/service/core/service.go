@@ -109,6 +109,9 @@ type Deps struct {
 	Inflight           inflightMarkers
 	Store              storages.Storager
 	DefaultBackend     model.SnapshotBackendKind
+	// MinDaemonMajor is the oldest Docker major the image backend can serve; 0
+	// requires none.
+	MinDaemonMajor int
 }
 
 // Service orchestrates arcave's savepoint workflows over one store root.
@@ -130,6 +133,7 @@ type Service struct {
 	inflightMarker          inflightMarkers
 	store                   storages.Storager
 	defaultBackend          model.SnapshotBackendKind
+	minDaemonMajor          int
 	maxConcurrentOperations int
 }
 
@@ -148,6 +152,7 @@ func New(d Deps) *Service {
 		inflightMarker:          d.Inflight,
 		store:                   d.Store,
 		defaultBackend:          d.DefaultBackend,
+		minDaemonMajor:          d.MinDaemonMajor,
 		maxConcurrentOperations: maxConcurrentOperations,
 	}
 }

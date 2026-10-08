@@ -29,9 +29,12 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
+	"github.com/docker/compose/v2/pkg/api"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -247,8 +250,28 @@ func (e *recreateEnv) up(t *testing.T, project *types.Project) {
 func (e *recreateEnv) down(t *testing.T) {
 	t.Helper()
 
+	// Down keeps volumes, so the anonymous ones it orphans are named first and dropped after.
+	byProject := filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+e.project))
+	containers, err := e.daemon.ContainerList(e.ctx, container.ListOptions{All: true, Filters: byProject})
+	require.NoError(t, err)
+
 	// By name: whatever spec built the compose project, this takes it down.
 	assert.NoError(t, e.compose.Down(e.ctx, &types.Project{Name: e.project}))
+
+	for _, c := range containers {
+		for _, m := range c.Mounts {
+			if m.Type != mount.TypeVolume {
+				continue
+			}
+			v, err := e.daemon.VolumeInspect(e.ctx, m.Name)
+			if !assert.NoError(t, err, "inspect volume %s", m.Name) {
+				continue
+			}
+			if _, anonymous := v.Labels[anonymousVolumeLabel]; anonymous {
+				assert.NoError(t, e.daemon.VolumeRemove(e.ctx, m.Name, false), "remove volume %s", m.Name)
+			}
+		}
+	}
 }
 
 // inspect reports the service's one container as the daemon holds it.

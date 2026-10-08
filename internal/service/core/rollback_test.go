@@ -71,8 +71,8 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 
 	// Twice over the one store: one backend per volume per set, and no third build.
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -161,8 +161,8 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 		downForRevert, createForRevert, restoreSafety, up, uncommitSafety, removeSafety)
 
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -240,8 +240,8 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 
 	registry := &mockRegistry{}
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -310,8 +310,8 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 
 	registry := &mockRegistry{}
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -373,8 +373,8 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 
 	registry := &mockRegistry{}
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -455,8 +455,8 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	})).Return(errors.New("revert boom")).Once()
 
 	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -555,8 +555,8 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 
 	registry := &mockRegistry{}
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -623,8 +623,8 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 
 	registry := &mockRegistry{}
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -845,8 +845,10 @@ func TestService_Rollback_RefusesASavepointWithNoSpec(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	registry := &mockRegistry{}
-	registry.On("New", mock.Anything).Return(&mockBackend{volume: demoVolume()}, nil).Once()
+	// Both sets are built: prepare runs first, then the savepoint's own.
+	registry.On("New", mock.Anything).Return(&mockBackend{volume: demoVolume()}, nil).Twice()
 	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil).Once()
 	runner := &mockComposeRunner{}
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -866,7 +868,7 @@ func TestService_Rollback_RefusesASavepointWithNoSpec(t *testing.T) {
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID)})
 
-	// Assert: nothing was introspected and nothing was stopped — both mocks close empty.
+	// Assert: nothing was stopped — the runner closes empty.
 	require.ErrorIs(t, err, model.ErrSavepointNoSpec)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -922,8 +924,8 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, anonVol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, anonVol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, anonVol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	// The docker name the mount had before the teardown: the only record of what to reap.
 	remover := &mockVolumeRemover{}

@@ -206,8 +206,8 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetyBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -276,8 +276,8 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetyBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -360,8 +360,8 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetyBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:      &mockVolumeRemover{},
@@ -424,8 +424,8 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetyBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:      &mockVolumeRemover{},
@@ -471,7 +471,7 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 	runner := &mockComposeRunner{}
 	store := newDirStore(t)
 	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, demoVolume().ObjectID)).Return(&mockBackend{volume: demoVolume()}, nil).Once()
+	registry.On("New", matchSpec(store, demoVolume().ObjectID)).Return(&mockBackend{volume: demoVolume()}, nil).Twice()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -497,6 +497,101 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 	assert.Equal(t, model.RollbackResult{}, res)
 	runner.AssertExpectations(t)
 	images.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
+func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
+	// Arrange
+	introspection := demoIntrospectionWithContainers()
+	introspection.Daemon.ServerVersion = "24.0.7"
+	locker := &mockLocker{}
+	expectLock(locker)
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
+
+	// No expectation on the assembler, the runner, the repository or the image
+	// backend: the refusal comes before any of them.
+	images := &mockImageBackend{}
+	assembler := &mockAssembler{}
+	runner := &mockComposeRunner{}
+	repo := &mockSavepointRepo{}
+	svc := New(Deps{
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assembler,
+		SpecCodec:        &mockCodec{},
+		ComposeRunner:    runner,
+		BackendRegistry:  &mockRegistry{},
+		ImageBackend:     images,
+		Inflight:         &fakeInflight{},
+		Store:            newDirStore(t),
+		DefaultBackend:   model.SnapshotBackendCopy,
+		MinDaemonMajor:   25,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{WaitTimeout: 60 * time.Second})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	assert.Equal(t, model.Savepoint{}, savepoint)
+	inspector.AssertExpectations(t)
+	images.AssertExpectations(t)
+	assembler.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	repo.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
+func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
+	// Arrange
+	record := demoRecordWithImages()
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	locker := &mockLocker{}
+	expectLock(locker)
+	introspection := demoIntrospectionWithContainers()
+	introspection.Daemon.ServerVersion = "24.0.7"
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
+	// Restore carries no expectation: the daemon is refused before any layer loads.
+	images := &mockImageBackend{}
+
+	runner := &mockComposeRunner{}
+	inflight := &fakeInflight{}
+	svc := New(Deps{
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: &mockAssembler{},
+		SpecCodec:        &mockCodec{},
+		ComposeRunner:    runner,
+		BackendRegistry:  &mockRegistry{},
+		ImageBackend:     images,
+		Inflight:         inflight,
+		Store:            newDirStore(t),
+		DefaultBackend:   model.SnapshotBackendCopy,
+		MinDaemonMajor:   25,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	res, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	assert.Equal(t, model.RollbackResult{}, res)
+	_, marked, err := inflight.Get(ctx)
+	require.NoError(t, err)
+	assert.False(t, marked)
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	images.AssertExpectations(t)
+	runner.AssertExpectations(t)
 	locker.AssertExpectations(t)
 }
 

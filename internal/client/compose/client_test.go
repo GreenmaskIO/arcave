@@ -146,6 +146,12 @@ func TestClient_Stop_warnsOfAKilledContainer(t *testing.T) {
 			wantWarn: []string{"container demo-db-1 did not exit within 25s and was killed"},
 		},
 		{
+			name:     "a killed container the list still shows running is warned of",
+			before:   running,
+			after:    []api.ContainerSummary{{ID: "c1", Name: "demo-db-1", Service: "db", State: "running", ExitCode: 137}},
+			wantWarn: []string{"container demo-db-1 did not exit within 25s and was killed"},
+		},
+		{
 			name:   "a clean exit is not warned of",
 			before: running,
 			after:  []api.ContainerSummary{exited("c1", "demo-db-1", "db", 0)},

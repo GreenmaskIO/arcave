@@ -27,15 +27,18 @@ import (
 )
 
 // The live compose project is acted on as its artifact parses back, not as the
-// assembler built it: a revert rebuilds from the same loader a rollback does.
+// assembler built it: a revert rebuilds from the same loader a rollback does. With
+// no container to commit, an old daemon is not refused.
 func TestService_prepare(t *testing.T) {
 	// Arrange
+	introspection := demoIntrospection()
+	introspection.Daemon.ServerVersion = "24.0.7"
 	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil).Once()
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	assembler := &mockAssembler{}
 	codec := &mockCodec{}
 	mock.InOrder(
-		assembler.On("Assemble", mock.Anything, demoIntrospection()).Return(demoAssembled, nil).Once(),
+		assembler.On("Assemble", mock.Anything, introspection).Return(demoAssembled, nil).Once(),
 		codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil).Once(),
 		codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil).Once(),
 	)
@@ -54,6 +57,7 @@ func TestService_prepare(t *testing.T) {
 		BackendRegistry:  registry,
 		Store:            store,
 		DefaultBackend:   model.SnapshotBackendCopy,
+		MinDaemonMajor:   25,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
