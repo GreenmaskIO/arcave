@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +39,9 @@ const (
 	defaultStartWaitTimeout = 120 * time.Second
 	defaultStopTimeout      = 10 * time.Second
 )
+
+// sigkillExitCode is the exit code of a container SIGKILLed: 128 + 9.
+const sigkillExitCode = 137
 
 // waitPollInterval is how often Start re-reads the containers it waits for; compose's own.
 const waitPollInterval = 500 * time.Millisecond
@@ -67,9 +72,8 @@ type Options struct {
 	// WaitTimeout bounds Up's health-check wait when a call names no bound of its
 	// own.
 	WaitTimeout time.Duration
-	// StopTimeout is the grace period a container gets to exit before compose
-	// SIGKILLs it. It applies to Stop, and to the stop half of any container Up
-	// recreates.
+	// StopTimeout is the least grace period before Stop and Down SIGKILL a container;
+	// a service's stop_grace_period raises it.
 	StopTimeout time.Duration
 }
 
@@ -79,21 +83,23 @@ func NewClient(svc dockerComposeAPI, opts Options) *Client {
 	return &Client{api: svc, opts: opts, pollInterval: waitPollInterval}
 }
 
-// Stop stops all project services and returns once the containers have exited.
-// Each gets the configured grace period to exit on its own before a SIGKILL.
+// Stop stops all project services and returns once the containers have exited,
+// warning of any the stop timeout ran out on and SIGKILLed.
 func (c *Client) Stop(ctx context.Context, project *types.Project) error {
-	timeout := c.stopTimeout()
-	// Str, not Dur: zerolog renders a Dur in milliseconds, and "10000" is not what
-	// a user reading a grace period wants to see.
-	zerolog.Ctx(ctx).Debug().Str("stop_timeout", timeout.String()).Msg("stopping compose services")
-	return c.api.Stop(ctx, project.Name, api.StopOptions{Project: project, Timeout: &timeout})
+	timeout := c.logStopTimeout(ctx, project, "stopping compose services")
+	running := c.runningContainers(ctx, project)
+
+	if err := c.api.Stop(ctx, project.Name, api.StopOptions{Project: project, Timeout: &timeout}); err != nil {
+		return fmt.Errorf("stop compose services: %w", err)
+	}
+	c.warnKilled(ctx, project, running, timeout)
+	return nil
 }
 
 // Down removes the project's containers and networks. Volumes are kept: a volume
 // arcave does not capture has no copy anywhere else.
 func (c *Client) Down(ctx context.Context, project *types.Project) error {
-	timeout := c.stopTimeout()
-	zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String()).Msg("removing compose containers and networks")
+	timeout := c.logStopTimeout(ctx, project, "removing compose containers and networks")
 
 	return c.api.Down(ctx, project.Name, api.DownOptions{
 		Project:       project,
@@ -141,6 +147,91 @@ func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout 
 		return err
 	}
 	return c.waitReady(ctx, project, waitTimeout)
+}
+
+// logStopTimeout resolves the stop bound for project and logs it with msg.
+func (c *Client) logStopTimeout(ctx context.Context, project *types.Project, msg string) time.Duration {
+	timeout, raisedBy := c.stopTimeoutFor(project)
+	// Str, not Dur: zerolog renders a Dur in milliseconds, and "10000" is not what
+	// a user reading a grace period wants to see.
+	event := zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String())
+	if raisedBy != "" {
+		event = event.Str("raised_by", raisedBy)
+	}
+	event.Msg(msg)
+	return timeout
+}
+
+// stopTimeoutFor is the configured grace period raised to the longest stop_grace_period
+// the project declares, and the service that raised it, if one did. It is rounded up to
+// whole seconds: compose truncates it to them, and 500ms would be no grace at all.
+func (c *Client) stopTimeoutFor(project *types.Project) (time.Duration, string) {
+	timeout, raisedBy := c.stopTimeout(), ""
+	for _, name := range slices.Sorted(maps.Keys(project.Services)) {
+		grace := project.Services[name].StopGracePeriod
+		if grace != nil && time.Duration(*grace) > timeout {
+			timeout, raisedBy = time.Duration(*grace), name
+		}
+	}
+	return (timeout + time.Second - 1).Truncate(time.Second), raisedBy
+}
+
+// stopTimeout is the configured grace period, or this package's default when the
+// Client was built without one.
+func (c *Client) stopTimeout() time.Duration {
+	if c.opts.StopTimeout <= 0 {
+		return defaultStopTimeout
+	}
+	return c.opts.StopTimeout
+}
+
+// runningContainers are the ids of the project's running containers; a failed read
+// is logged and yields none, so nothing is warned of.
+func (c *Client) runningContainers(ctx context.Context, project *types.Project) map[string]bool {
+	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project})
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("cannot list running containers; a killed one will not be reported")
+		return nil
+	}
+	running := make(map[string]bool, len(containers))
+	for _, ctr := range containers {
+		running[ctr.ID] = true
+	}
+	return running
+}
+
+// warnKilled warns of every container that was running and exited 137: the stop hit
+// its deadline and SIGKILLed it, so its volumes may hold a crash state.
+func (c *Client) warnKilled(ctx context.Context, project *types.Project, running map[string]bool, timeout time.Duration) {
+	if len(running) == 0 {
+		return
+	}
+	logger := zerolog.Ctx(ctx)
+	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project, All: true})
+	if err != nil {
+		logger.Warn().Err(err).Msg("cannot list stopped containers; a killed one will not be reported")
+		return
+	}
+	for _, ctr := range containers {
+		if !running[ctr.ID] || ctr.State != container.StateExited || ctr.ExitCode != sigkillExitCode {
+			continue
+		}
+		if service, ok := project.Services[ctr.Service]; ok && stopsWithSIGKILL(service.StopSignal) {
+			continue
+		}
+		logger.Warn().Str("container", ctr.Name).Str("stop_timeout", timeout.String()).
+			Msgf("container %s did not exit within %s and was killed; its volumes may hold a crash state — "+
+				"raise compose.stop_timeout or the service's stop_grace_period", ctr.Name, timeout)
+	}
+}
+
+// stopsWithSIGKILL reports a stop_signal whose normal exit is 137.
+func stopsWithSIGKILL(signal string) bool {
+	switch strings.TrimPrefix(strings.ToUpper(signal), "SIG") {
+	case "KILL", "9":
+		return true
+	}
+	return false
 }
 
 // withComposeLabels stamps onto a copy of the project the labels compose puts on
@@ -256,13 +347,4 @@ func (c *Client) waitTimeoutOr(waitTimeout time.Duration) time.Duration {
 		waitTimeout = defaultStartWaitTimeout
 	}
 	return waitTimeout
-}
-
-// stopTimeout is the configured grace period, or this package's default when the
-// Client was built without one.
-func (c *Client) stopTimeout() time.Duration {
-	if c.opts.StopTimeout <= 0 {
-		return defaultStopTimeout
-	}
-	return c.opts.StopTimeout
 }

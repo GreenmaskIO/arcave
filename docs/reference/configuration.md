@@ -100,7 +100,7 @@ How patient arcave is with the project, and how loudly compose reports its own p
 | Key | Flag | Default | Description |
 |---|---|---|---|
 | `compose.wait_timeout` | `--wait-timeout` | `2m0s` | How long to wait for services to become healthy after a start. |
-| `compose.stop_timeout` | `--stop-timeout` | `10s` | How long a container gets to exit on its own before it is killed. |
+| `compose.stop_timeout` | `--stop-timeout` | `10s` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |
 | `compose.progress` | `--progress` | `log` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
 
 **`wait_timeout` must be positive.** "Wait forever" is not on offer: it is exactly the failure this bound exists to turn into an error, since a crash-looping container with `restart: always` would otherwise hold a savepoint open indefinitely.
@@ -109,7 +109,7 @@ How patient arcave is with the project, and how loudly compose reports its own p
 compose.wait_timeout must be a positive duration, got -5s
 ```
 
-**`stop_timeout` matters more here than it does to `docker compose stop`.** arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown — and the command still reports success. Zero means "unset" and the default applies, so an immediate kill is spelled `1s`, not `0`. A negative value is refused:
+**`stop_timeout` matters more here than it does to `docker compose stop`.** arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown — and the command still reports success, with a warning naming the killed container. It is a floor: every stop waits up to the longest `stop_grace_period` the project's services declare, when that is longer. Zero means "unset" and the default applies, so an immediate kill is spelled `1s`, not `0`. A negative value is refused:
 
 ```text
 compose.stop_timeout must not be negative, got -1s

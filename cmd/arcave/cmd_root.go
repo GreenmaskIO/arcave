@@ -183,7 +183,7 @@ func init() {
 	pf.Duration("wait-timeout", config.DefaultWaitTimeout,
 		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
 	pf.Duration("stop-timeout", config.DefaultStopTimeout,
-		"How long a container gets to exit on its own before it is killed, e.g. 30s")
+		"The least time a container gets to exit on its own before it is killed; a service's stop_grace_period raises it, e.g. 30s")
 	pf.String("progress", config.ProgressLog,
 		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",
 			config.ProgressLog, config.ProgressTTY, config.ProgressQuiet))
