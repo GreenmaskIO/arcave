@@ -41,6 +41,45 @@ type workingSet struct {
 	// anonVolumes maps a mount's ObjectID to the docker name behind it — the only
 	// record of what a teardown orphans.
 	anonVolumes map[string]string
+	// What a capture of this set leaves out, as known before the stop.
+	skippedMounts          []model.SkippedVolume
+	servicesWithoutVolumes []string
+	replicaGaps            []model.ReplicaGap
+	unresolvedUpstreams    []model.UnresolvedUpstream
+}
+
+// notCovered is what a capture of ws leaves out, killed being the containers the
+// stop killed; nil when it leaves out nothing.
+func (ws workingSet) notCovered(killed []string) *model.NotCovered {
+	notCovered := model.NotCovered{
+		Mounts:                 ws.skippedMounts,
+		ServicesWithoutVolumes: ws.servicesWithoutVolumes,
+		KilledContainers:       ws.killedContainers(killed),
+		ReplicaGaps:            ws.replicaGaps,
+		UnresolvedUpstreams:    ws.unresolvedUpstreams,
+	}
+	if notCovered.IsEmpty() {
+		return nil
+	}
+	return &notCovered
+}
+
+// killedContainers names the replica behind each container id the stop killed.
+func (ws workingSet) killedContainers(ids []string) []model.KilledContainer {
+	var killed []model.KilledContainer
+	for _, id := range ids {
+		k := model.KilledContainer{Container: id}
+		if i := slices.IndexFunc(ws.containers, func(c model.ContainerRef) bool { return c.ID == id }); i >= 0 {
+			c := ws.containers[i]
+			k = model.KilledContainer{
+				Service:   c.Service,
+				Replica:   c.Replica,
+				Container: c.Name,
+			}
+		}
+		killed = append(killed, k)
+	}
+	return killed
 }
 
 // prepare introspects the compose project, renders its spec, parses it back and builds one
@@ -76,7 +115,7 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		return workingSet{}, fmt.Errorf("parsing the compose spec: %w", err)
 	}
 
-	volumes, err := s.resolveBackupVolumes(ctx, res)
+	volumes, notCovered, err := s.resolveBackupVolumes(ctx, res)
 	if err != nil {
 		return workingSet{}, err
 	}
@@ -89,8 +128,6 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		return workingSet{}, err
 	}
 
-	warnOnReplicaGaps(ctx, res)
-
 	return workingSet{
 		project:     project,
 		spec:        spec,
@@ -99,16 +136,23 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		containers:  containers,
 		upstreams:   upstreamImages(res, containers),
 		anonVolumes: anonymousVolumes(res),
+
+		skippedMounts:          notCovered.Mounts,
+		servicesWithoutVolumes: notCovered.ServicesWithoutVolumes,
+		replicaGaps:            replicaGaps(ctx, res),
+		unresolvedUpstreams:    unresolvedUpstreams(res, containers),
 	}, nil
 }
 
-// stopServices puts the services down.
-func (s *Service) stopServices(ctx context.Context, ws workingSet) error {
+// stopServices puts the services down and returns the containers the stop deadline
+// killed.
+func (s *Service) stopServices(ctx context.Context, ws workingSet) ([]string, error) {
 	zerolog.Ctx(ctx).Info().Msg("stopping services")
-	if err := s.composeRunner.Stop(ctx, ws.project); err != nil {
-		return fmt.Errorf("stopping services: %w", err)
+	killed, err := s.composeRunner.Stop(ctx, ws.project)
+	if err != nil {
+		return nil, fmt.Errorf("stopping services: %w", err)
 	}
-	return nil
+	return killed, nil
 }
 
 // composeDown removes the compose project's containers and networks. It goes by project
@@ -140,9 +184,9 @@ func (s *Service) startServices(ctx context.Context, ws workingSet) error {
 	return nil
 }
 
-// warnOnReplicaGaps reports each service missing a replica below its highest one:
-// only the replicas there are captured, and a rollback brings back exactly those.
-func warnOnReplicaGaps(ctx context.Context, res model.IntrospectionResult) {
+// replicaGaps warns of and returns each service missing a replica below its highest one.
+func replicaGaps(ctx context.Context, res model.IntrospectionResult) []model.ReplicaGap {
+	var gaps []model.ReplicaGap
 	for _, svc := range res.Project.Services {
 		numbers := make([]int, 0, len(svc.Containers))
 		for _, c := range svc.Containers {
@@ -156,7 +200,13 @@ func warnOnReplicaGaps(ctx context.Context, res model.IntrospectionResult) {
 		zerolog.Ctx(ctx).Warn().Str("service", svc.Name).Ints("replicas", numbers).Ints("missing", missing).
 			Msg("some replicas of this service are gone (removed, or exited and cleaned up); " +
 				"only the remaining ones are captured, and a rollback brings back exactly these, under the same names")
+		gaps = append(gaps, model.ReplicaGap{
+			Service:  svc.Name,
+			Replicas: numbers,
+			Missing:  missing,
+		})
 	}
+	return gaps
 }
 
 // missingReplicas is the numbers from 1 up to the highest of numbers that no replica holds.

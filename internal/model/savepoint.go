@@ -48,6 +48,8 @@ type Savepoint struct {
 	// Spec names the compose spec committed beside this record. A savepoint without
 	// one cannot be rolled back to: the compose project is rebuilt from the spec.
 	Spec *SpecRef `json:"spec,omitempty"`
+	// NotCovered is what this savepoint does not hold; nil when it holds everything.
+	NotCovered *NotCovered `json:"not_covered,omitempty"`
 }
 
 // SpecRef is the reference to a savepoint's compose spec artifact.

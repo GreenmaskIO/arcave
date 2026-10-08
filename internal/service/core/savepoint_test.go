@@ -39,7 +39,8 @@ import (
 
 func TestService_CreateSavepoint(t *testing.T) {
 	// Arrange
-	// One named volume and one bind mount are units; the tmpfs mount is a skip.
+	// One named volume and one bind mount are units; the tmpfs mount is a skip and
+	// web, mounting nothing, is not covered.
 	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Services: []model.Service{
@@ -57,6 +58,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 					Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata",
 				}},
 			},
+			{Name: "web"},
 		},
 		Volumes: []model.NamedVolume{{
 			Key: "pgdata", Name: "demo_pgdata",
@@ -68,7 +70,14 @@ func TestService_CreateSavepoint(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string{"c0ffee"}, nil).Once()
+	wantNotCovered := &model.NotCovered{
+		Mounts: []model.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
+			Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
+		ServicesWithoutVolumes: []string{"web"},
+		// No replica of the introspection has this id: kept by id alone.
+		KilledContainers: []model.KilledContainer{{Container: "c0ffee"}},
+	}
 
 	registry := &mockRegistry{}
 
@@ -87,7 +96,8 @@ func TestService_CreateSavepoint(t *testing.T) {
 	saveSpec := expectSpecCommit(repo).NotBefore(snapPg, snapCfg)
 	save := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil && r.Name == "before-migration" && r.Description == "trying a schema change" &&
-			r.Spec != nil && r.Spec.Format == model.SpecFormatComposeYAML
+			r.Spec != nil && r.Spec.Format == model.SpecFormatComposeYAML &&
+			assert.ObjectsAreEqual(wantNotCovered, r.NotCovered)
 	})).Return(nil).Once().NotBefore(saveSpec)
 	runner.On("Start", mock.Anything, demoSpec, 90*time.Second).Return(nil).Once().NotBefore(save)
 
@@ -135,6 +145,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 		{Volume: pgBackend.volume, Type: model.SnapshotBackendCopy, Payload: "pg-payload"},
 		{Volume: cfgBackend.volume, Type: model.SnapshotBackendCopy, Payload: "cfg-payload"},
 	}, savepoint.Stats)
+	assert.Equal(t, wantNotCovered, savepoint.NotCovered)
 
 	// Every volume captured under the one id the run created, and nothing else was
 	// asked of the backends — a create captures into the savepoint store only.
@@ -172,7 +183,7 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
 	repo := &mockSavepointRepo{}
 	expectSpecCommit(repo)
@@ -237,7 +248,7 @@ func TestService_CreateSavepoint_AnonymousVolumePerReplica(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
 	repo := &mockSavepointRepo{}
 	expectSpecCommit(repo)
@@ -298,7 +309,7 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
 	repo := &mockSavepointRepo{}
 	expectSpecCommit(repo)
@@ -430,7 +441,7 @@ func TestService_CreateSavepoint_UncommittedOnFailure(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
 	repo := &mockSavepointRepo{}
 
@@ -494,7 +505,7 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
 
 	store := newDirStore(t)
@@ -584,7 +595,7 @@ func TestService_CreateSavepoint_RefusesANonEmptyDirectory(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
 	repo := &mockSavepointRepo{}
 
@@ -652,7 +663,7 @@ func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
 	repo := &mockSavepointRepo{}
 	repo.On("SaveSpec", mock.Anything, mock.Anything, demoSpecBytes).Return(nil)
@@ -716,7 +727,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return(nil)
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
 
 	store := newDirStore(t)
@@ -776,7 +787,7 @@ func TestService_CreateSavepoint_CommittedWhenStartFails(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 
 	backend := &mockBackend{volume: vol}
 	snap := backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).

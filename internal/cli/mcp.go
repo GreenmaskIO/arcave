@@ -58,7 +58,11 @@ const (
 		"Docker Compose project. Call this before a risky change (a schema migration, a " +
 		"data transformation, a destructive experiment) so the environment can be restored " +
 		"afterwards with the rollback tool. Services are stopped for the duration of the " +
-		"snapshot and started again when it completes. If the call fails with a message of the " +
+		"snapshot and started again when it completes. The result's not_covered lists what the " +
+		"savepoint does NOT hold — skipped mounts with a reason code, services with no volume, " +
+		"containers killed at the stop deadline (their data may be crash-consistent only), replica " +
+		"gaps and containers whose upstream image is unknown — so tell the user before relying on " +
+		"it. If the call fails with a message of the " +
 		"form 'savepoint <id> committed; services failed to start', the savepoint EXISTS and is " +
 		"safe to roll back to — only the restart failed, so report that id to the user and " +
 		"investigate the compose project (the services are stopped or unhealthy), rather than taking " +

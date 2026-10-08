@@ -163,7 +163,7 @@ func TestService_Rollback_RemedyPassesTheGateAndClearsTheMarker(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { newSafetyID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -246,7 +246,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -324,7 +324,7 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -388,7 +388,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
-	stopBeforeBackup := runner.On("Stop", mock.Anything, demoSpec).Return(nil).Once()
+	stopBeforeBackup := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).

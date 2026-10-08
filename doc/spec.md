@@ -468,9 +468,34 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
   ],
   "spec": {
     "format": "compose-yaml"
+  },
+  "not_covered": {
+    "mounts": [
+      {
+        "service": "webapp",
+        "target": "/tmp/cache",
+        "raw_type": "tmpfs",
+        "reason": "tmpfs",
+        "detail": "non-persistent (tmpfs lives in RAM)"
+      }
+    ],
+    "services_without_volumes": ["proxy"],
+    "killed_containers": [{ "service": "db", "replica": 1, "container": "demo-db-1" }],
+    "replica_gaps": [{ "service": "worker", "replicas": [1, 3], "missing": [2] }],
+    "unresolved_upstreams": [{ "service": "job", "replica": 1, "container": "demo-job-1", "image": "arcave/demo-job-1-busybox:sp-1780330000" }]
   }
 }
 ```
+
+`not_covered` is what the savepoint does **not** hold, and is absent when it holds everything. It is in the record, so `savepoint list` and the MCP tools show it too:
+
+- `mounts` — the mounts the backup decision skipped. `reason` is a stable code to match on: `tmpfs`, `npipe`, `image`, `cluster`, `unknown_type`, or `inherited_from_outside` (a `volumes_from` mount of a container outside the project). `detail` is the prose, and may change.
+- `services_without_volumes` — services no captured volume belongs to; only their writable layer is held.
+- `killed_containers` — replicas the stop deadline SIGKILLed, by service, replica and container name; their volumes may hold a crash state.
+- `replica_gaps` — services missing a replica below their highest one; a rollback brings back exactly the numbers listed.
+- `unresolved_upstreams` — containers whose upstream image cannot be named; their layer is held, the image under it is not.
+
+Every entry is also logged as a warning on stderr.
 
 `images` holds what `docker commit` made of each container: its upstream plus the writable layer. `upstream_images` holds each distinct image the compose file named, once, whether or not a layer was captured over it. `stored: false` means neither the store nor the daemon had it, so only its identity is recorded.
 
@@ -709,7 +734,7 @@ Input schema:
 }
 ```
 
-Output: savepoint metadata JSON (same schema as `arcave savepoint create`).
+Output: savepoint metadata JSON (same schema as `arcave savepoint create`), `not_covered` included.
 
 ---
 

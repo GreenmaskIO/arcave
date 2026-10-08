@@ -30,38 +30,54 @@ import (
 // would share a repository and a capture directory, each overwriting the other.
 var errObjectIDCollision = errors.New("two volumes address the same object id")
 
-// skipReasons says why a mount type is not a unit of backup.
-var skipReasons = map[model.VolumeType]string{
-	model.VolumeTypeTmpfs:   "non-persistent (tmpfs lives in RAM)",
-	model.VolumeTypeNPipe:   "a named pipe is a channel, not data",
-	model.VolumeTypeImage:   "read-only image content, reproducible from the image",
-	model.VolumeTypeCluster: "CSI volume: data lives outside the docker daemon",
-	model.VolumeTypeUnknown: "unknown mount type",
+// skipReason is why a mount is not a unit of backup, as a code and as prose.
+type skipReason struct {
+	code   model.SkipReason
+	detail string
 }
 
+// skipReasons says why a mount type is not a unit of backup.
+var skipReasons = map[model.VolumeType]skipReason{
+	model.VolumeTypeTmpfs:   {model.SkipReasonTmpfs, "non-persistent (tmpfs lives in RAM)"},
+	model.VolumeTypeNPipe:   {model.SkipReasonNPipe, "a named pipe is a channel, not data"},
+	model.VolumeTypeImage:   {model.SkipReasonImage, "read-only image content, reproducible from the image"},
+	model.VolumeTypeCluster: {model.SkipReasonCluster, "CSI volume: data lives outside the docker daemon"},
+	model.VolumeTypeUnknown: {model.SkipReasonUnknownType, "unknown mount type"},
+}
+
+// inheritedSkipReason skips a mount inherited from a container the project does not stop or capture.
+var inheritedSkipReason = skipReason{model.SkipReasonInheritedFromOutside, "inherited from a container outside the project"}
+
 // resolveBackupVolumes returns the units a savepoint of the introspected compose project
-// covers. Every workflow comes through here, so create and rollback cannot differ.
-func (s *Service) resolveBackupVolumes(ctx context.Context, res model.IntrospectionResult) ([]model.Volume, error) {
-	volumes, skipped, err := FindBackupVolumes(res, s.defaultBackend)
+// covers, and the mounts and services it leaves out. Every workflow comes through
+// here, so create and rollback cannot differ.
+func (s *Service) resolveBackupVolumes(
+	ctx context.Context, res model.IntrospectionResult,
+) ([]model.Volume, model.NotCovered, error) {
+	volumes, notCovered, err := FindBackupVolumes(res, s.defaultBackend)
 	if err != nil {
-		return nil, fmt.Errorf("deciding which volumes to back up: %w", err)
+		return nil, model.NotCovered{}, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
 
-	for _, sk := range skipped {
-		zerolog.Ctx(ctx).Warn().
+	log := zerolog.Ctx(ctx)
+	for _, sk := range notCovered.Mounts {
+		log.Warn().
 			Str("service", sk.Service).
 			Str("target", sk.Target).
 			Str("raw_type", sk.RawType).
-			Str("reason", sk.Reason).
+			Str("reason", sk.Detail).
 			Msg("volume will not be backed up")
 	}
-	return volumes, nil
+	for _, svc := range notCovered.ServicesWithoutVolumes {
+		log.Warn().Str("service", svc).Msg("service has no volume to back up; only its writable layer is captured")
+	}
+	return volumes, notCovered, nil
 }
 
 // FindBackupVolumes decides what a savepoint captures — which units, with which
-// backend — plus the mounts it leaves out and why. Introspection reports facts;
-// the policy lives here. Skips are returned rather than logged, so every adapter
-// renders them as it likes.
+// backend — plus what it leaves out: the mounts it skips and why, and the services
+// no unit belongs to. Introspection reports facts; the policy lives here. Both are
+// returned rather than logged, so every adapter renders them as it likes.
 //
 // Today it applies the defaults only: every named volume and every bind or
 // anonymous mount not inherited through volumes_from, all on backend,
@@ -75,22 +91,23 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, res model.Introspect
 // resolved at the DI root. A per-volume choice would plug in here.
 func FindBackupVolumes(
 	res model.IntrospectionResult, backend model.SnapshotBackendKind,
-) ([]model.Volume, []model.SkippedVolume, error) {
-	// inheritedSkipReason skips a mount inherited from a container the project does not stop or capture.
-	const inheritedSkipReason = "inherited from a container outside the project"
-
+) ([]model.Volume, model.NotCovered, error) {
 	var (
 		volumes []model.Volume
 		skipped []model.SkippedVolume
 	)
 	seen := map[string]volumeIdentity{}
+	covered := map[string]bool{}
 
 	// Named volumes come from the project level: a volume three services mount is
 	// one unit, and only this level knows every mount of it.
 	for _, named := range res.Project.Volumes {
+		for _, ref := range named.UsedBy {
+			covered[ref.Service] = true
+		}
 		duplicate, err := claimObjectID(seen, named.ObjectID(), volumeIdentity{dockerName: named.Name})
 		if err != nil {
-			return nil, nil, err
+			return nil, model.NotCovered{}, err
 		}
 		if duplicate {
 			continue
@@ -114,29 +131,24 @@ func FindBackupVolumes(
 		for _, sv := range svc.Volumes {
 			if sv.Type == model.VolumeTypeNamed {
 				// Only a reference to the unit already taken above.
+				covered[svc.Name] = true
 				continue
 			}
 			if sv.InheritedFrom != "" {
-				if !inProject[sv.InheritedFrom] {
-					skipped = append(skipped, model.SkippedVolume{
-						Service: svc.Name,
-						Target:  sv.Target,
-						RawType: sv.RawType,
-						Reason:  inheritedSkipReason,
-					})
+				if inProject[sv.InheritedFrom] {
+					// Captured through its source.
+					covered[svc.Name] = true
+				} else {
+					skipped = append(skipped, skippedVolume(svc.Name, sv, inheritedSkipReason))
 				}
 				continue
 			}
 			switch sv.Type {
 			case model.VolumeTypeBind, model.VolumeTypeAnon:
 				// A unit of its own.
+				covered[svc.Name] = true
 			default:
-				skipped = append(skipped, model.SkippedVolume{
-					Service: svc.Name,
-					Target:  sv.Target,
-					RawType: sv.RawType,
-					Reason:  skipReason(sv.Type),
-				})
+				skipped = append(skipped, skippedVolume(svc.Name, sv, reasonFor(sv.Type)))
 				continue
 			}
 
@@ -144,7 +156,7 @@ func FindBackupVolumes(
 			duplicate, err := claimObjectID(seen, objectID,
 				volumeIdentity{service: svc.Name, replica: sv.Replica, target: sv.Target})
 			if err != nil {
-				return nil, nil, err
+				return nil, model.NotCovered{}, err
 			}
 			if duplicate {
 				continue
@@ -160,7 +172,24 @@ func FindBackupVolumes(
 		}
 	}
 
-	return volumes, skipped, nil
+	var uncovered []string
+	for _, svc := range res.Project.Services {
+		if !covered[svc.Name] {
+			uncovered = append(uncovered, svc.Name)
+		}
+	}
+	return volumes, model.NotCovered{Mounts: skipped, ServicesWithoutVolumes: uncovered}, nil
+}
+
+// skippedVolume reports one mount of service left out for reason.
+func skippedVolume(service string, sv model.ServiceVolume, reason skipReason) model.SkippedVolume {
+	return model.SkippedVolume{
+		Service: service,
+		Target:  sv.Target,
+		RawType: sv.RawType,
+		Reason:  reason.code,
+		Detail:  reason.detail,
+	}
 }
 
 // projectContainers are the ids of the project's replicas.
@@ -210,9 +239,9 @@ func claimObjectID(seen map[string]volumeIdentity, objectID string, identity vol
 	return false, nil
 }
 
-// skipReason falls back to the unknown-type reason, so a VolumeType missing from
+// reasonFor falls back to the unknown-type reason, so a VolumeType missing from
 // the table is still reported rather than dropped.
-func skipReason(volumeType model.VolumeType) string {
+func reasonFor(volumeType model.VolumeType) skipReason {
 	if reason, ok := skipReasons[volumeType]; ok {
 		return reason
 	}

@@ -164,7 +164,7 @@ In-flight steps — `Waiting`, `Starting`, `Creating`, image-pull progress — a
 
 ## A database needs recovery after a rollback
 
-The grace period was probably too short when the savepoint was taken: arcave captures the volumes the moment the containers are down, so a container killed mid-shutdown is captured mid-shutdown — and that capture reported success, with a warning on stderr: `container <name> did not exit within <bound> and was killed`.
+The grace period was probably too short when the savepoint was taken: arcave captures the volumes the moment the containers are down, so a container killed mid-shutdown is captured mid-shutdown — and that capture reported success, with a warning on stderr: `container <name> did not exit within <bound> and was killed`. The savepoint names it in `not_covered.killed_containers`.
 
 The bound is `compose.stop_timeout`, raised by the longest `stop_grace_period` a service declares. Declare what the database needs on the service itself, or raise the floor for every service:
 

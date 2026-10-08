@@ -25,10 +25,11 @@ import (
 
 func TestFindBackupVolumes(t *testing.T) {
 	tests := []struct {
-		name        string
-		project     model.Project
-		want        []model.Volume
-		wantSkipped []model.SkippedVolume
+		name          string
+		project       model.Project
+		want          []model.Volume
+		wantSkipped   []model.SkippedVolume
+		wantUncovered []string
 	}{
 		{
 			name: "named comes from the project level, bind and anon from the service level",
@@ -83,7 +84,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				},
 			},
 			wantSkipped: []model.SkippedVolume{
-				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
+				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"},
 			},
 		},
 		{
@@ -147,7 +148,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				},
 			},
 			wantSkipped: []model.SkippedVolume{
-				{Service: "app", Target: "/vpn", RawType: "bind", Reason: "inherited from a container outside the project"},
+				{Service: "app", Target: "/vpn", RawType: "bind", Reason: model.SkipReasonInheritedFromOutside, Detail: "inherited from a container outside the project"},
 			},
 		},
 		{
@@ -214,12 +215,13 @@ func TestFindBackupVolumes(t *testing.T) {
 			},
 			want: nil,
 			wantSkipped: []model.SkippedVolume{
-				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
-				{Service: "app", Target: `\\.\pipe\docker_engine`, RawType: "npipe", Reason: "a named pipe is a channel, not data"},
-				{Service: "app", Target: "/srv/assets", RawType: "image", Reason: "read-only image content, reproducible from the image"},
-				{Service: "app", Target: "/data", RawType: "cluster", Reason: "CSI volume: data lives outside the docker daemon"},
-				{Service: "app", Target: "/new", RawType: "something-new", Reason: "unknown mount type"},
+				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"},
+				{Service: "app", Target: `\\.\pipe\docker_engine`, RawType: "npipe", Reason: model.SkipReasonNPipe, Detail: "a named pipe is a channel, not data"},
+				{Service: "app", Target: "/srv/assets", RawType: "image", Reason: model.SkipReasonImage, Detail: "read-only image content, reproducible from the image"},
+				{Service: "app", Target: "/data", RawType: "cluster", Reason: model.SkipReasonCluster, Detail: "CSI volume: data lives outside the docker daemon"},
+				{Service: "app", Target: "/new", RawType: "something-new", Reason: model.SkipReasonUnknownType, Detail: "unknown mount type"},
 			},
+			wantUncovered: []string{"app"},
 		},
 		{
 			name: "a skipped mount beside a captured one costs the unit nothing",
@@ -238,7 +240,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
 			}},
 			wantSkipped: []model.SkippedVolume{
-				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
+				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"},
 			},
 		},
 		{
@@ -253,9 +255,38 @@ func TestFindBackupVolumes(t *testing.T) {
 			},
 			want: nil,
 			wantSkipped: []model.SkippedVolume{
-				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
-				{Service: "app", Target: "/run", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
+				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"},
+				{Service: "app", Target: "/run", RawType: "tmpfs", Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"},
 			},
+			wantUncovered: []string{"app"},
+		},
+		{
+			// Only the writable layer of a service mounting nothing is held.
+			name: "a service mounting nothing, or only what is skipped, is not covered",
+			project: model.Project{
+				Name: "demo",
+				Services: []model.Service{
+					{Name: "web"},
+					{Name: "db", Volumes: []model.ServiceVolume{{Type: model.VolumeTypeNamed, RawType: "volume", Source: "data", VolumeName: "demo_data", Target: "/data"}}},
+					{Name: "vpn", Volumes: []model.ServiceVolume{
+						{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/vpn", Target: "/vpn", InheritedFrom: "outside"},
+					}},
+				},
+				Volumes: []model.NamedVolume{{Key: "data", Name: "demo_data",
+					UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}}},
+			},
+			want: []model.Volume{{
+				ObjectID:       "volume-named-demo_data",
+				ComposeProject: "demo",
+				Type:           model.VolumeTypeNamed,
+				Backend:        model.SnapshotBackendCopy,
+				Named: &model.VolumePropertiesNamed{VolumeName: "demo_data",
+					UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
+			}},
+			wantSkipped: []model.SkippedVolume{
+				{Service: "vpn", Target: "/vpn", RawType: "bind", Reason: model.SkipReasonInheritedFromOutside, Detail: "inherited from a container outside the project"},
+			},
+			wantUncovered: []string{"web", "vpn"},
 		},
 		{
 			name: "two services binding the same host path stay two units",
@@ -292,12 +323,13 @@ func TestFindBackupVolumes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, skipped, err := FindBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.SnapshotBackendCopy)
+			got, notCovered, err := FindBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.SnapshotBackendCopy)
 
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
-			assert.Equal(t, tt.wantSkipped, skipped)
+			assert.Equal(t, tt.wantSkipped, notCovered.Mounts)
+			assert.Equal(t, tt.wantUncovered, notCovered.ServicesWithoutVolumes)
 			assertOneArmPerType(t, got)
 		})
 	}
@@ -321,7 +353,7 @@ func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 	}}
 
 	// Act
-	got, skipped, err := FindBackupVolumes(res, model.SnapshotBackendCopy)
+	got, notCovered, err := FindBackupVolumes(res, model.SnapshotBackendCopy)
 
 	// Assert
 	require.ErrorIs(t, err, errObjectIDCollision)
@@ -329,7 +361,7 @@ func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 	assert.Contains(t, err.Error(), `service "app-var" at "/lib/data"`)
 	assert.Contains(t, err.Error(), "volume-service-app-var-lib-data")
 	assert.Nil(t, got)
-	assert.Nil(t, skipped)
+	assert.Zero(t, notCovered)
 }
 
 // The backend is the caller's, stamped on every unit whatever its addressing

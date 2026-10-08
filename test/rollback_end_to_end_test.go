@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,6 +137,20 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 	for _, stat := range second.Stats {
 		assert.NotContains(t, stat.Volume.ObjectID, "reader", "reader's mount is data's volume")
 	}
+
+	// reader is covered through data; a SIGKILL stop signal is no deadline kill; a layer
+	// names its upstream by label.
+	for _, sp := range []model.Savepoint{first, second} {
+		require.NotNil(t, sp.NotCovered, sp.Name)
+		assert.Equal(t, model.NotCovered{ServicesWithoutVolumes: []string{"legacy", "quiet", "sidecar"}},
+			sortedNotCovered(*sp.NotCovered), sp.Name)
+	}
+}
+
+// sortedNotCovered orders what the daemon reports in no fixed order.
+func sortedNotCovered(n model.NotCovered) model.NotCovered {
+	slices.Sort(n.ServicesWithoutVolumes)
+	return n
 }
 
 func TestRollback_RenumbersAroundAMissingFirstReplica(t *testing.T) {

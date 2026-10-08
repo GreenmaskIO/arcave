@@ -96,6 +96,23 @@ func TestCapturableContainers(t *testing.T) {
 	}
 }
 
+func TestUnresolvedUpstreams(t *testing.T) {
+	// Arrange
+	res := demoIntrospectionWithContainers()
+	resolved := demoContainerRef()
+	unresolved := model.ContainerRef{Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1)}
+
+	// Act
+	none := unresolvedUpstreams(res, []model.ContainerRef{resolved})
+	got := unresolvedUpstreams(res, []model.ContainerRef{unresolved})
+
+	// Assert
+	assert.Nil(t, none)
+	assert.Equal(t, []model.UnresolvedUpstream{{
+		Service: demoService, Replica: 1, Container: demoContainerName(1), Image: demoBaseImage,
+	}}, got)
+}
+
 func TestUpstreamImages(t *testing.T) {
 	// Arrange: two replicas on one upstream, one on an upstream gone from the daemon,
 	// one that cannot be traced.

@@ -302,13 +302,3 @@ type IntrospectionResult struct {
 	// ipc or pid mode or in volumes_from, keyed by id, verbatim. One the daemon no longer has is absent.
 	Referenced map[string]container.InspectResponse
 }
-
-// SkippedVolume is a mount the backup decision did not take, reported so callers
-// can tell the user which state a savepoint does not cover. Not deduplicated:
-// two tmpfs mounts are two skips.
-type SkippedVolume struct {
-	Service string `json:"service,omitempty"`
-	Target  string `json:"target,omitempty"`
-	RawType string `json:"raw_type,omitempty"` // the compose mount type — the diagnosis
-	Reason  string `json:"reason"`
-}

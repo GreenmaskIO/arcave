@@ -26,6 +26,33 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+func TestMCPHandler_createSavepointMCP(t *testing.T) {
+	// Arrange
+	sp := model.Savepoint{ID: "1780335122", Name: "before-migration", NotCovered: &model.NotCovered{
+		Mounts: []model.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
+			Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
+		ServicesWithoutVolumes: []string{"web"},
+		KilledContainers:       []model.KilledContainer{{Service: "db", Replica: 1, Container: "demo-db-1"}},
+	}}
+	svc := &mockService{}
+	svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "before-migration"}).
+		Return(sp, nil).Once()
+	released := false
+	h := NewMCPHandler(func(context.Context, string) (MCPService, func(), error) {
+		return svc, func() { released = true }, nil
+	})
+
+	// Act
+	res, out, err := h.createSavepointMCP(context.Background(), nil, createInput{Project: "demo", Name: "before-migration"})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Nil(t, res)
+	assert.Equal(t, sp, out)
+	assert.True(t, released, "what the call opened must not outlive it")
+	svc.AssertExpectations(t)
+}
+
 func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 	sps := []model.Savepoint{{ID: "1780335122", Name: "before-migration"}}
 

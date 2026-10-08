@@ -95,10 +95,11 @@ func (s *Service) captureVolumes(
 
 // performSavepoint captures the volumes and the container layers, writes the
 // compose spec, and commits the record last: that write is the commit, and on any
-// failure the returned record is zero.
+// failure the returned record is zero. killed are the containers the stop killed.
 func (s *Service) performSavepoint(
 	ctx context.Context,
 	ws workingSet,
+	killed []string,
 	name string,
 	description string,
 	labels map[string]string,
@@ -122,6 +123,7 @@ func (s *Service) performSavepoint(
 		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", record.ID, err)
 	}
 	record.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML}
+	record.NotCovered = ws.notCovered(killed)
 
 	if err := s.savepointRepo.SaveSavepoint(ctx, record); err != nil {
 		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
