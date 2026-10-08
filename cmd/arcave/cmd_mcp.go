@@ -32,8 +32,8 @@ var mcpCmd = &cobra.Command{
 	RunE:  runMCP,
 }
 
-// runMCP builds no dependencies of its own: one server serves many stacks, and a
-// stack is named per tool call.
+// runMCP builds no dependencies of its own: one server serves many compose projects, and a
+// compose project is named per tool call.
 func runMCP(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
@@ -44,7 +44,7 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 // mcpServiceFactory wires the savepoint workflows for the project a tool call
 // named, and returns the release that closes them when that call returns.
 func mcpServiceFactory(ctx context.Context, project string) (cli.MCPService, func(), error) {
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.StackName(project))
+	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(project))
 	if err != nil {
 		return nil, nil, fmt.Errorf("init dependencies: %w", err)
 	}

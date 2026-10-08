@@ -34,12 +34,22 @@ import (
 func TestEngine_CommitContainer(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false}).
+	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{
+		Pause:   false,
+		Comment: "arcave savepoint 1780000000",
+		Changes: []string{
+			`LABEL "io.arcave.base-image-id"="sha256:bbbb"`,
+			`LABEL "io.arcave.base-image-ref"="postgres:16"`,
+		},
+	}).
 		Return(container.CommitResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
-	id, err := e.CommitContainer(context.Background(), "c0ffee")
+	id, err := e.CommitContainer(context.Background(), "c0ffee", "arcave savepoint 1780000000", map[string]string{
+		model.BaseImageRefLabel: "postgres:16",
+		model.BaseImageIDLabel:  "sha256:bbbb",
+	})
 
 	// Assert
 	require.NoError(t, err)
@@ -50,12 +60,12 @@ func TestEngine_CommitContainer(t *testing.T) {
 func TestEngine_CommitContainer_RefusesAnAnswerThatIsNotADigest(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false}).
+	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false, Changes: []string{}}).
 		Return(container.CommitResponse{ID: "postgres:16"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
-	_, err := e.CommitContainer(context.Background(), "c0ffee")
+	_, err := e.CommitContainer(context.Background(), "c0ffee", "", nil)
 
 	// Assert: a name would be resolved by whatever it points at later on.
 	require.ErrorIs(t, err, model.ErrInvalidDigestID)
@@ -71,7 +81,7 @@ func TestEngine_CommitContainer_ReportsTheDaemonsRefusal(t *testing.T) {
 	e := &Engine{api: api}
 
 	// Act
-	id, err := e.CommitContainer(context.Background(), "gone")
+	id, err := e.CommitContainer(context.Background(), "gone", "", nil)
 
 	// Assert
 	require.ErrorIs(t, err, wantErr)

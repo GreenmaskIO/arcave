@@ -106,9 +106,9 @@ The project declares a named volume the daemon does not hold. arcave treats that
 docker compose up -d
 ```
 
-## `no container for service "app" in project "myapp" mounts "/data" (is the project created?)`
+## `no container for service "app" replica 1 in project "myapp" mounts "/data" (is the project created?)`
 
-An anonymous volume can only be reached through the container that owns it, and that container is gone.
+An anonymous volume belongs to one replica and can only be reached through its container, and that container is gone.
 
 ```shell
 docker compose up -d
@@ -228,7 +228,7 @@ resolve config: unmarshal config: parse config: decoding failed due to the follo
 
 Unknown keys are an error, not a value quietly ignored. Check the key against [Configuration](configuration.md); arcave never rewrites the file on its own, so fix it by hand, or regenerate it with `arcave init --override` — and set `storage.directory.path` again in the same command if it was pointing somewhere non-default, since savepoints under the old path stop being visible otherwise.
 
-## `initialise stack store: stat /srv/arcave/myapp: no such file or directory`
+## `initialise compose project store: stat /srv/arcave/myapp: no such file or directory`
 
 An absolute `storage.directory.path` must already exist. Only a relative one materialises on first use — the asymmetry is what keeps a typo from growing a fresh tree somewhere unexpected.
 

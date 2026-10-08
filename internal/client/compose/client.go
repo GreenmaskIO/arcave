@@ -16,11 +16,14 @@ package compose
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
 	"github.com/rs/zerolog"
 )
 
@@ -35,6 +38,9 @@ const (
 	defaultStopTimeout      = 10 * time.Second
 )
 
+// waitPollInterval is how often Start re-reads the containers it waits for; compose's own.
+const waitPollInterval = 500 * time.Millisecond
+
 // dockerComposeAPI is the slice of the compose library's API that Client calls.
 // api.Compose satisfies it.
 type dockerComposeAPI interface {
@@ -42,13 +48,15 @@ type dockerComposeAPI interface {
 	Down(ctx context.Context, projectName string, options api.DownOptions) error
 	Create(ctx context.Context, project *types.Project, options api.CreateOptions) error
 	Start(ctx context.Context, projectName string, options api.StartOptions) error
+	Ps(ctx context.Context, projectName string, options api.PsOptions) ([]api.ContainerSummary, error)
 }
 
-// Client runs the project's lifecycle, the stack to act on passed per call. It
+// Client runs the project's lifecycle, the compose project to act on passed per call. It
 // calls compose/v2 as a library, so the host needs no docker CLI.
 type Client struct {
-	api  dockerComposeAPI
-	opts Options
+	api          dockerComposeAPI
+	opts         Options
+	pollInterval time.Duration
 }
 
 // Options are the project's compose-lifecycle bounds. They are durations, not a
@@ -68,7 +76,7 @@ type Options struct {
 // NewClient returns a runner over the engine's daemon connection. opts carries the
 // project's bounds; a zero Options means this package's defaults.
 func NewClient(svc dockerComposeAPI, opts Options) *Client {
-	return &Client{api: svc, opts: opts}
+	return &Client{api: svc, opts: opts, pollInterval: waitPollInterval}
 }
 
 // Stop stops all project services and returns once the containers have exited.
@@ -114,21 +122,30 @@ func (c *Client) Create(ctx context.Context, project *types.Project) error {
 
 // Start starts all project services and waits until they are healthy; a waitTimeout <= 0
 // falls back to Options. Start rather than Up: what Create built must not be recreated under it.
+// A project with a disabled healthcheck is waited for by Start itself: compose refuses one.
 func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	waitTimeout = c.waitTimeoutOr(waitTimeout)
 	zerolog.Ctx(ctx).Info().Str("wait_timeout", waitTimeout.String()).
 		Msg("waiting for services to become healthy")
 
-	return c.api.Start(ctx, project.Name, api.StartOptions{
-		Project:     project,
-		Wait:        true,
-		WaitTimeout: waitTimeout,
-	})
+	if !healthCheckDisabled(project) {
+		return c.api.Start(ctx, project.Name, api.StartOptions{
+			Project:     project,
+			Wait:        true,
+			WaitTimeout: waitTimeout,
+		})
+	}
+
+	// WaitTimeout still bounds the depends_on waits compose runs while it starts.
+	if err := c.api.Start(ctx, project.Name, api.StartOptions{Project: project, WaitTimeout: waitTimeout}); err != nil {
+		return err
+	}
+	return c.waitReady(ctx, project, waitTimeout)
 }
 
 // withComposeLabels stamps onto a copy of the project the labels compose puts on
 // every container it creates: the library leaves that to its CLI, and without
-// them nothing finds the stack again.
+// them nothing finds the compose project again.
 func withComposeLabels(project *types.Project) *types.Project {
 	stamped := *project
 	stamped.Services = make(types.Services, len(project.Services))
@@ -144,6 +161,89 @@ func withComposeLabels(project *types.Project) *types.Project {
 		stamped.Services[name] = service
 	}
 	return &stamped
+}
+
+// healthCheckDisabled reports a service compose creates with a healthcheck of NONE: its
+// start --wait refuses one, having no health to read.
+func healthCheckDisabled(project *types.Project) bool {
+	for _, service := range project.Services {
+		check := service.HealthCheck
+		if check != nil && (check.Disable || (len(check.Test) > 0 && check.Test[0] == "NONE")) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitReady waits as compose's start --wait does: healthy where a health is reported, running
+// where none is. A one-shot others wait to complete is skipped; Start has already waited for it.
+func (c *Client) waitReady(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, waitTimeout)
+	defer cancel()
+
+	oneShots := completionAwaited(project)
+	ticker := time.NewTicker(c.pollInterval)
+	defer ticker.Stop()
+	for {
+		ready, err := c.containersReady(ctx, project, oneShots)
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			return fmt.Errorf("application not healthy after %s", waitTimeout)
+		case err != nil:
+			return err
+		case ready:
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+		}
+	}
+}
+
+// completionAwaited are the services another depends on with service_completed_successfully.
+func completionAwaited(project *types.Project) map[string]bool {
+	oneShots := map[string]bool{}
+	for _, dependent := range project.Services {
+		for name, dependency := range dependent.DependsOn {
+			if dependency.Condition == types.ServiceConditionCompletedSuccessfully {
+				oneShots[name] = true
+			}
+		}
+	}
+	return oneShots
+}
+
+// containersReady reads the project's containers once: ready when every one runs and none
+// reports a health short of healthy; an exited or unhealthy one fails.
+func (c *Client) containersReady(ctx context.Context, project *types.Project, oneShots map[string]bool) (bool, error) {
+	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project, All: true})
+	if err != nil {
+		return false, err
+	}
+
+	ready := true
+	for _, ctr := range containers {
+		if oneShots[ctr.Service] {
+			continue
+		}
+		switch ctr.State {
+		case string(container.StateExited), string(container.StateDead):
+			return false, fmt.Errorf("container %s exited (%d)", ctr.Name, ctr.ExitCode)
+		case string(container.StateRunning):
+		default:
+			ready = false
+			continue
+		}
+		switch ctr.Health {
+		case "", container.Healthy:
+		case container.Unhealthy:
+			return false, fmt.Errorf("container %s is unhealthy", ctr.Name)
+		default:
+			ready = false
+		}
+	}
+	return ready, nil
 }
 
 // waitTimeoutOr resolves the bound a call named against the configured one, falling

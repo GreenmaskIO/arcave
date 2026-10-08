@@ -39,6 +39,32 @@ func WriteManifest(ctx context.Context, imageStore storages.Storager, manifest M
 	return nil
 }
 
+// intactManifest reports whether the store holds a whole capture of imageID: a
+// manifest that decodes, names that image and lists members. Written last, it
+// vouches for everything before it; a torn one does not, and the capture is
+// written again.
+func intactManifest(ctx context.Context, imageStore storages.Storager, imageID model.ImageDigestID) (bool, error) {
+	src, err := imageStore.GetObject(ctx, manifestName)
+	if errors.Is(err, storages.ErrFileNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", manifestName, err)
+	}
+	defer func() {
+		if err := src.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("close image manifest")
+		}
+	}()
+
+	var manifest Manifest
+	if err := json.NewDecoder(src).Decode(&manifest); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("the stored image manifest does not decode; the image is stored again")
+		return false, nil
+	}
+	return manifest.ImageID == imageID && len(manifest.Members) > 0, nil
+}
+
 // ReadManifest reads a capture's manifest back and refuses one written in a form
 // the caller does not handle.
 func ReadManifest(ctx context.Context, imageStore storages.Storager, format Format) (Manifest, error) {

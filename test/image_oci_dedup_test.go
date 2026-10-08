@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
@@ -59,19 +58,19 @@ import (
 // service's own command rewrites that one on every start.
 const epochMarker = "/epoch-marker"
 
-// sharedBlobPrefix is where the shared blob store sits under one stack root.
+// sharedBlobPrefix is where the shared blob store sits under one compose project root.
 const sharedBlobPrefix = "shared/oci/blobs"
 
-// ociDedupEnv is the stack for OCI blob-store deduplication tests.
+// ociDedupEnv is the compose project for OCI blob-store deduplication tests.
 type ociDedupEnv struct {
-	ctx         context.Context
-	svc         *core.Service
-	compose     *composeclient.Client
-	daemon      *client.Client
-	stackStore  storages.Storager
-	blobStore   storages.Storager
-	projectRoot string
-	project     string
+	ctx                 context.Context
+	svc                 *core.Service
+	compose             *composeclient.Client
+	daemon              *client.Client
+	composeProjectStore storages.Storager
+	blobStore           storages.Storager
+	projectRoot         string
+	project             string
 }
 
 func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
@@ -96,43 +95,42 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	})
 
 	projectRoot := t.TempDir()
-	stackStore, err := storefactory.New(config.Storage{
+	composeProjectStore, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	blobStore, err := stackStore.SubStorage(sharedBlobPrefix, true)
+	blobStore, err := composeProjectStore.SubStorage(sharedBlobPrefix, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
-		SavepointRepo:      sprepo.New(stackStore),
+		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.StackName(project)),
+		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
 		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.NewCopier(stackStore, engine, dedupcopy.New(blobStore)),
+		ImageBackend:       imagecopy.NewCopier(composeProjectStore, engine, dedupcopy.New(blobStore)),
 		ContainerRebuilder: engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
-		Store:              stackStore,
+		Store:              composeProjectStore,
 		DefaultBackend:     model.SnapshotBackendCopy,
 	})
 
 	env := &ociDedupEnv{
-		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
-		svc:         svc,
-		compose:     runner,
-		daemon:      daemonAPI,
-		stackStore:  stackStore,
-		blobStore:   blobStore,
-		projectRoot: projectRoot,
-		project:     project,
+		ctx:                 zerolog.New(io.Discard).WithContext(context.Background()),
+		svc:                 svc,
+		compose:             runner,
+		daemon:              daemonAPI,
+		composeProjectStore: composeProjectStore,
+		blobStore:           blobStore,
+		projectRoot:         projectRoot,
+		project:             project,
 	}
-	t.Cleanup(func() {
-		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
-	})
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 
@@ -140,7 +138,7 @@ func (e *ociDedupEnv) up(t *testing.T) {
 	t.Helper()
 
 	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
-	project, err := composespec.NewAssembler().Parse(e.ctx, []byte(document))
+	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
@@ -192,12 +190,12 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 		"the second savepoint stored %d of the archive's %d bytes: the base layer went in again",
 		capture.StoredBytes, capture.SizeBytes)
 
-	assert.NotEmpty(t, first.Images[0].ImageID, "first savepoint image ID")
-	assert.NotEmpty(t, second.Images[0].ImageID, "second savepoint image ID")
+	assert.NotEmpty(t, first.Images[0].CommittedImageID, "first savepoint image ID")
+	assert.NotEmpty(t, second.Images[0].CommittedImageID, "second savepoint image ID")
 
-	_, err = env.daemon.ImageInspect(env.ctx, first.Images[0].ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, first.Images[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "first image should be gone from daemon: %v", err)
-	_, err = env.daemon.ImageInspect(env.ctx, second.Images[0].ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, second.Images[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "second image should be gone from daemon: %v", err)
 }
 
@@ -217,7 +215,7 @@ func TestSavepoint_TwoSavepoints_BothRestore(t *testing.T) {
 	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
 	require.Len(t, second.Images, 1)
-	require.NotEqual(t, first.Images[0].ImageID, second.Images[0].ImageID,
+	require.NotEqual(t, first.Images[0].CommittedImageID, second.Images[0].CommittedImageID,
 		"the two savepoints must differ, or deduplication is trivially true")
 	assert.Less(t, second.Images[0].StoredBytes, second.Images[0].SizeBytes,
 		"the second savepoint reuses the first one's base layers")
@@ -254,11 +252,11 @@ func (e *ociDedupEnv) mutateContainer(t *testing.T, content string) {
 	e.exec(t, e.containerID(t), "sh", "-c", fmt.Sprintf("printf %%s %s > %s", content, epochMarker))
 }
 
-// containerID is the stack's one container.
+// containerID is the compose project's one container.
 func (e *ociDedupEnv) containerID(t *testing.T) string {
 	t.Helper()
 
-	res, err := introspect.NewInspector(e.daemon, model.StackName(e.project)).Introspect(e.ctx)
+	res, err := introspect.NewInspector(e.daemon, model.DockerComposeProjectName(e.project)).Introspect(e.ctx)
 	require.NoError(t, err)
 	require.Len(t, res.Project.Services, 1)
 	require.Len(t, res.Project.Services[0].Containers, 1)

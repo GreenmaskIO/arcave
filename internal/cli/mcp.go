@@ -45,23 +45,23 @@ type MCPHandler struct {
 	serviceFactory MCPServiceFactory
 }
 
-// NewMCPHandler builds the MCP adapter; the stack a call operates on arrives with the call.
+// NewMCPHandler builds the MCP adapter; the compose project a call operates on arrives with the call.
 func NewMCPHandler(serviceFactory MCPServiceFactory) *MCPHandler {
 	return &MCPHandler{serviceFactory: serviceFactory}
 }
 
 // The tool descriptions are written for an agent deciding *when* to call, not
 // for a human reading --help: each one says what the tool is for and what it
-// costs, since a savepoint stops the stack and a rollback destroys live data.
+// costs, since a savepoint stops the compose project and a rollback destroys live data.
 const (
-	descCreate = "Create a savepoint: a consistent snapshot of every stateful volume in the " +
-		"project's Docker Compose stack. Call this before a risky change (a schema migration, a " +
+	descCreate = "Create a savepoint: a consistent snapshot of every stateful volume of the " +
+		"Docker Compose project. Call this before a risky change (a schema migration, a " +
 		"data transformation, a destructive experiment) so the environment can be restored " +
 		"afterwards with the rollback tool. Services are stopped for the duration of the " +
 		"snapshot and started again when it completes. If the call fails with a message of the " +
 		"form 'savepoint <id> committed; services failed to start', the savepoint EXISTS and is " +
 		"safe to roll back to — only the restart failed, so report that id to the user and " +
-		"investigate the stack (the services are stopped or unhealthy), rather than taking " +
+		"investigate the compose project (the services are stopped or unhealthy), rather than taking " +
 		"another savepoint."
 	descList = "List the project's savepoints, newest first, with their id, name, description " +
 		"and creation time. Read-only. Call it to find the savepoint id or name to pass to " +

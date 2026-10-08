@@ -62,13 +62,13 @@ const resticShutdownTimeout = 5 * time.Second
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
-	stackStore     storages.Storager
-	progressWriter io.WriteCloser
-	dockerCli      *command.DockerCli
-	dockerClient   client.APIClient
-	composeService api.Compose
-	engine         *docker.Engine
-	composeRunner  *compose.Client
+	composeProjectStore storages.Storager
+	progressWriter      io.WriteCloser
+	dockerCli           *command.DockerCli
+	dockerClient        client.APIClient
+	composeService      api.Compose
+	engine              *docker.Engine
+	composeRunner       *compose.Client
 	// resticServer is held for one reason only — so Close shuts it down. What goes
 	// down to the backend is the URL base, never the object.
 	resticServer *echo.Echo
@@ -79,22 +79,22 @@ type dependencies struct {
 // initAllDependencies wires the savepoint workflows for the project rooted at
 // projectPath. Every store arrives from storefactory already rooted.
 func initAllDependencies(
-	ctx context.Context, projectPath string, cfg config.Config, stack model.StackName,
+	ctx context.Context, projectPath string, cfg config.Config, composeProject model.DockerComposeProjectName,
 ) (*dependencies, error) {
 	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	// One store for the whole stack: savepoint records, fullcopy captures and a
+	// One store for the whole compose project: savepoint records, fullcopy captures and a
 	// cdc repository root alike, rooted inside the session that they die with.
-	stackStore, err := storefactory.New(
+	composeProjectStore, err := storefactory.New(
 		cfg.Storage, projectPath,
-		model.ProjectName(cfg.Project.Name), model.DefaultSession, stack,
+		model.ArcaveProjectName(cfg.Project.Name), model.DefaultSession, composeProject,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("initialise stack store: %w", err)
+		return nil, fmt.Errorf("initialise compose project store: %w", err)
 	}
-	opened.add("stack store", stackStore)
+	opened.add("compose project store", composeProjectStore)
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
 	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
@@ -111,8 +111,9 @@ func initAllDependencies(
 	opened.add("docker engine", engine)
 
 	// Over the same daemon connection the engine uses.
-	inspector := introspect.NewInspector(dockerClientAPI, stack)
+	inspector := introspect.NewInspector(dockerClientAPI, composeProject)
 	assembler := composespec.NewAssembler()
+	codec := composespec.NewCodec()
 
 	composeService := dockercompose.NewComposeService(dockerCli)
 	composeRunner := compose.NewClient(composeService, compose.Options{
@@ -126,10 +127,10 @@ func initAllDependencies(
 	cdcCfg := config.CDCWithDefaults(cfg.Backends.CDC)
 
 	// The tree every cdc repository lives in — one directory per volume, named by
-	// its ObjectID, beside the stack's savepoint directories. Resolved once and
+	// its ObjectID, beside the compose project's savepoint directories. Resolved once and
 	// handed to both sides, so "the server serves exactly the tree cdc writes
 	// into" is visible in one place rather than kept by two call sites agreeing.
-	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
 	if err != nil {
 		return nil, fmt.Errorf("initialise restic repository root: %w", err)
 	}
@@ -166,7 +167,7 @@ func initAllDependencies(
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	imageBackend, err := newImageBackend(stackStore, engine)
+	imageBackend, err := newImageBackend(composeProjectStore, engine)
 	if err != nil {
 		return nil, err
 	}
@@ -174,10 +175,11 @@ func initAllDependencies(
 	// One repository over the one store, so every record travels with its data. The
 	// locker is bound to the project root here, so the service never names a path.
 	svc := core.New(core.Deps{
-		SavepointRepo:    sprepo.New(stackStore),
+		SavepointRepo:    sprepo.New(composeProjectStore),
 		ProjectLocker:    lock.New(projectPath),
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,
+		SpecCodec:        codec,
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    engine,
 		ImageBackend:     imageBackend,
@@ -187,21 +189,21 @@ func initAllDependencies(
 		BackendRegistry:    backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:       inflightrepo.New(projectPath),
-		Store:          stackStore,
+		Store:          composeProjectStore,
 		DefaultBackend: cfg.Snapshot.BackendKind(),
 	})
 	opened.keep()
 	return &dependencies{
-		stackStore:     stackStore,
-		progressWriter: progressWriter,
-		dockerCli:      dockerCli,
-		dockerClient:   dockerClientAPI,
-		composeService: composeService,
-		engine:         engine,
-		composeRunner:  composeRunner,
-		resticServer:   resticServer,
-		service:        svc,
-		printer:        json.New(os.Stdout),
+		composeProjectStore: composeProjectStore,
+		progressWriter:      progressWriter,
+		dockerCli:           dockerCli,
+		dockerClient:        dockerClientAPI,
+		composeService:      composeService,
+		engine:              engine,
+		composeRunner:       composeRunner,
+		resticServer:        resticServer,
+		service:             svc,
+		printer:             json.New(os.Stdout),
 	}, nil
 }
 
@@ -273,7 +275,7 @@ func (d *dependencies) Close(ctx context.Context) error {
 	shutdownResticServer(ctx, d.resticServer)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
-	return d.stackStore.Close()
+	return d.composeProjectStore.Close()
 }
 
 // shutdownResticServer stops serving gracefully: restic in a container reports a
@@ -459,17 +461,17 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	return dockerCli, apiClient, nil
 }
 
-// stackBlobPrefix is relative to the stack store root, so the blobs are shared
-// between that stack's savepoints and nothing wider. It sits beside them rather
+// composeProjectBlobPrefix is relative to the compose project store root, so the blobs are shared
+// between that compose project's savepoints and nothing wider. It sits beside them rather
 // than inside one: a savepoint id is digits only, so the name cannot collide.
-const stackBlobPrefix = "shared/oci/blobs"
+const composeProjectBlobPrefix = "shared/oci/blobs"
 
 // newImageBackend builds the one image backend: layers are always deduplicated,
 // which needs a daemon of Docker 25 or newer.
-func newImageBackend(stackStore storages.Storager, engine *docker.Engine) (*imagecopy.Copier, error) {
-	blobStore, err := stackStore.SubStorage(stackBlobPrefix, true)
+func newImageBackend(composeProjectStore storages.Storager, engine *docker.Engine) (*imagecopy.Copier, error) {
+	blobStore, err := composeProjectStore.SubStorage(composeProjectBlobPrefix, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}
-	return imagecopy.NewCopier(stackStore, engine, dedupcopy.New(blobStore)), nil
+	return imagecopy.NewCopier(composeProjectStore, engine, dedupcopy.New(blobStore)), nil
 }

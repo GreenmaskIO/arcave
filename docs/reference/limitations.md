@@ -42,9 +42,22 @@ A rollback returns volumes, container writable layers and the compose spec the s
 
 Nothing outside the project moves. A cloud database, a webhook already delivered, a message already consumed by something outside compose — none of it rolls back with the volumes.
 
+## Some compose settings do not survive a rollback
+
+arcave rebuilds the project from what Docker reports, not from your compose file. Docker does not keep everything a compose file can say, so the rebuilt project differs from it. Your compose file itself is never changed. After a rollback:
+
+* `build`, `profiles`, `develop` and `x-` keys are not applied; the image that was built keeps running.
+* `post_start` and `pre_stop` hooks do not run.
+* `env_file` is not applied; the variables it set are kept.
+* An optional `depends_on` (`required: false`) becomes required.
+* A container gets a new MAC address.
+* A network's subnet may change, unless a service has a fixed address in it.
+
+`volumes_from: [x:ro]` is writable before any rollback too: compose drops `:ro` before the mount reaches Docker.
+
 ## A `subpath:` mount is captured and put back whole
 
-The unit is the volume, not the mount. A service that sees only a subdirectory through `subpath:` still has the whole volume captured, and a rollback puts the whole volume back — including everything another service reaches through a different subpath of it. The Docker daemon does not report a mount's subpath, so arcave, which reads the running project, never sees one.
+The unit is the volume, not the mount. A service that sees only a subdirectory through `subpath:` still has the whole volume captured, and a rollback puts the whole volume back — including everything another service reaches through a different subpath of it.
 
 ## An anonymous volume needs its container
 
@@ -84,7 +97,7 @@ A capture, a restore and a removal each work at most five volumes concurrently. 
 
 ## A service without a health check counts as up
 
-arcave waits for health checks after every restart. A service that declares none is considered up the moment its container starts, so a savepoint may be taken of a database that has not finished coming up, and a rollback may report success before the project is genuinely usable. Declare a health check on every stateful service; arcave does not warn when one is missing.
+arcave waits for health checks after every restart. A service that declares none, or sets `healthcheck: {disable: true}`, is considered up the moment its container starts, so a savepoint may be taken of a database that has not finished coming up, and a rollback may report success before the project is genuinely usable. Declare a health check on every stateful service; arcave does not warn when one is missing.
 
 ## `cdc` and host bind mounts on macOS
 

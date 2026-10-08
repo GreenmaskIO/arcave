@@ -20,12 +20,6 @@ import (
 	"strings"
 )
 
-// digestAlgorithmPrefix is the one algorithm docker identifies image content by.
-const digestAlgorithmPrefix = "sha256:"
-
-// digestHexLen is how long a sha256 digest is once written in hex.
-const digestHexLen = 64
-
 // ImageDigestID identifies image content by the bytes it is made of — "sha256:" and 64
 // hex digits, the form a commit answers with. A reference is not one, so asking
 // the daemon about a ImageDigestID is an identity check and can never resolve to
@@ -36,6 +30,13 @@ type ImageDigestID string
 // here, where the daemon's answer arrives, rather than leaving a tag to be
 // resolved into a different image somewhere downstream.
 func ParseImageDigestID(s string) (ImageDigestID, error) {
+	const (
+		// digestAlgorithmPrefix is the one algorithm docker identifies image content by.
+		digestAlgorithmPrefix = "sha256:"
+		// digestHexLen is how long a sha256 digest is once written in hex.
+		digestHexLen = 64
+	)
+
 	hex, ok := strings.CutPrefix(s, digestAlgorithmPrefix)
 	if !ok {
 		return "", fmt.Errorf("%w %q: must open %q", ErrInvalidDigestID, s, digestAlgorithmPrefix)

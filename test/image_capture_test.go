@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
@@ -82,8 +81,9 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	capture := savepoint.Images[0]
 	assert.Equal(t, "app", capture.Service)
 	assert.Equal(t, 1, capture.Replica)
-	assert.NotEmpty(t, capture.ImageID)
-	assert.Equal(t, "busybox", capture.BaseImage)
+	assert.NotEmpty(t, capture.CommittedImageID)
+	assert.Equal(t, "busybox", capture.UpstreamImageRef)
+	assert.NotEmpty(t, capture.UpstreamImageID)
 	assert.Positive(t, capture.SizeBytes)
 
 	// The capture's own manifest, and the metadata the archive carried.
@@ -105,12 +105,22 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	}
 	assert.Positive(t, shared, "the archive's blobs went to the shared store")
 
+	// The upstream is kept once, by content, beside the blobs it shares with the layer.
+	require.Len(t, savepoint.UpstreamImages, 1)
+	upstream := savepoint.UpstreamImages[0]
+	assert.Equal(t, capture.UpstreamImageID, upstream.ID)
+	assert.Contains(t, upstream.Refs, "busybox")
+	assert.True(t, upstream.Stored)
+	upstreamDir := filepath.Join("shared", "oci", "images", "sha256",
+		strings.TrimPrefix(upstream.ID.String(), "sha256:"))
+	assert.Contains(t, keys, filepath.Join(upstreamDir, "image.json"))
+
 	// The committed image is gone from the daemon: the store is the only copy.
-	_, err = env.daemon.ImageInspect(env.ctx, capture.ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, capture.CommittedImageID.String())
 	assert.True(t, cerrdefs.IsNotFound(err), "the committed image outlived the capture: %v", err)
 }
 
-// imageCaptureEnv is the stack this test drives, wired the way cmd/arcave wires it.
+// imageCaptureEnv is the compose project this test drives, wired the way cmd/arcave wires it.
 type imageCaptureEnv struct {
 	ctx     context.Context
 	svc     *core.Service
@@ -145,7 +155,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	store, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
 	blobStore, err := store.SubStorage("shared/oci/blobs", true)
@@ -154,8 +164,9 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	svc := core.New(core.Deps{
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.StackName(project)),
+		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
 		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
 		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
@@ -174,9 +185,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		store:   store,
 		project: project,
 	}
-	t.Cleanup(func() {
-		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
-	})
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 
@@ -184,7 +193,7 @@ func (e *imageCaptureEnv) up(t *testing.T) {
 	t.Helper()
 
 	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
-	project, err := composespec.NewAssembler().Parse(e.ctx, []byte(document))
+	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))

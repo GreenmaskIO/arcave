@@ -40,7 +40,7 @@ arcave reads the **running project** from the daemon by the labels compose stamp
 The project does have to be there. `docker compose stop` is fine: stopped containers still describe the project. `docker compose down` is not — it removes the containers, and with them everything arcave knows about the project:
 
 ```text
-no containers found for compose project "myapp": bring the stack up once, or name another project with -p
+no containers found for compose project "myapp": bring the compose project up once, or name another project with -p
 ```
 
 Named volumes the project declares have to exist in the daemon too. A capture that finds one missing is an error rather than a skip, because an empty capture would silently replace live data at the next rollback:

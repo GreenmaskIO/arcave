@@ -16,9 +16,12 @@ package composespec
 
 import (
 	"context"
+	"slices"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,10 +29,19 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// richResult is the stack the round-trip is measured on: every section a rebuild
+// richResult is the compose project the round-trip is measured on: every section a rebuild
 // needs, on a service that declares something of each kind.
 func richResult() model.IntrospectionResult {
 	svc := richService()
+	svc.Volumes[0].Volume = &model.VolumeMount{NoCopy: true, Subpath: "pg", Labels: map[string]string{"tier": "db"}}
+	svc.Volumes = append(svc.Volumes,
+		model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/conf", Target: "/etc/conf",
+			Bind: &model.BindMount{Propagation: "rshared", Recursive: "disabled"}},
+		model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run/cache",
+			Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
+		model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/assets",
+			ReadOnly: true, Image: &model.ImageMount{Subpath: "static"}},
+	)
 	svc.Containers[0].Labels = map[string]string{
 		api.WorkingDirLabel:  "/srv/demo",
 		api.ConfigFilesLabel: "/srv/demo/compose.yaml",
@@ -57,17 +69,17 @@ func richResult() model.IntrospectionResult {
 }
 
 // The artifact has to survive its own loader: what Marshal writes is the only
-// statement of the stack a rollback doing `down` has left.
-func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
+// statement of the compose project a rollback doing `down` has left.
+func TestCodec_MarshalParse_RoundTrip(t *testing.T) {
 	// Arrange
-	assembler := NewAssembler()
-	assembled, err := assembler.Assemble(richResult())
+	codec := NewCodec()
+	assembled, err := NewAssembler().Assemble(context.Background(), richResult())
 	require.NoError(t, err)
 
 	// Act
-	spec, err := assembler.Marshal(assembled)
+	spec, err := codec.Marshal(assembled)
 	require.NoError(t, err)
-	parsed, err := assembler.Parse(context.Background(), spec)
+	parsed, err := codec.Parse(context.Background(), spec)
 
 	// Assert
 	require.NoError(t, err)
@@ -83,7 +95,12 @@ func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
 	assert.Equal(t, before.User, after.User)
 	assert.Equal(t, before.Hostname, after.Hostname)
 	assert.Equal(t, before.WorkingDir, after.WorkingDir)
-	assert.Equal(t, before.Ports, after.Ports)
+	// The loader fills the port mode the assembler leaves to it.
+	wantPorts := slices.Clone(before.Ports)
+	for i := range wantPorts {
+		wantPorts[i].Mode = "ingress"
+	}
+	assert.Equal(t, wantPorts, after.Ports)
 	assert.Equal(t, before.Restart, after.Restart)
 	assert.Equal(t, before.HealthCheck, after.HealthCheck)
 	assert.Equal(t, before.Labels, after.Labels)
@@ -110,24 +127,114 @@ func TestAssembler_MarshalParse_RoundTrip(t *testing.T) {
 	assert.Equal(t, assembled.Networks["back"].Name, parsed.Networks["back"].Name)
 	assert.Equal(t, assembled.Networks["back"].Ipam, parsed.Networks["back"].Ipam)
 
-	// The artifact is a fixed point: what the loader normalises, the assembler
-	// already wrote, so a re-render of the parsed project is the same document.
-	again, err := assembler.Marshal(parsed)
+	// The loader's normalisation settles in one pass: the parsed project re-renders
+	// to a document that parses back to itself.
+	again, err := codec.Marshal(parsed)
+	require.NoError(t, err)
+	reparsed, err := codec.Parse(context.Background(), again)
+	require.NoError(t, err)
+	settled, err := codec.Marshal(reparsed)
+	require.NoError(t, err)
+	assert.Equal(t, string(again), string(settled))
+}
+
+// The daemon tells an empty request from none, so the artifact has to as well: an empty
+// volume: or network entry must not come back nil, nor a nil one empty.
+func TestCodec_MarshalParse_EmptyOptions(t *testing.T) {
+	// Arrange
+	codec := NewCodec()
+	project := &types.Project{
+		Name: "demo",
+		Services: types.Services{"app": {
+			Name:  "app",
+			Image: "busybox",
+			Volumes: []types.ServiceVolumeConfig{
+				{Type: types.VolumeTypeVolume, Target: "/empty", Volume: &types.ServiceVolumeVolume{}},
+				{Type: types.VolumeTypeVolume, Target: "/none"},
+			},
+			Networks: map[string]*types.ServiceNetworkConfig{"front": {}, "back": nil},
+		}},
+		Networks: types.Networks{"front": {Name: "demo_front"}, "back": {Name: "demo_back"}},
+	}
+
+	// Act
+	spec, err := codec.Marshal(project)
+	require.NoError(t, err)
+	parsed, err := codec.Parse(context.Background(), spec)
+
+	// Assert
+	require.NoError(t, err)
+	app := parsed.Services["app"]
+	require.Len(t, app.Volumes, 2)
+	assert.Equal(t, &types.ServiceVolumeVolume{}, app.Volumes[0].Volume)
+	assert.Nil(t, app.Volumes[1].Volume)
+	assert.Equal(t, map[string]*types.ServiceNetworkConfig{"front": {}, "back": nil}, app.Networks)
+}
+
+// A service reference, a predefined network mode and a link are what compose's loader
+// validates against the services: they have to come back as written.
+func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
+	// Arrange
+	const dbID = "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9"
+	replica := func(id, name string, host container.HostConfig) model.Container {
+		return model.Container{ID: id, Name: name, Number: 1, Inspect: container.InspectResponse{
+			ContainerJSONBase: &container.ContainerJSONBase{ID: id, HostConfig: &host},
+			Config:            &container.Config{Image: "alpine:3"},
+		}}
+	}
+	res := model.IntrospectionResult{Project: model.Project{
+		Name: "demo",
+		Services: []model.Service{
+			{Name: "app", Containers: []model.Container{replica("app1", "demo-app-1", container.HostConfig{
+				NetworkMode: container.NetworkMode("container:" + dbID),
+				IpcMode:     container.IpcMode("container:" + dbID),
+				PidMode:     container.PidMode("container:" + dbID),
+			})}},
+			{Name: "db", Containers: []model.Container{replica(dbID, "demo-db-1", container.HostConfig{NetworkMode: "bridge"})}},
+			{Name: "backup", Containers: []model.Container{replica("backup1", "demo-backup-1", container.HostConfig{
+				NetworkMode: "default", VolumesFrom: []string{dbID, "sidecar"},
+				Links: []string{"/demo-db-1:/demo-backup-1/database", "/demo-db-1:/demo-backup-1/db-1"},
+			})}},
+		},
+	}}
+	codec := NewCodec()
+	assembled, err := NewAssembler().Assemble(context.Background(), res)
+	require.NoError(t, err)
+
+	// Act
+	spec, err := codec.Marshal(assembled)
+	require.NoError(t, err)
+	parsed, err := codec.Parse(context.Background(), spec)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, "service:db", parsed.Services["app"].NetworkMode)
+	assert.Equal(t, "service:db", parsed.Services["app"].Ipc)
+	assert.Equal(t, "service:db", parsed.Services["app"].Pid)
+	assert.Equal(t, "bridge", parsed.Services["db"].NetworkMode)
+	assert.Equal(t, "default", parsed.Services["backup"].NetworkMode)
+	assert.Equal(t, []string{"db", "container:sidecar"}, parsed.Services["backup"].VolumesFrom)
+	assert.Equal(t, []string{"db:database"}, parsed.Services["backup"].Links)
+	for _, name := range []string{"app", "db", "backup"} {
+		assert.Equal(t, assembled.Services[name].DependsOn, parsed.Services[name].DependsOn, name)
+	}
+
+	again, err := codec.Marshal(parsed)
 	require.NoError(t, err)
 	assert.Equal(t, string(spec), string(again))
 }
 
-func TestAssembler_Marshal_NoProject(t *testing.T) {
+func TestCodec_Marshal_NoProject(t *testing.T) {
 	// Act
-	_, err := NewAssembler().Marshal(nil)
+	_, err := NewCodec().Marshal(nil)
 
 	// Assert
 	assert.ErrorIs(t, err, errNoProject)
 }
 
-func TestAssembler_Parse_Junk(t *testing.T) {
+func TestCodec_Parse_Junk(t *testing.T) {
 	// Act
-	_, err := NewAssembler().Parse(context.Background(), []byte("services: [nope\n"))
+	_, err := NewCodec().Parse(context.Background(), []byte("services: [nope\n"))
 
 	// Assert
 	require.Error(t, err)

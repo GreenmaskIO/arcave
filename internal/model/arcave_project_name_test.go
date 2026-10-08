@@ -21,10 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProjectName_Validate(t *testing.T) {
+func TestArcaveProjectName_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
-		project ProjectName
+		project ArcaveProjectName
 		wantErr bool
 	}{
 		{name: "a plain name", project: "demo"},
@@ -50,7 +50,7 @@ func TestProjectName_Validate(t *testing.T) {
 				assert.NoError(t, err)
 				return
 			}
-			require.ErrorContains(t, err, "invalid project name")
+			require.ErrorContains(t, err, "invalid arcave project name")
 		})
 	}
 }
@@ -58,11 +58,11 @@ func TestProjectName_Validate(t *testing.T) {
 // The normalization a default name goes through: a directory arcave is run in
 // is whatever the user called it, and the tenant segment has to be addressable.
 // Whatever it produces must pass Validate, or be empty and say so.
-func TestNormalizeProjectName(t *testing.T) {
+func TestNormalizeArcaveProjectName(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
-		want ProjectName
+		want ArcaveProjectName
 	}{
 		{name: "already normal", in: "demo", want: "demo"},
 		{name: "mixed case", in: "MyApp", want: "myapp"},
@@ -77,7 +77,7 @@ func TestNormalizeProjectName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := NormalizeProjectName(tt.in)
+			got := NormalizeArcaveProjectName(tt.in)
 
 			// Assert
 			assert.Equal(t, tt.want, got)

@@ -17,7 +17,7 @@
 // store root, which makes it the one place the store namespace and the segments
 // below it are appended.
 //
-// New returns a Storager already rooted at the stack; everything below that is
+// New returns a Storager already rooted at the compose project; everything below that is
 // the savepoint layer's and the backends' own layout.
 package storefactory
 
@@ -26,6 +26,7 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 
@@ -39,7 +40,7 @@ import (
 // to it — point the path at /etc and arcave operates in /etc/arcave.
 const storeNamespace = "arcave"
 
-// The static segments between the namespace and the stack. They name what the
+// The static segments between the namespace and the compose project. They name what the
 // value after them is, so one configured path can hold every project a user
 // points at it and a reader of the tree can tell a tenant from a lifetime
 // without knowing arcave's vocabulary.
@@ -50,7 +51,7 @@ const (
 )
 
 // New builds the Storager for cfg, rooted at
-// <path>/arcave/projects/<project>/sessions/<session>/compose/<stack>. For the
+// <path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>. For the
 // directory arm a relative path is resolved against projectRoot; an absolute one
 // is honoured verbatim.
 //
@@ -60,21 +61,21 @@ const (
 func New(
 	cfg config.Storage,
 	projectRoot string,
-	project model.ProjectName,
+	arcaveProject model.ArcaveProjectName,
 	session model.SessionID,
-	stack model.StackName,
+	composeProject model.DockerComposeProjectName,
 ) (storages.Storager, error) {
 	// Every segment is rendered into a store root, so each is gated at the layer
 	// that owns the value, before any of it reaches a backend. Validated in path
 	// order, so a config naming two bad segments is reported outermost-first.
-	if err := project.Validate(); err != nil {
-		return nil, fmt.Errorf("validate project name: %w", err)
+	if err := arcaveProject.Validate(); err != nil {
+		return nil, fmt.Errorf("validate arcave project name: %w", err)
 	}
 	if err := session.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session id: %w", err)
 	}
-	if err := stack.Validate(); err != nil {
-		return nil, fmt.Errorf("validate stack name: %w", err)
+	if err := validateComposeProjectName(composeProject); err != nil {
+		return nil, fmt.Errorf("validate compose project name: %w", err)
 	}
 
 	store, err := getStorager(cfg, projectRoot)
@@ -83,15 +84,32 @@ func New(
 	}
 
 	key := path.Join(
-		projectsNamespace, project.String(),
+		projectsNamespace, arcaveProject.String(),
 		sessionsNamespace, session.String(),
-		composeNamespace, stack.String(),
+		composeNamespace, composeProject.String(),
 	)
-	stackStore, err := store.SubStorage(key, true)
+	composeProjectStore, err := store.SubStorage(key, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root storage at %s: %w", key, err)
 	}
-	return stackStore, nil
+	return composeProjectStore, nil
+}
+
+// validateComposeProjectName accepts a name compose itself would produce — one its own
+// normalization leaves unchanged — rendering as a single path segment. The charset is
+// compose's to own; the segment rule is the store's.
+func validateComposeProjectName(name model.DockerComposeProjectName) error {
+	s := name.String()
+	if s == "" {
+		return fmt.Errorf("invalid compose project name: must not be empty")
+	}
+	if normalized := loader.NormalizeProjectName(s); normalized != s {
+		return fmt.Errorf("invalid compose project name %q: compose would name it %q", s, normalized)
+	}
+	if path.Base(s) != s || s == "." || s == ".." {
+		return fmt.Errorf("invalid compose project name %q: must be a single path segment", s)
+	}
+	return nil
 }
 
 // getStorager resolves the config union into a store rooted at <path>/arcave — one arm

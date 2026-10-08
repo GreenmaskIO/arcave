@@ -18,6 +18,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
+	"strconv"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -29,12 +32,19 @@ import (
 )
 
 // CommitContainer snapshots a stopped container's writable layer as a new,
-// untagged image and returns its id. The daemon's answer is parsed here, the one
-// place an image id enters arcave: what travels on is a digest, never a name.
-func (e *Engine) CommitContainer(ctx context.Context, containerID string) (model.ImageDigestID, error) {
+// untagged image carrying comment and labels, and returns its id. The daemon's
+// answer is parsed here, the one place an image id enters arcave: what travels on
+// is a digest, never a name.
+func (e *Engine) CommitContainer(
+	ctx context.Context, containerID, comment string, labels map[string]string,
+) (model.ImageDigestID, error) {
 	// Unpaused: the caller has already stopped the services, and a stopped container
 	// cannot be paused.
-	resp, err := e.api.ContainerCommit(ctx, containerID, container.CommitOptions{Pause: false})
+	resp, err := e.api.ContainerCommit(ctx, containerID, container.CommitOptions{
+		Pause:   false,
+		Comment: comment,
+		Changes: labelChanges(labels),
+	})
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
@@ -43,6 +53,17 @@ func (e *Engine) CommitContainer(ctx context.Context, containerID string) (model
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
 	return imageID, nil
+}
+
+// labelChanges renders labels as Dockerfile LABEL instructions, in key order so the
+// changes are deterministic.
+func labelChanges(labels map[string]string) []string {
+	keys := slices.Sorted(maps.Keys(labels))
+	changes := make([]string, 0, len(keys))
+	for _, key := range keys {
+		changes = append(changes, "LABEL "+strconv.Quote(key)+"="+strconv.Quote(labels[key]))
+	}
+	return changes
 }
 
 // SaveImage streams one image out of the daemon as a save archive. The caller

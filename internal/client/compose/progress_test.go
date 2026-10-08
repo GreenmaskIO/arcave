@@ -44,7 +44,7 @@ func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 }
 
 // The golden inputs are lines captured from compose v2.40.3 running the demo
-// stack, not invented ones: the test doubles as the record of the schema arcave
+// compose project, not invented ones: the test doubles as the record of the schema arcave
 // decodes, and is what fails first when the pinned compose version changes it.
 func TestProgressLogger_Write(t *testing.T) {
 	tests := []struct {

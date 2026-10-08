@@ -25,8 +25,10 @@ import (
 
 type mockContainerImager struct{ mock.Mock }
 
-func (m *mockContainerImager) CommitContainer(ctx context.Context, containerID string) (model.ImageDigestID, error) {
-	args := m.Called(ctx, containerID)
+func (m *mockContainerImager) CommitContainer(
+	ctx context.Context, containerID, comment string, labels map[string]string,
+) (model.ImageDigestID, error) {
+	args := m.Called(ctx, containerID, comment, labels)
 	return args.Get(0).(model.ImageDigestID), args.Error(1)
 }
 

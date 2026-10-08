@@ -35,8 +35,8 @@ arcave savepoint create pre-migration --description "orders table, 1000 rows"
 INF stopping services
 INF volume operation started object_id=volume-named-arcave-demo_pgdata
 INF volume operation finished object_id=volume-named-arcave-demo_pgdata
-INF volume operation started object_id=volume-service-redis-data
-INF volume operation finished object_id=volume-service-redis-data
+INF volume operation started object_id=volume-anon-redis-1-data
+INF volume operation finished object_id=volume-anon-redis-1-data
 INF image capture started service=postgres replica=1
 INF image capture finished service=postgres replica=1
 INF starting services
@@ -107,12 +107,12 @@ INF image restore finished service=postgres replica=1
 INF stopping services
 INF backing up current state
 INF removing compose containers and networks
-INF rebuilding the stack from the savepoint's spec
+INF creating the compose project from the spec
 INF creating compose containers
 INF volume operation started object_id=volume-named-arcave-demo_pgdata
 INF volume operation finished object_id=volume-named-arcave-demo_pgdata
-INF volume operation started object_id=volume-service-redis-data
-INF volume operation finished object_id=volume-service-redis-data
+INF volume operation started object_id=volume-anon-redis-1-data
+INF volume operation finished object_id=volume-anon-redis-1-data
 INF starting services
 INF waiting for services to become healthy wait_timeout=2m0s
 INF compose kind=Container name=arcave-demo-postgres-1 status=Healthy
@@ -140,11 +140,11 @@ INF compose kind=Container name=arcave-demo-postgres-1 status=Healthy
       }
     },
     {
-      "object_id": "volume-service-redis-data",
+      "object_id": "volume-anon-redis-1-data",
       "compose_project": "arcave-demo",
       "type": "anon",
       "backend": "copy",
-      "anon": { "service": "redis", "target": "/data" }
+      "anon": { "service": "redis", "replica": 1, "target": "/data" }
     }
   ]
 }

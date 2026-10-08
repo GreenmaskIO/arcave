@@ -20,19 +20,17 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,6 +95,25 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	require.Len(t, rebuilt, 1)
 	assert.Equal(t, "original", env.read(t, rebuilt[0], layerMarker), "the writable layer")
 	assert.Equal(t, "original", env.read(t, rebuilt[0], volumeMarker), "the volume beside it")
+
+	// The restored layer names its upstream, so a savepoint taken on it still does.
+	restored, err := env.daemon.ImageInspect(env.ctx, res.Images[0].ImageRef)
+	require.NoError(t, err)
+	require.NotNil(t, restored.Config)
+	assert.Equal(t, savepoint.Images[0].UpstreamImageID.String(), restored.Config.Labels[model.BaseImageIDLabel])
+	assert.Equal(t, "busybox", restored.Config.Labels[model.BaseImageRefLabel])
+
+	next, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "on-the-layer"})
+	require.NoError(t, err)
+	require.Len(t, next.Images, 1)
+	assert.Equal(t, "busybox", next.Images[0].UpstreamImageRef)
+	assert.Equal(t, savepoint.Images[0].UpstreamImageID, next.Images[0].UpstreamImageID)
+	require.Len(t, next.UpstreamImages, 1)
+	assert.True(t, next.UpstreamImages[0].Stored)
+	assert.Zero(t, next.UpstreamImages[0].StoredBytes, "the upstream is already in the store")
+	t.Logf("upstream %s: first capture stored %d of %d bytes, second stored %d",
+		next.UpstreamImages[0].ID, savepoint.UpstreamImages[0].StoredBytes,
+		savepoint.UpstreamImages[0].SizeBytes, next.UpstreamImages[0].StoredBytes)
 }
 
 func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
@@ -104,7 +121,7 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 	env := newImageRollbackEnv(t)
 	env.up(t, 2)
 	before := env.replicas(t)
-	require.Len(t, before, 2, "the stack is scaled to two replicas")
+	require.Len(t, before, 2, "the compose project is scaled to two replicas")
 	env.write(t, before[0], "replica-1")
 	env.write(t, before[1], "replica-2")
 
@@ -130,13 +147,14 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 	assert.Equal(t, "replica-2", env.read(t, rebuilt[1], layerMarker))
 }
 
-// imageRollbackEnv is the stack these tests drive, wired the way cmd/arcave wires it.
+// imageRollbackEnv is the compose project these tests drive, wired the way cmd/arcave wires it.
 type imageRollbackEnv struct {
 	ctx       context.Context
 	svc       *core.Service
 	compose   *composeclient.Client
 	inspector *introspect.Inspector
 	daemon    *client.Client
+	store     storages.Storager
 	project   string
 }
 
@@ -157,7 +175,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	progress.Mode = progress.ModeQuiet
 
 	engine := dockerclient.NewEngine(daemonAPI)
-	inspector := introspect.NewInspector(daemonAPI, model.StackName(project))
+	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -166,10 +184,10 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	store, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	// The blob store is a sibling of the savepoints inside the stack root, so it
+	// The blob store is a sibling of the savepoints inside the compose project root, so it
 	// dies with the session the way everything else there does.
 	blobStore, err := store.SubStorage("shared/oci/blobs", true)
 	require.NoError(t, err)
@@ -179,6 +197,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,
 		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
 		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
@@ -195,20 +214,24 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		compose:   runner,
 		inspector: inspector,
 		daemon:    daemonAPI,
+		store:     store,
 		project:   project,
 	}
-	t.Cleanup(func() {
-		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
-		env.removeRestoredImages(t)
-	})
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 
 func (e *imageRollbackEnv) up(t *testing.T, replicas int) {
 	t.Helper()
 
-	document := fmt.Sprintf(imageRollbackSpec, e.project, replicas)
-	project, err := composespec.NewAssembler().Parse(e.ctx, []byte(document))
+	e.upDocument(t, fmt.Sprintf(imageRollbackSpec, e.project, replicas))
+}
+
+// upDocument creates and starts the compose project a document describes.
+func (e *imageRollbackEnv) upDocument(t *testing.T, document string) {
+	t.Helper()
+
+	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
@@ -265,21 +288,4 @@ func (e *imageRollbackEnv) exec(t *testing.T, containerID string, cmd ...string)
 	require.NoError(t, err)
 	require.Zero(t, inspect.ExitCode, out.String())
 	return out.String()
-}
-
-// removeRestoredImages drops the tags a rollback left in the daemon; nothing
-// collects them yet, and the test must not leave them behind.
-func (e *imageRollbackEnv) removeRestoredImages(t *testing.T) {
-	t.Helper()
-
-	images, err := e.daemon.ImageList(context.Background(), image.ListOptions{All: true})
-	require.NoError(t, err)
-	for _, img := range images {
-		for _, tag := range img.RepoTags {
-			if strings.HasPrefix(tag, "arcave/"+e.project+"-") {
-				_, err := e.daemon.ImageRemove(context.Background(), tag, image.RemoveOptions{PruneChildren: true})
-				assert.NoError(t, err)
-			}
-		}
-	}
 }

@@ -40,6 +40,22 @@ func serviceVolumes(mounts []model.ServiceVolume) []types.ServiceVolumeConfig {
 	return volumes
 }
 
+// declaredVolumes are the mounts the first replica declares: a later replica's anonymous
+// volume is its own copy of the same declaration.
+func declaredVolumes(svc model.Service) []model.ServiceVolume {
+	if len(svc.Containers) == 0 {
+		return svc.Volumes
+	}
+	first := svc.Containers[0].Number
+	declared := make([]model.ServiceVolume, 0, len(svc.Volumes))
+	for _, v := range svc.Volumes {
+		if v.Type != model.VolumeTypeAnon || v.Replica == first {
+			declared = append(declared, v)
+		}
+	}
+	return declared
+}
+
 // serviceVolume renders one mount. An anonymous volume renders as a bare target:
 // naming the one Down orphaned would make compose reuse it instead of a fresh one.
 func serviceVolume(m model.ServiceVolume) types.ServiceVolumeConfig {
@@ -85,19 +101,32 @@ func volumeOptions(from *model.VolumeMount) *types.ServiceVolumeVolume {
 	}
 }
 
-// bindOptions keeps compose creating a missing host path, as it does for a bind
-// declared with no options at all.
+// bindOptions renders a bind's options. With none reported, compose creates a missing
+// host path, as it does for a bind declared with no options at all.
 func bindOptions(from *model.BindMount) *types.ServiceVolumeBind {
 	bind := &types.ServiceVolumeBind{CreateHostPath: true}
 	if from == nil {
 		return bind
 	}
+	bind.CreateHostPath = from.CreateHostPath
 	bind.SELinux = from.SELinux
 	bind.Recursive = from.Recursive
 	if from.Propagation != defaultBindPropagation {
 		bind.Propagation = from.Propagation
 	}
 	return bind
+}
+
+// ownVolumes drops the mounts a container inherited through volumes_from: declared as its own,
+// they would be created afresh rather than shared.
+func ownVolumes(mounts []model.ServiceVolume) []model.ServiceVolume {
+	own := make([]model.ServiceVolume, 0, len(mounts))
+	for _, m := range mounts {
+		if m.InheritedFrom == "" {
+			own = append(own, m)
+		}
+	}
+	return own
 }
 
 // tmpfsMounts renders the tmpfs: shorthand, which the daemon reports apart from the

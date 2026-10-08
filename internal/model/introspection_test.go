@@ -40,16 +40,22 @@ func TestServiceVolume_StorageID(t *testing.T) {
 			want:    "volume-service-app-etc-cfg",
 		},
 		{
-			name:    "anonymous volume is identified by service and target",
+			name:    "anonymous volume is identified by service, replica and target",
 			service: "db",
-			volume:  ServiceVolume{Type: VolumeTypeAnon, Target: "/data"},
-			want:    "volume-service-db-data",
+			volume:  ServiceVolume{Type: VolumeTypeAnon, Target: "/data", Replica: 1},
+			want:    "volume-anon-db-1-data",
+		},
+		{
+			name:    "another replica's anonymous volume at the same target is another identity",
+			service: "db",
+			volume:  ServiceVolume{Type: VolumeTypeAnon, Target: "/data", Replica: 2},
+			want:    "volume-anon-db-2-data",
 		},
 		{
 			name:    "a target of several segments flattens into one",
 			service: "db",
-			volume:  ServiceVolume{Type: VolumeTypeAnon, Target: "/var/lib/postgresql/data"},
-			want:    "volume-service-db-var-lib-postgresql-data",
+			volume:  ServiceVolume{Type: VolumeTypeAnon, Target: "/var/lib/postgresql/data", Replica: 1},
+			want:    "volume-anon-db-1-var-lib-postgresql-data",
 		},
 		{
 			name:    "tmpfs has no identity",

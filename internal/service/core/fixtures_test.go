@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/mock"
@@ -70,7 +71,7 @@ func demoSafetySnapshot() model.Savepoint {
 	}
 }
 
-// demoIntrospection is what the inspector reports for the live stack.
+// demoIntrospection is what the inspector reports for the live compose project.
 func demoIntrospection() model.IntrospectionResult {
 	return model.IntrospectionResult{Project: model.Project{
 		Name: demoProject,
@@ -84,13 +85,46 @@ func demoIntrospection() model.IntrospectionResult {
 const (
 	demoContainerID = "c0ffee"
 	demoBaseImage   = "postgres:16"
+	demoUpstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
 // demoContainerRef is that replica in the form a capture request addresses it by.
 func demoContainerRef() model.ContainerRef {
 	return model.ContainerRef{
-		Service: demoService, Replica: 1, ID: demoContainerID, BaseImage: demoBaseImage,
+		Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1),
+		UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage,
 	}
+}
+
+// demoContainerName is the name compose gives replica n of demoService.
+func demoContainerName(n int) string {
+	return fmt.Sprintf("%s-%s-%d", demoProject, demoService, n)
+}
+
+// demoContainerInspect is a replica running on demoBaseImage.
+func demoContainerInspect() container.InspectResponse {
+	return container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{Image: demoUpstreamID.String()},
+		Config:            &container.Config{Image: demoBaseImage},
+	}
+}
+
+// demoUpstreamCaptureRequest is the one upstream demoIntrospectionWithContainers names.
+func demoUpstreamCaptureRequest() model.UpstreamImageCaptureRequest {
+	return model.UpstreamImageCaptureRequest{
+		Image: model.UpstreamImage{
+			ID: demoUpstreamID, Refs: []string{demoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
+		},
+		InDaemon: true,
+	}
+}
+
+// demoUpstreamImage is what the copier reports for demoUpstreamCaptureRequest.
+func demoUpstreamImage() model.UpstreamImage {
+	image := demoUpstreamCaptureRequest().Image
+	image.Stored = true
+	image.StoredBytes = 512
+	return image
 }
 
 // demoIntrospectionWithContainers is demoIntrospection with the daemon holding
@@ -101,22 +135,31 @@ func demoIntrospectionWithContainers() model.IntrospectionResult {
 		Name: demoService,
 		Containers: []model.Container{{
 			ID:      demoContainerID,
+			Name:    demoContainerName(1),
 			Number:  1,
-			Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+			Inspect: demoContainerInspect(),
 		}},
 	}}
+	res.Images = map[model.ImageDigestID]image.InspectResponse{
+		demoUpstreamID: {
+			ID: demoUpstreamID.String(), RepoTags: []string{demoBaseImage},
+			RepoDigests: []string{"postgres@sha256:dd"}, Size: 1 << 20,
+		},
+	}
 	return res
 }
 
 // demoImageCapture is what the copier reports for demoContainerRef.
 func demoImageCapture() model.ImageCapture {
 	return model.ImageCapture{
-		Service:     demoService,
-		Replica:     1,
-		ContainerID: demoContainerID,
-		ImageID:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		BaseImage:   demoBaseImage,
-		SizeBytes:   4096,
+		Service:          demoService,
+		Replica:          1,
+		ContainerID:      demoContainerID,
+		ContainerName:    demoContainerName(1),
+		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		UpstreamImageID:  demoUpstreamID,
+		UpstreamImageRef: demoBaseImage,
+		SizeBytes:        4096,
 	}
 }
 
@@ -136,8 +179,8 @@ func demoRestoredRef(replica int) string {
 // demoImageRestore is what the copier reports for demoImageCapture.
 func demoImageRestore() model.ImageRestore {
 	return model.ImageRestore{
-		Service: demoService, Replica: 1,
-		ImageID: demoImageCapture().ImageID, ImageRef: demoRestoredRef(1),
+		Service: demoService, Replica: 1, ContainerName: demoContainerName(1),
+		ImageID: demoImageCapture().CommittedImageID, ImageRef: demoRestoredRef(1),
 	}
 }
 
@@ -154,8 +197,9 @@ func demoScaledIntrospection() model.IntrospectionResult {
 	res := demoIntrospectionWithContainers()
 	res.Project.Services[0].Containers = append(res.Project.Services[0].Containers, model.Container{
 		ID:      demoSecondContainerID,
+		Name:    demoContainerName(2),
 		Number:  2,
-		Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+		Inspect: demoContainerInspect(),
 	})
 	return res
 }
@@ -165,39 +209,51 @@ func demoSecondImageCapture() model.ImageCapture {
 	capture := demoImageCapture()
 	capture.Replica = 2
 	capture.ContainerID = demoSecondContainerID
-	capture.ImageID = demoSecondImageID
+	capture.ContainerName = demoContainerName(2)
+	capture.CommittedImageID = demoSecondImageID
 	return capture
 }
 
-// demoScaledRecord is a savepoint of the scaled stack: one capture per replica.
+// demoScaledRecord is a savepoint of the scaled compose project: one capture per replica.
 func demoScaledRecord() model.Savepoint {
 	record := demoRecord()
 	record.Images = []model.ImageCapture{demoImageCapture(), demoSecondImageCapture()}
 	return record
 }
 
-// demoSpec is what the assembler materialises demoIntrospection into, demoSpecBytes
-// its artifact, and demoTargetSpec what that artifact parses back to. The two
-// projects are distinct values: expectations match them by identity, so a call
-// handed the live stack instead of the savepoint's fails.
+// demoAssembled is what the assembler materialises demoIntrospection into, demoSpecBytes
+// its artifact and demoSpec what that artifact parses back to — the live compose project
+// a workflow acts on. demoTargetSpecBytes is a savepoint's artifact and demoTargetSpec
+// what it parses back to. The projects are distinct values: expectations match them by
+// identity, so a call handed the assembled project, or the live one instead of the
+// savepoint's, fails.
 var (
+	demoAssembled  = &types.Project{Name: demoProject}
 	demoSpec       = &types.Project{Name: demoProject}
 	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{
 		demoService: {Name: demoService, Image: demoBaseImage},
 	}}
-	demoSpecBytes = []byte("name: demo\n")
+	demoSpecBytes       = []byte("name: demo\n")
+	demoTargetSpecBytes = []byte("name: demo\nservices: {db: {image: postgres:16}}\n")
 )
 
-// demoAssembler materialises demoIntrospection into demoSpec.
+// demoAssembler materialises demoIntrospection into demoAssembled.
 func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
 
 // assemblerFor is demoAssembler for a test that reports its own introspection.
 func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 	assembler := &mockAssembler{}
-	assembler.On("Assemble", res).Return(demoSpec, nil)
-	assembler.On("Marshal", demoSpec).Return(demoSpecBytes, nil)
-	assembler.On("Parse", mock.Anything, demoSpecBytes).Return(demoTargetSpec, nil)
+	assembler.On("Assemble", mock.Anything, res).Return(demoAssembled, nil)
 	return assembler
+}
+
+// demoCodec renders demoAssembled and parses both artifacts back.
+func demoCodec() *mockCodec {
+	codec := &mockCodec{}
+	codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil)
+	codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil)
+	codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil)
+	return codec
 }
 
 // demoResolution is the three reads every rollback opens with: the records, the
@@ -205,7 +261,7 @@ func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector, *mockLocker) {
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoSpecBytes, nil)
+	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil)
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}

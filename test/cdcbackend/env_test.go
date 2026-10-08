@@ -15,7 +15,7 @@
 // Package cdcbackend drives the cdc backend one contract call at a time: one
 // volume, one instance, a real daemon, stock restic containers and the real
 // endpoint in front of the real repository root. What only this level buys is
-// the repository in view — the stack store is inmemory, so a case lists the
+// the repository in view — the compose project store is inmemory, so a case lists the
 // keys restic actually wrote.
 // Guarded twice: -short skips, and so does an unreachable daemon.
 package cdcbackend
@@ -91,8 +91,8 @@ type env struct {
 	hostNetwork bool
 	// repoURLBase is what the DI root hands a backend: the served endpoint as a
 	// container names it, with a volume's ObjectID still to append.
-	repoURLBase string
-	stackStore  storages.Storager
+	repoURLBase         string
+	composeProjectStore storages.Storager
 	// resticRoot is the tree the repositories live in — the one the server
 	// resolves against and the one the factory writes into, exactly as the DI
 	// root wires it.
@@ -101,7 +101,7 @@ type env struct {
 	opts       cdc.Options
 }
 
-// newEnv wires the backend as cmd/arcave does, with the stack store in memory:
+// newEnv wires the backend as cmd/arcave does, with the compose project store in memory:
 // the restic server is started once here and lives for the whole case, exactly as
 // the DI root keeps it for the whole process.
 func newEnv(t *testing.T, opts cdc.Options) *env {
@@ -116,11 +116,11 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 			t.Logf("backend log:\n%s", logs.String())
 		}
 	})
-	stackStore := inmemory.New("stack")
-	t.Cleanup(func() { assert.NoError(t, stackStore.Close()) })
+	composeProjectStore := inmemory.New("compose-project")
+	t.Cleanup(func() { assert.NoError(t, composeProjectStore.Close()) })
 
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
 	require.NoError(t, err)
 	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	port, err := rest.Serve(server, "")
@@ -131,14 +131,14 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 	opts.HostNetwork = hostNetwork
 
 	e := &env{
-		ctx:         ctx,
-		cli:         cli,
-		engine:      engine,
-		hostNetwork: hostNetwork,
-		repoURLBase: rest.RepositoryURLBase("", containerHost, port),
-		stackStore:  stackStore,
-		resticRoot:  resticRoot,
-		opts:        opts,
+		ctx:                 ctx,
+		cli:                 cli,
+		engine:              engine,
+		hostNetwork:         hostNetwork,
+		repoURLBase:         rest.RepositoryURLBase("", containerHost, port),
+		composeProjectStore: composeProjectStore,
+		resticRoot:          resticRoot,
+		opts:                opts,
 	}
 	e.factory = cdc.NewFactory(cdc.Dependencies{
 		Runner:         engine,

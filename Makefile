@@ -1,4 +1,4 @@
-.PHONY: build test test-verbose lint clean generate-restic-api
+.PHONY: build test test-verbose test-fidelity lint clean generate-restic-api
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
@@ -13,6 +13,11 @@ test:
 
 test-verbose:
 	go test -v ./...
+
+# The spec-fidelity catalog brings a compose project up per case against the live daemon:
+# minutes, not seconds, so it stays out of `test` behind its build tag.
+test-fidelity:
+	go test -tags fidelity -run TestIntrospectAssemble -count=1 -timeout 30m ./test/
 
 lint:
 	golangci-lint run ./...

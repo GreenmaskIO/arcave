@@ -40,20 +40,24 @@ type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
 }
 
-// composeIntrospector reports the live stack it was bound to at construction.
+// composeIntrospector reports the live compose project it was bound to at construction.
 type composeIntrospector interface {
 	Introspect(ctx context.Context) (model.IntrospectionResult, error)
 }
 
-// projectAssembler materialises the spec the runner acts on — out of a live
-// stack, or out of the artifact a savepoint committed.
+// projectAssembler builds the spec of a live compose project out of its introspection.
 type projectAssembler interface {
-	Assemble(res model.IntrospectionResult) (*types.Project, error)
+	Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error)
+}
+
+// specCodec moves a spec through the artifact a savepoint commits; Parse is compose's
+// loader, so every project the runner acts on has been through it.
+type specCodec interface {
 	Marshal(project *types.Project) ([]byte, error)
 	Parse(ctx context.Context, spec []byte) (*types.Project, error)
 }
 
-// composeRunner is the stack's lifecycle: stop it, tear it down, build it back
+// composeRunner is the compose project's lifecycle: stop it, tear it down, build it back
 // from a spec without starting it, start it.
 type composeRunner interface {
 	Stop(ctx context.Context, project *types.Project) error
@@ -71,13 +75,14 @@ type volumeRemover interface {
 // the store, and loaded back out of it under a tag of its own.
 type imageBackend interface {
 	Capture(ctx context.Context, req model.ImageCaptureRequest) (model.ImageCapture, error)
+	CaptureUpstream(ctx context.Context, req model.UpstreamImageCaptureRequest) (model.UpstreamImage, error)
 	Restore(ctx context.Context, req model.ImageRestoreRequest) (model.ImageRestore, error)
 }
 
-// containerRebuilder recreates one built container from another image — the
-// per-replica half compose's one image per service cannot express.
+// containerRebuilder recreates one built container from another image as the replica a
+// savepoint recorded, which compose's one image per service cannot express.
 type containerRebuilder interface {
-	RecreateWithImage(ctx context.Context, containerID, imageRef string) (string, error)
+	RecreateWithImage(ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string) (string, error)
 }
 
 // inflightMarkers is the intent marker's seam: written before a rollback's first
@@ -95,6 +100,7 @@ type Deps struct {
 	ProjectLocker      projectLocker
 	ComposeInspector   composeIntrospector
 	ProjectAssembler   projectAssembler
+	SpecCodec          specCodec
 	ComposeRunner      composeRunner
 	VolumeRemover      volumeRemover
 	ImageBackend       imageBackend
@@ -115,6 +121,7 @@ type Service struct {
 	projectLocker           projectLocker
 	composeInspector        composeIntrospector
 	projectAssembler        projectAssembler
+	specCodec               specCodec
 	composeRunner           composeRunner
 	volumeRemover           volumeRemover
 	imageBackend            imageBackend
@@ -132,6 +139,7 @@ func New(d Deps) *Service {
 		projectLocker:           d.ProjectLocker,
 		composeInspector:        d.ComposeInspector,
 		projectAssembler:        d.ProjectAssembler,
+		specCodec:               d.SpecCodec,
 		composeRunner:           d.ComposeRunner,
 		volumeRemover:           d.VolumeRemover,
 		imageBackend:            d.ImageBackend,

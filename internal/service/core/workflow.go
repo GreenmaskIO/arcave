@@ -17,6 +17,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -26,7 +27,8 @@ import (
 )
 
 // workingSet is what a mutating workflow operates on: the introspection taken once
-// before the stop, its rendered spec, the request's bound, and one backend per volume.
+// before the stop, its rendered spec and the project parsed from it, the request's
+// bound, and one backend per volume.
 type workingSet struct {
 	project     *types.Project
 	spec        []byte
@@ -34,27 +36,35 @@ type workingSet struct {
 	backends    []model.VolumeSnapshotBackend
 	// containers are the replicas whose writable layer a capture commits.
 	containers []model.ContainerRef
+	// upstreams are the distinct images the containers' compose file named.
+	upstreams []model.UpstreamImageCaptureRequest
 	// anonVolumes maps a mount's ObjectID to the docker name behind it — the only
 	// record of what a teardown orphans.
 	anonVolumes map[string]string
 }
 
-// prepare introspects the stack, renders its spec and builds one backend per live
-// volume. A capture covering nothing is refused here.
+// prepare introspects the compose project, renders its spec, parses it back and builds one
+// backend per live volume. A capture covering nothing is refused here.
 func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (workingSet, error) {
 	res, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
-		return workingSet{}, fmt.Errorf("introspecting the stack: %w", err)
+		return workingSet{}, fmt.Errorf("introspecting the compose project: %w", err)
 	}
 
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
-	project, err := s.projectAssembler.Assemble(res)
+	assembled, err := s.projectAssembler.Assemble(ctx, res)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("assembling the compose spec: %w", err)
 	}
-	spec, err := s.projectAssembler.Marshal(project)
+	spec, err := s.specCodec.Marshal(assembled)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("rendering the compose spec: %w", err)
+	}
+	// Through the loader, as a rollback reads the artifact: the live compose project is
+	// acted on as these very bytes describe it.
+	project, err := s.specCodec.Parse(ctx, spec)
+	if err != nil {
+		return workingSet{}, fmt.Errorf("parsing the compose spec: %w", err)
 	}
 
 	volumes, err := s.resolveBackupVolumes(ctx, res)
@@ -70,12 +80,16 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		return workingSet{}, err
 	}
 
+	containers := capturableContainers(ctx, res)
+	warnOnReplicaGaps(ctx, res)
+
 	return workingSet{
 		project:     project,
 		spec:        spec,
 		waitTimeout: waitTimeout,
 		backends:    backends,
-		containers:  capturableContainers(res),
+		containers:  containers,
+		upstreams:   upstreamImages(res, containers),
 		anonVolumes: anonymousVolumes(res),
 	}, nil
 }
@@ -89,22 +103,22 @@ func (s *Service) stopServices(ctx context.Context, ws workingSet) error {
 	return nil
 }
 
-// tearDownStack removes the stack's containers and networks. It goes by project
+// composeDown removes the compose project's containers and networks. It goes by project
 // name, so it also takes down what a failed rebuild left standing.
-func (s *Service) tearDownStack(ctx context.Context, project *types.Project) error {
-	zerolog.Ctx(ctx).Info().Msg("removing the stack")
+func (s *Service) composeDown(ctx context.Context, project *types.Project) error {
+	zerolog.Ctx(ctx).Info().Msg("removing the compose project")
 	if err := s.composeRunner.Down(ctx, project); err != nil {
-		return fmt.Errorf("removing the stack: %w", err)
+		return fmt.Errorf("removing the compose project: %w", err)
 	}
 	return nil
 }
 
-// buildStack creates the containers of project without starting them: the data is
+// composeCreate creates the containers of project without starting them: the data is
 // restored into them first.
-func (s *Service) buildStack(ctx context.Context, project *types.Project) error {
-	zerolog.Ctx(ctx).Info().Msg("rebuilding the stack from the savepoint's spec")
+func (s *Service) composeCreate(ctx context.Context, project *types.Project) error {
+	zerolog.Ctx(ctx).Info().Msg("creating the compose project from the spec")
 	if err := s.composeRunner.Create(ctx, project); err != nil {
-		return fmt.Errorf("rebuilding the stack: %w", err)
+		return fmt.Errorf("creating the compose project: %w", err)
 	}
 	return nil
 }
@@ -118,22 +132,40 @@ func (s *Service) startServices(ctx context.Context, ws workingSet) error {
 	return nil
 }
 
-// capturableContainers lists every replica of every service, in service order.
-func capturableContainers(res model.IntrospectionResult) []model.ContainerRef {
-	var refs []model.ContainerRef
+// warnOnReplicaGaps reports each service missing a replica below its highest one:
+// only the replicas there are captured, and a rollback brings back exactly those.
+func warnOnReplicaGaps(ctx context.Context, res model.IntrospectionResult) {
 	for _, svc := range res.Project.Services {
+		numbers := make([]int, 0, len(svc.Containers))
 		for _, c := range svc.Containers {
-			ref := model.ContainerRef{Service: svc.Name, Replica: c.Number, ID: c.ID}
-			if c.Inspect.Config != nil {
-				ref.BaseImage = c.Inspect.Config.Image
-			}
-			refs = append(refs, ref)
+			numbers = append(numbers, c.Number)
 		}
+		missing := missingReplicas(numbers)
+		if len(missing) == 0 {
+			continue
+		}
+		slices.Sort(numbers)
+		zerolog.Ctx(ctx).Warn().Str("service", svc.Name).Ints("replicas", numbers).Ints("missing", missing).
+			Msg("some replicas of this service are gone (removed, or exited and cleaned up); " +
+				"only the remaining ones are captured, and a rollback brings back exactly these, under the same names")
 	}
-	return refs
 }
 
-// anonymousVolumes indexes the docker names of the stack's anonymous volumes by
+// missingReplicas is the numbers from 1 up to the highest of numbers that no replica holds.
+func missingReplicas(numbers []int) []int {
+	if len(numbers) == 0 {
+		return nil
+	}
+	var missing []int
+	for n := 1; n < slices.Max(numbers); n++ {
+		if !slices.Contains(numbers, n) {
+			missing = append(missing, n)
+		}
+	}
+	return missing
+}
+
+// anonymousVolumes indexes the docker names of the compose project's anonymous volumes by
 // the identity their data is captured under.
 func anonymousVolumes(res model.IntrospectionResult) map[string]string {
 	names := map[string]string{}

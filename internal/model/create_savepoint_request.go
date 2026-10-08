@@ -17,7 +17,7 @@ package model
 import "time"
 
 // CreateSavepointRequest carries everything CreateSavepoint needs, so a caller
-// need not hand over a config.Config. The stack and the backend are injected.
+// need not hand over a config.Config. The compose project and the backend are injected.
 type CreateSavepointRequest struct {
 	Name        string            // savepoint name
 	Description string            // savepoint description

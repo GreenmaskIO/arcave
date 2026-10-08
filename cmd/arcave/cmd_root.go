@@ -40,8 +40,8 @@ var (
 	configFound    bool          // whether .arcave/config.yaml existed
 	rootConfigFile string        // the --config flag's target, read before projectCfg exists
 
-	// projectName is the compose project every stack-bound command operates on. It
-	// is no config key: one project directory may hold several stacks.
+	// projectName is the compose project every project-bound command operates on. It
+	// is no config key: one project directory may hold several compose projects.
 	projectName string
 )
 
@@ -129,7 +129,7 @@ func requireConfig() error {
 	return nil
 }
 
-// requireProjectName guards every command bound to a stack.
+// requireProjectName guards every command bound to a compose project.
 func requireProjectName() error {
 	if projectName == "" {
 		return fmt.Errorf("no compose project named: pass -p/--project-name, or set %s", projectNameEnv)
@@ -137,7 +137,7 @@ func requireProjectName() error {
 	return nil
 }
 
-// withDeps runs fn with the dependencies for the stack -p named, released when fn
+// withDeps runs fn with the dependencies for the compose project -p named, released when fn
 // returns. It takes no lock: core.Service claims the project lock itself.
 func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
 	if err := requireProjectName(); err != nil {
@@ -145,7 +145,7 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	}
 
 	ctx := cmd.Context()
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.StackName(projectName))
+	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(projectName))
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
@@ -179,7 +179,7 @@ func init() {
 	// create` and `rollback` both want --wait-timeout, and whichever init() ran
 	// last would silently own the key for both, so the other command's flag would
 	// parse and then be ignored. Declared once here, every command that restarts
-	// the stack inherits them and the binding is unambiguous.
+	// the compose project inherits them and the binding is unambiguous.
 	pf.Duration("wait-timeout", config.DefaultWaitTimeout,
 		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
 	pf.Duration("stop-timeout", config.DefaultStopTimeout,

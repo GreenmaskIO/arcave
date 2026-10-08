@@ -19,14 +19,13 @@ import (
 	"strings"
 )
 
-// ProjectName names the storage tenant every store root is scoped by — the
+// ArcaveProjectName names the arcave project every store root is scoped by — the
 // `project.name` of .arcave/config.yaml. It carries its own gate, so a value
 // that reached a store was validated.
 //
-// StackName's twin, and deliberately a separate type: the tenant and the compose
-// stack are different concepts that happen to share a charset, and one segment
-// must never be passed where the other is expected.
-type ProjectName string
+// Deliberately not DockerComposeProjectName: the arcave project and the compose project are
+// different concepts, and one segment must never be passed where the other is expected.
+type ArcaveProjectName string
 
 // Validate accepts a non-empty name of the charset compose imposes on project
 // names: it starts with [a-z0-9] and continues with [a-z0-9_-].
@@ -34,34 +33,34 @@ type ProjectName string
 // An allowlist, like SessionID's and SavepointID's, and for the same reason: the
 // name is rendered into a store root, and a list of what a path segment must not
 // be is never provably complete.
-func (m ProjectName) Validate() error {
+func (m ArcaveProjectName) Validate() error {
 	if err := validateNameSegment(string(m)); err != nil {
-		return fmt.Errorf("invalid project name %q: %w", string(m), err)
+		return fmt.Errorf("invalid arcave project name %q: %w", string(m), err)
 	}
 	return nil
 }
 
 // String renders the name as the path segment it becomes.
-func (m ProjectName) String() string { return string(m) }
+func (m ArcaveProjectName) String() string { return string(m) }
 
-// NormalizeProjectName coerces s into the charset Validate accepts — the same
+// NormalizeArcaveProjectName coerces s into the charset Validate accepts — the same
 // normalization compose-go applies to a directory name: lower case, characters
 // outside the charset dropped, leading "-"/"_" trimmed. It is spelled out here
 // rather than borrowed, since model imports nothing.
 //
 // The result may be empty (a name of nothing but non-ASCII letters), which
 // Validate is what reports.
-func NormalizeProjectName(s string) ProjectName {
+func NormalizeArcaveProjectName(s string) ArcaveProjectName {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		if isNameRune(r) {
 			b.WriteRune(r)
 		}
 	}
-	return ProjectName(strings.TrimLeft(b.String(), "-_"))
+	return ArcaveProjectName(strings.TrimLeft(b.String(), "-_"))
 }
 
-// validateNameSegment holds the charset rule ProjectName and StackName share.
+// validateNameSegment holds ArcaveProjectName's charset rule.
 // The message names the condition alone; each type wraps it with its own
 // subject.
 func validateNameSegment(s string) error {

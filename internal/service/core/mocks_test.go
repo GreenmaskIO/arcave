@@ -67,6 +67,14 @@ func (m *mockImageBackend) Capture(
 	return capture, args.Error(1)
 }
 
+func (m *mockImageBackend) CaptureUpstream(
+	ctx context.Context, req model.UpstreamImageCaptureRequest,
+) (model.UpstreamImage, error) {
+	args := m.Called(ctx, req)
+	image, _ := args.Get(0).(model.UpstreamImage)
+	return image, args.Error(1)
+}
+
 func (m *mockImageBackend) Restore(
 	ctx context.Context, req model.ImageRestoreRequest,
 ) (model.ImageRestore, error) {
@@ -79,9 +87,9 @@ func (m *mockImageBackend) Restore(
 type mockContainerRebuilder struct{ mock.Mock }
 
 func (m *mockContainerRebuilder) RecreateWithImage(
-	ctx context.Context, containerID, imageRef string,
+	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
 ) (string, error) {
-	args := m.Called(ctx, containerID, imageRef)
+	args := m.Called(ctx, containerID, as, imageRef)
 	return args.String(0), args.Error(1)
 }
 
@@ -152,19 +160,21 @@ func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResu
 
 type mockAssembler struct{ mock.Mock }
 
-func (m *mockAssembler) Assemble(res model.IntrospectionResult) (*types.Project, error) {
-	args := m.Called(res)
+func (m *mockAssembler) Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error) {
+	args := m.Called(ctx, res)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)
 }
 
-func (m *mockAssembler) Marshal(project *types.Project) ([]byte, error) {
+type mockCodec struct{ mock.Mock }
+
+func (m *mockCodec) Marshal(project *types.Project) ([]byte, error) {
 	args := m.Called(project)
 	spec, _ := args.Get(0).([]byte)
 	return spec, args.Error(1)
 }
 
-func (m *mockAssembler) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
+func (m *mockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
 	args := m.Called(ctx, spec)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)

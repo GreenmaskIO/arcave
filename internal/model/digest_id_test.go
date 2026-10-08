@@ -67,11 +67,11 @@ func TestDigestID_UnmarshalJSON(t *testing.T) {
 	var capture model.ImageCapture
 
 	// Act
-	err := json.Unmarshal([]byte(`{"image_id":"`+validDigest+`"}`), &capture)
+	err := json.Unmarshal([]byte(`{"committed_image_id":"`+validDigest+`"}`), &capture)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ImageDigestID(validDigest), capture.ImageID)
+	assert.Equal(t, model.ImageDigestID(validDigest), capture.CommittedImageID)
 }
 
 func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
@@ -79,7 +79,7 @@ func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
 	var capture model.ImageCapture
 
 	// Act
-	err := json.Unmarshal([]byte(`{"image_id":"postgres:16"}`), &capture)
+	err := json.Unmarshal([]byte(`{"committed_image_id":"postgres:16"}`), &capture)
 
 	// Assert: a stored id that is not content fails at the decode, not at the daemon.
 	require.ErrorIs(t, err, model.ErrInvalidDigestID)
@@ -87,12 +87,12 @@ func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
 
 func TestDigestID_MarshalJSON_RoundTrips(t *testing.T) {
 	// Arrange
-	capture := model.ImageCapture{ImageID: model.ImageDigestID(validDigest)}
+	capture := model.ImageCapture{CommittedImageID: model.ImageDigestID(validDigest)}
 
 	// Act
 	body, err := json.Marshal(capture)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Contains(t, string(body), `"image_id":"`+validDigest+`"`)
+	assert.Contains(t, string(body), `"committed_image_id":"`+validDigest+`"`)
 }

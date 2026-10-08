@@ -39,7 +39,7 @@ var skipReasons = map[model.VolumeType]string{
 	model.VolumeTypeUnknown: "unknown mount type",
 }
 
-// resolveBackupVolumes returns the units a savepoint of the introspected stack
+// resolveBackupVolumes returns the units a savepoint of the introspected compose project
 // covers. Every workflow comes through here, so create and rollback cannot differ.
 func (s *Service) resolveBackupVolumes(ctx context.Context, res model.IntrospectionResult) ([]model.Volume, error) {
 	volumes, skipped, err := FindBackupVolumes(res, s.defaultBackend)
@@ -64,8 +64,8 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, res model.Introspect
 // renders them as it likes.
 //
 // Today it applies the defaults only: every named volume and every bind or
-// anonymous mount, all on backend, deduplicated by ObjectID. The one place
-// ComposeProject is stamped.
+// anonymous mount not inherited through volumes_from, all on backend,
+// deduplicated by ObjectID. The one place ComposeProject is stamped.
 //
 // It is also where an ObjectID collision is caught: this is the only level that
 // sees every volume of the project, so two identities rendering one id are
@@ -76,6 +76,9 @@ func (s *Service) resolveBackupVolumes(ctx context.Context, res model.Introspect
 func FindBackupVolumes(
 	res model.IntrospectionResult, backend model.SnapshotBackendKind,
 ) ([]model.Volume, []model.SkippedVolume, error) {
+	// inheritedSkipReason skips a mount inherited from a container the project does not stop or capture.
+	const inheritedSkipReason = "inherited from a container outside the project"
+
 	var (
 		volumes []model.Volume
 		skipped []model.SkippedVolume
@@ -104,13 +107,27 @@ func FindBackupVolumes(
 		})
 	}
 
-	// Bind and anonymous mounts belong to the service that declares them.
+	// Bind and anonymous mounts belong to the service that declares them; one inherited
+	// through volumes_from belongs to its source.
+	inProject := projectContainers(res.Project.Services)
 	for _, svc := range res.Project.Services {
 		for _, sv := range svc.Volumes {
-			switch sv.Type {
-			case model.VolumeTypeNamed:
+			if sv.Type == model.VolumeTypeNamed {
 				// Only a reference to the unit already taken above.
 				continue
+			}
+			if sv.InheritedFrom != "" {
+				if !inProject[sv.InheritedFrom] {
+					skipped = append(skipped, model.SkippedVolume{
+						Service: svc.Name,
+						Target:  sv.Target,
+						RawType: sv.RawType,
+						Reason:  inheritedSkipReason,
+					})
+				}
+				continue
+			}
+			switch sv.Type {
 			case model.VolumeTypeBind, model.VolumeTypeAnon:
 				// A unit of its own.
 			default:
@@ -124,7 +141,8 @@ func FindBackupVolumes(
 			}
 
 			objectID := sv.ObjectID(svc.Name)
-			duplicate, err := claimObjectID(seen, objectID, volumeIdentity{service: svc.Name, target: sv.Target})
+			duplicate, err := claimObjectID(seen, objectID,
+				volumeIdentity{service: svc.Name, replica: sv.Replica, target: sv.Target})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -145,20 +163,35 @@ func FindBackupVolumes(
 	return volumes, skipped, nil
 }
 
-// volumeIdentity is the facts an ObjectID is rendered from — a docker name for a
-// named volume, a service and a target for a bind or anonymous one. Comparable,
-// so two claims of one id are told apart by the identity behind them.
+// projectContainers are the ids of the project's replicas.
+func projectContainers(services []model.Service) map[string]bool {
+	ids := map[string]bool{}
+	for _, svc := range services {
+		for _, c := range svc.Containers {
+			ids[c.ID] = true
+		}
+	}
+	return ids
+}
+
+// volumeIdentity is the facts an ObjectID is rendered from: docker name (named),
+// service and target (bind), plus replica (anonymous). Comparable.
 type volumeIdentity struct {
 	dockerName string
 	service    string
+	replica    int
 	target     string
 }
 
 func (id volumeIdentity) String() string {
-	if id.dockerName != "" {
+	switch {
+	case id.dockerName != "":
 		return fmt.Sprintf("named volume %q", id.dockerName)
+	case id.replica != 0:
+		return fmt.Sprintf("service %q replica %d at %q", id.service, id.replica, id.target)
+	default:
+		return fmt.Sprintf("service %q at %q", id.service, id.target)
 	}
-	return fmt.Sprintf("service %q at %q", id.service, id.target)
 }
 
 // claimObjectID records that identity addresses objectID, reporting a repeat of
@@ -210,6 +243,7 @@ func anonProperties(service string, sv model.ServiceVolume) *model.VolumePropert
 	}
 	return &model.VolumePropertiesAnon{
 		Service:  service,
+		Replica:  sv.Replica,
 		Target:   sv.Target,
 		ReadOnly: sv.ReadOnly,
 		Subpath:  subpath,

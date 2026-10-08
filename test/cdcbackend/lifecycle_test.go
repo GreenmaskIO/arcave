@@ -56,7 +56,7 @@ func TestSnapshotter_Snapshot_KeepsRepositoriesPerVolume(t *testing.T) {
 
 	// Assert
 	roots := []string{"restic/" + first.ObjectID + "/", "restic/" + second.ObjectID + "/"}
-	for _, key := range objectNames(t, env.stackStore, "") {
+	for _, key := range objectNames(t, env.composeProjectStore, "") {
 		assert.Truef(t, hasAnyPrefix(key, roots), "%s lives outside either volume's repository", key)
 	}
 	assert.Equal(t, []string{firstPayload.SnapshotObjectID}, env.snapshotObjectIDs(t, first))

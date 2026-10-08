@@ -15,8 +15,11 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,27 +31,21 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// restoredImageNamespace opens every tag a rollback puts on a restored layer, so
-// what arcave left in the daemon is one prefix away from being told apart.
-const restoredImageNamespace = "arcave"
-
-// restoredTagPrefix opens the tag half: what the repository does not say is which
-// savepoint the layer came from.
-const restoredTagPrefix = "sp-"
-
 // maxRepositoryPath is docker's own cap on a repository path, the registry domain
 // aside — RepositoryNameTotalLengthMax of github.com/distribution/reference.
 const maxRepositoryPath = 255
 
-// firstReplica is the replica number compose counts from, and the only one a
-// compose service's single image can stand for.
-const firstReplica = 1
+// replicaPair is one recorded replica and the replica compose created in its place.
+type replicaPair struct {
+	recorded int
+	created  int
+}
 
-// replicaKey addresses one replica of one service among the containers a rebuild
-// has just created.
-type replicaKey struct {
-	service string
-	replica int
+// replicaRebuild is one restored layer and the created container it is rebuilt over.
+type replicaRebuild struct {
+	image       model.ImageRestore
+	created     int
+	containerID string
 }
 
 // captureImages commits every container's writable layer under one savepoint id,
@@ -94,6 +91,46 @@ func (s *Service) captureImages(
 	return captures, nil
 }
 
+// captureUpstreams keeps every distinct upstream image, concurrently, apart from
+// the layers: a savepoint holds its upstreams whether or not it holds a layer.
+func (s *Service) captureUpstreams(
+	ctx context.Context, snapshotID model.SavepointID, reqs []model.UpstreamImageCaptureRequest,
+) ([]model.UpstreamImage, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+
+	images := make([]model.UpstreamImage, len(reqs))
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(s.maxConcurrentOperations)
+	for i, req := range reqs {
+		eg.Go(func() error {
+			opCtx := zerolog.Ctx(egCtx).With().
+				Str("upstream_image_id", req.Image.ID.String()).
+				Str("snapshot_id", snapshotID.String()).
+				Str("op", "save").
+				Logger().
+				WithContext(egCtx)
+			log := zerolog.Ctx(opCtx)
+
+			started := time.Now()
+			log.Info().Msg("upstream image capture started")
+			image, err := s.imageBackend.CaptureUpstream(opCtx, req)
+			if err != nil {
+				return fmt.Errorf("capture upstream image %s: %w", req.Image.ID, err)
+			}
+			images[i] = image
+			log.Info().Dur("duration", time.Since(started)).Bool("stored", image.Stored).
+				Int64("stored_bytes", image.StoredBytes).Msg("upstream image capture finished")
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+	return images, nil
+}
+
 // restoreImages loads every writable layer the record holds back into the daemon,
 // concurrently, and names each under a tag of its own. A record predating image
 // capture restores nothing.
@@ -136,26 +173,19 @@ func (s *Service) restoreImages(
 	return restored, nil
 }
 
-// retargetImages points every restored service at its first replica's image, on a
-// copy of the project. The tag lives only in the local daemon, so the rebuild is
-// told never to pull it.
+// retargetImages points every restored service, on a copy of the project, at its lowest
+// recorded replica's image with pull_policy never: the tag exists only in the local daemon.
 func retargetImages(project *types.Project, restored []model.ImageRestore) *types.Project {
 	if len(restored) == 0 {
 		return project
 	}
 
-	refs := make(map[string]string, len(restored))
-	for _, image := range restored {
-		if image.Replica == firstReplica {
-			refs[image.Service] = image.ImageRef
-		}
-	}
-
+	_, byService := restoredByService(restored)
 	retargeted := *project
 	retargeted.Services = make(types.Services, len(project.Services))
 	for name, service := range project.Services {
-		if ref, ok := refs[name]; ok {
-			service.Image = ref
+		if images, ok := byService[name]; ok {
+			service.Image = images[0].ImageRef
 			service.PullPolicy = types.PullPolicyNever
 		}
 		retargeted.Services[name] = service
@@ -163,35 +193,37 @@ func retargetImages(project *types.Project, restored []model.ImageRestore) *type
 	return &retargeted
 }
 
-// rebuildDivergentReplicas gives every replica past the first its own layer, over
-// what compose has just created. It runs before the volumes are restored: an
-// anonymous volume is resolved through the container that mounts it, so the
-// container set has to be final by then.
+// rebuildDivergentReplicas rebuilds each replica the compose spec cannot name on its own layer
+// and recorded number. It must run before the volume restore, which resolves through containers.
 func (s *Service) rebuildDivergentReplicas(ctx context.Context, restored []model.ImageRestore) error {
-	divergent := divergentReplicas(restored)
-	if len(divergent) == 0 {
+	if createdAsRecorded(restored) {
 		return nil
 	}
 
 	res, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
-		return fmt.Errorf("introspecting the rebuilt stack: %w", err)
+		return fmt.Errorf("introspecting the rebuilt compose project: %w", err)
 	}
-	built := builtContainers(res)
+	rebuilds, err := replicaRebuilds(restored, builtContainers(res))
+	if err != nil {
+		return err
+	}
 
-	for _, image := range divergent {
-		key := replicaKey{service: image.Service, replica: image.Replica}
-		containerID, ok := built[key]
-		if !ok {
-			return fmt.Errorf("the rebuilt stack holds no replica %d of service %s to restore its layer into",
-				image.Replica, image.Service)
+	log := zerolog.Ctx(ctx)
+	for _, r := range rebuilds {
+		image := r.image
+		if image.Replica != r.created {
+			log.Warn().Str("service", image.Service).Int("replica", image.Replica).Int("created_replica", r.created).
+				Msg("compose numbers replicas without gaps and created this one under another number; " +
+					"it is recreated under the number and name the savepoint recorded")
 		}
-		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, containerID, image.ImageRef)
+		as := model.ReplicaIdentity{Name: image.ContainerName, Number: image.Replica}
+		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, r.containerID, as, image.ImageRef)
 		if err != nil {
 			return fmt.Errorf("rebuild replica %d of service %s from %s: %w",
 				image.Replica, image.Service, image.ImageRef, err)
 		}
-		zerolog.Ctx(ctx).Info().Str("service", image.Service).Int("replica", image.Replica).
+		log.Info().Str("service", image.Service).Int("replica", image.Replica).
 			Str("container", rebuilt).Str("image_ref", image.ImageRef).Msg("replica rebuilt on its own layer")
 	}
 	return nil
@@ -202,17 +234,17 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, restored []model
 // repository carries the identity and the tag the savepoint, so `docker images`
 // reads as one row per savepoint under a row per replica.
 func restoredImageRef(project string, snapshotID model.SavepointID, capture model.ImageCapture) string {
-	return restoredImageRepository(project, capture) + ":" + restoredTagPrefix + snapshotID.String()
+	return restoredImageRepository(project, capture) + ":" + model.LayerTagPrefix + snapshotID.String()
 }
 
 // restoredImageRepository builds the repository half and keeps it addressable: the
 // base image is the one segment carrying no identity, so it is what gets cut when
 // the name would pass docker's cap, and the replica is still named without it.
 func restoredImageRepository(project string, capture model.ImageCapture) string {
-	identity := restoredImageNamespace + "/" +
+	identity := model.LayerImageNamespace + "/" +
 		joinSegments(refSegment(project), refSegment(capture.Service), strconv.Itoa(capture.Replica))
 
-	base := refSegment(unnestBaseImage(identity, capture.BaseImage))
+	base := refSegment(capture.UpstreamImageRef)
 	room := maxRepositoryPath - len(identity) - 1
 	if base == "" || room <= 0 {
 		return identity
@@ -238,16 +270,6 @@ func joinSegments(segments ...string) string {
 	return strings.Join(kept, "-")
 }
 
-// unnestBaseImage recovers the image a replica really came from when its base is a
-// tag an earlier rollback left behind. Without it every rollback would fold its own
-// name into the next one's, and the name would grow without bound.
-func unnestBaseImage(identity, base string) string {
-	if repository, tag, ok := strings.Cut(base, ":"); ok && strings.HasPrefix(tag, restoredTagPrefix) {
-		base = repository
-	}
-	return strings.TrimPrefix(base, identity+"-")
-}
-
 // refSegment reduces one segment to lower-case alphanumerics joined by single
 // dashes — a subset of every docker path component, so whatever a service or an
 // image is called, what comes out of here is nameable.
@@ -267,31 +289,98 @@ func refSegment(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-// divergentReplicas is the replicas the compose spec cannot name: those past the
-// first whose image differs from the one their service was retargeted to.
-func divergentReplicas(restored []model.ImageRestore) []model.ImageRestore {
-	first := make(map[string]string, len(restored))
+// restoredByService groups the restored layers by service, each group ascending
+// by replica, and lists the services in the order they first appear.
+func restoredByService(restored []model.ImageRestore) ([]string, map[string][]model.ImageRestore) {
+	var services []string
+	byService := map[string][]model.ImageRestore{}
 	for _, image := range restored {
-		if image.Replica == firstReplica {
-			first[image.Service] = image.ImageRef
+		if _, ok := byService[image.Service]; !ok {
+			services = append(services, image.Service)
 		}
+		byService[image.Service] = append(byService[image.Service], image)
 	}
-
-	var divergent []model.ImageRestore
-	for _, image := range restored {
-		if image.Replica != firstReplica && first[image.Service] != image.ImageRef {
-			divergent = append(divergent, image)
-		}
+	for _, images := range byService {
+		slices.SortFunc(images, func(a, b model.ImageRestore) int { return cmp.Compare(a.Replica, b.Replica) })
 	}
-	return divergent
+	return services, byService
 }
 
-// builtContainers indexes the stack's containers by the replica each one is.
-func builtContainers(res model.IntrospectionResult) map[replicaKey]string {
-	built := map[replicaKey]string{}
+// createdAsRecorded reports whether every service's replicas count from 1 without a gap,
+// all on the one image the service was retargeted to. It trusts compose to number a
+// freshly created service 1..N, which is what lets it skip reading the created containers.
+func createdAsRecorded(restored []model.ImageRestore) bool {
+	_, byService := restoredByService(restored)
+	for _, images := range byService {
+		for i, image := range images {
+			if image.Replica != i+1 || image.ImageRef != images[0].ImageRef {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// replicaRebuilds is the replicas whose layer or number compose did not reproduce, highest
+// recorded number first per service so each claimed name has already been freed.
+func replicaRebuilds(
+	restored []model.ImageRestore, built map[string]map[int]string,
+) ([]replicaRebuild, error) {
+	services, byService := restoredByService(restored)
+	var rebuilds []replicaRebuild
+	for _, service := range services {
+		images := byService[service]
+		created := slices.Sorted(maps.Keys(built[service]))
+		pairs, err := pairReplicas(replicaNumbers(images), created)
+		if err != nil {
+			return nil, fmt.Errorf("service %s: %w", service, err)
+		}
+		for i := len(images) - 1; i >= 0; i-- {
+			image, pair := images[i], pairs[i]
+			if image.ImageRef == images[0].ImageRef && pair.recorded == pair.created {
+				continue
+			}
+			rebuilds = append(rebuilds, replicaRebuild{
+				image: image, created: pair.created, containerID: built[service][pair.created],
+			})
+		}
+	}
+	return rebuilds, nil
+}
+
+// pairReplicas pairs recorded with created replica numbers, both ascending: [1,3] against
+// [1,2] is 1←1, 3←2. Fewer created than recorded is an error.
+func pairReplicas(recorded, created []int) ([]replicaPair, error) {
+	recorded, created = slices.Sorted(slices.Values(recorded)), slices.Sorted(slices.Values(created))
+	if len(created) < len(recorded) {
+		return nil, fmt.Errorf("the rebuilt compose project holds %d replicas to restore %d recorded ones into",
+			len(created), len(recorded))
+	}
+	pairs := make([]replicaPair, len(recorded))
+	for i, number := range recorded {
+		pairs[i] = replicaPair{recorded: number, created: created[i]}
+	}
+	return pairs, nil
+}
+
+// replicaNumbers is the replica number of each layer, in order.
+func replicaNumbers(images []model.ImageRestore) []int {
+	numbers := make([]int, len(images))
+	for i, image := range images {
+		numbers[i] = image.Replica
+	}
+	return numbers
+}
+
+// builtContainers indexes the compose project's containers by service and replica number.
+func builtContainers(res model.IntrospectionResult) map[string]map[int]string {
+	built := map[string]map[int]string{}
 	for _, svc := range res.Project.Services {
 		for _, c := range svc.Containers {
-			built[replicaKey{service: svc.Name, replica: c.Number}] = c.ID
+			if built[svc.Name] == nil {
+				built[svc.Name] = map[int]string{}
+			}
+			built[svc.Name][c.Number] = c.ID
 		}
 	}
 	return built
@@ -318,7 +407,7 @@ func imageRestoreContext(
 	return zerolog.Ctx(ctx).With().
 		Str("service", capture.Service).
 		Int("replica", capture.Replica).
-		Str("image_id", capture.ImageID.String()).
+		Str("image_id", capture.CommittedImageID.String()).
 		Str("snapshot_id", snapshotID.String()).
 		Str("op", "load").
 		Logger().

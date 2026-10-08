@@ -59,7 +59,7 @@ flowchart TD
     D --> E["Wait until containers exited"]
     E --> F["Clear the savepoint namespace"]
     F --> G["Copy volume data"]
-    G --> G2["Write project.yaml (the stack's compose spec)"]
+    G --> G2["Write project.yaml (the compose project's spec)"]
     G2 --> H["Commit savepoint.json (written last)"]
     H --> I["Start Docker Compose services"]
     I --> J["Wait for health checks"]
@@ -81,7 +81,7 @@ rm -rf .arcave/savepoints/myapp/1780335122
 cp -a pgdata .arcave/savepoints/myapp/1780335122/postgres
 cp -a redisdata .arcave/savepoints/myapp/1780335122/redis
 
-# 4. Record the stack this savepoint was taken of
+# 4. Record the compose project this savepoint was taken of
 write .arcave/savepoints/myapp/1780335122/project.yaml
 
 # 5. Commit the savepoint — the record is written LAST
@@ -154,9 +154,9 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
 
 ```text
 -p, --project-name        The Docker Compose project to act on, as `docker compose ls` names it.
-                          Required by every command that touches a stack — savepoint create/list/remove
+                          Required by every command that touches a compose project — savepoint create/list/remove
                           and rollback — and read from ARCAVE_PROJECT_NAME when the flag is absent.
-                          `arcave init` names no stack and does not take it; `arcave mcp` serves
+                          `arcave init` names no compose project and does not take it; `arcave mcp` serves
                           many, so each of its tool calls names its own.
     --config              Path to the config file (default: .arcave/config.yaml under the project root).
     --log-level           debug | info | warn.
@@ -166,9 +166,9 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
     --progress            Where compose's own progress goes: log | tty | quiet.
 ```
 
-The project name is deliberately not a config key: one project directory may hold several stacks, and a
-persisted name would pin arcave to one of them. `project.name` in the config is the *storage tenant*, a
-different concept — it scopes the savepoint store, not the stack arcave acts on.
+The compose project name is deliberately not a config key: one project directory may hold several compose
+projects, and a persisted name would pin arcave to one of them. `project.name` in the config is the *arcave
+project*, a different concept — it scopes the savepoint store, not the compose project arcave acts on.
 
 ### Project Initialization
 
@@ -340,7 +340,7 @@ Result:
     ├── shared/oci/blobs/sha256/         # image layers shared by every savepoint here
     └── <savepoint-id>/                  # one self-contained namespace per savepoint
         ├── savepoint.json               # the record — written last, the commit marker
-        ├── project.yaml                  # the stack's compose spec, what a rollback rebuilds from
+        ├── project.yaml                  # the compose project's spec, what a rollback rebuilds from
         ├── <service>/<mount-path>/data.tar
         └── images/<service>/replicas/<n>/  # the container's committed writable layer
             ├── image.json               #   what to rebuild it from — written last
@@ -399,32 +399,34 @@ Behavior:
 
 ##### What a savepoint covers
 
-A savepoint has two halves, and they never overlap: the **volumes** below, and the **writable layer** of every container the stack holds. `docker commit` excludes the contents of every mount by contract, so the layer capture sees exactly the state the volume capture cannot — data a service wrote past all of its mounts.
+A savepoint has two halves, and they never overlap: the **volumes** below, and the **writable layer** of every container the compose project holds. `docker commit` excludes the contents of every mount by contract, so the layer capture sees exactly the state the volume capture cannot — data a service wrote past all of its mounts.
 
 **Layers are deduplicated.** The save archive is split: its parts go into `shared/oci/blobs/sha256/` under the digests they already carry, and the savepoint keeps only the archive's metadata and `image.json`, a manifest naming what to rebuild from — so the base image every savepoint carries is written once. `images[].size_bytes` is the image's own size and `images[].stored_bytes` is what that capture actually added to the store: the pair is where the saving is visible.
 
 This needs **Docker 25 or newer**, whose `docker save` writes an addressable archive. On an older daemon `savepoint create` refuses the capture and says so; there is no quieter mode to fall back to.
 
-Blobs are shared across savepoints of one stack, never across sessions, and nothing collects them yet — `savepoint remove` frees a savepoint's own namespace and leaves the shared blobs alone. Data belongs in volumes; the layer capture is what keeps a stack honest when it is not there.
+Blobs are shared across savepoints of one compose project, never across sessions, and nothing collects them yet — `savepoint remove` frees a savepoint's own namespace and leaves the shared blobs alone. Data belongs in volumes; the layer capture is what keeps a compose project honest when it is not there.
 
 **A rollback restores the layer.** It loads each stored image back into the daemon before it stops anything, and rebuilds the containers on those images rather than on the base image the spec names.
 
 The unit of backup is the **volume**, not the mount:
 
-- Every named volume of the project the daemon reports — including ones no service mounts, and including `external: true` ones that some service does mount. An external volume nothing mounts is invisible: arcave reads the running stack, and only compose's own volumes carry the project label that would reveal it.
-- Every bind mount and every anonymous volume, one unit per service and target. A named volume three services mount is one unit, captured once.
+- Every named volume of the project the daemon reports — including ones no service mounts, and including `external: true` ones that some service does mount. An external volume nothing mounts is invisible: arcave reads the running compose project, and only compose's own volumes carry the project label that would reveal it.
+- Every bind mount, one unit per service and target, and every anonymous volume, one unit per replica. A named volume three services mount is one unit, captured once.
 - Mounts that are not persistent data are skipped, each reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
 
-A volume is addressed directly — a named volume by its docker name, a bind by its host path — and read and written through a throwaway container of arcave's own. The project's own containers need not be running, only to exist. The one exception is an **anonymous volume**: its docker name is created per container, so arcave has to ask the daemon through that service's container, and a create fails if it is gone. In a rollback the question is asked after the stack has been built back, of the fresh container: the anonymous volume the teardown orphaned is not the one the data goes into, and it is removed once the restore has succeeded.
+A volume is addressed directly — a named volume by its docker name, a bind by its host path — and read and written through a throwaway container of arcave's own. The project's own containers need not be running, only to exist. The one exception is an **anonymous volume**: its docker name is created per container, so arcave has to ask the daemon through that service's container, and a create fails if it is gone. In a rollback the question is asked after the compose project has been built back, of the fresh container: the anonymous volume the teardown orphaned is not the one the data goes into, and it is removed once the restore has succeeded.
 
 Two things follow that a user with a `subpath:` mount will not expect:
 
-- A volume mounted through `subpath:` is captured **whole**. The subpath is a property of that one mount, and the daemon does not report it back at all, so arcave — which reads the running stack — never sees one.
+- A volume mounted through `subpath:` is captured **whole**: the unit is the volume, and the subpath is a property of one mount of it.
 - **A rollback therefore restores the whole volume**, not the subdirectory the service sees. Everything else in that volume goes back to its savepoint state too.
 
 A named volume that does not exist on the daemon is an **error**, not a skip: an empty capture would silently wipe live data at the next rollback. Bring the project up once (`docker compose up`) to create the volumes it declares.
 
-arcave reads the **running stack**, not the compose files — it never opens one, and a project whose files have moved or been deleted works exactly the same. The stack itself, though, has to exist on the daemon. `docker compose stop` is fine — stopped containers still describe the stack, and every workflow stops the services anyway. `docker compose down` is not: it removes the containers, and with them everything arcave knows about the project. A command run against a torn-down stack fails saying so.
+What a rollback cannot bring back of a compose file is listed once, in the user docs: [Limitations](../docs/reference/limitations.md#some-compose-settings-do-not-survive-a-rollback).
+
+arcave reads the **running compose project**, not the compose files — it never opens one, and a project whose files have moved or been deleted works exactly the same. The compose project itself, though, has to exist on the daemon. `docker compose stop` is fine — stopped containers still describe the compose project, and every workflow stops the services anyway. `docker compose down` is not: it removes the containers, and with them everything arcave knows about the project. A command run against a torn-down compose project fails saying so.
 
 Every savepoint receives a unique immutable identifier — a Unix timestamp integer:
 
@@ -432,7 +434,7 @@ Every savepoint receives a unique immutable identifier — a Unix timestamp inte
 1780335122
 ```
 
-Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose document committed beside it as `<savepoint-id>/project.yaml` — the stack as it stood, which is what a rollback rebuilds. It is read and parsed before a rollback stops anything, so an unloadable one fails while the project is still running:
+Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose document committed beside it as `<savepoint-id>/project.yaml` — the compose project as it stood, which is what a rollback rebuilds. It is read and parsed before a rollback stops anything, so an unloadable one fails while the project is still running:
 
 ```json
 {
@@ -445,10 +447,22 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
       "service": "webapp",
       "replica": 1,
       "container_id": "3f1a…",
-      "image_id": "sha256:aaaa…",
-      "base_image": "myapp:latest",
+      "container_name": "demo-webapp-1",
+      "committed_image_id": "sha256:aaaa…",
+      "upstream_image_id": "sha256:bbbb…",
+      "upstream_image_ref": "myapp:latest",
       "size_bytes": 83887104,
       "stored_bytes": 1048576
+    }
+  ],
+  "upstream_images": [
+    {
+      "id": "sha256:bbbb…",
+      "refs": ["myapp:latest"],
+      "repo_digests": ["myapp@sha256:cccc…"],
+      "size_bytes": 82838528,
+      "stored_bytes": 14336,
+      "stored": true
     }
   ],
   "spec": {
@@ -456,6 +470,8 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
   }
 }
 ```
+
+`images` holds what `docker commit` made of each container: its upstream plus the writable layer. `upstream_images` holds each distinct image the compose file named, once, whether or not a layer was captured over it. `stored: false` means neither the store nor the daemon had it, so only its identity is recorded.
 
 A rollback's safety snapshot carries the same two halves as any other savepoint — it differs only in its name, its empty description and the label that hides it from `savepoint list`.
 
@@ -544,7 +560,7 @@ Behavior:
 - Removes the anonymous volumes the teardown orphaned, and only those a capture was restored into.
 - Deletes the safety snapshot, unless replaying it failed too — the one case where it is the last copy of the pre-rollback state.
 
-A rollback restores the stack the savepoint recorded, not the one that is running: a service added since is gone, one removed comes back, and a changed image, port, environment variable or healthcheck goes back to what it was. The containers' writable layer goes back with it — what a service wrote outside its mounts is restored from the image the savepoint committed.
+A rollback restores the compose project the savepoint recorded, not the one that is running: a service added since is gone, one removed comes back, and a changed image, port, environment variable or healthcheck goes back to what it was. The containers' writable layer goes back with it — what a service wrote outside its mounts is restored from the image the savepoint committed.
 
 The `arcave/…` tags a rollback leaves behind are not collected: the running containers reference them, so nothing can be dropped at the end of the workflow. One tag per (service, replica, savepoint) survives each rollback. A `docker compose up` run by hand afterwards recreates the containers from the user's own compose file and drops the restored layer with them.
 
@@ -558,6 +574,7 @@ Output adds `images`, one entry per restored layer:
     {
       "service": "webapp",
       "replica": 1,
+      "container_name": "demo-webapp-1",
       "image_id": "sha256:aaaa…",
       "image_ref": "arcave/demo-webapp-1-myapp-latest:sp-1780335122"
     }
@@ -565,7 +582,7 @@ Output adds `images`, one entry per restored layer:
 }
 ```
 
-A savepoint taken before arcave recorded compose specs carries none, and a rollback to it is refused rather than guessed at: the stack is rebuilt from the spec the savepoint recorded, and there is nothing honest to rebuild it from.
+A savepoint taken before arcave recorded compose specs carries none, and a rollback to it is refused rather than guessed at: the compose project is rebuilt from the spec the savepoint recorded, and there is nothing honest to rebuild it from.
 
 ---
 

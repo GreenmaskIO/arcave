@@ -48,7 +48,7 @@ func TestFindBackupVolumes(t *testing.T) {
 							// A named mount is a reference to the unit taken below, never a
 							// unit of its own — otherwise a shared volume is captured twice.
 							{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata"},
-							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Volume: &model.VolumeMount{Subpath: "inner"}},
+							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1, Volume: &model.VolumeMount{Subpath: "inner"}},
 						},
 					},
 				},
@@ -75,15 +75,79 @@ func TestFindBackupVolumes(t *testing.T) {
 					Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg", ReadOnly: true},
 				},
 				{
-					ObjectID:       "volume-service-db-data",
+					ObjectID:       "volume-anon-db-1-data",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeAnon,
 					Backend:        model.SnapshotBackendCopy,
-					Anon:           &model.VolumePropertiesAnon{Service: "db", Target: "/data", Subpath: "inner"},
+					Anon:           &model.VolumePropertiesAnon{Service: "db", Replica: 1, Target: "/data", Subpath: "inner"},
 				},
 			},
 			wantSkipped: []model.SkippedVolume{
 				{Service: "app", Target: "/scratch", RawType: "tmpfs", Reason: "non-persistent (tmpfs lives in RAM)"},
+			},
+		},
+		{
+			name: "every replica's anonymous volume is a unit of its own",
+			project: model.Project{
+				Name: "demo",
+				Services: []model.Service{{
+					Name: "worker",
+					Volumes: []model.ServiceVolume{
+						{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1},
+						{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 2},
+					},
+				}},
+			},
+			want: []model.Volume{
+				{
+					ObjectID:       "volume-anon-worker-1-cache",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeAnon,
+					Backend:        model.SnapshotBackendCopy,
+					Anon:           &model.VolumePropertiesAnon{Service: "worker", Replica: 1, Target: "/cache"},
+				},
+				{
+					ObjectID:       "volume-anon-worker-2-cache",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeAnon,
+					Backend:        model.SnapshotBackendCopy,
+					Anon:           &model.VolumePropertiesAnon{Service: "worker", Replica: 2, Target: "/cache"},
+				},
+			},
+		},
+		{
+			name: "a mount inherited through volumes_from is its source's unit, or none from outside the project",
+			project: model.Project{
+				Name: "demo",
+				Services: []model.Service{
+					{
+						Name: "app",
+						Volumes: []model.ServiceVolume{
+							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1, InheritedFrom: "c-data-1"},
+							{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/vpn", Target: "/vpn", InheritedFrom: "c-vpn"},
+						},
+						Containers: []model.Container{{ID: "c-app-1", Number: 1}},
+					},
+					{
+						Name: "data",
+						Volumes: []model.ServiceVolume{
+							{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/data", Replica: 1},
+						},
+						Containers: []model.Container{{ID: "c-data-1", Number: 1}},
+					},
+				},
+			},
+			want: []model.Volume{
+				{
+					ObjectID:       "volume-anon-data-1-data",
+					ComposeProject: "demo",
+					Type:           model.VolumeTypeAnon,
+					Backend:        model.SnapshotBackendCopy,
+					Anon:           &model.VolumePropertiesAnon{Service: "data", Replica: 1, Target: "/data"},
+				},
+			},
+			wantSkipped: []model.SkippedVolume{
+				{Service: "app", Target: "/vpn", RawType: "bind", Reason: "inherited from a container outside the project"},
 			},
 		},
 		{

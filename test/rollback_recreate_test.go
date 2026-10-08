@@ -32,6 +32,7 @@ import (
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +53,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
-// recreateSpec is the stack under test; mode and the published port are the drift.
+// recreateSpec is the compose project under test; mode and the published port are the drift.
 const recreateSpec = `
 name: %[1]s
 services:
@@ -87,7 +88,7 @@ networks:
   back: {}
 `
 
-func TestRollback_RebuildsTheStackFromTheSavepointSpec(t *testing.T) {
+func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
 	// Arrange
 	env := newRecreateEnv(t)
 	env.up(t, env.spec(t, "original", env.port))
@@ -98,9 +99,9 @@ func TestRollback_RebuildsTheStackFromTheSavepointSpec(t *testing.T) {
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "before-drift"})
 	require.NoError(t, err)
-	require.NotNil(t, savepoint.Spec, "the savepoint records the stack it was taken of")
+	require.NotNil(t, savepoint.Spec, "the savepoint records the compose project it was taken of")
 
-	// The stack drifts: a new environment, label, alias and published port.
+	// The compose project drifts: a new environment, label, alias and published port.
 	drifted := env.port + 1
 	env.down(t)
 	env.up(t, env.spec(t, "drifted", drifted))
@@ -137,14 +138,15 @@ func TestRollback_RebuildsTheStackFromTheSavepointSpec(t *testing.T) {
 	assert.Equal(t, networkAliases(before), networkAliases(after), "network aliases")
 }
 
-// recreateEnv is the one stack this test drives, wired the way cmd/arcave wires it.
+// recreateEnv is the one compose project this test drives, wired the way cmd/arcave wires it.
 type recreateEnv struct {
 	ctx       context.Context
 	svc       *core.Service
 	compose   *composeclient.Client
 	engine    *dockerclient.Engine
+	daemon    *client.Client
 	inspector *introspect.Inspector
-	assembler *composespec.Assembler
+	codec     *composespec.Codec
 	project   string
 	hostDir   string
 	port      int
@@ -167,20 +169,20 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	progress.Mode = progress.ModeQuiet
 
 	engine := dockerclient.NewEngine(daemonAPI)
-	inspector := introspect.NewInspector(daemonAPI, model.StackName(project))
+	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
-	assembler := composespec.NewAssembler()
+	codec := composespec.NewCodec()
 
 	projectRoot := t.TempDir()
 	store, err := storefactory.New(config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-recreate-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-recreate-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	// The blob store is a sibling of the savepoints inside the stack root, so it
+	// The blob store is a sibling of the savepoints inside the compose project root, so it
 	// dies with the session the way everything else there does.
 	blobStore, err := store.SubStorage("shared/oci/blobs", true)
 	require.NoError(t, err)
@@ -189,7 +191,8 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,
-		ProjectAssembler:   assembler,
+		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          codec,
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
 		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
@@ -205,13 +208,14 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		svc:       svc,
 		compose:   runner,
 		engine:    engine,
+		daemon:    daemonAPI,
 		inspector: inspector,
-		assembler: assembler,
+		codec:     codec,
 		project:   project,
 		hostDir:   t.TempDir(),
 		port:      freePort(t),
 	}
-	t.Cleanup(func() { env.down(t) })
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 
@@ -223,12 +227,12 @@ func mustRegistry(t *testing.T, engine *dockerclient.Engine) model.SnapshotBacke
 	return registry
 }
 
-// spec renders the stack's compose document through the savepoint artifact's codec.
+// spec renders the compose project's document through the savepoint artifact's codec.
 func (e *recreateEnv) spec(t *testing.T, mode string, port int) *types.Project {
 	t.Helper()
 
 	document := fmt.Sprintf(recreateSpec, e.project, mode, port, e.hostDir)
-	project, err := e.assembler.Parse(e.ctx, []byte(document))
+	project, err := e.codec.Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	return project
 }
@@ -243,7 +247,7 @@ func (e *recreateEnv) up(t *testing.T, project *types.Project) {
 func (e *recreateEnv) down(t *testing.T) {
 	t.Helper()
 
-	// By name: whatever spec built the stack, this takes it down.
+	// By name: whatever spec built the compose project, this takes it down.
 	assert.NoError(t, e.compose.Down(e.ctx, &types.Project{Name: e.project}))
 }
 

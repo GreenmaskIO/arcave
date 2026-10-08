@@ -113,6 +113,11 @@ func (s *Service) performSavepoint(
 		return model.Savepoint{}, err
 	}
 
+	record.UpstreamImages, err = s.captureUpstreams(ctx, record.ID, ws.upstreams)
+	if err != nil {
+		return model.Savepoint{}, err
+	}
+
 	if err := s.savepointRepo.SaveSpec(ctx, record.ID, ws.spec); err != nil {
 		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", record.ID, err)
 	}

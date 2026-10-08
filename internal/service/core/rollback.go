@@ -47,7 +47,7 @@ func safetySnapshotLabels() map[string]string {
 }
 
 // Rollback restores the environment to the referenced savepoint: load its
-// writable layers back into the daemon, stop, safety snapshot, tear the stack
+// writable layers back into the daemon, stop, safety snapshot, tear the compose project
 // down, rebuild it from the spec the savepoint recorded on those layers, restore,
 // start. Any failure past the teardown replays the safety snapshot; the project
 // lock and the inflight marker stand across the whole workflow.
@@ -205,7 +205,7 @@ func (s *Service) abortBeforeRestore(ctx context.Context, safetySnapshot model.S
 	return s.startServices(ctx, ws)
 }
 
-// applySavepoint tears the stack down, rebuilds it from the savepoint's spec,
+// applySavepoint tears the compose project down, rebuilds it from the savepoint's spec,
 // restores every volume and starts the services; every failure shares the caller's
 // one revert path. The rebuild goes first — an anonymous volume needs its container.
 func (s *Service) applySavepoint(
@@ -217,10 +217,10 @@ func (s *Service) applySavepoint(
 	safetyID model.SavepointID,
 	ws workingSet,
 ) error {
-	if err := s.tearDownStack(ctx, ws.project); err != nil {
+	if err := s.composeDown(ctx, ws.project); err != nil {
 		return err
 	}
-	if err := s.buildStack(ctx, target); err != nil {
+	if err := s.composeCreate(ctx, target); err != nil {
 		return err
 	}
 	if err := s.rebuildDivergentReplicas(ctx, restored); err != nil {
@@ -251,7 +251,7 @@ func (s *Service) applySavepoint(
 }
 
 // revert replays the safety snapshot through the very instances that took it: load
-// its layers back, tear down, rebuild the stack it was taken of on them, restore,
+// its layers back, tear down, rebuild the compose project it was taken of on them, restore,
 // restart. It runs on the caller's context, not the fan-out's — an errgroup cancels
 // its own the moment Wait returns.
 func (s *Service) revert(
@@ -260,7 +260,7 @@ func (s *Service) revert(
 	ws workingSet,
 	target model.SavepointID,
 ) error {
-	// The safety snapshot holds the layers the live stack had, so the undo has to
+	// The safety snapshot holds the layers the live compose project had, so the undo has to
 	// put them back — the same parity the capture side already has.
 	restored, err := s.restoreImages(ctx, safetySnapshot, ws.project.Name)
 	if err != nil {
@@ -268,15 +268,15 @@ func (s *Service) revert(
 	}
 	live := retargetImages(ws.project, restored)
 
-	// Back to recreating: the stack is about to be torn down again.
+	// Back to recreating: the compose project is about to be torn down again.
 	if err := s.putInflightMarker(ctx, model.InflightRecreating, target, safetySnapshot.ID); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker back before revert")
 	}
 
-	if err := s.tearDownStack(ctx, ws.project); err != nil {
+	if err := s.composeDown(ctx, ws.project); err != nil {
 		return err
 	}
-	if err := s.buildStack(ctx, live); err != nil {
+	if err := s.composeCreate(ctx, live); err != nil {
 		return err
 	}
 	if err := s.rebuildDivergentReplicas(ctx, restored); err != nil {

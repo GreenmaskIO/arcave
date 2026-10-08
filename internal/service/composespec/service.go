@@ -24,6 +24,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/go-connections/nat"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -33,43 +34,59 @@ const (
 	// nanoCPUs is the unit HostConfig.NanoCPUs counts in; compose spells the same
 	// limit in whole CPUs.
 	nanoCPUs = 1e9
-	// portModeIngress is what compose's loader fills a published port with; the
-	// assembler writes it so a spec equals the one parsed back from its artifact.
-	portModeIngress = "ingress"
+	// defaultShmSize is the /dev/shm the daemon gives a container that asks for none.
+	defaultShmSize = 64 << 20
+	// desktopOperatingSystem is what `docker info` reports on Docker Desktop.
+	desktopOperatingSystem = "Docker Desktop"
+	// desktopStopTimeout is the stop timeout Docker Desktop stamps on every container
+	// created without one.
+	desktopStopTimeout = 1
+	// labelDisable is the security option the daemon adds where the host's namespaces are shared.
+	labelDisable = "label=disable"
 )
 
-// serviceConfig renders one service off its first replica, which differs from the
-// others only in its number. What the image contributed is declared verbatim.
-func serviceConfig(svc model.Service, netKeys map[string]string, known map[string]bool) types.ServiceConfig {
+// serviceConfig renders one service off its first replica. What the image
+// contributed is declared verbatim.
+func (s assembly) serviceConfig(svc model.Service) types.ServiceConfig {
+	cfg := s.baseConfig(svc)
+	if len(svc.Containers) > 0 {
+		s.applyReplica(&cfg, svc.Name, svc.Containers[0])
+	}
+	return cfg
+}
+
+// baseConfig is what the service declares apart from any one replica.
+func (s assembly) baseConfig(svc model.Service) types.ServiceConfig {
 	scale := len(svc.Containers)
-	cfg := types.ServiceConfig{
+	return types.ServiceConfig{
 		Name:       svc.Name,
 		Image:      svc.Image,
 		Labels:     userLabels(svc.Labels),
 		Scale:      &scale,
-		DependsOn:  dependsOn(svc.Labels[api.DependenciesLabel], known),
+		DependsOn:  s.dependsOn(svc.Labels[api.DependenciesLabel]),
 		PullPolicy: pullPolicyMissing,
-		Volumes:    serviceVolumes(svc.Volumes),
+		Volumes:    serviceVolumes(ownVolumes(declaredVolumes(svc))),
 	}
-	if len(svc.Containers) == 0 {
-		return cfg
-	}
+}
 
-	inspect := svc.Containers[0].Inspect
-	applyContainerConfig(&cfg, inspect)
-	applyHostConfig(&cfg, inspect)
-	applyNetworks(&cfg, svc.Name, inspect, netKeys)
-	return cfg
+// applyReplica reads one replica's container into cfg.
+func (s assembly) applyReplica(cfg *types.ServiceConfig, svcName string, c model.Container) {
+	s.applyContainerConfig(cfg, c.Inspect)
+	s.applyImage(cfg, c)
+	s.applyHostConfig(cfg, c.Inspect)
+	cfg.Expose = unpublished(cfg.Expose, cfg.Ports)
+	applyNetworks(cfg, svcName, c.Inspect, s.netKeys)
+	s.applyLinks(cfg, c)
+	dropSharedNetworkFields(cfg)
+	s.dropHostNetworkHostname(cfg)
+	addSharedDependencies(cfg)
 }
 
 // applyContainerConfig reads the container's own declaration.
-func applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
+func (s assembly) applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
 	c := inspect.Config
 	if c == nil {
 		return
-	}
-	if c.Image != "" {
-		cfg.Image = c.Image
 	}
 	cfg.Environment = types.NewMappingWithEquals(c.Env)
 	cfg.Command = types.ShellCommand(c.Cmd)
@@ -87,52 +104,97 @@ func applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectRes
 	if labels := userLabels(c.Labels); labels != nil {
 		cfg.Labels = labels
 	}
-	if c.StopTimeout != nil {
+	if c.StopTimeout != nil && !s.isDaemonStopTimeout(*c.StopTimeout) {
 		grace := types.Duration(time.Duration(*c.StopTimeout) * time.Second)
 		cfg.StopGracePeriod = &grace
 	}
 }
 
+// applyImage declares the upstream rather than the arcave tag a rollback ran the
+// container on. An upstream no registry knows is never pulled.
+func (s assembly) applyImage(cfg *types.ServiceConfig, c model.Container) {
+	if c.Inspect.Config != nil && c.Inspect.Config.Image != "" {
+		cfg.Image = c.Inspect.Config.Image
+	}
+	id, ref, ok := model.ResolveUpstream(s.res, c)
+	if !ok {
+		return
+	}
+	if ref != "" {
+		cfg.Image = ref
+	}
+	if inspect, found := s.res.Images[id]; found && isLocalImage(inspect) {
+		cfg.PullPolicy = pullPolicyNever
+	}
+}
+
+// isLocalImage reports an image no registry is known to hold: one compose built, or, on the
+// classic image store, one without a repo digest. The containerd store gives every image one.
+func isLocalImage(inspect image.InspectResponse) bool {
+	if len(inspect.RepoDigests) == 0 {
+		return true
+	}
+	return inspect.Config != nil && inspect.Config.Labels[api.ProjectLabel] != ""
+}
+
 // applyHostConfig reads what the container was created against the host with.
-func applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
+// What the daemon fills in by itself is left out.
+func (s assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
 	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
 		return
 	}
 	h := inspect.HostConfig
+	daemon := s.res.Daemon
 
 	cfg.Ports = publishedPorts(h.PortBindings)
 	cfg.Restart = restartPolicy(h.RestartPolicy)
-	cfg.NetworkMode = declaredNetworkMode(string(h.NetworkMode))
-	cfg.Logging = logging(h.LogConfig)
+	cfg.NetworkMode = declaredNetworkMode(string(h.NetworkMode), s.replicas, s.foreign)
+	cfg.Logging = logging(h.LogConfig, daemon.LoggingDriver)
 	cfg.ExtraHosts = extraHosts(h.ExtraHosts)
 	cfg.Tmpfs = tmpfsMounts(h.Tmpfs, cfg.Volumes)
 
 	cfg.CapAdd = h.CapAdd
 	cfg.CapDrop = h.CapDrop
 	cfg.GroupAdd = h.GroupAdd
-	cfg.SecurityOpt = h.SecurityOpt
+	cfg.SecurityOpt = declaredSecurityOpt(h)
 	cfg.DNS = types.StringList(h.DNS)
 	cfg.DNSOpts = h.DNSOptions
 	cfg.DNSSearch = types.StringList(h.DNSSearch)
-	cfg.Links = h.Links
-	cfg.VolumesFrom = h.VolumesFrom
+	cfg.VolumesFrom = declaredVolumesFrom(h.VolumesFrom, s.replicas)
 	cfg.VolumeDriver = h.VolumeDriver
 	cfg.Sysctls = types.Mapping(h.Sysctls)
 	cfg.StorageOpt = h.StorageOpt
 	cfg.Privileged = h.Privileged
 	cfg.ReadOnly = h.ReadonlyRootfs
 	cfg.Init = h.Init
-	cfg.ShmSize = types.UnitBytes(h.ShmSize)
-	cfg.Runtime = h.Runtime
+	if h.ShmSize != defaultShmSize {
+		cfg.ShmSize = types.UnitBytes(h.ShmSize)
+	}
+	if h.Runtime != daemon.DefaultRuntime {
+		cfg.Runtime = h.Runtime
+	}
 	cfg.Isolation = string(h.Isolation)
-	cfg.Ipc = string(h.IpcMode)
-	cfg.Pid = string(h.PidMode)
+	cfg.Ipc = declaredNamespace(string(h.IpcMode), s.replicas, s.foreign)
+	cfg.Pid = declaredNamespace(string(h.PidMode), s.replicas, s.foreign)
 	cfg.Uts = string(h.UTSMode)
 	cfg.UserNSMode = string(h.UsernsMode)
 	cfg.Cgroup = string(h.CgroupnsMode)
 	cfg.OomScoreAdj = int64(h.OomScoreAdj)
 
 	applyResources(cfg, h.Resources)
+}
+
+// dropHostNetworkHostname clears the hostname a container in the host's network reports:
+// it is the host's own.
+func (s assembly) dropHostNetworkHostname(cfg *types.ServiceConfig) {
+	if container.NetworkMode(cfg.NetworkMode).IsHost() && cfg.Hostname == s.res.Daemon.Name {
+		cfg.Hostname = ""
+	}
+}
+
+// isDaemonStopTimeout reports a stop timeout the daemon stamped rather than the user declared.
+func (s assembly) isDaemonStopTimeout(seconds int) bool {
+	return s.res.Daemon.OperatingSystem == desktopOperatingSystem && seconds == desktopStopTimeout
 }
 
 // applyResources carries the cgroup limits. Only a limit that was set is
@@ -151,7 +213,8 @@ func applyResources(cfg *types.ServiceConfig, r container.Resources) {
 	cfg.Devices = devices(r.Devices)
 	cfg.Ulimits = ulimits(r.Ulimits)
 
-	if r.MemorySwap > 0 {
+	if r.MemorySwap > 0 && r.MemorySwap != 2*r.Memory {
+		// Twice the memory is the swap the daemon gives a limit declared without one.
 		cfg.MemSwapLimit = types.UnitBytes(r.MemorySwap)
 	}
 	if r.MemorySwappiness != nil && *r.MemorySwappiness >= 0 {
@@ -192,11 +255,22 @@ func applyNetworks(cfg *types.ServiceConfig, svcName string, inspect container.I
 			attachment.Ipv6Address = endpoint.IPAMConfig.IPv6Address
 			attachment.LinkLocalIPs = endpoint.IPAMConfig.LinkLocalIPs
 		}
+		if endpoint.IPAMConfig == nil && isEmptyAttachment(attachment) {
+			// compose creates the endpoint of a nil entry without an IPAM config, and of an
+			// empty one with an empty config.
+			attachment = nil
+		}
 		attached[key] = attachment
 	}
 	if len(attached) > 0 {
 		cfg.Networks = attached
 	}
+}
+
+// isEmptyAttachment reports an attachment declaring nothing beyond the network itself.
+func isEmptyAttachment(a *types.ServiceNetworkConfig) bool {
+	return len(a.Aliases) == 0 && len(a.DriverOpts) == 0 && a.GatewayPriority == 0 &&
+		a.Ipv4Address == "" && a.Ipv6Address == "" && len(a.LinkLocalIPs) == 0
 }
 
 // declaredHostname drops the hostname the daemon generates from the container id.
@@ -224,14 +298,117 @@ func declaredContainerName(name string, labels map[string]string) string {
 	return name
 }
 
+// declaredSecurityOpt drops the label=disable the daemon adds to a container sharing the
+// host's pid or ipc namespace, or a privileged one.
+func declaredSecurityOpt(h *container.HostConfig) []string {
+	if !h.PidMode.IsHost() && !h.IpcMode.IsHost() && !h.Privileged {
+		return h.SecurityOpt
+	}
+	declared := slices.DeleteFunc(slices.Clone(h.SecurityOpt), func(opt string) bool {
+		return opt == labelDisable
+	})
+	if len(declared) == 0 {
+		return nil
+	}
+	return declared
+}
+
 // declaredNetworkMode keeps only a mode the user could have written; a compose
 // network's name lands there too, and the networks: section already carries it.
-func declaredNetworkMode(mode string) string {
-	if mode == "host" || mode == "none" ||
-		strings.HasPrefix(mode, "container:") || strings.HasPrefix(mode, "service:") {
-		return mode
+func declaredNetworkMode(mode string, replicas, foreign map[string]string) string {
+	if slices.Contains(predefinedNetworks, mode) ||
+		strings.HasPrefix(mode, types.ContainerPrefix) || strings.HasPrefix(mode, types.ServicePrefix) {
+		return declaredNamespace(mode, replicas, foreign)
 	}
 	return ""
+}
+
+// declaredNamespace turns compose's container:<id> back into what it resolved: the service:<name>
+// of a replica, since Down removes that container, or the name of one outside the project, since
+// its id changes once it is recreated. An id neither resolves to stays as written.
+func declaredNamespace(mode string, replicas, foreign map[string]string) string {
+	id, ok := strings.CutPrefix(mode, types.ContainerPrefix)
+	if !ok {
+		return mode
+	}
+	if service, ok := replicas[id]; ok {
+		return types.ServicePrefix + service
+	}
+	if name, ok := foreign[id]; ok {
+		return types.ContainerPrefix + name
+	}
+	return mode
+}
+
+// declaredVolumesFrom turns the bare ids compose wrote back into service names, and
+// prefixes any other container: unprefixed, the loader takes it for a service.
+func declaredVolumesFrom(entries []string, replicas map[string]string) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	declared := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name, mode, hasMode := strings.Cut(entry, ":")
+		if service, ok := replicas[name]; ok {
+			name = service
+		} else {
+			name = types.ContainerPrefix + name
+		}
+		if hasMode {
+			name += ":" + mode
+		}
+		declared = append(declared, name)
+	}
+	return declared
+}
+
+// dropSharedNetworkFields clears what the daemon refuses beside another container's
+// network namespace; what it reports there is the namespace owner's, or the image's.
+func dropSharedNetworkFields(cfg *types.ServiceConfig) {
+	if !strings.HasPrefix(cfg.NetworkMode, types.ServicePrefix) &&
+		!strings.HasPrefix(cfg.NetworkMode, types.ContainerPrefix) {
+		return
+	}
+	cfg.Hostname = ""
+	cfg.Links = nil
+	cfg.ExternalLinks = nil
+	cfg.DNS = nil
+	cfg.ExtraHosts = nil
+	cfg.Ports = nil
+	cfg.Expose = nil
+}
+
+// addSharedDependencies declares the dependencies compose's loader infers from a service
+// reference or a link, so the spec is the one parsed back from its artifact.
+func addSharedDependencies(cfg *types.ServiceConfig) {
+	for _, mode := range []string{cfg.NetworkMode, cfg.Ipc, cfg.Pid} {
+		if name, ok := strings.CutPrefix(mode, types.ServicePrefix); ok {
+			addDependency(cfg, name, true)
+		}
+	}
+	for _, link := range cfg.Links {
+		name, _, _ := strings.Cut(link, ":")
+		addDependency(cfg, name, true)
+	}
+	for _, entry := range cfg.VolumesFrom {
+		if !strings.HasPrefix(entry, types.ContainerPrefix) {
+			name, _, _ := strings.Cut(entry, ":")
+			addDependency(cfg, name, false)
+		}
+	}
+}
+
+// addDependency adds a started dependency unless the service already declares one.
+func addDependency(cfg *types.ServiceConfig, name string, restart bool) {
+	if _, ok := cfg.DependsOn[name]; ok {
+		return
+	}
+	if cfg.DependsOn == nil {
+		cfg.DependsOn = types.DependsOnConfig{}
+	}
+	cfg.DependsOn[name] = types.ServiceDependency{
+		Condition: types.ServiceConditionStarted, Restart: restart, Required: true,
+	}
 }
 
 // declaredAliases drops the aliases compose and docker add of their own: the
@@ -251,7 +428,7 @@ func declaredAliases(aliases []string, containerID string, generated []string) [
 	return kept
 }
 
-// exposedPorts renders EXPOSE, sorted so one stack renders one spec.
+// exposedPorts renders EXPOSE, sorted so one compose project renders one spec.
 func exposedPorts(set nat.PortSet) types.StringOrNumberList {
 	if len(set) == 0 {
 		return nil
@@ -262,6 +439,25 @@ func exposedPorts(set nat.PortSet) types.StringOrNumberList {
 	}
 	sort.Strings(exposed)
 	return exposed
+}
+
+// unpublished drops from expose what compose exposed because a port publishes it.
+func unpublished(expose types.StringOrNumberList, ports []types.ServicePortConfig) types.StringOrNumberList {
+	if len(expose) == 0 || len(ports) == 0 {
+		return expose
+	}
+	kept := make(types.StringOrNumberList, 0, len(expose))
+	for _, port := range expose {
+		if !slices.ContainsFunc(ports, func(p types.ServicePortConfig) bool {
+			return port == strconv.FormatUint(uint64(p.Target), 10)+"/"+p.Protocol
+		}) {
+			kept = append(kept, port)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
 }
 
 // publishedPorts renders the ports: section from the bindings, not from the running
@@ -275,7 +471,6 @@ func publishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
 		}
 		for _, host := range hosts {
 			published = append(published, types.ServicePortConfig{
-				Mode:      portModeIngress,
 				Target:    uint32(target),
 				Protocol:  port.Proto(),
 				Published: host.HostPort,
@@ -341,8 +536,9 @@ func duration(d time.Duration) *types.Duration {
 	return &converted
 }
 
-func logging(from container.LogConfig) *types.LoggingConfig {
-	if from.Type == "" {
+// logging renders logging:, unless it is the daemon's own driver with no options.
+func logging(from container.LogConfig, daemonDriver string) *types.LoggingConfig {
+	if from.Type == "" || (from.Type == daemonDriver && len(from.Config) == 0) {
 		return nil
 	}
 	return &types.LoggingConfig{Driver: from.Type, Options: from.Config}
