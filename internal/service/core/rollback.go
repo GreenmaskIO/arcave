@@ -46,10 +46,10 @@ func safetySnapshotLabels() map[string]string {
 	return map[string]string{model.SafetySnapshotLabel: model.SafetySnapshotLabelValue}
 }
 
-// Rollback restores the environment to the referenced savepoint: load its
-// writable layers back into the daemon, stop, safety snapshot, tear the compose project
-// down, rebuild it from the spec the savepoint recorded on those layers, restore,
-// start. Any failure past the teardown replays the safety snapshot; the project
+// Rollback restores the environment to the referenced savepoint: prepare the live
+// compose project, load the savepoint's writable layers back into the daemon, stop,
+// safety snapshot, tear the compose project down, rebuild it from the spec the
+// savepoint recorded on those layers, restore, start. Any failure past the teardown replays the safety snapshot; the project
 // lock and the inflight marker stand across the whole workflow.
 func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error) {
 	// Ahead of the lock: a request that names no savepoint must not make a
@@ -82,6 +82,13 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 		return model.RollbackResult{}, fmt.Errorf("require no inflight: %w", err)
 	}
 
+	// First, so a daemon the image backend cannot serve is refused before any layer
+	// is loaded.
+	ws, err := s.prepare(ctx, req.WaitTimeout)
+	if err != nil {
+		return model.RollbackResult{}, fmt.Errorf("prepare: %w", err)
+	}
+
 	// Two backend sets over the one store, because the volume sets differ: one may
 	// have been added or dropped since the savepoint was taken. Both ahead of the
 	// stop — a backend that cannot be built leaves the project running.
@@ -97,18 +104,13 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 		return model.RollbackResult{}, fmt.Errorf("load the savepoint's compose spec: %w", err)
 	}
 
-	// The load is this workflow's pre-flight, and it is a real one: an archive the
-	// daemon will not take fails here, with the project still running.
+	// The load is a pre-flight for the archives themselves: one the daemon will not
+	// take fails here, with the project still running.
 	restored, err := s.restoreImages(ctx, record, target.Name)
 	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("restore the savepoint's writable layers: %w", err)
 	}
 	target = retargetImages(target, restored)
-
-	ws, err := s.prepare(ctx, req.WaitTimeout)
-	if err != nil {
-		return model.RollbackResult{}, fmt.Errorf("prepare: %w", err)
-	}
 
 	if err := s.stopServices(ctx, ws); err != nil {
 		return model.RollbackResult{}, fmt.Errorf("stop services: %w", err)

@@ -63,4 +63,7 @@ var (
 	// ErrUnsupportedImageArchive reports that an image archive uses a format
 	// this operation does not support (e.g. Docker 24 legacy layout).
 	ErrUnsupportedImageArchive = errors.New("unsupported image archive format")
+
+	// ErrUnsupportedDaemon reports a Docker daemon too old for the image backend.
+	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
 )

@@ -183,6 +183,7 @@ func initAllDependencies(
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    engine,
 		ImageBackend:     imageBackend,
+		MinDaemonMajor:   dedupcopy.MinDaemonMajor,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: engine,

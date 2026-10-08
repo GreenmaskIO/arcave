@@ -404,7 +404,7 @@ A savepoint has two halves, and they never overlap: the **volumes** below, and t
 
 **Layers are deduplicated.** The save archive is split: its parts go into `shared/oci/blobs/sha256/` under the digests they already carry, and the savepoint keeps only the archive's metadata and `image.json`, a manifest naming what to rebuild from — so the base image every savepoint carries is written once. `images[].size_bytes` is the image's own size and `images[].stored_bytes` is what that capture actually added to the store: the pair is where the saving is visible.
 
-This needs **Docker 25 or newer**, whose `docker save` writes an addressable archive. On an older daemon `savepoint create` refuses the capture and says so; there is no quieter mode to fall back to.
+This needs **Docker 25 or newer**, whose `docker save` writes an addressable archive. On an older daemon `savepoint create` and `rollback` refuse before touching anything — nothing is stopped and nothing loaded — with `unsupported docker daemon`; there is no quieter mode to fall back to. `savepoint list` and `savepoint remove` touch no image and work on any daemon.
 
 Blobs are shared across savepoints of one compose project, never across sessions, and nothing collects them yet — `savepoint remove` frees a savepoint's own namespace and leaves the shared blobs alone. Data belongs in volumes; the layer capture is what keeps a compose project honest when it is not there.
 
@@ -549,9 +549,10 @@ The argument names the savepoint in one of three ways, and which one it is decid
 
 Behavior:
 
+- Reads the live compose project and refuses a daemon older than Docker 25, before anything is loaded or stopped.
+- Loads every writable layer the savepoint holds back into the daemon and tags each one `arcave/<project>-<service>-<replica>-<base-image>:sp-<savepoint-id>` — e.g. `arcave/shop-db-1-postgres-16:sp-1780335122`, so `docker images` reads as one row per replica and one tag per savepoint. Every segment is reduced to lower-case alphanumerics joined by dashes, because a docker repository path admits nothing else, and the base image is cut before the 255-character cap is passed. This runs with the project still running: an archive the daemon will not take stops the rollback before anything is torn down.
 - Stops project services.
 - Takes a safety snapshot of the live state, named `safety-snapshot-<id of the savepoint being restored>`, so one left behind by a killed rollback says which savepoint it was undoing.
-- Loads every writable layer the savepoint holds back into the daemon and tags each one `arcave/<project>-<service>-<replica>-<base-image>:sp-<savepoint-id>` — e.g. `arcave/shop-db-1-postgres-16:sp-1780335122`, so `docker images` reads as one row per replica and one tag per savepoint. Every segment is reduced to lower-case alphanumerics joined by dashes, because a docker repository path admits nothing else, and the base image is cut before the 255-character cap is passed. This runs first, with the project still running: an archive the daemon will not take stops the rollback before anything is torn down.
 - Removes the project's containers and networks. Volumes are kept — one arcave does not capture has no copy anywhere.
 - Creates the containers, networks and volumes the savepoint's own compose spec declares, without starting them, on the restored images.
 - Rebuilds every replica past the first on its own layer: a compose service names one image, while a layer is captured per replica.

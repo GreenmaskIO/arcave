@@ -51,6 +51,15 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		return workingSet{}, fmt.Errorf("introspecting the compose project: %w", err)
 	}
 
+	// First, before any work is wasted: with no layer to commit there is nothing to
+	// refuse.
+	containers := capturableContainers(ctx, res)
+	if len(containers) > 0 {
+		if err := requireDaemon(ctx, res.Daemon, s.minDaemonMajor); err != nil {
+			return workingSet{}, err
+		}
+	}
+
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
 	assembled, err := s.projectAssembler.Assemble(ctx, res)
 	if err != nil {
@@ -80,7 +89,6 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		return workingSet{}, err
 	}
 
-	containers := capturableContainers(ctx, res)
 	warnOnReplicaGaps(ctx, res)
 
 	return workingSet{

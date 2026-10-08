@@ -183,8 +183,8 @@ func TestService_Rollback_RemedyPassesTheGateAndClearsTheMarker(t *testing.T) {
 		restoreSp, up, uncommitSafety, removeSafety)
 
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -270,8 +270,8 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 		clear, uncommitSafety, removeSafety)
 
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -340,8 +340,8 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 		putRecreating, uncommitSafety, removeSafety, up)
 
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -411,8 +411,8 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 		restoreSp, downForRevert, createForRevert, restoreSafety)
 
 	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
