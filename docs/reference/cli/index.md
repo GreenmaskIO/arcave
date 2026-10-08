@@ -36,7 +36,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | `--log-level` | `info` | `log.level` | `debug`, `info` or `warn`. |
 | `--log-format` | `text` | `log.format` | `text` or `json`. |
 | `--wait-timeout` | `2m0s` | `compose.wait_timeout` | How long to wait for services to become healthy after they are started. |
-| `--stop-timeout` | `10s` | `compose.stop_timeout` | How long a container gets to exit on its own before it is killed. |
+| `--stop-timeout` | `10s` | `compose.stop_timeout` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |
 | `--progress` | `log` | `compose.progress` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
 | `-v`, `--version` | — | *(none)* | Print the version, commit and build date. |
 | `-h`, `--help` | — | *(none)* | Show help for the command. |

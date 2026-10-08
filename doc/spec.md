@@ -162,7 +162,8 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
     --log-level           debug | info | warn.
     --log-format          text | json.
     --wait-timeout        How long to wait for services to become healthy after a restart.
-    --stop-timeout        How long a container gets to exit on its own before it is killed.
+    --stop-timeout        The least time a container gets to exit on its own before it is killed;
+                          a service's stop_grace_period raises it.
     --progress            Where compose's own progress goes: log | tty | quiet.
 ```
 

@@ -124,10 +124,10 @@ const (
 	// bound a service that never becomes healthy (a crash-looping container with
 	// restart: always) would block a savepoint forever.
 	DefaultWaitTimeout = 120 * time.Second
-	// DefaultStopTimeout is the grace period a container gets to exit before
-	// compose sends SIGKILL. It matters more here than it does to `docker compose
-	// stop`: arcave snapshots the volumes the moment the containers are down, so a
-	// database killed mid-shutdown is captured mid-shutdown.
+	// DefaultStopTimeout is the least grace period before compose SIGKILLs a
+	// container; a service's stop_grace_period raises it. It matters more here than
+	// it does to `docker compose stop`: arcave snapshots the volumes the moment the
+	// containers are down, so a database killed mid-shutdown is captured mid-shutdown.
 	DefaultStopTimeout = 10 * time.Second
 )
 
@@ -212,11 +212,12 @@ type Compose struct {
 	// restarts the compose project advertises it as --wait-timeout; a request naming its own
 	// bound (an MCP tool call) overrides it.
 	WaitTimeout time.Duration `yaml:"wait_timeout" mapstructure:"wait_timeout"`
-	// StopTimeout is how long a container gets to exit on its own before compose
-	// sends SIGKILL. Zero means "unset": DefaultStopTimeout applies, so an
-	// immediate kill is spelled 1s, not 0 — the value that reads as "no grace at
-	// all" is the one a user is most likely to leave unset by accident, and a
-	// SIGKILLed database is exactly what this bound exists to prevent.
+	// StopTimeout is the least time a container gets to exit on its own before
+	// compose sends SIGKILL; a service's stop_grace_period raises it. Zero means
+	// "unset": DefaultStopTimeout applies, so an immediate kill is spelled 1s, not 0 —
+	// the value that reads as "no grace at all" is the one a user is most likely to
+	// leave unset by accident, and a SIGKILLed database is exactly what this bound
+	// exists to prevent.
 	StopTimeout time.Duration `yaml:"stop_timeout" mapstructure:"stop_timeout"`
 	// Progress selects the channel compose's own progress goes out on: folded
 	// into arcave's log (the default), rendered by compose itself, or dropped.

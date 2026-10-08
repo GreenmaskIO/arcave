@@ -56,7 +56,7 @@ The cost is downtime, proportional to the data being moved plus the time your se
 arcave uses `docker compose stop`, never `down`. Containers are stopped, not removed, and the same containers start again — nothing is recreated and nothing on the host is touched beyond the volume data being captured.
 :::
 
-Two bounds control that window, and both are configurable: [`compose.stop_timeout`](reference/configuration.md#compose) is how long a container gets to exit on its own before it is killed, and [`compose.wait_timeout`](reference/configuration.md#compose) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
+Two bounds control that window, and both are configurable: [`compose.stop_timeout`](reference/configuration.md#compose) is the least time a container gets to exit on its own before it is killed — a service's `stop_grace_period` raises it — and [`compose.wait_timeout`](reference/configuration.md#compose) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
 
 ## The two halves of a savepoint
 
