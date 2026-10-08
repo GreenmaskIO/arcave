@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
@@ -33,7 +34,11 @@ import (
 
 // testResource matches what a test names after its compose project, arcave-<kind>-<suffix>,
 // and the layer tags a rollback of one leaves: arcave/arcave-<kind>-<suffix>-….
-var testResource = regexp.MustCompile(`^(arcave/)?arcave-[a-z-]+-[0-9a-f]{10}([-_]|$)`)
+var testResource = regexp.MustCompile(`^(arcave/)?arcave-[a-z-]+-([0-9a-f]{10})([-_]|$)`)
+
+// issuedSuffixes is every suffix randomSuffix handed out in this process: a resource named
+// with another one belongs to a concurrent run on the same daemon, not to this one.
+var issuedSuffixes sync.Map
 
 // anonymousVolumeLabel is what the daemon stamps on a volume it created for a container.
 const anonymousVolumeLabel = "com.docker.volume.anonymous"
@@ -70,7 +75,7 @@ func TestMain(m *testing.M) {
 			continue
 		}
 		switch {
-		case testResource.MatchString(r.name):
+		case ownResource(r.name):
 			leaked = append(leaked, r.String())
 		case r.kind == "anonymous volume":
 			anonymous = append(anonymous, r.String())
@@ -90,6 +95,16 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+}
+
+// ownResource reports whether name is a test resource of this process.
+func ownResource(name string) bool {
+	m := testResource.FindStringSubmatch(name)
+	if m == nil {
+		return false
+	}
+	_, ok := issuedSuffixes.Load(m[2])
+	return ok
 }
 
 // daemonResources is every container, volume, network and image tag the daemon holds.
