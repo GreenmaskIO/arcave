@@ -49,7 +49,7 @@ Keep the baseline savepoint permanently and exclude it from pruning by removing 
 
 ```shell
 arcave savepoint list                          # find the ids you want gone
-arcave savepoint remove 1780339981 1780341002  # and remove only those
+arcave savepoint remove 019e8488-3ac8-7000-8000-000000000000 019e8497-cf10-7000-8000-000000000000  # and remove only those
 ```
 
 :::warning

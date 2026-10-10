@@ -68,7 +68,7 @@ Branch points accumulate. Prune them the way you prune merged branches:
 arcave savepoint list
 arcave savepoint remove --retain-recent 10
 arcave savepoint remove --retain-for 14d --dry-run
-arcave savepoint remove 1780335122 1780339981
+arcave savepoint remove 019e843e-1650-7000-8000-000000000000 019e8488-3ac8-7000-8000-000000000000
 ```
 
 `--dry-run` reports what would go without deleting anything. Deletion by id is all-or-nothing: an unknown id is an error and removes nothing, so a typo cannot half-empty your set of branch points.

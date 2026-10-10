@@ -31,7 +31,7 @@ import (
 // layerID and layerRef are a layer a rollback restored, which the container now runs on.
 const (
 	layerID  = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
-	layerRef = "arcave/demo-db-1-postgres-16:sp-1780000002"
+	layerRef = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
 )
 
 func TestCapturableContainers(t *testing.T) {

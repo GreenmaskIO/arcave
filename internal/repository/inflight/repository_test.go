@@ -33,8 +33,8 @@ func TestRepository_PutGetClear(t *testing.T) {
 	ctx := context.Background()
 	marker := model.InflightMarker{
 		Phase:  model.InflightRestoring,
-		Target: "1780335122",
-		Safety: "1780335999",
+		Target: "019e843e-1650-7000-8000-000000000000",
+		Safety: "019e844b-7818-7000-8000-000000000000",
 		At:     time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
 	}
 

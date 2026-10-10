@@ -57,7 +57,13 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
 	log := zerolog.Ctx(ctx)
 
+	if err := req.Validate(); err != nil {
+		return model.Savepoint{}, err
+	}
 	if _, err := s.requireNoInflight(ctx, ""); err != nil {
+		return model.Savepoint{}, err
+	}
+	if err := s.requireUniqueName(ctx, req.Name); err != nil {
 		return model.Savepoint{}, err
 	}
 
@@ -85,6 +91,24 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", record.ID, err)
 	}
 	return record, nil
+}
+
+// requireUniqueName refuses a name another savepoint of the compose project carries.
+// Safety snapshots do not count: a name selector never sees them.
+func (s *Service) requireUniqueName(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	records, err := s.listSavepoints(ctx, false)
+	if err != nil {
+		return err
+	}
+	for _, r := range records {
+		if r.Name == name {
+			return fmt.Errorf("%w: %q names savepoint %s", model.ErrSavepointNameTaken, name, r.ID)
+		}
+	}
+	return nil
 }
 
 // ListSavepoints returns the committed savepoints req asks for.

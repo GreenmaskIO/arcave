@@ -49,7 +49,7 @@ func record(id model.SessionID) model.Session {
 		ID:        id,
 		Name:      "feat/add-new-table",
 		CreatedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
-		From:      &model.SessionOrigin{Session: model.DefaultSession, Savepoint: "1759480000"},
+		From:      &model.SessionOrigin{Session: model.DefaultSession, Savepoint: "0199a92e-2e00-7000-8000-000000000000"},
 	}
 }
 

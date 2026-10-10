@@ -79,7 +79,7 @@ func TestRepository_Save(t *testing.T) {
 	ctx := context.Background()
 	store, root := newStore(t)
 	repo := New(store)
-	want := record("1780335122")
+	want := record("019e843e-1650-7000-8000-000000000000")
 
 	// Act
 	saveErr := repo.SaveSavepoint(ctx, want)
@@ -92,7 +92,7 @@ func TestRepository_Save(t *testing.T) {
 	assert.Equal(t, want, got[0], "the record must survive a save/list round trip")
 
 	// The record is the reserved key at the root of the savepoint's own namespace.
-	assert.FileExists(t, filepath.Join(root, "1780335122", "savepoint.json"))
+	assert.FileExists(t, filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "savepoint.json"))
 }
 
 // An id that is not a Unix timestamp must never become a storage key: Save and
@@ -144,23 +144,23 @@ func TestRepository_List(t *testing.T) {
 		{
 			name: "a namespace with no record is an incomplete savepoint and is skipped",
 			plant: func(t *testing.T, root string) {
-				writeObject(t, root, "1780335999/db/data/data.tar", "payload")
+				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/db/data/data.tar", "payload")
 			},
 			wantIDs: nil,
 		},
 		{
 			name: "a committed savepoint beside an incomplete one",
 			plant: func(t *testing.T, root string) {
-				writeObject(t, root, "1780335999/db/data/data.tar", "payload")
+				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/db/data/data.tar", "payload")
 			},
-			wantIDs: []string{"1780335122"},
+			wantIDs: []string{"019e843e-1650-7000-8000-000000000000"},
 		},
 		{
 			name: "a directory whose name is not a savepoint id is ignored",
 			plant: func(t *testing.T, root string) {
 				writeObject(t, root, "not-a-savepoint/savepoint.json", `{"id":"x"}`)
 			},
-			wantIDs: []string{"1780335122"},
+			wantIDs: []string{"019e843e-1650-7000-8000-000000000000"},
 		},
 		{
 			// cdc keeps its repositories beside the savepoint directories, under
@@ -171,14 +171,14 @@ func TestRepository_List(t *testing.T) {
 				writeObject(t, root, "restic/volume-demo_pgdata/config", "{}")
 				writeObject(t, root, "restic/volume-demo_pgdata/snapshots/abc", "{}")
 			},
-			wantIDs: []string{"1780335122"},
+			wantIDs: []string{"019e843e-1650-7000-8000-000000000000"},
 		},
 		{
 			name: "a corrupt record is an error, never a silent skip",
 			plant: func(t *testing.T, root string) {
-				writeObject(t, root, "1780335999/savepoint.json", "{not json")
+				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json", "{not json")
 			},
-			wantMsg: "parse savepoint record 1780335999",
+			wantMsg: "parse savepoint record 019e844b-7818-7000-8000-000000000000",
 		},
 	}
 
@@ -191,7 +191,7 @@ func TestRepository_List(t *testing.T) {
 			// Every case but the two that must fail carries the one committed
 			// savepoint, so "skipped" is distinguishable from "store is empty".
 			if len(tt.wantIDs) > 0 {
-				require.NoError(t, repo.SaveSavepoint(ctx, record("1780335122")))
+				require.NoError(t, repo.SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000000")))
 			}
 			tt.plant(t, root)
 
@@ -218,16 +218,16 @@ func TestRepository_Delete(t *testing.T) {
 	ctx := context.Background()
 	store, root := newStore(t)
 	repo := New(store)
-	require.NoError(t, repo.SaveSavepoint(ctx, record("1780335122")))
-	writeObject(t, root, "1780335122/db/data/data.tar", "payload")
+	require.NoError(t, repo.SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000000")))
+	writeObject(t, root, "019e843e-1650-7000-8000-000000000000/db/data/data.tar", "payload")
 
 	// Act: the uncommit drops the marker and nothing else.
-	err := repo.DeleteSavepoint(ctx, "1780335122")
+	err := repo.DeleteSavepoint(ctx, "019e843e-1650-7000-8000-000000000000")
 
 	// Assert
 	require.NoError(t, err)
-	assert.NoFileExists(t, filepath.Join(root, "1780335122", "savepoint.json"))
-	assert.FileExists(t, filepath.Join(root, "1780335122", "db", "data", "data.tar"),
+	assert.NoFileExists(t, filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "savepoint.json"))
+	assert.FileExists(t, filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "db", "data", "data.tar"),
 		"Delete uncommits the savepoint; dropping its data is the backend's job")
 
 	got, err := repo.ListSavepoints(ctx)
@@ -235,7 +235,7 @@ func TestRepository_Delete(t *testing.T) {
 	assert.Empty(t, got, "an uncommitted savepoint must not list")
 
 	// Delete is idempotent: a namespace with no record is already uncommitted.
-	assert.NoError(t, repo.DeleteSavepoint(ctx, "1780335122"))
+	assert.NoError(t, repo.DeleteSavepoint(ctx, "019e843e-1650-7000-8000-000000000000"))
 }
 
 // nilIfEmpty normalises an empty slice to nil so a table can spell "no records"
@@ -256,13 +256,13 @@ func TestRepository_SaveSpecAndLoadSpec(t *testing.T) {
 	spec := []byte("name: demo\nservices:\n  db:\n    image: postgres:16\n")
 
 	// Act
-	require.NoError(t, repo.SaveSpec(ctx, "1780335122", spec))
-	got, err := repo.LoadSpec(ctx, "1780335122")
+	require.NoError(t, repo.SaveSpec(ctx, "019e843e-1650-7000-8000-000000000000", spec))
+	got, err := repo.LoadSpec(ctx, "019e843e-1650-7000-8000-000000000000")
 
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, spec, got)
-	exists, err := store.Exists(ctx, "1780335122/project.yaml")
+	exists, err := store.Exists(ctx, "019e843e-1650-7000-8000-000000000000/project.yaml")
 	require.NoError(t, err)
 	assert.True(t, exists, "the artifact is a reserved key at the root of the savepoint's namespace")
 }
@@ -273,7 +273,7 @@ func TestRepository_List_SkipsANamespaceWithOnlyASpec(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
 	repo := New(store)
-	require.NoError(t, repo.SaveSpec(ctx, "1780335122", []byte("name: demo\n")))
+	require.NoError(t, repo.SaveSpec(ctx, "019e843e-1650-7000-8000-000000000000", []byte("name: demo\n")))
 
 	// Act
 	records, err := repo.ListSavepoints(ctx)
@@ -289,7 +289,7 @@ func TestRepository_LoadSpec_Missing(t *testing.T) {
 	repo := New(store)
 
 	// Act
-	_, err := repo.LoadSpec(context.Background(), "1780335122")
+	_, err := repo.LoadSpec(context.Background(), "019e843e-1650-7000-8000-000000000000")
 
 	// Assert
 	require.Error(t, err)
@@ -303,10 +303,10 @@ func TestListSessionSavepoints(t *testing.T) {
 	require.NoError(t, err)
 	blog, err := store.SubStorage("compose/blog", true)
 	require.NoError(t, err)
-	require.NoError(t, New(shop).SaveSavepoint(ctx, record("100")))
-	require.NoError(t, New(blog).SaveSavepoint(ctx, record("200")))
+	require.NoError(t, New(shop).SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000100")))
+	require.NoError(t, New(blog).SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000200")))
 	// A compose project whose only savepoint never committed.
-	writeObject(t, root, "compose/cache/300/project.yaml", "services: {}")
+	writeObject(t, root, "compose/cache/019e843e-1650-7000-8000-000000000300/project.yaml", "services: {}")
 
 	// Act
 	got, err := ListSessionSavepoints(ctx, store)
@@ -314,7 +314,7 @@ func TestListSessionSavepoints(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []model.ComposeProjectSavepoints{
-		{ComposeProject: "blog", Savepoints: []model.Savepoint{record("200")}},
-		{ComposeProject: "shop", Savepoints: []model.Savepoint{record("100")}},
+		{ComposeProject: "blog", Savepoints: []model.Savepoint{record("019e843e-1650-7000-8000-000000000200")}},
+		{ComposeProject: "shop", Savepoints: []model.Savepoint{record("019e843e-1650-7000-8000-000000000100")}},
 	}, got)
 }

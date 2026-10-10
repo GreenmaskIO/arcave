@@ -41,7 +41,7 @@ arcave savepoint create clean --description "seeded baseline — do not delete"
 
 ```json title="stdout"
 {
-  "id": "1780331000",
+  "id": "019e83ff-30c0-7000-8000-000000000000",
   "name": "clean",
   "description": "seeded baseline — do not delete",
   "created_at": "2026-06-01T18:36:40.002114Z",
@@ -124,8 +124,8 @@ arcave savepoint list
 
 ```json title="stdout"
 [
-  { "id": "1780339981", "name": "after-refactor", "description": "", "created_at": "2026-06-01T21:13:01.114872Z" },
-  { "id": "1780331000", "name": "clean", "description": "seeded baseline — do not delete", "created_at": "2026-06-01T18:36:40.002114Z" }
+  { "id": "019e8488-3ac8-7000-8000-000000000000", "name": "after-refactor", "description": "", "created_at": "2026-06-01T21:13:01.114872Z" },
+  { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean", "description": "seeded baseline — do not delete", "created_at": "2026-06-01T18:36:40.002114Z" }
 ]
 ```
 
@@ -136,7 +136,7 @@ arcave savepoint list
 Prune by id instead:
 
 ```shell
-arcave savepoint remove 1780339981
+arcave savepoint remove 019e8488-3ac8-7000-8000-000000000000
 ```
 
 Or give the baseline a store of its own, so no retention sweep in the working store can reach it:

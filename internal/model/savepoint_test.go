@@ -44,7 +44,7 @@ func TestSavepoint_IsSafetySnapshot(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := Savepoint{ID: "1780335122", Labels: tt.labels}.IsSafetySnapshot()
+			got := Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Labels: tt.labels}.IsSafetySnapshot()
 
 			// Assert
 			assert.Equal(t, tt.want, got)

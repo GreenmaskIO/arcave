@@ -44,7 +44,7 @@ func demoVolume() model.Volume {
 // demoRecord is a committed savepoint of demoVolume.
 func demoRecord() model.Savepoint {
 	return model.Savepoint{
-		ID:        "1780335122",
+		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
 		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendCopy, Payload: "sp-payload"}},
@@ -62,7 +62,7 @@ func demoSpecRef() *model.SpecRef {
 // the ref the rollback that took it was aiming at.
 func demoSafetySnapshot() model.Savepoint {
 	return model.Savepoint{
-		ID:        "1780335999",
+		ID:        "019e844b-7818-7000-8000-000000000000",
 		Name:      safetySnapshotName(demoRecord().ID),
 		Labels:    safetySnapshotLabels(),
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),

@@ -16,12 +16,12 @@ arcave savepoint list
 
 ```json title="stdout"
 [
-  { "id": "1780345000", "name": "attempt-7", "description": "", "created_at": "2026-06-01T22:56:40Z" },
-  { "id": "1780344100", "name": "attempt-6", "description": "", "created_at": "2026-06-01T22:41:40Z" },
-  { "id": "1780343200", "name": "attempt-5", "description": "", "created_at": "2026-06-01T22:26:40Z" },
-  { "id": "1780342300", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
-  { "id": "1780341400", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" },
-  { "id": "1780331000", "name": "clean",     "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" }
+  { "id": "019e84d4-d040-7000-8000-000000000000", "name": "attempt-7", "description": "", "created_at": "2026-06-01T22:56:40Z" },
+  { "id": "019e84c7-14a0-7000-8000-000000000000", "name": "attempt-6", "description": "", "created_at": "2026-06-01T22:41:40Z" },
+  { "id": "019e84b9-5900-7000-8000-000000000000", "name": "attempt-5", "description": "", "created_at": "2026-06-01T22:26:40Z" },
+  { "id": "019e84ab-9d60-7000-8000-000000000000", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
+  { "id": "019e849d-e1c0-7000-8000-000000000000", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" },
+  { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean",     "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" }
 ]
 ```
 
@@ -35,9 +35,9 @@ arcave savepoint remove --retain-recent 3 --dry-run
 {
   "dry_run": true,
   "removed": [
-    { "id": "1780342300", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
-    { "id": "1780341400", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" },
-    { "id": "1780331000", "name": "clean",     "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" }
+    { "id": "019e84ab-9d60-7000-8000-000000000000", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
+    { "id": "019e849d-e1c0-7000-8000-000000000000", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" },
+    { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean",     "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" }
   ]
 }
 ```
@@ -58,7 +58,7 @@ Rules are combined with **OR**: a savepoint survives if *any* rule keeps it. Tha
 {
   "dry_run": true,
   "removed": [
-    { "id": "1780331000", "name": "clean", "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" }
+    { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean", "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" }
   ]
 }
 ```
@@ -68,15 +68,15 @@ Rules are combined with **OR**: a savepoint survives if *any* rule keeps it. Tha
 ## 4. Prune by id when a savepoint is precious
 
 ```shell
-arcave savepoint remove 1780342300 1780341400
+arcave savepoint remove 019e84ab-9d60-7000-8000-000000000000 019e849d-e1c0-7000-8000-000000000000
 ```
 
 ```json title="stdout"
 {
   "dry_run": false,
   "removed": [
-    { "id": "1780342300", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
-    { "id": "1780341400", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" }
+    { "id": "019e84ab-9d60-7000-8000-000000000000", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
+    { "id": "019e849d-e1c0-7000-8000-000000000000", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" }
   ]
 }
 ```
@@ -84,19 +84,19 @@ arcave savepoint remove 1780342300 1780341400
 Deletion by id is **all-or-nothing**. One unknown id in a list of five is an error and removes none of them:
 
 ```shell
-arcave savepoint remove 1780342300 9999999999
+arcave savepoint remove 019e84ab-9d60-7000-8000-000000000000 019e9999-9999-7999-8999-999999999999
 ```
 
 ```text title="stderr"
-Error: savepoint not found: 9999999999
+Error: savepoint not found: 019e9999-9999-7999-8999-999999999999
 ```
 
-`1780342300` is still there.
+`019e84ab-9d60-7000-8000-000000000000` is still there.
 
 ## 5. What you cannot do
 
 ```shell
-arcave savepoint remove 1780342300 --retain-recent 3
+arcave savepoint remove 019e84ab-9d60-7000-8000-000000000000 --retain-recent 3
 ```
 
 ```text title="stderr"
@@ -136,11 +136,11 @@ arcave savepoint list --include-safety-snapshots \
 ```
 
 ```text
-1780340557  safety-snapshot-1780335122
+019e8491-04c8-7000-8000-000000000000  safety-snapshot-019e843e-1650-7000-8000-000000000000
 ```
 
 ```shell
-arcave savepoint remove 1780340557
+arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```
 
 :::warning

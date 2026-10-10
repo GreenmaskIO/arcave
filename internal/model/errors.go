@@ -45,9 +45,15 @@ var (
 	// mutating workflow in this project.
 	ErrProjectLocked = errors.New("another arcave command is already running in this project")
 
-	// ErrInvalidSavepointID reports an id that is not a run of decimal digits.
+	// ErrInvalidSavepointID reports an id that is not a canonical UUID.
 	// SavepointID.Validate wraps it with the offending id.
 	ErrInvalidSavepointID = errors.New("invalid savepoint id")
+	// ErrInvalidSavepointName reports a name a savepoint may not carry.
+	// CreateSavepointRequest.Validate wraps it with the offending name.
+	ErrInvalidSavepointName = errors.New("invalid savepoint name")
+	// ErrSavepointNameTaken reports a name another savepoint of the compose project
+	// already carries.
+	ErrSavepointNameTaken = errors.New("savepoint name is already taken")
 
 	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
 	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps

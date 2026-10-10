@@ -28,7 +28,7 @@ import (
 
 func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	// Arrange
-	sp := model.Savepoint{ID: "1780335122", Name: "before-migration", NotCovered: &model.NotCovered{
+	sp := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", NotCovered: &model.NotCovered{
 		Mounts: []model.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
 			Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
 		ServicesWithoutVolumes: []string{"web"},
@@ -54,7 +54,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 }
 
 func TestMCPHandler_listSavepointsMCP(t *testing.T) {
-	sps := []model.Savepoint{{ID: "1780335122", Name: "before-migration"}}
+	sps := []model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration"}}
 
 	tests := []struct {
 		name string

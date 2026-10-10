@@ -462,9 +462,8 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	return dockerCli, apiClient, nil
 }
 
-// composeProjectBlobPrefix is relative to the compose project store root, so the blobs are shared
-// between that compose project's savepoints and nothing wider. It sits beside them rather
-// than inside one: a savepoint id is digits only, so the name cannot collide.
+// composeProjectBlobPrefix sits beside the compose project's savepoints, shared by them and
+// nothing wider; a savepoint id is a canonical UUID, so the name cannot collide with one.
 const composeProjectBlobPrefix = "shared/oci/blobs"
 
 // newImageBackend builds the one image backend: layers are always deduplicated,

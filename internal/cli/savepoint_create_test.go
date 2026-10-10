@@ -33,7 +33,7 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 		Description: "schema v2",
 		WaitTimeout: waitTimeout,
 	}
-	sp := model.Savepoint{ID: "1780335122", Name: "before-migration", Description: "schema v2",
+	sp := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", Description: "schema v2",
 		NotCovered: &model.NotCovered{ServicesWithoutVolumes: []string{"web"}}}
 	svcErr := errors.New("services did not become healthy")
 	printErr := errors.New("stdout closed")

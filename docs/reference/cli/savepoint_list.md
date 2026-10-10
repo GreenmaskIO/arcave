@@ -24,7 +24,7 @@ Global flags apply — see [the CLI reference](index.md#global-flags).
 
 ## Order
 
-arcave does not sort the array. The store lists the savepoint directories by name, and an id is a Unix second in decimal, so what comes back is **oldest first**.
+arcave does not sort the array. The store lists the savepoint directories by name, and an id is a UUIDv7 — its leading digits are the capture's millisecond — so what comes back is **oldest first**.
 
 ```shell title="The newest savepoint"
 arcave savepoint list | jq -r 'max_by(.created_at).id'
@@ -41,7 +41,7 @@ It is hidden because one normally exists only *while* a rollback runs. One that 
 ```json title="stdout"
 [
   {
-    "id": "1780335122",
+    "id": "019e843e-1650-7000-8000-000000000000",
     "name": "before-migration",
     "description": "before the v2 schema",
     "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -59,8 +59,8 @@ With `--include-safety-snapshots`, a leftover safety snapshot carries its label 
 ```json title="stdout"
 [
   {
-    "id": "1780340557",
-    "name": "safety-snapshot-1780335122",
+    "id": "019e8491-04c8-7000-8000-000000000000",
+    "name": "safety-snapshot-019e843e-1650-7000-8000-000000000000",
     "description": "",
     "labels": { "arcave-safety-snapshot": "true" },
     "created_at": "2026-06-01T21:22:37.009412Z"
@@ -77,7 +77,7 @@ The name carries the id of the savepoint that rollback was applying, so a leftov
 | No `.arcave/config.yaml` | `config is not found: run 'arcave init' if not yet initialized` |
 | No compose project named | `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME` |
 | The Docker daemon is unreachable | The command fails while wiring itself up, before it reads the store. |
-| A record that will not decode | `parse savepoint record 1780335122: …` — a corrupt commit is an error, never a silent skip. |
+| A record that will not decode | `parse savepoint record 019e843e-1650-7000-8000-000000000000: …` — a corrupt commit is an error, never a silent skip. |
 | No savepoints | `[]`, exit code `0`. |
 
 ## Examples

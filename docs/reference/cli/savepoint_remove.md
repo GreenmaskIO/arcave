@@ -30,7 +30,7 @@ Global flags apply — see [the CLI reference](index.md#global-flags).
 **By id** — one or more ids as positional arguments:
 
 ```shell
-arcave savepoint remove 1780335122 1780339981
+arcave savepoint remove 019e843e-1650-7000-8000-000000000000 019e8488-3ac8-7000-8000-000000000000
 ```
 
 **By retention rule** — one or more of `--retain-recent`, `--retain-for`, `--before-date`:
@@ -59,7 +59,7 @@ A scanning selector cannot delete the last copy of a pre-rollback state by accid
   "dry_run": false,
   "removed": [
     {
-      "id": "1780335122",
+      "id": "019e843e-1650-7000-8000-000000000000",
       "name": "before-migration",
       "description": "before the v2 schema",
       "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -89,8 +89,8 @@ Deletion is permanent. It frees the savepoint's own directory; the [deduplicated
 | A negative `--retain-recent` | `retain-recent must be zero or positive` |
 | An unparseable duration | `invalid --retain-for "2 weeks": …` |
 | A bare date in `--before-date` | `invalid --before-date "2026-06-01": …` — it takes RFC3339Nano. |
-| An id that is not there | `savepoint(s) not found: 1780335122`, **and nothing is deleted**. There are no partial deletes: one typo in a list of five removes none of them. |
-| An interrupted rollback is marked | `rollback to savepoint 1780335122 was interrupted (restoring)`. While the marker stands its safety snapshot is the remedy, and no selector may delete it. |
+| An id that is not there | `savepoint(s) not found: 019e843e-1650-7000-8000-000000000000`, **and nothing is deleted**. There are no partial deletes: one typo in a list of five removes none of them. |
+| An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)`. While the marker stands its safety snapshot is the remedy, and no selector may delete it. |
 | Another arcave run holds the lock | `another arcave command is already running in this project`. `--dry-run` takes no lock and is unaffected. |
 
 Each removal uncommits the record first and drops the data second. A removal killed halfway therefore leaves data no record names — invisible to `savepoint list` — rather than a record pointing at data that is already half gone. What it leaves is named in the log.
@@ -115,7 +115,7 @@ arcave savepoint remove --before-date 2026-06-01T00:00:00Z
 
 ```shell title="Delete a leftover safety snapshot, once the environment is right"
 arcave savepoint list --include-safety-snapshots
-arcave savepoint remove 1780340557
+arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```
 
 Until you have confirmed the environment, that snapshot is the last copy of the pre-rollback state.

@@ -25,7 +25,7 @@ Returns the savepoint record — the shape [Output](output.md#the-savepoint-reco
 
 ```json title="structured content"
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "before-migration",
   "description": "before the v2 schema",
   "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -35,7 +35,7 @@ Returns the savepoint record — the shape [Output](output.md#the-savepoint-reco
 }
 ```
 
-A failure of the form `savepoint 1780335122 committed; services failed to start: …` means the savepoint **exists and is safe to roll back to**; only the restart failed. The tool's own description tells an agent this, so it reports the id rather than taking another savepoint.
+A failure of the form `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start: …` means the savepoint **exists and is safe to roll back to**; only the restart failed. The tool's own description tells an agent this, so it reports the id rather than taking another savepoint.
 
 ## `savepoint_list`
 
@@ -51,7 +51,7 @@ Returns an object, because MCP structured output must be one — the array the C
 ```json title="structured content"
 {
   "savepoints": [
-    { "id": "1780335122", "name": "before-migration", … }
+    { "id": "019e843e-1650-7000-8000-000000000000", "name": "before-migration", … }
   ]
 }
 ```
@@ -77,7 +77,7 @@ Either `ids` or the retention fields — not both, and not neither. The refusals
 {
   "dry_run": true,
   "removed": [
-    { "id": "1780335122", "name": "before-migration", … }
+    { "id": "019e843e-1650-7000-8000-000000000000", "name": "before-migration", … }
   ]
 }
 ```
@@ -94,7 +94,7 @@ Returns the environment to a savepoint. Destructive: every volume it covers is w
 
 ```json title="structured content"
 {
-  "rolled_back_to": { "id": "1780335122", … },
+  "rolled_back_to": { "id": "019e843e-1650-7000-8000-000000000000", … },
   "restored": [
     { "object_id": "volume-named-myapp_pgdata", "type": "named", … }
   ]

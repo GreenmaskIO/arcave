@@ -69,8 +69,8 @@ const (
 // The ids the cases capture under — a counter, not the clock, so a failure names
 // the same id on every run.
 const (
-	idFirst  = model.SavepointID("1780000001")
-	idSecond = model.SavepointID("1780000002")
+	idFirst  = model.SavepointID("019e7044-8be8-7000-8000-000000000000")
+	idSecond = model.SavepointID("019e7044-8fd0-7000-8000-000000000000")
 )
 
 // The repository objects the assertions name — restic's own layout.

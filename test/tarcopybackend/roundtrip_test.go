@@ -51,7 +51,7 @@ const (
 	busyboxImage = "busybox"
 	// idFirst is the id every case captures under — a constant, not the clock, so
 	// a failure names the same id on every run.
-	idFirst = model.SavepointID("1780000001")
+	idFirst = model.SavepointID("019e7044-8be8-7000-8000-000000000000")
 )
 
 // A capture is round: the volume comes back byte for byte, ownership and

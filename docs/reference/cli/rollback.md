@@ -31,12 +31,12 @@ arcave rollback latest --wait-timeout 5m
 | Token | Resolves as |
 |---|---|
 | `latest` | The savepoint with the newest `created_at`. A reserved word. |
-| A run of decimal digits | An **id**. Exact, and it never falls back to a name. |
+| A canonical UUID | An **id**. Exact, and it never falls back to a name. |
 | Anything else | A **name**. |
 
 ```shell
 arcave rollback latest
-arcave rollback 1780335122
+arcave rollback 019e843e-1650-7000-8000-000000000000
 arcave rollback before-migration
 ```
 
@@ -47,7 +47,7 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
 ```json title="stdout"
 {
   "rolled_back_to": {
-    "id": "1780335122",
+    "id": "019e843e-1650-7000-8000-000000000000",
     "name": "before-migration",
     "description": "before the v2 schema",
     "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -74,7 +74,7 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
       "service": "app",
       "replica": 1,
       "image_id": "sha256:aaaa…",
-      "image_ref": "arcave/myapp-app-1-myapp-latest:sp-1780335122"
+      "image_ref": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
     }
   ]
 }
@@ -93,13 +93,13 @@ Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<bas
 | Condition | What happens |
 |---|---|
 | No argument | cobra refuses the call: `rollback` takes exactly one. |
-| The id is not there | `finding savepoint "1780335122": savepoint not found: 1780335122` |
+| The id is not there | `finding savepoint "019e843e-1650-7000-8000-000000000000": savepoint not found: 019e843e-1650-7000-8000-000000000000` |
 | The name is not there | `finding savepoint "clean": savepoint not found: clean` |
-| The name matches several | `finding savepoint "clean": 2 savepoints are named "clean"; roll back by id instead: 1780335122, 1780339981` |
+| The name matches several | `finding savepoint "clean": 2 savepoints are named "clean"; roll back by id instead: 019e843e-1650-7000-8000-000000000000, 019e8488-3ac8-7000-8000-000000000000` |
 | `latest` with an empty store | `finding savepoint "latest": no savepoints exist` |
-| The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 1780335122`. The project is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
+| The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 019e843e-1650-7000-8000-000000000000`. The project is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
 | A stored layer the Docker daemon will not take | `restore the savepoint's writable layers: …` — raised **before** anything is stopped. |
-| An interrupted rollback is marked | `require no inflight: rollback to savepoint 1780335122 was interrupted (restoring)` — except a rollback to that marker's own safety snapshot, which is the remedy and passes. |
+| An interrupted rollback is marked | `require no inflight: rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)` — except a rollback to that marker's own safety snapshot, which is the remedy and passes. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The safety snapshot fails | `pre-rollback safety snapshot failed, nothing changed: …`. The services are started again. |
 | Anything fails after that | `rollback failed: …`, after the safety snapshot has been replayed. You are where you started. |
@@ -129,7 +129,7 @@ Worth raising whenever a health check is slower than two minutes: a healthy-but-
 
 ```shell title="Recover from an interrupted rollback"
 arcave savepoint list --include-safety-snapshots
-arcave rollback 1780340557
+arcave rollback 019e8491-04c8-7000-8000-000000000000
 ```
 
 ## Next step

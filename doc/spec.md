@@ -75,17 +75,17 @@ arcave savepoint create before-migration
 docker compose stop
 
 # 2. Clear the namespace, dropping anything a crashed run left behind
-rm -rf .arcave/savepoints/myapp/1780335122
+rm -rf .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000
 
 # 3. Copy registered volumes
-cp -a pgdata .arcave/savepoints/myapp/1780335122/postgres
-cp -a redisdata .arcave/savepoints/myapp/1780335122/redis
+cp -a pgdata .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/postgres
+cp -a redisdata .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/redis
 
 # 4. Record the compose project this savepoint was taken of
-write .arcave/savepoints/myapp/1780335122/project.yaml
+write .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/project.yaml
 
 # 5. Commit the savepoint — the record is written LAST
-write .arcave/savepoints/myapp/1780335122/savepoint.json
+write .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/savepoint.json
 
 # 6. Start services
 docker compose start
@@ -439,17 +439,17 @@ What a rollback cannot bring back of a compose file is listed once, in the user 
 
 arcave reads the **running compose project**, not the compose files — it never opens one, and a project whose files have moved or been deleted works exactly the same. The compose project itself, though, has to exist on the daemon. `docker compose stop` is fine — stopped containers still describe the compose project, and every workflow stops the services anyway. `docker compose down` is not: it removes the containers, and with them everything arcave knows about the project. A command run against a torn-down compose project fails saying so.
 
-Every savepoint receives a unique immutable identifier — a Unix timestamp integer:
+Every savepoint receives a unique immutable identifier — a UUIDv7 in canonical form, which sorts by creation time:
 
 ```text
-1780335122
+019e843e-1650-7000-8000-000000000000
 ```
 
 Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose document committed beside it as `<savepoint-id>/project.yaml` — the compose project as it stood, which is what a rollback rebuilds. It is read and parsed before a rollback stops anything, so an unloadable one fails while the project is still running:
 
 ```json
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "before-migration",
   "description": "Before applying migration 2026_001",
   "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -492,7 +492,7 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
     "services_without_volumes": ["proxy"],
     "killed_containers": [{ "service": "db", "replica": 1, "container": "demo-db-1" }],
     "replica_gaps": [{ "service": "worker", "replicas": [1, 3], "missing": [2] }],
-    "unresolved_upstreams": [{ "service": "job", "replica": 1, "container": "demo-job-1", "image": "arcave/demo-job-1-busybox:sp-1780330000" }]
+    "unresolved_upstreams": [{ "service": "job", "replica": 1, "container": "demo-job-1", "image": "arcave/demo-job-1-busybox:sp-019e83ef-ee80-7000-8000-000000000000" }]
   }
 }
 ```
@@ -536,7 +536,7 @@ Output:
 ```json
 [
   {
-    "id": "1780335122",
+    "id": "019e843e-1650-7000-8000-000000000000",
     "name": "before-migration",
     "description": "Before applying migration 2026_001",
     "created_at": "2026-06-01T19:41:12.123456789Z"
@@ -576,16 +576,16 @@ Restores the environment to a specified savepoint.
 
 ```bash
 arcave rollback latest
-arcave rollback 1780335122
+arcave rollback 019e843e-1650-7000-8000-000000000000
 arcave rollback before-migration
 ```
 
-The argument names the savepoint in one of three ways, and which one it is decided by the token itself: `latest` is reserved, a run of decimal digits is an **id** (that being exactly what a savepoint id is), and anything else is a **name**. An id is exact and never falls back to a name — `arcave rollback 1780335122` will not resolve to a savepoint merely *called* `1780335122` — and it is the only form that reaches a safety snapshot. A name matching several savepoints is an error listing the candidate ids, never a silent guess.
+The argument names the savepoint in one of three ways, and which one it is decided by the token itself: `latest` is reserved, a canonical UUID is an **id** (that being exactly what a savepoint id is), and anything else is a **name**. An id is exact and never falls back to a name — and `savepoint create` refuses a name shaped like one, so no savepoint is *called* an id — and it is the only form that reaches a safety snapshot. A name matching several savepoints is an error listing the candidate ids, never a silent guess.
 
 Behavior:
 
 - Reads the live compose project and refuses a daemon older than Docker 25, before anything is loaded or stopped.
-- Loads every writable layer the savepoint holds back into the daemon and tags each one `arcave/<project>-<service>-<replica>-<base-image>:sp-<savepoint-id>` — e.g. `arcave/shop-db-1-postgres-16:sp-1780335122`, so `docker images` reads as one row per replica and one tag per savepoint. Every segment is reduced to lower-case alphanumerics joined by dashes, because a docker repository path admits nothing else, and the base image is cut before the 255-character cap is passed. This runs with the project still running: an archive the daemon will not take stops the rollback before anything is torn down.
+- Loads every writable layer the savepoint holds back into the daemon and tags each one `arcave/<project>-<service>-<replica>-<base-image>:sp-<savepoint-id>` — e.g. `arcave/shop-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000`, so `docker images` reads as one row per replica and one tag per savepoint. Every segment is reduced to lower-case alphanumerics joined by dashes, because a docker repository path admits nothing else, and the base image is cut before the 255-character cap is passed. This runs with the project still running: an archive the daemon will not take stops the rollback before anything is torn down.
 - Stops project services.
 - Takes a safety snapshot of the live state, named `safety-snapshot-<id of the savepoint being restored>`, so one left behind by a killed rollback says which savepoint it was undoing.
 - Removes the project's containers and networks. Volumes are kept — one arcave does not capture has no copy anywhere.
@@ -605,7 +605,7 @@ Output adds `images`, one entry per restored layer:
 
 ```json
 {
-  "rolled_back_to": { "id": "1780335122" },
+  "rolled_back_to": { "id": "019e843e-1650-7000-8000-000000000000" },
   "restored": [],
   "images": [
     {
@@ -613,7 +613,7 @@ Output adds `images`, one entry per restored layer:
       "replica": 1,
       "container_name": "demo-webapp-1",
       "image_id": "sha256:aaaa…",
-      "image_ref": "arcave/demo-webapp-1-myapp-latest:sp-1780335122"
+      "image_ref": "arcave/demo-webapp-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
     }
   ]
 }

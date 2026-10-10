@@ -459,7 +459,7 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 		passes bool
 	}{
 		{name: "its own target passes and clears the marker", target: demoColdRecord().ID, passes: true},
-		{name: "another target is refused", target: "1780330000"},
+		{name: "another target is refused", target: "019e83ef-ee80-7000-8000-000000000000"},
 	}
 
 	for _, tt := range tests {

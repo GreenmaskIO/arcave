@@ -82,7 +82,7 @@ arcave stops the services, captures every volume and every container's writable 
 
 ```json title="stdout"
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "before-migration",
   "description": "",
   "created_at": "2026-06-01T19:41:12.123456789Z"
@@ -117,7 +117,7 @@ arcave rollback before-migration
 ```json title="stdout"
 {
   "rolled_back_to": {
-    "id": "1780335122",
+    "id": "019e843e-1650-7000-8000-000000000000",
     "name": "before-migration",
     "description": "",
     "created_at": "2026-06-01T19:41:12.123456789Z"
@@ -130,7 +130,7 @@ arcave rollback before-migration
       "service": "db",
       "replica": 1,
       "image_id": "sha256:aaaa…",
-      "image_ref": "arcave/myapp-db-1-postgres-16:sp-1780335122"
+      "image_ref": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
     }
   ]
 }
@@ -149,7 +149,7 @@ arcave savepoint list
 ```json title="stdout"
 [
   {
-    "id": "1780335122",
+    "id": "019e843e-1650-7000-8000-000000000000",
     "name": "before-migration",
     "description": "",
     "created_at": "2026-06-01T19:41:12.123456789Z"
@@ -160,7 +160,7 @@ arcave savepoint list
 ## 8. Clean up
 
 ```shell
-arcave savepoint remove 1780335122            # by id
+arcave savepoint remove 019e843e-1650-7000-8000-000000000000            # by id
 arcave savepoint remove --retain-recent 5     # keep the newest five
 arcave savepoint remove --retain-for 7d --dry-run
 ```

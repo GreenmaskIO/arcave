@@ -33,7 +33,7 @@ func TestRollbackRequest_Validate(t *testing.T) {
 		wantErr    bool
 		wantErrMsg string // set for an error other than ErrRollbackNoSelector
 	}{
-		{name: "an id", req: RollbackRequest{ID: ptr(SavepointID("1780335122"))}},
+		{name: "an id", req: RollbackRequest{ID: ptr(SavepointID("019e843e-1650-7000-8000-000000000000"))}},
 		{name: "a name", req: RollbackRequest{Name: ptr("before-migration")}},
 		{name: "latest", req: RollbackRequest{Latest: ptr(true)}},
 		{name: "nothing at all", req: RollbackRequest{}, wantErr: true},
@@ -81,7 +81,7 @@ func TestRollbackRequest_Ref(t *testing.T) {
 		req  RollbackRequest
 		want string
 	}{
-		{name: "an id", req: RollbackRequest{ID: ptr(SavepointID("1780335122"))}, want: "1780335122"},
+		{name: "an id", req: RollbackRequest{ID: ptr(SavepointID("019e843e-1650-7000-8000-000000000000"))}, want: "019e843e-1650-7000-8000-000000000000"},
 		{name: "a name", req: RollbackRequest{Name: ptr("before-migration")}, want: "before-migration"},
 		{name: "latest", req: RollbackRequest{Latest: ptr(true)}, want: RefLatest},
 		{name: "latest set to false renders nothing", req: RollbackRequest{Latest: ptr(false)}},
