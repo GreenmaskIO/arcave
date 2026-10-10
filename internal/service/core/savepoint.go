@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -382,11 +383,11 @@ func findSavepoint(records []model.Savepoint, req model.RollbackRequest) (model.
 	case 1:
 		return byName[0], nil
 	default:
-		ids := make([]string, len(byName))
+		ids := make([]model.SavepointID, len(byName))
 		for i, r := range byName {
-			ids[i] = r.ID.String()
+			ids[i] = r.ID
 		}
-		return model.Savepoint{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s",
-			len(byName), *req.Name, strings.Join(ids, ", "))
+		slices.Sort(ids)
+		return model.Savepoint{}, &model.AmbiguousSavepointNameError{Name: *req.Name, IDs: ids}
 	}
 }

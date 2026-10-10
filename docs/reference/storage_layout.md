@@ -18,7 +18,7 @@ Four things are named there, outermost first:
 |---|---|---|
 | `arcave` | The static namespace every store is rooted under. Not configurable. | — |
 | `<project>` | The storage tenant, `project.name`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
-| `<session>` | The session — the line of savepoints, and the lifetime everything below it dies with. | `global`, or a canonical UUID |
+| `<session>` | The session — the line of savepoints, and the lifetime everything below it dies with. | `baseline` (the default), or a canonical UUID |
 | `<compose-project>` | The compose project, named per invocation with `-p`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
 
 The static `arcave` segment is what bounds every write and every delete: point the path at `/etc` and arcave operates in `/etc/arcave`. Each segment below it is checked against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.

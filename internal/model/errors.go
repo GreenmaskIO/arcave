@@ -16,6 +16,8 @@ package model
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 )
 
 // Sentinel errors that cross a layer seam: a service returns one, an adapter
@@ -71,3 +73,19 @@ var (
 	// ErrUnsupportedDaemon reports a Docker daemon too old for the image backend.
 	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
 )
+
+// AmbiguousSavepointNameError reports a name more than one savepoint carries;
+// IDs lists those savepoints.
+type AmbiguousSavepointNameError struct {
+	Name string
+	IDs  []SavepointID
+}
+
+func (e *AmbiguousSavepointNameError) Error() string {
+	ids := make([]string, len(e.IDs))
+	for i, id := range e.IDs {
+		ids[i] = id.String()
+	}
+	return fmt.Sprintf("%d savepoints are named %q; roll back by id instead: %s",
+		len(e.IDs), e.Name, strings.Join(ids, ", "))
+}

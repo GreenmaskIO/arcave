@@ -24,11 +24,9 @@ import (
 // with. It carries its own gate, so a value that reached a store was validated.
 type SessionID string
 
-// DefaultSession is the session segment every store is rooted under today. A
-// session owns everything that dies with it, and there is exactly one, so
-// nothing selects it yet — the segment is laid down now because introducing it
-// later would move every existing key.
-const DefaultSession SessionID = "global"
+// DefaultSession is the session a command works in unless it names another. It
+// has no record and always exists implicitly.
+const DefaultSession SessionID = "baseline"
 
 // Validate accepts DefaultSession or a UUID in its canonical form.
 //

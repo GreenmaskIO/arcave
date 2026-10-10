@@ -294,3 +294,27 @@ func TestRepository_LoadSpec_Missing(t *testing.T) {
 	// Assert
 	require.Error(t, err)
 }
+
+func TestListSessionSavepoints(t *testing.T) {
+	// Arrange: one name in two compose projects is two savepoints, not a conflict.
+	ctx := context.Background()
+	store, root := newStore(t)
+	shop, err := store.SubStorage("compose/shop", true)
+	require.NoError(t, err)
+	blog, err := store.SubStorage("compose/blog", true)
+	require.NoError(t, err)
+	require.NoError(t, New(shop).SaveSavepoint(ctx, record("100")))
+	require.NoError(t, New(blog).SaveSavepoint(ctx, record("200")))
+	// A compose project whose only savepoint never committed.
+	writeObject(t, root, "compose/cache/300/project.yaml", "services: {}")
+
+	// Act
+	got, err := ListSessionSavepoints(ctx, store)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []model.ComposeProjectSavepoints{
+		{ComposeProject: "blog", Savepoints: []model.Savepoint{record("200")}},
+		{ComposeProject: "shop", Savepoints: []model.Savepoint{record("100")}},
+	}, got)
+}

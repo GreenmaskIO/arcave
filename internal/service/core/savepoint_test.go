@@ -1345,6 +1345,27 @@ func TestFindSavepoint(t *testing.T) {
 	}
 }
 
+func TestFindSavepoint_AmbiguousName(t *testing.T) {
+	// Arrange: two visible "dup"s out of id order, plus a safety snapshot of the same name.
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	name := "dup"
+	records := []model.Savepoint{
+		{ID: "300", Name: name, CreatedAt: now},
+		{ID: "200", Name: name, CreatedAt: now},
+		{ID: "400", Name: name, Labels: safetySnapshotLabels(), CreatedAt: now},
+	}
+
+	// Act
+	_, err := findSavepoint(records, model.RollbackRequest{Name: &name})
+
+	// Assert
+	var ambiguous *model.AmbiguousSavepointNameError
+	require.ErrorAs(t, err, &ambiguous)
+	assert.Equal(t, name, ambiguous.Name)
+	assert.Equal(t, []model.SavepointID{"200", "300"}, ambiguous.IDs, "sorted, and never the safety snapshot")
+	assert.EqualError(t, err, `2 savepoints are named "dup"; roll back by id instead: 200, 300`)
+}
+
 // recordsAt plants one record per instant, each id naming its own creation time.
 func recordsAt(times ...time.Time) []model.Savepoint {
 	records := make([]model.Savepoint, len(times))
