@@ -54,7 +54,7 @@ func (r *Repository) Get(_ context.Context) (marker model.InflightMarker, found 
 	return marker, true, nil
 }
 
-// Put writes the marker, replacing any standing one.
+// Put writes the marker, replacing any existing one.
 func (r *Repository) Put(_ context.Context, marker model.InflightMarker) error {
 	data, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {

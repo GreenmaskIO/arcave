@@ -56,7 +56,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
 	log := zerolog.Ctx(ctx)
 
-	if err := s.requireNoInflight(ctx, ""); err != nil {
+	if _, err := s.requireNoInflight(ctx, ""); err != nil {
 		return model.Savepoint{}, err
 	}
 
@@ -132,9 +132,9 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 	}
 
 	return withUnlock(ctx, s, func() (model.RemoveResult, error) {
-		// The gate guards the safety snapshot too: while the marker stands, that
-		// snapshot is the remedy, and no selector may delete it.
-		if err := s.requireNoInflight(ctx, ""); err != nil {
+		// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
+		// that snapshot is the way back, and no selector may delete it.
+		if _, err := s.requireNoInflight(ctx, ""); err != nil {
 			return model.RemoveResult{}, err
 		}
 		return s.removeSavepoints(ctx, req)

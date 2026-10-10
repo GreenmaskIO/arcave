@@ -146,6 +146,15 @@ const (
 	ProgressQuiet = "quiet"
 )
 
+// The tokens rollback.leftover_volumes accepts.
+const (
+	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
+	// containers, and warns. The default.
+	LeftoverVolumesOverwrite = "overwrite"
+	// LeftoverVolumesRefuse fails such a rollback before anything is created.
+	LeftoverVolumesRefuse = "refuse"
+)
+
 // Config is the content persisted to .arcave/config.yaml by init. The yaml tags
 // drive Save; the mapstructure tags drive Unmarshal.
 // One section per subsystem: a new subsystem adds a section rather than another
@@ -156,6 +165,7 @@ type Config struct {
 	Compose  Compose  `yaml:"compose" mapstructure:"compose"`
 	Storage  Storage  `yaml:"storage" mapstructure:"storage"`
 	Snapshot Snapshot `yaml:"snapshot" mapstructure:"snapshot"`
+	Rollback Rollback `yaml:"rollback" mapstructure:"rollback"`
 	// Backends holds the settings of the individual snapshot backends, one
 	// section per backend, present only for the backends a project configures.
 	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
@@ -325,6 +335,29 @@ func (s Snapshot) BackendKind() model.SnapshotBackendKind {
 	}
 }
 
+// Rollback configures the rollback workflow.
+type Rollback struct {
+	// LeftoverVolumes is what a rollback does when the compose project has no containers
+	// but its volumes still exist: overwrite them, or refuse.
+	LeftoverVolumes string `yaml:"leftover_volumes" mapstructure:"leftover_volumes"`
+}
+
+// Validate rejects a leftover-volumes policy arcave does not know.
+func (r Rollback) Validate() error {
+	switch r.LeftoverVolumes {
+	case LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
+		return nil
+	default:
+		return fmt.Errorf("unsupported rollback.leftover_volumes %q (supported: %s, %s)",
+			r.LeftoverVolumes, LeftoverVolumesOverwrite, LeftoverVolumesRefuse)
+	}
+}
+
+// Policy returns the configured token as the policy a rollback request carries.
+func (r Rollback) Policy() model.LeftoverVolumesPolicy {
+	return model.LeftoverVolumesPolicy(r.LeftoverVolumes)
+}
+
 // Backends is one optional section per snapshot backend. The arms are pointers
 // so a project that never names a backend carries no section for it.
 type Backends struct {
@@ -473,6 +506,9 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Snapshot.Backend == "" {
 		c.Snapshot.Backend = SnapshotBackendFullCopy
 	}
+	if c.Rollback.LeftoverVolumes == "" {
+		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
+	}
 	c.applyCDCDefaults()
 }
 
@@ -536,6 +572,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Snapshot.Validate(); err != nil {
+		return err
+	}
+	if err := c.Rollback.Validate(); err != nil {
 		return err
 	}
 	return c.Backends.Validate()

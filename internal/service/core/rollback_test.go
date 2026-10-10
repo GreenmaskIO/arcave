@@ -964,3 +964,301 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 	safetySnapshotBackend.AssertExpectations(t)
 	capturer.AssertExpectations(t)
 }
+
+// demoColdRecord is demoRecordWithImages addressing its volume by docker name, as a
+// capture records it: what a surviving volume is matched against.
+func demoColdRecord() model.Savepoint {
+	record := demoRecordWithImages()
+	record.Stats[0].Volume.Named = &model.VolumePropertiesNamed{VolumeName: demoVolumeName}
+	return record
+}
+
+// coldStartDeps wires a Service over a compose project taken down: the records hold
+// record, the inspector reports demoAbsentIntrospection, the daemon is Docker 27.
+func coldStartDeps(t *testing.T, record model.Savepoint) (Deps, *mockSavepointRepo, *mockInspector) {
+	t.Helper()
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	res := demoAbsentIntrospection()
+	res.Daemon.ServerVersion = "27.3.1"
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(res, nil).Once()
+	locker := &mockLocker{}
+	expectLock(locker)
+	codec := &mockCodec{}
+	codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil).Maybe()
+	return Deps{
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: &mockAssembler{},
+		SpecCodec:        codec,
+		ComposeRunner:    &mockComposeRunner{},
+		BackendRegistry:  &mockRegistry{},
+		ImageBackend:     &mockImageBackend{},
+		Inflight:         &fakeInflight{},
+		Store:            newDirStore(t),
+		DefaultBackend:   model.SnapshotBackendCopy,
+		MinDaemonMajor:   25,
+	}, repo, inspector
+}
+
+// A compose project with no container takes the short path: load, create, restore,
+// start — no stop, no safety snapshot, no teardown and no reap.
+func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
+	// Arrange
+	record := demoColdRecord()
+	vol := record.Stats[0].Volume
+	deps, repo, inspector := coldStartDeps(t, record)
+	loadSpec := repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
+
+	matchMarker := func(phase model.InflightPhase) any {
+		return mock.MatchedBy(func(m model.InflightMarker) bool {
+			return m.Phase == phase && m.Target == record.ID && m.Safety == ""
+		})
+	}
+	inflight := &mockInflight{}
+	gateGet := inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once()
+	putRecreating := inflight.On("Put", mock.Anything, matchMarker(model.InflightRecreating)).Return(nil).Once()
+	putRestoring := inflight.On("Put", mock.Anything, matchMarker(model.InflightRestoring)).Return(nil).Once()
+	putDone := inflight.On("Put", mock.Anything, matchMarker(model.InflightRestoreDone)).Return(nil).Once()
+	clear := inflight.On("Clear", mock.Anything).Return(nil).Once()
+
+	images := &mockImageBackend{}
+	restoreImage := images.On("Restore", mock.Anything, model.ImageRestoreRequest{
+		SnapshotID: record.ID, Capture: demoImageCapture(), ImageRef: demoRestoredRef(1),
+	}).Return(demoImageRestore(), nil).Once()
+	runner := &mockComposeRunner{}
+	target := matchRetargetedImage(demoService, demoRestoredRef(1))
+	create := runner.On("Create", mock.Anything, target).Return(nil).Once()
+	backend := &mockBackend{volume: vol}
+	restoreVolume := backend.On("Restore", mock.Anything,
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+	start := runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
+
+	mock.InOrder(gateGet, loadSpec, restoreImage, putRecreating, create, putRestoring,
+		restoreVolume, putDone, start, clear)
+
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(deps.Store, vol.ObjectID)).Return(backend, nil).Once()
+	volumeRemover := &mockVolumeRemover{}
+	deps.Inflight, deps.ImageBackend, deps.ComposeRunner = inflight, images, runner
+	deps.BackendRegistry, deps.VolumeRemover = registry, volumeRemover
+	svc := New(deps)
+	logs := &syncBuffer{}
+	ctx := zerolog.New(logs).WithContext(context.Background())
+
+	// Act
+	res, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+	// Assert: the volume `compose down` kept is overwritten under a warning naming it.
+	require.NoError(t, err)
+	assert.Equal(t, record, res.Savepoint)
+	assert.Equal(t, []model.Volume{vol}, res.Restored)
+	assert.Equal(t, []model.ImageRestore{demoImageRestore()}, res.Images)
+	assert.Contains(t, logs.String(), `"volume":"`+demoVolumeName+`"`)
+	assert.Contains(t, logs.String(), "no safety snapshot is taken")
+	inflight.AssertExpectations(t)
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	images.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	registry.AssertExpectations(t)
+	backend.AssertExpectations(t)
+	volumeRemover.AssertExpectations(t)
+}
+
+// Refusing a surviving volume refuses before anything is loaded or created: the image
+// backend, the registry and the runner carry no expectation.
+func TestService_Rollback_ColdStartRefusesALeftoverVolume(t *testing.T) {
+	// Arrange
+	record := demoColdRecord()
+	deps, repo, inspector := coldStartDeps(t, record)
+	images := &mockImageBackend{}
+	runner := &mockComposeRunner{}
+	registry := &mockRegistry{}
+	inflight := &fakeInflight{}
+	deps.ImageBackend, deps.ComposeRunner, deps.BackendRegistry, deps.Inflight = images, runner, registry, inflight
+	svc := New(deps)
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{
+		ID: ptrID(record.ID), WaitTimeout: 60 * time.Second, LeftoverVolumes: model.LeftoverVolumesRefuse,
+	})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrLeftoverVolumes)
+	assert.Contains(t, err.Error(), demoVolumeName)
+	_, marked, getErr := inflight.Get(ctx)
+	require.NoError(t, getErr)
+	assert.False(t, marked)
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	images.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	registry.AssertExpectations(t)
+}
+
+// A failure takes down what was created; the marker is cleared while no volume was
+// written and kept once one may have been.
+func TestService_Rollback_ColdStartFailure(t *testing.T) {
+	tests := []struct {
+		name          string
+		createErr     error
+		restoreErr    error
+		wantErr       string
+		wantMarker    bool
+		wantMarkPhase model.InflightPhase
+	}{
+		{
+			name:      "a failed create clears the marker",
+			createErr: errors.New("create boom"),
+			wantErr:   "rollback failed: creating the compose project: create boom",
+		},
+		{
+			name:          "a failed restore keeps the marker",
+			restoreErr:    errors.New("restore boom"),
+			wantErr:       "rollback failed: restore volume-named-demo_db: restore capture: restore boom",
+			wantMarker:    true,
+			wantMarkPhase: model.InflightRestoring,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			record := demoColdRecord()
+			vol := record.Stats[0].Volume
+			deps, repo, inspector := coldStartDeps(t, record)
+			repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
+			images := &mockImageBackend{}
+			images.On("Restore", mock.Anything, mock.Anything).Return(demoImageRestore(), nil).Once()
+			runner := &mockComposeRunner{}
+			target := matchRetargetedImage(demoService, demoRestoredRef(1))
+			create := runner.On("Create", mock.Anything, target).Return(tt.createErr).Once()
+			backend := &mockBackend{volume: vol}
+			down := runner.On("Down", mock.Anything, target).Return(nil).Once()
+			// demo_db outlived `compose down` and stays; demo_cache is the failed run's own.
+			inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospectionWith("demo_cache"), nil).Once()
+			volumeRemover := &mockVolumeRemover{}
+			removeCreated := volumeRemover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once()
+			if tt.createErr == nil {
+				restore := backend.On("Restore", mock.Anything, mock.Anything).Return(tt.restoreErr).Once()
+				mock.InOrder(create, restore, down, removeCreated)
+			} else {
+				mock.InOrder(create, down, removeCreated)
+			}
+			deps.VolumeRemover = volumeRemover
+			registry := &mockRegistry{}
+			registry.On("New", matchSpec(deps.Store, vol.ObjectID)).Return(backend, nil).Once()
+			inflight := &fakeInflight{}
+			deps.ImageBackend, deps.ComposeRunner, deps.BackendRegistry, deps.Inflight = images, runner, registry, inflight
+			svc := New(deps)
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+			// Assert
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			marker, marked, getErr := inflight.Get(ctx)
+			require.NoError(t, getErr)
+			assert.Equal(t, tt.wantMarker, marked)
+			if tt.wantMarker {
+				assert.Equal(t, tt.wantMarkPhase, marker.Phase)
+				assert.Equal(t, record.ID, marker.Target)
+				assert.Empty(t, marker.Safety)
+			}
+			repo.AssertExpectations(t)
+			inspector.AssertExpectations(t)
+			images.AssertExpectations(t)
+			runner.AssertExpectations(t)
+			registry.AssertExpectations(t)
+			backend.AssertExpectations(t)
+			volumeRemover.AssertExpectations(t)
+		})
+	}
+}
+
+// demoAbsentIntrospectionWith is demoAbsentIntrospection owning the extra volumes too.
+func demoAbsentIntrospectionWith(names ...string) model.IntrospectionResult {
+	res := demoAbsentIntrospection()
+	for _, name := range names {
+		res.Project.Volumes = append(res.Project.Volumes, model.NamedVolume{Key: name, Name: name})
+	}
+	return res
+}
+
+// Repeating an interrupted no-container rollback is not refused over the volumes it wrote
+// itself, and its marker never goes back to "nothing written": a failure keeps it.
+func TestService_Rollback_ColdStartRerun(t *testing.T) {
+	// Arrange
+	record := demoColdRecord()
+	vol := record.Stats[0].Volume
+	deps, repo, inspector := coldStartDeps(t, record)
+	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
+	inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once()
+	inflight := &fakeInflight{}
+	require.NoError(t, inflight.Put(context.Background(), model.InflightMarker{
+		Phase: model.InflightRestoring, Target: record.ID, At: time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC),
+	}))
+	images := &mockImageBackend{}
+	images.On("Restore", mock.Anything, mock.Anything).Return(demoImageRestore(), nil).Once()
+	runner := &mockComposeRunner{}
+	target := matchRetargetedImage(demoService, demoRestoredRef(1))
+	runner.On("Create", mock.Anything, target).Return(errors.New("create boom")).Once()
+	runner.On("Down", mock.Anything, target).Return(nil).Once()
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(deps.Store, vol.ObjectID)).Return(&mockBackend{volume: vol}, nil).Once()
+	deps.Inflight, deps.ImageBackend, deps.ComposeRunner, deps.BackendRegistry = inflight, images, runner, registry
+	svc := New(deps)
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{
+		ID: ptrID(record.ID), WaitTimeout: 60 * time.Second, LeftoverVolumes: model.LeftoverVolumesRefuse,
+	})
+
+	// Assert
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, model.ErrLeftoverVolumes)
+	assert.Contains(t, err.Error(), "create boom")
+	marker, marked, getErr := inflight.Get(ctx)
+	require.NoError(t, getErr)
+	require.True(t, marked)
+	assert.Equal(t, model.InflightRestoring, marker.Phase)
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	images.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	registry.AssertExpectations(t)
+}
+
+// Loading layers needs Docker 25+ even when the compose project has no containers.
+func TestService_Rollback_ColdStartUnsupportedDaemonLoadsNothing(t *testing.T) {
+	// Arrange
+	record := demoColdRecord()
+	deps, repo, _ := coldStartDeps(t, record)
+	res := demoAbsentIntrospection()
+	res.Daemon.ServerVersion = "24.0.7"
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(res, nil).Once()
+	images := &mockImageBackend{}
+	runner := &mockComposeRunner{}
+	deps.ComposeInspector, deps.ImageBackend, deps.ComposeRunner = inspector, images, runner
+	svc := New(deps)
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	images.AssertExpectations(t)
+	runner.AssertExpectations(t)
+}

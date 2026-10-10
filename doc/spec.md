@@ -112,7 +112,10 @@ flowchart TD
     A["arcave rollback before-migration"]
     A --> B["Load .arcave configuration"]
     B --> C["Find savepoint among the committed records"]
-    C --> D["Stop Docker Compose services"]
+    C --> R{"Compose project has containers?"}
+    R -- no --> X["Create it from the savepoint's spec"]
+    X --> G
+    R -- yes --> D["Stop Docker Compose services"]
     D --> E["Wait until containers exited"]
     E --> F["Clean registered volumes"]
     F --> G["Copy savepoint data back to volumes"]
@@ -367,8 +370,15 @@ storage:
   directory: {path: .arcave/savepoints/myapp}
 snapshot:
   backend: fullcopy
+rollback:
+  leftover_volumes: overwrite           # overwrite | refuse
 log: {level: info, format: text}
 ```
+
+`rollback.leftover_volumes` says what a rollback into a compose project that is not
+running does with the named volumes its `docker compose down` left behind: `overwrite`
+(the default) restores over them and warns, naming each one; `refuse` fails the rollback
+before anything is loaded or created.
 
 `storage` is a tagged union: `type` names the arm, and that arm must be present.
 Unknown keys are an error, not a value silently ignored — arcave never rewrites the file silently, since that would clobber a path the user set deliberately.
@@ -608,6 +618,8 @@ Output adds `images`, one entry per restored layer:
   ]
 }
 ```
+
+A compose project the daemon holds no container of — never started, or taken down with `docker compose down` — takes a short path. There is nothing to stop, to take a safety snapshot of, to remove or to reap, so the rollback loads the writable layers, creates the compose project from the savepoint's spec, rebuilds the replicas past the first, restores the volumes and starts the services. The named volumes the teardown left behind are overwritten with a warning naming each one, or refused under `rollback.leftover_volumes: refuse`. A bind mount or an external volume is overwritten either way, as by any rollback. A failure removes what the rollback created, the volumes the project did not own before included; once a volume may have been written, `.arcave/inflight.json` stays, and the way to recover is to run the same rollback again — there is no safety snapshot to return to. That re-run is not refused over leftover volumes, which are its own writes. A compose project with some of its containers, or with stopped ones, takes the full path.
 
 A savepoint taken before arcave recorded compose specs carries none, and a rollback to it is refused rather than guessed at: the compose project is rebuilt from the spec the savepoint recorded, and there is nothing honest to rebuild it from.
 

@@ -16,6 +16,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -32,12 +33,25 @@ type RollbackRequest struct {
 	Latest *bool        // when true, the newest savepoint by CreatedAt
 
 	WaitTimeout time.Duration // bounds the health check on restart; <= 0 lets the compose runner apply its default
+
+	// LeftoverVolumes is what a rollback into a compose project with no containers does with
+	// the volumes that still exist; empty means LeftoverVolumesOverwrite.
+	LeftoverVolumes LeftoverVolumesPolicy
 }
 
-// Validate refuses a request that names no savepoint. A pointer set to the zero
-// value does not count: an empty id or name selects nothing, and Latest set to
-// false says "not the latest", which selects nothing either. So a selector this
-// accepts is one findSavepoint can branch on by nil-ness alone.
+// LeftoverVolumesPolicy is what a rollback does with a volume that outlived its compose
+// project's containers.
+type LeftoverVolumesPolicy string
+
+const (
+	// LeftoverVolumesOverwrite restores over the volume and warns, naming it.
+	LeftoverVolumesOverwrite LeftoverVolumesPolicy = "overwrite"
+	// LeftoverVolumesRefuse fails the rollback before anything is created.
+	LeftoverVolumesRefuse LeftoverVolumesPolicy = "refuse"
+)
+
+// Validate refuses a request whose selector is nil or zero-valued, or whose
+// leftover-volumes policy is unknown.
 func (r RollbackRequest) Validate() error {
 	switch {
 	case r.ID != nil && *r.ID != "":
@@ -46,7 +60,12 @@ func (r RollbackRequest) Validate() error {
 	default:
 		return ErrRollbackNoSelector
 	}
-	return nil
+	switch r.LeftoverVolumes {
+	case "", LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
+		return nil
+	default:
+		return fmt.Errorf("unsupported leftover volumes policy %q", r.LeftoverVolumes)
+	}
 }
 
 // Ref renders the selector back as the word the user typed, for error messages

@@ -19,12 +19,12 @@ import (
 	"time"
 )
 
-// InflightPhase says how far an interrupted rollback got. The remedy differs by phase.
+// InflightPhase says how far an interrupted rollback got, which decides how to recover from it.
 type InflightPhase string
 
 const (
-	// InflightRecreating stands from the teardown until the containers exist again.
-	// The volumes are untouched: the remedy is to rebuild, not to restore.
+	// InflightRecreating covers `compose down` up to the containers existing again. The
+	// volumes are untouched: recovering means rebuilding the containers, not restoring data.
 	InflightRecreating   InflightPhase = "recreating"
 	InflightRestoring    InflightPhase = "restoring"
 	InflightRestoreDone  InflightPhase = "restore-done"
@@ -36,8 +36,10 @@ const (
 type InflightMarker struct {
 	Phase  InflightPhase `json:"phase"`
 	Target SavepointID   `json:"target"` // the savepoint being restored
-	Safety SavepointID   `json:"safety"` // the undo every phase's remedy points at
-	At     time.Time     `json:"at"`
+	// Safety is the safety snapshot that undoes the interrupted rollback; empty when the compose
+	// project had no containers, where running the same rollback again is the fix.
+	Safety SavepointID `json:"safety"`
+	At     time.Time   `json:"at"`
 }
 
 // InterruptedRollbackError refuses a mutating workflow while a marker stands. What

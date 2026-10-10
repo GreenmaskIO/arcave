@@ -64,6 +64,10 @@ var (
 	// this operation does not support (e.g. Docker 24 legacy layout).
 	ErrUnsupportedImageArchive = errors.New("unsupported image archive format")
 
+	// ErrLeftoverVolumes refuses a rollback into a compose project that is not running
+	// but still owns volumes the rollback would overwrite.
+	ErrLeftoverVolumes = errors.New("compose project is not running but its volumes survive")
+
 	// ErrUnsupportedDaemon reports a Docker daemon too old for the image backend.
 	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
 )

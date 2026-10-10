@@ -40,7 +40,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	released := false
 	h := NewMCPHandler(func(context.Context, string) (MCPService, func(), error) {
 		return svc, func() { released = true }, nil
-	})
+	}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	res, out, err := h.createSavepointMCP(context.Background(), nil, createInput{Project: "demo", Name: "before-migration"})
@@ -89,7 +89,7 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 				gotProject = project
 				return svc, func() { released = true }, nil
 			}
-			h := NewMCPHandler(factory)
+			h := NewMCPHandler(factory, model.LeftoverVolumesOverwrite)
 
 			// Act
 			res, out, err := h.listSavepointsMCP(context.Background(), nil, tt.in)
@@ -111,7 +111,7 @@ func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
 	svc := &mockService{}
 	h := NewMCPHandler(func(context.Context, string) (MCPService, func(), error) {
 		return nil, nil, wireErr
-	})
+	}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, out, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "nope"})

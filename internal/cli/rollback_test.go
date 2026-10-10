@@ -166,13 +166,14 @@ func TestNewRollbackRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newRollbackRequest(tt.ref, 90*time.Second)
+			got := newRollbackRequest(tt.ref, 90*time.Second, model.LeftoverVolumesRefuse)
 
 			// Assert
 			assert.Equal(t, tt.wantID, got.ID)
 			assert.Equal(t, tt.wantName, got.Name)
 			assert.Equal(t, tt.wantLatest, got.Latest)
 			assert.Equal(t, 90*time.Second, got.WaitTimeout)
+			assert.Equal(t, model.LeftoverVolumesRefuse, got.LeftoverVolumes)
 			assert.ErrorIs(t, got.Validate(), tt.wantErr)
 			// Whatever it chose renders back as the word that was typed, which is what
 			// error messages quote and what a safety snapshot's name carries.
