@@ -82,12 +82,13 @@ func TestSessionDeleteHandler_SessionDelete(t *testing.T) {
 	tests := []struct {
 		name        string
 		ref         string
-		id          model.SessionID
+		resp        model.DeleteSessionResponse
 		deleteErr   error
 		wantPrinted []any
 	}{
-		{name: "prints the deleted session", ref: "exp", id: handlerSession,
-			wantPrinted: []any{model.DeleteSessionResponse{Session: handlerSession, Deleted: true}}},
+		{name: "prints the response as is", ref: "exp",
+			resp:        model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 4096},
+			wantPrinted: []any{model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 4096}}},
 		{name: "a refusal skips printing", ref: "baseline", deleteErr: refused},
 	}
 	for _, tt := range tests {
@@ -96,7 +97,7 @@ func TestSessionDeleteHandler_SessionDelete(t *testing.T) {
 			p := &capturePrinter{}
 			p.On("Print", mock.Anything).Return(nil).Maybe()
 			svc := &mockService{}
-			svc.On("DeleteSession", mock.Anything, tt.ref).Return(tt.id, tt.deleteErr).Once()
+			svc.On("DeleteSession", mock.Anything, tt.ref).Return(tt.resp, tt.deleteErr).Once()
 
 			// Act
 			err := NewSessionDeleteHandler(svc, p).SessionDelete(context.Background(), tt.ref)

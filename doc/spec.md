@@ -579,15 +579,18 @@ UUID — new ones UUIDv7 — and the default session's is `00000000-0000-0000-00
 and always exists. These commands name no compose project and reach no daemon.
 
 ```text
-arcave session list                 # JSON array of {id, name, created_at, from, savepoint_count, compose_projects}
+arcave session list                 # JSON array of {id, name, created_at, from, savepoint_count, compose_projects, size_bytes}
 arcave session create [--name N]    # an empty session; prints its record
-arcave session delete <id|name>     # {session, deleted: true}
+arcave session delete <id|name>     # {session, deleted: true, freed_bytes}
 ```
 
 `--name` is optional and may be anything not blank — `/` and a UUID's shape included — but must be unique within
 the arcave project (`baseline` is taken by the default session) and must not be another session's id.
 `--session` and `session delete` look a value up as a name first, then as an id; several sessions carrying the name
 is an error listing their ids.
+`size_bytes` sums the size of every object under `sessions/<id>/`, read from the store's listing — no object is read —
+so it counts orphans, unpruned restic data and uncollected image blobs, which a sum over the records would miss; it is
+what deleting the session frees, and `session delete` reports it as `freed_bytes`, measured before it deletes.
 `session delete` drops the record first, then the session's tree. It refuses `baseline` and a session the
 inflight marker names, and leaves any running compose project alone. `session create --from` (the fork) is not
 built yet.

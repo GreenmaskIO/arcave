@@ -16,10 +16,11 @@ package core
 
 import (
 	"context"
-	"github.com/google/uuid"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -60,6 +61,11 @@ func (m *mockSessionRepo) ListSessionSavepoints(
 ) ([]model.ComposeProjectSavepoints, error) {
 	args := m.Called(ctx, id)
 	return args.Get(0).([]model.ComposeProjectSavepoints), args.Error(1)
+}
+
+func (m *mockSessionRepo) SessionSize(ctx context.Context, id model.SessionID) (int64, error) {
+	args := m.Called(ctx, id)
+	return args.Get(0).(int64), args.Error(1)
 }
 
 func sessionRecord(id model.SessionID, name string, at time.Time) model.Session {
@@ -142,6 +148,9 @@ func TestSessionService_ListSessions(t *testing.T) {
 	repo.On("ListSessionSavepoints", mock.Anything, demoSession).Return([]model.ComposeProjectSavepoints{
 		{ComposeProject: "shop", Savepoints: []model.Savepoint{{}}},
 	}, nil).Once()
+	repo.On("SessionSize", mock.Anything, model.DefaultSession).Return(int64(2048), nil).Once()
+	repo.On("SessionSize", mock.Anything, otherSession).Return(int64(0), nil).Once()
+	repo.On("SessionSize", mock.Anything, demoSession).Return(int64(512), nil).Once()
 	svc := NewSessionService(SessionDeps{Sessions: repo})
 
 	// Act
@@ -151,9 +160,9 @@ func TestSessionService_ListSessions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []model.SessionSummary{
 		{Session: model.DefaultSessionRecord, SavepointCount: 2,
-			ComposeProjects: []model.DockerComposeProjectName{"blog", "shop"}},
+			ComposeProjects: []model.DockerComposeProjectName{"blog", "shop"}, SizeBytes: 2048},
 		{Session: older, ComposeProjects: []model.DockerComposeProjectName{}},
-		{Session: newer, SavepointCount: 1, ComposeProjects: []model.DockerComposeProjectName{"shop"}},
+		{Session: newer, SavepointCount: 1, ComposeProjects: []model.DockerComposeProjectName{"shop"}, SizeBytes: 512},
 	}, got)
 	repo.AssertExpectations(t)
 }
@@ -262,9 +271,10 @@ func TestSessionService_DeleteSession(t *testing.T) {
 	marker := demoMarker(model.InflightRestoring)
 	marker.Session = otherSession
 	require.NoError(t, inflight.Put(context.Background(), marker))
+	size := repo.On("SessionSize", mock.Anything, demoSession).Return(int64(4096), nil).Once()
 	del := repo.On("DeleteSession", mock.Anything, demoSession).Return(nil).Once()
 	release := locker.On("Release").Return(nil).Once()
-	mock.InOrder(acquire, load, del, release)
+	mock.InOrder(acquire, load, size, del, release)
 	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker, Inflight: inflight})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -273,10 +283,12 @@ func TestSessionService_DeleteSession(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, demoSession, got)
+	assert.Equal(t, model.DeleteSessionResponse{Session: demoSession, Deleted: true, FreedBytes: 4096}, got)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
 }
+
+var errSessionSize = errors.New("list failed")
 
 func TestSessionService_DeleteSession_Refused(t *testing.T) {
 	tests := []struct {
@@ -310,6 +322,16 @@ func TestSessionService_DeleteSession_Refused(t *testing.T) {
 				var interrupted *model.InterruptedRollbackError
 				require.ErrorAs(t, err, &interrupted)
 			},
+		},
+		{
+			name: "a session that cannot be measured",
+			ref:  "exp",
+			setup: func(repo *mockSessionRepo) {
+				repo.On("ListSessions", mock.Anything).
+					Return([]model.Session{sessionRecord(demoSession, "exp", sessionNow)}, nil).Once()
+				repo.On("SessionSize", mock.Anything, demoSession).Return(int64(0), errSessionSize).Once()
+			},
+			check: func(t *testing.T, err error) { require.ErrorIs(t, err, errSessionSize) },
 		},
 	}
 	for _, tt := range tests {

@@ -31,6 +31,7 @@ type sessionRepository interface {
 	ListSessions(ctx context.Context) ([]model.Session, error)
 	DeleteSession(ctx context.Context, id model.SessionID) error
 	ListSessionSavepoints(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error)
+	SessionSize(ctx context.Context, id model.SessionID) (int64, error)
 }
 
 // SessionDeps are SessionService's collaborators.
@@ -122,34 +123,43 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 	})
 }
 
-// DeleteSession drops a session and everything it holds. It refuses the default session
-// and one an interrupted rollback's marker names; the running compose project is left alone.
-func (s *SessionService) DeleteSession(ctx context.Context, ref string) (model.SessionID, error) {
-	return withUnlock(ctx, s.locker, func() (model.SessionID, error) {
+// DeleteSession drops a session and everything it holds, and reports the bytes that freed. It
+// refuses the default session and one an interrupted rollback's marker names; the running
+// compose project is left alone.
+func (s *SessionService) DeleteSession(ctx context.Context, ref string) (model.DeleteSessionResponse, error) {
+	return withUnlock(ctx, s.locker, func() (model.DeleteSessionResponse, error) {
 		record, err := s.ResolveSession(ctx, ref)
 		if err != nil {
-			return model.SessionID{}, err
+			return model.DeleteSessionResponse{}, err
 		}
 		id := record.ID
 		if id == model.DefaultSession {
-			return model.SessionID{}, model.ErrDefaultSessionDelete
+			return model.DeleteSessionResponse{}, model.ErrDefaultSessionDelete
 		}
 		marker, found, err := s.inflight.Get(ctx)
 		if err != nil {
-			return model.SessionID{}, fmt.Errorf("reading the inflight marker: %w", err)
+			return model.DeleteSessionResponse{}, fmt.Errorf("reading the inflight marker: %w", err)
 		}
 		if found && marker.Session == id {
 			err := &model.InterruptedRollbackError{Marker: marker}
 			zerolog.Ctx(ctx).Error().Err(err).Str("session", id.String()).
 				Str("compose_project", marker.ComposeProject.String()).Msg(recoveryHint(marker))
-			return model.SessionID{}, err
+			return model.DeleteSessionResponse{}, err
+		}
+		size, err := s.sessions.SessionSize(ctx, id)
+		if err != nil {
+			return model.DeleteSessionResponse{}, err
 		}
 		if err := s.sessions.DeleteSession(ctx, id); err != nil {
-			return model.SessionID{}, fmt.Errorf("deleting session %s: %w", id, err)
+			return model.DeleteSessionResponse{}, fmt.Errorf("deleting session %s: %w", id, err)
 		}
-		zerolog.Ctx(ctx).Info().Str("session", id.String()).
+		zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
 			Msg("session deleted; any compose project running from it is left as it is")
-		return id, nil
+		return model.DeleteSessionResponse{
+			Session:    id,
+			Deleted:    true,
+			FreedBytes: size,
+		}, nil
 	})
 }
 
@@ -204,13 +214,17 @@ func (s *SessionService) requireFreeName(ctx context.Context, name string) error
 	return nil
 }
 
-// summarize counts what the session holds; safety snapshots are not counted.
+// summarize counts what the session holds, safety snapshots excluded, and measures its tree.
 func (s *SessionService) summarize(ctx context.Context, record model.Session) (model.SessionSummary, error) {
 	groups, err := s.sessions.ListSessionSavepoints(ctx, record.ID)
 	if err != nil {
 		return model.SessionSummary{}, fmt.Errorf("session %s: %w", record.ID, err)
 	}
-	summary := model.SessionSummary{Session: record, ComposeProjects: []model.DockerComposeProjectName{}}
+	size, err := s.sessions.SessionSize(ctx, record.ID)
+	if err != nil {
+		return model.SessionSummary{}, err
+	}
+	summary := model.SessionSummary{Session: record, ComposeProjects: []model.DockerComposeProjectName{}, SizeBytes: size}
 	for _, group := range groups {
 		summary.ComposeProjects = append(summary.ComposeProjects, group.ComposeProject)
 		for _, sp := range group.Savepoints {

@@ -48,19 +48,22 @@ The copy keeps the savepoint's name and id, so `--from=baseline/v1.0` leaves a s
 
 ## `session list`
 
-The project's sessions as a JSON array, `baseline` first and the rest oldest first: each one's id, name, when it was created, the savepoint it was forked from, how many savepoints it holds (safety snapshots not counted) and the compose projects they belong to.
+The project's sessions as a JSON array, `baseline` first and the rest oldest first: each one's id, name, when it was created, the savepoint it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store.
+
+`size_bytes` is measured from the store, not added up from the savepoints: it counts everything under the session's directory — volume data, container layers, the image blobs its savepoints share, and data a removed savepoint left behind. That is exactly what `session delete` frees.
 
 ```json title="Output"
 [
-  {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline", "savepoint_count": 2, "compose_projects": ["shop"]},
+  {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline", "savepoint_count": 2, "compose_projects": ["shop"],
+   "size_bytes": 734003200},
   {"id": "0f9c2f4a-6d3e-4b6f-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table",
-   "created_at": "2026-10-10T12:00:00Z", "savepoint_count": 0, "compose_projects": []}
+   "created_at": "2026-10-10T12:00:00Z", "savepoint_count": 0, "compose_projects": [], "size_bytes": 196}
 ]
 ```
 
 ## `session delete`
 
-Deletes a session and everything under it — its savepoints, and the backend data they name. A session is the lifetime everything below it dies with. It prints `{"session": "<id>", "deleted": true}`.
+Deletes a session and everything under it — its savepoints, and the backend data they name. A session is the lifetime everything below it dies with. It prints `{"session": "<id>", "deleted": true, "freed_bytes": <n>}` — the session's `size_bytes`, measured just before it went.
 
 **The running compose project is left alone.** Deleting the session a compose project was rolled back from does not stop it or touch its volumes; only the savepoints go.
 

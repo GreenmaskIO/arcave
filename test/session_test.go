@@ -17,8 +17,10 @@ package test
 import (
 	"context"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,10 +95,14 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	}
 }
 
+// storeDir is the store root on disk, every arcave project beneath it.
+func (e *sessionEnv) storeDir() string {
+	return filepath.Join(e.projectRoot, e.storage.Directory.Path, "arcave")
+}
+
 // sessionDir is where a session's tree lives on disk.
 func (e *sessionEnv) sessionDir(id model.SessionID) string {
-	return filepath.Join(e.projectRoot, e.storage.Directory.Path, "arcave", "projects", sessionArcaveProject,
-		"sessions", id.String())
+	return filepath.Join(e.storeDir(), "projects", sessionArcaveProject, "sessions", id.String())
 }
 
 // create makes a session named name and fails the test if it cannot.
@@ -174,7 +180,7 @@ func TestSession_CreateListResolveDelete(t *testing.T) {
 
 	deleted, err := env.sessions.DeleteSession(env.ctx, "feat-a")
 	require.NoError(t, err)
-	assert.Equal(t, a.ID, deleted)
+	assert.Equal(t, a.ID, deleted.Session)
 	assert.NoDirExists(t, env.sessionDir(a.ID))
 	assert.Equal(t, []string{model.DefaultSessionName, "feat-b", ""}, env.names(t))
 	_, err = env.sessions.ResolveSession(env.ctx, "feat-a")
@@ -253,7 +259,7 @@ func TestSession_Delete_PassesAMarkerOfAnotherSession(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, feat.ID, deleted)
+	assert.Equal(t, feat.ID, deleted.Session)
 	_, found, err := env.inflight.Get(env.ctx)
 	require.NoError(t, err)
 	assert.True(t, found, "the other session's marker stays")
@@ -490,4 +496,77 @@ func TestSession_InterruptedRollbackMarkerSpansSessions(t *testing.T) {
 	assert.ErrorAs(t, deleteErr, &interrupted)
 	assert.NoError(t, createAfterErr)
 	assert.NoError(t, deleteAfterErr)
+}
+
+// The size a listing reports is the session's tree on disk, everything a capture writes lands
+// in that tree, and a delete frees exactly that much. The capture runs on fullcopy only:
+// cdc's restic repositories are not covered here.
+func TestSession_SizeIsWhatDeleteFrees(t *testing.T) {
+	// Arrange
+	env := newSessionEnv(t)
+	env.withComposeProject(t)
+	baselineBefore := env.summary(t, model.DefaultSession).SizeBytes
+	before := fileSizes(t, env.storeDir())
+	feat := env.create(t, "feat")
+	_, err := env.in(t, feat.ID).svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
+	require.NoError(t, err)
+
+	added := fileSizes(t, env.storeDir())
+	var onDisk int64
+	for name, size := range added {
+		if _, found := before[name]; found {
+			continue
+		}
+		assert.True(t, strings.HasPrefix(name, env.sessionDir(feat.ID)+string(filepath.Separator)),
+			"%s lies outside the session's tree", name)
+		onDisk += size
+	}
+
+	// Act
+	listed := env.summary(t, feat.ID)
+	deleted, err := env.sessions.DeleteSession(env.ctx, "feat")
+
+	// Assert
+	require.NoError(t, err)
+	assert.Positive(t, listed.SizeBytes)
+	assert.Equal(t, onDisk, listed.SizeBytes, "size_bytes is the tree on disk")
+	assert.Equal(t, baselineBefore, env.summary(t, model.DefaultSession).SizeBytes, "baseline is unchanged")
+	assert.Equal(t, listed.SizeBytes, deleted.FreedBytes, "freed_bytes is what was listed")
+	assert.NoDirExists(t, env.sessionDir(feat.ID))
+	assert.Equal(t, before, fileSizes(t, env.storeDir()), "the store holds what it held before")
+}
+
+// summary is the listing's row for session.
+func (e *sessionEnv) summary(t *testing.T, session model.SessionID) model.SessionSummary {
+	t.Helper()
+
+	summaries, err := e.sessions.ListSessions(e.ctx)
+	require.NoError(t, err)
+	for _, s := range summaries {
+		if s.ID == session {
+			return s
+		}
+	}
+	require.Failf(t, "session not listed", "%s", session)
+	return model.SessionSummary{}
+}
+
+// fileSizes maps every regular file under dir to its size.
+func fileSizes(t *testing.T, dir string) map[string]int64 {
+	t.Helper()
+
+	sizes := map[string]int64{}
+	err := filepath.WalkDir(dir, func(name string, entry fs.DirEntry, err error) error {
+		if err != nil || !entry.Type().IsRegular() {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		sizes[name] = info.Size()
+		return nil
+	})
+	require.NoError(t, err)
+	return sizes
 }

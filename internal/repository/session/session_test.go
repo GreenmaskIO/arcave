@@ -179,6 +179,31 @@ func TestRepository_ListSessions(t *testing.T) {
 	})
 }
 
+func TestRepository_SessionSize(t *testing.T) {
+	// Arrange: two compose projects, a restic repository and a shared blob all count;
+	// another session's objects do not.
+	ctx := context.Background()
+	store, root := newStore(t)
+	dir := "sessions/" + sessionA.String() + "/"
+	writeObject(t, root, dir+"session.json", "0123456789")
+	writeObject(t, root, dir+"compose/shop/019e843e-1650-7000-8000-000000000100/volume-named-db/data.tar", "abcdefghij")
+	writeObject(t, root, dir+"compose/blog/019e843e-1650-7000-8000-000000000200/savepoint.json", "{}")
+	writeObject(t, root, dir+"compose/shop/restic/volume-named-db/data/ab/abcd", "packpack")
+	writeObject(t, root, dir+"compose/shop/shared/oci/blobs/sha256/abcd", "blob")
+	writeObject(t, root, "sessions/"+sessionB.String()+"/session.json", "not counted")
+	repo := New(store)
+
+	// Act
+	got, err := repo.SessionSize(ctx, sessionA)
+	absent, absentErr := repo.SessionSize(ctx, model.DefaultSession)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, int64(10+10+2+8+4), got)
+	require.NoError(t, absentErr)
+	assert.Zero(t, absent)
+}
+
 func TestRepository_DeleteSession(t *testing.T) {
 	// Arrange
 	ctx := context.Background()

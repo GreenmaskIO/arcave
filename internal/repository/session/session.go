@@ -141,6 +141,24 @@ func (r *Repository) ListSessionSavepoints(ctx context.Context, id model.Session
 	return groups, nil
 }
 
+// SessionSize sums the size of every object under sessions/<id> — exactly what DeleteSession
+// frees, orphans and uncollected blobs included. An absent session measures 0.
+func (r *Repository) SessionSize(ctx context.Context, id model.SessionID) (int64, error) {
+	sessionStore, err := storefactory.Session(r.storage, id)
+	if err != nil {
+		return 0, fmt.Errorf("measure session %s: %w", id, err)
+	}
+	objects, err := sessionStore.List(ctx, "")
+	if err != nil {
+		return 0, fmt.Errorf("measure session %s: %w", id, err)
+	}
+	var size int64
+	for _, object := range objects {
+		size += object.Size
+	}
+	return size, nil
+}
+
 // DeleteSession removes a session's record first, then everything under sessions/<id>.
 // Deleting a session that is already gone is a no-op.
 func (r *Repository) DeleteSession(ctx context.Context, id model.SessionID) error {

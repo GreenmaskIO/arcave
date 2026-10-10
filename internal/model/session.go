@@ -50,6 +50,8 @@ type SessionSummary struct {
 	// SavepointCount counts the session's savepoints, safety snapshots excluded.
 	SavepointCount  int                        `json:"savepoint_count"`
 	ComposeProjects []DockerComposeProjectName `json:"compose_projects"`
+	// SizeBytes is what the session's tree occupies in the store: what deleting it frees.
+	SizeBytes int64 `json:"size_bytes"`
 }
 
 // CreateSessionRequest carries what CreateSession needs.
@@ -69,4 +71,6 @@ func (r CreateSessionRequest) Validate() error {
 type DeleteSessionResponse struct {
 	Session SessionID `json:"session"`
 	Deleted bool      `json:"deleted"`
+	// FreedBytes is the session's size, measured just before it was deleted.
+	FreedBytes int64 `json:"freed_bytes"`
 }
