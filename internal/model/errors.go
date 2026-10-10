@@ -55,6 +55,20 @@ var (
 	// already carries.
 	ErrSavepointNameTaken = errors.New("savepoint name is already taken")
 
+	// ErrInvalidSessionID reports a string that is not a session id: a canonical UUID
+	// other than the nil one. ParseSessionID wraps it with the offending value.
+	ErrInvalidSessionID = errors.New("invalid session id")
+	// ErrSessionNotFound reports a session id or name no session record carries.
+	ErrSessionNotFound = errors.New("session not found")
+	// ErrInvalidSessionName reports a name a session may not carry.
+	// CreateSessionRequest.Validate wraps it with the offending name.
+	ErrInvalidSessionName = errors.New("invalid session name")
+	// ErrSessionNameTaken reports a name another session of the arcave project
+	// already carries.
+	ErrSessionNameTaken = errors.New("session name is already taken")
+	// ErrDefaultSessionDelete refuses to delete DefaultSession, which always exists.
+	ErrDefaultSessionDelete = errors.New("the default session cannot be deleted")
+
 	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
 	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps
 	// it with the offending value.
@@ -93,5 +107,21 @@ func (e *AmbiguousSavepointNameError) Error() string {
 		ids[i] = id.String()
 	}
 	return fmt.Sprintf("%d savepoints are named %q; roll back by id instead: %s",
+		len(e.IDs), e.Name, strings.Join(ids, ", "))
+}
+
+// AmbiguousSessionNameError reports a name more than one session carries; IDs
+// lists those sessions.
+type AmbiguousSessionNameError struct {
+	Name string
+	IDs  []SessionID
+}
+
+func (e *AmbiguousSessionNameError) Error() string {
+	ids := make([]string, len(e.IDs))
+	for i, id := range e.IDs {
+		ids[i] = id.String()
+	}
+	return fmt.Sprintf("%d sessions are named %q; name the session by id instead: %s",
 		len(e.IDs), e.Name, strings.Join(ids, ", "))
 }

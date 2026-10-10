@@ -18,7 +18,7 @@ rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (rest
 
 **What happened.** A rollback was killed after it began writing. `.arcave/inflight.json` records the phase it died in, and that marker refuses the next mutating workflow so nothing is built on a half-written environment.
 
-**The remedy.** Return to the safety snapshot that rollback took of the pre-rollback state. It is the one operation the marker lets through.
+**The remedy.** Return to the safety snapshot that rollback took of the pre-rollback state. It is the one operation the marker lets through, and only in the session and compose project the marker names — the error's hint prints the full command, `--session` and `-p` included. Pass the same two flags to the commands below.
 
 ```shell title="1. Find it"
 arcave savepoint list --include-safety-snapshots

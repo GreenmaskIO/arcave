@@ -21,13 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
-
-	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newStore returns a Storager rooted at a fresh temp dir, plus that dir so a
@@ -293,28 +291,4 @@ func TestRepository_LoadSpec_Missing(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
-}
-
-func TestListSessionSavepoints(t *testing.T) {
-	// Arrange: one name in two compose projects is two savepoints, not a conflict.
-	ctx := context.Background()
-	store, root := newStore(t)
-	shop, err := store.SubStorage("compose/shop", true)
-	require.NoError(t, err)
-	blog, err := store.SubStorage("compose/blog", true)
-	require.NoError(t, err)
-	require.NoError(t, New(shop).SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000100")))
-	require.NoError(t, New(blog).SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000200")))
-	// A compose project whose only savepoint never committed.
-	writeObject(t, root, "compose/cache/019e843e-1650-7000-8000-000000000300/project.yaml", "services: {}")
-
-	// Act
-	got, err := ListSessionSavepoints(ctx, store)
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, []model.ComposeProjectSavepoints{
-		{ComposeProject: "blog", Savepoints: []model.Savepoint{record("019e843e-1650-7000-8000-000000000200")}},
-		{ComposeProject: "shop", Savepoints: []model.Savepoint{record("019e843e-1650-7000-8000-000000000100")}},
-	}, got)
 }

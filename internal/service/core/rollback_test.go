@@ -1203,7 +1203,8 @@ func TestService_Rollback_ColdStartRerun(t *testing.T) {
 	inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once()
 	inflight := &fakeInflight{}
 	require.NoError(t, inflight.Put(context.Background(), model.InflightMarker{
-		Phase: model.InflightRestoring, Target: record.ID, At: time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC),
+		Phase: model.InflightRestoring, Session: model.DefaultSession, Target: record.ID,
+		At: time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC),
 	}))
 	images := &mockImageBackend{}
 	images.On("Restore", mock.Anything, mock.Anything).Return(demoImageRestore(), nil).Once()

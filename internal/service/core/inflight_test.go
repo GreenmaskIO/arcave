@@ -20,24 +20,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // demoMarker is what an interrupted rollback of demoRecord left behind; the way back
 // is demoSafetySnapshot.
 func demoMarker(phase model.InflightPhase) model.InflightMarker {
 	return model.InflightMarker{
-		Phase:  phase,
-		Target: demoRecord().ID,
-		Safety: demoSafetySnapshot().ID,
-		At:     time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
+		Phase:   phase,
+		Session: model.DefaultSession,
+		Target:  demoRecord().ID,
+		Safety:  demoSafetySnapshot().ID,
+		At:      time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
 	}
 }
+
+// demoSession is a session other than the default, for the tests about the marker's session.
+var demoSession = model.SessionID(uuid.MustParse("0f9c2f4a-6d3e-4b6f-9a2c-1d5e8b7a4c31"))
 
 // standingMarker is a fakeInflight preloaded with demoMarker.
 func standingMarker(t *testing.T, phase model.InflightPhase) *fakeInflight {
@@ -233,7 +237,8 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	var safetySnapshotID model.SavepointID
 	matchMarker := func(phase model.InflightPhase) any {
 		return mock.MatchedBy(func(m model.InflightMarker) bool {
-			return m.Phase == phase && m.Target == record.ID && m.Safety == safetySnapshotID
+			return m.Phase == phase && m.Target == record.ID && m.Safety == safetySnapshotID &&
+				m.Session == model.DefaultSession && m.ComposeProject == "demo"
 		})
 	}
 	inflight := &mockInflight{}
@@ -285,6 +290,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 		Inflight:         inflight,
 		Store:            store,
 		DefaultBackend:   model.SnapshotBackendCopy,
+		ComposeProject:   "demo",
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -468,7 +474,7 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 			record := demoColdRecord()
 			deps, repo, inspector := coldStartDeps(t, record)
 			marker := model.InflightMarker{
-				Phase: model.InflightRestoring, Target: tt.target,
+				Phase: model.InflightRestoring, Session: model.DefaultSession, Target: tt.target,
 				At: time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC),
 			}
 			inflight := &fakeInflight{}
@@ -517,4 +523,97 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 			registry.AssertExpectations(t)
 		})
 	}
+}
+
+// TestService_requireNoInflight checks the gate matches by session and id: the same id
+// in another session passes nothing.
+func TestService_requireNoInflight(t *testing.T) {
+	marker := demoMarker(model.InflightRestoring)
+	marker.Session = demoSession
+	coldMarker := marker
+	coldMarker.Safety = ""
+	otherCompose := marker
+	otherCompose.ComposeProject = "other"
+	tests := []struct {
+		name      string
+		marker    model.InflightMarker
+		session   model.SessionID
+		restoring model.SavepointID
+		wantPass  bool
+	}{
+		{name: "safety snapshot in the marker's session", marker: marker, session: demoSession,
+			restoring: marker.Safety, wantPass: true},
+		{name: "safety snapshot id in another session", marker: marker, session: model.DefaultSession,
+			restoring: marker.Safety},
+		{name: "cold-start target in the marker's session", marker: coldMarker, session: demoSession,
+			restoring: coldMarker.Target, wantPass: true},
+		{name: "cold-start target id in another session", marker: coldMarker, session: model.DefaultSession,
+			restoring: coldMarker.Target},
+		{name: "any other workflow", marker: marker, session: demoSession},
+		{name: "the target of a rollback that took a safety snapshot", marker: marker, session: demoSession,
+			restoring: marker.Target},
+		{name: "safety snapshot id in another compose project", marker: otherCompose, session: demoSession,
+			restoring: marker.Safety},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			inflight := &fakeInflight{}
+			require.NoError(t, inflight.Put(context.Background(), tt.marker))
+			svc := New(Deps{Inflight: inflight, Session: tt.session})
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			got, err := svc.requireNoInflight(ctx, tt.restoring)
+
+			// Assert
+			if tt.wantPass {
+				require.NoError(t, err)
+				assert.Equal(t, tt.marker, got)
+				return
+			}
+			var interrupted *model.InterruptedRollbackError
+			require.ErrorAs(t, err, &interrupted)
+			assert.Equal(t, tt.marker, interrupted.Marker)
+		})
+	}
+}
+
+func TestRecoveryHint_NamesSessionAndComposeProject(t *testing.T) {
+	// Arrange
+	marker := demoMarker(model.InflightRestoring)
+	marker.Session = demoSession
+	marker.ComposeProject = "demo"
+
+	// Act
+	hint := recoveryHint(marker)
+
+	// Assert
+	assert.Contains(t, hint, "arcave rollback --session "+demoSession.String()+" -p demo "+marker.Safety.String())
+}
+
+func TestService_CreateSavepoint_RefusesADeletedSession(t *testing.T) {
+	// Arrange: --session resolved, then the session was deleted before the lock was taken.
+	locker := &mockLocker{}
+	expectLock(locker)
+	sessions := &mockSessionRepo{}
+	sessions.On("LoadSession", mock.Anything, demoSession).Return(model.Session{}, false, nil).Once()
+	svc := New(Deps{ProjectLocker: locker, Session: demoSession, Sessions: sessions, Inflight: &fakeInflight{}})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionNotFound)
+	sessions.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
+func TestNew_ZeroSessionIsTheDefault(t *testing.T) {
+	// Act
+	svc := New(Deps{})
+
+	// Assert
+	assert.Equal(t, model.DefaultSession, svc.session)
 }

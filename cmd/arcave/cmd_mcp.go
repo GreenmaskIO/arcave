@@ -38,21 +38,29 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return cli.NewMCPHandler(mcpServiceFactory, projectCfg.Rollback.Policy()).MCPRun(cmd.Context())
+	// One session for the whole server, from --session or ARCAVE_SESSION.
+	session, err := resolveSession(cmd.Context(), sessionRef)
+	if err != nil {
+		return err
+	}
+	return cli.NewMCPHandler(mcpServiceFactory(session), projectCfg.Rollback.Policy()).MCPRun(cmd.Context())
 }
 
 // mcpServiceFactory wires the savepoint workflows for the project a tool call
 // named, and returns the release that closes them when that call returns.
-func mcpServiceFactory(ctx context.Context, project string) (cli.MCPService, func(), error) {
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(project))
-	if err != nil {
-		return nil, nil, fmt.Errorf("init dependencies: %w", err)
-	}
-	return deps.service, func() {
-		if err := deps.Close(ctx); err != nil {
-			log.Ctx(ctx).Error().Err(err).Msg("close all dependencies")
+// mcpServiceFactory builds each tool call's workflows in session.
+func mcpServiceFactory(session model.SessionID) cli.MCPServiceFactory {
+	return func(ctx context.Context, project string) (cli.MCPService, func(), error) {
+		deps, err := initAllDependencies(ctx, projectRoot, projectCfg, session, model.DockerComposeProjectName(project))
+		if err != nil {
+			return nil, nil, fmt.Errorf("init dependencies: %w", err)
 		}
-	}, nil
+		return deps.service, func() {
+			if err := deps.Close(ctx); err != nil {
+				log.Ctx(ctx).Error().Err(err).Msg("close all dependencies")
+			}
+		}, nil
+	}
 }
 
 func init() {

@@ -183,8 +183,7 @@ func TestNew(t *testing.T) {
 			{name: "a nested arcave project", arcaveProject: "a/b", session: model.DefaultSession, composeProject: testComposeProject, wantMsg: "invalid arcave project name"},
 			{name: "an upper-case arcave project", arcaveProject: "MyApp", session: model.DefaultSession, composeProject: testComposeProject, wantMsg: "invalid arcave project name"},
 			{name: "an escaping arcave project", arcaveProject: "..", session: model.DefaultSession, composeProject: testComposeProject, wantMsg: "invalid arcave project name"},
-			{name: "an empty session", arcaveProject: testArcaveProject, session: "", composeProject: testComposeProject, wantMsg: "invalid session id"},
-			{name: "a nested session", arcaveProject: testArcaveProject, session: "a/b", composeProject: testComposeProject, wantMsg: "invalid session id"},
+			{name: "the nil session", arcaveProject: testArcaveProject, session: model.SessionID{}, composeProject: testComposeProject, wantMsg: "invalid session id"},
 			{name: "an empty compose project", arcaveProject: testArcaveProject, session: model.DefaultSession, composeProject: "", wantMsg: "invalid compose project name"},
 			{name: "a nested compose project", arcaveProject: testArcaveProject, session: model.DefaultSession, composeProject: "a/b", wantMsg: "invalid compose project name"},
 			{name: "an upper-case compose project", arcaveProject: testArcaveProject, session: model.DefaultSession, composeProject: "MyShop", wantMsg: "invalid compose project name"},
@@ -243,7 +242,7 @@ func TestDescent(t *testing.T) {
 
 		// Act
 		_, projectErr := ArcaveProject(rootStore, "..")
-		_, sessionErr := Session(rootStore, "a/b")
+		_, sessionErr := Session(rootStore, model.SessionID{})
 		_, composeErr := ComposeProject(rootStore, "MyShop")
 
 		// Assert

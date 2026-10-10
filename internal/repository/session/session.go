@@ -28,6 +28,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
 const (
@@ -51,7 +53,7 @@ func New(store storages.Storager) *Repository {
 // SaveSession writes a session's record; the caller writes the session's data first.
 func (r *Repository) SaveSession(ctx context.Context, session model.Session) error {
 	if err := validateID(session.ID); err != nil {
-		return err
+		return fmt.Errorf("save session: %w", err)
 	}
 	data, err := json.MarshalIndent(session, "", "  ")
 	if err != nil {
@@ -66,15 +68,19 @@ func (r *Repository) SaveSession(ctx context.Context, session model.Session) err
 }
 
 // LoadSession reads one session's record; found is false when it has none.
+// DefaultSession is always found, as model.DefaultSessionRecord.
 func (r *Repository) LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error) {
-	if err := validateID(id); err != nil {
-		return model.Session{}, false, err
+	if id == model.DefaultSession {
+		return model.DefaultSessionRecord, true, nil
+	}
+	if err := id.Validate(); err != nil {
+		return model.Session{}, false, fmt.Errorf("load session: %w", err)
 	}
 	return r.load(ctx, id)
 }
 
-// ListSessions returns every committed record. A session directory with no record
-// is incomplete and skipped; a record that will not decode is an error.
+// ListSessions returns model.DefaultSessionRecord, then every committed record. A session
+// directory with no record is incomplete and skipped; a record that will not decode is an error.
 func (r *Repository) ListSessions(ctx context.Context) ([]model.Session, error) {
 	sessionsStore, err := r.storage.SubStorage(sessionsNamespace, true)
 	if err != nil {
@@ -85,11 +91,11 @@ func (r *Repository) ListSessions(ctx context.Context) ([]model.Session, error) 
 		return nil, fmt.Errorf("list session store: %w", err)
 	}
 
-	records := make([]model.Session, 0, len(dirs))
+	records := []model.Session{model.DefaultSessionRecord}
 	for _, dir := range dirs {
-		id := model.SessionID(dir.Dirname())
-		if err := validateID(id); err != nil {
-			log.Ctx(ctx).Debug().Str("entry", id.String()).Msg("ignoring directory that holds no session record")
+		id, err := model.ParseSessionID(dir.Dirname())
+		if err != nil {
+			log.Ctx(ctx).Debug().Str("entry", dir.Dirname()).Msg("ignoring directory that holds no session record")
 			continue
 		}
 		record, found, err := r.load(ctx, id)
@@ -105,21 +111,53 @@ func (r *Repository) ListSessions(ctx context.Context) ([]model.Session, error) 
 	return records, nil
 }
 
-// DeleteSession removes a session's record, before the caller drops its data. A
-// session with no record is a no-op.
+// ListSessionSavepoints returns every committed savepoint of a session, grouped by compose
+// project and ordered by its name. A compose project holding none is left out.
+func (r *Repository) ListSessionSavepoints(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error) {
+	sessionStore, err := storefactory.Session(r.storage, id)
+	if err != nil {
+		return nil, fmt.Errorf("open session %s: %w", id, err)
+	}
+	names, err := storefactory.ComposeProjects(ctx, sessionStore)
+	if err != nil {
+		return nil, fmt.Errorf("list compose projects of session %s: %w", id, err)
+	}
+
+	groups := make([]model.ComposeProjectSavepoints, 0, len(names))
+	for _, name := range names {
+		composeProjectStore, err := storefactory.ComposeProject(sessionStore, name)
+		if err != nil {
+			return nil, fmt.Errorf("open compose project %s: %w", name, err)
+		}
+		savepoints, err := sprepo.New(composeProjectStore).ListSavepoints(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list savepoints of compose project %s: %w", name, err)
+		}
+		if len(savepoints) == 0 {
+			continue
+		}
+		groups = append(groups, model.ComposeProjectSavepoints{ComposeProject: name, Savepoints: savepoints})
+	}
+	return groups, nil
+}
+
+// DeleteSession removes a session's record first, then everything under sessions/<id>.
+// Deleting a session that is already gone is a no-op.
 func (r *Repository) DeleteSession(ctx context.Context, id model.SessionID) error {
 	if err := validateID(id); err != nil {
-		return err
+		return fmt.Errorf("delete session: %w", err)
 	}
 	exists, err := r.storage.Exists(ctx, recordKey(id))
 	if err != nil {
 		return fmt.Errorf("stat session record %s: %w", id, err)
 	}
-	if !exists {
-		return nil
+	if exists {
+		if err := r.storage.Delete(ctx, recordKey(id)); err != nil {
+			return fmt.Errorf("delete session record %s: %w", id, err)
+		}
 	}
-	if err := r.storage.Delete(ctx, recordKey(id)); err != nil {
-		return fmt.Errorf("delete session record %s: %w", id, err)
+	if err := r.storage.DeleteAll(ctx, sessionKey(id)); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+		return fmt.Errorf("delete session %s: %w", id, err)
 	}
 	return nil
 }
@@ -162,7 +200,12 @@ func (r *Repository) load(ctx context.Context, id model.SessionID) (model.Sessio
 	return record, true, nil
 }
 
+// sessionKey is the session's directory relative to the arcave project store.
+func sessionKey(id model.SessionID) string {
+	return path.Join(sessionsNamespace, id.String())
+}
+
 // recordKey is the record's key relative to the arcave project store.
 func recordKey(id model.SessionID) string {
-	return path.Join(sessionsNamespace, id.String(), recordName)
+	return path.Join(sessionKey(id), recordName)
 }

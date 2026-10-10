@@ -45,7 +45,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
 // The reserved keys at the root of every savepoint namespace. The namespace
@@ -158,33 +157,6 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, err
 		records = append(records, record)
 	}
 	return records, nil
-}
-
-// ListSessionSavepoints returns every committed record in a session, grouped by
-// compose project and ordered by its name. A compose project holding no committed
-// record is left out.
-func ListSessionSavepoints(ctx context.Context, sessionStore storages.Storager) ([]model.ComposeProjectSavepoints, error) {
-	names, err := storefactory.ComposeProjects(ctx, sessionStore)
-	if err != nil {
-		return nil, err
-	}
-
-	groups := make([]model.ComposeProjectSavepoints, 0, len(names))
-	for _, name := range names {
-		composeProjectStore, err := storefactory.ComposeProject(sessionStore, name)
-		if err != nil {
-			return nil, err
-		}
-		records, err := New(composeProjectStore).ListSavepoints(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("compose project %s: %w", name, err)
-		}
-		if len(records) == 0 {
-			continue
-		}
-		groups = append(groups, model.ComposeProjectSavepoints{ComposeProject: name, Savepoints: records})
-	}
-	return groups, nil
 }
 
 // load reads one savepoint's record. found is false when the namespace holds no

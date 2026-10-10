@@ -48,7 +48,7 @@ var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 // On error the record is zero, whatever the store holds: a savepoint committed
 // before a failed restart is named by the error and found by `savepoint list`.
 func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
-	return withUnlock(ctx, s, func() (model.Savepoint, error) {
+	return locked(ctx, s, func() (model.Savepoint, error) {
 		return s.createSavepoint(ctx, req)
 	})
 }
@@ -156,7 +156,7 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 		return s.removeSavepoints(ctx, req)
 	}
 
-	return withUnlock(ctx, s, func() (model.RemoveResult, error) {
+	return locked(ctx, s, func() (model.RemoveResult, error) {
 		// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
 		// that snapshot is the way back, and no selector may delete it.
 		if _, err := s.requireNoInflight(ctx, ""); err != nil {

@@ -14,14 +14,18 @@
 
 package model
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Session is a session's record — sessions/<id>/session.json. DefaultSession has
 // none and always exists implicitly.
 type Session struct {
 	ID        SessionID `json:"id"`
 	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
 	// From is the savepoint the session was forked from; nil for one started empty.
 	From *SessionOrigin `json:"from,omitempty"`
 }
@@ -37,4 +41,32 @@ type SessionOrigin struct {
 type ComposeProjectSavepoints struct {
 	ComposeProject DockerComposeProjectName `json:"compose_project"`
 	Savepoints     []Savepoint              `json:"savepoints"`
+}
+
+// SessionSummary is one row of a session listing: the record plus what the session holds.
+// DefaultSession's row carries only its id and name.
+type SessionSummary struct {
+	Session
+	// SavepointCount counts the session's savepoints, safety snapshots excluded.
+	SavepointCount  int                        `json:"savepoint_count"`
+	ComposeProjects []DockerComposeProjectName `json:"compose_projects"`
+}
+
+// CreateSessionRequest carries what CreateSession needs.
+type CreateSessionRequest struct {
+	Name string // optional; unique within the arcave project when set
+}
+
+// Validate refuses a name that is all whitespace.
+func (r CreateSessionRequest) Validate() error {
+	if r.Name != "" && strings.TrimSpace(r.Name) == "" {
+		return fmt.Errorf("%w %q: must not be blank", ErrInvalidSessionName, r.Name)
+	}
+	return nil
+}
+
+// DeleteSessionResponse reports a deleted session.
+type DeleteSessionResponse struct {
+	Session SessionID `json:"session"`
+	Deleted bool      `json:"deleted"`
 }

@@ -161,6 +161,9 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
                           and rollback — and read from ARCAVE_PROJECT_NAME when the flag is absent.
                           `arcave init` names no compose project and does not take it; `arcave mcp` serves
                           many, so each of its tool calls names its own.
+    --session             The session to work in, by id or name; read from ARCAVE_SESSION when the flag is
+                          absent, `baseline` when neither is set. Unbound, like -p: there is no current-session
+                          pointer, so a command that names none works in `baseline`.
     --config              Path to the config file (default: .arcave/config.yaml under the project root).
     --log-level           debug | info | warn.
     --log-format          text | json.
@@ -567,6 +570,27 @@ Options:
 ```
 
 ---
+
+### Sessions
+
+A session is an independent line of savepoints inside the arcave project; its store lives at
+`projects/<arcave-project>/sessions/<id>/`, and its record `session.json` is written last. Every id is a canonical
+UUID — new ones UUIDv7 — and the default session's is `00000000-0000-0000-0000-000000000001`, named `baseline`; it has none
+and always exists. These commands name no compose project and reach no daemon.
+
+```text
+arcave session list                 # JSON array of {id, name, created_at, from, savepoint_count, compose_projects}
+arcave session create [--name N]    # an empty session; prints its record
+arcave session delete <id|name>     # {session, deleted: true}
+```
+
+`--name` is optional and may be anything not blank — `/` and a UUID's shape included — but must be unique within
+the arcave project (`baseline` is taken by the default session) and must not be another session's id.
+`--session` and `session delete` look a value up as a name first, then as an id; several sessions carrying the name
+is an error listing their ids.
+`session delete` drops the record first, then the session's tree. It refuses `baseline` and a session the
+inflight marker names, and leaves any running compose project alone. `session create --from` (the fork) is not
+built yet.
 
 ### Environment Recovery
 
