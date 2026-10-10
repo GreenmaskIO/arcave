@@ -38,7 +38,7 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return cli.NewMCPHandler(mcpServiceFactory).MCPRun(cmd.Context())
+	return cli.NewMCPHandler(mcpServiceFactory, projectCfg.Rollback.Policy()).MCPRun(cmd.Context())
 }
 
 // mcpServiceFactory wires the savepoint workflows for the project a tool call

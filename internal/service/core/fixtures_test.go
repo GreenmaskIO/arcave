@@ -71,13 +71,29 @@ func demoSafetySnapshot() model.Savepoint {
 	}
 }
 
-// demoIntrospection is what the inspector reports for the live compose project.
+// demoIntrospection is what the inspector reports for the live compose project: one
+// service mounting the named volume. It holds no container, so no layer is captured.
 func demoIntrospection() model.IntrospectionResult {
 	return model.IntrospectionResult{Project: model.Project{
 		Name: demoProject,
+		Services: []model.Service{{
+			Name: demoService,
+			Volumes: []model.ServiceVolume{{
+				Type: model.VolumeTypeNamed, Source: "db", Target: demoTarget, VolumeName: demoVolumeName,
+			}},
+		}},
 		Volumes: []model.NamedVolume{{Key: "db", Name: demoVolumeName,
 			UsedBy: []model.ServiceReference{{Service: demoService, Target: demoTarget}}}},
 	}}
+}
+
+// demoAbsentIntrospection is what the inspector reports once the compose project was
+// taken down: no service, its named volume left behind.
+func demoAbsentIntrospection() model.IntrospectionResult {
+	res := demoIntrospection()
+	res.Project.Services = nil
+	res.Project.Volumes[0].UsedBy = nil
+	return res
 }
 
 // The one replica demoIntrospectionWithContainers reports for demoService — the

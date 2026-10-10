@@ -702,6 +702,8 @@ func TestUndeclaredMounts(t *testing.T) {
 	}
 }
 
+// A compose project taken down is reported, not refused: no service, and the named
+// volumes `compose down` kept.
 func TestInspector_Introspect_NoContainers(t *testing.T) {
 	oneoff := summary("c-web-run", "web", "nginx:1", 1)
 	oneoff.Labels[api.OneoffLabel] = "True"
@@ -719,13 +721,19 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 			// Arrange
 			daemon := &mockDockerAPI{}
 			daemon.expectContainers(tt.containers...)
+			daemon.expectVolumes(ownedVolume("demo_pgdata", "pgdata"))
+			daemon.expectNetworks()
+			daemon.expectInfo()
 
 			// Act
-			_, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			res, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), `read containers of compose project "demo": no containers found`)
+			require.NoError(t, err)
+			assert.Empty(t, res.Project.Services)
+			require.Len(t, res.Project.Volumes, 1)
+			assert.Equal(t, "demo_pgdata", res.Project.Volumes[0].Name)
+			assert.Empty(t, res.Project.Volumes[0].UsedBy)
 			daemon.AssertExpectations(t)
 		})
 	}

@@ -24,33 +24,46 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// requireNoInflight refuses a mutating workflow while an interrupted rollback's
-// marker stands. remedyTarget is the savepoint the caller is about to restore
-// (empty when it restores nothing); the marker's own safety snapshot passes.
-func (s *Service) requireNoInflight(ctx context.Context, remedyTarget model.SavepointID) error {
+// requireNoInflight refuses to run while .arcave/inflight.json says an earlier rollback was
+// interrupted, except for the one rollback that repairs it: to the marker's safety snapshot,
+// or, when the marker has none, to the interrupted rollback's own savepoint again.
+// restoring is the savepoint the caller rolls back to, "" for any other workflow. It returns
+// the marker it let through, zero when there is none.
+func (s *Service) requireNoInflight(ctx context.Context, restoring model.SavepointID) (model.InflightMarker, error) {
 	marker, found, err := s.inflightMarker.Get(ctx)
 	if err != nil {
-		return fmt.Errorf("reading the inflight marker: %w", err)
+		return model.InflightMarker{}, fmt.Errorf("reading the inflight marker: %w", err)
 	}
 	if !found {
-		return nil
+		return model.InflightMarker{}, nil
 	}
-	if remedyTarget != "" && remedyTarget == marker.Safety {
+	if restoring != "" && marker.Safety == "" && restoring == marker.Target {
+		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
+			Msg("re-running an interrupted rollback into a compose project that was not running; " +
+				"the marker clears on success")
+		return marker, nil
+	}
+	if restoring != "" && restoring == marker.Safety {
 		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
 			Msg("rolling back to the safety snapshot of an interrupted rollback; the marker clears on success")
-		return nil
+		return marker, nil
 	}
 	err = &model.InterruptedRollbackError{Marker: marker}
 	zerolog.Ctx(ctx).Error().Err(err).
 		Str("interrupted_target", marker.Target.String()).
 		Str("safety_snapshot_id", marker.Safety.String()).
 		Str("phase", string(marker.Phase)).
-		Msg(remedyOf(marker))
-	return err
+		Msg(recoveryHint(marker))
+	return model.InflightMarker{}, err
 }
 
-// remedyOf says how to get out of the phase the marker stands at.
-func remedyOf(marker model.InflightMarker) string {
+// recoveryHint is the message telling the user how to recover from the interrupted rollback the
+// marker records; it depends on the phase the rollback reached.
+func recoveryHint(marker model.InflightMarker) string {
+	if marker.Safety == "" {
+		return "a rollback into a compose project that was not running was interrupted; volumes may be " +
+			"half-restored: re-run `arcave rollback " + marker.Target.String() + "`"
+	}
 	switch marker.Phase {
 	case model.InflightRestoreDone:
 		return "every volume was restored and only the services were not started: start the compose project, then remove " +
@@ -63,8 +76,8 @@ func remedyOf(marker model.InflightMarker) string {
 	}
 }
 
-// putInflightMarker writes the marker for the rollback restoring target, with safety as
-// its remedy. A phase transition rewrites the whole marker.
+// putInflightMarker writes the marker for the rollback restoring target; safety is the
+// safety snapshot that undoes it, empty when none was taken. A phase change rewrites it whole.
 func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, target, safety model.SavepointID) error {
 	return s.inflightMarker.Put(ctx, model.InflightMarker{
 		Phase:  phase,
@@ -75,14 +88,14 @@ func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPha
 }
 
 // releaseSafetySnapshot ends a consistent rollback: marker first, snapshot second,
-// so a failed clear never leaves a marker naming a deleted remedy.
+// so a failed clear never leaves a marker pointing at a safety snapshot that is gone.
 func (s *Service) releaseSafetySnapshot(
 	ctx context.Context, safetySnapshot model.Savepoint, backends []model.VolumeSnapshotBackend,
 ) {
 	log := zerolog.Ctx(ctx)
 	if err := s.inflightMarker.Clear(ctx); err != nil {
 		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).
-			Msg("failed to clear the inflight marker; the safety snapshot is retained so the marker's remedy stays real")
+			Msg("failed to clear the inflight marker; the safety snapshot it points at is kept")
 		return
 	}
 	if err := s.dropSavepoint(ctx, safetySnapshot, backends); err != nil {

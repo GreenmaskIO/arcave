@@ -549,7 +549,10 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 // stopping a project to capture zero volumes is pure downtime.
 func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
 	// Arrange
-	empty := model.IntrospectionResult{Project: model.Project{Name: demoProject}}
+	empty := model.IntrospectionResult{Project: model.Project{
+		Name:     demoProject,
+		Services: []model.Service{{Name: demoService}},
+	}}
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(empty, nil)
 	locker := &mockLocker{}
@@ -581,6 +584,44 @@ func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
 	require.ErrorIs(t, err, errNoVolumesToBackUp)
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	registry.AssertExpectations(t)
+}
+
+// A compose project taken down has nothing to capture a spec of: the create is refused
+// before anything is assembled, even though its volumes still exist.
+func TestService_CreateSavepoint_ComposeProjectAbsent(t *testing.T) {
+	// Arrange
+	inspector := &mockInspector{}
+	inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once()
+	locker := &mockLocker{}
+	expectLock(locker)
+	assembler := &mockAssembler{}
+	runner := &mockComposeRunner{}
+	registry := &mockRegistry{}
+	svc := New(Deps{
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    &mockSavepointRepo{},
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assembler,
+		SpecCodec:        &mockCodec{},
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		DefaultBackend:   model.SnapshotBackendCopy,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+
+	// Assert
+	require.ErrorIs(t, err, errComposeProjectAbsent)
+	assert.Contains(t, err.Error(), `compose project "demo"`)
+	inspector.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	assembler.AssertExpectations(t)
 	runner.AssertExpectations(t)
 	registry.AssertExpectations(t)
 }
@@ -651,7 +692,8 @@ func TestService_CreateSavepoint_RefusesANonEmptyDirectory(t *testing.T) {
 func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	// Arrange
 	introspection := model.IntrospectionResult{Project: model.Project{
-		Name: "demo",
+		Name:     "demo",
+		Services: demoIntrospection().Project.Services,
 		Volumes: []model.NamedVolume{
 			{Key: "db", Name: "demo_db", UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
 			// Mounted by no service — docker created it, so it can hold data.

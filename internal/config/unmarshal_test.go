@@ -60,7 +60,21 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, DefaultWaitTimeout, cfg.Compose.WaitTimeout)
 				assert.Equal(t, DefaultStopTimeout, cfg.Compose.StopTimeout)
 				assert.Equal(t, ProgressLog, cfg.Compose.Progress)
+				assert.Equal(t, LeftoverVolumesOverwrite, cfg.Rollback.LeftoverVolumes)
+				assert.Equal(t, model.LeftoverVolumesOverwrite, cfg.Rollback.Policy())
 			},
+		},
+		{
+			name: "a rollback may refuse leftover volumes",
+			yaml: "rollback:\n  leftover_volumes: refuse\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, model.LeftoverVolumesRefuse, cfg.Rollback.Policy())
+			},
+		},
+		{
+			name:       "a leftover-volumes policy arcave does not know is rejected",
+			yaml:       "rollback:\n  leftover_volumes: keep\n",
+			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
 			name: "the compose section is read",

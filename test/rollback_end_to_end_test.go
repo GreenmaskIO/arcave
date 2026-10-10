@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
@@ -144,6 +145,62 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 		require.NotNil(t, sp.NotCovered, sp.Name)
 		assert.Equal(t, model.NotCovered{ServicesWithoutVolumes: []string{"legacy", "quiet", "sidecar"}},
 			sortedNotCovered(*sp.NotCovered), sp.Name)
+	}
+}
+
+// A compose project taken down comes back from the savepoint alone: its spec, its layers
+// and its data, over the named volume `compose down` kept.
+func TestRollback_RebuildsAComposeProjectThatWasTakenDown(t *testing.T) {
+	// Arrange
+	env := newImageRollbackEnv(t)
+	env.externalVolume(t, env.project+"-shared", "mkdir /data/app")
+	env.upDocument(t, fmt.Sprintf(endToEndSpec, env.project))
+	env.stampAll(t, "original")
+
+	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
+	require.NoError(t, err)
+	env.stampAll(t, "drifted")
+	env.down(t)
+
+	// Act
+	res, err := env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, savepoint.ID, res.Savepoint.ID)
+	containers := env.containers(t)
+	require.Len(t, containers, 9)
+	for name, c := range containers {
+		assert.Equal(t, name+"-original", env.read(t, c.ID, layerMarker), "%s's writable layer", name)
+		if path, ok := endToEndVolumes[name]; ok {
+			assert.Equal(t, name+"-original", env.read(t, c.ID, path), "%s's volume", name)
+		}
+	}
+	assert.Equal(t, container.NetworkMode("container:"+containers["db-1"].ID),
+		containers["sidecar-1"].Inspect.HostConfig.NetworkMode, "sidecar joins the new db")
+
+	// No safety snapshot is taken: there was nothing running to save.
+	records, err := env.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, savepoint.ID, records[0].ID)
+}
+
+// down takes the compose project down as `docker compose down` does, keeping its named
+// volumes; the anonymous ones it orphans are named first and dropped after.
+func (e *imageRollbackEnv) down(t *testing.T) {
+	t.Helper()
+
+	res, err := e.inspector.Introspect(e.ctx)
+	require.NoError(t, err)
+	require.NoError(t, e.compose.Down(e.ctx, &types.Project{Name: e.project}))
+
+	for _, svc := range res.Project.Services {
+		for _, v := range svc.Volumes {
+			if v.Type == model.VolumeTypeAnon && v.VolumeName != "" && v.InheritedFrom == "" {
+				assert.NoError(t, e.daemon.VolumeRemove(e.ctx, v.VolumeName, false), "remove volume %s", v.VolumeName)
+			}
+		}
 	}
 }
 

@@ -42,12 +42,14 @@ type MCPServiceFactory func(ctx context.Context, project string) (svc MCPService
 // MCPHandler serves arcave's savepoint workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
-	serviceFactory MCPServiceFactory
+	serviceFactory        MCPServiceFactory
+	leftoverVolumesPolicy model.LeftoverVolumesPolicy
 }
 
-// NewMCPHandler builds the MCP adapter; the compose project a call operates on arrives with the call.
-func NewMCPHandler(serviceFactory MCPServiceFactory) *MCPHandler {
-	return &MCPHandler{serviceFactory: serviceFactory}
+// NewMCPHandler builds the MCP adapter; the compose project a call operates on arrives with the call,
+// and leftoverVolumes is the project's rollback.leftover_volumes.
+func NewMCPHandler(serviceFactory MCPServiceFactory, leftoverVolumes model.LeftoverVolumesPolicy) *MCPHandler {
+	return &MCPHandler{serviceFactory: serviceFactory, leftoverVolumesPolicy: leftoverVolumes}
 }
 
 // The tool descriptions are written for an agent deciding *when* to call, not
@@ -218,7 +220,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	}
 	defer release()
 
-	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout))
+	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.leftoverVolumesPolicy))
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}

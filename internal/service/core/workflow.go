@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -25,6 +26,11 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
+
+// errComposeProjectAbsent refuses a capture of a compose project the daemon holds no
+// container of: there is nothing to rebuild it from.
+var errComposeProjectAbsent = errors.New(
+	"no containers found: bring the compose project up once, or name another project with -p")
 
 // workingSet is what a mutating workflow operates on: the introspection taken once
 // before the stop, its rendered spec and the project parsed from it, the request's
@@ -82,12 +88,31 @@ func (ws workingSet) killedContainers(ids []string) []model.KilledContainer {
 	return killed
 }
 
-// prepare introspects the compose project, renders its spec, parses it back and builds one
-// backend per live volume. A capture covering nothing is refused here.
+// prepare introspects the compose project and builds the working set of it.
 func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (workingSet, error) {
+	res, err := s.introspect(ctx)
+	if err != nil {
+		return workingSet{}, err
+	}
+	return s.workingSetOf(ctx, res, waitTimeout)
+}
+
+// introspect reads the compose project as the daemon holds it now.
+func (s *Service) introspect(ctx context.Context) (model.IntrospectionResult, error) {
 	res, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
-		return workingSet{}, fmt.Errorf("introspecting the compose project: %w", err)
+		return model.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
+	}
+	return res, nil
+}
+
+// workingSetOf renders and parses back the compose project's spec and builds one backend
+// per live volume; an absent compose project or an empty capture is refused.
+func (s *Service) workingSetOf(
+	ctx context.Context, res model.IntrospectionResult, waitTimeout time.Duration,
+) (workingSet, error) {
+	if composeProjectAbsent(res) {
+		return workingSet{}, fmt.Errorf("compose project %q: %w", res.Project.Name, errComposeProjectAbsent)
 	}
 
 	// First, before any work is wasted: with no layer to commit there is nothing to
@@ -142,6 +167,12 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 		replicaGaps:            replicaGaps(ctx, res),
 		unresolvedUpstreams:    unresolvedUpstreams(res, containers),
 	}, nil
+}
+
+// composeProjectAbsent reports whether the daemon holds no container of the compose project:
+// it was never started, or was taken down.
+func composeProjectAbsent(res model.IntrospectionResult) bool {
+	return len(res.Project.Services) == 0
 }
 
 // stopServices puts the services down and returns the containers the stop deadline

@@ -20,7 +20,6 @@ package introspect
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"regexp"
@@ -137,7 +136,7 @@ func (i *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 }
 
 // replicas lists the compose project's containers, stopped ones included, without the one-off
-// containers `docker compose run` leaves behind.
+// containers `docker compose run` leaves behind. None means never started or taken down, not an error.
 func (i *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
 	summaries, err := i.api.ContainerList(ctx, container.ListOptions{
 		All:     true,
@@ -146,11 +145,7 @@ func (i *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list containers: %w", err)
 	}
-	replicas := keepProjectContainers(summaries)
-	if len(replicas) == 0 {
-		return nil, errors.New("no containers found: bring the compose project up once, or name another project with -p")
-	}
-	return replicas, nil
+	return keepProjectContainers(summaries), nil
 }
 
 // projectFilter selects what compose stamped with this compose project's name.

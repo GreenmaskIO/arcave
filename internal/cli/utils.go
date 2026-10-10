@@ -21,7 +21,7 @@ import (
 )
 
 // removeUsageError restates the service's selector-validation errors as the
-// remedy the caller can act on: which selector to drop, or which to supply.
+// fix the caller can act on: which selector to drop, or which to supply.
 //
 // Both the CLI and MCP remove handlers share it, so the wording names each
 // selector without the spelling either adapter gives it — "retain-recent", not
