@@ -73,7 +73,7 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (mode
 		return model.RollbackResult{}, err
 	}
 
-	return withUnlock(ctx, s, func() (model.RollbackResult, error) {
+	return locked(ctx, s, func() (model.RollbackResult, error) {
 		return s.rollback(ctx, req)
 	})
 }

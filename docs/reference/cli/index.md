@@ -30,7 +30,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 
 | Flag | Default | Config key | Description |
 |---|---|---|---|
-| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`. Read from `ARCAVE_PROJECT_NAME` when the flag is absent. |
+| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init` and the `session` commands. Read from `ARCAVE_PROJECT_NAME` when the flag is absent. |
 | `--session` | `baseline` | *(none)* | The session to work in, by id or by name. Read from `ARCAVE_SESSION` when the flag is absent. See [`arcave session`](session.md). |
 | `--config` | `.arcave/config.yaml` | *(none)* | Path to the config file. |
 | `--log-level` | `info` | `log.level` | `debug`, `info` or `warn`. |
@@ -77,6 +77,8 @@ Every command but `init` needs three things:
 * **An initialised project.** Without `.arcave/config.yaml`: `config is not found: run 'arcave init' if not yet initialized`.
 * **A named compose project**, as above.
 * **A reachable Docker daemon.** The daemon is contacted while the command wires itself up, before any workflow starts, so an unreachable one fails `savepoint list` exactly as it fails `rollback`.
+
+The `session` commands are the exception: they name no compose project and reach no daemon, `session create --from` included — a fork copies a session's savepoints and deploys nothing.
 
 `savepoint create` and `rollback` additionally need the project to **exist in the daemon**: arcave reads the running project rather than your compose files. `docker compose stop` is fine — stopped containers still describe the project. `docker compose down` is not:
 

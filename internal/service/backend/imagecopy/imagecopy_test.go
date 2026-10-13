@@ -32,11 +32,11 @@ import (
 )
 
 const (
-	snapshotID  = model.SavepointID("1780335122")
+	snapshotID  = model.SavepointID("019e843e-1650-7000-8000-000000000000")
 	containerID = "c0ffee"
 	imageID     = model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	upstreamID  = model.ImageDigestID("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	commitNote  = "arcave savepoint 1780335122"
+	commitNote  = "arcave savepoint 019e843e-1650-7000-8000-000000000000"
 )
 
 func demoRequest() model.ImageCaptureRequest {
@@ -72,7 +72,7 @@ func TestImageStorage_AddressesOneImage(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	require.NoError(t, imageStore.PutObject(context.Background(), "probe", strings.NewReader("x")))
-	assert.Equal(t, []string{"1780335122/images/db/replicas/1/probe"}, objectNames(t, store),
+	assert.Equal(t, []string{"019e843e-1650-7000-8000-000000000000/images/db/replicas/1/probe"}, objectNames(t, store),
 		"the key both backends must agree on")
 }
 
@@ -451,7 +451,7 @@ type stubLayout struct {
 }
 
 func (s *stubLayout) Store(
-	_ context.Context, _ storages.Storager, _ model.ImageDigestID, archive io.Reader,
+	_ context.Context, _ storages.Writer, _ model.ImageDigestID, archive io.Reader,
 ) (StoredSize, error) {
 	body, err := io.ReadAll(archive)
 	if err != nil {

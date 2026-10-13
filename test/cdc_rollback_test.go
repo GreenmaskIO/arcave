@@ -40,6 +40,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
@@ -198,6 +199,47 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 		"the backup's own directory is swept with it")
 }
 
+// A cloned session carries every cdc repository with it and restores through its own restic
+// server; the source's repository is left as it was.
+func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
+	// Arrange
+	env := newCDCEnv(t, config.CDCBackend{
+		RestoreMode: config.RestoreModeWipe,
+		Overwrite:   config.OverwriteIfChanged,
+		Image:       config.DefaultResticImage,
+	})
+	before := env.hashAll(t)
+	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
+	require.NoError(t, err)
+	sourceRepo := objectNames(t, env.composeProjectStore, cdc.RepoNamespace)
+	arcaveProjectStore := env.arcaveProjectStore(t)
+	sessions := core.NewSessionService(core.SessionDeps{
+		Sessions: sessionrepo.New(arcaveProjectStore),
+		Locker:   lock.New(env.projectRoot),
+		Inflight: inflightrepo.New(env.projectRoot),
+		Store:    arcaveProjectStore,
+	})
+	clone, err := sessions.CreateSession(env.ctx, model.CreateSessionRequest{Name: "feat", From: "baseline"})
+	require.NoError(t, err)
+	cloneSvc, cloneStore := env.serviceIn(t, clone.ID)
+	env.mutate(t, env.volumes[0])
+
+	// Act
+	_, err = cloneSvc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, before, env.hashAll(t), "the clone restores the savepoint's data")
+	for _, stat := range savepoint.Stats {
+		snapshot := cdc.RepoNamespace + "/" + stat.Volume.ObjectID + "/snapshots/" + resticPayload(t, stat).SnapshotObjectID
+		exists, err := cloneStore.Exists(env.ctx, snapshot)
+		require.NoError(t, err)
+		assert.True(t, exists, "the clone holds %s", snapshot)
+	}
+	assert.Equal(t, sourceRepo, objectNames(t, env.composeProjectStore, cdc.RepoNamespace),
+		"the rollback wrote into the clone's repository, never the source's")
+}
+
 // cdcEnv is one wired arcave over a live daemon, plus the volumes it captures.
 type cdcEnv struct {
 	ctx                 context.Context
@@ -207,6 +249,13 @@ type cdcEnv struct {
 	engine              *dockerclient.Engine
 	composeProjectStore storages.Storager
 	volumes             []cdcVolume
+
+	// What serviceIn wires another session's service from.
+	projectRoot   string
+	storageCfg    config.Storage
+	cdcCfg        config.CDCBackend
+	hostNetwork   bool
+	containerHost string
 }
 
 // cdcVolume is one docker volume and the labelled container that mounts it.
@@ -238,39 +287,55 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 		createLabelledContainer(t, cli, v.service, v)
 	}
 
+	logs := &syncBuffer{}
+	env := &cdcEnv{
+		ctx:     zerolog.New(logs).Level(zerolog.InfoLevel).WithContext(context.Background()),
+		compose: &stubComposeRunner{},
+		logs:    logs,
+		engine:  engine,
+		volumes: volumes,
+
+		projectRoot: t.TempDir(),
+		storageCfg: config.Storage{
+			Type:      config.StorageTypeDirectory,
+			Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
+		},
+		cdcCfg:        cdcCfg,
+		hostNetwork:   hostNetwork,
+		containerHost: containerHost,
+	}
+	env.svc, env.composeProjectStore = env.serviceIn(t, model.DefaultSession)
+	return env
+}
+
+// serviceIn wires the service for session the way the DI root does, with its own restic server.
+func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service, storages.Storager) {
+	t.Helper()
+
 	// The store, exactly as the DI root builds it: one tree per compose project inside the
 	// session — savepoints, a rollback's undo and the cdc repositories alike. The
 	// arcave project is named apart from the compose project, so an assertion on the tree shows
 	// both levels rather than one name standing in for two.
-	projectRoot := t.TempDir()
-	storageCfg := config.Storage{
-		Type:      config.StorageTypeDirectory,
-		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}
-	composeProjectStore, err := storefactory.New(storageCfg, projectRoot, cdcArcaveProject, model.DefaultSession, cdcProject)
+	composeProjectStore, err := storefactory.New(e.storageCfg, e.projectRoot, cdcArcaveProject, session, cdcProject)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, composeProjectStore.Close()) })
 
-	composeRunner := &stubComposeRunner{}
-	logs := &syncBuffer{}
-	ctx := zerolog.New(logs).Level(zerolog.InfoLevel).WithContext(context.Background())
-
 	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
 	require.NoError(t, err)
-	resticServer := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
+	resticServer := rest.NewEcho(e.ctx, repo.NewResolver(resticRoot))
 	resticPort, err := rest.Serve(resticServer, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, resticServer.Close()) })
 
 	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
-		Runner:         engine,
-		RepoURLBase:    rest.RepositoryURLBase("", containerHost, resticPort),
+		Runner:         e.engine,
+		RepoURLBase:    rest.RepositoryURLBase("", e.containerHost, resticPort),
 		RepositoryRoot: resticRoot,
 		Options: cdc.Options{
-			Image:       cdcCfg.Image,
-			Incremental: cdcCfg.RestoreMode == config.RestoreModeIncremental,
-			Overwrite:   cdcCfg.Overwrite,
-			HostNetwork: hostNetwork,
+			Image:       e.cdcCfg.Image,
+			Incremental: e.cdcCfg.RestoreMode == config.RestoreModeIncremental,
+			Overwrite:   e.cdcCfg.Overwrite,
+			HostNetwork: e.hostNetwork,
 		},
 	}))
 	require.NoError(t, err)
@@ -278,27 +343,33 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	spec := stubAssembler{project: &types.Project{Name: cdcProject}}
 	svc := core.New(core.Deps{
 		SavepointRepo:    sprepo.New(composeProjectStore),
-		ProjectLocker:    lock.New(projectRoot),
-		ComposeInspector: stubInspector{result: introspectionOf(volumes)},
+		ProjectLocker:    lock.New(e.projectRoot),
+		ComposeInspector: stubInspector{result: introspectionOf(e.volumes)},
 		ProjectAssembler: spec,
 		SpecCodec:        spec,
-		ComposeRunner:    composeRunner,
+		ComposeRunner:    e.compose,
 		VolumeRemover:    stubVolumeRemover{},
 		BackendRegistry:  registry,
-		Inflight:         inflightrepo.New(projectRoot),
+		Inflight:         inflightrepo.New(e.projectRoot),
 		Store:            composeProjectStore,
 		DefaultBackend:   model.SnapshotBackendCDC,
+		Session:          session,
+		ComposeProject:   cdcProject,
+		Sessions:         sessionrepo.New(e.arcaveProjectStore(t)),
 	})
+	return svc, composeProjectStore
+}
 
-	return &cdcEnv{
-		ctx:                 ctx,
-		svc:                 svc,
-		compose:             composeRunner,
-		logs:                logs,
-		engine:              engine,
-		composeProjectStore: composeProjectStore,
-		volumes:             volumes,
-	}
+// arcaveProjectStore is the store the session records live in.
+func (e *cdcEnv) arcaveProjectStore(t *testing.T) storages.Storager {
+	t.Helper()
+
+	root, err := storefactory.Root(e.storageCfg, e.projectRoot)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, root.Close()) })
+	store, err := storefactory.ArcaveProject(root, cdcArcaveProject)
+	require.NoError(t, err)
+	return store
 }
 
 // syncBuffer collects the run's log. The restic server serves its requests

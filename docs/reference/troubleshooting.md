@@ -13,12 +13,12 @@ Each entry names the symptom as arcave reports it, what happened, and what to do
 **Symptom.** Every mutating command refuses to run:
 
 ```text
-rollback to savepoint 1780335122 was interrupted (restoring)
+rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)
 ```
 
 **What happened.** A rollback was killed after it began writing. `.arcave/inflight.json` records the phase it died in, and that marker refuses the next mutating workflow so nothing is built on a half-written environment.
 
-**The remedy.** Return to the safety snapshot that rollback took of the pre-rollback state. It is the one operation the marker lets through.
+**The remedy.** Return to the safety snapshot that rollback took of the pre-rollback state. It is the one operation the marker lets through, and only in the session and compose project the marker names — the error's hint prints the full command, `--session` and `-p` included. Pass the same two flags to the commands below.
 
 ```shell title="1. Find it"
 arcave savepoint list --include-safety-snapshots
@@ -27,8 +27,8 @@ arcave savepoint list --include-safety-snapshots
 ```json title="stdout"
 [
   {
-    "id": "1780340557",
-    "name": "safety-snapshot-1780335122",
+    "id": "019e8491-04c8-7000-8000-000000000000",
+    "name": "safety-snapshot-019e843e-1650-7000-8000-000000000000",
     "description": "",
     "labels": { "arcave-safety-snapshot": "true" },
     "created_at": "2026-06-01T21:22:37.009412Z"
@@ -39,13 +39,13 @@ arcave savepoint list --include-safety-snapshots
 The name carries the id of the savepoint that rollback was applying, so a leftover always identifies the run that abandoned it.
 
 ```shell title="2. Apply it, by id"
-arcave rollback 1780340557
+arcave rollback 019e8491-04c8-7000-8000-000000000000
 ```
 
 An id is the only reference that reaches a safety snapshot: `latest` and name lookups skip them.
 
 ```shell title="3. Once the environment is right, remove it"
-arcave savepoint remove 1780340557
+arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```
 
 Not before. Until then it is the last copy of the pre-rollback state.
@@ -119,20 +119,18 @@ Consider making the mount a named volume: it is addressable directly, survives c
 ## `capture directory is not empty`
 
 ```text
-capture directory is not empty: 1780335122 holds 3 object(s) — a savepoint of this same second, or an interrupted run's remains; retry, and check what is there before removing it
+capture directory is not empty: 019e843e-1650-7000-8000-000000000000 holds 3 object(s), an interrupted run's remains; check what is there before removing it
 ```
 
-An earlier run was interrupted after it started writing and before it committed a record — or, an id being a Unix second, a savepoint of this very second already exists. **Retry first**: a second attempt lands on the next second and usually just works.
-
-If the directory persists, its objects are the last copy of whatever that run captured. Look before removing:
+An earlier run was interrupted after it started writing and before it committed a record. Its objects are the last copy of whatever that run captured. Look before removing:
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/1780335122/
+<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/019e843e-1650-7000-8000-000000000000/
 ```
 
 If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back.
 
-## `savepoint 1780335122 committed; services failed to start`
+## `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start`
 
 **The savepoint exists and is complete.** Only the restart failed, so note the id and look at the project: the services are stopped, or unhealthy, or slower than [`--wait-timeout`](configuration.md#compose). Do not take another savepoint to compensate.
 

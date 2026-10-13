@@ -14,7 +14,11 @@
 
 package model
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // CreateSavepointRequest carries everything CreateSavepoint needs, so a caller
 // need not hand over a config.Config. The compose project and the backend are injected.
@@ -23,4 +27,18 @@ type CreateSavepointRequest struct {
 	Description string            // savepoint description
 	Labels      map[string]string // marks carried into the record and on to every backend
 	WaitTimeout time.Duration     // bounds the health check on restart; <= 0 lets the compose runner apply its default
+}
+
+// Validate refuses a name carrying "/", which a <session>/<savepoint> address splits on,
+// and one rollback would read as another ref: RefLatest or a savepoint id.
+func (r CreateSavepointRequest) Validate() error {
+	switch {
+	case strings.Contains(r.Name, "/"):
+		return fmt.Errorf("%w %q: must not contain \"/\"", ErrInvalidSavepointName, r.Name)
+	case r.Name == RefLatest:
+		return fmt.Errorf("%w %q: is reserved", ErrInvalidSavepointName, r.Name)
+	case r.Name != "" && SavepointID(r.Name).Validate() == nil:
+		return fmt.Errorf("%w %q: must not be a savepoint id", ErrInvalidSavepointName, r.Name)
+	}
+	return nil
 }

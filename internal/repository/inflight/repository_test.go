@@ -32,10 +32,12 @@ func TestRepository_PutGetClear(t *testing.T) {
 	repo := New(t.TempDir())
 	ctx := context.Background()
 	marker := model.InflightMarker{
-		Phase:  model.InflightRestoring,
-		Target: "1780335122",
-		Safety: "1780335999",
-		At:     time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
+		Phase:          model.InflightRestoring,
+		Session:        model.DefaultSession,
+		ComposeProject: "demo",
+		Target:         "019e843e-1650-7000-8000-000000000000",
+		Safety:         "019e844b-7818-7000-8000-000000000000",
+		At:             time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
 	}
 
 	// Act & Assert: absent, written, replaced, cleared, cleared again.
@@ -50,6 +52,8 @@ func TestRepository_PutGetClear(t *testing.T) {
 	assert.Equal(t, marker.Phase, got.Phase)
 	assert.Equal(t, marker.Target, got.Target)
 	assert.Equal(t, marker.Safety, got.Safety)
+	assert.Equal(t, marker.Session, got.Session)
+	assert.Equal(t, marker.ComposeProject, got.ComposeProject)
 	assert.True(t, got.At.Equal(marker.At), "at = %v", got.At)
 
 	marker.Phase = model.InflightRestoreDone

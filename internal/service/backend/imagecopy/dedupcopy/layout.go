@@ -28,6 +28,10 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 )
 
+// BlobPrefix is the blob store's key under the compose project store, beside the savepoints;
+// a savepoint id is a canonical UUID, so it cannot collide with one.
+const BlobPrefix = "shared/oci/blobs"
+
 // MinDaemonMajor is the first Docker whose `docker save` writes the OCI layout this
 // layout splits by digest.
 const MinDaemonMajor = 25
@@ -48,7 +52,7 @@ func New(blobStore storages.Storager) *Layout {
 // member name is the key, and that is what makes one pass enough. The layout is
 // therefore the gate — see requiredMetadata.
 func (l *Layout) Store(
-	ctx context.Context, dst storages.Storager, imageID model.ImageDigestID, archive io.Reader,
+	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
 ) (imagecopy.StoredSize, error) {
 	var size imagecopy.StoredSize
 	manifest := imagecopy.Manifest{ImageID: imageID, Format: imagecopy.FormatBlobs}
@@ -95,7 +99,7 @@ func (l *Layout) Store(
 // storeMember puts one archive member where its kind belongs and reports how many
 // bytes that added. An unaddressable name must never become a storage key.
 func (l *Layout) storeMember(
-	ctx context.Context, dst storages.Storager, body io.Reader, name string, size int64,
+	ctx context.Context, dst storages.Writer, body io.Reader, name string, size int64,
 ) (imagecopy.Member, int64, error) {
 	if digest, isBlob := parseBlobName(name); isBlob {
 		written, err := l.blobs.put(ctx, digest, body, size)

@@ -183,8 +183,7 @@ func TestNew(t *testing.T) {
 			{name: "a nested arcave project", arcaveProject: "a/b", session: model.DefaultSession, composeProject: testComposeProject, wantMsg: "invalid arcave project name"},
 			{name: "an upper-case arcave project", arcaveProject: "MyApp", session: model.DefaultSession, composeProject: testComposeProject, wantMsg: "invalid arcave project name"},
 			{name: "an escaping arcave project", arcaveProject: "..", session: model.DefaultSession, composeProject: testComposeProject, wantMsg: "invalid arcave project name"},
-			{name: "an empty session", arcaveProject: testArcaveProject, session: "", composeProject: testComposeProject, wantMsg: "invalid session id"},
-			{name: "a nested session", arcaveProject: testArcaveProject, session: "a/b", composeProject: testComposeProject, wantMsg: "invalid session id"},
+			{name: "the nil session", arcaveProject: testArcaveProject, session: model.SessionID{}, composeProject: testComposeProject, wantMsg: "invalid session id"},
 			{name: "an empty compose project", arcaveProject: testArcaveProject, session: model.DefaultSession, composeProject: "", wantMsg: "invalid compose project name"},
 			{name: "a nested compose project", arcaveProject: testArcaveProject, session: model.DefaultSession, composeProject: "a/b", wantMsg: "invalid compose project name"},
 			{name: "an upper-case compose project", arcaveProject: testArcaveProject, session: model.DefaultSession, composeProject: "MyShop", wantMsg: "invalid compose project name"},
@@ -210,5 +209,84 @@ func TestNew(t *testing.T) {
 
 		// Assert
 		require.ErrorContains(t, err, "unsupported storage.type")
+	})
+}
+
+func TestDescent(t *testing.T) {
+	t.Run("each step descends one segment and the chain equals New", func(t *testing.T) {
+		// Arrange
+		root := t.TempDir()
+		rootStore, err := Root(directoryStorage("snaps"), root)
+		require.NoError(t, err)
+
+		// Act
+		arcaveProjectStore, err := ArcaveProject(rootStore, testArcaveProject)
+		require.NoError(t, err)
+		sessionStore, err := Session(arcaveProjectStore, model.DefaultSession)
+		require.NoError(t, err)
+		composeProjectStore, err := ComposeProject(sessionStore, testComposeProject)
+		require.NoError(t, err)
+
+		// Assert
+		base := filepath.Join(root, "snaps", "arcave")
+		assert.Equal(t, base, rootStore.GetCwd())
+		assert.Equal(t, filepath.Join(base, "projects", testArcaveProject.String()), arcaveProjectStore.GetCwd())
+		assert.Equal(t, filepath.Join(base, "projects", testArcaveProject.String(), "sessions", model.DefaultSession.String()), sessionStore.GetCwd())
+		assert.Equal(t, filepath.Join(root, "snaps", layout()), composeProjectStore.GetCwd())
+	})
+
+	t.Run("each step gates its own segment", func(t *testing.T) {
+		// Arrange
+		rootStore, err := Root(directoryStorage("snaps"), t.TempDir())
+		require.NoError(t, err)
+
+		// Act
+		_, projectErr := ArcaveProject(rootStore, "..")
+		_, sessionErr := Session(rootStore, model.SessionID{})
+		_, composeErr := ComposeProject(rootStore, "MyShop")
+
+		// Assert
+		assert.ErrorContains(t, projectErr, "invalid arcave project name")
+		assert.ErrorContains(t, sessionErr, "invalid session id")
+		assert.ErrorContains(t, composeErr, "invalid compose project name")
+	})
+}
+
+func TestComposeProjects(t *testing.T) {
+	t.Run("lists the compose projects of a session, sorted, skipping what is not one", func(t *testing.T) {
+		// Arrange
+		ctx := context.Background()
+		root := t.TempDir()
+		rootStore, err := Root(directoryStorage("snaps"), root)
+		require.NoError(t, err)
+		arcaveProjectStore, err := ArcaveProject(rootStore, testArcaveProject)
+		require.NoError(t, err)
+		sessionStore, err := Session(arcaveProjectStore, model.DefaultSession)
+		require.NoError(t, err)
+		for _, key := range []string{"compose/shop/100/savepoint.json", "compose/blog/200/savepoint.json", "compose/Not_Compose/x"} {
+			require.NoError(t, sessionStore.PutObject(ctx, key, strings.NewReader("{}")))
+		}
+
+		// Act
+		names, err := ComposeProjects(ctx, sessionStore)
+
+		// Assert
+		require.NoError(t, err)
+		assert.Equal(t, []model.DockerComposeProjectName{"blog", "shop"}, names)
+	})
+
+	t.Run("a session holding nothing yet lists empty", func(t *testing.T) {
+		// Arrange
+		rootStore, err := Root(directoryStorage("snaps"), t.TempDir())
+		require.NoError(t, err)
+		sessionStore, err := Session(rootStore, model.DefaultSession)
+		require.NoError(t, err)
+
+		// Act
+		names, err := ComposeProjects(context.Background(), sessionStore)
+
+		// Assert
+		require.NoError(t, err)
+		assert.Empty(t, names)
 	})
 }

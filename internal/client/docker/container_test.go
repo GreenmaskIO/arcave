@@ -55,12 +55,12 @@ func TestEngine_RecreateWithImage(t *testing.T) {
 	e := &Engine{api: api}
 
 	// Act
-	id, err := e.RecreateWithImage(context.Background(), replacedID, renumbered, "arcave/demo-app-3:sp-1780335122")
+	id, err := e.RecreateWithImage(context.Background(), replacedID, renumbered, "arcave/demo-app-3:sp-019e843e-1650-7000-8000-000000000000")
 
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "new", id)
-	assert.Equal(t, "arcave/demo-app-3:sp-1780335122", gotConfig.Image)
+	assert.Equal(t, "arcave/demo-app-3:sp-019e843e-1650-7000-8000-000000000000", gotConfig.Image)
 	assert.Equal(t, "demo-app-2", gotConfig.Hostname)
 	assert.Equal(t, []string{"MODE=original"}, gotConfig.Env, "the environment goes over whole")
 	assert.Equal(t, map[string]string{
@@ -114,7 +114,7 @@ func TestEngine_RecreateWithImage_Hostname(t *testing.T) {
 			e := &Engine{api: api}
 
 			// Act
-			_, err := e.RecreateWithImage(context.Background(), replacedID, sameReplica, "arcave/demo-app-2:sp-1780335122")
+			_, err := e.RecreateWithImage(context.Background(), replacedID, sameReplica, "arcave/demo-app-2:sp-019e843e-1650-7000-8000-000000000000")
 
 			// Assert
 			require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestEngine_RecreateWithImage_AFailedCreateLeavesTheContainerRemoved(t *test
 	e := &Engine{api: api}
 
 	// Act
-	id, err := e.RecreateWithImage(context.Background(), replacedID, sameReplica, "arcave/demo-app-2:sp-1780335122")
+	id, err := e.RecreateWithImage(context.Background(), replacedID, sameReplica, "arcave/demo-app-2:sp-019e843e-1650-7000-8000-000000000000")
 
 	// Assert
 	require.ErrorIs(t, err, wantErr)
@@ -160,7 +160,7 @@ func TestEngine_RecreateWithImage_RefusesNoReplicaIdentity(t *testing.T) {
 			e := &Engine{api: api}
 
 			// Act
-			_, err := e.RecreateWithImage(context.Background(), replacedID, tt.as, "arcave/demo-app-2:sp-1780335122")
+			_, err := e.RecreateWithImage(context.Background(), replacedID, tt.as, "arcave/demo-app-2:sp-019e843e-1650-7000-8000-000000000000")
 
 			// Assert
 			require.ErrorContains(t, err, "no replica identity")
@@ -177,7 +177,7 @@ func TestEngine_RecreateWithImage_RefusesAContainerItCannotRebuild(t *testing.T)
 	e := &Engine{api: api}
 
 	// Act
-	_, err := e.RecreateWithImage(context.Background(), replacedID, sameReplica, "arcave/demo-app-2:sp-1780335122")
+	_, err := e.RecreateWithImage(context.Background(), replacedID, sameReplica, "arcave/demo-app-2:sp-019e843e-1650-7000-8000-000000000000")
 
 	// Assert
 	require.ErrorContains(t, err, "no configuration")
@@ -214,7 +214,7 @@ func builtReplica() container.InspectResponse {
 			Platform: &ocispec.Platform{OS: "linux", Architecture: "arm64"},
 		},
 		Config: &container.Config{
-			Image:    "arcave/demo-app-1:sp-1780335122",
+			Image:    "arcave/demo-app-1:sp-019e843e-1650-7000-8000-000000000000",
 			Hostname: "demo-app-2",
 			Env:      []string{"MODE=original"},
 			Labels:   builtReplicaLabels,

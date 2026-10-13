@@ -50,7 +50,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
-	commitSafety := expectSafetySnapshotCommit(repo, "1780335122")
+	commitSafety := expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	// The teardown takes the live compose project down; the rebuild puts back the recorded one.
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
@@ -91,7 +91,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 
 	// Act
 	res, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -136,7 +136,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
-	commitSafety := expectSafetySnapshotCommit(repo, "1780335122")
+	commitSafety := expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
@@ -182,7 +182,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -211,7 +211,7 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	// The backup commits its record and, once the revert has returned the
 	// environment, uncommits it again.
 	expectSpecCommit(repo)
-	expectSafetySnapshotCommit(repo, "1780335122")
+	expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
@@ -260,7 +260,7 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -288,7 +288,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	// The record is committed and never uncommitted: repo carries no Delete
 	// expectation, so an uncommit would fail the run where it happened.
 	expectSpecCommit(repo)
-	expectSafetySnapshotCommit(repo, "1780335122")
+	expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
@@ -331,7 +331,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -393,7 +393,7 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -476,7 +476,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -492,7 +492,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	backup, found := byID(committed, safetySnapshotID)
 	require.True(t, found, "the retained safety snapshot lists with the flag")
 	assert.True(t, backup.IsSafetySnapshot())
-	assert.Equal(t, "safety-snapshot-1780335122", backup.Name,
+	assert.Equal(t, "safety-snapshot-019e843e-1650-7000-8000-000000000000", backup.Name,
 		"the name says what the killed rollback was undoing")
 	assert.Equal(t, map[string]string{model.SafetySnapshotLabel: model.SafetySnapshotLabelValue}, backup.Labels)
 	assert.Equal(t, []model.Volume{vol}, volumesOf(backup),
@@ -524,7 +524,7 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	var safetySnapshotID model.SavepointID
 	var upErrs []error
 	expectSpecCommit(repo)
-	expectSafetySnapshotCommit(repo, "1780335122")
+	expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	captureCtx := func(args mock.Arguments) { upErrs = append(upErrs, args.Get(0).(context.Context).Err()) }
 	runner := &mockComposeRunner{}
@@ -575,7 +575,7 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -601,7 +601,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 
 	var safetySnapshotID model.SavepointID
 	expectSpecCommit(repo)
-	expectSafetySnapshotCommit(repo, "1780335122")
+	expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
@@ -644,7 +644,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -652,7 +652,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, logs.String(), `"volume":"volume-named-demo_db"`)
 	assert.Contains(t, logs.String(), `"backend":"copy"`)
-	assert.Contains(t, logs.String(), `"snapshot_id":"1780335122"`)
+	assert.Contains(t, logs.String(), `"snapshot_id":"019e843e-1650-7000-8000-000000000000"`)
 	assert.Contains(t, logs.String(), `"op":"restore"`)
 	assert.Contains(t, logs.String(), `"snapshot_id":"`+safetySnapshotID.String()+`"`)
 	repo.AssertExpectations(t)
@@ -728,7 +728,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 			UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
 	}
 	record := model.Savepoint{
-		ID:        "1780335122",
+		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
 		Stats:     []model.SnapshotStat{{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "sp-payload"}},
@@ -766,13 +766,13 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	})
 
 	// The capture the restore reads, at the key the backend renders.
-	archive := "1780335122/volume-named-demo_db/data.tar"
+	archive := "019e843e-1650-7000-8000-000000000000/volume-named-demo_db/data.tar"
 	require.NoError(t, store.PutObject(context.Background(), archive, strings.NewReader("savepoint bytes")))
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	res, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID("1780335122"),
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
 		WaitTimeout: 60 * time.Second,
 	})
 
@@ -780,7 +780,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []model.Volume{vol}, res.Restored)
 	assert.Equal(t, "savepoint bytes", docker.written.String(), "the archive's stream is what reaches the mount")
-	assert.ElementsMatch(t, []string{archive, "1780335122/savepoint.json", "1780335122/project.yaml"}, objectNames(t, store),
+	assert.ElementsMatch(t, []string{archive, "019e843e-1650-7000-8000-000000000000/savepoint.json", "019e843e-1650-7000-8000-000000000000/project.yaml"}, objectNames(t, store),
 		"the savepoint is read, never rewritten, and the backup's own tree is swept whole")
 	committed, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
@@ -1203,7 +1203,8 @@ func TestService_Rollback_ColdStartRerun(t *testing.T) {
 	inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once()
 	inflight := &fakeInflight{}
 	require.NoError(t, inflight.Put(context.Background(), model.InflightMarker{
-		Phase: model.InflightRestoring, Target: record.ID, At: time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC),
+		Phase: model.InflightRestoring, Session: model.DefaultSession, Target: record.ID,
+		At: time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC),
 	}))
 	images := &mockImageBackend{}
 	images.On("Restore", mock.Anything, mock.Anything).Return(demoImageRestore(), nil).Once()

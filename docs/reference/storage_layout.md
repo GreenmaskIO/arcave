@@ -18,7 +18,7 @@ Four things are named there, outermost first:
 |---|---|---|
 | `arcave` | The static namespace every store is rooted under. Not configurable. | — |
 | `<project>` | The storage tenant, `project.name`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
-| `<session>` | The session — the line of savepoints, and the lifetime everything below it dies with. | `global`, or a canonical UUID |
+| `<session>` | The session — the line of savepoints, and the lifetime everything below it dies with. | A canonical UUID; the default session `baseline` is `00000000-0000-0000-0000-000000000001` |
 | `<compose-project>` | The compose project, named per invocation with `-p`. | Starts with `[a-z0-9]`, continues with `[a-z0-9_-]` |
 
 The static `arcave` segment is what bounds every write and every delete: point the path at `/etc` and arcave operates in `/etc/arcave`. Each segment below it is checked against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.
@@ -29,7 +29,7 @@ The static `arcave` segment is what bounds every write and every delete: point t
 
 ```text
 <compose-project root>/
-  1780335122/                                  a savepoint, named by its id
+  019e843e-1650-7000-8000-000000000000/                                  a savepoint, named by its id
     savepoint.json                             the record — written last, and it is the commit
     project.yaml                               the compose spec the project was captured under
     volume-named-myapp_pgdata/
@@ -39,12 +39,12 @@ The static `arcave` segment is what bounds every write and every delete: point t
       manifest.json                            verbatim from the image archive
       oci-layout                               verbatim from the image archive
       image.json                               what to rebuild the layer from — written last
-  1780339981/                                  the next savepoint
+  019e8488-3ac8-7000-8000-000000000000/                                  the next savepoint
   shared/oci/blobs/sha256/<digest>             the image blobs every savepoint here shares
   restic/volume-named-myapp_pgdata/            one cdc repository per volume
 ```
 
-A savepoint id is a run of decimal digits — the Unix second the capture started — so a directory that is not one is never mistaken for a savepoint, and `shared/` and `restic/` cannot collide with a savepoint of any age.
+A savepoint id is a canonical UUID, so a directory that is not one is never mistaken for a savepoint, and `shared/` and `restic/` cannot collide with a savepoint of any age.
 
 **The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
 

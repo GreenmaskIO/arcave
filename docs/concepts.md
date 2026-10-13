@@ -12,11 +12,11 @@ Seven terms carry the whole tool. This page defines each one and points at the p
 
 A **savepoint** is a consistent snapshot of every stateful volume in a Docker Compose project, plus every container's writable layer, plus the compose spec of the project it was taken from.
 
-It has an id — a Unix timestamp as decimal digits, assigned by arcave — and optionally a name and a description that you assign.
+It has an id — a UUID (version 7) assigned by arcave — and optionally a name and a description that you assign.
 
 ```json title="A savepoint record"
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "before-migration",
   "description": "Before applying migration 2026_001",
   "created_at": "2026-06-01T19:41:12.123456789Z"
@@ -32,12 +32,12 @@ Three ways to refer to a savepoint, and which one you mean is decided by the tok
 | Token | Resolves as |
 |---|---|
 | `latest` | The most recently created savepoint. Reserved word. |
-| A run of decimal digits | An **id**. Exact, and never falls back to a name. |
+| A canonical UUID | An **id**. Exact, and never falls back to a name. |
 | Anything else | A **name**. |
 
-An id is the only form that reaches a hidden safety snapshot. `arcave rollback 1780335122` will not resolve to a savepoint merely *called* `1780335122`.
+An id is the only form that reaches a hidden safety snapshot. A name can never be mistaken for one: `savepoint create` refuses a name that is itself a savepoint id.
 
-A name matching several savepoints is an **error** that lists the candidate ids, never a silent guess. Names are yours to keep unique — arcave does not enforce it at creation time.
+A name matching several savepoints is an **error** that lists the candidate ids, never a silent guess. `savepoint create` refuses a name another savepoint of the compose project already carries, and a name containing `/`, so a name you create today matches one savepoint; the error guards records written before that rule.
 
 ## Safety snapshot
 

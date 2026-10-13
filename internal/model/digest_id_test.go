@@ -41,7 +41,7 @@ func TestParseDigestID_RefusesWhatIsNotContent(t *testing.T) {
 		s    string
 	}{
 		{name: "a tag", s: "postgres:16"},
-		{name: "a tag a rollback left behind", s: "arcave/demo-db-1:sp-1780335122"},
+		{name: "a tag a rollback left behind", s: "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000000"},
 		{name: "an untagged repository", s: "postgres"},
 		{name: "a truncated id", s: "sha256:5f2b8d7c1a4e"},
 		{name: "hex with no algorithm", s: validDigest[len("sha256:"):]},

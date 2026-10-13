@@ -107,6 +107,12 @@ With `snapshot.backend: cdc`, a host bind mount cannot be captured on Docker Des
 
 Each session's restic repositories live inside that session's own store root and die with it, which is what keeps a session self-contained. They cannot be shared across sessions or projects.
 
+## A fork copies the whole session
+
+`session create --from` copies every compose project, savepoint and backend repository of the source session, byte for byte — safety snapshots and what removed savepoints left behind included. It costs the source's `size_bytes`, and it holds the project's lock for as long as the copy takes, so every other arcave command in the project directory is refused until it is done — the lock does not queue.
+
+A fork that fails or is interrupted leaves what it copied in the store, and nothing collects it on its own yet. `session list --all` shows it — `failed`, or `cloning` for up to 30 minutes after a fork that was killed — and `session delete <id>` removes it (`--force` for a `cloning` one).
+
 ## The local filesystem is the only store
 
 `storage.type` is a union with one arm implemented: `directory`. Two machines can share a store through a filesystem they both mount, with the one-writer rule above as the only thing keeping them apart.

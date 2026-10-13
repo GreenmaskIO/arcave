@@ -158,7 +158,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	blobStore, err := store.SubStorage("shared/oci/blobs", true)
+	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{

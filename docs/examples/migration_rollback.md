@@ -46,7 +46,7 @@ INF compose kind=Container name=arcave-demo-postgres-1 status=Healthy
 
 ```json title="stdout"
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "pre-migration",
   "description": "orders table, 1000 rows",
   "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -121,7 +121,7 @@ INF compose kind=Container name=arcave-demo-postgres-1 status=Healthy
 ```json title="stdout"
 {
   "rolled_back_to": {
-    "id": "1780335122",
+    "id": "019e843e-1650-7000-8000-000000000000",
     "name": "pre-migration",
     "description": "orders table, 1000 rows",
     "created_at": "2026-06-01T19:41:12.123456789Z"
@@ -197,12 +197,12 @@ arcave savepoint remove pre-migration --dry-run
 That is an **error** — `remove` takes ids, not names:
 
 ```text
-Error: invalid savepoint id "pre-migration": must be a Unix timestamp (digits only)
+Error: invalid savepoint id "pre-migration": must be a canonical UUID
 ```
 
 ```shell
 arcave savepoint list | jq -r '.[] | select(.name == "pre-migration") | .id'
-arcave savepoint remove 1780335122
+arcave savepoint remove 019e843e-1650-7000-8000-000000000000
 ```
 
 ```json title="stdout"
@@ -210,7 +210,7 @@ arcave savepoint remove 1780335122
   "dry_run": false,
   "removed": [
     {
-      "id": "1780335122",
+      "id": "019e843e-1650-7000-8000-000000000000",
       "name": "pre-migration",
       "description": "orders table, 1000 rows",
       "created_at": "2026-06-01T19:41:12.123456789Z"

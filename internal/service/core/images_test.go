@@ -600,7 +600,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 }
 
 func TestRestoredImageRef(t *testing.T) {
-	const id = model.SavepointID("1780335122")
+	const id = model.SavepointID("019e843e-1650-7000-8000-000000000000")
 	// A repository path may hold at most 255 characters, and a path component only
 	// lower-case alphanumerics joined by separators — neither is arcave's to widen.
 	longImage := strings.Repeat("x", 300)
@@ -615,25 +615,25 @@ func TestRestoredImageRef(t *testing.T) {
 			name:    "project, service, replica and upstream image",
 			project: "demo",
 			capture: model.ImageCapture{Service: "db", Replica: 1, UpstreamImageRef: "postgres:16"},
-			want:    "arcave/demo-db-1-postgres-16:sp-1780335122",
+			want:    "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "a registry-qualified upstream image",
 			project: "demo",
 			capture: model.ImageCapture{Service: "web", Replica: 2, UpstreamImageRef: "ghcr.io/Org/App:1.2.3"},
-			want:    "arcave/demo-web-2-ghcr-io-org-app-1-2-3:sp-1780335122",
+			want:    "arcave/demo-web-2-ghcr-io-org-app-1-2-3:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "an upper-case service, which a repository path refuses",
 			project: "Demo_App",
 			capture: model.ImageCapture{Service: "DB", Replica: 1, UpstreamImageRef: "busybox"},
-			want:    "arcave/demo-app-db-1-busybox:sp-1780335122",
+			want:    "arcave/demo-app-db-1-busybox:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "a capture whose upstream could not be traced is still addressable",
 			project: "demo",
 			capture: model.ImageCapture{Service: "db", Replica: 1},
-			want:    "arcave/demo-db-1:sp-1780335122",
+			want:    "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000000",
 		},
 	}
 
@@ -657,7 +657,7 @@ func TestRestoredImageRef(t *testing.T) {
 		repository, tag, _ := strings.Cut(got, ":")
 		assert.Len(t, repository, 255)
 		assert.True(t, strings.HasPrefix(repository, "arcave/demo-db-1-"), repository)
-		assert.Equal(t, "sp-1780335122", tag)
+		assert.Equal(t, "sp-019e843e-1650-7000-8000-000000000000", tag)
 	})
 }
 
@@ -665,7 +665,7 @@ func TestRestoredImageRef(t *testing.T) {
 // grammar: lower-case alphanumeric runs joined by single dashes is a subset of it,
 // so no service or image name can produce something the daemon refuses to tag.
 func TestRestoredImageRef_IsAlwaysNameable(t *testing.T) {
-	nameable := regexp.MustCompile(`^arcave/[a-z0-9]+(-[a-z0-9]+)*:sp-[0-9]+$`)
+	nameable := regexp.MustCompile(`^arcave/[a-z0-9]+(-[a-z0-9]+)*:sp-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
 
 	names := []string{"", "___", "..", "-lead", "trail-", "UPPER", "a b/c:d@e", "юникод"}
 	bases := append(append([]string{}, names...), strings.Repeat("x", 300))
@@ -673,7 +673,7 @@ func TestRestoredImageRef_IsAlwaysNameable(t *testing.T) {
 		for _, service := range names {
 			for _, base := range bases {
 				// Act
-				got := restoredImageRef(project, "1780335122", model.ImageCapture{
+				got := restoredImageRef(project, "019e843e-1650-7000-8000-000000000000", model.ImageCapture{
 					Service: service, Replica: 1, UpstreamImageRef: base,
 				})
 

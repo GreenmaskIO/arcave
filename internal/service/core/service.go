@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -86,6 +87,11 @@ type containerRebuilder interface {
 	RecreateWithImage(ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string) (string, error)
 }
 
+// sessionLookup finds a session's record; core re-checks it under the lock.
+type sessionLookup interface {
+	LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error)
+}
+
 // inflightMarkers is the intent marker's seam: written before a rollback's first
 // destructive write, cleared when the environment is consistent again.
 type inflightMarkers interface {
@@ -110,6 +116,12 @@ type Deps struct {
 	Inflight           inflightMarkers
 	Store              storages.Storager
 	DefaultBackend     model.SnapshotBackendKind
+	// Session is the session Store belongs to; zero means model.DefaultSession.
+	Session model.SessionID
+	// ComposeProject is the compose project Store belongs to.
+	ComposeProject model.DockerComposeProjectName
+	// Sessions checks, under the lock, that Session still exists.
+	Sessions sessionLookup
 	// MinDaemonMajor is the oldest Docker major the image backend can serve; 0
 	// requires none.
 	MinDaemonMajor int
@@ -134,11 +146,17 @@ type Service struct {
 	inflightMarker          inflightMarkers
 	store                   storages.Storager
 	defaultBackend          model.SnapshotBackendKind
+	session                 model.SessionID
+	composeProject          model.DockerComposeProjectName
+	sessions                sessionLookup
 	minDaemonMajor          int
 	maxConcurrentOperations int
 }
 
 func New(d Deps) *Service {
+	if d.Session.IsNil() {
+		d.Session = model.DefaultSession
+	}
 	return &Service{
 		savepointRepo:           d.SavepointRepo,
 		projectLocker:           d.ProjectLocker,
@@ -153,9 +171,24 @@ func New(d Deps) *Service {
 		inflightMarker:          d.Inflight,
 		store:                   d.Store,
 		defaultBackend:          d.DefaultBackend,
+		session:                 d.Session,
+		composeProject:          d.ComposeProject,
+		sessions:                d.Sessions,
 		minDaemonMajor:          d.MinDaemonMajor,
 		maxConcurrentOperations: maxConcurrentOperations,
 	}
+}
+
+// locked runs a workflow with the project lock held, once its session is known to still
+// exist: one deleted since the command resolved it must not be written into again.
+func locked[T any](ctx context.Context, s *Service, fn func() (T, error)) (T, error) {
+	return withUnlock(ctx, s.projectLocker, func() (T, error) {
+		if err := s.requireSession(ctx); err != nil {
+			var zero T
+			return zero, err
+		}
+		return fn()
+	})
 }
 
 // withUnlock runs fn with the project lock held, and releases it however fn ends.
@@ -163,8 +196,8 @@ func New(d Deps) *Service {
 //
 // A function rather than a method, because Go has no generic methods: every
 // workflow returns its own result type, and the lock must not decide it.
-func withUnlock[T any](ctx context.Context, s *Service, fn func() (T, error)) (T, error) {
-	release, err := s.projectLocker.Acquire(ctx)
+func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, error)) (T, error) {
+	release, err := locker.Acquire(ctx)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -175,4 +208,19 @@ func withUnlock[T any](ctx context.Context, s *Service, fn func() (T, error)) (T
 		}
 	}()
 	return fn()
+}
+
+// requireSession refuses a session other than the default that has no record.
+func (s *Service) requireSession(ctx context.Context) error {
+	if s.session == model.DefaultSession {
+		return nil
+	}
+	_, found, err := s.sessions.LoadSession(ctx, s.session)
+	if err != nil {
+		return fmt.Errorf("checking session %s: %w", s.session, err)
+	}
+	if !found {
+		return fmt.Errorf("%w: %s", model.ErrSessionNotFound, s.session)
+	}
+	return nil
 }

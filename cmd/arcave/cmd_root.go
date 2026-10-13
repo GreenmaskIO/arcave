@@ -28,8 +28,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// projectNameEnv is the environment counterpart of -p/--project-name.
-const projectNameEnv = "ARCAVE_PROJECT_NAME"
+const (
+	// projectNameEnv is the environment counterpart of -p/--project-name.
+	projectNameEnv = "ARCAVE_PROJECT_NAME"
+	// sessionEnv is the environment counterpart of --session.
+	sessionEnv = "ARCAVE_SESSION"
+)
 
 // The state every command shares, produced once by initRoot and read from RunE.
 // It is package-level because cobra registers commands from init(), so there is
@@ -43,6 +47,9 @@ var (
 	// projectName is the compose project every project-bound command operates on. It
 	// is no config key: one project directory may hold several compose projects.
 	projectName string
+	// sessionRef names the session, by id or name, every project-bound command works in;
+	// empty is model.DefaultSession.
+	sessionRef string
 )
 
 // The build stamps, filled at link time by goreleaser's -X flags (see
@@ -95,6 +102,9 @@ func initRoot() error {
 	if projectName == "" {
 		projectName = os.Getenv(projectNameEnv)
 	}
+	if sessionRef == "" {
+		sessionRef = os.Getenv(sessionEnv)
+	}
 
 	// A config arcave cannot speak is held, not raised: it must not stop `arcave init
 	// --override`, which is the fix the error names. requireInitialized raises it
@@ -145,7 +155,11 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	}
 
 	ctx := cmd.Context()
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(projectName))
+	session, err := resolveSession(ctx, sessionRef)
+	if err != nil {
+		return err
+	}
+	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, session, model.DockerComposeProjectName(projectName))
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
@@ -157,12 +171,46 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	return fn(ctx, deps)
 }
 
+// resolveSession turns a --session value into the id of a session that exists.
+func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
+	if ref == "" {
+		return model.DefaultSession, nil
+	}
+	var record model.Session
+	err := withSessionDeps(ctx, func(d *sessionDependencies) error {
+		var err error
+		record, err = d.service.ResolveSession(ctx, ref)
+		return err
+	})
+	if err != nil {
+		return model.SessionID{}, fmt.Errorf("resolve --session: %w", err)
+	}
+	return record.ID, nil
+}
+
+// withSessionDeps runs fn over the session dependencies, which reach no daemon and
+// name no compose project.
+func withSessionDeps(ctx context.Context, fn func(d *sessionDependencies) error) error {
+	deps, err := initSessionDependencies(projectRoot, projectCfg)
+	if err != nil {
+		return fmt.Errorf("init session dependencies: %w", err)
+	}
+	defer func() {
+		if err := deps.Close(); err != nil {
+			log.Ctx(ctx).Error().Err(err).Msg("close session dependencies")
+		}
+	}()
+	return fn(deps)
+}
+
 func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&rootConfigFile, "config", "", "config file path")
 	// Unbound, like --config: it steers one run rather than describing the project.
 	pf.StringVarP(&projectName, "project-name", "p", "",
 		fmt.Sprintf("Docker Compose project to operate on, as 'docker compose ls' names it (env %s)", projectNameEnv))
+	pf.StringVar(&sessionRef, "session", "",
+		fmt.Sprintf("Session to work in, by name or id (default %q; env %s)", model.DefaultSessionName, sessionEnv))
 	pf.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
 	pf.String("log-level", utils.DefaultLogLevel,
 		fmt.Sprintf(

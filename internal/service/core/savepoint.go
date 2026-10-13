@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 // On error the record is zero, whatever the store holds: a savepoint committed
 // before a failed restart is named by the error and found by `savepoint list`.
 func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
-	return withUnlock(ctx, s, func() (model.Savepoint, error) {
+	return locked(ctx, s, func() (model.Savepoint, error) {
 		return s.createSavepoint(ctx, req)
 	})
 }
@@ -56,7 +57,13 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
 	log := zerolog.Ctx(ctx)
 
+	if err := req.Validate(); err != nil {
+		return model.Savepoint{}, err
+	}
 	if _, err := s.requireNoInflight(ctx, ""); err != nil {
+		return model.Savepoint{}, err
+	}
+	if err := s.requireUniqueName(ctx, req.Name); err != nil {
 		return model.Savepoint{}, err
 	}
 
@@ -84,6 +91,24 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", record.ID, err)
 	}
 	return record, nil
+}
+
+// requireUniqueName refuses a name another savepoint of the compose project carries.
+// Safety snapshots do not count: a name selector never sees them.
+func (s *Service) requireUniqueName(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	records, err := s.listSavepoints(ctx, false)
+	if err != nil {
+		return err
+	}
+	for _, r := range records {
+		if r.Name == name {
+			return fmt.Errorf("%w: %q names savepoint %s", model.ErrSavepointNameTaken, name, r.ID)
+		}
+	}
+	return nil
 }
 
 // ListSavepoints returns the committed savepoints req asks for.
@@ -131,7 +156,7 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 		return s.removeSavepoints(ctx, req)
 	}
 
-	return withUnlock(ctx, s, func() (model.RemoveResult, error) {
+	return locked(ctx, s, func() (model.RemoveResult, error) {
 		// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
 		// that snapshot is the way back, and no selector may delete it.
 		if _, err := s.requireNoInflight(ctx, ""); err != nil {
@@ -382,11 +407,11 @@ func findSavepoint(records []model.Savepoint, req model.RollbackRequest) (model.
 	case 1:
 		return byName[0], nil
 	default:
-		ids := make([]string, len(byName))
+		ids := make([]model.SavepointID, len(byName))
 		for i, r := range byName {
-			ids[i] = r.ID.String()
+			ids[i] = r.ID
 		}
-		return model.Savepoint{}, fmt.Errorf("%d savepoints are named %q; roll back by id instead: %s",
-			len(byName), *req.Name, strings.Join(ids, ", "))
+		slices.Sort(ids)
+		return model.Savepoint{}, &model.AmbiguousSavepointNameError{Name: *req.Name, IDs: ids}
 	}
 }

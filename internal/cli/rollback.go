@@ -53,7 +53,7 @@ func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref s
 }
 
 // newRollbackRequest builds the request both adapters send, so neither drifts on
-// what a ref means: "latest" is reserved, digits are an id, the rest is a name.
+// what a ref means: "latest" is reserved, a canonical UUID is an id, the rest is a name.
 func newRollbackRequest(
 	ref string, waitTimeout time.Duration, leftoverVolumesPolicy model.LeftoverVolumesPolicy,
 ) model.RollbackRequest {

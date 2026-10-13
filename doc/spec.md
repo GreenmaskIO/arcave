@@ -75,17 +75,17 @@ arcave savepoint create before-migration
 docker compose stop
 
 # 2. Clear the namespace, dropping anything a crashed run left behind
-rm -rf .arcave/savepoints/myapp/1780335122
+rm -rf .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000
 
 # 3. Copy registered volumes
-cp -a pgdata .arcave/savepoints/myapp/1780335122/postgres
-cp -a redisdata .arcave/savepoints/myapp/1780335122/redis
+cp -a pgdata .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/postgres
+cp -a redisdata .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/redis
 
 # 4. Record the compose project this savepoint was taken of
-write .arcave/savepoints/myapp/1780335122/project.yaml
+write .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/project.yaml
 
 # 5. Commit the savepoint — the record is written LAST
-write .arcave/savepoints/myapp/1780335122/savepoint.json
+write .arcave/savepoints/myapp/019e843e-1650-7000-8000-000000000000/savepoint.json
 
 # 6. Start services
 docker compose start
@@ -161,6 +161,9 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
                           and rollback — and read from ARCAVE_PROJECT_NAME when the flag is absent.
                           `arcave init` names no compose project and does not take it; `arcave mcp` serves
                           many, so each of its tool calls names its own.
+    --session             The session to work in, by id or name; read from ARCAVE_SESSION when the flag is
+                          absent, `baseline` when neither is set. Unbound, like -p: there is no current-session
+                          pointer, so a command that names none works in `baseline`.
     --config              Path to the config file (default: .arcave/config.yaml under the project root).
     --log-level           debug | info | warn.
     --log-format          text | json.
@@ -439,17 +442,17 @@ What a rollback cannot bring back of a compose file is listed once, in the user 
 
 arcave reads the **running compose project**, not the compose files — it never opens one, and a project whose files have moved or been deleted works exactly the same. The compose project itself, though, has to exist on the daemon. `docker compose stop` is fine — stopped containers still describe the compose project, and every workflow stops the services anyway. `docker compose down` is not: it removes the containers, and with them everything arcave knows about the project. A command run against a torn-down compose project fails saying so.
 
-Every savepoint receives a unique immutable identifier — a Unix timestamp integer:
+Every savepoint receives a unique immutable identifier — a UUIDv7 in canonical form, which sorts by creation time:
 
 ```text
-1780335122
+019e843e-1650-7000-8000-000000000000
 ```
 
 Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose document committed beside it as `<savepoint-id>/project.yaml` — the compose project as it stood, which is what a rollback rebuilds. It is read and parsed before a rollback stops anything, so an unloadable one fails while the project is still running:
 
 ```json
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "before-migration",
   "description": "Before applying migration 2026_001",
   "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -492,7 +495,7 @@ Metadata stored in `<savepoint-id>/savepoint.json`. `spec` names the compose doc
     "services_without_volumes": ["proxy"],
     "killed_containers": [{ "service": "db", "replica": 1, "container": "demo-db-1" }],
     "replica_gaps": [{ "service": "worker", "replicas": [1, 3], "missing": [2] }],
-    "unresolved_upstreams": [{ "service": "job", "replica": 1, "container": "demo-job-1", "image": "arcave/demo-job-1-busybox:sp-1780330000" }]
+    "unresolved_upstreams": [{ "service": "job", "replica": 1, "container": "demo-job-1", "image": "arcave/demo-job-1-busybox:sp-019e83ef-ee80-7000-8000-000000000000" }]
   }
 }
 ```
@@ -536,7 +539,7 @@ Output:
 ```json
 [
   {
-    "id": "1780335122",
+    "id": "019e843e-1650-7000-8000-000000000000",
     "name": "before-migration",
     "description": "Before applying migration 2026_001",
     "created_at": "2026-06-01T19:41:12.123456789Z"
@@ -568,6 +571,44 @@ Options:
 
 ---
 
+### Sessions
+
+A session is an independent line of savepoints inside the arcave project; its store lives at
+`projects/<arcave-project>/sessions/<id>/`, and its record `session.json` is written last. Every id is a canonical
+UUID — new ones UUIDv7 — and the default session's is `00000000-0000-0000-0000-000000000001`, named `baseline`; it has none
+and always exists. These commands name no compose project and reach no daemon.
+
+```text
+arcave session list [--all]         # JSON array of {id, name, status, error, created_at, from, savepoint_count, compose_projects, size_bytes}
+arcave session create [--name N] [--from S]  # an empty session, or a copy of S; prints its record
+arcave session delete [--force] <id|name>  # {session, deleted: true, freed_bytes}
+```
+
+`--name` is optional and may be anything not blank — `/` and a UUID's shape included — but must be unique within
+the arcave project (`baseline` is taken by the default session) and must not be another session's id.
+`--session` and `session delete` look a value up as a name first, then as an id; several sessions carrying the name
+is an error listing their ids.
+`size_bytes` sums the size of every object under `sessions/<id>/`, read from the store's listing — no object is read —
+so it counts orphans, unpruned restic data and uncollected image blobs, which a sum over the records would miss; it is
+what deleting the session frees, and `session delete` reports it as `freed_bytes`, measured before it deletes.
+`session delete` drops the record first, then the session's tree. It refuses `baseline` and a session the
+inflight marker names, and leaves any running compose project alone.
+`status` is `ready` for a session with a record. `session list --all` adds every `sessions/<id>/` tree without one,
+its status read from its `heartbeat.json`: `cloning` while the heartbeat is `in-progress` and younger than its stale
+age (30 min, by the store's `LastModified`), `failed` once it is `failed` or stale — `error` then carries the
+heartbeat's — `incomplete` for a `done` heartbeat or none (an interrupted delete, or a tree arcave did not write), and
+`unknown` for a heartbeat that cannot be read or reports another operation in progress — `error` then says which.
+A tree whose savepoints cannot be read, as one mid-copy, is still listed, its counts left empty.
+Such a tree has no name; `created_at` and `from` come from its heartbeat. `session delete <id>` deletes it; a
+`cloning` one only with `--force` (`session is still being cloned` otherwise): holding the lock, no fork runs on this
+host, so the heartbeat is a killed fork's. An `unknown` one is refused likewise (`session tree status is unknown`).
+`session create --from <session>` (the fork) takes a session by name or id, `baseline` included, and copies everything
+under `sessions/<source>/` but its record and its `heartbeat.json` into the new session's tree — every compose project, every savepoint with
+its id and name, `shared/oci` and the restic repositories — then writes the record last, with `from: {session}`. It
+holds the lock for the whole copy and touches no daemon; a failure or an interrupt creates nothing and leaves the copied
+tree in the store, its `heartbeat.json` marked `failed` for a gc. A fork is deployed by an ordinary `rollback --session <new>`. It is not refused by an inflight marker: the
+marker guards the daemon, which a fork does not touch.
+
 ### Environment Recovery
 
 #### arcave rollback
@@ -576,16 +617,16 @@ Restores the environment to a specified savepoint.
 
 ```bash
 arcave rollback latest
-arcave rollback 1780335122
+arcave rollback 019e843e-1650-7000-8000-000000000000
 arcave rollback before-migration
 ```
 
-The argument names the savepoint in one of three ways, and which one it is decided by the token itself: `latest` is reserved, a run of decimal digits is an **id** (that being exactly what a savepoint id is), and anything else is a **name**. An id is exact and never falls back to a name — `arcave rollback 1780335122` will not resolve to a savepoint merely *called* `1780335122` — and it is the only form that reaches a safety snapshot. A name matching several savepoints is an error listing the candidate ids, never a silent guess.
+The argument names the savepoint in one of three ways, and which one it is decided by the token itself: `latest` is reserved, a canonical UUID is an **id** (that being exactly what a savepoint id is), and anything else is a **name**. An id is exact and never falls back to a name — and `savepoint create` refuses a name shaped like one, so no savepoint is *called* an id — and it is the only form that reaches a safety snapshot. A name matching several savepoints is an error listing the candidate ids, never a silent guess.
 
 Behavior:
 
 - Reads the live compose project and refuses a daemon older than Docker 25, before anything is loaded or stopped.
-- Loads every writable layer the savepoint holds back into the daemon and tags each one `arcave/<project>-<service>-<replica>-<base-image>:sp-<savepoint-id>` — e.g. `arcave/shop-db-1-postgres-16:sp-1780335122`, so `docker images` reads as one row per replica and one tag per savepoint. Every segment is reduced to lower-case alphanumerics joined by dashes, because a docker repository path admits nothing else, and the base image is cut before the 255-character cap is passed. This runs with the project still running: an archive the daemon will not take stops the rollback before anything is torn down.
+- Loads every writable layer the savepoint holds back into the daemon and tags each one `arcave/<project>-<service>-<replica>-<base-image>:sp-<savepoint-id>` — e.g. `arcave/shop-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000`, so `docker images` reads as one row per replica and one tag per savepoint. Every segment is reduced to lower-case alphanumerics joined by dashes, because a docker repository path admits nothing else, and the base image is cut before the 255-character cap is passed. This runs with the project still running: an archive the daemon will not take stops the rollback before anything is torn down.
 - Stops project services.
 - Takes a safety snapshot of the live state, named `safety-snapshot-<id of the savepoint being restored>`, so one left behind by a killed rollback says which savepoint it was undoing.
 - Removes the project's containers and networks. Volumes are kept — one arcave does not capture has no copy anywhere.
@@ -605,7 +646,7 @@ Output adds `images`, one entry per restored layer:
 
 ```json
 {
-  "rolled_back_to": { "id": "1780335122" },
+  "rolled_back_to": { "id": "019e843e-1650-7000-8000-000000000000" },
   "restored": [],
   "images": [
     {
@@ -613,7 +654,7 @@ Output adds `images`, one entry per restored layer:
       "replica": 1,
       "container_name": "demo-webapp-1",
       "image_id": "sha256:aaaa…",
-      "image_ref": "arcave/demo-webapp-1-myapp-latest:sp-1780335122"
+      "image_ref": "arcave/demo-webapp-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
     }
   ]
 }

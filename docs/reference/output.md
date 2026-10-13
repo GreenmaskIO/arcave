@@ -60,7 +60,7 @@ The one shape three commands are built from: `savepoint create` prints it, `save
 
 ```json
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "before-migration",
   "description": "before the v2 schema",
   "labels": { "arcave-safety-snapshot": "true" },
@@ -73,7 +73,7 @@ The one shape three commands are built from: `savepoint create` prints it, `save
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string | The Unix second the capture started, in decimal digits. |
+| `id` | string | A UUIDv7 in canonical form, assigned at capture. |
 | `name` | string | What you passed, or `""`. |
 | `description` | string | What you passed, or `""`. |
 | `labels` | object | Omitted unless the record carries marks. `arcave-safety-snapshot: "true"` is the one arcave sets. |
@@ -145,7 +145,7 @@ The one shape three commands are built from: `savepoint create` prints it, `save
       "service": "app",
       "replica": 1,
       "image_id": "sha256:aaaa…",
-      "image_ref": "arcave/myapp-app-1-myapp-latest:sp-1780335122"
+      "image_ref": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
     }
   ]
 }

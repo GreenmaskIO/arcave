@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/greenmaskio/storages"
@@ -59,7 +58,7 @@ func (s *Service) captureVolumes(
 ) (model.Savepoint, error) {
 	createdAt := time.Now()
 	record := model.Savepoint{
-		ID:          model.SavepointID(strconv.FormatInt(createdAt.Unix(), 10)),
+		ID:          model.NewSavepointID(),
 		Name:        name,
 		Description: description,
 		Labels:      labels,
@@ -232,17 +231,15 @@ func volumeOpContext(
 		WithContext(ctx)
 }
 
-// requireEmptyTree refuses an id whose capture directory already holds objects:
-// an interrupted run's remains, or — an id being Unix seconds — a live savepoint
-// captured and rolled back inside one tick. Telling them apart needs the reserved
-// record key, which this layer may not name, so the message advises neither removal.
+// requireEmptyTree refuses an id whose capture directory already holds objects: an
+// interrupted run's remains, possibly the last copy of what it captured.
 func (s *Service) requireEmptyTree(ctx context.Context, id model.SavepointID) error {
 	objects, err := s.store.List(ctx, id.String())
 	if err != nil {
 		return fmt.Errorf("reading the capture directory %s: %w", id, err)
 	}
 	if len(objects) > 0 {
-		return fmt.Errorf("%w: %s holds %d object(s) — a savepoint of this same second, or an interrupted run's remains; retry, and check what is there before removing it",
+		return fmt.Errorf("%w: %s holds %d object(s), an interrupted run's remains; check what is there before removing it",
 			errCaptureDirectoryNotEmpty, id, len(objects))
 	}
 	return nil

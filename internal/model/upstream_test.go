@@ -28,7 +28,7 @@ const (
 	upstreamID  = ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 	upstreamRef = "postgres:16"
 	layerID     = ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
-	layerRef    = "arcave/demo-db-1-postgres-16:sp-1780000002"
+	layerRef    = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
 )
 
 func TestResolveUpstream(t *testing.T) {
@@ -102,11 +102,11 @@ func TestIsLayerRef(t *testing.T) {
 		want bool
 	}{
 		{ref: layerRef, want: true},
-		{ref: "arcave/demo-db-1:sp-1780000001", want: true},
+		{ref: "arcave/demo-db-1:sp-019e7044-8be8-7000-8000-000000000000", want: true},
 		{ref: "postgres:16"},
 		{ref: "arcave/demo-db-1:latest"},
 		{ref: "arcave/demo-db-1:sp-abc"},
-		{ref: "registry:5000/arcave/x:sp-1780000001"},
+		{ref: "registry:5000/arcave/x:sp-019e7044-8be8-7000-8000-000000000000"},
 	}
 
 	for _, tt := range tests {

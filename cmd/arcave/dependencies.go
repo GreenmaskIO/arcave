@@ -43,6 +43,7 @@ import (
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
@@ -51,6 +52,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
@@ -62,6 +64,7 @@ const resticShutdownTimeout = 5 * time.Second
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
+	storeRoot           storages.Storager
 	composeProjectStore storages.Storager
 	progressWriter      io.WriteCloser
 	dockerCli           *command.DockerCli
@@ -79,22 +82,29 @@ type dependencies struct {
 // initAllDependencies wires the savepoint workflows for the project rooted at
 // projectPath. Every store arrives from storefactory already rooted.
 func initAllDependencies(
-	ctx context.Context, projectPath string, cfg config.Config, composeProject model.DockerComposeProjectName,
+	ctx context.Context, projectPath string, cfg config.Config,
+	session model.SessionID, composeProject model.DockerComposeProjectName,
 ) (*dependencies, error) {
 	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
+	storeRoot, arcaveProjectStore, err := openArcaveProjectStore(cfg, projectPath)
+	if err != nil {
+		return nil, err
+	}
+	opened.add("store root", storeRoot)
+
 	// One store for the whole compose project: savepoint records, fullcopy captures and a
 	// cdc repository root alike, rooted inside the session that they die with.
-	composeProjectStore, err := storefactory.New(
-		cfg.Storage, projectPath,
-		model.ArcaveProjectName(cfg.Project.Name), model.DefaultSession, composeProject,
-	)
+	sessionStore, err := storefactory.Session(arcaveProjectStore, session)
+	if err != nil {
+		return nil, fmt.Errorf("initialise session store: %w", err)
+	}
+	composeProjectStore, err := storefactory.ComposeProject(sessionStore, composeProject)
 	if err != nil {
 		return nil, fmt.Errorf("initialise compose project store: %w", err)
 	}
-	opened.add("compose project store", composeProjectStore)
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
 	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
@@ -192,9 +202,14 @@ func initAllDependencies(
 		Inflight:       inflightrepo.New(projectPath),
 		Store:          composeProjectStore,
 		DefaultBackend: cfg.Snapshot.BackendKind(),
+		Session:        session,
+		ComposeProject: composeProject,
+		// Re-checked under the lock: a session deleted since --session was resolved.
+		Sessions: sessionrepo.New(arcaveProjectStore),
 	})
 	opened.keep()
 	return &dependencies{
+		storeRoot:           storeRoot,
 		composeProjectStore: composeProjectStore,
 		progressWriter:      progressWriter,
 		dockerCli:           dockerCli,
@@ -276,7 +291,7 @@ func (d *dependencies) Close(ctx context.Context) error {
 	shutdownResticServer(ctx, d.resticServer)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
-	return d.composeProjectStore.Close()
+	return d.storeRoot.Close()
 }
 
 // shutdownResticServer stops serving gracefully: restic in a container reports a
@@ -296,6 +311,59 @@ func shutdownResticServer(ctx context.Context, e *echo.Echo) {
 // more. Nothing here holds a resource.
 func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
 	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), json.New(os.Stdout)
+}
+
+// sessionDependencies is what the session commands run on: the arcave project's store
+// and nothing that reaches the daemon.
+type sessionDependencies struct {
+	store   storages.Storager
+	service *core.SessionService
+	printer *json.Printer
+}
+
+func initSessionDependencies(projectPath string, cfg config.Config) (*sessionDependencies, error) {
+	root, arcaveProjectStore, err := openArcaveProjectStore(cfg, projectPath)
+	if err != nil {
+		return nil, err
+	}
+	svc := core.NewSessionService(core.SessionDeps{
+		Sessions:   sessionrepo.New(arcaveProjectStore),
+		Locker:     lock.New(projectPath),
+		Inflight:   inflightrepo.New(projectPath),
+		Store:      arcaveProjectStore,
+		RunnerInfo: heartbeatRunnerInfo(),
+	})
+	return &sessionDependencies{store: root, service: svc, printer: json.New(os.Stdout)}, nil
+}
+
+func (d *sessionDependencies) Close() error {
+	return d.store.Close()
+}
+
+// heartbeatRunnerInfo identifies this process in a heartbeat; an unknown host stays blank.
+func heartbeatRunnerInfo() heartbeat.RunnerInfo {
+	host, err := os.Hostname()
+	if err != nil {
+		log.Debug().Err(err).Msg("reading the hostname for the heartbeat")
+	}
+	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
+}
+
+// openArcaveProjectStore opens the store root and descends to the arcave project; the root
+// is what the caller closes.
+func openArcaveProjectStore(cfg config.Config, projectPath string) (root, arcaveProjectStore storages.Storager, err error) {
+	root, err = storefactory.Root(cfg.Storage, projectPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initialise store root: %w", err)
+	}
+	arcaveProjectStore, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name))
+	if err != nil {
+		if closeErr := root.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("close store root")
+		}
+		return nil, nil, fmt.Errorf("initialise arcave project store: %w", err)
+	}
+	return root, arcaveProjectStore, nil
 }
 
 // closeQuietly closes c and logs any error without failing the caller.
@@ -462,15 +530,10 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	return dockerCli, apiClient, nil
 }
 
-// composeProjectBlobPrefix is relative to the compose project store root, so the blobs are shared
-// between that compose project's savepoints and nothing wider. It sits beside them rather
-// than inside one: a savepoint id is digits only, so the name cannot collide.
-const composeProjectBlobPrefix = "shared/oci/blobs"
-
 // newImageBackend builds the one image backend: layers are always deduplicated,
 // which needs a daemon of Docker 25 or newer.
-func newImageBackend(composeProjectStore storages.Storager, engine *docker.Engine) (*imagecopy.Copier, error) {
-	blobStore, err := composeProjectStore.SubStorage(composeProjectBlobPrefix, true)
+func newImageBackend(composeProjectStore storages.Navigator, engine *docker.Engine) (*imagecopy.Copier, error) {
+	blobStore, err := composeProjectStore.SubStorage(dedupcopy.BlobPrefix, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}

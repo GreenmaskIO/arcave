@@ -381,7 +381,7 @@ func TestServiceConfig_Image(t *testing.T) {
 	const (
 		upstreamID = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 		layerID    = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
-		layerRef   = "arcave/demo-db-1-postgres-16:sp-1780000002"
+		layerRef   = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
 	)
 	pulled := image.InspectResponse{RepoDigests: []string{"postgres@sha256:dddd"}}
 	labelled := func(labels map[string]string) image.InspectResponse {

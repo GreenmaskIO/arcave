@@ -38,7 +38,7 @@ import (
 // replica. Both directions address it through here — the capture that writes the
 // image and the restore that reads it back — so the gates stand here.
 func imageStorage(
-	store storages.Storager, snapshotID model.SavepointID, service string, replica int,
+	store storages.Navigator, snapshotID model.SavepointID, service string, replica int,
 ) (storages.Storager, error) {
 	// "images" is a reserved key beside savepoint.json — no volume collides with it,
 	// every volume ObjectID opens "volume-"; "replicas" names what follows it.
@@ -68,7 +68,7 @@ func imageStorage(
 // upstreamImageStorage narrows a store root to one upstream image. It is keyed by
 // content and belongs to no savepoint, so every savepoint naming the image shares
 // one copy; its blobs go to the shared blob store like any capture's.
-func upstreamImageStorage(store storages.Storager, imageID model.ImageDigestID) (storages.Storager, error) {
+func upstreamImageStorage(store storages.Navigator, imageID model.ImageDigestID) (storages.Storager, error) {
 	const upstreamNamespace = "shared/oci/images"
 
 	if _, err := model.ParseImageDigestID(imageID.String()); err != nil {
@@ -99,21 +99,21 @@ type ContainerImager interface {
 // never speaks to the daemon — it is handed the archive as a stream and renders one
 // back, and those two directions are the whole of its contract.
 type ArchiveLayout interface {
-	Store(ctx context.Context, dst storages.Storager, imageID model.ImageDigestID, archive io.Reader) (StoredSize, error)
+	Store(ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader) (StoredSize, error)
 	Load(ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer) error
 }
 
 // Copier carries containers' layers in and out of one store root. Every exchange
 // with the daemon is here; what the bytes look like once stored is the layout's.
 type Copier struct {
-	store  storages.Storager
+	store  storages.Navigator
 	docker ContainerImager
 	layout ArchiveLayout
 }
 
 // NewCopier binds a copier to the compose project store it works under and the layout its
 // captures are written in.
-func NewCopier(store storages.Storager, docker ContainerImager, layout ArchiveLayout) *Copier {
+func NewCopier(store storages.Navigator, docker ContainerImager, layout ArchiveLayout) *Copier {
 	return &Copier{
 		store:  store,
 		docker: docker,
@@ -218,7 +218,7 @@ func (c *Copier) CaptureUpstream(
 
 // storeArchive streams the committed image out of the daemon and hands it to the layout.
 func (c *Copier) storeArchive(
-	ctx context.Context, imageStore storages.Storager, imageID model.ImageDigestID,
+	ctx context.Context, imageStore storages.Writer, imageID model.ImageDigestID,
 ) (StoredSize, error) {
 	archive, err := c.docker.SaveImage(ctx, imageID)
 	if err != nil {

@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -93,6 +92,8 @@ func TestService_CreateSavepoint(t *testing.T) {
 	// Stop → every capture → the spec → commit → start. Save-last is the commit marker,
 	// and NotBefore pins it after the whole fan-out and after the artifact it names.
 	repo := &mockSavepointRepo{}
+	nameCheck := repo.On("ListSavepoints", mock.Anything).
+		Return([]model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000000", Name: "other"}}, nil).Once()
 	saveSpec := expectSpecCommit(repo).NotBefore(snapPg, snapCfg)
 	save := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil && r.Name == "before-migration" && r.Description == "trying a schema change" &&
@@ -110,7 +111,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 		Run(captureSpec).Return(cfgBackend, nil).Once()
 	// Every backend is built before the stop: one that cannot be built must leave
 	// the project running. Reversed, it compiles.
-	stop.NotBefore(newPg, newCfg)
+	stop.NotBefore(newPg, newCfg, nameCheck)
 
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
@@ -626,64 +627,135 @@ func TestService_CreateSavepoint_ComposeProjectAbsent(t *testing.T) {
 	registry.AssertExpectations(t)
 }
 
-// An orphan tree a crashed create left under the same id stops the create: it
-// is the only copy of whatever that run captured, so it is reported, never
-// deleted.
-func TestService_CreateSavepoint_RefusesANonEmptyDirectory(t *testing.T) {
-	// Arrange
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
-	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
-	repo := &mockSavepointRepo{}
-
-	// The backend carries no expectations: a capture dispatched over a refused
-	// directory fails the test loudly.
-	backend := &mockBackend{volume: model.Volume{ObjectID: "volume-named-demo_db"}}
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
-
-	// What the run that died left behind, planted under every id this create can
-	// produce, since it takes its id from the clock.
-	orphans := make([]string, 0, 2)
-	for _, id := range candidateIDs() {
-		key := id.String() + "/volume-named-gone/data.tar"
-		require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader("stale")))
-		orphans = append(orphans, key)
+// A name the savepoint could not carry is refused while the project still runs:
+// nothing is introspected, stopped or captured.
+func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
+	tests := []struct {
+		name     string
+		reqName  string
+		existing []model.Savepoint
+		wantErr  error
+	}{
+		{name: "a slash", reqName: "feat/v1", wantErr: model.ErrInvalidSavepointName},
+		{name: "a savepoint id", reqName: "019e843e-1650-7000-8000-000000000000", wantErr: model.ErrInvalidSavepointName},
+		{
+			name:     "a name already taken",
+			reqName:  "v1",
+			existing: []model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000000", Name: "v1"}},
+			wantErr:  model.ErrSavepointNameTaken,
+		},
 	}
 
-	svc := New(Deps{
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			locker := &mockLocker{}
+			expectLock(locker)
+			repo := &mockSavepointRepo{}
+			if tt.existing != nil {
+				repo.On("ListSavepoints", mock.Anything).Return(tt.existing, nil).Once()
+			}
+			inspector := &mockInspector{}
+			runner := &mockComposeRunner{}
+			svc := New(Deps{
+				SavepointRepo:    repo,
+				ProjectLocker:    locker,
+				ComposeInspector: inspector,
+				ComposeRunner:    runner,
+				Inflight:         &fakeInflight{},
+				Store:            newDirStore(t),
+			})
 
-	// Act
-	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+			// Act
+			_, err := svc.CreateSavepoint(zerolog.Nop().WithContext(context.Background()),
+				model.CreateSavepointRequest{Name: tt.reqName})
 
-	// Assert
-	require.ErrorIs(t, err, errCaptureDirectoryNotEmpty)
-	assert.ElementsMatch(t, orphans, objectNames(t, store),
-		"the orphan is left untouched: nothing captured, nothing deleted")
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	backend.AssertExpectations(t)
+			// Assert
+			require.ErrorIs(t, err, tt.wantErr)
+			locker.AssertExpectations(t)
+			repo.AssertExpectations(t)
+			inspector.AssertExpectations(t)
+			runner.AssertExpectations(t)
+		})
+	}
+}
+
+func TestService_requireUniqueName(t *testing.T) {
+	const id = model.SavepointID("019e843e-1650-7000-8000-000000000000")
+	safety := model.Savepoint{ID: id, Name: "pre-rollback", Labels: safetySnapshotLabels()}
+
+	tests := []struct {
+		name     string
+		reqName  string
+		existing []model.Savepoint
+		wantErr  error
+	}{
+		{name: "no name reads nothing"},
+		{name: "a free name", reqName: "v2", existing: []model.Savepoint{{ID: id, Name: "v1"}}},
+		{name: "a taken name", reqName: "v1", existing: []model.Savepoint{{ID: id, Name: "v1"}}, wantErr: model.ErrSavepointNameTaken},
+		{name: "a safety snapshot's name does not count", reqName: "pre-rollback", existing: []model.Savepoint{safety}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			repo := &mockSavepointRepo{}
+			if tt.reqName != "" {
+				repo.On("ListSavepoints", mock.Anything).Return(tt.existing, nil).Once()
+			}
+			svc := New(Deps{SavepointRepo: repo})
+
+			// Act
+			err := svc.requireUniqueName(context.Background(), tt.reqName)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+// An orphan tree a crashed run left under the id stops the capture: it is the
+// only copy of whatever that run captured, so it is reported, never deleted.
+func TestService_requireEmptyTree(t *testing.T) {
+	tests := []struct {
+		name    string
+		planted []string
+		wantErr error
+	}{
+		{name: "an empty directory passes"},
+		{name: "an orphan is refused", planted: []string{"volume-named-gone/data.tar"}, wantErr: errCaptureDirectoryNotEmpty},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			const id = model.SavepointID("019e843e-1650-7000-8000-000000000000")
+			store := newDirStore(t)
+			want := make([]string, 0, len(tt.planted))
+			for _, name := range tt.planted {
+				key := id.String() + "/" + name
+				require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader("stale")))
+				want = append(want, key)
+			}
+			svc := New(Deps{Store: store})
+
+			// Act
+			err := svc.requireEmptyTree(zerolog.Nop().WithContext(context.Background()), id)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.ElementsMatch(t, want, objectNames(t, store), "nothing is deleted")
+		})
+	}
 }
 
 // A named volume no service mounts is covered like any other: a backend
@@ -797,8 +869,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now(), savepoint.CreatedAt, time.Minute)
-	assert.Equal(t, strconv.FormatInt(savepoint.CreatedAt.Unix(), 10), savepoint.ID.String(),
-		"the id is the creation second, so it doubles as a path-safe directory")
+	assert.NoError(t, savepoint.ID.Validate(), "the id doubles as a path-safe directory")
 	assert.ElementsMatch(t,
 		[]string{
 			savepoint.ID.String() + "/savepoint.json",
@@ -1069,7 +1140,7 @@ func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
 // A dry run takes no lock, deletes no record and reaches no backend.
 func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	// Arrange
-	record := model.Savepoint{ID: "1780335122", Name: "sp", CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC)}
+	record := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "sp", CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC)}
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
 	locker := &mockLocker{}
@@ -1345,13 +1416,40 @@ func TestFindSavepoint(t *testing.T) {
 	}
 }
 
-// recordsAt plants one record per instant, each id naming its own creation time.
+func TestFindSavepoint_AmbiguousName(t *testing.T) {
+	// Arrange: two visible "dup"s out of id order, plus a safety snapshot of the same name.
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	name := "dup"
+	records := []model.Savepoint{
+		{ID: "300", Name: name, CreatedAt: now},
+		{ID: "200", Name: name, CreatedAt: now},
+		{ID: "400", Name: name, Labels: safetySnapshotLabels(), CreatedAt: now},
+	}
+
+	// Act
+	_, err := findSavepoint(records, model.RollbackRequest{Name: &name})
+
+	// Assert
+	var ambiguous *model.AmbiguousSavepointNameError
+	require.ErrorAs(t, err, &ambiguous)
+	assert.Equal(t, name, ambiguous.Name)
+	assert.Equal(t, []model.SavepointID{"200", "300"}, ambiguous.IDs, "sorted, and never the safety snapshot")
+	assert.EqualError(t, err, `2 savepoints are named "dup"; roll back by id instead: 200, 300`)
+}
+
+// recordsAt plants one record per instant, each id a UUIDv7 of its creation time.
 func recordsAt(times ...time.Time) []model.Savepoint {
 	records := make([]model.Savepoint, len(times))
 	for i, t := range times {
-		records[i] = model.Savepoint{ID: model.SavepointID(strconv.FormatInt(t.Unix(), 10)), CreatedAt: t}
+		records[i] = model.Savepoint{ID: savepointIDAt(t), CreatedAt: t}
 	}
 	return records
+}
+
+// savepointIDAt is the UUIDv7 a capture started at t would sort as.
+func savepointIDAt(t time.Time) model.SavepointID {
+	h := fmt.Sprintf("%012x", t.UnixMilli())
+	return model.SavepointID(h[:8] + "-" + h[8:] + "-7000-8000-000000000000")
 }
 
 func ids(records []model.Savepoint) []string {
@@ -1363,16 +1461,6 @@ func ids(records []model.Savepoint) []string {
 		out[i] = r.ID.String()
 	}
 	return out
-}
-
-// candidateIDs is every id a call entered now can create: this second and the
-// next, since the clock may tick between here and the call.
-func candidateIDs() []model.SavepointID {
-	now := time.Now().Unix()
-	return []model.SavepointID{
-		model.SavepointID(strconv.FormatInt(now, 10)),
-		model.SavepointID(strconv.FormatInt(now+1, 10)),
-	}
 }
 
 // newDirStore is a real directory Storager on a tempdir: the service addresses

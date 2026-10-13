@@ -46,7 +46,7 @@ func New() *Layout { return &Layout{} }
 // Store writes the archive whole. Nothing is deduplicated, so every byte written is
 // a byte this capture added.
 func (l *Layout) Store(
-	ctx context.Context, dst storages.Storager, imageID model.ImageDigestID, archive io.Reader,
+	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
 ) (imagecopy.StoredSize, error) {
 	counted := utils.NewCountingReader(archive)
 	if err := dst.PutObject(ctx, archiveName, counted); err != nil {

@@ -24,11 +24,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// requireNoInflight refuses to run while .arcave/inflight.json says an earlier rollback was
-// interrupted, except for the one rollback that repairs it: to the marker's safety snapshot,
-// or, when the marker has none, to the interrupted rollback's own savepoint again.
-// restoring is the savepoint the caller rolls back to, "" for any other workflow. It returns
-// the marker it let through, zero when there is none.
+// requireNoInflight refuses to run while .arcave/inflight.json stands, except for the rollback
+// that recovers from it. restoring is the savepoint the caller rolls back to, "" for any other
+// workflow. It returns the marker it let through, zero when there is none.
 func (s *Service) requireNoInflight(ctx context.Context, restoring model.SavepointID) (model.InflightMarker, error) {
 	marker, found, err := s.inflightMarker.Get(ctx)
 	if err != nil {
@@ -37,42 +35,46 @@ func (s *Service) requireNoInflight(ctx context.Context, restoring model.Savepoi
 	if !found {
 		return model.InflightMarker{}, nil
 	}
-	if restoring != "" && marker.Safety == "" && restoring == marker.Target {
+	if s.isRecoveryRollback(marker, restoring) {
 		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
-			Msg("re-running an interrupted rollback into a compose project that was not running; " +
-				"the marker clears on success")
-		return marker, nil
-	}
-	if restoring != "" && restoring == marker.Safety {
-		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
-			Msg("rolling back to the safety snapshot of an interrupted rollback; the marker clears on success")
+			Msg("recovering from an interrupted rollback; the marker clears on success")
 		return marker, nil
 	}
 	err = &model.InterruptedRollbackError{Marker: marker}
 	zerolog.Ctx(ctx).Error().Err(err).
 		Str("interrupted_target", marker.Target.String()).
+		Str("session", marker.Session.String()).
+		Str("compose_project", marker.ComposeProject.String()).
 		Str("safety_snapshot_id", marker.Safety.String()).
 		Str("phase", string(marker.Phase)).
 		Msg(recoveryHint(marker))
 	return model.InflightMarker{}, err
 }
 
-// recoveryHint is the message telling the user how to recover from the interrupted rollback the
-// marker records; it depends on the phase the rollback reached.
+// isRecoveryRollback reports whether a rollback to id, in this session and compose project,
+// is the one that recovers from the interrupted rollback the marker records.
+func (s *Service) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
+	return id == marker.RecoveryID() && marker.Session == s.session && marker.ComposeProject == s.composeProject
+}
+
+// recoveryHint tells the user what state the interrupted rollback left and how to recover.
 func recoveryHint(marker model.InflightMarker) string {
-	if marker.Safety == "" {
-		return "a rollback into a compose project that was not running was interrupted; volumes may be " +
-			"half-restored: re-run `arcave rollback " + marker.Target.String() + "`"
-	}
-	switch marker.Phase {
-	case model.InflightRestoreDone:
-		return "every volume was restored and only the services were not started: start the compose project, then remove " +
-			".arcave/inflight.json — or roll back to the safety snapshot to undo the rollback"
-	case model.InflightInconsistent:
-		return "the rollback failed and its revert failed too: roll back to the safety snapshot to return " +
-			"to the pre-rollback state"
+	return interruptedState(marker) + "; recover with `arcave rollback --session " + marker.Session.String() +
+		" -p " + marker.ComposeProject.String() + " " + marker.RecoveryID().String() + "`"
+}
+
+// interruptedState describes what the interrupted rollback left behind, by the phase it reached.
+func interruptedState(marker model.InflightMarker) string {
+	switch {
+	case marker.Safety == "":
+		return "a rollback into a compose project that was not running was interrupted; volumes may be half-restored"
+	case marker.Phase == model.InflightRestoreDone:
+		return "every volume was restored and only the services were not started " +
+			"(starting the compose project and removing .arcave/inflight.json keeps the rollback instead)"
+	case marker.Phase == model.InflightInconsistent:
+		return "the rollback failed and so did its revert"
 	default:
-		return "volumes may mix states: roll back to the safety snapshot to return to the pre-rollback state"
+		return "volumes may mix states"
 	}
 }
 
@@ -80,10 +82,12 @@ func recoveryHint(marker model.InflightMarker) string {
 // safety snapshot that undoes it, empty when none was taken. A phase change rewrites it whole.
 func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, target, safety model.SavepointID) error {
 	return s.inflightMarker.Put(ctx, model.InflightMarker{
-		Phase:  phase,
-		Target: target,
-		Safety: safety,
-		At:     time.Now(),
+		Phase:          phase,
+		Session:        s.session,
+		ComposeProject: s.composeProject,
+		Target:         target,
+		Safety:         safety,
+		At:             time.Now(),
 	})
 }
 

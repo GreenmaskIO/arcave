@@ -30,8 +30,8 @@ import (
 // the caller.
 func TestSavepointListHandler_SavepointList(t *testing.T) {
 	sps := []model.Savepoint{
-		{ID: "1780335122", Name: "before-migration"},
-		{ID: "1780335999", Name: "after-migration"},
+		{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration"},
+		{ID: "019e844b-7818-7000-8000-000000000000", Name: "after-migration"},
 	}
 	svcErr := errors.New("manifest unreadable")
 	printErr := errors.New("stdout closed")
