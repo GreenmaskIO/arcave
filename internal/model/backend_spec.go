@@ -28,6 +28,6 @@ type BackendSpec struct {
 	// caller's call — the backend only knows it is a root, and what it lays out
 	// below it is its own policy. A backend whose data lives elsewhere (cdc, whose
 	// repository outlives every session) may ignore it.
-	Store  storages.Storager
+	Store  storages.Navigator
 	Volume Volume
 }

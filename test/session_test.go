@@ -79,7 +79,6 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	require.NoError(t, err)
 
 	inflight := inflightrepo.New(projectRoot)
-	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	return &sessionEnv{
 		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
 		projectRoot: projectRoot,
@@ -88,8 +87,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 			Sessions: sessionrepo.New(arcaveProjectStore),
 			Locker:   lock.New(projectRoot),
 			Inflight: inflight,
-			// Each record a second after the previous, so oldest-first is decidable.
-			Now: func() time.Time { now = now.Add(time.Second); return now },
+			Store:    arcaveProjectStore,
 		}),
 		inflight: inflight,
 	}
@@ -336,7 +334,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	store, err := storefactory.New(e.storage, e.projectRoot, sessionArcaveProject, session,
 		model.DockerComposeProjectName(e.project))
 	require.NoError(t, err)
-	blobStore, err := store.SubStorage("shared/oci/blobs", true)
+	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{

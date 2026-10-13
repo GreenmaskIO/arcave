@@ -87,7 +87,7 @@ type Dependencies struct {
 	// RepositoryRoot is the tree the repositories live in — one directory per
 	// volume, named by its ObjectID. It is the very root the server resolves
 	// against, so a name on the wire and a directory here are the same thing.
-	RepositoryRoot storages.Storager
+	RepositoryRoot storages.Navigator
 	Options        Options
 }
 

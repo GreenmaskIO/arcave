@@ -15,6 +15,7 @@
 package model
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,4 +47,16 @@ func TestCreateSessionRequest_Validate(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestSession_JSON_FromNamesASessionOnly(t *testing.T) {
+	// Arrange
+	record := Session{ID: DefaultSession, Name: "feat", From: &SessionOrigin{Session: DefaultSession}}
+
+	// Act
+	data, err := json.Marshal(record)
+
+	// Assert
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"id":"`+DefaultSession.String()+`","name":"feat","from":{"session":"`+DefaultSession.String()+`"}}`, string(data))
 }

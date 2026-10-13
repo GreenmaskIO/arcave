@@ -112,7 +112,7 @@ func Root(cfg config.Storage, projectRoot string) (storages.Storager, error) {
 }
 
 // ArcaveProject descends from the root store to projects/<name>.
-func ArcaveProject(root storages.Storager, name model.ArcaveProjectName) (storages.Storager, error) {
+func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (storages.Storager, error) {
 	if err := name.Validate(); err != nil {
 		return nil, fmt.Errorf("validate arcave project name: %w", err)
 	}
@@ -120,7 +120,7 @@ func ArcaveProject(root storages.Storager, name model.ArcaveProjectName) (storag
 }
 
 // Session descends from an arcave project store to sessions/<id>.
-func Session(arcaveProjectStore storages.Storager, id model.SessionID) (storages.Storager, error) {
+func Session(arcaveProjectStore storages.Navigator, id model.SessionID) (storages.Storager, error) {
 	if err := id.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session id: %w", err)
 	}
@@ -128,7 +128,7 @@ func Session(arcaveProjectStore storages.Storager, id model.SessionID) (storages
 }
 
 // ComposeProject descends from a session store to compose/<name>.
-func ComposeProject(sessionStore storages.Storager, name model.DockerComposeProjectName) (storages.Storager, error) {
+func ComposeProject(sessionStore storages.Navigator, name model.DockerComposeProjectName) (storages.Storager, error) {
 	if err := validateComposeProjectName(name); err != nil {
 		return nil, fmt.Errorf("validate compose project name: %w", err)
 	}
@@ -137,7 +137,7 @@ func ComposeProject(sessionStore storages.Storager, name model.DockerComposeProj
 
 // ComposeProjects lists the compose projects a session holds, sorted by name. A
 // directory whose name the compose gate refuses is not one and is skipped.
-func ComposeProjects(ctx context.Context, sessionStore storages.Storager) ([]model.DockerComposeProjectName, error) {
+func ComposeProjects(ctx context.Context, sessionStore storages.Navigator) ([]model.DockerComposeProjectName, error) {
 	composeStore, err := sessionStore.SubStorage(composeNamespace, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root storage at %s: %w", composeNamespace, err)
@@ -161,7 +161,7 @@ func ComposeProjects(ctx context.Context, sessionStore storages.Storager) ([]mod
 }
 
 // joinKind re-roots store at <kind>/<name>; the caller has validated name.
-func joinKind(store storages.Storager, kind, name string) (storages.Storager, error) {
+func joinKind(store storages.Navigator, kind, name string) (storages.Storager, error) {
 	key := path.Join(kind, name)
 	sub, err := store.SubStorage(key, true)
 	if err != nil {

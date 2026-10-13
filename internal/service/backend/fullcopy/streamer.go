@@ -84,7 +84,7 @@ func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 // Snapshotter captures one volume into one root.
 type Snapshotter struct {
 	volume model.Volume
-	store  storages.Storager
+	store  storages.Navigator
 	docker VolumeStreamer
 }
 

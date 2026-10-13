@@ -59,7 +59,7 @@ import (
 const epochMarker = "/epoch-marker"
 
 // sharedBlobPrefix is where the shared blob store sits under one compose project root.
-const sharedBlobPrefix = "shared/oci/blobs"
+const sharedBlobPrefix = dedupcopy.BlobPrefix
 
 // ociDedupEnv is the compose project for OCI blob-store deduplication tests.
 type ociDedupEnv struct {

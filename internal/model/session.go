@@ -26,14 +26,13 @@ type Session struct {
 	ID        SessionID `json:"id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at,omitzero"`
-	// From is the savepoint the session was forked from; nil for one started empty.
+	// From is the session this one was cloned from; nil for one started empty.
 	From *SessionOrigin `json:"from,omitempty"`
 }
 
-// SessionOrigin names the savepoint, in another session, a session was forked from.
+// SessionOrigin names the session a session was cloned from.
 type SessionOrigin struct {
-	Session   SessionID   `json:"session"`
-	Savepoint SavepointID `json:"savepoint"`
+	Session SessionID `json:"session"`
 }
 
 // ComposeProjectSavepoints is one compose project's committed savepoints, an entry
@@ -57,6 +56,8 @@ type SessionSummary struct {
 // CreateSessionRequest carries what CreateSession needs.
 type CreateSessionRequest struct {
 	Name string // optional; unique within the arcave project when set
+	// From names the session to clone, by name or id; empty starts the session empty.
+	From string
 }
 
 // Validate refuses a name that is all whitespace.
@@ -73,4 +74,12 @@ type DeleteSessionResponse struct {
 	Deleted bool      `json:"deleted"`
 	// FreedBytes is the session's size, measured just before it was deleted.
 	FreedBytes int64 `json:"freed_bytes"`
+}
+
+// HeartbeatOperationFork is session create --from in a heartbeat; its data is ForkHeartbeatData.
+const HeartbeatOperationFork = "fork"
+
+// ForkHeartbeatData is a fork heartbeat's data.
+type ForkHeartbeatData struct {
+	From SessionID `json:"from"`
 }

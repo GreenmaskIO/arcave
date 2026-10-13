@@ -16,11 +16,15 @@ package session
 
 import (
 	"context"
-	"github.com/google/uuid"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -45,13 +49,13 @@ func newStore(t *testing.T) (storages.Storager, string) {
 	return st, root
 }
 
-// record is a session forked from a baseline savepoint.
+// record is a session cloned from baseline.
 func record(id model.SessionID) model.Session {
 	return model.Session{
 		ID:        id,
 		Name:      "feat/add-new-table",
 		CreatedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
-		From:      &model.SessionOrigin{Session: model.DefaultSession, Savepoint: "0199a92e-2e00-7000-8000-000000000000"},
+		From:      &model.SessionOrigin{Session: model.DefaultSession},
 	}
 }
 
@@ -204,6 +208,208 @@ func TestRepository_SessionSize(t *testing.T) {
 	assert.Zero(t, absent)
 }
 
+func TestRepository_CopySession(t *testing.T) {
+	// Arrange: only the root record and the excepted heartbeat stay behind; the destination's own
+	// heartbeat and a sibling prefixed by its id do not make it non-empty.
+	ctx := context.Background()
+	store, root := newStore(t)
+	src := "sessions/" + sessionA.String() + "/"
+	writeObject(t, root, src+"session.json", "the source's record")
+	writeObject(t, root, src+"heartbeat.json", "the source's heartbeat")
+	writeObject(t, root, "sessions/"+sessionB.String()+"/heartbeat.json", "the clone's heartbeat")
+	writeObject(t, root, src+"compose/shop/019e843e-1650-7000-8000-000000000100/savepoint.json", "{}")
+	writeObject(t, root, src+"compose/shop/019e843e-1650-7000-8000-000000000100/volume-named-db/data.tar", "abcdefghij")
+	writeObject(t, root, src+"compose/shop/shared/oci/blobs/sha256/abcd", "blob")
+	writeObject(t, root, src+"compose/shop/restic/volume-named-db/locks/1234", "lock")
+	writeObject(t, root, src+"compose/blog/019e843e-1650-7000-8000-000000000200/session.json", "nested")
+	writeObject(t, root, "sessions/"+sessionB.String()+"x/other", "a sibling")
+	repo := New(store)
+
+	// Act
+	got, err := repo.CopySession(ctx, sessionA, sessionB, "heartbeat.json")
+
+	// Assert
+	require.NoError(t, err)
+	want := treeOf(t, filepath.Join(root, "sessions", sessionA.String()))
+	delete(want, "session.json")
+	want["heartbeat.json"] = "the clone's heartbeat"
+	assert.Equal(t, want, treeOf(t, filepath.Join(root, "sessions", sessionB.String())))
+	assert.Equal(t, int64(2+10+4+4+6), got)
+}
+
+func TestRepository_CopySession_FromBaseline(t *testing.T) {
+	// Arrange: the default session has no record, but has a tree.
+	ctx := context.Background()
+	store, root := newStore(t)
+	writeObject(t, root, "sessions/"+model.DefaultSession.String()+"/compose/shop/x/data.tar", "bytes")
+
+	// Act
+	got, err := New(store).CopySession(ctx, model.DefaultSession, sessionB)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), got)
+	assert.Equal(t, map[string]string{"compose/shop/x/data.tar": "bytes"},
+		treeOf(t, filepath.Join(root, "sessions", sessionB.String())))
+}
+
+func TestRepository_CopySession_Refused(t *testing.T) {
+	tests := []struct {
+		name     string
+		to       model.SessionID
+		plant    string
+		wantErr  string
+		occupied bool
+	}{
+		{name: "onto itself", to: sessionA, wantErr: "onto itself", occupied: true},
+		{name: "onto the default session", to: model.DefaultSession, wantErr: "the default session has no record"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			store, root := newStore(t)
+			writeObject(t, root, "sessions/"+sessionA.String()+"/compose/shop/y/data.tar", "bytes")
+			if tt.plant != "" {
+				writeObject(t, root, tt.plant, "already here")
+			}
+
+			// Act
+			_, err := New(store).CopySession(context.Background(), sessionA, tt.to)
+
+			// Assert
+			require.ErrorContains(t, err, tt.wantErr)
+			assert.Equal(t, tt.occupied, errors.Is(err, model.ErrSessionTreeOccupied))
+			assert.FileExists(t, filepath.Join(root, "sessions", sessionA.String(), "compose", "shop", "y", "data.tar"))
+		})
+	}
+}
+
+func TestRepository_CopySession_ObjectGoneMidCopy(t *testing.T) {
+	// Arrange: CopyAll reports not found for a prefix that does hold objects.
+	store, root := newStore(t)
+	src := "sessions/" + sessionA.String() + "/"
+	writeObject(t, root, src+"compose/shop/y/data.tar", "bytes")
+	failing := failingCopyAll{Storager: store, prefix: src + "compose"}
+
+	// Act
+	_, err := New(failing).CopySession(context.Background(), sessionA, sessionB)
+
+	// Assert
+	require.ErrorIs(t, err, storages.ErrFileNotFound)
+	assert.ErrorContains(t, err, "copy compose")
+}
+
+func TestRepository_CopySession_EmptyDirectoryCopiesNothing(t *testing.T) {
+	// Arrange: a directory holding no object, which CopyAll refuses as not found.
+	store, root := newStore(t)
+	src := "sessions/" + sessionA.String() + "/"
+	require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.FromSlash(src+"compose/shop/empty")), 0o755))
+	writeObject(t, root, src+"loose.json", "{}")
+
+	// Act
+	got, err := New(store).CopySession(context.Background(), sessionA, sessionB)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"loose.json": "{}"}, treeOf(t, filepath.Join(root, "sessions", sessionB.String())))
+	assert.Equal(t, int64(2), got)
+}
+
+func Test_rootKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		files  []string
+		except []string
+		want   []string
+	}{
+		{name: "every file", files: []string{"a.json", "b"}, want: []string{"a.json", "b"}},
+		{
+			name:   "the record and the excepted keys stay behind",
+			files:  []string{"heartbeat.json", "loose.json", "session.json"},
+			except: []string{"heartbeat.json"},
+			want:   []string{"loose.json"},
+		},
+		{name: "folder markers are not objects", files: []string{"", "compose/", "loose.json"}, want: []string{"loose.json"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := rootKeys(tt.files, tt.except)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestRepository_CopySession_LooseKeys(t *testing.T) {
+	// Arrange: keys outside any compose/<name> tree are copied one by one, the excepted ones left.
+	store, root := newStore(t)
+	src := "sessions/" + sessionA.String() + "/"
+	writeObject(t, root, src+"heartbeat.json", "the source's heartbeat")
+	writeObject(t, root, src+"loose.json", "{}")
+	writeObject(t, root, src+"compose/stray", "abc")
+	writeObject(t, root, src+"compose/shop/x/data.tar", "bytes")
+
+	// Act
+	got, err := New(store).CopySession(context.Background(), sessionA, sessionB, "heartbeat.json")
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"loose.json":              "{}",
+		"compose/stray":           "abc",
+		"compose/shop/x/data.tar": "bytes",
+	}, treeOf(t, filepath.Join(root, "sessions", sessionB.String())))
+	assert.Equal(t, int64(2+3+5), got)
+}
+
+func TestRepository_CopySession_CancelledCopiesNothing(t *testing.T) {
+	// Arrange
+	store, root := newStore(t)
+	writeObject(t, root, "sessions/"+sessionA.String()+"/compose/shop/x/data.tar", "bytes")
+	writeObject(t, root, "sessions/"+sessionA.String()+"/compose/web/y/data.tar", "bytes")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Act
+	n, err := New(store).CopySession(ctx, sessionA, sessionB)
+
+	// Assert
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, n)
+	assert.NoDirExists(t, filepath.Join(root, "sessions", sessionB.String()))
+}
+
+func TestRepository_IsSessionTreeEmpty(t *testing.T) {
+	tests := []struct {
+		name  string
+		plant []string
+		want  bool
+	}{
+		{name: "an absent tree", want: true},
+		{name: "a heartbeat alone", plant: []string{"heartbeat.json"}},
+		{name: "a record alone", plant: []string{"session.json"}},
+		{name: "data", plant: []string{"compose/shop/x/data.tar"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			store, root := newStore(t)
+			for _, name := range tt.plant {
+				writeObject(t, root, "sessions/"+sessionB.String()+"/"+name, "x")
+			}
+
+			// Act
+			got, err := New(store).IsSessionTreeEmpty(context.Background(), sessionB)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestRepository_DeleteSession(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
@@ -317,4 +523,41 @@ func TestRepository_ListSessionSavepoints(t *testing.T) {
 	}, got)
 	require.NoError(t, emptyErr)
 	assert.Empty(t, empty)
+}
+
+// treeOf maps every file under dir, by its slash-separated path relative to dir, to its body.
+func treeOf(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	tree := map[string]string{}
+	require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		tree[filepath.ToSlash(rel)] = string(body)
+		return nil
+	}))
+	return tree
+}
+
+// failingCopyAll is a store whose CopyAll of prefix reports it missing.
+type failingCopyAll struct {
+	storages.Storager
+	prefix string
+}
+
+func (f failingCopyAll) CopyAll(
+	ctx context.Context, srcPrefix, dstPrefix string, opts ...storages.CopyAllOption,
+) (storages.CopyStat, error) {
+	if srcPrefix == f.prefix {
+		return storages.CopyStat{}, fmt.Errorf("%w: %s", storages.ErrFileNotFound, srcPrefix)
+	}
+	return f.Storager.CopyAll(ctx, srcPrefix, dstPrefix, opts...)
 }

@@ -580,7 +580,7 @@ and always exists. These commands name no compose project and reach no daemon.
 
 ```text
 arcave session list                 # JSON array of {id, name, created_at, from, savepoint_count, compose_projects, size_bytes}
-arcave session create [--name N]    # an empty session; prints its record
+arcave session create [--name N] [--from S]  # an empty session, or a copy of S; prints its record
 arcave session delete <id|name>     # {session, deleted: true, freed_bytes}
 ```
 
@@ -592,8 +592,13 @@ is an error listing their ids.
 so it counts orphans, unpruned restic data and uncollected image blobs, which a sum over the records would miss; it is
 what deleting the session frees, and `session delete` reports it as `freed_bytes`, measured before it deletes.
 `session delete` drops the record first, then the session's tree. It refuses `baseline` and a session the
-inflight marker names, and leaves any running compose project alone. `session create --from` (the fork) is not
-built yet.
+inflight marker names, and leaves any running compose project alone.
+`session create --from <session>` (the fork) takes a session by name or id, `baseline` included, and copies everything
+under `sessions/<source>/` but its record and its `heartbeat.json` into the new session's tree — every compose project, every savepoint with
+its id and name, `shared/oci` and the restic repositories — then writes the record last, with `from: {session}`. It
+holds the lock for the whole copy and touches no daemon; a failure or an interrupt creates nothing and leaves the copied
+tree in the store, its `heartbeat.json` marked `failed` for a gc. A fork is deployed by an ordinary `rollback --session <new>`. It is not refused by an inflight marker: the
+marker guards the daemon, which a fork does not touch.
 
 ### Environment Recovery
 

@@ -61,8 +61,8 @@ func TestSessionListHandler_SessionList(t *testing.T) {
 
 func TestSessionCreateHandler_SessionCreate(t *testing.T) {
 	// Arrange
-	req := model.CreateSessionRequest{Name: "exp"}
-	record := model.Session{ID: handlerSession, Name: "exp"}
+	req := model.CreateSessionRequest{Name: "exp", From: "baseline"}
+	record := model.Session{ID: handlerSession, Name: "exp", From: &model.SessionOrigin{Session: model.DefaultSession}}
 	p := &capturePrinter{}
 	p.On("Print", mock.Anything).Return(nil).Once()
 	svc := &mockService{}

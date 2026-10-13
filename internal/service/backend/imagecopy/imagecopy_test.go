@@ -451,7 +451,7 @@ type stubLayout struct {
 }
 
 func (s *stubLayout) Store(
-	_ context.Context, _ storages.Storager, _ model.ImageDigestID, archive io.Reader,
+	_ context.Context, _ storages.Writer, _ model.ImageDigestID, archive io.Reader,
 ) (StoredSize, error) {
 	body, err := io.ReadAll(archive)
 	if err != nil {

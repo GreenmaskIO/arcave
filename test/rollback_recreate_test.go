@@ -187,7 +187,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 
 	// The blob store is a sibling of the savepoints inside the compose project root, so it
 	// dies with the session the way everything else there does.
-	blobStore, err := store.SubStorage("shared/oci/blobs", true)
+	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{

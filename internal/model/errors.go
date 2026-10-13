@@ -68,6 +68,12 @@ var (
 	ErrSessionNameTaken = errors.New("session name is already taken")
 	// ErrDefaultSessionDelete refuses to delete DefaultSession, which always exists.
 	ErrDefaultSessionDelete = errors.New("the default session cannot be deleted")
+	// ErrSessionTreeOccupied refuses a fork into a tree that already holds anything, or a copy
+	// of a session onto itself; nothing was written, so the caller must not clean the tree up.
+	ErrSessionTreeOccupied = errors.New("session tree is occupied")
+	// ErrSessionHeartbeatLost refuses to commit a fork whose heartbeat could not be kept
+	// fresh: a gc may already have taken the tree for a dead one.
+	ErrSessionHeartbeatLost = errors.New("session heartbeat lost")
 
 	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
 	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps

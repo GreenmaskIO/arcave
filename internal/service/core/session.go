@@ -15,18 +15,25 @@
 package core
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
 
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
 type sessionRepository interface {
 	SaveSession(ctx context.Context, session model.Session) error
+	CopySession(ctx context.Context, from, to model.SessionID, except ...string) (int64, error)
+	IsSessionTreeEmpty(ctx context.Context, id model.SessionID) (bool, error)
 	LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error)
 	ListSessions(ctx context.Context) ([]model.Session, error)
 	DeleteSession(ctx context.Context, id model.SessionID) error
@@ -34,34 +41,54 @@ type sessionRepository interface {
 	SessionSize(ctx context.Context, id model.SessionID) (int64, error)
 }
 
+type heartbeatWriter interface {
+	Write(ctx context.Context, h heartbeat.Heartbeat) error
+}
+
 // SessionDeps are SessionService's collaborators.
 type SessionDeps struct {
 	Sessions sessionRepository
 	Locker   projectLocker
 	Inflight inflightMarkers
-	// Now stamps a new session's record; nil means time.Now.
-	Now func() time.Time
+	// Store is the arcave project store a fork's heartbeat is written into.
+	Store storages.Storager
+	// RunnerInfo identifies this process in a fork's heartbeat.
+	RunnerInfo heartbeat.RunnerInfo
+	// HeartbeatInterval and HeartbeatStaleAfter time a fork's heartbeat; zero keeps
+	// heartbeat.DefaultInterval and heartbeat.DefaultStaleAfter.
+	HeartbeatInterval   time.Duration
+	HeartbeatStaleAfter time.Duration
 }
 
 // SessionService manages an arcave project's sessions. It touches no daemon and names
 // no compose project.
 type SessionService struct {
-	sessions sessionRepository
-	locker   projectLocker
-	inflight inflightMarkers
-	now      func() time.Time
+	sessions   sessionRepository
+	locker     projectLocker
+	inflight   inflightMarkers
+	runnerInfo heartbeat.RunnerInfo
+	// heartbeatInterval and heartbeatStaleAfter time a fork's heartbeat.
+	heartbeatInterval   time.Duration
+	heartbeatStaleAfter time.Duration
+	// heartbeatWriter opens the heartbeat of one session's tree.
+	heartbeatWriter func(id model.SessionID) (heartbeatWriter, error)
 }
 
 func NewSessionService(d SessionDeps) *SessionService {
-	now := d.Now
-	if now == nil {
-		now = time.Now
-	}
 	return &SessionService{
-		sessions: d.Sessions,
-		locker:   d.Locker,
-		inflight: d.Inflight,
-		now:      now,
+		sessions:            d.Sessions,
+		locker:              d.Locker,
+		inflight:            d.Inflight,
+		runnerInfo:          d.RunnerInfo,
+		heartbeatInterval:   cmp.Or(d.HeartbeatInterval, heartbeat.DefaultInterval),
+		heartbeatStaleAfter: cmp.Or(d.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
+		heartbeatWriter: func(id model.SessionID) (heartbeatWriter, error) {
+			st, err := storefactory.Session(d.Store, id)
+			if err != nil {
+				return nil, err
+			}
+			return heartbeat.NewWriter(st), nil
+		},
 	}
 }
 
@@ -74,13 +101,7 @@ func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.
 	if err != nil {
 		return model.Session{}, fmt.Errorf("listing sessions: %w", err)
 	}
-	if record, found, err := sessionByName(records, ref); err != nil || found {
-		return record, err
-	}
-	if record, found := sessionByID(records, ref); found {
-		return record, nil
-	}
-	return model.Session{}, fmt.Errorf("%w: %q", model.ErrSessionNotFound, ref)
+	return findSessionByRef(records, ref)
 }
 
 // ListSessions returns every session oldest first; the default, created by no one, leads.
@@ -102,22 +123,41 @@ func (s *SessionService) ListSessions(ctx context.Context) ([]model.SessionSumma
 	return summaries, nil
 }
 
-// CreateSession commits an empty session: its record only, nothing in the daemon.
+// CreateSession commits a session, empty or a clone of req.From: every compose project and
+// savepoint copied, the record written last. The daemon is never touched.
 func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error) {
 	if err := req.Validate(); err != nil {
 		return model.Session{}, err
 	}
 	return withUnlock(ctx, s.locker, func() (model.Session, error) {
-		if err := s.requireFreeName(ctx, req.Name); err != nil {
+		var records []model.Session
+		if req.Name != "" || req.From != "" {
+			var err error
+			if records, err = s.sessions.ListSessions(ctx); err != nil {
+				return model.Session{}, fmt.Errorf("listing sessions: %w", err)
+			}
+		}
+		if err := requireFreeName(records, req.Name); err != nil {
 			return model.Session{}, err
 		}
 		record := model.Session{
 			ID:        model.NewSessionID(),
 			Name:      req.Name,
-			CreatedAt: s.now().UTC(),
+			CreatedAt: time.Now().UTC(),
 		}
-		if err := s.sessions.SaveSession(ctx, record); err != nil {
-			return model.Session{}, fmt.Errorf("committing session %s: %w", record.ID, err)
+		if req.From == "" {
+			if err := s.sessions.SaveSession(ctx, record); err != nil {
+				return model.Session{}, fmt.Errorf("committing session %s: %w", record.ID, err)
+			}
+			return record, nil
+		}
+		source, err := findSessionByRef(records, req.From)
+		if err != nil {
+			return model.Session{}, err
+		}
+		record.From = &model.SessionOrigin{Session: source.ID}
+		if err := s.forkSession(ctx, record); err != nil {
+			return model.Session{}, err
 		}
 		return record, nil
 	})
@@ -163,8 +203,19 @@ func (s *SessionService) DeleteSession(ctx context.Context, ref string) (model.D
 	})
 }
 
-// sessionByName finds the one record carrying name; several carrying it is an error.
-func sessionByName(records []model.Session, name string) (model.Session, bool, error) {
+// findSessionByRef finds the record ref names among records: by name first, then by id.
+func findSessionByRef(records []model.Session, ref string) (model.Session, error) {
+	if record, found, err := findSessionByName(records, ref); err != nil || found {
+		return record, err
+	}
+	if record, found := findSessionByID(records, ref); found {
+		return record, nil
+	}
+	return model.Session{}, fmt.Errorf("%w: %q", model.ErrSessionNotFound, ref)
+}
+
+// findSessionByName finds the one record carrying name; several carrying it is an error.
+func findSessionByName(records []model.Session, name string) (model.Session, bool, error) {
 	var named []model.Session
 	for _, record := range records {
 		if record.Name == name {
@@ -185,33 +236,14 @@ func sessionByName(records []model.Session, name string) (model.Session, bool, e
 	}
 }
 
-// sessionByID finds the record whose id is ref.
-func sessionByID(records []model.Session, ref string) (model.Session, bool) {
+// findSessionByID finds the record whose id is ref.
+func findSessionByID(records []model.Session, ref string) (model.Session, bool) {
 	for _, record := range records {
 		if record.ID.String() == ref {
 			return record, true
 		}
 	}
 	return model.Session{}, false
-}
-
-// requireFreeName refuses a name another session carries, or one that is another session's
-// id: ResolveSession tries names first, so such a name would hide that session's id.
-func (s *SessionService) requireFreeName(ctx context.Context, name string) error {
-	if name == "" {
-		return nil
-	}
-	records, err := s.sessions.ListSessions(ctx)
-	if err != nil {
-		return fmt.Errorf("listing sessions: %w", err)
-	}
-	if _, found, err := sessionByName(records, name); found || err != nil {
-		return fmt.Errorf("%w: %q", model.ErrSessionNameTaken, name)
-	}
-	if record, found := sessionByID(records, name); found {
-		return fmt.Errorf("%w: %q is the id of session %q", model.ErrSessionNameTaken, name, record.Name)
-	}
-	return nil
 }
 
 // summarize counts what the session holds, safety snapshots excluded, and measures its tree.
@@ -234,4 +266,90 @@ func (s *SessionService) summarize(ctx context.Context, record model.Session) (m
 		}
 	}
 	return summary, nil
+}
+
+// requireFreeName refuses a name another session carries, or one that is another session's
+// id: ResolveSession tries names first, so such a name would hide that session's id.
+func requireFreeName(records []model.Session, name string) error {
+	if name == "" {
+		return nil
+	}
+	if _, found, err := findSessionByName(records, name); found || err != nil {
+		return fmt.Errorf("%w: %q", model.ErrSessionNameTaken, name)
+	}
+	if record, found := findSessionByID(records, name); found {
+		return fmt.Errorf("%w: %q is the id of session %q", model.ErrSessionNameTaken, name, record.Name)
+	}
+	return nil
+}
+
+// forkSession copies record.From's tree under record.ID and commits record, a heartbeat kept
+// beside the tree throughout. A failure leaves the tree to a gc, its heartbeat marked failed.
+func (s *SessionService) forkSession(ctx context.Context, record model.Session) error {
+	source := record.From.Session
+	if err := s.requireEmptyForkTree(ctx, record.ID); err != nil {
+		return fmt.Errorf("cloning session %s: %w", source, err)
+	}
+	data, err := heartbeat.EncodeData(model.ForkHeartbeatData{From: source})
+	if err != nil {
+		return err
+	}
+	w, err := s.heartbeatWriter(record.ID)
+	if err != nil {
+		return fmt.Errorf("cloning session %s: open the heartbeat: %w", source, err)
+	}
+	copyCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	hb := heartbeat.NewWorker(w).SetInterval(s.heartbeatInterval).SetStaleAfter(s.heartbeatStaleAfter)
+	base := heartbeat.Heartbeat{Operation: model.HeartbeatOperationFork, RunnerInfo: s.runnerInfo, Data: data}
+	if err := hb.Start(ctx, base, cancel); err != nil {
+		// A write that timed out may still have landed: mark it failed rather than leave it in progress.
+		err = fmt.Errorf("cloning session %s: %w", source, err)
+		abandonFork(ctx, hb, record.ID, err)
+		return err
+	}
+	copied, err := s.sessions.CopySession(copyCtx, source, record.ID, heartbeat.FileName)
+	hb.Stop()
+	if err != nil {
+		if cause := context.Cause(copyCtx); errors.Is(cause, model.ErrSessionHeartbeatLost) {
+			err = cause
+		}
+		err = fmt.Errorf("cloning session %s: %w", source, err)
+		abandonFork(ctx, hb, record.ID, err)
+		return err
+	}
+	zerolog.Ctx(ctx).Info().Str("session", record.ID.String()).Str("from", source.String()).
+		Int64("copied_bytes", copied).Msg("session cloned")
+
+	if err := hb.Alive(); err != nil {
+		err = fmt.Errorf("committing session %s: %w", record.ID, err)
+		abandonFork(ctx, hb, record.ID, err)
+		return err
+	}
+	if err := s.sessions.SaveSession(ctx, record); err != nil {
+		err = fmt.Errorf("committing session %s: %w", record.ID, err)
+		abandonFork(ctx, hb, record.ID, err)
+		return err
+	}
+	hb.Finish(ctx)
+	return nil
+}
+
+// requireEmptyForkTree refuses a fork's tree that holds anything, a heartbeat included.
+func (s *SessionService) requireEmptyForkTree(ctx context.Context, id model.SessionID) error {
+	empty, err := s.sessions.IsSessionTreeEmpty(ctx, id)
+	if err != nil {
+		return fmt.Errorf("checking the tree of session %s: %w", id, err)
+	}
+	if !empty {
+		return fmt.Errorf("%w: sessions/%s", model.ErrSessionTreeOccupied, id)
+	}
+	return nil
+}
+
+// abandonFork marks an uncommitted fork failed and logs its tree, the only pointer left to it.
+func abandonFork(ctx context.Context, hb *heartbeat.Worker, id model.SessionID, cause error) {
+	hb.Fail(ctx, cause)
+	zerolog.Ctx(ctx).Error().Str("session", id.String()).Str("tree", "sessions/"+id.String()).
+		Msg("the fork did not commit; its tree is left in the store")
 }

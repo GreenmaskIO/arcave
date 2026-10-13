@@ -28,7 +28,7 @@ import (
 
 // WriteManifest commits a capture's manifest. It goes last: the manifest is the
 // capture's commit marker, so one that failed halfway leaves none.
-func WriteManifest(ctx context.Context, imageStore storages.Storager, manifest Manifest) error {
+func WriteManifest(ctx context.Context, imageStore storages.Writer, manifest Manifest) error {
 	body, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("marshal %s: %w", manifestName, err)
@@ -43,7 +43,7 @@ func WriteManifest(ctx context.Context, imageStore storages.Storager, manifest M
 // manifest that decodes, names that image and lists members. Written last, it
 // vouches for everything before it; a torn one does not, and the capture is
 // written again.
-func intactManifest(ctx context.Context, imageStore storages.Storager, imageID model.ImageDigestID) (bool, error) {
+func intactManifest(ctx context.Context, imageStore storages.Reader, imageID model.ImageDigestID) (bool, error) {
 	src, err := imageStore.GetObject(ctx, manifestName)
 	if errors.Is(err, storages.ErrFileNotFound) {
 		return false, nil
@@ -67,7 +67,7 @@ func intactManifest(ctx context.Context, imageStore storages.Storager, imageID m
 
 // ReadManifest reads a capture's manifest back and refuses one written in a form
 // the caller does not handle.
-func ReadManifest(ctx context.Context, imageStore storages.Storager, format Format) (Manifest, error) {
+func ReadManifest(ctx context.Context, imageStore storages.Reader, format Format) (Manifest, error) {
 	src, err := imageStore.GetObject(ctx, manifestName)
 	if err != nil {
 		if errors.Is(err, storages.ErrFileNotFound) {

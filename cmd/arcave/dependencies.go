@@ -52,6 +52,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
@@ -326,15 +327,26 @@ func initSessionDependencies(projectPath string, cfg config.Config) (*sessionDep
 		return nil, err
 	}
 	svc := core.NewSessionService(core.SessionDeps{
-		Sessions: sessionrepo.New(arcaveProjectStore),
-		Locker:   lock.New(projectPath),
-		Inflight: inflightrepo.New(projectPath),
+		Sessions:   sessionrepo.New(arcaveProjectStore),
+		Locker:     lock.New(projectPath),
+		Inflight:   inflightrepo.New(projectPath),
+		Store:      arcaveProjectStore,
+		RunnerInfo: heartbeatRunnerInfo(),
 	})
 	return &sessionDependencies{store: root, service: svc, printer: json.New(os.Stdout)}, nil
 }
 
 func (d *sessionDependencies) Close() error {
 	return d.store.Close()
+}
+
+// heartbeatRunnerInfo identifies this process in a heartbeat; an unknown host stays blank.
+func heartbeatRunnerInfo() heartbeat.RunnerInfo {
+	host, err := os.Hostname()
+	if err != nil {
+		log.Debug().Err(err).Msg("reading the hostname for the heartbeat")
+	}
+	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
 }
 
 // openArcaveProjectStore opens the store root and descends to the arcave project; the root
@@ -518,14 +530,10 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	return dockerCli, apiClient, nil
 }
 
-// composeProjectBlobPrefix sits beside the compose project's savepoints, shared by them and
-// nothing wider; a savepoint id is a canonical UUID, so the name cannot collide with one.
-const composeProjectBlobPrefix = "shared/oci/blobs"
-
 // newImageBackend builds the one image backend: layers are always deduplicated,
 // which needs a daemon of Docker 25 or newer.
-func newImageBackend(composeProjectStore storages.Storager, engine *docker.Engine) (*imagecopy.Copier, error) {
-	blobStore, err := composeProjectStore.SubStorage(composeProjectBlobPrefix, true)
+func newImageBackend(composeProjectStore storages.Navigator, engine *docker.Engine) (*imagecopy.Copier, error) {
+	blobStore, err := composeProjectStore.SubStorage(dedupcopy.BlobPrefix, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}

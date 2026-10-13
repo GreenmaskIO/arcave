@@ -17,6 +17,7 @@ package core
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
 var (
@@ -40,6 +42,18 @@ type mockSessionRepo struct{ mock.Mock }
 
 func (m *mockSessionRepo) SaveSession(ctx context.Context, session model.Session) error {
 	return m.Called(ctx, session).Error(0)
+}
+
+func (m *mockSessionRepo) CopySession(
+	ctx context.Context, from, to model.SessionID, except ...string,
+) (int64, error) {
+	args := m.Called(ctx, from, to, except)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *mockSessionRepo) IsSessionTreeEmpty(ctx context.Context, id model.SessionID) (bool, error) {
+	args := m.Called(ctx, id)
+	return args.Bool(0), args.Error(1)
 }
 
 func (m *mockSessionRepo) LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error) {
@@ -66,6 +80,44 @@ func (m *mockSessionRepo) ListSessionSavepoints(
 func (m *mockSessionRepo) SessionSize(ctx context.Context, id model.SessionID) (int64, error) {
 	args := m.Called(ctx, id)
 	return args.Get(0).(int64), args.Error(1)
+}
+
+// mockHeartbeats records the heartbeats written into each session's tree.
+type mockHeartbeats struct{ mock.Mock }
+
+func (m *mockHeartbeats) Write(ctx context.Context, id model.SessionID, h heartbeat.Heartbeat) error {
+	return m.Called(ctx, id, h).Error(0)
+}
+
+// writerFor binds the heartbeat writes of session id.
+func (m *mockHeartbeats) writerFor(id model.SessionID) (heartbeatWriter, error) {
+	return sessionBeats{beats: m, id: id}, nil
+}
+
+type sessionBeats struct {
+	beats *mockHeartbeats
+	id    model.SessionID
+}
+
+func (w sessionBeats) Write(ctx context.Context, h heartbeat.Heartbeat) error {
+	return w.beats.Write(ctx, w.id, h)
+}
+
+var testRunnerInfo = heartbeat.RunnerInfo{Host: "box", PID: 42, ArcaveVersion: "dev"}
+
+// beatOf matches a heartbeat write of status.
+func beatOf(status heartbeat.Status) any {
+	return mock.MatchedBy(func(h heartbeat.Heartbeat) bool { return h.Status == status })
+}
+
+// forkBeatOf matches a fork heartbeat from otherSession, written by testRunnerInfo with status.
+func forkBeatOf(status heartbeat.Status) any {
+	data := `{"from":"` + otherSession.String() + `"}`
+	return mock.MatchedBy(func(h heartbeat.Heartbeat) bool {
+		return h.Operation == model.HeartbeatOperationFork && string(h.Data) == data &&
+			h.RunnerInfo == testRunnerInfo && h.Status == status && !h.StartedAt.IsZero() &&
+			(status == heartbeat.StatusInProgress) == h.FinishedAt.IsZero()
+	})
 }
 
 func sessionRecord(id model.SessionID, name string, at time.Time) model.Session {
@@ -176,11 +228,12 @@ func TestSessionService_CreateSession(t *testing.T) {
 		Return([]model.Session{model.DefaultSessionRecord, sessionRecord(otherSession, "other", sessionNow)}, nil).Once()
 	save := repo.On("SaveSession", mock.Anything, mock.MatchedBy(func(s model.Session) bool {
 		return s.ID.Validate() == nil && s.ID != model.DefaultSession &&
-			s.Name == "feat/x" && s.CreatedAt.Equal(sessionNow) && s.From == nil
+			s.Name == "feat/x" && s.From == nil
 	})).Return(nil).Once()
 	release := locker.On("Release").Return(nil).Once()
 	mock.InOrder(acquire, list, save, release)
-	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker, Now: func() time.Time { return sessionNow }})
+	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker})
+	before := time.Now()
 
 	// Act
 	got, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{Name: "feat/x"})
@@ -188,9 +241,260 @@ func TestSessionService_CreateSession(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, "feat/x", got.Name)
-	assert.Equal(t, sessionNow, got.CreatedAt)
+	assert.WithinRange(t, got.CreatedAt, before, time.Now())
+	assert.Equal(t, time.UTC, got.CreatedAt.Location())
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
+}
+
+func TestSessionService_CreateSession_Clone(t *testing.T) {
+	// Arrange: the source is named, the copy lands under the new id beside a heartbeat, the
+	// record comes last and the heartbeat ends done.
+	records := []model.Session{model.DefaultSessionRecord, sessionRecord(otherSession, "exp", sessionNow)}
+	locker := &mockLocker{}
+	acquire := locker.On("Acquire", mock.Anything).Return(nil).Once()
+	repo := &mockSessionRepo{}
+	beats := &mockHeartbeats{}
+	list := repo.On("ListSessions", mock.Anything).Return(records, nil).Once()
+	var clone model.SessionID
+	empty := repo.On("IsSessionTreeEmpty", mock.Anything, mock.MatchedBy(func(id model.SessionID) bool {
+		return id.Validate() == nil && id != otherSession && id != model.DefaultSession
+	})).Run(func(args mock.Arguments) { clone = args.Get(1).(model.SessionID) }).Return(true, nil).Once()
+	isClone := mock.MatchedBy(func(id model.SessionID) bool { return id == clone })
+	beat := beats.On("Write", mock.Anything, isClone, forkBeatOf(heartbeat.StatusInProgress)).Return(nil).Once()
+	cp := repo.On("CopySession", mock.Anything, otherSession, isClone, []string{heartbeat.FileName}).Return(int64(4096), nil).Once()
+	save := repo.On("SaveSession", mock.Anything, mock.MatchedBy(func(s model.Session) bool {
+		return s.ID == clone && s.Name == "feat/x" && s.From != nil && *s.From == model.SessionOrigin{Session: otherSession}
+	})).Return(nil).Once()
+	done := beats.On("Write", mock.Anything, isClone, forkBeatOf(heartbeat.StatusDone)).Return(nil).Once()
+	release := locker.On("Release").Return(nil).Once()
+	mock.InOrder(acquire, list, empty, beat, cp, save, done, release)
+	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker, RunnerInfo: testRunnerInfo})
+	svc.heartbeatWriter = beats.writerFor
+
+	// Act
+	got, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{Name: "feat/x", From: "exp"})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, clone, got.ID)
+	assert.Equal(t, &model.SessionOrigin{Session: otherSession}, got.From)
+	repo.AssertExpectations(t)
+	beats.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
+func TestSessionService_CreateSession_CloneOfBaselineWithoutName(t *testing.T) {
+	// Arrange: no name means no name check; baseline has no record, but has a tree.
+	locker := &mockLocker{}
+	expectLock(locker)
+	repo := &mockSessionRepo{}
+	beats := &mockHeartbeats{}
+	repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+	repo.On("IsSessionTreeEmpty", mock.Anything, mock.Anything).Return(true, nil).Once()
+	beats.On("Write", mock.Anything, mock.Anything, beatOf(heartbeat.StatusInProgress)).Return(nil).Once()
+	repo.On("CopySession", mock.Anything, model.DefaultSession, mock.Anything, []string{heartbeat.FileName}).Return(int64(0), nil).Once()
+	repo.On("SaveSession", mock.Anything, mock.MatchedBy(func(s model.Session) bool {
+		return s.From != nil && s.From.Session == model.DefaultSession
+	})).Return(nil).Once()
+	beats.On("Write", mock.Anything, mock.Anything, beatOf(heartbeat.StatusDone)).Return(nil).Once()
+	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker})
+	svc.heartbeatWriter = beats.writerFor
+
+	// Act
+	_, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{From: "baseline"})
+
+	// Assert
+	require.NoError(t, err)
+	repo.AssertExpectations(t)
+	beats.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
+func TestSessionService_CreateSession_CloneRefusedBeforeCopy(t *testing.T) {
+	records := []model.Session{model.DefaultSessionRecord, sessionRecord(otherSession, "exp", sessionNow)}
+	tests := []struct {
+		name    string
+		req     model.CreateSessionRequest
+		wantErr error
+	}{
+		{name: "a taken name", req: model.CreateSessionRequest{Name: "exp", From: "baseline"},
+			wantErr: model.ErrSessionNameTaken},
+		{name: "an unknown source", req: model.CreateSessionRequest{Name: "feat/x", From: "nope"},
+			wantErr: model.ErrSessionNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: strict mocks, so a CopySession call fails the test.
+			locker := &mockLocker{}
+			expectLock(locker)
+			repo := &mockSessionRepo{}
+			repo.On("ListSessions", mock.Anything).Return(records, nil).Once()
+			svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker})
+
+			// Act
+			_, err := svc.CreateSession(context.Background(), tt.req)
+
+			// Assert
+			require.ErrorIs(t, err, tt.wantErr)
+			repo.AssertExpectations(t)
+			locker.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSessionService_CreateSession_CloneFailureLeavesTheTreeMarkedFailed(t *testing.T) {
+	errCopy := errors.New("disk full")
+	errSave := errors.New("record write failed")
+	errMark := errors.New("mark failed")
+	tests := []struct {
+		name    string
+		copyErr error
+		saveErr error
+		markErr error
+		wantErr error
+	}{
+		{name: "the copy fails", copyErr: errCopy, wantErr: errCopy},
+		{name: "the record fails", saveErr: errSave, wantErr: errSave},
+		{name: "the mark fails too: the copy's error stands", copyErr: errCopy, markErr: errMark, wantErr: errCopy},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: the command's context is cancelled, as by Ctrl-C; the mark must not be.
+			// Strict mocks: a DeleteSession call fails the test, the tree is a gc's.
+			ctx, cancel := context.WithCancel(context.Background())
+			locker := &mockLocker{}
+			acquire := locker.On("Acquire", mock.Anything).Return(nil).Once()
+			repo := &mockSessionRepo{}
+			beats := &mockHeartbeats{}
+			resolve := repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+			var clone model.SessionID
+			empty := repo.On("IsSessionTreeEmpty", mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) { clone = args.Get(1).(model.SessionID) }).Return(true, nil).Once()
+			beat := beats.On("Write", mock.Anything, mock.Anything, beatOf(heartbeat.StatusInProgress)).Return(nil).Once()
+			cp := repo.On("CopySession", mock.Anything, model.DefaultSession, mock.Anything, []string{heartbeat.FileName}).
+				Run(func(mock.Arguments) { cancel() }).Return(int64(1), tt.copyErr).Once()
+			calls := []*mock.Call{acquire, resolve, empty, beat, cp}
+			if tt.copyErr == nil {
+				calls = append(calls, repo.On("SaveSession", mock.Anything, mock.Anything).Return(tt.saveErr).Once())
+			}
+			mark := beats.On("Write", mock.MatchedBy(func(c context.Context) bool { return c.Err() == nil }),
+				mock.MatchedBy(func(id model.SessionID) bool { return id == clone }),
+				mock.MatchedBy(func(h heartbeat.Heartbeat) bool {
+					return h.Status == heartbeat.StatusFailed && strings.Contains(h.Error, tt.wantErr.Error()) &&
+						!h.FinishedAt.IsZero()
+				})).Return(tt.markErr).Once()
+			release := locker.On("Release").Return(nil).Once()
+			mock.InOrder(append(calls, mark, release)...)
+			svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker})
+			svc.heartbeatWriter = beats.writerFor
+
+			// Act
+			_, err := svc.CreateSession(ctx, model.CreateSessionRequest{From: "baseline"})
+
+			// Assert
+			require.ErrorIs(t, err, tt.wantErr)
+			if tt.markErr != nil {
+				assert.NotErrorIs(t, err, tt.markErr)
+			}
+			repo.AssertExpectations(t)
+			beats.AssertExpectations(t)
+			locker.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSessionService_CreateSession_OccupiedTreeWritesNothing(t *testing.T) {
+	// Arrange: strict mocks, so a heartbeat or a copy fails the test; whatever the tree holds,
+	// a heartbeat included, is another operation's.
+	locker := &mockLocker{}
+	expectLock(locker)
+	repo := &mockSessionRepo{}
+	repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+	repo.On("IsSessionTreeEmpty", mock.Anything, mock.Anything).Return(false, nil).Once()
+	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker})
+
+	// Act
+	_, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{From: "baseline"})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionTreeOccupied)
+	repo.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
+func TestSessionService_CreateSession_FirstHeartbeatFailsBeforeCopy(t *testing.T) {
+	// Arrange: strict mocks, so a CopySession call fails the test. The first beat may have
+	// landed despite its error, so it is marked failed.
+	errPut := errors.New("store unreachable")
+	locker := &mockLocker{}
+	expectLock(locker)
+	repo := &mockSessionRepo{}
+	beats := &mockHeartbeats{}
+	repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+	repo.On("IsSessionTreeEmpty", mock.Anything, mock.Anything).Return(true, nil).Once()
+	first := beats.On("Write", mock.Anything, mock.Anything, beatOf(heartbeat.StatusInProgress)).Return(errPut).Once()
+	mark := beats.On("Write", mock.Anything, mock.Anything, beatOf(heartbeat.StatusFailed)).Return(nil).Once()
+	mock.InOrder(first, mark)
+	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker})
+	svc.heartbeatWriter = beats.writerFor
+
+	// Act
+	_, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{From: "baseline"})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionHeartbeatLost)
+	require.ErrorIs(t, err, errPut)
+	repo.AssertExpectations(t)
+	beats.AssertExpectations(t)
+	locker.AssertExpectations(t)
+}
+
+func TestSessionService_CreateSession_HeartbeatLostCancelsTheFork(t *testing.T) {
+	tests := []struct {
+		name    string
+		copyErr error
+	}{
+		// The copy stops on the cancel; its own error gives way to the cause.
+		{name: "the copy is cancelled", copyErr: errors.New("copy compose: context canceled")},
+		// The copy finishes as the cancel lands: Alive refuses the commit.
+		{name: "the copy finishes anyway"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: only the first beat lands, so the deadline (stale age less one interval)
+			// passes and a tick cancels the copy. Strict mocks: a SaveSession call fails the test.
+			errPut := errors.New("store unreachable")
+			locker := &mockLocker{}
+			expectLock(locker)
+			repo := &mockSessionRepo{}
+			beats := &mockHeartbeats{}
+			repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+			repo.On("IsSessionTreeEmpty", mock.Anything, mock.Anything).Return(true, nil).Once()
+			beats.On("Write", mock.Anything, mock.Anything, beatOf(heartbeat.StatusInProgress)).Return(nil).Once()
+			beats.On("Write", mock.Anything, mock.Anything, beatOf(heartbeat.StatusInProgress)).Return(errPut).Maybe()
+			repo.On("CopySession", mock.Anything, model.DefaultSession, mock.Anything, []string{heartbeat.FileName}).
+				Run(func(args mock.Arguments) { <-args.Get(0).(context.Context).Done() }).
+				Return(int64(1), tt.copyErr).Once()
+			beats.On("Write", mock.Anything, mock.Anything, mock.MatchedBy(func(h heartbeat.Heartbeat) bool {
+				return h.Status == heartbeat.StatusFailed && strings.Contains(h.Error, model.ErrSessionHeartbeatLost.Error())
+			})).Return(nil).Once()
+			svc := NewSessionService(SessionDeps{
+				Sessions: repo, Locker: locker,
+				HeartbeatInterval: 10 * time.Millisecond, HeartbeatStaleAfter: 30 * time.Millisecond,
+			})
+			svc.heartbeatWriter = beats.writerFor
+
+			// Act
+			_, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{From: "baseline"})
+
+			// Assert
+			require.ErrorIs(t, err, model.ErrSessionHeartbeatLost)
+			repo.AssertExpectations(t)
+			beats.AssertExpectations(t)
+			locker.AssertExpectations(t)
+		})
+	}
 }
 
 func TestSessionService_CreateSession_NameTaken(t *testing.T) {
@@ -233,7 +537,7 @@ func TestSessionService_CreateSession_UUIDShapedName(t *testing.T) {
 	repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
 	repo.On("SaveSession", mock.Anything, mock.MatchedBy(func(s model.Session) bool { return s.Name == name })).
 		Return(nil).Once()
-	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker, Now: func() time.Time { return sessionNow }})
+	svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker})
 
 	// Act
 	got, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{Name: name})

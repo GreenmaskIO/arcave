@@ -12,7 +12,7 @@ require (
 	github.com/docker/go-connections v0.6.0
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/google/uuid v1.6.0
-	github.com/greenmaskio/storages v0.3.1
+	github.com/greenmaskio/storages v0.3.3
 	github.com/labstack/echo/v4 v4.15.1
 	github.com/labstack/gommon v0.4.2
 	github.com/moby/docker-image-spec v1.3.1

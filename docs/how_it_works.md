@@ -10,7 +10,7 @@ arcave sits between you and the Docker daemon. It does not install an agent, pat
 
 ## You, arcave and the Docker daemon
 
-You are between two things: the savepoints arcave keeps, and the live state your Docker daemon is running. Every arcave command moves state across that gap. `savepoint create` reads the live state into a savepoint. `rollback` writes a savepoint back into the daemon. `session create --from` does both: it copies a savepoint into a new session, then deploys that state into the daemon.
+You are between two things: the savepoints arcave keeps, and the live state your Docker daemon is running. Every arcave command moves state across that gap. `savepoint create` reads the live state into a savepoint. `rollback` writes a savepoint back into the daemon. `session create --from` stays on arcave's side: it copies a session's savepoints into a new session and leaves the daemon alone, so a fork is deployed by a `rollback` inside it.
 
 ```mermaid
 sequenceDiagram
@@ -27,9 +27,10 @@ sequenceDiagram
     Note over S: session baseline, savepoint v1.0
     S->>D: start the services
 
-    U->>S: arcave session create --from=baseline/v1.0 --name=feat/add-new-table
-    Note over S: session feat/add-new-table, savepoint v1.0 copied in
-    S->>D: deploy what savepoint v1.0 recorded
+    U->>S: arcave session create --from=baseline --name=feat/add-new-table
+    Note over S: session feat/add-new-table, baseline's savepoints copied in
+    U->>S: arcave rollback --session=feat/add-new-table v1.0
+    S->>D: restore volumes, layers and spec
     Note over D: the project runs on v1.0
 
     U->>D: write code, run a migration, let an agent work

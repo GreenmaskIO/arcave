@@ -23,12 +23,15 @@ import (
 
 var (
 	sessionCreateFlagName string
+	sessionCreateFlagFrom string
 
 	sessionCreateCmd = &cobra.Command{
 		Use:   "create",
-		Short: "Create an empty session",
-		Args:  cobra.NoArgs,
-		RunE:  runSessionCreate,
+		Short: "Create a session, empty or a copy of another",
+		Long: `Create a session. With --from it copies every compose project and savepoint of
+that session into the new one and touches no container; roll back inside it to deploy.`,
+		Args: cobra.NoArgs,
+		RunE: runSessionCreate,
 	}
 )
 
@@ -38,7 +41,10 @@ func runSessionCreate(cmd *cobra.Command, _ []string) error {
 	}
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
 		return cli.NewSessionCreateHandler(d.service, d.printer).
-			SessionCreate(cmd.Context(), model.CreateSessionRequest{Name: sessionCreateFlagName})
+			SessionCreate(cmd.Context(), model.CreateSessionRequest{
+				Name: sessionCreateFlagName,
+				From: sessionCreateFlagFrom,
+			})
 	})
 }
 
@@ -46,5 +52,7 @@ func init() {
 	// Unbound: it would collide with init --name on the shared name key.
 	sessionCreateCmd.Flags().StringVar(&sessionCreateFlagName, "name", "",
 		"Session name, unique within the arcave project; --session accepts it in place of the id")
+	sessionCreateCmd.Flags().StringVar(&sessionCreateFlagFrom, "from", "",
+		"Session to copy, by name or id; the copy costs that session's size")
 	sessionCmd.AddCommand(sessionCreateCmd)
 }

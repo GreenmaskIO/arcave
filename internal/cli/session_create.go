@@ -33,7 +33,7 @@ func NewSessionCreateHandler(svc sessionCreateService, printer printer) *Session
 	return &SessionCreateHandler{svc: svc, printer: printer}
 }
 
-// SessionCreate creates an empty session and prints its record.
+// SessionCreate creates a session, empty or a clone of req.From, and prints its record.
 func (h *SessionCreateHandler) SessionCreate(ctx context.Context, req model.CreateSessionRequest) error {
 	session, err := h.svc.CreateSession(ctx, req)
 	if err != nil {

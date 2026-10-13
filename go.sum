@@ -248,6 +248,8 @@ github.com/gorilla/websocket v1.5.0 h1:PPwGk2jz7EePpoHN/+ClbZu8SPxiqlu12wZP/3sWm
 github.com/gorilla/websocket v1.5.0/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/greenmaskio/storages v0.3.1 h1:I6IXp1R8WVT11H0uMHZM0hiMA2enBiscTRC15zZr9es=
 github.com/greenmaskio/storages v0.3.1/go.mod h1:+HQ2T9idT4VgmMGIk4/WEXynofj4Mzv5OTWFoRjvq9s=
+github.com/greenmaskio/storages v0.3.3 h1:6dO7onoJHdwdDuE0XGUoOFkMVHTpCPcQkZSSaCiiS9k=
+github.com/greenmaskio/storages v0.3.3/go.mod h1:y4rQqJ1fyIY/FkyJ8ISTDcXPO1RsQsruNXF6c5GgFlE=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 h1:5VipnvEpbqr2gA2VbM+nYVbkIF28c5ZQfqCBQ5g2xfk=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0/go.mod h1:Hyl3n6Twe1hvtd9XUXDec4pTvgMSEixRuQKPTMH2bNs=
 github.com/hailocab/go-hostpool v0.0.0-20160125115350-e80d13ce29ed h1:5upAirOpQc1Q53c0bnx2ufif5kANL7bfZWcc6VJWJd8=
