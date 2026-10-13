@@ -48,7 +48,7 @@ var (
 	// is no config key: one project directory may hold several compose projects.
 	projectName string
 	// sessionRef names the session, by id or name, every project-bound command works in;
-	// empty is model.DefaultSession.
+	// empty is the current session, else model.DefaultSession.
 	sessionRef string
 )
 
@@ -155,11 +155,7 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	}
 
 	ctx := cmd.Context()
-	session, err := resolveSession(ctx, sessionRef)
-	if err != nil {
-		return err
-	}
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, session, model.DockerComposeProjectName(projectName))
+	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(projectName))
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
@@ -171,11 +167,9 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	return fn(ctx, deps)
 }
 
-// resolveSession turns a --session value into the id of a session that exists.
+// resolveSession turns a --session value into the id of a session that exists, for a command that
+// opens no compose project's dependencies; "" is the current session, else the default.
 func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
-	if ref == "" {
-		return model.DefaultSession, nil
-	}
 	var record model.Session
 	err := withSessionDeps(ctx, func(d *sessionDependencies) error {
 		var err error
@@ -183,7 +177,7 @@ func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
 		return err
 	})
 	if err != nil {
-		return model.SessionID{}, fmt.Errorf("resolve --session: %w", err)
+		return model.SessionID{}, err
 	}
 	return record.ID, nil
 }
@@ -210,7 +204,8 @@ func init() {
 	pf.StringVarP(&projectName, "project-name", "p", "",
 		fmt.Sprintf("Docker Compose project to operate on, as 'docker compose ls' names it (env %s)", projectNameEnv))
 	pf.StringVar(&sessionRef, "session", "",
-		fmt.Sprintf("Session to work in, by name or id (default %q; env %s)", model.DefaultSessionName, sessionEnv))
+		fmt.Sprintf("Session to work in, by name or id (default: the current session, see 'arcave session set', else %q; env %s)",
+			model.DefaultSessionName, sessionEnv))
 	pf.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
 	pf.String("log-level", utils.DefaultLogLevel,
 		fmt.Sprintf(

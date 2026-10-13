@@ -110,3 +110,53 @@ func TestSessionDeleteHandler_SessionDelete(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionSetHandler_SessionSet(t *testing.T) {
+	// Arrange
+	record := model.Session{ID: handlerSession, Name: "exp"}
+	p := &capturePrinter{}
+	p.On("Print", mock.Anything).Return(nil).Once()
+	svc := &mockService{}
+	svc.On("SetSession", mock.Anything, "exp").Return(record, nil).Once()
+
+	// Act
+	err := NewSessionSetHandler(svc, p).SessionSet(context.Background(), "exp")
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, []any{record}, p.printed())
+	svc.AssertExpectations(t)
+}
+
+func TestSessionUnsetHandler_SessionUnset(t *testing.T) {
+	// Arrange
+	p := &capturePrinter{}
+	p.On("Print", mock.Anything).Return(nil).Once()
+	svc := &mockService{}
+	svc.On("UnsetSession", mock.Anything).Return(model.DefaultSessionRecord, nil).Once()
+
+	// Act
+	err := NewSessionUnsetHandler(svc, p).SessionUnset(context.Background())
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, []any{model.DefaultSessionRecord}, p.printed())
+	svc.AssertExpectations(t)
+}
+
+func TestSessionCurrentHandler_SessionCurrent(t *testing.T) {
+	// Arrange
+	record := model.Session{ID: handlerSession, Name: "exp"}
+	p := &capturePrinter{}
+	p.On("Print", mock.Anything).Return(nil).Once()
+	svc := &mockService{}
+	svc.On("ResolveSession", mock.Anything, "").Return(record, nil).Once()
+
+	// Act
+	err := NewSessionCurrentHandler(svc, p).SessionCurrent(context.Background(), "")
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, []any{record}, p.printed())
+	svc.AssertExpectations(t)
+}

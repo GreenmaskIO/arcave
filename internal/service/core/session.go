@@ -42,6 +42,14 @@ type sessionRepository interface {
 	SessionSize(ctx context.Context, id model.SessionID) (int64, error)
 }
 
+// currentSessionPointer is .arcave/current_session: the session a command works in when it
+// names none.
+type currentSessionPointer interface {
+	Get(ctx context.Context) (id model.SessionID, found bool, err error)
+	Put(ctx context.Context, id model.SessionID) error
+	Clear(ctx context.Context) error
+}
+
 type heartbeatWriter interface {
 	Write(ctx context.Context, h heartbeat.Heartbeat) error
 }
@@ -55,6 +63,8 @@ type SessionDeps struct {
 	Sessions sessionRepository
 	Locker   projectLocker
 	Inflight inflightMarkers
+	// Current is the current-session pointer.
+	Current currentSessionPointer
 	// Store is the arcave project store a fork's heartbeat is written into and read from.
 	Store storages.Navigator
 	// RunnerInfo identifies this process in a fork's heartbeat.
@@ -71,6 +81,7 @@ type SessionService struct {
 	sessions   sessionRepository
 	locker     projectLocker
 	inflight   inflightMarkers
+	current    currentSessionPointer
 	runnerInfo heartbeat.RunnerInfo
 	// heartbeatInterval and heartbeatStaleAfter time a fork's heartbeat.
 	heartbeatInterval   time.Duration
@@ -86,6 +97,7 @@ func NewSessionService(d SessionDeps) *SessionService {
 		sessions:            d.Sessions,
 		locker:              d.Locker,
 		inflight:            d.Inflight,
+		current:             d.Current,
 		runnerInfo:          d.RunnerInfo,
 		heartbeatInterval:   cmp.Or(d.HeartbeatInterval, heartbeat.DefaultInterval),
 		heartbeatStaleAfter: staleAfter,
@@ -106,25 +118,92 @@ func NewSessionService(d SessionDeps) *SessionService {
 	}
 }
 
-// ResolveSession finds the session ref names: by name first, then by id; "" is the default.
+// ResolveSession finds the session ref names: by name first, then by id. "" is the current
+// session, or the default when no pointer is set; a pointer to a deleted session is refused.
 func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
-	if ref == "" {
+	if ref != "" {
+		records, err := s.sessions.ListSessions(ctx)
+		if err != nil {
+			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
+		}
+		record, err := findSessionByRef(records, ref)
+		if err != nil {
+			return model.Session{}, err
+		}
+		logResolved(ctx, record, "ref", ref)
+		return record, nil
+	}
+	id, found, err := s.readCurrent(ctx)
+	if err != nil {
+		return model.Session{}, err
+	}
+	if !found {
+		logResolved(ctx, model.DefaultSessionRecord, "default", "")
 		return model.DefaultSessionRecord, nil
 	}
 	records, err := s.sessions.ListSessions(ctx)
 	if err != nil {
 		return model.Session{}, fmt.Errorf("listing sessions: %w", err)
 	}
-	return findSessionByRef(records, ref)
+	if record, found := findSessionByID(records, id.String()); found {
+		logResolved(ctx, record, "pointer", "")
+		return record, nil
+	}
+	return model.Session{}, fmt.Errorf("%w: %s, named by %s/current_session; "+
+		"run 'arcave session unset' or 'arcave session set <session>'", model.ErrCurrentSessionNotFound, id, model.StateDir)
+}
+
+// logResolved records which session a command works in and what named it: a ref, the pointer
+// or the default.
+func logResolved(ctx context.Context, record model.Session, by, ref string) {
+	zerolog.Ctx(ctx).Debug().Str("session", record.ID.String()).Str("name", record.Name).
+		Str("by", by).Str("ref", ref).Msg("session resolved")
+}
+
+// SetSession makes the session ref names the current one.
+func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Session, error) {
+	if ref == "" {
+		return model.Session{}, model.ErrNoSessionRef
+	}
+	return withUnlock(ctx, s.locker, func() (model.Session, error) {
+		records, err := s.sessions.ListSessions(ctx)
+		if err != nil {
+			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
+		}
+		record, err := findSessionByRef(records, ref)
+		if err != nil {
+			return model.Session{}, err
+		}
+		if err := s.current.Put(ctx, record.ID); err != nil {
+			return model.Session{}, err
+		}
+		zerolog.Ctx(ctx).Info().Str("session", record.ID.String()).Str("name", record.Name).
+			Msg("current session set")
+		return record, nil
+	})
+}
+
+// UnsetSession clears the current-session pointer, so commands that name no session work in
+// the default one.
+func (s *SessionService) UnsetSession(ctx context.Context) (model.Session, error) {
+	return withUnlock(ctx, s.locker, func() (model.Session, error) {
+		if err := s.current.Clear(ctx); err != nil {
+			return model.Session{}, err
+		}
+		zerolog.Ctx(ctx).Info().Msg("current session cleared; commands now work in the default session")
+		return model.DefaultSessionRecord, nil
+	})
 }
 
 // ListSessions returns every session oldest first; the default, created by no one, leads.
-// req.All adds the trees without a record, each with the status its heartbeat gives it.
+// req.All adds the trees without a record, each with the status its heartbeat gives it; the
+// session req.Ref resolves to is marked current.
 func (s *SessionService) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
 	records, err := s.sessions.ListSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
+	current := s.findCurrent(ctx, records, req.Ref)
 	summaries := make([]model.SessionSummary, 0, len(records))
 	for _, record := range records {
 		summary, err := s.summarize(ctx, record)
@@ -132,6 +211,7 @@ func (s *SessionService) ListSessions(ctx context.Context, req model.ListSession
 			return nil, err
 		}
 		summary.Status = model.SessionStatusReady
+		summary.Current = record.ID == current
 		summaries = append(summaries, summary)
 	}
 	if req.All {
@@ -141,6 +221,8 @@ func (s *SessionService) ListSessions(ctx context.Context, req model.ListSession
 		}
 		summaries = append(summaries, uncommitted...)
 	}
+	zerolog.Ctx(ctx).Debug().Int("committed", len(records)).Int("listed", len(summaries)).
+		Str("current", current.String()).Bool("all", req.All).Msg("sessions listed")
 	slices.SortStableFunc(summaries, func(a, b model.SessionSummary) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return summaries, nil
 }
@@ -171,6 +253,8 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 			if err := s.sessions.SaveSession(ctx, record); err != nil {
 				return model.Session{}, fmt.Errorf("committing session %s: %w", record.ID, err)
 			}
+			zerolog.Ctx(ctx).Info().Str("session", record.ID.String()).Str("name", record.Name).
+				Msg("session created")
 			return record, nil
 		}
 		source, err := findSessionByRef(records, req.From)
@@ -178,6 +262,8 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 			return model.Session{}, err
 		}
 		record.From = &model.SessionOrigin{Session: source.ID}
+		zerolog.Ctx(ctx).Debug().Str("session", record.ID.String()).Str("name", record.Name).
+			Str("from", source.ID.String()).Str("from_name", source.Name).Msg("forking session")
 		if err := s.forkSession(ctx, record); err != nil {
 			return model.Session{}, err
 		}
@@ -186,15 +272,21 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 }
 
 // DeleteSession drops a session and everything it holds, and reports the bytes freed. It refuses
-// the default session, one an inflight marker names, and a tree still cloning or unknown unless forced.
+// the default session and one an inflight marker names; the current or pinned session, and a tree
+// still cloning or unknown, only unless forced. Forcing the current one clears the pointer.
 func (s *SessionService) DeleteSession(
 	ctx context.Context, req model.DeleteSessionRequest,
 ) (model.DeleteSessionResponse, error) {
+	if req.Session == "" {
+		return model.DeleteSessionResponse{}, model.ErrNoSessionRef
+	}
 	return withUnlock(ctx, s.locker, func() (model.DeleteSessionResponse, error) {
 		id, err := s.findDeletable(ctx, req)
 		if err != nil {
 			return model.DeleteSessionResponse{}, err
 		}
+		zerolog.Ctx(ctx).Debug().Str("ref", req.Session).Str("session", id.String()).Bool("force", req.Force).
+			Msg("session to delete found")
 		if id == model.DefaultSession {
 			return model.DeleteSessionResponse{}, model.ErrDefaultSessionDelete
 		}
@@ -208,15 +300,29 @@ func (s *SessionService) DeleteSession(
 				Str("compose_project", marker.ComposeProject.String()).Msg(recoveryHint(marker))
 			return model.DeleteSessionResponse{}, err
 		}
+		current, err := s.requireNotInUse(ctx, id, req)
+		if err != nil {
+			return model.DeleteSessionResponse{}, err
+		}
 		size, err := s.sessions.SessionSize(ctx, id)
 		if err != nil {
 			return model.DeleteSessionResponse{}, err
 		}
+		zerolog.Ctx(ctx).Debug().Str("session", id.String()).Int64("size_bytes", size).Msg("deleting session")
 		if err := s.sessions.DeleteSession(ctx, id); err != nil {
 			return model.DeleteSessionResponse{}, fmt.Errorf("deleting session %s: %w", id, err)
 		}
 		zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
 			Msg("session deleted; any compose project running from it is left as it is")
+		if current {
+			if err := s.current.Clear(ctx); err != nil {
+				zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).
+					Msg("the deleted session is still the current one; run 'arcave session unset'")
+			} else {
+				zerolog.Ctx(ctx).Info().Str("session", id.String()).
+					Msg("the deleted session was the current one; commands now work in the default session")
+			}
+		}
 		return model.DeleteSessionResponse{
 			Session:    id,
 			Deleted:    true,
@@ -236,6 +342,7 @@ func (s *SessionService) findDeletable(ctx context.Context, req model.DeleteSess
 	if parseErr != nil {
 		return model.SessionID{}, err
 	}
+	zerolog.Ctx(ctx).Debug().Str("session", id.String()).Msg("no session record; looking for a tree without one")
 	uncommitted, listErr := s.sessions.ListUncommittedSessions(ctx)
 	if listErr != nil {
 		return model.SessionID{}, fmt.Errorf("listing sessions: %w", listErr)
@@ -257,6 +364,75 @@ func (s *SessionService) findDeletable(ctx context.Context, req model.DeleteSess
 	zerolog.Ctx(ctx).Info().Str("session", id.String()).Str("status", string(status)).
 		Msg("deleting a session tree without a record")
 	return id, nil
+}
+
+// requireNotInUse refuses id when it is the current or the pinned session, unless req.Force; it
+// reports whether id is the current one. An unreadable pointer names no session.
+func (s *SessionService) requireNotInUse(
+	ctx context.Context, id model.SessionID, req model.DeleteSessionRequest,
+) (bool, error) {
+	pointer, found := s.readCurrentOrNone(ctx)
+	current := found && pointer == id
+	if req.Force {
+		if current || req.Pinned == id {
+			zerolog.Ctx(ctx).Debug().Str("session", id.String()).Bool("current", current).
+				Bool("pinned", req.Pinned == id).Msg("deleting a session in use, forced")
+		}
+		return current, nil
+	}
+	if current {
+		return false, fmt.Errorf("%w: %s; switch with 'arcave session set <session>' or 'arcave session unset' "+
+			"first, or force it to delete it and clear the pointer", model.ErrCurrentSessionDelete, id)
+	}
+	if req.Pinned == id {
+		return false, fmt.Errorf("%w: %s is the session this MCP server is pinned to; force it to delete it anyway",
+			model.ErrCurrentSessionDelete, id)
+	}
+	return false, nil
+}
+
+// readCurrent reads the current-session pointer, naming the way out of an unreadable one.
+func (s *SessionService) readCurrent(ctx context.Context) (model.SessionID, bool, error) {
+	id, found, err := s.current.Get(ctx)
+	if err != nil {
+		return model.SessionID{}, false, fmt.Errorf("%w; run 'arcave session unset' or 'arcave session set <session>'", err)
+	}
+	zerolog.Ctx(ctx).Debug().Bool("found", found).Str("session", id.String()).Msg("current-session pointer read")
+	return id, found, nil
+}
+
+// readCurrentOrNone reads the pointer for a command it only informs: an unreadable one is
+// logged and read as none.
+func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID, bool) {
+	id, found, err := s.readCurrent(ctx)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
+		return model.SessionID{}, false
+	}
+	return id, found
+}
+
+// findCurrent is the session ref resolves to among records, or the current session for ""; zero
+// when ref names none or the pointer cannot be read.
+func (s *SessionService) findCurrent(ctx context.Context, records []model.Session, ref string) model.SessionID {
+	if ref != "" {
+		record, err := findSessionByRef(records, ref)
+		if err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Msg("marking the current session")
+			return model.SessionID{}
+		}
+		return record.ID
+	}
+	id, found, err := s.readCurrent(ctx)
+	switch {
+	case err != nil:
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
+		return model.SessionID{}
+	case !found:
+		return model.DefaultSession
+	default:
+		return id
+	}
 }
 
 // findSessionByRef finds the record ref names among records: by name first, then by id.
@@ -321,6 +497,8 @@ func (s *SessionService) summarize(ctx context.Context, record model.Session) (m
 			}
 		}
 	}
+	zerolog.Ctx(ctx).Debug().Str("session", record.ID.String()).Int("compose_projects", len(groups)).
+		Int("savepoints", summary.SavepointCount).Int64("size_bytes", size).Msg("session summarized")
 	return summary, nil
 }
 
@@ -330,6 +508,7 @@ func (s *SessionService) listUncommitted(ctx context.Context) ([]model.SessionSu
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
+	zerolog.Ctx(ctx).Debug().Int("trees", len(ids)).Msg("session trees without a record found")
 	summaries := make([]model.SessionSummary, 0, len(ids))
 	for _, id := range ids {
 		status, h, readErr := s.readTreeStatus(ctx, id)
@@ -363,12 +542,15 @@ func (s *SessionService) readTreeStatus(
 	}
 	h, err := reader.Read(ctx)
 	if errors.Is(err, model.ErrHeartbeatNotFound) {
+		zerolog.Ctx(ctx).Debug().Str("session", id.String()).Msg("tree has no heartbeat")
 		return model.SessionStatusIncomplete, heartbeat.Heartbeat{}, nil
 	}
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).Msg("reading the heartbeat")
 		return model.SessionStatusUnknown, heartbeat.Heartbeat{}, err
 	}
+	zerolog.Ctx(ctx).Debug().Str("session", id.String()).Str("operation", string(h.Operation)).
+		Str("status", string(h.Status)).Time("updated_at", h.UpdatedAt).Msg("tree heartbeat read")
 	switch {
 	case h.Status == heartbeat.StatusDone:
 		return model.SessionStatusIncomplete, h, nil
@@ -433,6 +615,8 @@ func (s *SessionService) forkSession(ctx context.Context, record model.Session) 
 		abandonFork(ctx, hb, record.ID, err)
 		return err
 	}
+	zerolog.Ctx(ctx).Debug().Str("session", record.ID.String()).Str("from", source.String()).
+		Msg("heartbeat started; copying the source tree")
 	copied, err := s.sessions.CopySession(copyCtx, source, record.ID, heartbeat.FileName)
 	hb.Stop()
 	if err != nil {
@@ -457,6 +641,7 @@ func (s *SessionService) forkSession(ctx context.Context, record model.Session) 
 		return err
 	}
 	hb.Finish(ctx)
+	zerolog.Ctx(ctx).Debug().Str("session", record.ID.String()).Msg("fork committed")
 	return nil
 }
 

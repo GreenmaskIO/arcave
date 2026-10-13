@@ -135,6 +135,54 @@ func (f *fakeInflight) Clear(_ context.Context) error {
 	return nil
 }
 
+// fakePointer is a stateful stand-in for .arcave/current_session; the zero value holds none.
+type fakePointer struct {
+	mu       sync.Mutex
+	id       *model.SessionID
+	err      error // returned by every call when set
+	clearErr error // returned by Clear alone when set
+}
+
+func (f *fakePointer) Get(_ context.Context) (model.SessionID, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return model.SessionID{}, false, f.err
+	}
+	if f.id == nil {
+		return model.SessionID{}, false, nil
+	}
+	return *f.id, true, nil
+}
+
+func (f *fakePointer) Put(_ context.Context, id model.SessionID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	f.id = &id
+	return nil
+}
+
+func (f *fakePointer) Clear(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	if f.clearErr != nil {
+		return f.clearErr
+	}
+	f.id = nil
+	return nil
+}
+
+// pointerAt is a fakePointer holding id.
+func pointerAt(id model.SessionID) *fakePointer {
+	return &fakePointer{id: &id}
+}
+
 type mockInflight struct{ mock.Mock }
 
 func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, error) {

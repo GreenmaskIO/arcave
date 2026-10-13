@@ -15,13 +15,18 @@
 package cli
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // serverVersion is the version arcave reports to the MCP host during initialise.
@@ -35,21 +40,53 @@ type MCPService interface {
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
 }
 
-// MCPServiceFactory builds the workflows for one compose project, plus the release
-// the tool call invokes on return.
-type MCPServiceFactory func(ctx context.Context, project string) (svc MCPService, release func(), err error)
+// MCPServiceFactory builds the workflows for one compose project in the session ref names, ""
+// being the current one, plus the release the tool call invokes on return.
+type MCPServiceFactory func(ctx context.Context, project, session string) (svc MCPService, release func(), err error)
 
-// MCPHandler serves arcave's savepoint workflows as MCP tools over stdio.
+// MCPSessionService is the MCP adapter's view of the session commands.
+type MCPSessionService interface {
+	ResolveSession(ctx context.Context, ref string) (model.Session, error)
+	ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error)
+	CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error)
+	DeleteSession(ctx context.Context, req model.DeleteSessionRequest) (model.DeleteSessionResponse, error)
+	SetSession(ctx context.Context, ref string) (model.Session, error)
+	UnsetSession(ctx context.Context) (model.Session, error)
+}
+
+// MCPSessionServiceFactory builds the session commands, plus the release the tool call invokes on return.
+type MCPSessionServiceFactory func(ctx context.Context) (svc MCPSessionService, release func(), err error)
+
+// MCPHandler serves arcave's savepoint and session workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
 	serviceFactory        MCPServiceFactory
+	sessionFactory        MCPSessionServiceFactory
+	pin                   model.SessionID
 	leftoverVolumesPolicy model.LeftoverVolumesPolicy
 }
 
-// NewMCPHandler builds the MCP adapter; the compose project a call operates on arrives with the call,
-// and leftoverVolumes is the project's rollback.leftover_volumes.
-func NewMCPHandler(serviceFactory MCPServiceFactory, leftoverVolumes model.LeftoverVolumesPolicy) *MCPHandler {
-	return &MCPHandler{serviceFactory: serviceFactory, leftoverVolumesPolicy: leftoverVolumes}
+// NewMCPHandler builds the MCP adapter; pin is the session the server was started in, zero to
+// follow the current one, and leftoverVolumes is the project's rollback.leftover_volumes.
+func NewMCPHandler(
+	serviceFactory MCPServiceFactory, sessionFactory MCPSessionServiceFactory,
+	pin model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
+) *MCPHandler {
+	return &MCPHandler{
+		serviceFactory:        serviceFactory,
+		sessionFactory:        sessionFactory,
+		pin:                   pin,
+		leftoverVolumesPolicy: leftoverVolumes,
+	}
+}
+
+// openService builds the workflows for project in session, else in the pinned or current session.
+func (h *MCPHandler) openService(ctx context.Context, project, session string) (MCPService, func(), error) {
+	svc, release, err := h.serviceFactory(ctx, project, cmp.Or(session, h.pinRef()))
+	if err != nil {
+		return nil, nil, mcpError(err)
+	}
+	return svc, release, nil
 }
 
 // The tool descriptions are written for an agent deciding *when* to call, not
@@ -87,11 +124,37 @@ const (
 		"a service only sees a subpath of. arcave takes a safety snapshot of the live state first " +
 		"and replays it automatically if the rollback fails, so a failed rollback leaves the " +
 		"environment as it was. Services are stopped and started again."
+	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — oldest " +
+		"first, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current " +
+		"marks the session the other tools work in when they are given no session — the one session_current " +
+		"names. all adds session trees " +
+		"without a record — forks still cloning, failed or left incomplete — with their status."
+	descSessionCreate = "Create a session: empty, or with from a copy (fork) of another session — every " +
+		"compose project and savepoint it holds. A fork copies the whole session, so it costs that session's " +
+		"size_bytes in time and space, and it touches no container: to run the forked state, call " +
+		"session_set (or pass session) and then rollback to one of its savepoints. A fork holds the project " +
+		"lock for its whole copy, so every other tool fails with a lock error until it finishes."
+	descSessionDelete = "Delete a session and every savepoint it holds, permanently. A compose project " +
+		"running from it is left as it is. The default session (baseline) cannot be deleted. The current " +
+		"session, and the one this server is pinned to, are refused unless force is set, which also resets the current session to baseline; force " +
+		"likewise deletes a tree whose fork still looks alive — only when no fork is running."
+	descSessionSet = "Make a session the current one, by name or id: every later tool call that is given " +
+		"no session works in it — and so do the user's own arcave commands in this project directory, " +
+		"which share the pointer. session_unset goes back to the default session. Refused when the server " +
+		"was started with --session: pass session per call instead."
+	descSessionCurrent = "Show the session tool calls work in when they are given no session: the one the " +
+		"server was started with --session, else the current session, else the default (baseline). Read-only. " +
+		"Fails when the current session no longer exists; session_unset or session_set repairs it."
+	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
+		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
+		"directory. It is also the way out when the current session no longer exists. Refused when the " +
+		"server was started with --session."
 )
 
 // createInput is savepoint_create's input schema.
 type createInput struct {
 	Project     string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	Session     string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	Name        string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by arcave"`
 	Description string `json:"description,omitempty" jsonschema:"what this savepoint captures, e.g. the change it is being taken before"`
 	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
@@ -103,7 +166,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
-	svc, release, err := h.serviceFactory(ctx, in.Project)
+	svc, release, err := h.openService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
@@ -115,7 +178,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 		WaitTimeout: waitTimeout,
 	})
 	if err != nil {
-		return nil, model.Savepoint{}, err
+		return nil, model.Savepoint{}, mcpError(err)
 	}
 	return nil, sp, nil
 }
@@ -145,13 +208,14 @@ type listOutput struct {
 // otherwise argument-free.
 type listSavepointInput struct {
 	Project                string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	Session                string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	IncludeSafetySnapshots bool   `json:"include_safety_snapshots,omitempty" jsonschema:"also list the safety snapshots a rollback commits for its own undo; hidden by default"`
 }
 
 // listSavepoints reports the savepoints in the store. It reaches no daemon and
 // takes no lock, so it is safe to call while another workflow is running.
 func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in listSavepointInput) (*mcpsdk.CallToolResult, listOutput, error) {
-	svc, release, err := h.serviceFactory(ctx, in.Project)
+	svc, release, err := h.openService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, listOutput{}, err
 	}
@@ -159,7 +223,7 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 
 	sps, err := svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
 	if err != nil {
-		return nil, listOutput{}, err
+		return nil, listOutput{}, mcpError(err)
 	}
 	// A non-nil empty slice marshals as [] rather than null, so an agent reading
 	// the result never has to tell "no savepoints" from "no such field".
@@ -173,6 +237,7 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 // retention rules (the two modes are mutually exclusive).
 type removeSavepointInput struct {
 	Project      string   `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	Session      string   `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	IDs          []string `json:"ids,omitempty" jsonschema:"savepoint ids to delete; cannot be combined with the retention fields"`
 	RetainRecent int      `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest"`
 	RetainFor    string   `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
@@ -182,7 +247,7 @@ type removeSavepointInput struct {
 
 // removeSavepoints deletes the selected savepoints and reports what went.
 func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResponse, error) {
-	svc, release, err := h.serviceFactory(ctx, in.Project)
+	svc, release, err := h.openService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, model.RemoveResponse{}, err
 	}
@@ -196,7 +261,7 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 		DryRun:       in.DryRun,
 	})
 	if err != nil {
-		return nil, model.RemoveResponse{}, removeUsageError(err)
+		return nil, model.RemoveResponse{}, mcpError(removeUsageError(err))
 	}
 	return nil, model.RemoveResponse(res), nil
 }
@@ -204,6 +269,7 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 // rollbackInput is rollback's input schema.
 type rollbackInput struct {
 	Project     string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	Session     string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	Ref         string `json:"ref" jsonschema:"the savepoint to restore: its id, its name, or the literal 'latest'"`
 	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
 }
@@ -214,7 +280,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
-	svc, release, err := h.serviceFactory(ctx, in.Project)
+	svc, release, err := h.openService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
@@ -222,7 +288,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 
 	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.leftoverVolumesPolicy))
 	if err != nil {
-		return nil, model.RollbackResponse{}, err
+		return nil, model.RollbackResponse{}, mcpError(err)
 	}
 	return nil, model.RollbackResponse{
 		RolledBackTo: res.Savepoint,
@@ -230,15 +296,201 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	}, nil
 }
 
-// Run registers the tools and serves them over stdio until the host closes stdin
-// or ctx is cancelled.
+// sessionListInput is session_list's input schema.
+type sessionListInput struct {
+	All bool `json:"all,omitempty" jsonschema:"also list session trees without a record: forks cloning, failed or left incomplete"`
+}
+
+// sessionListOutput wraps the sessions, because MCP structured output must be a JSON object.
+type sessionListOutput struct {
+	Sessions []model.SessionSummary `json:"sessions" jsonschema:"the arcave project's sessions, oldest first"`
+}
+
+// listSessionsMCP reports the arcave project's sessions.
+func (h *MCPHandler) listSessionsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionListInput) (*mcpsdk.CallToolResult, sessionListOutput, error) {
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, sessionListOutput{}, err
+	}
+	defer release()
+
+	sessions, err := svc.ListSessions(ctx, model.ListSessionsRequest{All: in.All, Ref: h.pinRef()})
+	if err != nil {
+		return nil, sessionListOutput{}, mcpError(err)
+	}
+	if sessions == nil {
+		sessions = []model.SessionSummary{}
+	}
+	return nil, sessionListOutput{Sessions: sessions}, nil
+}
+
+// sessionCreateInput is session_create's input schema.
+type sessionCreateInput struct {
+	Name string `json:"name,omitempty" jsonschema:"a name for the session, unique within the arcave project; ids are assigned by arcave"`
+	From string `json:"from,omitempty" jsonschema:"the session to copy, by name or id; omit for an empty session"`
+}
+
+// createSessionMCP commits a session, empty or a fork of another.
+func (h *MCPHandler) createSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionCreateInput) (*mcpsdk.CallToolResult, model.Session, error) {
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, model.Session{}, err
+	}
+	defer release()
+
+	session, err := svc.CreateSession(ctx, model.CreateSessionRequest{Name: in.Name, From: in.From})
+	if err != nil {
+		return nil, model.Session{}, mcpError(err)
+	}
+	return nil, session, nil
+}
+
+// sessionDeleteInput is session_delete's input schema.
+type sessionDeleteInput struct {
+	Session string `json:"session" jsonschema:"the session to delete, by name or id; a tree without a record by id only"`
+	Force   bool   `json:"force,omitempty" jsonschema:"also delete the current session, resetting the current session to baseline, or a tree whose fork still looks alive"`
+}
+
+// deleteSessionMCP deletes a session and reports the bytes it freed.
+func (h *MCPHandler) deleteSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionDeleteInput) (*mcpsdk.CallToolResult, model.DeleteSessionResponse, error) {
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, model.DeleteSessionResponse{}, err
+	}
+	defer release()
+
+	res, err := svc.DeleteSession(ctx, model.DeleteSessionRequest{Session: in.Session, Force: in.Force, Pinned: h.pin})
+	if err != nil {
+		return nil, model.DeleteSessionResponse{}, mcpError(err)
+	}
+	return nil, res, nil
+}
+
+// sessionSetInput is session_set's input schema.
+type sessionSetInput struct {
+	Session string `json:"session" jsonschema:"the session to make current, by name or id; baseline is the default session"`
+}
+
+// setSessionMCP makes a session the current one; a server pinned by --session refuses.
+func (h *MCPHandler) setSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionSetInput) (*mcpsdk.CallToolResult, model.Session, error) {
+	if err := h.requireUnpinned(); err != nil {
+		return nil, model.Session{}, err
+	}
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, model.Session{}, err
+	}
+	defer release()
+
+	session, err := svc.SetSession(ctx, in.Session)
+	if err != nil {
+		return nil, model.Session{}, mcpError(err)
+	}
+	return nil, session, nil
+}
+
+// currentSessionMCP reports the session a call given no session works in.
+func (h *MCPHandler) currentSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, model.Session, error) {
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, model.Session{}, err
+	}
+	defer release()
+
+	session, err := svc.ResolveSession(ctx, h.pinRef())
+	if err != nil {
+		return nil, model.Session{}, mcpError(err)
+	}
+	return nil, session, nil
+}
+
+// unsetSessionMCP clears the current session; a server pinned by --session refuses.
+func (h *MCPHandler) unsetSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, model.Session, error) {
+	if err := h.requireUnpinned(); err != nil {
+		return nil, model.Session{}, err
+	}
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, model.Session{}, err
+	}
+	defer release()
+
+	session, err := svc.UnsetSession(ctx)
+	if err != nil {
+		return nil, model.Session{}, mcpError(err)
+	}
+	return nil, session, nil
+}
+
+// requireUnpinned refuses to move the current session from a server pinned by --session, whose
+// calls the pointer does not reach.
+func (h *MCPHandler) requireUnpinned() error {
+	if h.pin == (model.SessionID{}) {
+		return nil
+	}
+	return fmt.Errorf("this server is pinned to session %q by --session or ARCAVE_SESSION, "+
+		"which outranks the current session: pass session on each call, or restart the server without the pin", h.pin.String())
+}
+
+// pinRef is the pin as a session ref, "" when the server is not pinned.
+func (h *MCPHandler) pinRef() string {
+	if h.pin == (model.SessionID{}) {
+		return ""
+	}
+	return h.pin.String()
+}
+
+// openSessionService builds the session commands for one tool call.
+func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService, func(), error) {
+	svc, release, err := h.sessionFactory(ctx)
+	if err != nil {
+		return nil, nil, mcpError(err)
+	}
+	return svc, release, nil
+}
+
+// mcpError names what holds the project lock, so an agent waits instead of retrying blind.
+func mcpError(err error) error {
+	if errors.Is(err, model.ErrProjectLocked) {
+		return fmt.Errorf("%w: a session fork holds the lock for its whole copy, as does a savepoint or "+
+			"rollback for its run; retry when it finishes", err)
+	}
+	return err
+}
+
+// MCPRun serves the tools over stdio until the host closes stdin or ctx is cancelled.
 func (h *MCPHandler) MCPRun(ctx context.Context) error {
+	return h.Server().Run(ctx, &mcpsdk.StdioTransport{})
+}
+
+// Server is the MCP server with every tool registered, for any transport.
+func (h *MCPHandler) Server() *mcpsdk.Server {
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "arcave", Version: serverVersion}, nil)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_create", Description: descCreate}, h.createSavepointMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList}, h.listSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove}, h.removeSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_list", Description: descSessionList,
+		OutputSchema: outputSchema[sessionListOutput]()}, h.listSessionsMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_create", Description: descSessionCreate,
+		OutputSchema: outputSchema[model.Session]()}, h.createSessionMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_delete", Description: descSessionDelete,
+		OutputSchema: outputSchema[model.DeleteSessionResponse]()}, h.deleteSessionMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_current", Description: descSessionCurrent,
+		OutputSchema: outputSchema[model.Session]()}, h.currentSessionMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_set", Description: descSessionSet,
+		OutputSchema: outputSchema[model.Session]()}, h.setSessionMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_unset", Description: descSessionUnset,
+		OutputSchema: outputSchema[model.Session]()}, h.unsetSessionMCP)
 
-	return srv.Run(ctx, &mcpsdk.StdioTransport{})
+	return srv
+}
+
+// outputSchema infers T's schema with a session id as the string it marshals to: inferred from
+// its Go type, it would be an array, and the SDK would refuse every result.
+func outputSchema[T any]() *jsonschema.Schema {
+	return utils.Must(jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+		reflect.TypeFor[model.SessionID](): {Type: "string", Format: "uuid"},
+	}}))
 }
