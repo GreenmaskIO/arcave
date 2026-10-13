@@ -15,6 +15,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strings"
@@ -34,6 +35,8 @@ import (
 var (
 	otherSession = model.SessionID(uuid.MustParse("7d1e3b2a-4c5f-4a6e-8b9d-0e1f2a3b4c5d"))
 	thirdSession = model.SessionID(uuid.MustParse("019e1111-0000-7000-8000-000000000000"))
+	// forkedSession is a fourth id, for listings that need one more tree.
+	forkedSession = model.SessionID(uuid.MustParse("019e2222-0000-7000-8000-000000000000"))
 )
 
 var sessionNow = time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
@@ -64,6 +67,11 @@ func (m *mockSessionRepo) LoadSession(ctx context.Context, id model.SessionID) (
 func (m *mockSessionRepo) ListSessions(ctx context.Context) ([]model.Session, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]model.Session), args.Error(1)
+}
+
+func (m *mockSessionRepo) ListUncommittedSessions(ctx context.Context) ([]model.SessionID, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]model.SessionID), args.Error(1)
 }
 
 func (m *mockSessionRepo) DeleteSession(ctx context.Context, id model.SessionID) error {
@@ -101,6 +109,34 @@ type sessionBeats struct {
 
 func (w sessionBeats) Write(ctx context.Context, h heartbeat.Heartbeat) error {
 	return w.beats.Write(ctx, w.id, h)
+}
+
+// fakeBeat is a tree's heartbeat as the reader returns it; found false is none.
+type fakeBeat struct {
+	h     heartbeat.Heartbeat
+	found bool
+	err   error
+}
+
+func (b fakeBeat) Read(context.Context) (heartbeat.Heartbeat, error) {
+	if b.err != nil {
+		return heartbeat.Heartbeat{}, b.err
+	}
+	if !b.found {
+		return heartbeat.Heartbeat{}, model.ErrHeartbeatNotFound
+	}
+	return b.h, nil
+}
+
+// readBeats opens each session's heartbeat from beats, failing to read those in errs; a
+// session in neither has none.
+func readBeats(
+	beats map[model.SessionID]heartbeat.Heartbeat, errs map[model.SessionID]error,
+) func(model.SessionID) (heartbeatReader, error) {
+	return func(id model.SessionID) (heartbeatReader, error) {
+		h, found := beats[id]
+		return fakeBeat{h: h, found: found, err: errs[id]}, nil
+	}
 }
 
 var testRunnerInfo = heartbeat.RunnerInfo{Host: "box", PID: 42, ArcaveVersion: "dev"}
@@ -206,15 +242,68 @@ func TestSessionService_ListSessions(t *testing.T) {
 	svc := NewSessionService(SessionDeps{Sessions: repo})
 
 	// Act
-	got, err := svc.ListSessions(context.Background())
+	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{})
 
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []model.SessionSummary{
-		{Session: model.DefaultSessionRecord, SavepointCount: 2,
+		{Session: model.DefaultSessionRecord, Status: model.SessionStatusReady, SavepointCount: 2,
 			ComposeProjects: []model.DockerComposeProjectName{"blog", "shop"}, SizeBytes: 2048},
-		{Session: older, ComposeProjects: []model.DockerComposeProjectName{}},
-		{Session: newer, SavepointCount: 1, ComposeProjects: []model.DockerComposeProjectName{"shop"}, SizeBytes: 512},
+		{Session: older, Status: model.SessionStatusReady, ComposeProjects: []model.DockerComposeProjectName{}},
+		{Session: newer, Status: model.SessionStatusReady, SavepointCount: 1,
+			ComposeProjects: []model.DockerComposeProjectName{"shop"}, SizeBytes: 512},
+	}, got)
+	repo.AssertExpectations(t)
+}
+
+func TestSessionService_ListSessions_All(t *testing.T) {
+	// Arrange: one tree per heartbeat status, plus one that cannot be summarized and keeps its row.
+	cloning, failed, done, none := thirdSession, demoSession, forkedSession, otherSession
+	unreadable := model.SessionID(uuid.MustParse("019e4444-0000-7000-8000-000000000000"))
+	otherOp := model.SessionID(uuid.MustParse("019e5555-0000-7000-8000-000000000000"))
+	errRead := errors.New("store timeout")
+	errDecode := errors.New("decode savepoint.json: unexpected EOF")
+	data, err := heartbeat.EncodeData(model.ForkHeartbeatData{From: model.DefaultSession})
+	require.NoError(t, err)
+	fork := func(status heartbeat.Status, at time.Time, cause string) heartbeat.Heartbeat {
+		return heartbeat.Heartbeat{Operation: model.HeartbeatOperationFork, Status: status, StartedAt: at, Error: cause,
+			Data: data}
+	}
+	beats := map[model.SessionID]heartbeat.Heartbeat{
+		cloning: fork(heartbeat.StatusInProgress, sessionNow.Add(3*time.Minute), ""),
+		failed:  fork(heartbeat.StatusFailed, sessionNow.Add(2*time.Minute), "disk full"),
+		done:    fork(heartbeat.StatusDone, sessionNow.Add(time.Minute), ""),
+		otherOp: {Operation: "gc", Status: heartbeat.StatusInProgress, StartedAt: sessionNow.Add(4 * time.Minute)},
+	}
+	repo := &mockSessionRepo{}
+	repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+	repo.On("ListUncommittedSessions", mock.Anything).
+		Return([]model.SessionID{cloning, failed, done, none, unreadable, otherOp}, nil).Once()
+	repo.On("ListSessionSavepoints", mock.Anything, cloning).Return([]model.ComposeProjectSavepoints(nil), errDecode).Once()
+	repo.On("ListSessionSavepoints", mock.Anything, mock.Anything).Return([]model.ComposeProjectSavepoints(nil), nil)
+	repo.On("SessionSize", mock.Anything, mock.Anything).Return(int64(0), nil)
+	svc := NewSessionService(SessionDeps{Sessions: repo})
+	svc.heartbeatReader = readBeats(beats, map[model.SessionID]error{unreadable: errRead})
+	origin := &model.SessionOrigin{Session: model.DefaultSession}
+	row := func(id model.SessionID, at time.Time, from *model.SessionOrigin, status model.SessionStatus,
+		cause string) model.SessionSummary {
+		return model.SessionSummary{Session: model.Session{ID: id, CreatedAt: at, From: from}, Status: status,
+			Error: cause, ComposeProjects: []model.DockerComposeProjectName{}}
+	}
+
+	// Act
+	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{All: true})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []model.SessionSummary{
+		{Session: model.DefaultSessionRecord, Status: model.SessionStatusReady, ComposeProjects: []model.DockerComposeProjectName{}},
+		row(none, time.Time{}, nil, model.SessionStatusIncomplete, ""),
+		row(unreadable, time.Time{}, nil, model.SessionStatusUnknown, errRead.Error()),
+		row(done, sessionNow.Add(time.Minute), origin, model.SessionStatusIncomplete, ""),
+		row(failed, sessionNow.Add(2*time.Minute), origin, model.SessionStatusFailed, "disk full"),
+		row(cloning, sessionNow.Add(3*time.Minute), origin, model.SessionStatusCloning, ""),
+		row(otherOp, sessionNow.Add(4*time.Minute), nil, model.SessionStatusUnknown, `a "gc" operation is in progress`),
 	}, got)
 	repo.AssertExpectations(t)
 }
@@ -443,7 +532,7 @@ func TestSessionService_CreateSession_FirstHeartbeatFailsBeforeCopy(t *testing.T
 	_, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{From: "baseline"})
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrSessionHeartbeatLost)
+	require.ErrorIs(t, err, model.ErrHeartbeatLost)
 	require.ErrorIs(t, err, errPut)
 	repo.AssertExpectations(t)
 	beats.AssertExpectations(t)
@@ -477,7 +566,7 @@ func TestSessionService_CreateSession_HeartbeatLostCancelsTheFork(t *testing.T) 
 				Run(func(args mock.Arguments) { <-args.Get(0).(context.Context).Done() }).
 				Return(int64(1), tt.copyErr).Once()
 			beats.On("Write", mock.Anything, mock.Anything, mock.MatchedBy(func(h heartbeat.Heartbeat) bool {
-				return h.Status == heartbeat.StatusFailed && strings.Contains(h.Error, model.ErrSessionHeartbeatLost.Error())
+				return h.Status == heartbeat.StatusFailed && strings.Contains(h.Error, model.ErrHeartbeatLost.Error())
 			})).Return(nil).Once()
 			svc := NewSessionService(SessionDeps{
 				Sessions: repo, Locker: locker,
@@ -489,7 +578,7 @@ func TestSessionService_CreateSession_HeartbeatLostCancelsTheFork(t *testing.T) 
 			_, err := svc.CreateSession(context.Background(), model.CreateSessionRequest{From: "baseline"})
 
 			// Assert
-			require.ErrorIs(t, err, model.ErrSessionHeartbeatLost)
+			require.ErrorIs(t, err, model.ErrHeartbeatLost)
 			repo.AssertExpectations(t)
 			beats.AssertExpectations(t)
 			locker.AssertExpectations(t)
@@ -583,7 +672,7 @@ func TestSessionService_DeleteSession(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	got, err := svc.DeleteSession(ctx, demoSession.String())
+	got, err := svc.DeleteSession(ctx, model.DeleteSessionRequest{Session: demoSession.String()})
 
 	// Assert
 	require.NoError(t, err)
@@ -652,12 +741,102 @@ func TestSessionService_DeleteSession_Refused(t *testing.T) {
 			svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker, Inflight: inflight})
 
 			// Act
-			_, err := svc.DeleteSession(context.Background(), tt.ref)
+			_, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: tt.ref})
 
 			// Assert
 			tt.check(t, err)
 			repo.AssertExpectations(t)
 			locker.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSessionService_DeleteSession_Uncommitted(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  heartbeat.Status // the heartbeat's; empty is none
+		op      heartbeat.Operation
+		readErr error
+		force   bool
+		wantErr error
+	}{
+		{name: "a failed fork", status: heartbeat.StatusFailed},
+		{name: "a tree without a heartbeat"},
+		{name: "a fork done but never committed", status: heartbeat.StatusDone},
+		{name: "a fork still cloning is refused", status: heartbeat.StatusInProgress, wantErr: model.ErrSessionCloning},
+		{name: "a fork still cloning, forced", status: heartbeat.StatusInProgress, force: true},
+		{name: "an unreadable heartbeat is refused", readErr: errors.New("store timeout"),
+			wantErr: model.ErrSessionStatusUnknown},
+		{name: "an unreadable heartbeat, forced", readErr: errors.New("store timeout"), force: true},
+		{name: "another operation in progress is refused", status: heartbeat.StatusInProgress, op: "gc",
+			wantErr: model.ErrSessionStatusUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: strict mocks, so a refused delete that reaches the store fails the test.
+			locker := &mockLocker{}
+			expectLock(locker)
+			repo := &mockSessionRepo{}
+			repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+			repo.On("ListUncommittedSessions", mock.Anything).Return([]model.SessionID{demoSession}, nil).Once()
+			if tt.wantErr == nil {
+				repo.On("SessionSize", mock.Anything, demoSession).Return(int64(10), nil).Once()
+				repo.On("DeleteSession", mock.Anything, demoSession).Return(nil).Once()
+			}
+			svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+			beats := map[model.SessionID]heartbeat.Heartbeat{}
+			if tt.status != "" {
+				beats[demoSession] = heartbeat.Heartbeat{Operation: cmp.Or(tt.op, model.HeartbeatOperationFork), Status: tt.status}
+			}
+			svc.heartbeatReader = readBeats(beats, map[model.SessionID]error{demoSession: tt.readErr})
+
+			// Act
+			got, err := svc.DeleteSession(context.Background(),
+				model.DeleteSessionRequest{Session: demoSession.String(), Force: tt.force})
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, model.DeleteSessionResponse{Session: demoSession, Deleted: true, FreedBytes: 10}, got)
+			}
+			repo.AssertExpectations(t)
+			locker.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSessionService_DeleteSession_NotFound(t *testing.T) {
+	tests := []struct {
+		name  string
+		ref   string
+		setup func(repo *mockSessionRepo)
+	}{
+		// A name is never a tree's: only an id is looked for among them.
+		{name: "a name no session carries", ref: "ghost"},
+		{name: "an id no tree carries", ref: demoSession.String(), setup: func(repo *mockSessionRepo) {
+			repo.On("ListUncommittedSessions", mock.Anything).Return([]model.SessionID{otherSession}, nil).Once()
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			locker := &mockLocker{}
+			expectLock(locker)
+			repo := &mockSessionRepo{}
+			repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+			if tt.setup != nil {
+				tt.setup(repo)
+			}
+			svc := NewSessionService(SessionDeps{Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+
+			// Act
+			_, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: tt.ref})
+
+			// Assert
+			require.ErrorIs(t, err, model.ErrSessionNotFound)
+			repo.AssertExpectations(t)
 		})
 	}
 }

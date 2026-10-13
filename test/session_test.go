@@ -116,7 +116,7 @@ func (e *sessionEnv) create(t *testing.T, name string) model.Session {
 func (e *sessionEnv) names(t *testing.T) []string {
 	t.Helper()
 
-	summaries, err := e.sessions.ListSessions(e.ctx)
+	summaries, err := e.sessions.ListSessions(e.ctx, model.ListSessionsRequest{})
 	require.NoError(t, err)
 	names := make([]string, len(summaries))
 	for i, s := range summaries {
@@ -148,7 +148,7 @@ func TestSession_CreateListResolveDelete(t *testing.T) {
 	unnamed := env.create(t, "")
 
 	// Act
-	summaries, err := env.sessions.ListSessions(env.ctx)
+	summaries, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{})
 
 	// Assert
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestSession_CreateListResolveDelete(t *testing.T) {
 		assert.Equal(t, want, got.ID, "resolve %q", ref)
 	}
 
-	deleted, err := env.sessions.DeleteSession(env.ctx, "feat-a")
+	deleted, err := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat-a"})
 	require.NoError(t, err)
 	assert.Equal(t, a.ID, deleted.Session)
 	assert.NoDirExists(t, env.sessionDir(a.ID))
@@ -233,9 +233,9 @@ func TestSession_Delete_Refused(t *testing.T) {
 	feat := env.create(t, "feat")
 
 	// Act
-	_, defaultErr := env.sessions.DeleteSession(env.ctx, model.DefaultSessionName)
+	_, defaultErr := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: model.DefaultSessionName})
 	env.marker(t, feat.ID)
-	_, markedErr := env.sessions.DeleteSession(env.ctx, "feat")
+	_, markedErr := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
 
 	// Assert
 	assert.ErrorIs(t, defaultErr, model.ErrDefaultSessionDelete)
@@ -253,7 +253,7 @@ func TestSession_Delete_PassesAMarkerOfAnotherSession(t *testing.T) {
 	env.marker(t, model.DefaultSession)
 
 	// Act
-	deleted, err := env.sessions.DeleteSession(env.ctx, "feat")
+	deleted, err := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
 
 	// Assert
 	require.NoError(t, err)
@@ -273,7 +273,7 @@ func TestSession_RefusedWhileLocked(t *testing.T) {
 
 	// Act
 	_, createErr := env.sessions.CreateSession(env.ctx, model.CreateSessionRequest{Name: "other"})
-	_, deleteErr := env.sessions.DeleteSession(env.ctx, "feat")
+	_, deleteErr := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
 
 	// Assert
 	assert.ErrorIs(t, createErr, model.ErrProjectLocked)
@@ -392,7 +392,7 @@ func TestSession_SavepointsAreIsolated(t *testing.T) {
 	_, err = branch.svc.Rollback(env.ctx, model.RollbackRequest{ID: &fromBaseline.ID})
 	assert.Error(t, err, "a session cannot reach another session's savepoint by id")
 
-	summaries, err := env.sessions.ListSessions(env.ctx)
+	summaries, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	for _, s := range summaries {
@@ -455,7 +455,7 @@ func TestSession_DeleteDropsItsDataAndLeavesTheProjectRunning(t *testing.T) {
 	require.DirExists(t, filepath.Join(env.sessionDir(feat.ID), "compose", env.project, "shared", "oci", "blobs"))
 
 	// Act
-	_, err = env.sessions.DeleteSession(env.ctx, "feat")
+	_, err = env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
 
 	// Assert
 	require.NoError(t, err)
@@ -483,10 +483,10 @@ func TestSession_InterruptedRollbackMarkerSpansSessions(t *testing.T) {
 
 	// Act
 	_, createErr := baseline.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
-	_, deleteErr := env.sessions.DeleteSession(env.ctx, "feat")
+	_, deleteErr := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
 	require.NoError(t, env.inflight.Clear(env.ctx))
 	_, createAfterErr := baseline.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
-	_, deleteAfterErr := env.sessions.DeleteSession(env.ctx, "feat")
+	_, deleteAfterErr := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
 
 	// Assert
 	var interrupted *model.InterruptedRollbackError
@@ -522,7 +522,7 @@ func TestSession_SizeIsWhatDeleteFrees(t *testing.T) {
 
 	// Act
 	listed := env.summary(t, feat.ID)
-	deleted, err := env.sessions.DeleteSession(env.ctx, "feat")
+	deleted, err := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
 
 	// Assert
 	require.NoError(t, err)
@@ -538,7 +538,7 @@ func TestSession_SizeIsWhatDeleteFrees(t *testing.T) {
 func (e *sessionEnv) summary(t *testing.T, session model.SessionID) model.SessionSummary {
 	t.Helper()
 
-	summaries, err := e.sessions.ListSessions(e.ctx)
+	summaries, err := e.sessions.ListSessions(e.ctx, model.ListSessionsRequest{})
 	require.NoError(t, err)
 	for _, s := range summaries {
 		if s.ID == session {

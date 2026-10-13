@@ -18,24 +18,33 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
-var sessionListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List the sessions of the arcave project",
-	Args:  cobra.NoArgs,
-	RunE:  runSessionList,
-}
+var (
+	sessionListFlagAll bool
+
+	sessionListCmd = &cobra.Command{
+		Use:   "list",
+		Short: "List the sessions of the arcave project",
+		Long: `List the sessions of the arcave project, each with its status. --all adds the trees
+without a record: a fork still cloning, one that failed, or one left incomplete.`,
+		Args: cobra.NoArgs,
+		RunE: runSessionList,
+	}
+)
 
 func runSessionList(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
-		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context())
+		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(), model.ListSessionsRequest{All: sessionListFlagAll})
 	})
 }
 
 func init() {
+	sessionListCmd.Flags().BoolVar(&sessionListFlagAll, "all", false,
+		"Also list the trees without a record: forks cloning, failed or left incomplete")
 	sessionCmd.AddCommand(sessionListCmd)
 }

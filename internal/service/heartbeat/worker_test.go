@@ -103,7 +103,7 @@ func TestWorker_Start_FirstWriteFails(t *testing.T) {
 	err := NewWorker(w).Start(context.Background(), testBase, func(error) {})
 
 	// Assert
-	require.ErrorIs(t, err, model.ErrSessionHeartbeatLost)
+	require.ErrorIs(t, err, model.ErrHeartbeatLost)
 	require.ErrorIs(t, err, errStore)
 	w.AssertExpectations(t)
 }
@@ -188,7 +188,7 @@ func TestWorker_run_TickPastTheDeadlineCancels(t *testing.T) {
 	<-hb.done
 
 	// Assert
-	require.ErrorIs(t, context.Cause(opCtx), model.ErrSessionHeartbeatLost)
+	require.ErrorIs(t, context.Cause(opCtx), model.ErrHeartbeatLost)
 	w.AssertExpectations(t)
 }
 
@@ -243,7 +243,7 @@ func TestWorker_Alive(t *testing.T) {
 
 			// Assert
 			if tt.wantErr {
-				assert.ErrorIs(t, err, model.ErrSessionHeartbeatLost)
+				assert.ErrorIs(t, err, model.ErrHeartbeatLost)
 				assert.ErrorContains(t, err, "last written")
 			} else {
 				assert.NoError(t, err)

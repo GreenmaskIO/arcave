@@ -84,12 +84,12 @@ func (h *Worker) Deadline() time.Duration {
 }
 
 // Start writes the first beat of base's operation, then beats on every tick until Stop; a
-// heartbeat that cannot be kept alive cancels with model.ErrSessionHeartbeatLost.
+// heartbeat that cannot be kept alive cancels with model.ErrHeartbeatLost.
 func (h *Worker) Start(ctx context.Context, base Heartbeat, cancel context.CancelCauseFunc) error {
 	h.base = base
 	h.base.StartedAt = wallClock()
 	if err := h.beat(ctx, StatusInProgress, nil); err != nil {
-		return fmt.Errorf("%w: %w", model.ErrSessionHeartbeatLost, err)
+		return fmt.Errorf("%w: %w", model.ErrHeartbeatLost, err)
 	}
 	go h.run(ctx, cancel)
 	return nil
@@ -106,7 +106,7 @@ func (h *Worker) Alive() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if age := wallClock().Sub(h.last); age >= h.Deadline() {
-		return fmt.Errorf("%w: last written %s ago", model.ErrSessionHeartbeatLost, age.Round(time.Second))
+		return fmt.Errorf("%w: last written %s ago", model.ErrHeartbeatLost, age.Round(time.Second))
 	}
 	return nil
 }

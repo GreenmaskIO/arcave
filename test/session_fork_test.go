@@ -90,7 +90,7 @@ func TestSessionFork_RollbackInTheForkDeploys(t *testing.T) {
 	require.NoError(t, err)
 	clone, err := env.sessions.CreateSession(env.ctx, model.CreateSessionRequest{Name: "feat", From: "src"})
 	require.NoError(t, err)
-	_, err = env.sessions.DeleteSession(env.ctx, "src")
+	_, err = env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "src"})
 	require.NoError(t, err)
 	require.NoDirExists(t, env.sessionDir(src.ID))
 	source.write(t, source.replicas(t)[0], "drifted")
@@ -148,6 +148,41 @@ func TestSessionFork_FailureLeavesTheTreeMarkedFailed(t *testing.T) {
 	assert.Equal(t, heartbeat.Operation(model.HeartbeatOperationFork), hb.Operation)
 	assert.Equal(t, createErr.Error(), hb.Error)
 	assert.False(t, hb.FinishedAt.IsZero())
+}
+
+// A failed fork is listed with --all as failed, with its error, and deleted by its id.
+func TestSessionFork_FailedTreeIsListedAndDeleted(t *testing.T) {
+	// Arrange: the source's only object cannot be read.
+	if os.Geteuid() == 0 {
+		t.Skip("root reads an unreadable file")
+	}
+	env := newSessionEnv(t)
+	baseline := env.sessionDir(model.DefaultSession)
+	dir := filepath.Join(baseline, "compose", "shop", "a")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	unreadable := filepath.Join(dir, "data.tar")
+	require.NoError(t, os.WriteFile(unreadable, []byte("a"), 0))
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+	_, createErr := env.sessions.CreateSession(env.ctx, model.CreateSessionRequest{From: "baseline"})
+	require.Error(t, createErr)
+
+	// Act
+	ready, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{})
+	require.NoError(t, err)
+	all, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{All: true})
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	failed := all[1]
+	deleted, deleteErr := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: failed.ID.String()})
+
+	// Assert
+	assert.Len(t, ready, 1, "without --all only ready sessions are listed")
+	assert.Equal(t, model.SessionStatusFailed, failed.Status)
+	assert.Equal(t, createErr.Error(), failed.Error)
+	assert.Equal(t, &model.SessionOrigin{Session: model.DefaultSession}, failed.From)
+	require.NoError(t, deleteErr)
+	assert.Equal(t, failed.SizeBytes, deleted.FreedBytes)
+	assert.NoDirExists(t, env.sessionDir(failed.ID))
 }
 
 // readHeartbeat decodes the heartbeat.json of the session tree at dir.

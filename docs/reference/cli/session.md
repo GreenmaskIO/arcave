@@ -12,8 +12,8 @@ None of the `session` commands touches the Docker daemon, and none of them takes
 
 ```text title="Synopsis"
 arcave session create [--name <name>] [--from <session>]
-arcave session list
-arcave session delete <id|name>
+arcave session list [--all]
+arcave session delete [--force] <id|name>
 ```
 
 ## Naming the session a command works in
@@ -47,19 +47,29 @@ Four things to know before you run it.
 
 **A fork costs the size of the session it copies.** The two lines share nothing, so nothing one of them writes can reach the other. Check the source's `size_bytes` in `session list` before you copy a large one.
 
-**The copy holds the project's lock until it is done.** Every other arcave command in the project directory, in any session, is refused with `another arcave command is already running` meanwhile. Progress goes to stderr, one line per compose project copied. A fork that fails or is interrupted creates no session, and leaves what it copied in the store until a garbage collector removes it; the error log names its directory, `sessions/<id>/`, if you want the space back sooner.
+**The copy holds the project's lock until it is done.** Every other arcave command in the project directory, in any session, is refused with `another arcave command is already running` meanwhile. Nothing is printed while it copies; one line goes to stderr when the copy is done. A fork that fails or is interrupted creates no session and leaves what it copied in the store: `session list --all` shows it as `failed`, and `session delete <id>` gives the space back.
 
 ## `session list`
 
-The project's sessions as a JSON array, `baseline` first and the rest oldest first: each one's id, name, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store.
+The project's sessions as a JSON array, `baseline` first and the rest oldest first: each one's id, name, `status`, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store.
+
+Without `--all` every session listed is `ready`. `--all` adds the session directories that never got their record — what a fork leaves while it copies, or after it failed. They have no name; address them by id.
+
+| `status` | Meaning |
+|---|---|
+| `ready` | A session you can work in. |
+| `cloning` | A fork is copying it, or died within the last 30 minutes without saying so. |
+| `failed` | A fork that failed, with its `error`, or one silent for 30 minutes. `session delete <id>` removes it. |
+| `incomplete` | Neither: an interrupted `session delete`, or a directory arcave did not write. `session delete <id>` removes it. |
+| `unknown` | Its heartbeat could not be read, or reports an operation other than a fork still running; `error` says which. |
 
 `size_bytes` is measured from the store, not added up from the savepoints: it counts everything under the session's directory — volume data, container layers, the image blobs its savepoints share, and data a removed savepoint left behind. That is exactly what `session delete` frees.
 
 ```json title="Output"
 [
-  {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline", "savepoint_count": 2, "compose_projects": ["shop"],
+  {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline", "status": "ready", "savepoint_count": 2, "compose_projects": ["shop"],
    "size_bytes": 734003200},
-  {"id": "0f9c2f4a-6d3e-4b6f-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table",
+  {"id": "0f9c2f4a-6d3e-4b6f-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table", "status": "ready",
    "created_at": "2026-10-10T12:00:00Z", "from": {"session": "00000000-0000-0000-0000-000000000001"},
    "savepoint_count": 2, "compose_projects": ["shop"], "size_bytes": 734003396}
 ]
@@ -73,6 +83,8 @@ Deletes a session and everything under it — its savepoints, and the backend da
 
 `baseline` cannot be deleted, and neither can a session an interrupted rollback left its marker in — recover that rollback first.
 
+A session directory without a record — `failed`, `incomplete`, `cloning` or `unknown` in `session list --all` — is deleted by its id. A `cloning` one is refused unless `--force` is given: no fork can be running in this project directory while `session delete` holds the lock, so a `cloning` tree there is one whose fork was killed; `--force` deletes it without waiting the 30 minutes for it to turn `failed`. An `unknown` one is refused unless `--force` too: arcave cannot tell that nothing is writing it.
+
 ## Errors
 
 | Condition | What happens |
@@ -83,6 +95,8 @@ Deletes a session and everything under it — its savepoints, and the backend da
 | The name is another session's id | Refused: names are looked up first, so it would hide that session's id. |
 | `--session` or `session delete` names no session | `session not found`, naming what was given. |
 | `session delete baseline` | Refused: the default session always exists. |
+| `session delete` of a `cloning` directory without `--force` | `session is still being cloned`; nothing is deleted. |
+| `session delete` of an `unknown` directory without `--force` | `session tree status is unknown`, with why; nothing is deleted. |
 | `session delete` of a session an interrupted rollback names | Refused, with the interrupted rollback's recovery hint. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 

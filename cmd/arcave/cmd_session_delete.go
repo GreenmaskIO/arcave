@@ -18,26 +18,35 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
-var sessionDeleteCmd = &cobra.Command{
-	Use:   "delete <id|name>",
-	Short: "Delete a session and every savepoint it holds",
-	Long: "Delete a session and every savepoint it holds. A compose project running from it is " +
-		"left as it is. The default session cannot be deleted.",
-	Args: cobra.ExactArgs(1),
-	RunE: runSessionDelete,
-}
+var (
+	sessionDeleteFlagForce bool
+
+	sessionDeleteCmd = &cobra.Command{
+		Use:   "delete <id|name>",
+		Short: "Delete a session and every savepoint it holds",
+		Long: "Delete a session and every savepoint it holds. A compose project running from it is " +
+			"left as it is. The default session cannot be deleted. A tree without a record — a failed " +
+			"or incomplete fork, as `session list --all` shows it — is deleted by its id; one still " +
+			"cloning needs --force.",
+		Args: cobra.ExactArgs(1),
+		RunE: runSessionDelete,
+	}
+)
 
 func runSessionDelete(cmd *cobra.Command, args []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
-		return cli.NewSessionDeleteHandler(d.service, d.printer).SessionDelete(cmd.Context(), args[0])
+		return cli.NewSessionDeleteHandler(d.service, d.printer).SessionDelete(cmd.Context(), model.DeleteSessionRequest{Session: args[0], Force: sessionDeleteFlagForce})
 	})
 }
 
 func init() {
+	sessionDeleteCmd.Flags().BoolVar(&sessionDeleteFlagForce, "force", false,
+		"Delete a tree whose fork still looks alive; no fork may be running")
 	sessionCmd.AddCommand(sessionDeleteCmd)
 }

@@ -71,9 +71,16 @@ var (
 	// ErrSessionTreeOccupied refuses a fork into a tree that already holds anything, or a copy
 	// of a session onto itself; nothing was written, so the caller must not clean the tree up.
 	ErrSessionTreeOccupied = errors.New("session tree is occupied")
-	// ErrSessionHeartbeatLost refuses to commit a fork whose heartbeat could not be kept
-	// fresh: a gc may already have taken the tree for a dead one.
-	ErrSessionHeartbeatLost = errors.New("session heartbeat lost")
+	// ErrHeartbeatNotFound reports a tree that holds no heartbeat.
+	ErrHeartbeatNotFound = errors.New("heartbeat not found")
+	// ErrSessionCloning refuses to delete a tree whose fork kept its heartbeat fresh, unless forced.
+	ErrSessionCloning = errors.New("session is still being cloned")
+	// ErrSessionStatusUnknown refuses to delete a tree whose heartbeat cannot be read or reports
+	// another operation in progress, unless forced.
+	ErrSessionStatusUnknown = errors.New("session tree status is unknown")
+	// ErrHeartbeatLost stops an operation whose heartbeat could not be kept fresh: a gc may
+	// already have taken its tree for a dead one.
+	ErrHeartbeatLost = errors.New("heartbeat lost")
 
 	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
 	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps

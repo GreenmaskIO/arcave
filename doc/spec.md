@@ -579,9 +579,9 @@ UUID — new ones UUIDv7 — and the default session's is `00000000-0000-0000-00
 and always exists. These commands name no compose project and reach no daemon.
 
 ```text
-arcave session list                 # JSON array of {id, name, created_at, from, savepoint_count, compose_projects, size_bytes}
+arcave session list [--all]         # JSON array of {id, name, status, error, created_at, from, savepoint_count, compose_projects, size_bytes}
 arcave session create [--name N] [--from S]  # an empty session, or a copy of S; prints its record
-arcave session delete <id|name>     # {session, deleted: true, freed_bytes}
+arcave session delete [--force] <id|name>  # {session, deleted: true, freed_bytes}
 ```
 
 `--name` is optional and may be anything not blank — `/` and a UUID's shape included — but must be unique within
@@ -593,6 +593,15 @@ so it counts orphans, unpruned restic data and uncollected image blobs, which a 
 what deleting the session frees, and `session delete` reports it as `freed_bytes`, measured before it deletes.
 `session delete` drops the record first, then the session's tree. It refuses `baseline` and a session the
 inflight marker names, and leaves any running compose project alone.
+`status` is `ready` for a session with a record. `session list --all` adds every `sessions/<id>/` tree without one,
+its status read from its `heartbeat.json`: `cloning` while the heartbeat is `in-progress` and younger than its stale
+age (30 min, by the store's `LastModified`), `failed` once it is `failed` or stale — `error` then carries the
+heartbeat's — `incomplete` for a `done` heartbeat or none (an interrupted delete, or a tree arcave did not write), and
+`unknown` for a heartbeat that cannot be read or reports another operation in progress — `error` then says which.
+A tree whose savepoints cannot be read, as one mid-copy, is still listed, its counts left empty.
+Such a tree has no name; `created_at` and `from` come from its heartbeat. `session delete <id>` deletes it; a
+`cloning` one only with `--force` (`session is still being cloned` otherwise): holding the lock, no fork runs on this
+host, so the heartbeat is a killed fork's. An `unknown` one is refused likewise (`session tree status is unknown`).
 `session create --from <session>` (the fork) takes a session by name or id, `baseline` included, and copies everything
 under `sessions/<source>/` but its record and its `heartbeat.json` into the new session's tree — every compose project, every savepoint with
 its id and name, `shared/oci` and the restic repositories — then writes the record last, with `from: {session}`. It

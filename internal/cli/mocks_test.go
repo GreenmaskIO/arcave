@@ -81,8 +81,8 @@ func (m *mockService) Rollback(ctx context.Context, req model.RollbackRequest) (
 	return args.Get(0).(model.RollbackResult), args.Error(1)
 }
 
-func (m *mockService) ListSessions(ctx context.Context) ([]model.SessionSummary, error) {
-	args := m.Called(ctx)
+func (m *mockService) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
+	args := m.Called(ctx, req)
 	var sessions []model.SessionSummary
 	if v := args.Get(0); v != nil {
 		sessions = v.([]model.SessionSummary)
@@ -95,7 +95,9 @@ func (m *mockService) CreateSession(ctx context.Context, req model.CreateSession
 	return args.Get(0).(model.Session), args.Error(1)
 }
 
-func (m *mockService) DeleteSession(ctx context.Context, ref string) (model.DeleteSessionResponse, error) {
-	args := m.Called(ctx, ref)
+func (m *mockService) DeleteSession(
+	ctx context.Context, req model.DeleteSessionRequest,
+) (model.DeleteSessionResponse, error) {
+	args := m.Called(ctx, req)
 	return args.Get(0).(model.DeleteSessionResponse), args.Error(1)
 }

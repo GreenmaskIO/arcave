@@ -21,7 +21,7 @@ import (
 )
 
 type sessionListService interface {
-	ListSessions(ctx context.Context) ([]model.SessionSummary, error)
+	ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error)
 }
 
 type SessionListHandler struct {
@@ -33,9 +33,10 @@ func NewSessionListHandler(svc sessionListService, printer printer) *SessionList
 	return &SessionListHandler{svc: svc, printer: printer}
 }
 
-// SessionList prints every session of the arcave project as a JSON array, the default first.
-func (h *SessionListHandler) SessionList(ctx context.Context) error {
-	sessions, err := h.svc.ListSessions(ctx)
+// SessionList prints the arcave project's sessions as a JSON array, oldest first; req.All adds
+// the trees without a record, each with its status.
+func (h *SessionListHandler) SessionList(ctx context.Context, req model.ListSessionsRequest) error {
+	sessions, err := h.svc.ListSessions(ctx, req)
 	if err != nil {
 		return err
 	}

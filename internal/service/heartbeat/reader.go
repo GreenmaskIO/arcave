@@ -17,11 +17,14 @@ package heartbeat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // Reader reads the heartbeat at the root of one tree's store.
@@ -41,38 +44,41 @@ func (r *Reader) SetStaleAfter(v time.Duration) *Reader {
 	return r
 }
 
-// Read returns the heartbeat and the status it stands for now, aged by the store's
-// LastModified; found is false when there is none.
-func (r *Reader) Read(ctx context.Context) (h Heartbeat, status Status, found bool, err error) {
-	lastModified, found, err := r.lastModified()
-	if err != nil || !found {
-		return Heartbeat{}, "", false, err
-	}
-	h, err = r.decode(ctx)
+// Read returns the heartbeat with its status as of now, aged by the store's LastModified: an
+// in-progress one gone stale reads as failed. None is model.ErrHeartbeatNotFound.
+func (r *Reader) Read(ctx context.Context) (Heartbeat, error) {
+	lastModified, err := r.lastModified()
 	if err != nil {
-		return Heartbeat{}, "", false, err
+		return Heartbeat{}, err
 	}
-	status, err = h.StatusAt(lastModified, time.Now(), r.staleAfter)
+	h, err := r.decode(ctx)
 	if err != nil {
-		return Heartbeat{}, "", false, fmt.Errorf("read heartbeat: %w", err)
+		return Heartbeat{}, err
 	}
-	return h, status, true, nil
+	if h.Status, err = h.StatusAt(lastModified, time.Now(), r.staleAfter); err != nil {
+		return Heartbeat{}, fmt.Errorf("read heartbeat: %w", err)
+	}
+	return h, nil
 }
 
 // lastModified is when the store last wrote the heartbeat.
-func (r *Reader) lastModified() (time.Time, bool, error) {
+func (r *Reader) lastModified() (time.Time, error) {
 	stat, err := r.st.Stat(FileName)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("stat heartbeat: %w", err)
+		return time.Time{}, fmt.Errorf("stat heartbeat: %w", err)
 	}
 	if !stat.Exist {
-		return time.Time{}, false, nil
+		return time.Time{}, model.ErrHeartbeatNotFound
 	}
-	return stat.LastModified, true, nil
+	return stat.LastModified, nil
 }
 
 func (r *Reader) decode(ctx context.Context) (Heartbeat, error) {
 	obj, err := r.st.GetObject(ctx, FileName)
+	if errors.Is(err, storages.ErrFileNotFound) {
+		// Deleted since it was stat'ed.
+		return Heartbeat{}, model.ErrHeartbeatNotFound
+	}
 	if err != nil {
 		return Heartbeat{}, fmt.Errorf("get heartbeat: %w", err)
 	}

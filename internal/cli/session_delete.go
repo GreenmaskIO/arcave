@@ -21,7 +21,7 @@ import (
 )
 
 type sessionDeleteService interface {
-	DeleteSession(ctx context.Context, ref string) (model.DeleteSessionResponse, error)
+	DeleteSession(ctx context.Context, req model.DeleteSessionRequest) (model.DeleteSessionResponse, error)
 }
 
 type SessionDeleteHandler struct {
@@ -33,10 +33,10 @@ func NewSessionDeleteHandler(svc sessionDeleteService, printer printer) *Session
 	return &SessionDeleteHandler{svc: svc, printer: printer}
 }
 
-// SessionDelete deletes the session ref names, by id or name, and prints which one went
-// and the bytes it freed.
-func (h *SessionDeleteHandler) SessionDelete(ctx context.Context, ref string) error {
-	resp, err := h.svc.DeleteSession(ctx, ref)
+// SessionDelete deletes a session by id or name, or a recordless tree by id, and prints which
+// one went and the bytes it freed.
+func (h *SessionDeleteHandler) SessionDelete(ctx context.Context, req model.DeleteSessionRequest) error {
+	resp, err := h.svc.DeleteSession(ctx, req)
 	if err != nil {
 		return err
 	}

@@ -86,22 +86,12 @@ func (r *Repository) LoadSession(ctx context.Context, id model.SessionID) (model
 // ListSessions returns model.DefaultSessionRecord, then every committed record. A session
 // directory with no record is incomplete and skipped; a record that will not decode is an error.
 func (r *Repository) ListSessions(ctx context.Context) ([]model.Session, error) {
-	sessionsStore, err := r.storage.SubStorage(sessionsNamespace, true)
+	ids, err := r.sessionIDs(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("re-root storage at %s: %w", sessionsNamespace, err)
+		return nil, err
 	}
-	_, dirs, err := sessionsStore.ListDir(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list session store: %w", err)
-	}
-
 	records := []model.Session{model.DefaultSessionRecord}
-	for _, dir := range dirs {
-		id, err := model.ParseSessionID(dir.Dirname())
-		if err != nil {
-			log.Ctx(ctx).Debug().Str("entry", dir.Dirname()).Msg("ignoring directory that holds no session record")
-			continue
-		}
+	for _, id := range ids {
 		record, found, err := r.load(ctx, id)
 		if err != nil {
 			return nil, err
@@ -113,6 +103,29 @@ func (r *Repository) ListSessions(ctx context.Context) ([]model.Session, error) 
 		records = append(records, record)
 	}
 	return records, nil
+}
+
+// ListUncommittedSessions returns the ids of the session trees without a record: forks still
+// copying or never committed, and deletes that were interrupted. The default session is none.
+func (r *Repository) ListUncommittedSessions(ctx context.Context) ([]model.SessionID, error) {
+	ids, err := r.sessionIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var uncommitted []model.SessionID
+	for _, id := range ids {
+		if id == model.DefaultSession {
+			continue
+		}
+		exists, err := r.storage.Exists(ctx, recordKey(id))
+		if err != nil {
+			return nil, fmt.Errorf("stat session record %s: %w", id, err)
+		}
+		if !exists {
+			uncommitted = append(uncommitted, id)
+		}
+	}
+	return uncommitted, nil
 }
 
 // ListSessionSavepoints returns every committed savepoint of a session, grouped by compose
@@ -221,6 +234,28 @@ func (r *Repository) DeleteSession(ctx context.Context, id model.SessionID) erro
 		return fmt.Errorf("delete session %s: %w", id, err)
 	}
 	return nil
+}
+
+// sessionIDs returns the ids of the directories under sessions/, skipping any that is not one.
+func (r *Repository) sessionIDs(ctx context.Context) ([]model.SessionID, error) {
+	sessionsStore, err := r.storage.SubStorage(sessionsNamespace, true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root storage at %s: %w", sessionsNamespace, err)
+	}
+	_, dirs, err := sessionsStore.ListDir(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list session store: %w", err)
+	}
+	ids := make([]model.SessionID, 0, len(dirs))
+	for _, dir := range dirs {
+		id, err := model.ParseSessionID(dir.Dirname())
+		if err != nil {
+			log.Ctx(ctx).Debug().Str("entry", dir.Dirname()).Msg("ignoring directory that is not a session")
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // validateID accepts an id that may carry a record: a valid one other than the default.

@@ -36,6 +36,7 @@ type sessionRepository interface {
 	IsSessionTreeEmpty(ctx context.Context, id model.SessionID) (bool, error)
 	LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error)
 	ListSessions(ctx context.Context) ([]model.Session, error)
+	ListUncommittedSessions(ctx context.Context) ([]model.SessionID, error)
 	DeleteSession(ctx context.Context, id model.SessionID) error
 	ListSessionSavepoints(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error)
 	SessionSize(ctx context.Context, id model.SessionID) (int64, error)
@@ -45,13 +46,17 @@ type heartbeatWriter interface {
 	Write(ctx context.Context, h heartbeat.Heartbeat) error
 }
 
+type heartbeatReader interface {
+	Read(ctx context.Context) (heartbeat.Heartbeat, error)
+}
+
 // SessionDeps are SessionService's collaborators.
 type SessionDeps struct {
 	Sessions sessionRepository
 	Locker   projectLocker
 	Inflight inflightMarkers
-	// Store is the arcave project store a fork's heartbeat is written into.
-	Store storages.Storager
+	// Store is the arcave project store a fork's heartbeat is written into and read from.
+	Store storages.Navigator
 	// RunnerInfo identifies this process in a fork's heartbeat.
 	RunnerInfo heartbeat.RunnerInfo
 	// HeartbeatInterval and HeartbeatStaleAfter time a fork's heartbeat; zero keeps
@@ -70,24 +75,33 @@ type SessionService struct {
 	// heartbeatInterval and heartbeatStaleAfter time a fork's heartbeat.
 	heartbeatInterval   time.Duration
 	heartbeatStaleAfter time.Duration
-	// heartbeatWriter opens the heartbeat of one session's tree.
+	// heartbeatWriter and heartbeatReader open the heartbeat of one session's tree.
 	heartbeatWriter func(id model.SessionID) (heartbeatWriter, error)
+	heartbeatReader func(id model.SessionID) (heartbeatReader, error)
 }
 
 func NewSessionService(d SessionDeps) *SessionService {
+	staleAfter := cmp.Or(d.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter)
 	return &SessionService{
 		sessions:            d.Sessions,
 		locker:              d.Locker,
 		inflight:            d.Inflight,
 		runnerInfo:          d.RunnerInfo,
 		heartbeatInterval:   cmp.Or(d.HeartbeatInterval, heartbeat.DefaultInterval),
-		heartbeatStaleAfter: cmp.Or(d.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
+		heartbeatStaleAfter: staleAfter,
 		heartbeatWriter: func(id model.SessionID) (heartbeatWriter, error) {
 			st, err := storefactory.Session(d.Store, id)
 			if err != nil {
 				return nil, err
 			}
 			return heartbeat.NewWriter(st), nil
+		},
+		heartbeatReader: func(id model.SessionID) (heartbeatReader, error) {
+			st, err := storefactory.Session(d.Store, id)
+			if err != nil {
+				return nil, err
+			}
+			return heartbeat.NewReader(st).SetStaleAfter(staleAfter), nil
 		},
 	}
 }
@@ -105,21 +119,29 @@ func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.
 }
 
 // ListSessions returns every session oldest first; the default, created by no one, leads.
-func (s *SessionService) ListSessions(ctx context.Context) ([]model.SessionSummary, error) {
+// req.All adds the trees without a record, each with the status its heartbeat gives it.
+func (s *SessionService) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
 	records, err := s.sessions.ListSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
-	slices.SortStableFunc(records, func(a, b model.Session) int { return a.CreatedAt.Compare(b.CreatedAt) })
-
 	summaries := make([]model.SessionSummary, 0, len(records))
 	for _, record := range records {
 		summary, err := s.summarize(ctx, record)
 		if err != nil {
 			return nil, err
 		}
+		summary.Status = model.SessionStatusReady
 		summaries = append(summaries, summary)
 	}
+	if req.All {
+		uncommitted, err := s.listUncommitted(ctx)
+		if err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, uncommitted...)
+	}
+	slices.SortStableFunc(summaries, func(a, b model.SessionSummary) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return summaries, nil
 }
 
@@ -163,16 +185,16 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 	})
 }
 
-// DeleteSession drops a session and everything it holds, and reports the bytes that freed. It
-// refuses the default session and one an interrupted rollback's marker names; the running
-// compose project is left alone.
-func (s *SessionService) DeleteSession(ctx context.Context, ref string) (model.DeleteSessionResponse, error) {
+// DeleteSession drops a session and everything it holds, and reports the bytes freed. It refuses
+// the default session, one an inflight marker names, and a tree still cloning or unknown unless forced.
+func (s *SessionService) DeleteSession(
+	ctx context.Context, req model.DeleteSessionRequest,
+) (model.DeleteSessionResponse, error) {
 	return withUnlock(ctx, s.locker, func() (model.DeleteSessionResponse, error) {
-		record, err := s.ResolveSession(ctx, ref)
+		id, err := s.findDeletable(ctx, req)
 		if err != nil {
 			return model.DeleteSessionResponse{}, err
 		}
-		id := record.ID
 		if id == model.DefaultSession {
 			return model.DeleteSessionResponse{}, model.ErrDefaultSessionDelete
 		}
@@ -201,6 +223,40 @@ func (s *SessionService) DeleteSession(ctx context.Context, ref string) (model.D
 			FreedBytes: size,
 		}, nil
 	})
+}
+
+// findDeletable resolves req.Session to a session, or by id to a tree without a record; a tree
+// still cloning or of unknown status is refused unless req.Force.
+func (s *SessionService) findDeletable(ctx context.Context, req model.DeleteSessionRequest) (model.SessionID, error) {
+	record, err := s.ResolveSession(ctx, req.Session)
+	if !errors.Is(err, model.ErrSessionNotFound) {
+		return record.ID, err
+	}
+	id, parseErr := model.ParseSessionID(req.Session)
+	if parseErr != nil {
+		return model.SessionID{}, err
+	}
+	uncommitted, listErr := s.sessions.ListUncommittedSessions(ctx)
+	if listErr != nil {
+		return model.SessionID{}, fmt.Errorf("listing sessions: %w", listErr)
+	}
+	if !slices.Contains(uncommitted, id) {
+		return model.SessionID{}, err
+	}
+	status, _, readErr := s.readTreeStatus(ctx, id)
+	if !req.Force {
+		switch status {
+		case model.SessionStatusCloning:
+			return model.SessionID{}, fmt.Errorf("%w: %s's heartbeat is younger than its stale age; "+
+				"if no fork is running, --force deletes it", model.ErrSessionCloning, id)
+		case model.SessionStatusUnknown:
+			return model.SessionID{}, fmt.Errorf("%w: %s: %w; if nothing is writing it, --force deletes it",
+				model.ErrSessionStatusUnknown, id, readErr)
+		}
+	}
+	zerolog.Ctx(ctx).Info().Str("session", id.String()).Str("status", string(status)).
+		Msg("deleting a session tree without a record")
+	return id, nil
 }
 
 // findSessionByRef finds the record ref names among records: by name first, then by id.
@@ -268,6 +324,75 @@ func (s *SessionService) summarize(ctx context.Context, record model.Session) (m
 	return summary, nil
 }
 
+// listUncommitted summarizes every tree without a record, with what its heartbeat says of it.
+func (s *SessionService) listUncommitted(ctx context.Context) ([]model.SessionSummary, error) {
+	ids, err := s.sessions.ListUncommittedSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions: %w", err)
+	}
+	summaries := make([]model.SessionSummary, 0, len(ids))
+	for _, id := range ids {
+		status, h, readErr := s.readTreeStatus(ctx, id)
+		record := model.Session{ID: id, CreatedAt: h.StartedAt, From: forkOrigin(h)}
+		summary, err := s.summarize(ctx, record)
+		if err != nil {
+			// A tree still being written may hold a half-copied record; keep its row.
+			zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).Msg("summarizing a session tree without a record")
+			summary = model.SessionSummary{Session: record, ComposeProjects: []model.DockerComposeProjectName{}}
+		}
+		summary.Status = status
+		switch status {
+		case model.SessionStatusFailed:
+			summary.Error = h.Error
+		case model.SessionStatusUnknown:
+			summary.Error = readErr.Error()
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, nil
+}
+
+// readTreeStatus derives a recordless tree's status from its heartbeat; an unknown status comes
+// with the reason.
+func (s *SessionService) readTreeStatus(
+	ctx context.Context, id model.SessionID,
+) (model.SessionStatus, heartbeat.Heartbeat, error) {
+	reader, err := s.heartbeatReader(id)
+	if err != nil {
+		return model.SessionStatusUnknown, heartbeat.Heartbeat{}, fmt.Errorf("opening the heartbeat: %w", err)
+	}
+	h, err := reader.Read(ctx)
+	if errors.Is(err, model.ErrHeartbeatNotFound) {
+		return model.SessionStatusIncomplete, heartbeat.Heartbeat{}, nil
+	}
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).Msg("reading the heartbeat")
+		return model.SessionStatusUnknown, heartbeat.Heartbeat{}, err
+	}
+	switch {
+	case h.Status == heartbeat.StatusDone:
+		return model.SessionStatusIncomplete, h, nil
+	case h.Status == heartbeat.StatusInProgress && h.Operation == model.HeartbeatOperationFork:
+		return model.SessionStatusCloning, h, nil
+	case h.Status == heartbeat.StatusInProgress:
+		return model.SessionStatusUnknown, h, fmt.Errorf("a %q operation is in progress", h.Operation)
+	default:
+		return model.SessionStatusFailed, h, nil
+	}
+}
+
+// forkOrigin is the session a fork's heartbeat names as its source; nil for any other heartbeat.
+func forkOrigin(h heartbeat.Heartbeat) *model.SessionOrigin {
+	if h.Operation != model.HeartbeatOperationFork {
+		return nil
+	}
+	data, err := heartbeat.DecodeData[model.ForkHeartbeatData](h)
+	if err != nil {
+		return nil
+	}
+	return &model.SessionOrigin{Session: data.From}
+}
+
 // requireFreeName refuses a name another session carries, or one that is another session's
 // id: ResolveSession tries names first, so such a name would hide that session's id.
 func requireFreeName(records []model.Session, name string) error {
@@ -311,7 +436,7 @@ func (s *SessionService) forkSession(ctx context.Context, record model.Session) 
 	copied, err := s.sessions.CopySession(copyCtx, source, record.ID, heartbeat.FileName)
 	hb.Stop()
 	if err != nil {
-		if cause := context.Cause(copyCtx); errors.Is(cause, model.ErrSessionHeartbeatLost) {
+		if cause := context.Cause(copyCtx); errors.Is(cause, model.ErrHeartbeatLost) {
 			err = cause
 		}
 		err = fmt.Errorf("cloning session %s: %w", source, err)

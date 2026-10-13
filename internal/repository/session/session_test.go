@@ -183,6 +183,25 @@ func TestRepository_ListSessions(t *testing.T) {
 	})
 }
 
+func TestRepository_ListUncommittedSessions(t *testing.T) {
+	// Arrange: a committed session, a tree without a record, the default session's tree and a
+	// directory that is no session.
+	ctx := context.Background()
+	store, root := newStore(t)
+	repo := New(store)
+	require.NoError(t, repo.SaveSession(ctx, record(sessionA)))
+	writeObject(t, root, "sessions/"+sessionB.String()+"/heartbeat.json", "{}")
+	writeObject(t, root, "sessions/"+model.DefaultSession.String()+"/compose/shop/100/savepoint.json", "{}")
+	writeObject(t, root, "sessions/not-a-session/heartbeat.json", "{}")
+
+	// Act
+	got, err := repo.ListUncommittedSessions(ctx)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []model.SessionID{sessionB}, got)
+}
+
 func TestRepository_SessionSize(t *testing.T) {
 	// Arrange: two compose projects, a restic repository and a shared blob all count;
 	// another session's objects do not.

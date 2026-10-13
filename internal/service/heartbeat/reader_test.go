@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 package heartbeat
 
 import (
@@ -24,6 +23,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestReader_Read(t *testing.T) {
@@ -49,14 +50,12 @@ func TestReader_Read(t *testing.T) {
 			require.NoError(t, os.Chtimes(filepath.Join(root, FileName), modified, modified))
 
 			// Act
-			got, status, found, err := NewReader(st).Read(ctx)
+			got, err := NewReader(st).Read(ctx)
 
 			// Assert
 			require.NoError(t, err)
-			assert.True(t, found)
-			assert.Equal(t, tt.wantStatus, status)
-			assert.Equal(t, written.Status, got.Status, "the record is returned as written")
-			assert.True(t, written.UpdatedAt.Equal(got.UpdatedAt))
+			assert.Equal(t, tt.wantStatus, got.Status)
+			assert.True(t, written.UpdatedAt.Equal(got.UpdatedAt), "the rest is returned as written")
 		})
 	}
 }
@@ -70,11 +69,11 @@ func TestReader_Read_SetStaleAfter(t *testing.T) {
 	require.NoError(t, os.Chtimes(filepath.Join(root, FileName), modified, modified))
 
 	// Act
-	_, status, _, err := NewReader(st).SetStaleAfter(time.Minute).Read(ctx)
+	got, err := NewReader(st).SetStaleAfter(time.Minute).Read(ctx)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, StatusFailed, status)
+	assert.Equal(t, StatusFailed, got.Status)
 }
 
 func TestReader_Read_Missing(t *testing.T) {
@@ -82,12 +81,10 @@ func TestReader_Read_Missing(t *testing.T) {
 	st, _ := newStore(t)
 
 	// Act
-	_, status, found, err := NewReader(st).Read(context.Background())
+	_, err := NewReader(st).Read(context.Background())
 
 	// Assert
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Empty(t, status)
+	require.ErrorIs(t, err, model.ErrHeartbeatNotFound)
 }
 
 func TestReader_Read_Unreadable(t *testing.T) {
@@ -106,11 +103,11 @@ func TestReader_Read_Unreadable(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(root, FileName), []byte(tt.body), 0o644))
 
 			// Act
-			_, _, found, err := NewReader(st).Read(context.Background())
+			_, err := NewReader(st).Read(context.Background())
 
 			// Assert
 			require.ErrorContains(t, err, tt.wantErr)
-			assert.False(t, found)
+			assert.NotErrorIs(t, err, model.ErrHeartbeatNotFound)
 		})
 	}
 }
