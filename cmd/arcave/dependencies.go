@@ -41,6 +41,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
+	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
@@ -79,11 +80,12 @@ type dependencies struct {
 	printer      *json.Printer
 }
 
-// initAllDependencies wires the savepoint workflows for the project rooted at
-// projectPath. Every store arrives from storefactory already rooted.
+// initAllDependencies wires the savepoint workflows for the project rooted at projectPath, in the
+// session sessionRef resolves to on the store it opens. Every store arrives from storefactory
+// already rooted.
 func initAllDependencies(
 	ctx context.Context, projectPath string, cfg config.Config,
-	session model.SessionID, composeProject model.DockerComposeProjectName,
+	sessionRef string, composeProject model.DockerComposeProjectName,
 ) (*dependencies, error) {
 	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial
@@ -95,9 +97,15 @@ func initAllDependencies(
 	}
 	opened.add("store root", storeRoot)
 
+	sessions := sessionrepo.New(arcaveProjectStore)
+	session, err := newSessionService(projectPath, arcaveProjectStore, sessions).ResolveSession(ctx, sessionRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session: %w", err)
+	}
+
 	// One store for the whole compose project: savepoint records, fullcopy captures and a
 	// cdc repository root alike, rooted inside the session that they die with.
-	sessionStore, err := storefactory.Session(arcaveProjectStore, session)
+	sessionStore, err := storefactory.Session(arcaveProjectStore, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("initialise session store: %w", err)
 	}
@@ -202,10 +210,10 @@ func initAllDependencies(
 		Inflight:       inflightrepo.New(projectPath),
 		Store:          composeProjectStore,
 		DefaultBackend: cfg.Snapshot.BackendKind(),
-		Session:        session,
+		Session:        session.ID,
 		ComposeProject: composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
-		Sessions: sessionrepo.New(arcaveProjectStore),
+		Sessions: sessions,
 	})
 	opened.keep()
 	return &dependencies{
@@ -326,14 +334,22 @@ func initSessionDependencies(projectPath string, cfg config.Config) (*sessionDep
 	if err != nil {
 		return nil, err
 	}
-	svc := core.NewSessionService(core.SessionDeps{
-		Sessions:   sessionrepo.New(arcaveProjectStore),
+	svc := newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore))
+	return &sessionDependencies{store: root, service: svc, printer: json.New(os.Stdout)}, nil
+}
+
+// newSessionService wires the session commands over the arcave project's store.
+func newSessionService(
+	projectPath string, arcaveProjectStore storages.Storager, sessions *sessionrepo.Repository,
+) *core.SessionService {
+	return core.NewSessionService(core.SessionDeps{
+		Sessions:   sessions,
 		Locker:     lock.New(projectPath),
 		Inflight:   inflightrepo.New(projectPath),
+		Current:    currentsession.New(projectPath),
 		Store:      arcaveProjectStore,
 		RunnerInfo: heartbeatRunnerInfo(),
 	})
-	return &sessionDependencies{store: root, service: svc, printer: json.New(os.Stdout)}, nil
 }
 
 func (d *sessionDependencies) Close() error {

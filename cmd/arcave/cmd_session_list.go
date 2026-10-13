@@ -39,7 +39,7 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
-		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(), model.ListSessionsRequest{All: sessionListFlagAll})
+		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(), model.ListSessionsRequest{All: sessionListFlagAll, Ref: sessionRef})
 	})
 }
 

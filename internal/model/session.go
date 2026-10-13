@@ -65,6 +65,8 @@ const (
 type SessionSummary struct {
 	Session
 	Status SessionStatus `json:"status"`
+	// Current marks the session commands work in when they name none.
+	Current bool `json:"current"`
 	// Error is why a failed fork failed, as its heartbeat records it, or why an unknown tree's
 	// heartbeat could not be read.
 	Error string `json:"error,omitempty"`
@@ -79,14 +81,18 @@ type SessionSummary struct {
 type ListSessionsRequest struct {
 	// All adds the trees without a record: forks cloning, failed or left incomplete.
 	All bool
+	// Ref marks as current the session it names; empty marks the current session.
+	Ref string
 }
 
 // DeleteSessionRequest carries what DeleteSession needs.
 type DeleteSessionRequest struct {
 	// Session names the session by name or id; a tree without a record only by id.
 	Session string
-	// Force deletes a tree still cloning or of unknown status.
+	// Force deletes a tree still cloning or of unknown status, the current session, or Pinned.
 	Force bool
+	// Pinned is the session an MCP server is pinned to; zero is none.
+	Pinned SessionID
 }
 
 // CreateSessionRequest carries what CreateSession needs.

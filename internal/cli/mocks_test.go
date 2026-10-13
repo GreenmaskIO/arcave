@@ -101,3 +101,18 @@ func (m *mockService) DeleteSession(
 	args := m.Called(ctx, req)
 	return args.Get(0).(model.DeleteSessionResponse), args.Error(1)
 }
+
+func (m *mockService) SetSession(ctx context.Context, ref string) (model.Session, error) {
+	args := m.Called(ctx, ref)
+	return args.Get(0).(model.Session), args.Error(1)
+}
+
+func (m *mockService) UnsetSession(ctx context.Context) (model.Session, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(model.Session), args.Error(1)
+}
+
+func (m *mockService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
+	args := m.Called(ctx, ref)
+	return args.Get(0).(model.Session), args.Error(1)
+}

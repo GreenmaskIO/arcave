@@ -16,9 +16,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -38,9 +42,9 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "before-migration"}).
 		Return(sp, nil).Once()
 	released := false
-	h := NewMCPHandler(func(context.Context, string) (MCPService, func(), error) {
+	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 		return svc, func() { released = true }, nil
-	}, model.LeftoverVolumesOverwrite)
+	}, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	res, out, err := h.createSavepointMCP(context.Background(), nil, createInput{Project: "demo", Name: "before-migration"})
@@ -85,11 +89,11 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 				Return(tt.svc, nil).Once()
 			var gotProject string
 			released := false
-			factory := func(_ context.Context, project string) (MCPService, func(), error) {
+			factory := func(_ context.Context, project, _ string) (MCPService, func(), error) {
 				gotProject = project
 				return svc, func() { released = true }, nil
 			}
-			h := NewMCPHandler(factory, model.LeftoverVolumesOverwrite)
+			h := NewMCPHandler(factory, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 			// Act
 			res, out, err := h.listSavepointsMCP(context.Background(), nil, tt.in)
@@ -109,9 +113,9 @@ func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
 	// Arrange
 	wireErr := errors.New("no such project")
 	svc := &mockService{}
-	h := NewMCPHandler(func(context.Context, string) (MCPService, func(), error) {
+	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 		return nil, nil, wireErr
-	}, model.LeftoverVolumesOverwrite)
+	}, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, out, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "nope"})
@@ -119,5 +123,383 @@ func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
 	// Assert
 	require.ErrorIs(t, err, wireErr)
 	assert.Equal(t, listOutput{}, out)
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_openService_SessionPrecedence(t *testing.T) {
+	tests := []struct {
+		name    string
+		pin     model.SessionID
+		session string
+		want    string
+	}{
+		{name: "neither follows the current session", want: ""},
+		{name: "the pin, by id", pin: handlerSession, want: handlerSession.String()},
+		{name: "the call outranks the pin", pin: handlerSession, session: "baseline", want: "baseline"},
+		{name: "the call alone", session: "exp", want: "exp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint(nil), nil).Once()
+			var gotSession string
+			factory := func(_ context.Context, _, session string) (MCPService, func(), error) {
+				gotSession = session
+				return svc, func() {}, nil
+			}
+			h := NewMCPHandler(factory, nil, tt.pin, model.LeftoverVolumesOverwrite)
+
+			// Act
+			_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "demo", Session: tt.session})
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, gotSession)
+			svc.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMCPHandler_ALockedProjectIsNamed(t *testing.T) {
+	// Arrange
+	svc := &mockService{}
+	svc.On("Rollback", mock.Anything, mock.Anything).Return(model.RollbackResult{}, model.ErrProjectLocked).Once()
+	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+		return svc, func() {}, nil
+	}, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, _, err := h.rollbackMCP(context.Background(), nil, rollbackInput{Project: "demo", Ref: "latest"})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrProjectLocked)
+	assert.Contains(t, err.Error(), "session fork")
+	svc.AssertExpectations(t)
+}
+
+// sessionFactoryOf hands svc to every call and records whether the call released it.
+func sessionFactoryOf(svc MCPSessionService, released *bool) MCPSessionServiceFactory {
+	return func(context.Context) (MCPSessionService, func(), error) {
+		return svc, func() { *released = true }, nil
+	}
+}
+
+func TestMCPHandler_listSessionsMCP(t *testing.T) {
+	sessions := []model.SessionSummary{{Session: model.DefaultSessionRecord, Current: true}}
+	tests := []struct {
+		name string
+		svc  []model.SessionSummary
+		want sessionListOutput
+	}{
+		{name: "every session", svc: sessions, want: sessionListOutput{Sessions: sessions}},
+		{name: "none answers an empty array", want: sessionListOutput{Sessions: []model.SessionSummary{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true}).Return(tt.svc, nil).Once()
+			released := false
+			h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+			// Act
+			_, out, err := h.listSessionsMCP(context.Background(), nil, sessionListInput{All: true})
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, out)
+			assert.True(t, released, "what the call opened must not outlive it")
+			svc.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMCPHandler_createSessionMCP(t *testing.T) {
+	// Arrange
+	record := model.Session{ID: handlerSession, Name: "exp", From: &model.SessionOrigin{Session: model.DefaultSession}}
+	svc := &mockService{}
+	svc.On("CreateSession", mock.Anything, model.CreateSessionRequest{Name: "exp", From: "baseline"}).Return(record, nil).Once()
+	released := false
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, out, err := h.createSessionMCP(context.Background(), nil, sessionCreateInput{Name: "exp", From: "baseline"})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, record, out)
+	assert.True(t, released)
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_deleteSessionMCP(t *testing.T) {
+	// Arrange
+	resp := model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}
+	svc := &mockService{}
+	svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "exp", Force: true}).Return(resp, nil).Once()
+	released := false
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, out, err := h.deleteSessionMCP(context.Background(), nil, sessionDeleteInput{Session: "exp", Force: true})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, resp, out)
+	assert.True(t, released)
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_setSessionMCP(t *testing.T) {
+	// Arrange
+	record := model.Session{ID: handlerSession, Name: "exp"}
+	svc := &mockService{}
+	svc.On("SetSession", mock.Anything, "exp").Return(record, nil).Once()
+	released := false
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, out, err := h.setSessionMCP(context.Background(), nil, sessionSetInput{Session: "exp"})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, record, out)
+	assert.True(t, released)
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_setSessionMCP_RefusedWhenPinned(t *testing.T) {
+	// Arrange: strict mock, so a pinned server that writes the pointer fails the test.
+	svc := &mockService{}
+	released := false
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), handlerSession, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, _, err := h.setSessionMCP(context.Background(), nil, sessionSetInput{Session: "exp"})
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `pinned to session "`+handlerSession.String()+`"`)
+	assert.False(t, released, "nothing is opened")
+	svc.AssertExpectations(t)
+}
+
+func TestOutputSchema_ValidatesWhatASessionToolReturns(t *testing.T) {
+	// Arrange: every SessionID position — a record's id, its origin, a listing row, a delete response.
+	record := model.Session{ID: handlerSession, Name: "exp", From: &model.SessionOrigin{Session: model.DefaultSession}}
+	tests := []struct {
+		name   string
+		schema *jsonschema.Schema
+		value  any
+	}{
+		{name: "a record", schema: outputSchema[model.Session](), value: record},
+		{name: "a listing", schema: outputSchema[sessionListOutput](),
+			value: sessionListOutput{Sessions: []model.SessionSummary{{Session: record, Current: true}}}},
+		{name: "a delete", schema: outputSchema[model.DeleteSessionResponse](),
+			value: model.DeleteSessionResponse{Session: handlerSession, Deleted: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved, err := tt.schema.Resolve(nil)
+			require.NoError(t, err)
+			data, err := json.Marshal(tt.value)
+			require.NoError(t, err)
+			var instance any
+			require.NoError(t, json.Unmarshal(data, &instance))
+
+			// Act
+			err = resolved.Validate(instance)
+
+			// Assert
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestMCPHandler_unsetSessionMCP(t *testing.T) {
+	// Arrange
+	svc := &mockService{}
+	svc.On("UnsetSession", mock.Anything).Return(model.DefaultSessionRecord, nil).Once()
+	released := false
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, out, err := h.unsetSessionMCP(context.Background(), nil, struct{}{})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, model.DefaultSessionRecord, out)
+	assert.True(t, released)
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_unsetSessionMCP_RefusedWhenPinned(t *testing.T) {
+	// Arrange: strict mock, so a pinned server that clears the pointer fails the test.
+	svc := &mockService{}
+	released := false
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), handlerSession, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, _, err := h.unsetSessionMCP(context.Background(), nil, struct{}{})
+
+	// Assert
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `pinned to session "`+handlerSession.String()+`"`)
+	assert.False(t, released, "nothing is opened")
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_currentSessionMCP(t *testing.T) {
+	tests := []struct {
+		name string
+		pin  model.SessionID
+		ref  string
+	}{
+		{name: "unpinned follows the pointer"},
+		{name: "pinned answers the pin, by id", pin: handlerSession, ref: handlerSession.String()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			record := model.Session{ID: handlerSession, Name: "feat"}
+			svc := &mockService{}
+			svc.On("ResolveSession", mock.Anything, tt.ref).Return(record, nil).Once()
+			released := false
+			h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), tt.pin, model.LeftoverVolumesOverwrite)
+
+			// Act
+			_, out, err := h.currentSessionMCP(context.Background(), nil, struct{}{})
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, record, out)
+			assert.True(t, released)
+			svc.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMCPHandler_PinnedSessionTools(t *testing.T) {
+	// Arrange
+	svc := &mockService{}
+	svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{Ref: handlerSession.String()}).
+		Return([]model.SessionSummary(nil), nil).Once()
+	svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "feat", Pinned: handlerSession}).
+		Return(model.DeleteSessionResponse{}, model.ErrCurrentSessionDelete).Once()
+	released := false
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), handlerSession, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, _, listErr := h.listSessionsMCP(context.Background(), nil, sessionListInput{})
+	_, _, deleteErr := h.deleteSessionMCP(context.Background(), nil, sessionDeleteInput{Session: "feat"})
+
+	// Assert: the listing marks the pin, and the pin is protected like the current session.
+	require.NoError(t, listErr)
+	require.ErrorIs(t, deleteErr, model.ErrCurrentSessionDelete)
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_Server_EveryTool(t *testing.T) {
+	sp := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "v1"}
+	record := model.Session{ID: handlerSession, Name: "feat", From: &model.SessionOrigin{Session: model.DefaultSession}}
+	tests := []struct {
+		tool  string
+		args  map[string]any
+		setup func(svc *mockService)
+		want  any // the structured content, decoded into its type
+	}{
+		{tool: "savepoint_create", args: map[string]any{"project": "demo", "name": "v1"},
+			setup: func(svc *mockService) {
+				svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "v1"}).Return(sp, nil).Once()
+			}, want: sp},
+		{tool: "savepoint_list", args: map[string]any{"project": "demo", "session": "feat"},
+			setup: func(svc *mockService) {
+				svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint{sp}, nil).Once()
+			}, want: listOutput{Savepoints: []model.Savepoint{sp}}},
+		{tool: "savepoint_remove", args: map[string]any{"project": "demo", "ids": []string{sp.ID.String()}},
+			setup: func(svc *mockService) {
+				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{IDs: []model.SavepointID{sp.ID}}).
+					Return(model.RemoveResult{}, nil).Once()
+			}, want: model.RemoveResponse{}},
+		{tool: "rollback", args: map[string]any{"project": "demo", "ref": "latest"},
+			setup: func(svc *mockService) {
+				svc.On("Rollback", mock.Anything, mock.Anything).Return(model.RollbackResult{Savepoint: sp}, nil).Once()
+			}, want: model.RollbackResponse{RolledBackTo: sp}},
+		{tool: "session_list", args: map[string]any{"all": true},
+			setup: func(svc *mockService) {
+				svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true}).
+					Return([]model.SessionSummary{{Session: record, Status: model.SessionStatusReady, Current: true}}, nil).Once()
+			}, want: sessionListOutput{Sessions: []model.SessionSummary{{Session: record, Status: model.SessionStatusReady, Current: true}}}},
+		{tool: "session_create", args: map[string]any{"name": "feat", "from": "baseline"},
+			setup: func(svc *mockService) {
+				svc.On("CreateSession", mock.Anything, model.CreateSessionRequest{Name: "feat", From: "baseline"}).Return(record, nil).Once()
+			}, want: record},
+		{tool: "session_delete", args: map[string]any{"session": "feat", "force": true},
+			setup: func(svc *mockService) {
+				svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "feat", Force: true}).
+					Return(model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}, nil).Once()
+			}, want: model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}},
+		{tool: "session_current", args: map[string]any{},
+			setup: func(svc *mockService) {
+				svc.On("ResolveSession", mock.Anything, "").Return(record, nil).Once()
+			}, want: record},
+		{tool: "session_set", args: map[string]any{"session": "feat"},
+			setup: func(svc *mockService) {
+				svc.On("SetSession", mock.Anything, "feat").Return(record, nil).Once()
+			}, want: record},
+		{tool: "session_unset", args: map[string]any{},
+			setup: func(svc *mockService) {
+				svc.On("UnsetSession", mock.Anything).Return(model.DefaultSessionRecord, nil).Once()
+			}, want: model.DefaultSessionRecord},
+	}
+
+	// Arrange: one server for every case, over the SDK's own transport, so its schema checks run.
+	svc := &mockService{}
+	for _, tt := range tests {
+		tt.setup(svc)
+	}
+	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+		return svc, func() {}, nil
+	}, func(context.Context) (MCPSessionService, func(), error) {
+		return svc, func() {}, nil
+	}, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	ctx := context.Background()
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := h.Server().Connect(ctx, serverTransport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = serverSession.Close() })
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, clientTransport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cs.Close() })
+
+	listed, err := cs.ListTools(ctx, nil)
+	require.NoError(t, err)
+	var names []string
+	for _, tool := range listed.Tools {
+		names = append(names, tool.Name)
+	}
+	var want []string
+	for _, tt := range tests {
+		want = append(want, tt.tool)
+	}
+	assert.ElementsMatch(t, want, names, "every tool is registered and every registered tool is covered")
+
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			// Act
+			res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: tt.tool, Arguments: tt.args})
+
+			// Assert
+			require.NoError(t, err)
+			require.False(t, res.IsError, "tool error: %v", res.Content)
+			data, err := json.Marshal(res.StructuredContent)
+			require.NoError(t, err)
+			got := reflect.New(reflect.TypeOf(tt.want))
+			require.NoError(t, json.Unmarshal(data, got.Interface()))
+			assert.Equal(t, tt.want, got.Elem().Interface())
+		})
+	}
 	svc.AssertExpectations(t)
 }

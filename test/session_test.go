@@ -37,6 +37,7 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
@@ -87,6 +88,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 			Sessions: sessionrepo.New(arcaveProjectStore),
 			Locker:   lock.New(projectRoot),
 			Inflight: inflight,
+			Current:  currentsession.New(projectRoot),
 			Store:    arcaveProjectStore,
 		}),
 		inflight: inflight,

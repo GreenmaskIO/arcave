@@ -162,8 +162,8 @@ copy-on-write clones, or storage-native snapshot mechanisms without changing the
                           `arcave init` names no compose project and does not take it; `arcave mcp` serves
                           many, so each of its tool calls names its own.
     --session             The session to work in, by id or name; read from ARCAVE_SESSION when the flag is
-                          absent, `baseline` when neither is set. Unbound, like -p: there is no current-session
-                          pointer, so a command that names none works in `baseline`.
+                          absent, then from the current session (`arcave session set`), `baseline` when none
+                          is set. Unbound, like -p: it steers one invocation and never moves the pointer.
     --config              Path to the config file (default: .arcave/config.yaml under the project root).
     --log-level           debug | info | warn.
     --log-format          text | json.
@@ -582,7 +582,22 @@ and always exists. These commands name no compose project and reach no daemon.
 arcave session list [--all]         # JSON array of {id, name, status, error, created_at, from, savepoint_count, compose_projects, size_bytes}
 arcave session create [--name N] [--from S]  # an empty session, or a copy of S; prints its record
 arcave session delete [--force] <id|name>  # {session, deleted: true, freed_bytes}
+arcave session set <id|name>        # makes it the current session; prints its record
+arcave session unset                # clears the current session; prints baseline's record
+arcave session current              # the session a command works in: --session, else the current one, else baseline
 ```
+
+**The current session** is `.arcave/current_session`: one session id, host-local beside the lock, read by every
+command and every MCP tool call that names no session, written under the lock. The order is `--session` /
+`ARCAVE_SESSION` → the current session → `baseline`; no pointer is `baseline`. `session list` marks `current: true`
+on the session `session current` names — the record a command would resolve, `--session` included; none when that
+cannot be resolved, so a broken pointer never stops the listing. A pointer naming a session that no longer exists is refused — `the current session no
+longer exists: <id>` — rather than read as `baseline`, so no savepoint lands in a session nobody chose;
+`session unset` or `session set <session>` repairs it, and a pointer that is not an id at all is read as none by
+`session list` and `session delete`. `session delete` refuses the current session (`session is the current session`)
+unless `--force`, which deletes it and clears the pointer; `session delete` and `session set` refuse an empty name
+(`no session named`) rather than read it as the current session. The pointer is written to a temporary file and
+renamed into place, so no reader sees a partial one.
 
 `--name` is optional and may be anything not blank — `/` and a UUID's shape included — but must be unique within
 the arcave project (`baseline` is taken by the default session) and must not be another session's id.
@@ -711,15 +726,20 @@ Output:
 Starts the arcave MCP server.
 
 ```bash
-arcave mcp
+arcave mcp [--session <id|name>]
 ```
 
-Provides AI agents with native tools:
+Tools: `savepoint_create`, `savepoint_list`, `savepoint_remove`, `rollback`, `session_list`, `session_create`
+(`from` forks), `session_delete` (`force`), `session_current`, `session_set`, `session_unset`. Every savepoint tool and `rollback` take `project` and
+an optional `session`; the session tools mirror `arcave session list|create|delete|current|set|unset` and print the same JSON
+(`session_list` wrapped as `{sessions: [...]}`).
 
-- `create_savepoint`
-- `list_savepoints`
-- `rollback`
-- `status`
+The session a call works in is its `session` argument, else the server's pin, else the current session, else
+`baseline`. `--session` / `ARCAVE_SESSION` at start **pins** the server to the session it names then, by id — one
+created later under the same name is not the pinned one — never written to the pointer; `session_delete` refuses the
+pinned session unless `force`; `session_current` answers the pin, and `session_set`/`session_unset` on a pinned server are refused. Unpinned, the server reads the pointer on every call,
+so `session_set` — or `arcave session set` from a terminal — moves it. A call refused because another arcave
+command holds the project lock says so and names a fork, which holds it for its whole copy.
 
 This enables agent-driven development workflows where agents can safely create savepoints before modifying application
 state and automatically rollback when validation fails.
