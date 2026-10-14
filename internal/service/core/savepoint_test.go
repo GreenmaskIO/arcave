@@ -510,7 +510,12 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
 
 	store := newDirStore(t)
-	docker := &fakeVolumeStreamer{payload: "pgdata bytes", openErrFor: "volume-service-app-etc-cfg"}
+	// The failure waits for the surviving archive: its cancel would abort a put still in flight.
+	docker := &fakeVolumeStreamer{
+		payload:        "pgdata bytes",
+		openErrFor:     "volume-service-app-etc-cfg",
+		failAfterClose: make(chan struct{}),
+	}
 	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
@@ -1499,6 +1504,10 @@ type fakeVolumeStreamer struct {
 	// openErrFor is the ObjectID of the volume that will not open, for a test
 	// that needs one volume of several to fail.
 	openErrFor string
+	// failAfterClose, when set, holds the failing open until a served stream is
+	// closed — after its archive is in place — so the failure cancels no write.
+	failAfterClose chan struct{}
+	closeOnce      sync.Once
 }
 
 func (f *fakeVolumeStreamer) ResolveMountSource(
@@ -1510,12 +1519,28 @@ func (f *fakeVolumeStreamer) ResolveMountSource(
 func (f *fakeVolumeStreamer) OpenVolume(
 	_ context.Context, src model.MountSource,
 ) (io.ReadCloser, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	if src.Source != "" && src.Source == f.openErrFor {
+		if f.failAfterClose != nil {
+			<-f.failAfterClose
+		}
 		return nil, errors.New("volume boom")
 	}
-	return io.NopCloser(strings.NewReader(f.payload)), nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &fakeVolumeStream{Reader: strings.NewReader(f.payload), streamer: f}, nil
+}
+
+// fakeVolumeStream releases a failing open waiting on failAfterClose.
+type fakeVolumeStream struct {
+	io.Reader
+	streamer *fakeVolumeStreamer
+}
+
+func (s *fakeVolumeStream) Close() error {
+	if s.streamer.failAfterClose != nil {
+		s.streamer.closeOnce.Do(func() { close(s.streamer.failAfterClose) })
+	}
+	return nil
 }
 
 func (f *fakeVolumeStreamer) WriteVolume(_ context.Context, _ model.MountSource, r io.Reader) error {
