@@ -185,6 +185,8 @@ func TestRunOneShotContainer_AttachConfig(t *testing.T) {
 			assert.Equal(t, tt.wantCfg.AttachStdout, cfg.AttachStdout)
 			assert.Equal(t, tt.wantCfg.AttachStderr, cfg.AttachStderr)
 			assert.False(t, cfg.Tty, "a tty would collapse stdout and stderr into one stream")
+			assert.Equal(t, map[string]string{oneShotLabel: "true"}, cfg.Labels,
+				"a container a killed run leaves behind must be findable")
 			if !tt.wantAttach {
 				api.AssertNotCalled(t, "ContainerAttach")
 			}

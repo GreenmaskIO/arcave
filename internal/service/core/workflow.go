@@ -215,6 +215,39 @@ func (s *Service) startServices(ctx context.Context, ws workingSet) error {
 	return nil
 }
 
+// restartServices brings back the services a workflow stopped, on a revertContext:
+// the interrupt that aborted the workflow must not leave the compose project stopped.
+func (s *Service) restartServices(ctx context.Context, ws workingSet) error {
+	ctx, cancel := revertContext(ctx)
+	defer cancel()
+	return s.startServices(ctx, ws)
+}
+
+// revertContext strips ctx of its cancellation and bounds it by revertBudget instead, for a
+// step that puts the environment back and so must outlive a Ctrl-C.
+func revertContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), revertBudget)
+}
+
+// logInterrupt tells the user what arcave does about an interrupt, when ctx was interrupted.
+func logInterrupt(ctx context.Context, action string) {
+	if ctx.Err() == nil {
+		return
+	}
+	zerolog.Ctx(ctx).Info().Msg(action)
+}
+
+// preferInterrupt returns the interrupt that cancelled ctx in place of err, the symptom
+// it caused somewhere downstream, and logs err.
+func preferInterrupt(ctx context.Context, err error) error {
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return err
+	}
+	zerolog.Ctx(ctx).Debug().Err(err).Msg("failure the interrupt caused")
+	return fmt.Errorf("interrupted: %w", ctxErr)
+}
+
 // replicaGaps warns of and returns each service missing a replica below its highest one.
 func replicaGaps(ctx context.Context, res model.IntrospectionResult) []model.ReplicaGap {
 	var gaps []model.ReplicaGap

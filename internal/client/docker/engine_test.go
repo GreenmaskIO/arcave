@@ -292,6 +292,7 @@ func TestEngine_OpenVolume(t *testing.T) {
 	assertClosed(t, removed, "closing the stream must remove the container")
 	api.AssertExpectations(t)
 	assert.Equal(t, []string{"demo_pgdata:" + scratchMount}, scratch.host.Binds)
+	assert.Equal(t, map[string]string{oneShotLabel: "true"}, scratch.cfg.Labels)
 }
 
 // A restore clears the volume before extracting into it, and extracts at the

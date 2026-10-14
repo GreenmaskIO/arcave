@@ -34,6 +34,15 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// oneShotLabel marks every throwaway container arcave creates, so one a killed run
+// left behind can be found: `docker ps -a --filter label=arcave.oneshot`.
+const oneShotLabel = "arcave.oneshot"
+
+// oneShotLabels is the label set of a throwaway container.
+func oneShotLabels() map[string]string {
+	return map[string]string{oneShotLabel: "true"}
+}
+
 // attaches reports whether the run exchanges any stdio with the container.
 func attaches(spec model.OneShotSpec) bool {
 	return spec.Stdin != nil || spec.Stdout != nil || spec.Stderr != nil
@@ -57,6 +66,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		Image:        spec.Image,
 		Cmd:          spec.Cmd,
 		Env:          spec.Env,
+		Labels:       oneShotLabels(),
 		OpenStdin:    spec.Stdin != nil,
 		StdinOnce:    spec.Stdin != nil,
 		AttachStdin:  spec.Stdin != nil,
@@ -173,7 +183,7 @@ func startScratchContainer(
 	}
 
 	created, err := api.ContainerCreate(ctx,
-		&container.Config{Image: scratchImage, Cmd: scratchCmd},
+		&container.Config{Image: scratchImage, Cmd: scratchCmd, Labels: oneShotLabels()},
 		&container.HostConfig{Binds: []string{src.Source + ":" + scratchMount}},
 		nil, nil, "")
 	if err != nil {

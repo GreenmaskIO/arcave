@@ -1263,3 +1263,194 @@ func TestService_Rollback_ColdStartUnsupportedDaemonLoadsNothing(t *testing.T) {
 	images.AssertExpectations(t)
 	runner.AssertExpectations(t)
 }
+
+// An interrupt during the restore runs the revert, and the cleanup after it, on a
+// live context: the Ctrl-C that aborted the rollback must not tear the way back.
+func TestService_Rollback_InterruptedRestoreReverts(t *testing.T) {
+	// Arrange
+	ctx, cancel := context.WithCancel(zerolog.Nop().WithContext(context.Background()))
+	defer cancel()
+	liveErr := func(errs *[]error) func(mock.Arguments) {
+		return func(args mock.Arguments) { *errs = append(*errs, args.Get(0).(context.Context).Err()) }
+	}
+
+	vol := demoVolume()
+	record := demoRecord()
+	repo, inspector, locker := demoResolution(record)
+
+	var safetySnapshotID model.SavepointID
+	var revertErrs []error
+	expectSpecCommit(repo)
+	expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
+	expectSafetySnapshotUncommit(repo, &safetySnapshotID).Run(liveErr(&revertErrs))
+	runner := &mockComposeRunner{}
+	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
+	runner.On("Down", mock.Anything, demoSpec).Return(nil).Twice()
+	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
+	runner.On("Create", mock.Anything, demoSpec).Run(liveErr(&revertErrs)).Return(nil).Once()
+	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Run(liveErr(&revertErrs)).Return(nil).Once()
+
+	savepointBackend := &mockBackend{volume: vol}
+	savepointBackend.On("Restore", mock.Anything,
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
+		Run(func(mock.Arguments) { cancel() }).Return(context.Canceled).Once()
+
+	safetySnapshotBackend := &mockBackend{volume: vol}
+	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
+		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+	safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
+		return req.SnapshotID == safetySnapshotID
+	})).Run(liveErr(&revertErrs)).Return(nil).Once()
+	safetySnapshotBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
+		return req.SnapshotID == safetySnapshotID
+	})).Run(liveErr(&revertErrs)).Return(nil).Once()
+
+	registry := &mockRegistry{}
+	store := newDirStore(t)
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
+
+	inflight := &fakeInflight{}
+	svc := New(Deps{
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         inflight,
+		Store:            store,
+		DefaultBackend:   model.SnapshotBackendCopy,
+	})
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{
+		ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
+		WaitTimeout: 60 * time.Second,
+	})
+
+	// Assert
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, revertErrs, 5, "create, restore, start, uncommit and remove of the revert")
+	for _, err := range revertErrs {
+		assert.NoError(t, err, "the revert and its cleanup must run on a live context")
+	}
+	_, found, _ := inflight.Get(context.Background())
+	assert.False(t, found, "a reverted rollback clears its marker")
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	registry.AssertExpectations(t)
+	savepointBackend.AssertExpectations(t)
+	safetySnapshotBackend.AssertExpectations(t)
+}
+
+// An interrupt during the stop or the safety snapshot changes nothing: the services
+// come back on a live context, and nothing is torn down or restored.
+func TestService_Rollback_InterruptBeforeTheTeardownRestarts(t *testing.T) {
+	tests := []struct {
+		name string
+		// stopErr fails the stop itself; with none, the interrupt lands during the
+		// safety snapshot, which still commits.
+		stopErr    error
+		wantErr    string
+		wantRemove bool
+	}{
+		{
+			name:    "stop fails partway",
+			stopErr: context.Canceled,
+			wantErr: "stop services: interrupted: context canceled",
+		},
+		{
+			name:       "interrupt during the safety snapshot",
+			wantErr:    "rollback interrupted, nothing changed: context canceled",
+			wantRemove: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx, cancel := context.WithCancel(zerolog.Nop().WithContext(context.Background()))
+			defer cancel()
+
+			vol := demoVolume()
+			record := demoRecord()
+			repo, inspector, locker := demoResolution(record)
+
+			var startErr error
+			runner := &mockComposeRunner{}
+			stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), tt.stopErr).Once()
+			if tt.stopErr != nil {
+				stop.Run(func(mock.Arguments) { cancel() })
+			}
+			runner.On("Start", mock.Anything, demoSpec, 60*time.Second).
+				Run(func(args mock.Arguments) { startErr = args.Get(0).(context.Context).Err() }).
+				Return(nil).Once()
+
+			savepointBackend := &mockBackend{volume: vol}
+			safetySnapshotBackend := &mockBackend{volume: vol}
+			var safetySnapshotID model.SavepointID
+			if tt.wantRemove {
+				expectSpecCommit(repo)
+				expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
+				expectSafetySnapshotUncommit(repo, &safetySnapshotID)
+				safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
+					Run(func(args mock.Arguments) {
+						safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID
+						cancel()
+					}).
+					Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).
+					Once()
+				safetySnapshotBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
+					return req.SnapshotID == safetySnapshotID
+				})).Return(nil).Once()
+			}
+
+			registry := &mockRegistry{}
+			store := newDirStore(t)
+			registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+			registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
+
+			inflight := &fakeInflight{}
+			svc := New(Deps{
+				VolumeRemover:    &mockVolumeRemover{},
+				SavepointRepo:    repo,
+				ProjectLocker:    locker,
+				ComposeInspector: inspector,
+				ProjectAssembler: demoAssembler(),
+				SpecCodec:        demoCodec(),
+				ComposeRunner:    runner,
+				BackendRegistry:  registry,
+				Inflight:         inflight,
+				Store:            store,
+				DefaultBackend:   model.SnapshotBackendCopy,
+			})
+
+			// Act
+			_, err := svc.Rollback(ctx, model.RollbackRequest{
+				ID:          ptrID("019e843e-1650-7000-8000-000000000000"),
+				WaitTimeout: 60 * time.Second,
+			})
+
+			// Assert
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.NoError(t, startErr, "the restart must run on a live context")
+			_, found, _ := inflight.Get(context.Background())
+			assert.False(t, found, "nothing was torn down, so no marker is written")
+			// No Down, Create or Restore is declared: any would fail the run.
+			repo.AssertExpectations(t)
+			inspector.AssertExpectations(t)
+			locker.AssertExpectations(t)
+			runner.AssertExpectations(t)
+			registry.AssertExpectations(t)
+			savepointBackend.AssertExpectations(t)
+			safetySnapshotBackend.AssertExpectations(t)
+		})
+	}
+}

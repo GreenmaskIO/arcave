@@ -18,8 +18,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -502,4 +504,113 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		})
 	}
 	svc.AssertExpectations(t)
+}
+
+// How a rollback tool call ends decides whether its context is cancelled — and so whether
+// core reverts — but never lets the server exit while the call is still unwinding.
+func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
+	tests := []struct {
+		name string
+		// end ends the call, the server's stdin or the server while the rollback runs.
+		end           func(cancelCall, closeStdin, stopServer func())
+		wantCancelled bool
+		wantServing   bool
+	}{
+		{
+			name:          "the client cancels the call",
+			end:           func(cancelCall, _, _ func()) { cancelCall() },
+			wantCancelled: true,
+			wantServing:   true,
+		},
+		{
+			name:          "the client closes stdin",
+			end:           func(_, closeStdin, _ func()) { closeStdin() },
+			wantCancelled: true,
+		},
+		{
+			name: "the server is interrupted",
+			end:  func(_, _, stopServer func()) { stopServer() },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			started, cancelled, unwound := make(chan struct{}), make(chan bool, 1), make(chan struct{})
+			svc := &mockService{}
+			svc.On("Rollback", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				ctx := args.Get(0).(context.Context)
+				close(started)
+				select {
+				case <-ctx.Done():
+					cancelled <- true
+				case <-unwound:
+					cancelled <- false
+				}
+				<-unwound // the revert core runs on its own context
+			}).Return(model.RollbackResult{}, context.Canceled).Once()
+			if tt.wantServing {
+				svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint{}, nil).Once()
+			}
+			h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+				return svc, func() {}, nil
+			}, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+			// Pipes rather than the in-memory pair: an agent host that dies closes the server's
+			// stdin under a call in flight, which the SDK client's own Close never does.
+			stdinR, stdinW := io.Pipe()
+			stdoutR, stdoutW := io.Pipe()
+			serverTransport := &mcpsdk.IOTransport{Reader: stdinR, Writer: stdoutW}
+			clientTransport := &mcpsdk.IOTransport{Reader: stdoutR, Writer: stdinW}
+			closeStdin := func() { _ = stdinW.Close() }
+			serverCtx, stopServer := context.WithCancel(context.Background())
+			defer stopServer()
+			served := make(chan error, 1)
+			go func() { served <- h.Server().Run(serverCtx, serverTransport) }()
+
+			client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "0"}, nil)
+			cs, err := client.Connect(context.Background(), clientTransport, nil)
+			require.NoError(t, err)
+			defer func() { _ = cs.Close() }()
+			callCtx, cancelCall := context.WithCancel(context.Background())
+			defer cancelCall()
+			go func() {
+				_, _ = cs.CallTool(callCtx, &mcpsdk.CallToolParams{
+					Name: "rollback", Arguments: map[string]any{"project": "demo", "ref": "latest"},
+				})
+			}()
+			<-started
+
+			// Act
+			tt.end(cancelCall, closeStdin, stopServer)
+
+			// Assert
+			if tt.wantCancelled {
+				assert.True(t, <-cancelled, "the call's context must be cancelled, so core reverts")
+			}
+			select {
+			case err := <-served:
+				t.Fatalf("the server exited while the call was unwinding: %v", err)
+			default:
+			}
+			close(unwound)
+			if !tt.wantCancelled {
+				assert.False(t, <-cancelled, "an interrupted server lets the call in flight finish")
+			}
+
+			if tt.wantServing {
+				_, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{
+					Name: "savepoint_list", Arguments: map[string]any{"project": "demo"},
+				})
+				require.NoError(t, err, "a cancelled call leaves the server serving")
+				_ = cs.Close()
+			}
+			select {
+			case <-served:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the server did not exit once the call had unwound")
+			}
+			svc.AssertExpectations(t)
+		})
+	}
 }
