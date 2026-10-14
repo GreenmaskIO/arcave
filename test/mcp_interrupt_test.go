@@ -101,12 +101,16 @@ func waitForPhase(t *testing.T, env *sessionEnv, phase model.InflightPhase) {
 	}, mcpCallTimeout, 20*time.Millisecond, "the rollback never reached %s", phase)
 }
 
-// oneShotContainers are the throwaway containers arcave left in the daemon.
+// oneShotContainers are the throwaway containers arcave left in the daemon for the env's
+// compose project: those mounting its volume, since other test packages run helpers too.
 func oneShotContainers(t *testing.T, env *sessionEnv) []string {
 	t.Helper()
 
 	containers, err := env.daemon.ContainerList(env.ctx, container.ListOptions{
-		All: true, Filters: filters.NewArgs(filters.Arg("label", "arcave.oneshot")),
+		All: true, Filters: filters.NewArgs(
+			filters.Arg("label", "arcave.oneshot"),
+			filters.Arg("volume", env.project+"_data"),
+		),
 	})
 	require.NoError(t, err)
 	names := make([]string, 0, len(containers))
