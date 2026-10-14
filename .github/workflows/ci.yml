@@ -1,6 +1,6 @@
-#   pull request  -> lint + test
-#   push to main  -> lint + test + build every target (nothing published)
-#   push of a tag -> lint + test + build every target + GitHub Release
+#   pull request  -> lint + unit + integration
+#   push to main  -> lint + unit + integration + build every target (nothing published)
+#   push of a tag -> lint + unit + integration + build every target + GitHub Release
 name: CI
 
 on:
@@ -35,8 +35,8 @@ jobs:
         with:
           version: v2.14.0
 
-  test:
-    name: Test
+  unit:
+    name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,29 +45,54 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # internal/service/backend/restic/rest skips its conformance test when no
-      # restic binary is on PATH, so without this the suite would go green
-      # having never run it.
+      - name: Run unit tests
+        run: make test-unit
+
+  integration:
+    name: Integration tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # One runner per slow package: the job takes as long as the slowest of them,
+    # not their sum.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test
+            pkgs: ./test
+          - name: cdcbackend
+            pkgs: ./test/cdcbackend
+          - name: resticrest, tarcopybackend
+            pkgs: ./test/resticrest ./test/tarcopybackend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # test/resticrest skips its conformance test when no restic binary is on
+      # PATH, so without this the suite would go green having never run it.
       - name: Install restic
         run: |
           sudo apt-get update
           sudo apt-get install -y restic
 
-      # The integration suites create busybox containers through raw creates that
-      # never pull, and every restic container runs the default image; pulling
-      # both once here keeps the first test from paying (or flaking on) the pull.
+      # The integration suites create containers through raw creates that never
+      # pull; pulling every image they name once here keeps the first test from
+      # paying (or flaking on) the pull.
       - name: Pre-pull integration test images
         run: |
           docker pull busybox
+          docker pull alpine:3.22
           docker pull restic/restic:0.19.1
 
-      - name: Run tests
-        run: go test ./...
+      - name: Run integration tests
+        run: make test-integration INTEGRATION_PKGS="${{ matrix.pkgs }}"
 
   build:
     name: Build (all targets)
     if: github.ref == 'refs/heads/main'
-    needs: [lint, test]
+    needs: [lint, unit, integration]
     # macOS, not ubuntu: the darwin targets need cgo (compose/v2 pulls in the cgo-only fsnotify/fsevents)
     runs-on: macos-latest
     steps:
@@ -95,7 +120,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, test]
+    needs: [lint, unit, integration]
     # Same reason as the build job: the darwin targets need cgo, so the release
     # is cut on macOS.
     runs-on: macos-latest

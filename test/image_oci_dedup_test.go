@@ -30,7 +30,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -87,8 +86,6 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	progress.Mode = progress.ModeQuiet
-
 	engine := dockerclient.NewEngine(daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
@@ -160,6 +157,8 @@ func blobStoreKeys(t *testing.T, store storages.Storager) []string {
 // TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs pins that a second
 // savepoint reuses the first one's blobs instead of writing them again.
 func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newOCIDedupEnv(t)
 	env.up(t)
@@ -202,6 +201,8 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 // TestSavepoint_TwoSavepoints_BothRestore rolls back to a savepoint whose blobs a
 // later one shares, so the layer has to come back out of the blob store.
 func TestSavepoint_TwoSavepoints_BothRestore(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newOCIDedupEnv(t)
 	env.up(t)

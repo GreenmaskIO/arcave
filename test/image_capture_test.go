@@ -27,7 +27,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -61,6 +60,7 @@ services:
   app:
     image: busybox
     command: ["sh", "-c", "printf captured > %[2]s; sleep 3600"]
+    stop_signal: SIGKILL
     volumes:
       - data:/data
 volumes:
@@ -68,6 +68,8 @@ volumes:
 `
 
 func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageCaptureEnv(t)
 	env.up(t)
@@ -144,8 +146,6 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	progress.Mode = progress.ModeQuiet
-
 	engine := dockerclient.NewEngine(daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,

@@ -46,6 +46,8 @@ services:
 `
 
 func TestRollback_KeepsALinkToARebuiltReplica(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		replicas int

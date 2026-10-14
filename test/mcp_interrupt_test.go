@@ -124,6 +124,8 @@ func oneShotContainers(t *testing.T, env *sessionEnv) []string {
 // signal lets the rollback finish, a closed stdin cancels it into the revert, and either way
 // the server exits only once the call is over, with no marker, safety snapshot or helper left.
 func TestMCP_InterruptedRollback(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		// end stops the server the way a host does, mid-rollback.

@@ -24,6 +24,8 @@ import (
 // I1: a capture writes restic's own layout and nothing else, which is what "open it
 // with a stock restic CLI" rests on.
 func TestSnapshotter_Snapshot_KeepsTheRepositoryLayout(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -45,6 +47,8 @@ func TestSnapshotter_Snapshot_KeepsTheRepositoryLayout(t *testing.T) {
 // I2: two volumes are two repositories that share nothing, so one volume's
 // exclusive operation cannot block another's.
 func TestSnapshotter_Snapshot_KeepsRepositoriesPerVolume(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	first := env.newVolume(t, "db", "/var/lib/postgresql/data")

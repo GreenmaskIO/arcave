@@ -1,4 +1,4 @@
-.PHONY: build test test-verbose test-fidelity lint clean generate-restic-api
+.PHONY: build test test-unit test-integration test-verbose test-fidelity lint clean generate-restic-api
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
@@ -8,8 +8,19 @@ OAPI_CODEGEN_VERSION := v2.6.0
 build:
 	go build -o bin/arcave ./cmd/arcave
 
-test:
-	go test -timeout 30m ./...
+# Unit tests need no daemon; the integration suites under test/ need a reachable one.
+UNIT_PKGS := ./cmd/... ./internal/...
+INTEGRATION_PKGS := ./test/...
+# Concurrent tests per integration package: the daemon's disk, not the CPU, is the bound.
+INTEGRATION_PARALLEL := 4
+
+test: test-unit test-integration
+
+test-unit:
+	go test $(UNIT_PKGS)
+
+test-integration:
+	go test -timeout 30m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_PKGS)
 
 test-verbose:
 	go test -v -timeout 30m ./...

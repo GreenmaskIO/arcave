@@ -25,7 +25,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -118,8 +117,6 @@ func newStopEnv(t *testing.T) *stopEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	progress.Mode = progress.ModeQuiet
-
 	logs := &syncBuffer{}
 	env := &stopEnv{
 		ctx: zerolog.New(logs).WithContext(context.Background()),

@@ -50,6 +50,8 @@ services:
 `
 
 func TestRollback_StartsAServiceWithItsHealthcheckDisabled(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageRollbackEnv(t)
 	env.upDocument(t, fmt.Sprintf(healthCheckDisabledSpec, env.project))

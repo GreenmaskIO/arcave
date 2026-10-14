@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
@@ -43,8 +44,8 @@ import (
 // incremental backup and a byte-identical restore. Throughput goes to the log as
 // a reference, never as an assertion.
 
-// resticImage pins the stock image the one-shot runner drives.
-const resticImage = "restic/restic:0.19.0"
+// resticImage is the stock image the one-shot runner drives: the one arcave defaults to.
+const resticImage = config.DefaultResticImage
 
 // busyboxImage fills, hashes and wipes the volume.
 const busyboxImage = "busybox"

@@ -81,6 +81,8 @@ const (
 )
 
 func TestCDCBackend_CreateAndRollback(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		cdc  config.CDCBackend
@@ -156,6 +158,8 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 // lives in the very same repository as the savepoints, as an increment over
 // them, and commits its own record in the one savepoint store.
 func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newCDCEnv(t, config.CDCBackend{
 		RestoreMode: config.RestoreModeWipe,
@@ -202,6 +206,8 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 // A cloned session carries every cdc repository with it and restores through its own restic
 // server; the source's repository is left as it was.
 func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newCDCEnv(t, config.CDCBackend{
 		RestoreMode: config.RestoreModeWipe,

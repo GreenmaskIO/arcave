@@ -30,6 +30,8 @@ import (
 // A fork copies the whole session, byte for byte and without its record, and leaves the
 // running compose project exactly as it was.
 func TestSessionFork_ClonesTheSessionAndLeavesTheDaemonAlone(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
@@ -80,6 +82,8 @@ func TestSessionFork_ClonesTheSessionAndLeavesTheDaemonAlone(t *testing.T) {
 // A rollback is what deploys a fork, and it needs nothing of the source: blobs and upstreams
 // travel with the clone. Layers live only in the store until a rollback loads them.
 func TestSessionFork_RollbackInTheForkDeploys(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
@@ -111,6 +115,8 @@ func TestSessionFork_RollbackInTheForkDeploys(t *testing.T) {
 
 // A fork that fails mid-copy creates no session and leaves its tree, marked failed, to a gc.
 func TestSessionFork_FailureLeavesTheTreeMarkedFailed(t *testing.T) {
+	t.Parallel()
+
 	// Arrange: the second object of the source cannot be read.
 	if os.Geteuid() == 0 {
 		t.Skip("root reads an unreadable file")
@@ -152,6 +158,8 @@ func TestSessionFork_FailureLeavesTheTreeMarkedFailed(t *testing.T) {
 
 // A failed fork is listed with --all as failed, with its error, and deleted by its id.
 func TestSessionFork_FailedTreeIsListedAndDeleted(t *testing.T) {
+	t.Parallel()
+
 	// Arrange: the source's only object cannot be read.
 	if os.Geteuid() == 0 {
 		t.Skip("root reads an unreadable file")

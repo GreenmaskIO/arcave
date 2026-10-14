@@ -90,6 +90,8 @@ var endToEndVolumes = map[string]string{
 }
 
 func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageRollbackEnv(t)
 	env.externalVolume(t, env.project+"-shared", "mkdir /data/app")
@@ -151,6 +153,8 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 // A compose project taken down comes back from the savepoint alone: its spec, its layers
 // and its data, over the named volume `compose down` kept.
 func TestRollback_RebuildsAComposeProjectThatWasTakenDown(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageRollbackEnv(t)
 	env.externalVolume(t, env.project+"-shared", "mkdir /data/app")
@@ -211,6 +215,8 @@ func sortedNotCovered(n model.NotCovered) model.NotCovered {
 }
 
 func TestRollback_RenumbersAroundAMissingFirstReplica(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageRollbackEnv(t)
 	env.upDocument(t, fmt.Sprintf(replicaGapSpec, env.project))

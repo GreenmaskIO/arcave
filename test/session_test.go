@@ -27,7 +27,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -142,6 +141,8 @@ func (e *sessionEnv) marker(t *testing.T, session model.SessionID) {
 }
 
 func TestSession_CreateListResolveDelete(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	require.Equal(t, []string{model.DefaultSessionName}, env.names(t), "a fresh store lists the default alone")
@@ -190,6 +191,8 @@ func TestSession_CreateListResolveDelete(t *testing.T) {
 }
 
 func TestSession_Create_Refused(t *testing.T) {
+	t.Parallel()
+
 	env := newSessionEnv(t)
 	taken := env.create(t, "taken")
 
@@ -217,6 +220,8 @@ func TestSession_Create_Refused(t *testing.T) {
 }
 
 func TestSession_Resolve_NotFound(t *testing.T) {
+	t.Parallel()
+
 	env := newSessionEnv(t)
 	env.create(t, "feat")
 
@@ -230,6 +235,8 @@ func TestSession_Resolve_NotFound(t *testing.T) {
 }
 
 func TestSession_Delete_Refused(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	feat := env.create(t, "feat")
@@ -249,6 +256,8 @@ func TestSession_Delete_Refused(t *testing.T) {
 }
 
 func TestSession_Delete_PassesAMarkerOfAnotherSession(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	feat := env.create(t, "feat")
@@ -266,6 +275,8 @@ func TestSession_Delete_PassesAMarkerOfAnotherSession(t *testing.T) {
 }
 
 func TestSession_RefusedWhileLocked(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.create(t, "feat")
@@ -285,6 +296,8 @@ func TestSession_RefusedWhileLocked(t *testing.T) {
 
 // A session directory with no record is what an interrupted create leaves: it is no session.
 func TestSession_IncompleteSessionIsInvisible(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	orphan := model.NewSessionID()
@@ -321,8 +334,6 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	progress.Mode = progress.ModeQuiet
-
 	engine := dockerclient.NewEngine(e.daemon)
 	inspector := introspect.NewInspector(e.daemon, model.DockerComposeProjectName(e.project))
 	runner := composeclient.NewClient(dockercompose.NewComposeService(cli), composeclient.Options{
@@ -369,6 +380,8 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 }
 
 func TestSession_SavepointsAreIsolated(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
@@ -405,6 +418,8 @@ func TestSession_SavepointsAreIsolated(t *testing.T) {
 }
 
 func TestSession_RollbackStaysInItsSession(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
@@ -441,6 +456,8 @@ func TestSession_RollbackStaysInItsSession(t *testing.T) {
 }
 
 func TestSession_DeleteDropsItsDataAndLeavesTheProjectRunning(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
@@ -476,6 +493,8 @@ func TestSession_DeleteDropsItsDataAndLeavesTheProjectRunning(t *testing.T) {
 
 // The marker is host-local: an interrupted rollback in one session holds every session.
 func TestSession_InterruptedRollbackMarkerSpansSessions(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
@@ -502,6 +521,8 @@ func TestSession_InterruptedRollbackMarkerSpansSessions(t *testing.T) {
 // in that tree, and a delete frees exactly that much. The capture runs on fullcopy only:
 // cdc's restic repositories are not covered here.
 func TestSession_SizeIsWhatDeleteFrees(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
