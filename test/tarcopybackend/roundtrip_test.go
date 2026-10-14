@@ -57,6 +57,8 @@ const (
 // A capture is round: the volume comes back byte for byte, ownership and
 // permissions included, and what was written after the capture is gone.
 func TestSnapshotter_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		volume func(t *testing.T, e *env) model.Volume
@@ -116,6 +118,8 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 // A capture of a volume the daemon does not have is refused before anything
 // creates it: an empty capture would wipe live data at the next rollback.
 func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	e := newEnv(t)
 	vol := namedVolume(itProject + "-never-created-" + randomSuffix(t))

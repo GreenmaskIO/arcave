@@ -182,6 +182,8 @@ type savepointListResult struct {
 }
 
 func TestMCP_SessionLifecycle(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	initArcave(t, env)
@@ -211,6 +213,8 @@ func TestMCP_SessionLifecycle(t *testing.T) {
 }
 
 func TestMCP_PinnedServer(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	initArcave(t, env)
@@ -234,6 +238,8 @@ func TestMCP_PinnedServer(t *testing.T) {
 }
 
 func TestMCP_DanglingPointer(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	initArcave(t, env)
@@ -252,6 +258,8 @@ func TestMCP_DanglingPointer(t *testing.T) {
 }
 
 func TestMCP_PinToMissingSessionFailsStart(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	initArcave(t, env)
@@ -268,6 +276,8 @@ func TestMCP_PinToMissingSessionFailsStart(t *testing.T) {
 }
 
 func TestMCP_LockedCallNamesTheFork(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	initArcave(t, env)
@@ -285,6 +295,8 @@ func TestMCP_LockedCallNamesTheFork(t *testing.T) {
 }
 
 func TestMCP_SavepointsFollowTheCurrentSession(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newSessionEnv(t)
 	env.withComposeProject(t)

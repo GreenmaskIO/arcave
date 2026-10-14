@@ -29,6 +29,8 @@ import (
 // ran `docker compose down` still has their data, and used to be unable to
 // capture or restore it.
 func TestSnapshotter_NoServiceContainer(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newBareVolume(t, "db", "/var/lib/postgresql/data")
@@ -55,6 +57,8 @@ func TestSnapshotter_NoServiceContainer(t *testing.T) {
 // went through the container would have snapshotted a fraction of the volume
 // and, worse, restored a fraction over a wipe of all of it.
 func TestSnapshotter_SubpathMountedVolume(t *testing.T) {
+	t.Parallel()
+
 	// Arrange: "nested" is a subdirectory the fill creates; "blob" and "small"
 	// sit outside it and no container ever sees them.
 	env := newEnv(t, wipeOptions())

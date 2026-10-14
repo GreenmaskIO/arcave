@@ -25,6 +25,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
@@ -52,6 +53,8 @@ func (r resource) String() string { return r.kind + " " + r.name }
 // anonymous volume is only reported: the daemon is shared, and it carries no test's name.
 func TestMain(m *testing.M) {
 	flag.Parse()
+	// Set once here: the envs run in parallel, and compose reads it from every one of them.
+	progress.Mode = progress.ModeQuiet
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil || testing.Short() {
 		os.Exit(m.Run())

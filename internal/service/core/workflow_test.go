@@ -15,6 +15,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -116,6 +117,36 @@ func TestReplicaGaps(t *testing.T) {
 				return
 			}
 			assert.Contains(t, logs.String(), tt.want)
+		})
+	}
+}
+
+func TestLogInterrupt(t *testing.T) {
+	tests := []struct {
+		name        string
+		interrupted bool
+		want        string
+	}{
+		{name: "a live context logs nothing"},
+		{name: "an interrupted context logs the action", interrupted: true,
+			want: `{"level":"info","message":"restarting services"}` + "\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			var buf bytes.Buffer
+			ctx, cancel := context.WithCancel(zerolog.New(&buf).WithContext(context.Background()))
+			defer cancel()
+			if tt.interrupted {
+				cancel()
+			}
+
+			// Act
+			logInterrupt(ctx, "restarting services")
+
+			// Assert
+			assert.Equal(t, tt.want, buf.String())
 		})
 	}
 }

@@ -69,25 +69,34 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 
 	ws, err := s.prepare(ctx, req.WaitTimeout)
 	if err != nil {
-		return model.Savepoint{}, err
+		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
+		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
 
 	killed, err := s.stopServices(ctx, ws)
 	if err != nil {
-		return model.Savepoint{}, err
+		// A stop that failed or was interrupted partway may have stopped some services.
+		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")
+		if err := s.restartServices(ctx, ws); err != nil {
+			log.Error().Err(err).Msg("services failed to restart after stop failure")
+		}
+		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
 
 	// Capture while the services are stopped. The capture error is what the caller
 	// gets; the restart on top of it is best-effort and only logged.
 	record, err := s.performSavepoint(ctx, ws, killed, req.Name, req.Description, req.Labels)
 	if err != nil {
-		if err := s.startServices(ctx, ws); err != nil {
+		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
+		err = preferInterrupt(ctx, err)
+		if err := s.restartServices(ctx, ws); err != nil {
 			log.Error().Err(err).Msg("services failed to restart after capture failure")
 		}
 		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", err)
 	}
 
-	if err := s.startServices(ctx, ws); err != nil {
+	logInterrupt(ctx, "savepoint committed before the interrupt: restarting services")
+	if err := s.restartServices(ctx, ws); err != nil {
 		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", record.ID, err)
 	}
 	return record, nil
@@ -183,6 +192,8 @@ func (s *Service) removeSavepoints(ctx context.Context, req model.RemoveRequest)
 
 	if !req.DryRun && len(removed) > 0 {
 		if err := s.applyRemoval(ctx, removed); err != nil {
+			logInterrupt(ctx, "removal interrupted: the savepoints not yet removed are kept, "+
+				"a partly removed one is left as an orphan directory")
 			return model.RemoveResult{}, err
 		}
 	}

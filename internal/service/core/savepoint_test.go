@@ -1549,3 +1549,80 @@ func (f *fakeVolumeStreamer) WriteVolume(_ context.Context, _ model.MountSource,
 	_, err := io.Copy(&f.written, r)
 	return err
 }
+
+// A stop or a capture that fails — an interrupt included — brings the services back
+// on a live context: the Ctrl-C that aborted the capture must not leave them stopped.
+func TestService_CreateSavepoint_RestartsAfterAnInterrupt(t *testing.T) {
+	tests := []struct {
+		name    string
+		stopErr error
+		wantErr string
+	}{
+		{
+			name:    "stop fails partway",
+			stopErr: context.Canceled,
+			wantErr: "interrupted: context canceled",
+		},
+		{
+			name:    "capture interrupted",
+			wantErr: "capturing volumes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx, cancel := context.WithCancel(zerolog.Nop().WithContext(context.Background()))
+			defer cancel()
+
+			inspector := &mockInspector{}
+			inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
+			locker := &mockLocker{}
+			expectLock(locker)
+
+			var startErr error
+			runner := &mockComposeRunner{}
+			runner.On("Stop", mock.Anything, demoSpec).Run(func(mock.Arguments) { cancel() }).
+				Return([]string(nil), tt.stopErr).Once()
+			runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).
+				Run(func(args mock.Arguments) { startErr = args.Get(0).(context.Context).Err() }).
+				Return(nil).Once()
+
+			store := newDirStore(t)
+			backend := &mockBackend{volume: model.Volume{ObjectID: "volume-named-demo_db"}}
+			registry := &mockRegistry{}
+			registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
+			if tt.stopErr == nil {
+				backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+					Return(model.SnapshotStat{}, context.Canceled).Once()
+			}
+
+			svc := New(Deps{
+				VolumeRemover:    &mockVolumeRemover{},
+				SavepointRepo:    &mockSavepointRepo{},
+				ProjectLocker:    locker,
+				ComposeInspector: inspector,
+				ProjectAssembler: demoAssembler(),
+				SpecCodec:        demoCodec(),
+				ComposeRunner:    runner,
+				BackendRegistry:  registry,
+				Inflight:         &fakeInflight{},
+				Store:            store,
+				DefaultBackend:   model.SnapshotBackendCopy,
+			})
+
+			// Act
+			_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+
+			// Assert
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.NoError(t, startErr, "the restart must run on a live context")
+			inspector.AssertExpectations(t)
+			locker.AssertExpectations(t)
+			runner.AssertExpectations(t)
+			registry.AssertExpectations(t)
+			backend.AssertExpectations(t)
+		})
+	}
+}

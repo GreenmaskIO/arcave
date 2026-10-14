@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -458,8 +459,13 @@ func mcpError(err error) error {
 	return err
 }
 
-// MCPRun serves the tools over stdio until the host closes stdin or ctx is cancelled.
+// MCPRun serves the tools over stdio until the host closes stdin or ctx is cancelled. A
+// cancelled ctx cancels no tool call: the server exits once the calls in flight have finished.
 func (h *MCPHandler) MCPRun(ctx context.Context) error {
+	stop := context.AfterFunc(ctx, func() {
+		zerolog.Ctx(ctx).Info().Msg("MCP server interrupted: it exits once the tool calls in flight have finished")
+	})
+	defer stop()
 	return h.Server().Run(ctx, &mcpsdk.StdioTransport{})
 }
 

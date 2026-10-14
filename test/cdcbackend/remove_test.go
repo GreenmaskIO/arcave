@@ -26,6 +26,8 @@ import (
 // D1: a removal drops the one snapshot its payload names, and no bytes — the packs
 // are shared, and space comes back only from a future `arcave savepoint gc`.
 func TestSnapshotter_Remove_DropsOnlyItsOwnSnapshot(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -48,6 +50,8 @@ func TestSnapshotter_Remove_DropsOnlyItsOwnSnapshot(t *testing.T) {
 // D2: a capture that reported no payload has no snapshot to drop, which is the
 // ordinary cleanup of a failed create rather than an error.
 func TestSnapshotter_Remove_WithoutAPayload(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		payload any
@@ -81,6 +85,8 @@ func TestSnapshotter_Remove_WithoutAPayload(t *testing.T) {
 // way out of snapshots/ is refused, and the config object it aims at is the
 // repository itself.
 func TestSnapshotter_Remove_RefusesAnIDThatLeavesSnapshots(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -103,6 +109,8 @@ func TestSnapshotter_Remove_RefusesAnIDThatLeavesSnapshots(t *testing.T) {
 
 // D3: a snapshot already gone is not an error — an interrupted remove is re-run.
 func TestSnapshotter_Remove_IsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")

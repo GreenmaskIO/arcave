@@ -26,7 +26,6 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -62,6 +61,7 @@ services:
   app:
     image: busybox
     command: ["sleep", "3600"]
+    stop_signal: SIGKILL
     deploy:
       replicas: %[2]d
     volumes:
@@ -71,6 +71,8 @@ volumes:
 `
 
 func TestRollback_RestoresTheWritableLayer(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageRollbackEnv(t)
 	env.up(t, 1)
@@ -117,6 +119,8 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 }
 
 func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageRollbackEnv(t)
 	env.up(t, 2)
@@ -172,8 +176,6 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	progress.Mode = progress.ModeQuiet
-
 	engine := dockerclient.NewEngine(daemonAPI)
 	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{

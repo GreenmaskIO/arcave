@@ -44,6 +44,8 @@ services:
 `
 
 func TestRollback_KeepsAGapInReplicaNumbering(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newImageRollbackEnv(t)
 	env.upDocument(t, fmt.Sprintf(replicaGapSpec, env.project))

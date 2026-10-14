@@ -31,7 +31,6 @@ import (
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v2/pkg/api"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
@@ -92,6 +91,8 @@ networks:
 `
 
 func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newRecreateEnv(t)
 	env.up(t, env.spec(t, "original", env.port))
@@ -169,8 +170,6 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	progress.Mode = progress.ModeQuiet
-
 	engine := dockerclient.NewEngine(daemonAPI)
 	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{

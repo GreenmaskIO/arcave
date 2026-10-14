@@ -310,6 +310,7 @@ func (s *SessionService) DeleteSession(
 		}
 		zerolog.Ctx(ctx).Debug().Str("session", id.String()).Int64("size_bytes", size).Msg("deleting session")
 		if err := s.sessions.DeleteSession(ctx, id); err != nil {
+			logInterrupt(ctx, "session delete interrupted: run it again with the session id to remove the rest")
 			return model.DeleteSessionResponse{}, fmt.Errorf("deleting session %s: %w", id, err)
 		}
 		zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
@@ -659,6 +660,7 @@ func (s *SessionService) requireEmptyForkTree(ctx context.Context, id model.Sess
 
 // abandonFork marks an uncommitted fork failed and logs its tree, the only pointer left to it.
 func abandonFork(ctx context.Context, hb *heartbeat.Worker, id model.SessionID, cause error) {
+	logInterrupt(ctx, "fork interrupted: the partial session is not committed")
 	hb.Fail(ctx, cause)
 	zerolog.Ctx(ctx).Error().Str("session", id.String()).Str("tree", "sessions/"+id.String()).
 		Msg("the fork did not commit; its tree is left in the store")

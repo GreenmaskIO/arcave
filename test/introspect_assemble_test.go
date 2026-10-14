@@ -35,7 +35,6 @@ import (
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v2/pkg/api"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
@@ -199,8 +198,6 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 	require.NoError(t, err)
 	require.NoError(t, dockerCLI.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(dockerCLI)
-	progress.Mode = progress.ModeQuiet
-
 	logs := &syncBuffer{}
 	e := &fidelityEnv{
 		ctx:     zerolog.New(logs).WithContext(context.Background()),

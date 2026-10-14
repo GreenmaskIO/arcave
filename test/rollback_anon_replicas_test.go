@@ -39,6 +39,8 @@ services:
 `
 
 func TestRollback_RestoresEveryReplicasAnonymousVolume(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newRecreateEnv(t)
 	project, err := env.codec.Parse(env.ctx, fmt.Appendf(nil, anonReplicasSpec, env.project))

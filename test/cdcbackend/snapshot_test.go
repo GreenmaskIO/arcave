@@ -27,6 +27,8 @@ import (
 // S1: the first capture initialises the repository and ships the volume whole,
 // and leaves the volume itself untouched — a backup mounts it read-only.
 func TestSnapshotter_Snapshot_InitialisesTheRepository(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -55,6 +57,8 @@ func TestSnapshotter_Snapshot_InitialisesTheRepository(t *testing.T) {
 
 // S2: the second capture ships only what changed — the reason this backend exists.
 func TestSnapshotter_Snapshot_ShipsAnIncrement(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -78,6 +82,8 @@ func TestSnapshotter_Snapshot_ShipsAnIncrement(t *testing.T) {
 // S3: the savepoint id and every label reach the repository as restic tags, which
 // is what makes a capture findable with a plain restic CLI.
 func TestSnapshotter_Snapshot_RendersLabelsAsTags(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -106,6 +112,8 @@ func TestSnapshotter_Snapshot_RendersLabelsAsTags(t *testing.T) {
 // S4: an id that could name something outside its own capture is refused before
 // anything happens — no repository, no publish, no container.
 func TestSnapshotter_Snapshot_RefusesAnInvalidID(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		id   model.SavepointID
@@ -135,6 +143,8 @@ func TestSnapshotter_Snapshot_RefusesAnInvalidID(t *testing.T) {
 // S5: a savepoint and an undo share one repository, so a safety snapshot is an increment over
 // the savepoint it is undoing rather than a second full copy.
 func TestSnapshotter_Snapshot_BothTiersShareTheRepository(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -155,6 +165,8 @@ func TestSnapshotter_Snapshot_BothTiersShareTheRepository(t *testing.T) {
 // standing lock is an orphan by construction, and `restic unlock` could not pick
 // this one anyway — it carries a dead container's hostname.
 func TestSnapshotter_Snapshot_ClearsAnOrphanedLock(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
