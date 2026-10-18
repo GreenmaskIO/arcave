@@ -86,7 +86,7 @@ var rootCmd = &cobra.Command{
 // points viper at the config file, resolves the effective config (flag > env >
 // file > default), and sets up the context logger from the result. For init it
 // reads no file — init writes a template — and only notes whether one exists.
-func initRoot(initializing bool) error {
+func initRoot(isInitCommand bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get current working directory: %w", err)
@@ -107,7 +107,7 @@ func initRoot(initializing bool) error {
 		sessionRef = os.Getenv(sessionEnv)
 	}
 
-	if initializing {
+	if isInitCommand {
 		projectCfg, configFound, err = resolveWithoutFile(cfgViper, projectRoot, configPath)
 	} else {
 		projectCfg, configFound, err = resolveConfig(cfgViper, projectRoot)
