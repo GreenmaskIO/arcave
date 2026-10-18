@@ -50,14 +50,14 @@ type replicaPair struct {
 // it on: its restored layer's tag, or its service's own image.
 type recordedReplica struct {
 	service       string
-	replica       int
+	number        int
 	containerName string
 	image         string
 }
 
 // replicaRebuild is one recorded replica and the created container it is rebuilt over.
 type replicaRebuild struct {
-	replica     recordedReplica
+	recorded    recordedReplica
 	created     int
 	containerID string
 }
@@ -145,32 +145,32 @@ func (s *Service) captureImages(
 	return images, nil
 }
 
-// restoreWritableLayers loads every writable layer the record holds back into the daemon,
-// concurrently, and names each under a tag of its own. A record holding no
+// restoreWritableLayers loads every writable layer the savepoint holds back into the daemon,
+// concurrently, and names each under a tag of its own. A savepoint holding no
 // writable layer restores nothing.
 func (s *Service) restoreWritableLayers(
-	ctx context.Context, record model.Savepoint, project string,
+	ctx context.Context, savepoint model.Savepoint, composeProject string,
 ) ([]model.WritableLayerRestoreResult, error) {
-	if len(record.WritableLayers) == 0 {
-		zerolog.Ctx(ctx).Info().Str("snapshot_id", record.ID.String()).
+	if len(savepoint.WritableLayers) == 0 {
+		zerolog.Ctx(ctx).Info().Str("snapshot_id", savepoint.ID.String()).
 			Msg("the savepoint holds no writable layers; nothing to restore")
 		return nil, nil
 	}
 
-	restored := make([]model.WritableLayerRestoreResult, len(record.WritableLayers))
+	restored := make([]model.WritableLayerRestoreResult, len(savepoint.WritableLayers))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
-	for i, capture := range record.WritableLayers {
+	for i, capture := range savepoint.WritableLayers {
 		eg.Go(func() error {
-			opCtx := imageRestoreContext(egCtx, capture, record.ID)
+			opCtx := imageRestoreContext(egCtx, capture, savepoint.ID)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
 			log.Info().Msg("writable layer restore started")
 			image, err := s.imageBackend.RestoreWritableLayer(opCtx, model.WritableLayerRestoreRequest{
-				SnapshotID: record.ID,
+				SnapshotID: savepoint.ID,
 				Layer:      capture,
-				Tag:        restoredLayerTag(project, record.ID, capture),
+				Tag:        restoredLayerTag(composeProject, savepoint.ID, capture),
 			})
 			if err != nil {
 				return fmt.Errorf("restore writable layer of %s/%d: %w", capture.Service, capture.Replica, err)
@@ -239,30 +239,30 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, replicas []recor
 		return nil
 	}
 
-	res, err := s.composeInspector.Introspect(ctx)
+	introspection, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
 		return fmt.Errorf("introspecting the rebuilt compose project: %w", err)
 	}
-	rebuilds, err := replicaRebuilds(replicas, builtContainers(res))
+	rebuilds, err := newReplicaRebuilds(replicas, builtContainers(introspection))
 	if err != nil {
 		return err
 	}
 
 	log := zerolog.Ctx(ctx)
-	for _, r := range rebuilds {
-		replica := r.replica
-		if replica.replica != r.created {
-			log.Warn().Str("service", replica.service).Int("replica", replica.replica).Int("created_replica", r.created).
+	for _, rebuild := range rebuilds {
+		replica := rebuild.recorded
+		if replica.number != rebuild.created {
+			log.Warn().Str("service", replica.service).Int("replica", replica.number).Int("created_replica", rebuild.created).
 				Msg("compose numbers replicas without gaps and created this one under another number; " +
 					"it is recreated under the number and name the savepoint recorded")
 		}
-		as := model.ReplicaIdentity{Name: replica.containerName, Number: replica.replica}
-		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, r.containerID, as, replica.image)
+		identity := model.ReplicaIdentity{Name: replica.containerName, Number: replica.number}
+		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, rebuild.containerID, identity, replica.image)
 		if err != nil {
 			return fmt.Errorf("rebuild replica %d of service %s from %s: %w",
-				replica.replica, replica.service, replica.image, err)
+				replica.number, replica.service, replica.image, err)
 		}
-		log.Info().Str("service", replica.service).Int("replica", replica.replica).
+		log.Info().Str("service", replica.service).Int("replica", replica.number).
 			Str("container", rebuilt).Str("image", replica.image).Msg("replica rebuilt as the savepoint recorded it")
 	}
 	return nil
@@ -272,16 +272,16 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, replicas []recor
 // arcave/<project>-<service>-<replica>-<base image>:sp-<savepoint id>. The
 // repository carries the identity and the tag the savepoint, so `docker images`
 // reads as one row per savepoint under a row per replica.
-func restoredLayerTag(project string, snapshotID model.SavepointID, capture model.WritableLayer) string {
-	return restoredImageRepository(project, capture) + ":" + model.LayerTagPrefix + snapshotID.String()
+func restoredLayerTag(composeProject string, snapshotID model.SavepointID, capture model.WritableLayer) string {
+	return restoredImageRepository(composeProject, capture) + ":" + model.LayerTagPrefix + snapshotID.String()
 }
 
 // restoredImageRepository builds the repository half and keeps it addressable: the
 // base image is the one segment carrying no identity, so it is what gets cut when
 // the name would pass docker's cap, and the replica is still named without it.
-func restoredImageRepository(project string, capture model.WritableLayer) string {
+func restoredImageRepository(composeProject string, capture model.WritableLayer) string {
 	identity := model.LayerImageNamespace + "/" +
-		joinSegments(refSegment(project), refSegment(capture.Service), strconv.Itoa(capture.Replica))
+		joinSegments(refSegment(composeProject), refSegment(capture.Service), strconv.Itoa(capture.Replica))
 
 	base := refSegment(capture.UpstreamImageRef)
 	room := maxRepositoryPath - len(identity) - 1
@@ -312,49 +312,49 @@ func joinSegments(segments ...string) string {
 // refSegment reduces one segment to lower-case alphanumerics joined by single
 // dashes — a subset of every docker path component, so whatever a service or an
 // image is called, what comes out of here is nameable.
-func refSegment(s string) string {
-	var b strings.Builder
+func refSegment(segment string) string {
+	var builder strings.Builder
 	dashed := true // no leading separator: a path component opens alphanumeric
-	for _, r := range strings.ToLower(s) {
+	for _, char := range strings.ToLower(segment) {
 		switch {
-		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
-			b.WriteRune(r)
+		case (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9'):
+			builder.WriteRune(char)
 			dashed = false
 		case !dashed:
-			b.WriteByte('-')
+			builder.WriteByte('-')
 			dashed = true
 		}
 	}
-	return strings.TrimRight(b.String(), "-")
+	return strings.TrimRight(builder.String(), "-")
 }
 
-// recordedReplicas lists every replica record holds under the number and name it
+// newRecordedReplicas lists every replica savepoint holds under the number and name it
 // recorded: one with a restored layer on its tag, one without on its service's own
 // image. A restore resolves an anonymous volume by recorded number, so a gap in the
 // numbering is rebuilt without a layer too.
-func recordedReplicas(
-	record model.Savepoint, project *types.Project, restored []model.WritableLayerRestoreResult,
+func newRecordedReplicas(
+	savepoint model.Savepoint, project *types.Project, restored []model.WritableLayerRestoreResult,
 ) []recordedReplica {
 	replicas := make([]recordedReplica, 0, len(restored))
 	for _, layer := range restored {
 		replicas = append(replicas, recordedReplica{
 			service:       layer.Service,
-			replica:       layer.Replica,
+			number:        layer.Replica,
 			containerName: layer.ContainerName,
 			image:         layer.Tag,
 		})
 	}
-	if record.NotCovered == nil {
+	if savepoint.NotCovered == nil {
 		return replicas
 	}
-	for _, skipped := range record.NotCovered.WritableLayers {
+	for _, skipped := range savepoint.NotCovered.WritableLayers {
 		svc, ok := project.Services[skipped.Service]
 		if !ok {
 			continue
 		}
 		replicas = append(replicas, recordedReplica{
 			service:       skipped.Service,
-			replica:       skipped.Replica,
+			number:        skipped.Replica,
 			containerName: skipped.Container,
 			image:         svc.Image,
 		})
@@ -374,7 +374,7 @@ func replicasByService(replicas []recordedReplica) ([]string, map[string][]recor
 		byService[replica.service] = append(byService[replica.service], replica)
 	}
 	for _, group := range byService {
-		slices.SortFunc(group, func(a, b recordedReplica) int { return cmp.Compare(a.replica, b.replica) })
+		slices.SortFunc(group, func(a, b recordedReplica) int { return cmp.Compare(a.number, b.number) })
 	}
 	return services, byService
 }
@@ -386,7 +386,7 @@ func createdAsRecorded(replicas []recordedReplica) bool {
 	_, byService := replicasByService(replicas)
 	for _, group := range byService {
 		for i, replica := range group {
-			if replica.replica != i+1 || replica.image != group[0].image {
+			if replica.number != i+1 || replica.image != group[0].image {
 				return false
 			}
 		}
@@ -394,15 +394,15 @@ func createdAsRecorded(replicas []recordedReplica) bool {
 	return true
 }
 
-// replicaRebuilds is the replicas whose image or number compose did not reproduce, highest
+// newReplicaRebuilds is the replicas whose image or number compose did not reproduce, highest
 // recorded number first per service so each claimed name has already been freed.
-func replicaRebuilds(replicas []recordedReplica, built map[string]map[int]string) ([]replicaRebuild, error) {
+func newReplicaRebuilds(replicas []recordedReplica, built map[string]map[int]string) ([]replicaRebuild, error) {
 	services, byService := replicasByService(replicas)
 	var rebuilds []replicaRebuild
 	for _, service := range services {
 		group := byService[service]
 		created := slices.Sorted(maps.Keys(built[service]))
-		pairs, err := pairReplicas(replicaNumbers(group), created)
+		pairs, err := newReplicaPairs(replicaNumbers(group), created)
 		if err != nil {
 			return nil, fmt.Errorf("service %s: %w", service, err)
 		}
@@ -412,16 +412,16 @@ func replicaRebuilds(replicas []recordedReplica, built map[string]map[int]string
 				continue
 			}
 			rebuilds = append(rebuilds, replicaRebuild{
-				replica: replica, created: pair.created, containerID: built[service][pair.created],
+				recorded: replica, created: pair.created, containerID: built[service][pair.created],
 			})
 		}
 	}
 	return rebuilds, nil
 }
 
-// pairReplicas pairs recorded with created replica numbers, both ascending: [1,3] against
+// newReplicaPairs pairs recorded with created replica numbers, both ascending: [1,3] against
 // [1,2] is 1←1, 3←2. Fewer created than recorded is an error.
-func pairReplicas(recorded, created []int) ([]replicaPair, error) {
+func newReplicaPairs(recorded, created []int) ([]replicaPair, error) {
 	recorded, created = slices.Sorted(slices.Values(recorded)), slices.Sorted(slices.Values(created))
 	if len(created) < len(recorded) {
 		return nil, fmt.Errorf("the rebuilt compose project holds %d replicas to restore %d recorded ones into",
@@ -438,20 +438,20 @@ func pairReplicas(recorded, created []int) ([]replicaPair, error) {
 func replicaNumbers(replicas []recordedReplica) []int {
 	numbers := make([]int, len(replicas))
 	for i, replica := range replicas {
-		numbers[i] = replica.replica
+		numbers[i] = replica.number
 	}
 	return numbers
 }
 
 // builtContainers indexes the compose project's containers by service and replica number.
-func builtContainers(res model.IntrospectionResult) map[string]map[int]string {
+func builtContainers(introspection model.IntrospectionResult) map[string]map[int]string {
 	built := map[string]map[int]string{}
-	for _, svc := range res.Project.Services {
-		for _, c := range svc.Containers {
+	for _, svc := range introspection.Project.Services {
+		for _, container := range svc.Containers {
 			if built[svc.Name] == nil {
 				built[svc.Name] = map[int]string{}
 			}
-			built[svc.Name][c.Number] = c.ID
+			built[svc.Name][container.Number] = container.ID
 		}
 	}
 	return built

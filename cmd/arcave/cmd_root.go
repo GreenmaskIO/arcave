@@ -155,7 +155,7 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	}
 
 	ctx := cmd.Context()
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(projectName))
+	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(projectName))
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
@@ -185,7 +185,7 @@ func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
 // withSessionDeps runs fn over the session dependencies, which reach no daemon and
 // name no compose project.
 func withSessionDeps(ctx context.Context, fn func(d *sessionDependencies) error) error {
-	deps, err := initSessionDependencies(projectRoot, projectCfg)
+	deps, err := newSessionDependencies(projectRoot, projectCfg)
 	if err != nil {
 		return fmt.Errorf("init session dependencies: %w", err)
 	}
@@ -198,16 +198,16 @@ func withSessionDeps(ctx context.Context, fn func(d *sessionDependencies) error)
 }
 
 func init() {
-	pf := rootCmd.PersistentFlags()
-	pf.StringVar(&rootConfigFile, "config", "", "config file path")
+	persistentFlags := rootCmd.PersistentFlags()
+	persistentFlags.StringVar(&rootConfigFile, "config", "", "config file path")
 	// Unbound, like --config: it steers one run rather than describing the project.
-	pf.StringVarP(&projectName, "project-name", "p", "",
+	persistentFlags.StringVarP(&projectName, "project-name", "p", "",
 		fmt.Sprintf("Docker Compose project to operate on, as 'docker compose ls' names it (env %s)", projectNameEnv))
-	pf.StringVar(&sessionRef, "session", "",
+	persistentFlags.StringVar(&sessionRef, "session", "",
 		fmt.Sprintf("Session to work in, by name or id (default: the current session, see 'arcave session set', else %q; env %s)",
 			model.DefaultSessionName, sessionEnv))
-	pf.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
-	pf.String("log-level", utils.DefaultLogLevel,
+	persistentFlags.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
+	persistentFlags.String("log-level", utils.DefaultLogLevel,
 		fmt.Sprintf(
 			"logging level %s, %s or %s",
 			zerolog.LevelDebugValue,
@@ -223,15 +223,15 @@ func init() {
 	// last would silently own the key for both, so the other command's flag would
 	// parse and then be ignored. Declared once here, every command that restarts
 	// the compose project inherits them and the binding is unambiguous.
-	pf.Duration("wait-timeout", config.DefaultWaitTimeout,
+	persistentFlags.Duration("wait-timeout", config.DefaultWaitTimeout,
 		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
-	pf.Duration("stop-timeout", config.DefaultStopTimeout,
+	persistentFlags.Duration("stop-timeout", config.DefaultStopTimeout,
 		"The least time a container gets to exit on its own before it is killed; a service's stop_grace_period raises it, e.g. 30s")
-	pf.String("progress", config.ProgressLog,
+	persistentFlags.String("progress", config.ProgressLog,
 		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",
 			config.ProgressLog, config.ProgressTTY, config.ProgressQuiet))
 
-	viperBind(cfgViper, pf, map[string]string{
+	viperBind(cfgViper, persistentFlags, map[string]string{
 		"log-level":    "log.level",
 		"log-format":   "log.format",
 		"wait-timeout": "compose.wait_timeout",

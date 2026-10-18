@@ -63,20 +63,20 @@ type MCPSessionServiceFactory func(ctx context.Context) (svc MCPSessionService, 
 type MCPHandler struct {
 	serviceFactory        MCPServiceFactory
 	sessionFactory        MCPSessionServiceFactory
-	pin                   model.SessionID
+	pinnedSession         model.SessionID
 	leftoverVolumesPolicy model.LeftoverVolumesPolicy
 }
 
-// NewMCPHandler builds the MCP adapter; pin is the session the server was started in, zero to
+// NewMCPHandler builds the MCP adapter; pinnedSession is the session the server was started in, zero to
 // follow the current one, and leftoverVolumes is the project's rollback.leftover_volumes.
 func NewMCPHandler(
 	serviceFactory MCPServiceFactory, sessionFactory MCPSessionServiceFactory,
-	pin model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
+	pinnedSession model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
 ) *MCPHandler {
 	return &MCPHandler{
 		serviceFactory:        serviceFactory,
 		sessionFactory:        sessionFactory,
-		pin:                   pin,
+		pinnedSession:         pinnedSession,
 		leftoverVolumesPolicy: leftoverVolumes,
 	}
 }
@@ -173,7 +173,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	}
 	defer release()
 
-	sp, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
+	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
 		Name:        in.Name,
 		Description: in.Description,
 		WaitTimeout: waitTimeout,
@@ -181,7 +181,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	if err != nil {
 		return nil, model.Savepoint{}, mcpError(err)
 	}
-	return nil, sp, nil
+	return nil, savepoint, nil
 }
 
 // parseWaitTimeout reads the bound a tool call named, in the same unit-bearing
@@ -222,16 +222,16 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 	}
 	defer release()
 
-	sps, err := svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
+	savepoints, err := svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
 	if err != nil {
 		return nil, listOutput{}, mcpError(err)
 	}
 	// A non-nil empty slice marshals as [] rather than null, so an agent reading
 	// the result never has to tell "no savepoints" from "no such field".
-	if sps == nil {
-		sps = []model.Savepoint{}
+	if savepoints == nil {
+		savepoints = []model.Savepoint{}
 	}
-	return nil, listOutput{Savepoints: sps}, nil
+	return nil, listOutput{Savepoints: savepoints}, nil
 }
 
 // removeSavepointInput selects savepoints to remove, either by explicit IDs or by
@@ -291,10 +291,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err != nil {
 		return nil, model.RollbackResponse{}, mcpError(err)
 	}
-	return nil, model.RollbackResponse{
-		RolledBackTo: res.Savepoint,
-		Restored:     res.Restored,
-	}, nil
+	return nil, newRollbackResponse(res), nil
 }
 
 // sessionListInput is session_list's input schema.
@@ -360,7 +357,7 @@ func (h *MCPHandler) deleteSessionMCP(ctx context.Context, _ *mcpsdk.CallToolReq
 	}
 	defer release()
 
-	res, err := svc.DeleteSession(ctx, model.DeleteSessionRequest{Session: in.Session, Force: in.Force, Pinned: h.pin})
+	res, err := svc.DeleteSession(ctx, model.DeleteSessionRequest{Session: in.Session, Force: in.Force, Pinned: h.pinnedSession})
 	if err != nil {
 		return nil, model.DeleteSessionResponse{}, mcpError(err)
 	}
@@ -426,19 +423,19 @@ func (h *MCPHandler) unsetSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequ
 // requireUnpinned refuses to move the current session from a server pinned by --session, whose
 // calls the pointer does not reach.
 func (h *MCPHandler) requireUnpinned() error {
-	if h.pin == (model.SessionID{}) {
+	if h.pinnedSession == (model.SessionID{}) {
 		return nil
 	}
 	return fmt.Errorf("this server is pinned to session %q by --session or ARCAVE_SESSION, "+
-		"which outranks the current session: pass session on each call, or restart the server without the pin", h.pin.String())
+		"which outranks the current session: pass session on each call, or restart the server without the pin", h.pinnedSession.String())
 }
 
 // pinRef is the pin as a session ref, "" when the server is not pinned.
 func (h *MCPHandler) pinRef() string {
-	if h.pin == (model.SessionID{}) {
+	if h.pinnedSession == (model.SessionID{}) {
 		return ""
 	}
-	return h.pin.String()
+	return h.pinnedSession.String()
 }
 
 // openSessionService builds the session commands for one tool call.
@@ -478,24 +475,24 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove}, h.removeSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_list", Description: descSessionList,
-		OutputSchema: outputSchema[sessionListOutput]()}, h.listSessionsMCP)
+		OutputSchema: newOutputSchema[sessionListOutput]()}, h.listSessionsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_create", Description: descSessionCreate,
-		OutputSchema: outputSchema[model.Session]()}, h.createSessionMCP)
+		OutputSchema: newOutputSchema[model.Session]()}, h.createSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_delete", Description: descSessionDelete,
-		OutputSchema: outputSchema[model.DeleteSessionResponse]()}, h.deleteSessionMCP)
+		OutputSchema: newOutputSchema[model.DeleteSessionResponse]()}, h.deleteSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_current", Description: descSessionCurrent,
-		OutputSchema: outputSchema[model.Session]()}, h.currentSessionMCP)
+		OutputSchema: newOutputSchema[model.Session]()}, h.currentSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_set", Description: descSessionSet,
-		OutputSchema: outputSchema[model.Session]()}, h.setSessionMCP)
+		OutputSchema: newOutputSchema[model.Session]()}, h.setSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_unset", Description: descSessionUnset,
-		OutputSchema: outputSchema[model.Session]()}, h.unsetSessionMCP)
+		OutputSchema: newOutputSchema[model.Session]()}, h.unsetSessionMCP)
 
 	return srv
 }
 
-// outputSchema infers T's schema with a session id as the string it marshals to: inferred from
+// newOutputSchema infers T's schema with a session id as the string it marshals to: inferred from
 // its Go type, it would be an array, and the SDK would refuse every result.
-func outputSchema[T any]() *jsonschema.Schema {
+func newOutputSchema[T any]() *jsonschema.Schema {
 	return utils.Must(jsonschema.For[T](&jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
 		reflect.TypeFor[model.SessionID](): {Type: "string", Format: "uuid"},
 	}}))

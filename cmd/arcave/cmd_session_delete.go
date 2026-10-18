@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	sessionDeleteFlagForce bool
+	sessionDeleteForce bool
 
 	sessionDeleteCmd = &cobra.Command{
 		Use:   "delete <id|name>",
@@ -42,12 +42,12 @@ func runSessionDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
-		return cli.NewSessionDeleteHandler(d.service, d.printer).SessionDelete(cmd.Context(), model.DeleteSessionRequest{Session: args[0], Force: sessionDeleteFlagForce})
+		return cli.NewSessionDeleteHandler(d.service, d.printer).SessionDelete(cmd.Context(), model.DeleteSessionRequest{Session: args[0], Force: sessionDeleteForce})
 	})
 }
 
 func init() {
-	sessionDeleteCmd.Flags().BoolVar(&sessionDeleteFlagForce, "force", false,
+	sessionDeleteCmd.Flags().BoolVar(&sessionDeleteForce, "force", false,
 		"Delete the current session, clearing the pointer, or a tree whose fork still looks alive; no fork may be running")
 	sessionCmd.AddCommand(sessionDeleteCmd)
 }

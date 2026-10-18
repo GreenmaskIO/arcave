@@ -726,14 +726,14 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 			daemon.expectInfo()
 
 			// Act
-			res, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+			introspection, err := NewInspector(daemon, composeProject).Introspect(context.Background())
 
 			// Assert
 			require.NoError(t, err)
-			assert.Empty(t, res.Project.Services)
-			require.Len(t, res.Project.Volumes, 1)
-			assert.Equal(t, "demo_pgdata", res.Project.Volumes[0].Name)
-			assert.Empty(t, res.Project.Volumes[0].UsedBy)
+			assert.Empty(t, introspection.Project.Services)
+			require.Len(t, introspection.Project.Volumes, 1)
+			assert.Equal(t, "demo_pgdata", introspection.Project.Volumes[0].Name)
+			assert.Empty(t, introspection.Project.Volumes[0].UsedBy)
 			daemon.AssertExpectations(t)
 		})
 	}

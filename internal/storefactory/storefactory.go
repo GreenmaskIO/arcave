@@ -174,15 +174,15 @@ func joinKind(store storages.Navigator, kind, name string) (storages.Storager, e
 // normalization leaves unchanged — rendering as a single path segment. The charset is
 // compose's to own; the segment rule is the store's.
 func validateComposeProjectName(name model.DockerComposeProjectName) error {
-	s := name.String()
-	if s == "" {
+	raw := name.String()
+	if raw == "" {
 		return fmt.Errorf("invalid compose project name: must not be empty")
 	}
-	if normalized := loader.NormalizeProjectName(s); normalized != s {
-		return fmt.Errorf("invalid compose project name %q: compose would name it %q", s, normalized)
+	if normalized := loader.NormalizeProjectName(raw); normalized != raw {
+		return fmt.Errorf("invalid compose project name %q: compose would name it %q", raw, normalized)
 	}
-	if path.Base(s) != s || s == "." || s == ".." {
-		return fmt.Errorf("invalid compose project name %q: must be a single path segment", s)
+	if path.Base(raw) != raw || raw == "." || raw == ".." {
+		return fmt.Errorf("invalid compose project name %q: must be a single path segment", raw)
 	}
 	return nil
 }

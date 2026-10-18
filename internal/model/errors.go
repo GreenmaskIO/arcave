@@ -125,13 +125,13 @@ type AmbiguousSavepointNameError struct {
 	IDs  []SavepointID
 }
 
-func (e *AmbiguousSavepointNameError) Error() string {
-	ids := make([]string, len(e.IDs))
-	for i, id := range e.IDs {
+func (m *AmbiguousSavepointNameError) Error() string {
+	ids := make([]string, len(m.IDs))
+	for i, id := range m.IDs {
 		ids[i] = id.String()
 	}
 	return fmt.Sprintf("%d savepoints are named %q; roll back by id instead: %s",
-		len(e.IDs), e.Name, strings.Join(ids, ", "))
+		len(m.IDs), m.Name, strings.Join(ids, ", "))
 }
 
 // AmbiguousSessionNameError reports a name more than one session carries; IDs
@@ -141,11 +141,11 @@ type AmbiguousSessionNameError struct {
 	IDs  []SessionID
 }
 
-func (e *AmbiguousSessionNameError) Error() string {
-	ids := make([]string, len(e.IDs))
-	for i, id := range e.IDs {
+func (m *AmbiguousSessionNameError) Error() string {
+	ids := make([]string, len(m.IDs))
+	for i, id := range m.IDs {
 		ids[i] = id.String()
 	}
 	return fmt.Sprintf("%d sessions are named %q; name the session by id instead: %s",
-		len(e.IDs), e.Name, strings.Join(ids, ", "))
+		len(m.IDs), m.Name, strings.Join(ids, ", "))
 }

@@ -40,20 +40,20 @@ type Payload struct {
 // decodePayload reads back what a capture reported. A record that has been
 // through the store arrives as a map[string]any, so the JSON round trip is the
 // normal path, not a fallback.
-func decodePayload(v any) (Payload, error) {
-	if p, ok := v.(Payload); ok {
-		return p, nil
+func decodePayload(stored any) (Payload, error) {
+	if payload, ok := stored.(Payload); ok {
+		return payload, nil
 	}
-	if v == nil {
+	if stored == nil {
 		return Payload{}, errors.New("no cdc payload: this capture reported none")
 	}
-	raw, err := json.Marshal(v)
+	raw, err := json.Marshal(stored)
 	if err != nil {
 		return Payload{}, fmt.Errorf("re-encode cdc payload: %w", err)
 	}
-	var p Payload
-	if err := json.Unmarshal(raw, &p); err != nil {
+	var payload Payload
+	if err := json.Unmarshal(raw, &payload); err != nil {
 		return Payload{}, fmt.Errorf("decode cdc payload: %w", err)
 	}
-	return p, nil
+	return payload, nil
 }

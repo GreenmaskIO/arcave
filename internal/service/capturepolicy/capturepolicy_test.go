@@ -74,7 +74,7 @@ func nopCtx() context.Context { return zerolog.Nop().WithContext(context.Backgro
 
 // byConfig is a volume captured by the defaults.
 func byConfig(backend model.SnapshotBackendKind) model.VolumeDecision {
-	return model.VolumeDecision{CaptureDecision: model.ConfigDecision(true, ""), Backend: backend}
+	return model.VolumeDecision{CaptureDecision: model.NewConfigDecision(true, ""), Backend: backend}
 }
 
 // byLabel is a decision a label made.
@@ -138,7 +138,7 @@ func TestResolve(t *testing.T) {
 			wantAnon: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(true, "arcave.capture=true on the anonymous volume at /cache of service app")},
 			wantData: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
-				CaptureDecision: model.ConfigDecision(true, "")},
+				CaptureDecision: model.NewConfigDecision(true, "")},
 			wantApp: model.ServiceDecision{
 				WritableLayer: model.WritableLayerDecision{Backend: model.ImageBackendFullCopy,
 					CaptureDecision: byLabel(true, "arcave.writable-layer.capture=true on service app")},
@@ -156,7 +156,7 @@ func TestResolve(t *testing.T) {
 			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/app on service app")},
 			wantAnon: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
-				CaptureDecision: model.ConfigDecision(true, "")},
+				CaptureDecision: model.NewConfigDecision(true, "")},
 			wantData: byConfig(model.SnapshotBackendFullCopy),
 			wantApp: model.ServiceDecision{
 				WritableLayer: defaultImages().WritableLayer,
@@ -173,7 +173,7 @@ func TestResolve(t *testing.T) {
 			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/app/ on service app")},
 			wantAnon: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
-				CaptureDecision: model.ConfigDecision(true, "")},
+				CaptureDecision: model.NewConfigDecision(true, "")},
 			wantData: byConfig(model.SnapshotBackendFullCopy),
 			wantApp:  defaultImages(),
 			wantDB:   defaultImages(),
@@ -192,10 +192,10 @@ func TestResolve(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := demoProject(tt.app, tt.db, tt.anon, tt.pgdata)
+			introspection := demoProject(tt.app, tt.db, tt.anon, tt.pgdata)
 
 			// Act
-			policy, err := Resolve(nopCtx(), res, defaults)
+			policy, err := Resolve(nopCtx(), introspection, defaults)
 
 			// Assert
 			require.NoError(t, err)
@@ -211,12 +211,12 @@ func TestResolve(t *testing.T) {
 // A named volume one excluded service and one captured service share is captured.
 func TestResolve_SharedNamedVolumeStaysWhileOneServiceIsCaptured(t *testing.T) {
 	// Arrange
-	res := demoProject(map[string]string{model.LabelCapture: "false"}, nil, nil, nil)
-	res.Project.Volumes[0].UsedBy = append(res.Project.Volumes[0].UsedBy,
+	introspection := demoProject(map[string]string{model.LabelCapture: "false"}, nil, nil, nil)
+	introspection.Project.Volumes[0].UsedBy = append(introspection.Project.Volumes[0].UsedBy,
 		model.ServiceReference{Service: "app", Target: "/shared"})
 
 	// Act
-	policy, err := Resolve(nopCtx(), res, defaults)
+	policy, err := Resolve(nopCtx(), introspection, defaults)
 
 	// Assert
 	require.NoError(t, err)
@@ -247,10 +247,10 @@ func TestResolve_Refuses(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := demoProject(tt.app, nil, tt.anon, tt.pg)
+			introspection := demoProject(tt.app, nil, tt.anon, tt.pg)
 
 			// Act
-			_, err := Resolve(nopCtx(), res, defaults)
+			_, err := Resolve(nopCtx(), introspection, defaults)
 
 			// Assert
 			require.ErrorIs(t, err, model.ErrInvalidCapturePolicy)
@@ -287,7 +287,7 @@ func TestResolve_ServiceLabelsReachANamedVolume(t *testing.T) {
 			name: "its backend picked",
 			db:   map[string]string{model.LabelMountsCDC: "/var/lib/postgresql/data"},
 			want: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
-				CaptureDecision: model.ConfigDecision(true, "")},
+				CaptureDecision: model.NewConfigDecision(true, "")},
 		},
 		{
 			name:     "a service's arcave.capture=true takes it back from the config",
@@ -306,16 +306,16 @@ func TestResolve_ServiceLabelsReachANamedVolume(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: app mounts pgdata too, at /shared.
-			res := demoProject(tt.shares, tt.db, nil, nil)
-			res.Project.Services[0].Volumes = append(res.Project.Services[0].Volumes, model.ServiceVolume{
+			introspection := demoProject(tt.shares, tt.db, nil, nil)
+			introspection.Project.Services[0].Volumes = append(introspection.Project.Services[0].Volumes, model.ServiceVolume{
 				Type: model.VolumeTypeNamed, Source: "pgdata", Target: "/shared", VolumeName: "demo_pgdata"})
-			res.Project.Volumes[0].UsedBy = []model.ServiceReference{
+			introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{
 				{Service: "app", Target: "/shared"}, {Service: "db", Target: "/var/lib/postgresql/data"}}
 			config := defaults
 			config.SavepointCapture.NamedVolumes = !tt.namedOff
 
 			// Act
-			policy, err := Resolve(nopCtx(), res, config)
+			policy, err := Resolve(nopCtx(), introspection, config)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -334,22 +334,22 @@ func TestResolve_ConfigKinds(t *testing.T) {
 	// Arrange
 	captureNothing := defaults
 	captureNothing.SavepointCapture = SavepointCaptureSettings{}
-	res := demoProject(
+	introspection := demoProject(
 		map[string]string{model.LabelMountsInclude: "/app", model.LabelWritableLayerCapture: "true"},
 		nil, nil, nil)
 
 	// Act
-	policy, err := Resolve(nopCtx(), res, captureNothing)
+	policy, err := Resolve(nopCtx(), introspection, captureNothing)
 
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, byLabel(true, "arcave.mounts.include=/app on service app"),
 		policy.DecideMount(appBind).CaptureDecision, "included back by its service")
-	assert.Equal(t, model.ConfigDecision(false, "capture.volumes.anonymous=false in the config"), policy.DecideMount(appAnon).CaptureDecision)
-	assert.Equal(t, model.ConfigDecision(false, "capture.volumes.named=false in the config"), policy.DecideNamedVolume("demo_pgdata").CaptureDecision)
+	assert.Equal(t, model.NewConfigDecision(false, "capture.volumes.anonymous=false in the config"), policy.DecideMount(appAnon).CaptureDecision)
+	assert.Equal(t, model.NewConfigDecision(false, "capture.volumes.named=false in the config"), policy.DecideNamedVolume("demo_pgdata").CaptureDecision)
 	assert.True(t, policy.DecideService("app").WritableLayer.Capture, "taken back by its label")
-	assert.Equal(t, model.ConfigDecision(false, "capture.writable_layers=false in the config"), policy.DecideService("db").WritableLayer.CaptureDecision)
-	assert.Equal(t, model.ConfigDecision(false, "capture.images=false in the config"), policy.DecideService("app").Image)
+	assert.Equal(t, model.NewConfigDecision(false, "capture.writable_layers=false in the config"), policy.DecideService("db").WritableLayer.CaptureDecision)
+	assert.Equal(t, model.NewConfigDecision(false, "capture.images=false in the config"), policy.DecideService("app").Image)
 }
 
 // Labels outside arcave.* are none of the policy's business, and an unknown
@@ -362,17 +362,17 @@ func TestResolve_IgnoresOtherLabels(t *testing.T) {
 		"org.opencontainers.title":   "app",
 		"arcave.version":             "1",
 	}
-	res := demoProject(labels, nil, nil, map[string]string{"com.docker.compose.project": "demo"})
+	introspection := demoProject(labels, nil, nil, map[string]string{"com.docker.compose.project": "demo"})
 	imageID := model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	res.Project.Services[0].Containers = []model.Container{{Inspect: container.InspectResponse{
+	introspection.Project.Services[0].Containers = []model.Container{{Inspect: container.InspectResponse{
 		ContainerJSONBase: &container.ContainerJSONBase{Image: imageID.String()},
 	}}}
-	res.Images = map[model.ImageDigestID]image.InspectResponse{
+	introspection.Images = map[model.ImageDigestID]image.InspectResponse{
 		imageID: {Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: map[string]string{"arcave.version": "1"}}}},
 	}
 
 	// Act
-	_, err := Resolve(nopCtx(), res, defaults)
+	_, err := Resolve(nopCtx(), introspection, defaults)
 
 	// Assert
 	require.NoError(t, err)
@@ -383,10 +383,10 @@ func TestResolveWithoutLabels(t *testing.T) {
 	// Arrange
 	noBinds := defaults
 	noBinds.SavepointCapture.BindVolumes = false
-	res := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{model.LabelBackend: "x"}, nil)
+	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{model.LabelBackend: "x"}, nil)
 
 	// Act
-	policy, err := ResolveWithoutLabels(nopCtx(), res, noBinds)
+	policy, err := ResolveWithoutLabels(nopCtx(), introspection, noBinds)
 
 	// Assert
 	require.NoError(t, err)
@@ -400,12 +400,12 @@ func TestStamps(t *testing.T) {
 	// Arrange
 	noBinds := defaults
 	noBinds.SavepointCapture.BindVolumes = false
-	res := demoProject(map[string]string{model.LabelMountsCDC: "/cache"}, nil, nil, nil)
-	policy, err := Resolve(nopCtx(), res, noBinds)
+	introspection := demoProject(map[string]string{model.LabelMountsCDC: "/cache"}, nil, nil, nil)
+	policy, err := Resolve(nopCtx(), introspection, noBinds)
 	require.NoError(t, err)
 
 	// Act
-	got := Stamps(res, policy)
+	got := Stamps(introspection, policy)
 
 	// Assert
 	assert.Equal(t, map[string]string{
@@ -422,11 +422,11 @@ func TestStamps(t *testing.T) {
 func TestStamps_AreNotReadBack(t *testing.T) {
 	// Arrange
 	user := map[string]string{model.LabelMountsExclude: "/app", model.LabelWritableLayerBackend: "fullcopy"}
-	res := demoProject(user, nil, nil, nil)
-	policy, err := Resolve(nopCtx(), res, defaults)
+	introspection := demoProject(user, nil, nil, nil)
+	policy, err := Resolve(nopCtx(), introspection, defaults)
 	require.NoError(t, err)
 	rebuilt := maps.Clone(user)
-	maps.Copy(rebuilt, Stamps(res, policy)["app"])
+	maps.Copy(rebuilt, Stamps(introspection, policy)["app"])
 
 	// Act
 	again, err := Resolve(nopCtx(), demoProject(rebuilt, nil, nil, nil), defaults)

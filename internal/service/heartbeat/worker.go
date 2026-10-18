@@ -37,7 +37,7 @@ const (
 )
 
 type heartbeatWriter interface {
-	Write(ctx context.Context, h Heartbeat) error
+	Write(ctx context.Context, beat Heartbeat) error
 }
 
 // Worker reports a running operation in its heartbeat. A failed beat is retried on the next
@@ -55,9 +55,9 @@ type Worker struct {
 }
 
 // NewWorker returns a worker writing through w every DefaultInterval.
-func NewWorker(w heartbeatWriter) *Worker {
+func NewWorker(writer heartbeatWriter) *Worker {
 	return &Worker{
-		writer:     w,
+		writer:     writer,
 		interval:   DefaultInterval,
 		staleAfter: DefaultStaleAfter,
 		quit:       make(chan struct{}),
@@ -66,85 +66,85 @@ func NewWorker(w heartbeatWriter) *Worker {
 }
 
 // SetInterval sets how often the worker beats.
-func (h *Worker) SetInterval(v time.Duration) *Worker {
-	h.interval = v
-	return h
+func (s *Worker) SetInterval(interval time.Duration) *Worker {
+	s.interval = interval
+	return s
 }
 
 // SetStaleAfter sets the age at which a gc may take the heartbeat's tree for dead.
-func (h *Worker) SetStaleAfter(v time.Duration) *Worker {
-	h.staleAfter = v
-	return h
+func (s *Worker) SetStaleAfter(staleAfter time.Duration) *Worker {
+	s.staleAfter = staleAfter
+	return s
 }
 
 // Deadline is the age at which a last good beat stops the operation: one interval short of
 // the stale age, so the tick that reaches it comes before any gc sees the tree stale.
-func (h *Worker) Deadline() time.Duration {
-	return h.staleAfter - h.interval
+func (s *Worker) Deadline() time.Duration {
+	return s.staleAfter - s.interval
 }
 
 // Start writes the first beat of base's operation, then beats on every tick until Stop; a
 // heartbeat that cannot be kept alive cancels with model.ErrHeartbeatLost.
-func (h *Worker) Start(ctx context.Context, base Heartbeat, cancel context.CancelCauseFunc) error {
-	h.base = base
-	h.base.StartedAt = wallClock()
-	if err := h.beat(ctx, StatusInProgress, nil); err != nil {
+func (s *Worker) Start(ctx context.Context, base Heartbeat, cancel context.CancelCauseFunc) error {
+	s.base = base
+	s.base.StartedAt = wallClock()
+	if err := s.beat(ctx, StatusInProgress, nil); err != nil {
 		return fmt.Errorf("%w: %w", model.ErrHeartbeatLost, err)
 	}
-	go h.run(ctx, cancel)
+	go s.run(ctx, cancel)
 	return nil
 }
 
 // Stop ends the beats and waits for the last one to finish.
-func (h *Worker) Stop() {
-	close(h.quit)
-	<-h.done
+func (s *Worker) Stop() {
+	close(s.quit)
+	<-s.done
 }
 
 // Alive refuses an operation whose last good beat is Deadline old or older; call it after Stop.
-func (h *Worker) Alive() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if age := wallClock().Sub(h.last); age >= h.Deadline() {
+func (s *Worker) Alive() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if age := wallClock().Sub(s.last); age >= s.Deadline() {
 		return fmt.Errorf("%w: last written %s ago", model.ErrHeartbeatLost, age.Round(time.Second))
 	}
 	return nil
 }
 
 // Finish marks the operation done; a failed mark is only logged, the record outranks it.
-func (h *Worker) Finish(ctx context.Context) {
-	if err := h.beat(ctx, StatusDone, nil); err != nil {
+func (s *Worker) Finish(ctx context.Context) {
+	if err := s.beat(ctx, StatusDone, nil); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("marking the operation done")
 	}
 }
 
 // Fail marks the operation failed with cause, even past a cancelled command; a failed mark is
 // only logged.
-func (h *Worker) Fail(ctx context.Context, cause error) {
-	if err := h.beat(context.WithoutCancel(ctx), StatusFailed, cause); err != nil {
+func (s *Worker) Fail(ctx context.Context, cause error) {
+	if err := s.beat(context.WithoutCancel(ctx), StatusFailed, cause); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Msg("marking the operation failed")
 	}
 }
 
 // run beats on every tick until Stop or ctx ends. A tick past the deadline cancels without
 // writing: a fresh beat would revive a tree a gc may already be taking.
-func (h *Worker) run(ctx context.Context, cancel context.CancelCauseFunc) {
-	defer close(h.done)
-	ticker := time.NewTicker(h.interval)
+func (s *Worker) run(ctx context.Context, cancel context.CancelCauseFunc) {
+	defer close(s.done)
+	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-h.quit:
+		case <-s.quit:
 			return
 		case <-ticker.C:
-			if err := h.Alive(); err != nil {
+			if err := s.Alive(); err != nil {
 				zerolog.Ctx(ctx).Error().Err(err).Msg("cancelling the operation")
 				cancel(err)
 				return
 			}
-			if err := h.beat(ctx, StatusInProgress, nil); err != nil {
+			if err := s.beat(ctx, StatusInProgress, nil); err != nil {
 				zerolog.Ctx(ctx).Warn().Err(err).Msg("heartbeat failed; retrying on the next tick")
 			}
 		}
@@ -152,25 +152,25 @@ func (h *Worker) run(ctx context.Context, cancel context.CancelCauseFunc) {
 }
 
 // beat writes one heartbeat; a good one moves the deadline.
-func (h *Worker) beat(ctx context.Context, status Status, cause error) error {
+func (s *Worker) beat(ctx context.Context, status Status, cause error) error {
 	at := wallClock()
-	record := h.base
-	record.Status = status
-	record.UpdatedAt = at
+	beat := s.base
+	beat.Status = status
+	beat.UpdatedAt = at
 	if status != StatusInProgress {
-		record.FinishedAt = at
+		beat.FinishedAt = at
 	}
 	if cause != nil {
-		record.Error = cause.Error()
+		beat.Error = cause.Error()
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, WriteTimeout)
 	defer cancel()
-	if err := h.writer.Write(writeCtx, record); err != nil {
+	if err := s.writer.Write(writeCtx, beat); err != nil {
 		return err
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.last = at
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.last = at
 	return nil
 }
 

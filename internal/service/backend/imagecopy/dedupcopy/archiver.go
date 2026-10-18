@@ -51,7 +51,7 @@ func New(blobStore storages.Storager) *Archiver {
 // name carries and the metadata beside the savepoint. Nothing is decompressed: the
 // member name is the key, and that is what makes one pass enough. The OCI layout is
 // therefore the gate — see requiredMetadata.
-func (a *Archiver) Store(
+func (s *Archiver) Store(
 	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
 ) (imagecopy.StoredSize, error) {
 	var size imagecopy.StoredSize
@@ -72,7 +72,7 @@ func (a *Archiver) Store(
 			continue
 		}
 
-		member, written, err := a.storeMember(ctx, dst, reader, header.Name, header.Size)
+		member, written, err := s.storeMember(ctx, dst, reader, header.Name, header.Size)
 		if err != nil {
 			return imagecopy.StoredSize{}, err
 		}
@@ -98,11 +98,11 @@ func (a *Archiver) Store(
 
 // storeMember puts one archive member where its kind belongs and reports how many
 // bytes that added. An unaddressable name must never become a storage key.
-func (a *Archiver) storeMember(
+func (s *Archiver) storeMember(
 	ctx context.Context, dst storages.Writer, body io.Reader, name string, size int64,
 ) (imagecopy.Member, int64, error) {
 	if digest, isBlob := parseBlobName(name); isBlob {
-		written, err := a.blobs.put(ctx, digest, body, size)
+		written, err := s.blobs.put(ctx, digest, body, size)
 		if err != nil {
 			return imagecopy.Member{}, 0, err
 		}
@@ -123,7 +123,7 @@ func (a *Archiver) storeMember(
 // Members go back under the names and in the order the capture recorded, their bytes
 // verbatim: an image's id is the digest of those, never of the tar headers, which are
 // written anew and which a load ignores.
-func (a *Archiver) Load(
+func (s *Archiver) Load(
 	ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer,
 ) error {
 	manifest, err := imagecopy.ReadManifest(ctx, src, imagecopy.FormatBlobs)
@@ -135,20 +135,20 @@ func (a *Archiver) Load(
 			model.ErrSavepointImageMissing, manifest.ImageID, imageID)
 	}
 
-	writer := tar.NewWriter(archive)
+	tarWriter := tar.NewWriter(archive)
 	for _, member := range manifest.Members {
-		if err := a.writeMember(ctx, writer, src, member); err != nil {
+		if err := s.writeMember(ctx, tarWriter, src, member); err != nil {
 			return err
 		}
 	}
-	return writer.Close()
+	return tarWriter.Close()
 }
 
 // writeMember copies one stored member into the archive under its original name.
-func (a *Archiver) writeMember(
-	ctx context.Context, archive *tar.Writer, src storages.Storager, member imagecopy.Member,
+func (s *Archiver) writeMember(
+	ctx context.Context, tarWriter *tar.Writer, src storages.Storager, member imagecopy.Member,
 ) error {
-	body, size, err := a.openMember(ctx, src, member)
+	body, size, err := s.openMember(ctx, src, member)
 	if err != nil {
 		return err
 	}
@@ -159,17 +159,17 @@ func (a *Archiver) writeMember(
 	}()
 
 	header := &tar.Header{Name: member.Name, Mode: 0o644, Size: size, Typeflag: tar.TypeReg}
-	if err := archive.WriteHeader(header); err != nil {
+	if err := tarWriter.WriteHeader(header); err != nil {
 		return fmt.Errorf("write tar header for %s: %w", member.Name, err)
 	}
-	if _, err := io.Copy(archive, body); err != nil {
+	if _, err := io.Copy(tarWriter, body); err != nil {
 		return fmt.Errorf("copy member %s into the archive: %w", member.Name, err)
 	}
 	return nil
 }
 
 // openMember resolves one member to the store that holds it.
-func (a *Archiver) openMember(
+func (s *Archiver) openMember(
 	ctx context.Context, src storages.Storager, member imagecopy.Member,
 ) (io.ReadCloser, int64, error) {
 	switch member.Kind {
@@ -178,21 +178,21 @@ func (a *Archiver) openMember(
 			return nil, 0, fmt.Errorf("%w: member %q names digest %q",
 				model.ErrUnsupportedImageArchive, member.Name, member.Digest)
 		}
-		src, size, err := a.blobs.open(ctx, member.Digest)
+		body, size, err := s.blobs.open(ctx, member.Digest)
 		if err != nil {
 			return nil, 0, fmt.Errorf("%w: %w", model.ErrSavepointImageMissing, err)
 		}
-		return src, size, nil
+		return body, size, nil
 	case imagecopy.KindMetadata:
 		if !isMetadataName(member.Name) {
 			return nil, 0, fmt.Errorf("%w: %q is not a metadata member",
 				model.ErrUnsupportedImageArchive, member.Name)
 		}
-		src, size, err := openSized(ctx, src, member.Name)
+		body, size, err := openSized(ctx, src, member.Name)
 		if err != nil {
 			return nil, 0, fmt.Errorf("%w: %w", model.ErrSavepointImageMissing, err)
 		}
-		return src, size, nil
+		return body, size, nil
 	default:
 		return nil, 0, fmt.Errorf("%w: member %q is of unknown kind %q",
 			model.ErrUnsupportedImageArchive, member.Name, member.Kind)
@@ -210,9 +210,9 @@ func openSized(ctx context.Context, store storages.Storager, key string) (io.Rea
 	if stat == nil || !stat.Exist {
 		return nil, 0, fmt.Errorf("%s is not in the store", key)
 	}
-	src, err := store.GetObject(ctx, key)
+	body, err := store.GetObject(ctx, key)
 	if err != nil {
 		return nil, 0, fmt.Errorf("read %s: %w", key, err)
 	}
-	return src, stat.Size, nil
+	return body, stat.Size, nil
 }

@@ -138,14 +138,14 @@ type ServiceVolume struct {
 //
 // A rename produces a new identity, deliberately: docker creates an empty volume on
 // a rename, so an old backup must not map onto it.
-func (v ServiceVolume) ObjectID(service string) string {
-	switch v.Type {
+func (m ServiceVolume) ObjectID(service string) string {
+	switch m.Type {
 	case VolumeTypeNamed:
-		return namedStorageID(v.VolumeName)
+		return namedStorageID(m.VolumeName)
 	case VolumeTypeBind:
-		return serviceStorageID(service, v.Target)
+		return serviceStorageID(service, m.Target)
 	case VolumeTypeAnon:
-		return anonStorageID(service, v.Replica, v.Target)
+		return anonStorageID(service, m.Replica, m.Target)
 	default:
 		return ""
 	}
@@ -273,8 +273,8 @@ type NamedVolume struct {
 }
 
 // ObjectID is the id a named ServiceVolume referencing this volume also returns.
-func (v NamedVolume) ObjectID() string {
-	return namedStorageID(v.Name)
+func (m NamedVolume) ObjectID() string {
+	return namedStorageID(m.Name)
 }
 
 // Project is the compose project as arcave sees it. Services are sorted by name,

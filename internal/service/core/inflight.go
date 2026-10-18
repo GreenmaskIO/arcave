@@ -78,14 +78,14 @@ func interruptedState(marker model.InflightMarker) string {
 	}
 }
 
-// putInflightMarker writes the marker for the rollback restoring target; safety is the
+// putInflightMarker writes the marker for the rollback restoring targetID; safety is the
 // safety snapshot that undoes it, empty when none was taken. A phase change rewrites it whole.
-func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, target, safety model.SavepointID) error {
+func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, targetID, safety model.SavepointID) error {
 	return s.inflightMarker.Put(ctx, model.InflightMarker{
 		Phase:          phase,
 		Session:        s.session,
 		ComposeProject: s.composeProject,
-		Target:         target,
+		Target:         targetID,
 		Safety:         safety,
 		At:             time.Now(),
 	})

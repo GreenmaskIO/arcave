@@ -51,9 +51,9 @@ type NotCovered struct {
 }
 
 // IsEmpty reports whether nothing is left out.
-func (n NotCovered) IsEmpty() bool {
-	return len(n.Mounts) == 0 && len(n.ServicesWithoutVolumes) == 0 && len(n.KilledContainers) == 0 &&
-		len(n.ReplicaGaps) == 0 && len(n.UnresolvedImages) == 0 && len(n.WritableLayers) == 0 && len(n.Images) == 0
+func (m NotCovered) IsEmpty() bool {
+	return len(m.Mounts) == 0 && len(m.ServicesWithoutVolumes) == 0 && len(m.KilledContainers) == 0 &&
+		len(m.ReplicaGaps) == 0 && len(m.UnresolvedImages) == 0 && len(m.WritableLayers) == 0 && len(m.Images) == 0
 }
 
 // SkippedVolume is a mount the backup decision did not take. Not deduplicated:

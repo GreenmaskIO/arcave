@@ -98,20 +98,20 @@ func TestAssembly_DeclaredLinks(t *testing.T) {
 
 // A link on a project network is reported on the endpoint, and a link implies the
 // dependency compose's loader would add.
-func TestServiceConfig_Links(t *testing.T) {
+func TestNewServiceConfig_Links(t *testing.T) {
 	// Arrange
-	res := linkedProject()
-	app := res.Project.Services[0]
+	introspection := linkedProject()
+	app := introspection.Project.Services[0]
 	app.Containers[0].Inspect = container.InspectResponse{
 		ContainerJSONBase: &container.ContainerJSONBase{ID: "app1", HostConfig: &container.HostConfig{}},
 		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
 			"demo_default": {Links: []string{"demo-db-1:database", "demo-db-1:db-1", "demo-db-1:demo-db-1", "outside:ext"}},
 		}},
 	}
-	res.Project.Services[0] = app
+	introspection.Project.Services[0] = app
 
 	// Act
-	cfg := newAssembly(res).serviceConfig(app)
+	cfg := newAssembly(introspection).newServiceConfig(app)
 
 	// Assert
 	assert.Equal(t, []string{"db:database"}, cfg.Links)

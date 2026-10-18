@@ -61,14 +61,14 @@ func TestService_prepare(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	ws, err := svc.prepare(ctx, 0)
+	working, err := svc.prepare(ctx, 0)
 	require.NoError(t, err)
-	killed, err := svc.stopServices(ctx, ws)
+	killed, err := svc.stopServices(ctx, working)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Same(t, demoSpec, ws.project)
-	assert.Equal(t, demoSpecBytes, ws.spec)
+	assert.Same(t, demoSpec, working.project)
+	assert.Equal(t, demoSpecBytes, working.spec)
 	assert.Equal(t, []string{demoContainerID}, killed)
 	inspector.AssertExpectations(t)
 	assembler.AssertExpectations(t)
@@ -77,7 +77,7 @@ func TestService_prepare(t *testing.T) {
 	registry.AssertExpectations(t)
 }
 
-func TestReplicaGaps(t *testing.T) {
+func TestNewReplicaGaps(t *testing.T) {
 	tests := []struct {
 		name    string
 		numbers []int
@@ -96,17 +96,17 @@ func TestReplicaGaps(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := demoIntrospection()
+			introspection := demoIntrospection()
 			svc := model.Service{Name: demoService}
 			for _, n := range tt.numbers {
 				svc.Containers = append(svc.Containers, model.Container{Number: n})
 			}
-			res.Project.Services = []model.Service{svc}
+			introspection.Project.Services = []model.Service{svc}
 			logs := &syncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 
 			// Act
-			gaps := replicaGaps(ctx, res)
+			gaps := newReplicaGaps(ctx, introspection)
 
 			// Assert
 			assert.Equal(t, tt.wantGap, gaps)

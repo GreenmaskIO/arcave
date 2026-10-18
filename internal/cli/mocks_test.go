@@ -64,11 +64,11 @@ func (m *mockService) CreateSavepoint(ctx context.Context, req model.CreateSavep
 
 func (m *mockService) ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error) {
 	args := m.Called(ctx, req)
-	var sps []model.Savepoint
+	var savepoints []model.Savepoint
 	if v := args.Get(0); v != nil {
-		sps = v.([]model.Savepoint)
+		savepoints = v.([]model.Savepoint)
 	}
-	return sps, args.Error(1)
+	return savepoints, args.Error(1)
 }
 
 func (m *mockService) RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error) {

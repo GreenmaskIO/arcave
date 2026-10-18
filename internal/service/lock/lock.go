@@ -67,8 +67,8 @@ func New(projectRoot string) *Locker {
 // at once. It is in the contract because the consumer's seam must survive a
 // locker that reaches a network (a lease in the shared store), which is the only
 // kind of lock that could serialise two *hosts*.
-func (l *Locker) Acquire(ctx context.Context) (release func() error, err error) {
-	path := filepath.Join(l.projectRoot, fileName)
+func (s *Locker) Acquire(ctx context.Context) (release func() error, err error) {
+	path := filepath.Join(s.projectRoot, fileName)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create lock directory: %w", err)
 	}

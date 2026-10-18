@@ -30,9 +30,9 @@ import (
 // RecreateWithImage rebuilds a stopped container from imageRef under the given name and replica
 // number, keeping its labels, host config and endpoints; its anonymous volumes are dropped.
 func (e *Engine) RecreateWithImage(
-	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
+	ctx context.Context, containerID string, identity model.ReplicaIdentity, imageRef string,
 ) (string, error) {
-	if as.Name == "" || as.Number < 1 {
+	if identity.Name == "" || identity.Number < 1 {
 		return "", fmt.Errorf("container %s: no replica identity to rebuild it as", containerID)
 	}
 	inspect, err := e.api.ContainerInspect(ctx, containerID)
@@ -49,10 +49,10 @@ func (e *Engine) RecreateWithImage(
 	config := *inspect.Config
 	config.Image = imageRef
 	config.Hostname = declaredHostname(inspect)
-	config.Labels = renumberedLabels(inspect.Config.Labels, as.Number)
+	config.Labels = renumberedLabels(inspect.Config.Labels, identity.Number)
 	hostConfig := *inspect.HostConfig
 	name := strings.TrimPrefix(inspect.Name, "/")
-	networking := declaredEndpoints(inspect.NetworkSettings, name, as.Name)
+	networking := newNetworkingConfig(inspect.NetworkSettings, name, identity.Name)
 	platform := imagePlatform(inspect)
 
 	// The empty anonymous volumes compose made for this container go with it; the
@@ -61,9 +61,9 @@ func (e *Engine) RecreateWithImage(
 		return "", fmt.Errorf("remove container %s: %w", containerID, err)
 	}
 
-	created, err := e.api.ContainerCreate(ctx, &config, &hostConfig, networking, platform, as.Name)
+	created, err := e.api.ContainerCreate(ctx, &config, &hostConfig, networking, platform, identity.Name)
 	if err != nil {
-		return "", fmt.Errorf("recreate container %s as %s from %s: %w", name, as.Name, imageRef, err)
+		return "", fmt.Errorf("recreate container %s as %s from %s: %w", name, identity.Name, imageRef, err)
 	}
 	return created.ID, nil
 }
@@ -99,9 +99,9 @@ func imagePlatform(inspect container.InspectResponse) *ocispec.Platform {
 	return inspect.ImageManifestDescriptor.Platform
 }
 
-// declaredEndpoints keeps what was declared, drops the addresses and ids the daemon
+// newNetworkingConfig keeps what was declared, drops the addresses and ids the daemon
 // assigned, and renames the alias compose gave each endpoint from oldName to newName.
-func declaredEndpoints(settings *container.NetworkSettings, oldName, newName string) *network.NetworkingConfig {
+func newNetworkingConfig(settings *container.NetworkSettings, oldName, newName string) *network.NetworkingConfig {
 	endpoints := map[string]*network.EndpointSettings{}
 	if settings != nil {
 		for name, endpoint := range settings.Networks {

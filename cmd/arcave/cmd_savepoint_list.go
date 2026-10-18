@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	savepointListFlagIncludeSafetySnapshots = false
+	savepointListIncludeSafety = false
 
 	savepointListCmd = &cobra.Command{
 		Use:   "list",
@@ -41,13 +41,13 @@ func runSavepointList(cmd *cobra.Command, _ []string) error {
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewSavepointListHandler(d.service, d.printer)
 		return h.SavepointList(ctx, model.ListRequest{
-			IncludeSafetySnapshots: savepointListFlagIncludeSafetySnapshots,
+			IncludeSafetySnapshots: savepointListIncludeSafety,
 		})
 	})
 }
 
 func init() {
-	savepointListCmd.Flags().BoolVar(&savepointListFlagIncludeSafetySnapshots, "include-safety-snapshots", false,
+	savepointListCmd.Flags().BoolVar(&savepointListIncludeSafety, "include-safety-snapshots", false,
 		"also list the safety snapshots a rollback takes of the live state; one that outlived its rollback can be rolled back to by id")
 	savepointCmd.AddCommand(savepointListCmd)
 }

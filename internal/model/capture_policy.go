@@ -87,14 +87,14 @@ type CaptureStamp struct {
 }
 
 // String renders the stamp's value; the source goes last, so it may hold anything.
-func (s CaptureStamp) String() string {
-	fields := []string{strconv.FormatBool(s.Capture)}
-	if s.Backend != "" {
-		fields = append(fields, fmt.Sprintf("%s=%s", stampLabelBackend, s.Backend))
+func (m CaptureStamp) String() string {
+	fields := []string{strconv.FormatBool(m.Capture)}
+	if m.Backend != "" {
+		fields = append(fields, fmt.Sprintf("%s=%s", stampLabelBackend, m.Backend))
 	}
-	fields = append(fields, fmt.Sprintf("%s=%s", stampLabelOrigin, s.Origin))
-	if s.Source != "" {
-		fields = append(fields, fmt.Sprintf("%s=%s", stampLabelSource, s.Source))
+	fields = append(fields, fmt.Sprintf("%s=%s", stampLabelOrigin, m.Origin))
+	if m.Source != "" {
+		fields = append(fields, fmt.Sprintf("%s=%s", stampLabelSource, m.Source))
 	}
 	return strings.Join(fields, stampLabelSeparator)
 }
@@ -216,39 +216,39 @@ type CapturePolicy struct {
 
 // DecideService returns the decision for a service's images; the config's default when
 // none was recorded.
-func (p CapturePolicy) DecideService(name string) ServiceDecision {
-	if d, ok := p.Services[name]; ok {
+func (m CapturePolicy) DecideService(name string) ServiceDecision {
+	if d, ok := m.Services[name]; ok {
 		return d
 	}
 	return ServiceDecision{
-		WritableLayer: WritableLayerDecision{CaptureDecision: ConfigDecision(true, ""), Backend: p.WritableLayerBackend},
-		Image:         ConfigDecision(true, ""),
+		WritableLayer: WritableLayerDecision{CaptureDecision: NewConfigDecision(true, ""), Backend: m.WritableLayerBackend},
+		Image:         NewConfigDecision(true, ""),
 	}
 }
 
 // DecideNamedVolume returns the decision for the named volume of that docker name; the
 // config's default when none was recorded.
-func (p CapturePolicy) DecideNamedVolume(name string) VolumeDecision {
-	if d, ok := p.NamedVolumes[name]; ok {
+func (m CapturePolicy) DecideNamedVolume(name string) VolumeDecision {
+	if d, ok := m.NamedVolumes[name]; ok {
 		return d
 	}
-	return p.defaultVolume()
+	return m.defaultVolume()
 }
 
 // DecideMount returns the decision for one bind or anonymous mount; the config's default
 // when none was recorded.
-func (p CapturePolicy) DecideMount(ref MountRef) VolumeDecision {
-	if d, ok := p.Mounts[ref]; ok {
+func (m CapturePolicy) DecideMount(ref MountRef) VolumeDecision {
+	if d, ok := m.Mounts[ref]; ok {
 		return d
 	}
-	return p.defaultVolume()
+	return m.defaultVolume()
 }
 
-func (p CapturePolicy) defaultVolume() VolumeDecision {
-	return VolumeDecision{CaptureDecision: ConfigDecision(true, ""), Backend: p.VolumeBackend}
+func (m CapturePolicy) defaultVolume() VolumeDecision {
+	return VolumeDecision{CaptureDecision: NewConfigDecision(true, ""), Backend: m.VolumeBackend}
 }
 
-// ConfigDecision is a decision the config made; source names the key, empty for the default.
-func ConfigDecision(capture bool, source string) CaptureDecision {
+// NewConfigDecision is a decision the config made; source names the key, empty for the default.
+func NewConfigDecision(capture bool, source string) CaptureDecision {
 	return CaptureDecision{Capture: capture, Origin: OriginConfig, Source: source}
 }

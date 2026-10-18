@@ -34,7 +34,7 @@ const (
 	layerRef = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
 )
 
-func TestCapturableContainers(t *testing.T) {
+func TestNewContainerRefs(t *testing.T) {
 	tests := []struct {
 		name   string
 		image  model.ImageDigestID
@@ -68,15 +68,15 @@ func TestCapturableContainers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := demoIntrospection()
-			res.Project.Services = []model.Service{{Name: demoService, Containers: []model.Container{{
+			introspection := demoIntrospection()
+			introspection.Project.Services = []model.Service{{Name: demoService, Containers: []model.Container{{
 				ID: demoContainerID, Number: 1,
 				Inspect: container.InspectResponse{
 					ContainerJSONBase: &container.ContainerJSONBase{Image: tt.image.String()},
 					Config:            &container.Config{Image: tt.ref},
 				},
 			}}}}
-			res.Images = map[model.ImageDigestID]image.InspectResponse{
+			introspection.Images = map[model.ImageDigestID]image.InspectResponse{
 				tt.image: {
 					ID:     tt.image.String(),
 					Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: tt.labels}},
@@ -85,7 +85,7 @@ func TestCapturableContainers(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			got := capturableContainers(ctx, res)
+			got := newContainerRefs(ctx, introspection)
 
 			// Assert
 			assert.Equal(t, []model.ContainerRef{{
@@ -96,15 +96,15 @@ func TestCapturableContainers(t *testing.T) {
 	}
 }
 
-func TestUnresolvedImages(t *testing.T) {
+func TestNewUnresolvedImages(t *testing.T) {
 	// Arrange
-	res := demoIntrospectionWithContainers()
+	introspection := demoIntrospectionWithContainers()
 	resolved := demoContainerRef()
 	unresolved := model.ContainerRef{Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1)}
 
 	// Act
-	none := unresolvedImages(res, []model.ContainerRef{resolved})
-	got := unresolvedImages(res, []model.ContainerRef{unresolved})
+	none := newUnresolvedImages(introspection, []model.ContainerRef{resolved})
+	got := newUnresolvedImages(introspection, []model.ContainerRef{unresolved})
 
 	// Assert
 	assert.Nil(t, none)
@@ -113,11 +113,11 @@ func TestUnresolvedImages(t *testing.T) {
 	}}, got)
 }
 
-func TestImageCaptures(t *testing.T) {
+func TestNewImageCaptures(t *testing.T) {
 	// Arrange: two replicas on one upstream, one on an upstream gone from the daemon,
 	// one that cannot be traced.
 	goneID := model.ImageDigestID("sha256:9999999999999999999999999999999999999999999999999999999999999999")
-	res := demoIntrospectionWithContainers()
+	introspection := demoIntrospectionWithContainers()
 	containers := []model.ContainerRef{
 		{Service: demoService, Replica: 1, UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage},
 		{Service: demoService, Replica: 2, UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage},
@@ -126,7 +126,7 @@ func TestImageCaptures(t *testing.T) {
 	}
 
 	// Act
-	got := imageCaptures(res, containers)
+	got := newImageCaptures(introspection, containers)
 
 	// Assert
 	assert.Equal(t, []model.ImageCaptureRequest{
@@ -165,12 +165,12 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 			if tt.mediaType != "" {
 				inspect.Descriptor = &ocispec.Descriptor{MediaType: tt.mediaType}
 			}
-			res := model.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{runningID: inspect}}
+			introspection := model.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{runningID: inspect}}
 			logs := &syncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 
 			// Act
-			warnOnComposeImageMismatch(ctx, res, c)
+			warnOnComposeImageMismatch(ctx, introspection, c)
 
 			// Assert
 			assert.Equal(t, tt.want, logs.String() != "")

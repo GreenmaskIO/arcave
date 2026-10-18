@@ -340,7 +340,7 @@ func TestFindBackupVolumes(t *testing.T) {
 // would have each overwrite the other, so the operation stops and names both.
 func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 	// Arrange
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Services: []model.Service{
 			{Name: "app", Volumes: []model.ServiceVolume{
@@ -353,7 +353,7 @@ func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 	}}
 
 	// Act
-	got, notCovered, err := FindBackupVolumes(res, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
+	got, notCovered, err := FindBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
 
 	// Assert
 	require.ErrorIs(t, err, errObjectIDCollision)
@@ -368,7 +368,7 @@ func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 // arm: it is project config, not a constant of this package.
 func TestFindBackupVolumes_StampsTheGivenBackend(t *testing.T) {
 	// Arrange
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Services: []model.Service{{
 			Name:    "app",
@@ -379,7 +379,7 @@ func TestFindBackupVolumes_StampsTheGivenBackend(t *testing.T) {
 	}}
 
 	// Act
-	got, _, err := FindBackupVolumes(res, model.CapturePolicy{VolumeBackend: model.SnapshotBackendCDC})
+	got, _, err := FindBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendCDC})
 
 	// Assert
 	require.NoError(t, err)
@@ -410,7 +410,7 @@ func assertOneArmPerType(t *testing.T, volumes []model.Volume) {
 // reason and source.
 func TestFindBackupVolumes_AppliesThePolicy(t *testing.T) {
 	// Arrange
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Services: []model.Service{
 			{Name: "app", Volumes: []model.ServiceVolume{
@@ -436,7 +436,7 @@ func TestFindBackupVolumes_AppliesThePolicy(t *testing.T) {
 	}
 
 	// Act
-	got, notCovered, err := FindBackupVolumes(res, policy)
+	got, notCovered, err := FindBackupVolumes(introspection, policy)
 
 	// Assert
 	require.NoError(t, err)

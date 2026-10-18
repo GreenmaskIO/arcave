@@ -182,7 +182,7 @@ func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 			Config:            &container.Config{Image: "alpine:3"},
 		}}
 	}
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Services: []model.Service{
 			{Name: "app", Containers: []model.Container{replica("app1", "demo-app-1", container.HostConfig{
@@ -198,7 +198,7 @@ func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 		},
 	}}
 	codec := NewCodec()
-	assembled, err := NewAssembler().Assemble(context.Background(), res)
+	assembled, err := NewAssembler().Assemble(context.Background(), introspection)
 	require.NoError(t, err)
 
 	// Act

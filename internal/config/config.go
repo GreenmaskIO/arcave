@@ -363,17 +363,17 @@ type WritableLayers struct {
 }
 
 // Validate rejects a layout arcave does not know.
-func (i WritableLayers) Validate() error {
-	if _, ok := model.ParseImageBackend(i.Backend); !ok {
+func (w WritableLayers) Validate() error {
+	if _, ok := model.ParseImageBackend(w.Backend); !ok {
 		return fmt.Errorf("%w: unsupported writable_layers.backend %q (supported: %s, %s)", ErrInvalid,
-			i.Backend, model.ImageBackendDedupCopy, model.ImageBackendFullCopy)
+			w.Backend, model.ImageBackendDedupCopy, model.ImageBackendFullCopy)
 	}
 	return nil
 }
 
 // BackendKind is the configured layout as the kind a capture carries.
-func (i WritableLayers) BackendKind() model.ImageBackendKind {
-	kind, _ := model.ParseImageBackend(i.Backend)
+func (w WritableLayers) BackendKind() model.ImageBackendKind {
+	kind, _ := model.ParseImageBackend(w.Backend)
 	return kind
 }
 
@@ -608,33 +608,33 @@ func (c *Config) applyCDCDefaults() {
 // fullcopy and the project carries no block. It is the single home of these
 // defaults: ApplyDefaults fills the config through it, and the DI root reads the
 // effective section through it, so neither side can hold a copy that drifts.
-func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
-	c := CDCBackend{}
-	if cfg != nil {
-		c = *cfg
+func CDCWithDefaults(configured *CDCBackend) CDCBackend {
+	cdc := CDCBackend{}
+	if configured != nil {
+		cdc = *configured
 	}
-	if c.RestoreMode == "" {
-		c.RestoreMode = RestoreModeIncremental
+	if cdc.RestoreMode == "" {
+		cdc.RestoreMode = RestoreModeIncremental
 	}
-	if c.Overwrite == "" {
-		c.Overwrite = OverwriteAlways
+	if cdc.Overwrite == "" {
+		cdc.Overwrite = OverwriteAlways
 	}
-	if c.Image == "" {
-		c.Image = DefaultResticImage
+	if cdc.Image == "" {
+		cdc.Image = DefaultResticImage
 	}
-	if c.ServerAddress == "" {
-		c.ServerAddress = DefaultCDCServerAddress
+	if cdc.ServerAddress == "" {
+		cdc.ServerAddress = DefaultCDCServerAddress
 	}
-	if c.ServerScheme == "" {
-		c.ServerScheme = DefaultCDCServerScheme
+	if cdc.ServerScheme == "" {
+		cdc.ServerScheme = DefaultCDCServerScheme
 	}
-	if c.ContainerHost == "" {
-		c.ContainerHost = DefaultCDCContainerHost
+	if cdc.ContainerHost == "" {
+		cdc.ContainerHost = DefaultCDCContainerHost
 	}
-	if c.NetworkMode == "" {
-		c.NetworkMode = DefaultCDCNetworkMode
+	if cdc.NetworkMode == "" {
+		cdc.NetworkMode = DefaultCDCNetworkMode
 	}
-	return c
+	return cdc
 }
 
 // Validate checks the sections whose values arcave must be able to act on. It runs

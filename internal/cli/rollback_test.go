@@ -40,7 +40,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		Latest:      &wantLatest,
 		WaitTimeout: waitTimeout,
 	}
-	sp := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000"}
+	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000"}
 	restored := []model.Volume{
 		{
 			ObjectID: "volume-named-demo_pgdata",
@@ -75,25 +75,25 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			// service's now, not this adapter's.
 			name: "forwards every restored volume",
 			res: model.RollbackResult{
-				Savepoint: sp,
+				Savepoint: savepoint,
 				Restored:  restored,
 			},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
 			wantPrinted: []any{model.RollbackResponse{
-				RolledBackTo: sp,
+				RolledBackTo: savepoint,
 				Restored:     restored,
 			}},
 		},
 		{
 			name:       "restores nothing",
-			res:        model.RollbackResult{Savepoint: sp, Restored: []model.Volume{}},
+			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
 			wantPrinted: []any{model.RollbackResponse{
-				RolledBackTo: sp,
+				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
 		},
@@ -107,12 +107,12 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		},
 		{
 			name:       "printer error surfaces",
-			res:        model.RollbackResult{Savepoint: sp, Restored: []model.Volume{}},
+			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: printErr,
 			wantErr:    printErr,
 			wantPrinted: []any{model.RollbackResponse{
-				RolledBackTo: sp,
+				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
 		},

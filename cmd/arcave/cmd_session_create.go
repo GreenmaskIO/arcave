@@ -22,8 +22,8 @@ import (
 )
 
 var (
-	sessionCreateFlagName string
-	sessionCreateFlagFrom string
+	sessionCreateName string
+	sessionCreateFrom string
 
 	sessionCreateCmd = &cobra.Command{
 		Use:   "create",
@@ -42,17 +42,17 @@ func runSessionCreate(cmd *cobra.Command, _ []string) error {
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
 		return cli.NewSessionCreateHandler(d.service, d.printer).
 			SessionCreate(cmd.Context(), model.CreateSessionRequest{
-				Name: sessionCreateFlagName,
-				From: sessionCreateFlagFrom,
+				Name: sessionCreateName,
+				From: sessionCreateFrom,
 			})
 	})
 }
 
 func init() {
 	// Unbound: it would collide with init --name on the shared name key.
-	sessionCreateCmd.Flags().StringVar(&sessionCreateFlagName, "name", "",
+	sessionCreateCmd.Flags().StringVar(&sessionCreateName, "name", "",
 		"Session name, unique within the arcave project; --session accepts it in place of the id")
-	sessionCreateCmd.Flags().StringVar(&sessionCreateFlagFrom, "from", "",
+	sessionCreateCmd.Flags().StringVar(&sessionCreateFrom, "from", "",
 		"Session to copy, by name or id; the copy costs that session's size")
 	sessionCmd.AddCommand(sessionCreateCmd)
 }

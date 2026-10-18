@@ -120,16 +120,16 @@ func richService() model.Service {
 	}
 }
 
-func TestServiceConfig(t *testing.T) {
+func TestNewServiceConfig(t *testing.T) {
 	// Arrange
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name:     "demo",
 		Services: []model.Service{richService()},
 		Networks: []model.Network{{Key: "back", Name: "demo_back"}},
 	}}
 
 	// Act
-	cfg := newAssembly(res).serviceConfig(richService())
+	cfg := newAssembly(introspection).newServiceConfig(richService())
 
 	// Assert
 	assert.Equal(t, "postgres:16", cfg.Image)
@@ -180,9 +180,9 @@ func TestServiceConfig(t *testing.T) {
 	assert.Equal(t, "172.28.0.10", cfg.Networks["back"].Ipv4Address)
 }
 
-func TestServiceConfig_Volumes(t *testing.T) {
+func TestNewServiceConfig_Volumes(t *testing.T) {
 	// Act
-	cfg := newAssembly(model.IntrospectionResult{}).serviceConfig(richService())
+	cfg := newAssembly(model.IntrospectionResult{}).newServiceConfig(richService())
 
 	// Assert
 	require.Len(t, cfg.Volumes, 3)
@@ -198,7 +198,7 @@ func TestServiceConfig_Volumes(t *testing.T) {
 	}, cfg.Volumes[2])
 }
 
-func TestServiceVolume_Options(t *testing.T) {
+func TestNewServiceVolume_Options(t *testing.T) {
 	tests := []struct {
 		name  string
 		mount model.ServiceVolume
@@ -250,7 +250,7 @@ func TestServiceVolume_Options(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := serviceVolume(tt.mount)
+			got := newServiceVolume(tt.mount)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -338,7 +338,7 @@ func TestDeclaredVolumesFrom(t *testing.T) {
 
 // A service reference is what compose wrote as the id of the replica it resolved;
 // the spec declares it back, with the dependency the loader would infer.
-func TestServiceConfig_SharedNamespaces(t *testing.T) {
+func TestNewServiceConfig_SharedNamespaces(t *testing.T) {
 	// Arrange
 	db := model.Service{Name: "db", Containers: []model.Container{{ID: dbReplicaID}}}
 	app := model.Service{Name: "app", Containers: []model.Container{{
@@ -360,10 +360,10 @@ func TestServiceConfig_SharedNamespaces(t *testing.T) {
 			},
 		},
 	}}}
-	res := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{app, db}}}
+	introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{app, db}}}
 
 	// Act
-	cfg := newAssembly(res).serviceConfig(app)
+	cfg := newAssembly(introspection).newServiceConfig(app)
 
 	// Assert
 	assert.Equal(t, "service:db", cfg.NetworkMode)
@@ -377,7 +377,7 @@ func TestServiceConfig_SharedNamespaces(t *testing.T) {
 	}, cfg.DependsOn)
 }
 
-func TestServiceConfig_Image(t *testing.T) {
+func TestNewServiceConfig_Image(t *testing.T) {
 	const (
 		upstreamID = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 		layerID    = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
@@ -450,13 +450,13 @@ func TestServiceConfig_Image(t *testing.T) {
 					Config:            &container.Config{Image: tt.ref},
 				},
 			}}}
-			res := model.IntrospectionResult{
+			introspection := model.IntrospectionResult{
 				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
 				Images:  tt.images,
 			}
 
 			// Act
-			cfg := newAssembly(res).serviceConfig(svc)
+			cfg := newAssembly(introspection).newServiceConfig(svc)
 
 			// Assert
 			assert.Equal(t, tt.want, cfg.Image)
@@ -465,7 +465,7 @@ func TestServiceConfig_Image(t *testing.T) {
 	}
 }
 
-func TestServiceConfig_DaemonDefaults(t *testing.T) {
+func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 	stopTimeout := func(seconds int) *int { return &seconds }
 	grace := func(d time.Duration) *types.Duration { converted := types.Duration(d); return &converted }
 
@@ -537,13 +537,13 @@ func TestServiceConfig_DaemonDefaults(t *testing.T) {
 					Config:            &container.Config{Image: "postgres:16", StopTimeout: tt.stop},
 				},
 			}}}
-			res := model.IntrospectionResult{
+			introspection := model.IntrospectionResult{
 				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
 				Daemon:  tt.daemon,
 			}
 
 			// Act
-			cfg := newAssembly(res).serviceConfig(svc)
+			cfg := newAssembly(introspection).newServiceConfig(svc)
 
 			// Assert
 			tt.verify(t, cfg)
@@ -552,7 +552,7 @@ func TestServiceConfig_DaemonDefaults(t *testing.T) {
 }
 
 // What the daemon or compose added past the declaration is left out of the spec.
-func TestServiceConfig_DaemonAdditions(t *testing.T) {
+func TestNewServiceConfig_DaemonAdditions(t *testing.T) {
 	tests := []struct {
 		name   string
 		host   container.HostConfig
@@ -629,13 +629,13 @@ func TestServiceConfig_DaemonAdditions(t *testing.T) {
 					Config:            &config,
 				},
 			}}}
-			res := model.IntrospectionResult{
+			introspection := model.IntrospectionResult{
 				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
 				Daemon:  system.Info{Name: "docker-desktop"},
 			}
 
 			// Act
-			cfg := newAssembly(res).serviceConfig(svc)
+			cfg := newAssembly(introspection).newServiceConfig(svc)
 
 			// Assert
 			tt.verify(t, cfg)
@@ -643,7 +643,7 @@ func TestServiceConfig_DaemonAdditions(t *testing.T) {
 	}
 }
 
-func TestServiceConfig_NetworkAttachment(t *testing.T) {
+func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 	tests := []struct {
 		name     string
 		endpoint network.EndpointSettings
@@ -680,14 +680,14 @@ func TestServiceConfig_NetworkAttachment(t *testing.T) {
 					},
 				},
 			}}}
-			res := model.IntrospectionResult{Project: model.Project{
+			introspection := model.IntrospectionResult{Project: model.Project{
 				Name:     "demo",
 				Services: []model.Service{svc},
 				Networks: []model.Network{{Key: "default", Name: "demo_default"}},
 			}}
 
 			// Act
-			cfg := newAssembly(res).serviceConfig(svc)
+			cfg := newAssembly(introspection).newServiceConfig(svc)
 
 			// Assert
 			require.Contains(t, cfg.Networks, "default")
@@ -696,7 +696,7 @@ func TestServiceConfig_NetworkAttachment(t *testing.T) {
 	}
 }
 
-func TestServiceConfig_VolumesFrom(t *testing.T) {
+func TestNewServiceConfig_VolumesFrom(t *testing.T) {
 	tests := []struct {
 		name          string
 		inheritedFrom string
@@ -733,10 +733,10 @@ func TestServiceConfig_VolumesFrom(t *testing.T) {
 					},
 				}},
 			}
-			res := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{svc}}}
+			introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{svc}}}
 
 			// Act
-			cfg := newAssembly(res).serviceConfig(svc)
+			cfg := newAssembly(introspection).newServiceConfig(svc)
 
 			// Assert
 			var targets []string
@@ -769,7 +769,7 @@ func TestDeclaredContainerName(t *testing.T) {
 	}
 }
 
-func TestRestartPolicy(t *testing.T) {
+func TestToRestartPolicy(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy container.RestartPolicy
@@ -787,7 +787,7 @@ func TestRestartPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, restartPolicy(tt.policy))
+			assert.Equal(t, tt.want, toRestartPolicy(tt.policy))
 		})
 	}
 }

@@ -40,10 +40,10 @@ type Snapshotter struct {
 	// container. What a restic container reaches over the protocol is the same
 	// repository, resolved by the server from the volume's ObjectID.
 	repo objectRepo
-	// mounted is where the volume sits inside the restic container, and therefore
+	// mountPath is where the volume sits inside the restic container, and therefore
 	// the path inside every snapshot.
-	mounted string
-	deps    Dependencies
+	mountPath string
+	deps      Dependencies
 }
 
 func (s *Snapshotter) Volume() model.Volume { return s.volume }
@@ -57,7 +57,7 @@ func (s *Snapshotter) Snapshot(
 		return model.SnapshotStat{}, err
 	}
 
-	mnt, err := s.mountSource(ctx)
+	src, err := s.mountSource(ctx)
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
@@ -79,8 +79,8 @@ func (s *Snapshotter) Snapshot(
 	}
 
 	summary, err := resticRunner.run(ctx, resticCmd{
-		args:  s.backupArgs(req),
-		binds: []string{mnt.Source + ":" + s.mounted + ":ro"},
+		args:  s.newBackupArgs(req),
+		binds: []string{src.Source + ":" + s.mountPath + ":ro"},
 	})
 	if err != nil {
 		return model.SnapshotStat{}, err
@@ -103,14 +103,14 @@ func (s *Snapshotter) Snapshot(
 	}, nil
 }
 
-// backupArgs builds the backup command line. --host and the path do not depend
+// newBackupArgs builds the backup command line. --host and the path do not depend
 // on what the capture is for, on purpose: restic picks a parent snapshot by
 // them, and a safety snapshot that missed the parent would reship the whole
 // volume. What it is for shows up in the labels the caller passed, and nowhere
 // else.
-func (s *Snapshotter) backupArgs(req model.BackendSnapshotRequest) []string {
+func (s *Snapshotter) newBackupArgs(req model.BackendSnapshotRequest) []string {
 	args := []string{
-		"backup", s.mounted,
+		"backup", s.mountPath,
 		"--host", s.volume.ComposeProject,
 		"--tag", savepointTag + "=" + req.SnapshotID.String(),
 	}
@@ -143,7 +143,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 		return errNoSnapshotID
 	}
 
-	mnt, err := s.mountSource(ctx)
+	src, err := s.mountSource(ctx)
 	if err != nil {
 		return fmt.Errorf("mount source: %w", err)
 	}
@@ -151,24 +151,24 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	// The wipe must finish before restic writes a byte; it is a container of its
 	// own and needs no repository.
 	if !s.deps.Options.Incremental {
-		if err := s.deps.Runner.WipeVolume(ctx, mnt); err != nil {
+		if err := s.deps.Runner.WipeVolume(ctx, src); err != nil {
 			return fmt.Errorf("clear the volume before restore: %w", err)
 		}
 	}
 
-	run, err := s.openResticRunner(ctx)
+	resticRunner, err := s.openResticRunner(ctx)
 	if err != nil {
 		return fmt.Errorf("open restic runner: %w", err)
 	}
 
-	args := []string{"restore", payload.SnapshotObjectID, "--target", "/", "--include", s.mounted}
+	args := []string{"restore", payload.SnapshotObjectID, "--target", "/", "--include", s.mountPath}
 	if s.deps.Options.Incremental {
 		// Needs restic ≥0.17, which compares content rather than size+mtime.
 		args = append(args, "--delete", "--overwrite", s.deps.Options.Overwrite)
 	}
-	_, err = run.run(ctx, resticCmd{
+	_, err = resticRunner.run(ctx, resticCmd{
 		args:  append(args, "--json"),
-		binds: []string{mnt.Source + ":" + s.mounted},
+		binds: []string{src.Source + ":" + s.mountPath},
 	})
 	return err
 }
@@ -227,11 +227,11 @@ func (s *Snapshotter) repositoryURL() string {
 // The volume is mounted whole, whatever subpath a service happens to mount — so
 // a capture holds all of it, and a restore puts all of it back.
 func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error) {
-	mnt, err := s.deps.Runner.ResolveMountSource(ctx, s.volume)
+	src, err := s.deps.Runner.ResolveMountSource(ctx, s.volume)
 	if err != nil {
 		return model.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
 	}
-	return mnt, nil
+	return src, nil
 }
 
 // sortedKeys orders a label set, so the command line is stable across runs.

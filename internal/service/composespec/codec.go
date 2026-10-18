@@ -45,7 +45,7 @@ func NewCodec() *Codec { return &Codec{} }
 
 // Marshal renders the project as the compose document a savepoint commits beside
 // its record.
-func (c *Codec) Marshal(project *types.Project) ([]byte, error) {
+func (s *Codec) Marshal(project *types.Project) ([]byte, error) {
 	if project == nil {
 		return nil, errNoProject
 	}
@@ -61,7 +61,7 @@ func (c *Codec) Marshal(project *types.Project) ([]byte, error) {
 
 // Parse reads an artifact back through compose's own loader, so a truncated or
 // foreign document fails here rather than halfway through a rebuild.
-func (c *Codec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
+func (s *Codec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
 	project, err := loader.LoadWithContext(ctx, types.ConfigDetails{
 		ConfigFiles: []types.ConfigFile{{Filename: specFilename, Content: spec}},
 	}, func(o *loader.Options) {

@@ -31,12 +31,12 @@ var perReplicaFields = []string{"ContainerName", "Hostname"}
 
 // warnOnDivergentReplicas reports, once per service, the fields in which a later
 // replica differs from the first one the spec was rendered off.
-func (s assembly) warnOnDivergentReplicas(ctx context.Context, svc model.Service, first types.ServiceConfig) {
+func (a assembly) warnOnDivergentReplicas(ctx context.Context, svc model.Service, firstConfig types.ServiceConfig) {
 	var diverged []string
-	for _, c := range svc.Containers[min(1, len(svc.Containers)):] {
-		replica := s.baseConfig(svc)
-		s.applyReplica(&replica, svc.Name, c)
-		for _, field := range divergentFields(first, replica) {
+	for _, replica := range svc.Containers[min(1, len(svc.Containers)):] {
+		replicaConfig := a.newBaseConfig(svc)
+		a.applyReplica(&replicaConfig, svc.Name, replica)
+		for _, field := range divergentFields(firstConfig, replicaConfig) {
 			if !slices.Contains(diverged, field) {
 				diverged = append(diverged, field)
 			}
@@ -51,14 +51,14 @@ func (s assembly) warnOnDivergentReplicas(ctx context.Context, svc model.Service
 
 // divergentFields names, by their compose key, the fields a and b differ in.
 func divergentFields(a, b types.ServiceConfig) []string {
-	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	valueA, valueB := reflect.ValueOf(a), reflect.ValueOf(b)
 	var fields []string
-	for i := range va.NumField() {
-		field := va.Type().Field(i)
+	for i := range valueA.NumField() {
+		field := valueA.Type().Field(i)
 		if slices.Contains(perReplicaFields, field.Name) {
 			continue
 		}
-		if !reflect.DeepEqual(va.Field(i).Interface(), vb.Field(i).Interface()) {
+		if !reflect.DeepEqual(valueA.Field(i).Interface(), valueB.Field(i).Interface()) {
 			fields = append(fields, composeKey(field))
 		}
 	}

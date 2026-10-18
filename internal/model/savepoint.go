@@ -59,6 +59,6 @@ type SpecRef struct {
 
 // IsSafetySnapshot reports whether this record is a rollback's undo rather than
 // a savepoint a user asked for.
-func (s Savepoint) IsSafetySnapshot() bool {
-	return s.Labels[SafetySnapshotLabel] == SafetySnapshotLabelValue
+func (m Savepoint) IsSafetySnapshot() bool {
+	return m.Labels[SafetySnapshotLabel] == SafetySnapshotLabelValue
 }

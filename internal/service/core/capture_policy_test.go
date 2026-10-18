@@ -29,9 +29,9 @@ import (
 
 // labelledIntrospection is demoIntrospectionWithContainers, its one service carrying labels.
 func labelledIntrospection(labels map[string]string) model.IntrospectionResult {
-	res := demoIntrospectionWithContainers()
-	res.Project.Services[0].Labels = labels
-	return res
+	introspection := demoIntrospectionWithContainers()
+	introspection.Project.Services[0].Labels = labels
+	return introspection
 }
 
 // A service's labels choose its layer's backend and leave its upstream out.
@@ -58,18 +58,18 @@ func TestService_prepare_LabelsDecideTheImages(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	ws, err := svc.prepare(ctx, 0)
+	working, err := svc.prepare(ctx, 0)
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, ws.images.writableLayers, 1)
-	assert.Equal(t, model.ImageBackendFullCopy, ws.images.writableLayers[0].Backend)
-	assert.Equal(t, demoContainerID, ws.images.writableLayers[0].Container.ID)
-	assert.Empty(t, ws.images.upstreams)
+	require.Len(t, working.images.writableLayers, 1)
+	assert.Equal(t, model.ImageBackendFullCopy, working.images.writableLayers[0].Backend)
+	assert.Equal(t, demoContainerID, working.images.writableLayers[0].Container.ID)
+	assert.Empty(t, working.images.upstreams)
 	assert.Equal(t, []model.SkippedImage{{
 		Service: demoService, Image: demoBaseImage, Reason: model.SkipReasonExcluded,
 		Detail: "arcave.image.capture=false on service " + demoService,
-	}}, ws.images.skippedImages)
+	}}, working.images.skippedImages)
 	inspector.AssertExpectations(t)
 	registry.AssertExpectations(t)
 }
@@ -103,7 +103,7 @@ func TestService_prepare_OldDaemonIsRefusedWithoutALayer(t *testing.T) {
 
 // A rollback's safety snapshot captures what the rollback overwrites, whatever the
 // labels say now, and a label it cannot read only warns.
-func TestService_safetySnapshotCapturePolicy(t *testing.T) {
+func TestService_newSafetySnapshotPolicy(t *testing.T) {
 	tests := []struct {
 		name   string
 		labels map[string]string
@@ -114,13 +114,13 @@ func TestService_safetySnapshotCapturePolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := labelledIntrospection(tt.labels)
-			res.Project.Volumes[0].UsedBy = []model.ServiceReference{{Service: demoService, Target: "/data"}}
+			introspection := labelledIntrospection(tt.labels)
+			introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{{Service: demoService, Target: "/data"}}
 			svc := New(Deps{CaptureDefaults: demoCaptureDefaults})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			policy, err := svc.safetySnapshotCapturePolicy(ctx, res, demoRecord())
+			policy, err := svc.newSafetySnapshotPolicy(ctx, introspection, demoRecord())
 
 			// Assert
 			require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestService_safetySnapshotCapturePolicy(t *testing.T) {
 
 // A replica with a restored layer is built on its tag; one the savepoint holds no layer of
 // on its service's own image, under the number and name the record keeps for it.
-func TestRecordedReplicas(t *testing.T) {
+func TestNewRecordedReplicas(t *testing.T) {
 	// Arrange
 	record := model.Savepoint{NotCovered: &model.NotCovered{WritableLayers: []model.SkippedWritableLayer{
 		{Service: "worker", Replica: 1, Container: "demo-worker-1"},
@@ -144,13 +144,13 @@ func TestRecordedReplicas(t *testing.T) {
 	layered := []model.WritableLayerRestoreResult{{Service: "app", Replica: 2, Tag: "arcave/app:sp-1", ContainerName: "demo-app-2"}}
 
 	// Act
-	got := recordedReplicas(record, project, layered)
+	got := newRecordedReplicas(record, project, layered)
 
 	// Assert
 	assert.Equal(t, []recordedReplica{
-		{service: "app", replica: 2, containerName: "demo-app-2", image: "arcave/app:sp-1"},
-		{service: "worker", replica: 1, containerName: "demo-worker-1", image: "busybox"},
-		{service: "worker", replica: 3, containerName: "demo-worker-3", image: "busybox"},
+		{service: "app", number: 2, containerName: "demo-app-2", image: "arcave/app:sp-1"},
+		{service: "worker", number: 1, containerName: "demo-worker-1", image: "busybox"},
+		{service: "worker", number: 3, containerName: "demo-worker-3", image: "busybox"},
 	}, got)
 }
 
@@ -158,7 +158,7 @@ func TestRecordedReplicas(t *testing.T) {
 // upstream another captured service names is not reported as left out.
 func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 	// Arrange
-	res := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{
+	introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{
 		{Name: "app", Volumes: []model.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/src", Target: "/app"}}},
 	}}}
 	excluded := model.VolumeDecision{CaptureDecision: model.CaptureDecision{Source: "a label"}}
@@ -173,7 +173,7 @@ func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, notCovered, err := FindBackupVolumes(res, volumePolicy)
+	_, notCovered, err := FindBackupVolumes(introspection, volumePolicy)
 	taken, skipped := imageCaptureContainers(ctx, containers, imagePolicy)
 
 	// Assert
@@ -211,7 +211,7 @@ func TestService_prepare_InvalidLabelStopsNothing(t *testing.T) {
 	assembler.AssertExpectations(t)
 }
 
-func TestWritableLayerCaptures(t *testing.T) {
+func TestNewLayerCaptures(t *testing.T) {
 	// Arrange
 	containers := []model.ContainerRef{
 		{Service: "app", Replica: 1, Name: "demo-app-1"},
@@ -227,7 +227,7 @@ func TestWritableLayerCaptures(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	layers, skipped := writableLayerCaptures(ctx, containers, policy)
+	layers, skipped := newLayerCaptures(ctx, containers, policy)
 
 	// Assert
 	assert.Equal(t, []model.WritableLayerCaptureRequest{
@@ -240,16 +240,16 @@ func TestWritableLayerCaptures(t *testing.T) {
 }
 
 // Past a bad label the safety snapshot drops the labels, not the config.
-func TestService_safetySnapshotCapturePolicy_FallbackKeepsTheConfig(t *testing.T) {
+func TestService_newSafetySnapshotPolicy_FallbackKeepsTheConfig(t *testing.T) {
 	// Arrange
 	defaults := demoCaptureDefaults
 	defaults.SavepointCapture.WritableLayers = false
 	svc := New(Deps{CaptureDefaults: defaults})
-	res := labelledIntrospection(map[string]string{"arcave.captur": "false"})
+	introspection := labelledIntrospection(map[string]string{"arcave.captur": "false"})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	policy, err := svc.safetySnapshotCapturePolicy(ctx, res, demoRecord())
+	policy, err := svc.newSafetySnapshotPolicy(ctx, introspection, demoRecord())
 
 	// Assert
 	require.NoError(t, err)

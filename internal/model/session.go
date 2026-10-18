@@ -103,9 +103,9 @@ type CreateSessionRequest struct {
 }
 
 // Validate refuses a name that is all whitespace.
-func (r CreateSessionRequest) Validate() error {
-	if r.Name != "" && strings.TrimSpace(r.Name) == "" {
-		return fmt.Errorf("%w %q: must not be blank", ErrInvalidSessionName, r.Name)
+func (m CreateSessionRequest) Validate() error {
+	if m.Name != "" && strings.TrimSpace(m.Name) == "" {
+		return fmt.Errorf("%w %q: must not be blank", ErrInvalidSessionName, m.Name)
 	}
 	return nil
 }

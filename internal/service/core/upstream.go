@@ -32,44 +32,44 @@ const composeImageLabel = "com.docker.compose.image"
 // twin of ocispec.MediaTypeImageIndex; registries serve either, so both are checked.
 const dockerManifestList = "application/vnd.docker.distribution.manifest.list.v2+json"
 
-// capturableContainers lists every replica of every service, in service order,
+// newContainerRefs lists every replica of every service, in service order,
 // each with its upstream resolved.
-func capturableContainers(ctx context.Context, res model.IntrospectionResult) []model.ContainerRef {
+func newContainerRefs(ctx context.Context, introspection model.IntrospectionResult) []model.ContainerRef {
 	var refs []model.ContainerRef
-	for _, svc := range res.Project.Services {
-		for _, c := range svc.Containers {
-			ref := model.ContainerRef{Service: svc.Name, Replica: c.Number, ID: c.ID, Name: c.Name}
-			ref.UpstreamImageID, ref.UpstreamImageRef = resolveUpstream(ctx, res, c)
+	for _, svc := range introspection.Project.Services {
+		for _, container := range svc.Containers {
+			ref := model.ContainerRef{Service: svc.Name, Replica: container.Number, ID: container.ID, Name: container.Name}
+			ref.UpstreamImageID, ref.UpstreamImageRef = resolveUpstream(ctx, introspection, container)
 			refs = append(refs, ref)
 		}
 	}
 	return refs
 }
 
-// writableLayerCaptures returns the replicas whose writable layer capturePolicy takes, each with
+// newLayerCaptures returns the replicas whose writable layer capturePolicy takes, each with
 // its backend, and the ones it leaves out.
-func writableLayerCaptures(
+func newLayerCaptures(
 	ctx context.Context, containers []model.ContainerRef, capturePolicy model.CapturePolicy,
 ) ([]model.WritableLayerCaptureRequest, []model.SkippedWritableLayer) {
 	var (
 		layers  []model.WritableLayerCaptureRequest
 		skipped []model.SkippedWritableLayer
 	)
-	for _, c := range containers {
-		decision := capturePolicy.DecideService(c.Service).WritableLayer
+	for _, ref := range containers {
+		decision := capturePolicy.DecideService(ref.Service).WritableLayer
 		if decision.Capture {
 			layers = append(layers, model.WritableLayerCaptureRequest{
-				Container: c,
+				Container: ref,
 				Backend:   decision.Backend,
 			})
 			continue
 		}
-		zerolog.Ctx(ctx).Warn().Str("service", c.Service).Int("replica", c.Replica).Str("reason", decision.Source).
+		zerolog.Ctx(ctx).Warn().Str("service", ref.Service).Int("replica", ref.Replica).Str("reason", decision.Source).
 			Msg("writable layer is not captured; a rollback to this savepoint creates the container fresh from its image")
 		skipped = append(skipped, model.SkippedWritableLayer{
-			Service:   c.Service,
-			Replica:   c.Replica,
-			Container: c.Name,
+			Service:   ref.Service,
+			Replica:   ref.Replica,
+			Container: ref.Name,
 			Reason:    model.SkipReasonExcluded,
 			Detail:    decision.Source,
 		})
@@ -89,23 +89,23 @@ func imageCaptureContainers(
 	// kept are the upstreams some service takes: one is not reported skipped for another.
 	kept := map[model.ImageDigestID]bool{}
 	reported := map[string]bool{}
-	for _, c := range containers {
-		if capturePolicy.DecideService(c.Service).Image.Capture {
-			taken = append(taken, c)
-			kept[c.UpstreamImageID] = true
+	for _, ref := range containers {
+		if capturePolicy.DecideService(ref.Service).Image.Capture {
+			taken = append(taken, ref)
+			kept[ref.UpstreamImageID] = true
 		}
 	}
-	for _, c := range containers {
-		decision := capturePolicy.DecideService(c.Service).Image
-		if decision.Capture || reported[c.Service] || (c.UpstreamImageID != "" && kept[c.UpstreamImageID]) {
+	for _, ref := range containers {
+		decision := capturePolicy.DecideService(ref.Service).Image
+		if decision.Capture || reported[ref.Service] || (ref.UpstreamImageID != "" && kept[ref.UpstreamImageID]) {
 			continue
 		}
-		reported[c.Service] = true
-		zerolog.Ctx(ctx).Warn().Str("service", c.Service).Str("image", c.UpstreamImageRef).
+		reported[ref.Service] = true
+		zerolog.Ctx(ctx).Warn().Str("service", ref.Service).Str("image", ref.UpstreamImageRef).
 			Str("reason", decision.Source).Msg("image is not captured")
 		skipped = append(skipped, model.SkippedImage{
-			Service: c.Service,
-			Image:   c.UpstreamImageRef,
+			Service: ref.Service,
+			Image:   ref.UpstreamImageRef,
 			Reason:  model.SkipReasonExcluded,
 			Detail:  decision.Source,
 		})
@@ -115,37 +115,37 @@ func imageCaptureContainers(
 
 // resolveUpstream is model.ResolveUpstream, with what it cannot say logged:
 // a container off the image compose created it on, and a layer naming no upstream.
-func resolveUpstream(ctx context.Context, res model.IntrospectionResult, c model.Container) (model.ImageDigestID, string) {
-	if c.Inspect.Config == nil {
+func resolveUpstream(ctx context.Context, introspection model.IntrospectionResult, container model.Container) (model.ImageDigestID, string) {
+	if container.Inspect.Config == nil {
 		return "", ""
 	}
-	warnOnComposeImageMismatch(ctx, res, c)
+	warnOnComposeImageMismatch(ctx, introspection, container)
 
-	id, ref, ok := model.ResolveUpstream(res, c)
+	id, ref, ok := model.ResolveUpstream(introspection, container)
 	if !ok {
-		zerolog.Ctx(ctx).Warn().Str("container", c.ID).Str("image", c.Inspect.Config.Image).
+		zerolog.Ctx(ctx).Warn().Str("container", container.ID).Str("image", container.Inspect.Config.Image).
 			Msg("the writable layer names no image it was taken over; only the writable layer is captured")
 	}
 	return id, ref
 }
 
-// unresolvedImages returns the containers whose upstream resolveUpstream could not name.
-func unresolvedImages(res model.IntrospectionResult, containers []model.ContainerRef) []model.UnresolvedImage {
+// newUnresolvedImages returns the containers whose upstream resolveUpstream could not name.
+func newUnresolvedImages(introspection model.IntrospectionResult, containers []model.ContainerRef) []model.UnresolvedImage {
 	images := map[string]string{}
-	for _, svc := range res.Project.Services {
-		for _, c := range svc.Containers {
-			if c.Inspect.Config != nil {
-				images[c.ID] = c.Inspect.Config.Image
+	for _, svc := range introspection.Project.Services {
+		for _, container := range svc.Containers {
+			if container.Inspect.Config != nil {
+				images[container.ID] = container.Inspect.Config.Image
 			}
 		}
 	}
 	var unresolved []model.UnresolvedImage
-	for _, c := range containers {
-		if c.UpstreamImageID != "" {
+	for _, ref := range containers {
+		if ref.UpstreamImageID != "" {
 			continue
 		}
 		unresolved = append(unresolved, model.UnresolvedImage{
-			Service: c.Service, Replica: c.Replica, Container: c.Name, Image: images[c.ID],
+			Service: ref.Service, Replica: ref.Replica, Container: ref.Name, Image: images[ref.ID],
 		})
 	}
 	return unresolved
@@ -155,13 +155,13 @@ func unresolvedImages(res model.IntrospectionResult, containers []model.Containe
 // created it from; the image is still what the capture goes by. Under the containerd
 // image store a container names a multi-platform index and compose one manifest in it,
 // which tells nothing, so an index is not compared.
-func warnOnComposeImageMismatch(ctx context.Context, res model.IntrospectionResult, c model.Container) {
-	imageID := c.ImageID()
-	created, ok := c.Labels[composeImageLabel]
-	if !ok || imageID == "" || created == imageID.String() || isImageIndex(res.Images[imageID]) {
+func warnOnComposeImageMismatch(ctx context.Context, introspection model.IntrospectionResult, container model.Container) {
+	imageID := container.ImageID()
+	created, ok := container.Labels[composeImageLabel]
+	if !ok || imageID == "" || created == imageID.String() || isImageIndex(introspection.Images[imageID]) {
 		return
 	}
-	zerolog.Ctx(ctx).Warn().Str("container", c.ID).Str("image_id", imageID.String()).
+	zerolog.Ctx(ctx).Warn().Str("container", container.ID).Str("image_id", imageID.String()).
 		Str("compose_image", created).Msg("the container runs on another image than compose created it from")
 }
 
@@ -179,21 +179,21 @@ func isImageIndex(inspect image.InspectResponse) bool {
 	return false
 }
 
-// imageCaptures lists the distinct images the containers run on, described from
+// newImageCaptures lists the distinct images the containers run on, described from
 // the introspected daemon; one the daemon no longer holds is named by reference.
-func imageCaptures(res model.IntrospectionResult, containers []model.ContainerRef) []model.ImageCaptureRequest {
+func newImageCaptures(introspection model.IntrospectionResult, containers []model.ContainerRef) []model.ImageCaptureRequest {
 	var reqs []model.ImageCaptureRequest
-	for _, c := range containers {
-		if c.UpstreamImageID == "" || slices.ContainsFunc(reqs, func(req model.ImageCaptureRequest) bool {
-			return req.Image.ID == c.UpstreamImageID
+	for _, ref := range containers {
+		if ref.UpstreamImageID == "" || slices.ContainsFunc(reqs, func(req model.ImageCaptureRequest) bool {
+			return req.Image.ID == ref.UpstreamImageID
 		}) {
 			continue
 		}
-		imageToCapture := model.Image{ID: c.UpstreamImageID}
-		if c.UpstreamImageRef != "" {
-			imageToCapture.Refs = []string{c.UpstreamImageRef}
+		imageToCapture := model.Image{ID: ref.UpstreamImageID}
+		if ref.UpstreamImageRef != "" {
+			imageToCapture.Refs = []string{ref.UpstreamImageRef}
 		}
-		inspect, existsInDaemon := res.Images[c.UpstreamImageID]
+		inspect, existsInDaemon := introspection.Images[ref.UpstreamImageID]
 		if existsInDaemon {
 			for _, tag := range inspect.RepoTags {
 				if !slices.Contains(imageToCapture.Refs, tag) {

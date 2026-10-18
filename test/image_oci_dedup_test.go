@@ -114,7 +114,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              composeProjectStore,
-		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
+		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &ociDedupEnv{

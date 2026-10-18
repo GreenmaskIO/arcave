@@ -27,9 +27,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// buildBackends builds one backend per volume, all rooted at the one store, in
+// newBackends builds one backend per volume, all rooted at the one store, in
 // input order. All up front: an unregistered backend fails before any byte moves.
-func (s *Service) buildBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
+func (s *Service) newBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
 	backends := make([]model.VolumeSnapshotBackend, len(volumes))
 	for i, volume := range volumes {
 		backend, err := s.snapshotBackendRegistry.New(model.BackendSpec{
@@ -57,7 +57,7 @@ func (s *Service) captureVolumes(
 	labels map[string]string,
 ) (model.Savepoint, error) {
 	createdAt := time.Now()
-	record := model.Savepoint{
+	savepoint := model.Savepoint{
 		ID:          model.NewSavepointID(),
 		Name:        name,
 		Description: description,
@@ -66,81 +66,81 @@ func (s *Service) captureVolumes(
 		Stats:       make([]model.SnapshotStat, len(backends)),
 	}
 
-	if err := s.requireEmptyTree(ctx, record.ID); err != nil {
+	if err := s.requireEmptyTree(ctx, savepoint.ID); err != nil {
 		return model.Savepoint{}, err
 	}
 
-	err := s.forEachBackend(ctx, record.ID, backends, "snapshot",
+	err := s.forEachBackend(ctx, savepoint.ID, backends, "snapshot",
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{
-				SnapshotID: record.ID,
-				Labels:     record.Labels,
+				SnapshotID: savepoint.ID,
+				Labels:     savepoint.Labels,
 			})
 			if err != nil {
 				return fmt.Errorf("capture volume: %w", err)
 			}
-			record.Stats[i] = stat
+			savepoint.Stats[i] = stat
 			return nil
 		})
 	if err != nil {
 		// No record names what the fan-out wrote, so nothing reads it, and a failure
 		// path is the worst moment to delete data.
-		zerolog.Ctx(ctx).Warn().Str("snapshot_id", record.ID.String()).
+		zerolog.Ctx(ctx).Warn().Str("snapshot_id", savepoint.ID.String()).
 			Msg("the partial capture is retained for a later gc")
 		return model.Savepoint{}, err
 	}
-	return record, nil
+	return savepoint, nil
 }
 
 // performSavepoint captures the volumes and the container layers, writes the
 // compose spec, and commits the record last: that write is the commit, and on any
-// failure the returned record is zero. killed are the containers the stop killed.
+// failure the returned savepoint is zero. killed are the containers the stop killed.
 func (s *Service) performSavepoint(
 	ctx context.Context,
-	ws workingSet,
+	working workingSet,
 	killed []string,
 	name string,
 	description string,
 	labels map[string]string,
 ) (model.Savepoint, error) {
-	record, err := s.captureVolumes(ctx, ws.backends, name, description, labels)
+	savepoint, err := s.captureVolumes(ctx, working.backends, name, description, labels)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
 	// The images first: a writable layer's stored_bytes is then what it adds over its image.
-	record.Images, err = s.captureImages(ctx, record.ID, ws.images.upstreams)
+	savepoint.Images, err = s.captureImages(ctx, savepoint.ID, working.images.upstreams)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
-	record.WritableLayers, err = s.captureWritableLayers(ctx, record.ID, ws.images.writableLayers)
+	savepoint.WritableLayers, err = s.captureWritableLayers(ctx, savepoint.ID, working.images.writableLayers)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
-	if err := s.savepointRepo.SaveSpec(ctx, record.ID, ws.spec); err != nil {
-		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", record.ID, err)
+	if err := s.savepointRepo.SaveSpec(ctx, savepoint.ID, working.spec); err != nil {
+		return model.Savepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", savepoint.ID, err)
 	}
-	record.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML}
-	record.NotCovered = ws.notCovered(killed)
+	savepoint.Spec = &model.SpecRef{Format: model.SpecFormatComposeYAML}
+	savepoint.NotCovered = working.newNotCovered(killed)
 
-	if err := s.savepointRepo.SaveSavepoint(ctx, record); err != nil {
-		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", record.ID, err)
+	if err := s.savepointRepo.SaveSavepoint(ctx, savepoint); err != nil {
+		return model.Savepoint{}, fmt.Errorf("commit savepoint %s: %w", savepoint.ID, err)
 	}
-	return record, nil
+	return savepoint, nil
 }
 
 // restoreVolumes writes every volume back, each carrying the payload its own
 // capture reported; stats index alike with backends.
 func (s *Service) restoreVolumes(
-	ctx context.Context, record model.Savepoint, backends []model.VolumeSnapshotBackend,
+	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
 ) error {
-	return s.forEachBackend(ctx, record.ID, backends, "restore",
+	return s.forEachBackend(ctx, savepoint.ID, backends, "restore",
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			if err := backend.Restore(ctx, model.BackendRestoreRequest{
-				SnapshotID: record.ID,
-				Payload:    record.Stats[i].Payload,
+				SnapshotID: savepoint.ID,
+				Payload:    savepoint.Stats[i].Payload,
 			}); err != nil {
 				return fmt.Errorf("restore capture: %w", err)
 			}
@@ -159,27 +159,27 @@ func (s *Service) restoreVolumes(
 // capture that died mid-fan-out left behind, which no stat names.
 func (s *Service) dropSavepoint(
 	ctx context.Context,
-	record model.Savepoint,
+	savepoint model.Savepoint,
 	backends []model.VolumeSnapshotBackend,
 ) error {
-	if err := s.savepointRepo.DeleteSavepoint(ctx, record.ID); err != nil {
-		return fmt.Errorf("uncommit savepoint %s: %w", record.ID, err)
+	if err := s.savepointRepo.DeleteSavepoint(ctx, savepoint.ID); err != nil {
+		return fmt.Errorf("uncommit savepoint %s: %w", savepoint.ID, err)
 	}
 
-	removeErr := s.forEachBackend(ctx, record.ID, backends, "remove",
+	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, "remove",
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			if err := backend.Remove(ctx, model.BackendRemoveRequest{
-				SnapshotID: record.ID,
-				Payload:    record.Stats[i].Payload,
+				SnapshotID: savepoint.ID,
+				Payload:    savepoint.Stats[i].Payload,
 			}); err != nil {
 				return fmt.Errorf("remove capture: %w", err)
 			}
 			return nil
 		})
 
-	sweepErr := s.sweepTree(ctx, record.ID)
+	sweepErr := s.sweepTree(ctx, savepoint.ID)
 	if sweepErr != nil {
-		sweepErr = fmt.Errorf("remove capture directory %s: %w", record.ID, sweepErr)
+		sweepErr = fmt.Errorf("remove capture directory %s: %w", savepoint.ID, sweepErr)
 	}
 	return errors.Join(removeErr, sweepErr)
 }

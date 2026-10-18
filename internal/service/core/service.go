@@ -29,7 +29,7 @@ import (
 
 type savepointRepository interface {
 	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
-	SaveSavepoint(ctx context.Context, record model.Savepoint) error
+	SaveSavepoint(ctx context.Context, savepoint model.Savepoint) error
 	SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error
 	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
 	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
@@ -46,7 +46,7 @@ type composeIntrospector interface {
 
 // projectAssembler builds the spec of a live compose project out of its introspection.
 type projectAssembler interface {
-	Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error)
+	Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error)
 }
 
 // specCodec moves a spec through the artifact a savepoint commits; Parse is compose's
@@ -160,30 +160,30 @@ type Service struct {
 	maxConcurrentOperations int
 }
 
-func New(d Deps) *Service {
-	if d.Session.IsNil() {
-		d.Session = model.DefaultSession
+func New(deps Deps) *Service {
+	if deps.Session.IsNil() {
+		deps.Session = model.DefaultSession
 	}
 	return &Service{
-		savepointRepo:           d.SavepointRepo,
-		projectLocker:           d.ProjectLocker,
-		composeInspector:        d.ComposeInspector,
-		projectAssembler:        d.ProjectAssembler,
-		specCodec:               d.SpecCodec,
-		composeRunner:           d.ComposeRunner,
-		volumeRemover:           d.VolumeRemover,
-		imageBackend:            d.ImageBackend,
-		containerRebuilder:      d.ContainerRebuilder,
-		imageLookup:             d.ImageLookup,
-		snapshotBackendRegistry: d.BackendRegistry,
-		inflightMarker:          d.Inflight,
-		store:                   d.Store,
-		captureDefaults:         d.CaptureDefaults,
-		session:                 d.Session,
-		composeProject:          d.ComposeProject,
-		sessions:                d.Sessions,
-		minDaemonMajor:          d.MinDaemonMajor,
-		maxConcurrentOperations: fanOutLimit(d.Concurrency),
+		savepointRepo:           deps.SavepointRepo,
+		projectLocker:           deps.ProjectLocker,
+		composeInspector:        deps.ComposeInspector,
+		projectAssembler:        deps.ProjectAssembler,
+		specCodec:               deps.SpecCodec,
+		composeRunner:           deps.ComposeRunner,
+		volumeRemover:           deps.VolumeRemover,
+		imageBackend:            deps.ImageBackend,
+		containerRebuilder:      deps.ContainerRebuilder,
+		imageLookup:             deps.ImageLookup,
+		snapshotBackendRegistry: deps.BackendRegistry,
+		inflightMarker:          deps.Inflight,
+		store:                   deps.Store,
+		captureDefaults:         deps.CaptureDefaults,
+		session:                 deps.Session,
+		composeProject:          deps.ComposeProject,
+		sessions:                deps.Sessions,
+		minDaemonMajor:          deps.MinDaemonMajor,
+		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
 	}
 }
 

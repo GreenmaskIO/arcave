@@ -195,11 +195,11 @@ func (r *Repository) CopySession(ctx context.Context, from, to model.SessionID, 
 		return 0, fmt.Errorf("list session %s: %w", from, err)
 	}
 
-	n, err := copySessionTree(ctx, r.storage, from, to, rootKeys(files, except), dirNames(dirs))
+	copiedBytes, err := copySessionTree(ctx, r.storage, from, to, rootKeys(files, except), dirNames(dirs))
 	if err != nil {
-		return n, fmt.Errorf("copy session %s to %s: %w", from, to, err)
+		return copiedBytes, fmt.Errorf("copy session %s to %s: %w", from, to, err)
 	}
-	return n, nil
+	return copiedBytes, nil
 }
 
 // IsSessionTreeEmpty reports whether sessions/<id> holds no object at all, a heartbeat included.
@@ -279,18 +279,18 @@ func (r *Repository) load(ctx context.Context, id model.SessionID) (model.Sessio
 		return model.Session{}, false, nil
 	}
 
-	src, err := r.storage.GetObject(ctx, recordKey(id))
+	obj, err := r.storage.GetObject(ctx, recordKey(id))
 	if err != nil {
 		return model.Session{}, false, fmt.Errorf("read session record %s: %w", id, err)
 	}
 	defer func() {
-		if err := src.Close(); err != nil {
+		if err := obj.Close(); err != nil {
 			log.Ctx(ctx).Debug().Err(err).Str("session", id.String()).Msg("close session record")
 		}
 	}()
 
 	var record model.Session
-	if err := json.NewDecoder(src).Decode(&record); err != nil {
+	if err := json.NewDecoder(obj).Decode(&record); err != nil {
 		return model.Session{}, false, fmt.Errorf("parse session record %s: %w", id, err)
 	}
 	return record, true, nil

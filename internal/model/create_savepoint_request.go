@@ -31,14 +31,14 @@ type CreateSavepointRequest struct {
 
 // Validate refuses a name carrying "/", which a <session>/<savepoint> address splits on,
 // and one rollback would read as another ref: RefLatest or a savepoint id.
-func (r CreateSavepointRequest) Validate() error {
+func (m CreateSavepointRequest) Validate() error {
 	switch {
-	case strings.Contains(r.Name, "/"):
-		return fmt.Errorf("%w %q: must not contain \"/\"", ErrInvalidSavepointName, r.Name)
-	case r.Name == RefLatest:
-		return fmt.Errorf("%w %q: is reserved", ErrInvalidSavepointName, r.Name)
-	case r.Name != "" && SavepointID(r.Name).Validate() == nil:
-		return fmt.Errorf("%w %q: must not be a savepoint id", ErrInvalidSavepointName, r.Name)
+	case strings.Contains(m.Name, "/"):
+		return fmt.Errorf("%w %q: must not contain \"/\"", ErrInvalidSavepointName, m.Name)
+	case m.Name == RefLatest:
+		return fmt.Errorf("%w %q: is reserved", ErrInvalidSavepointName, m.Name)
+	case m.Name != "" && SavepointID(m.Name).Validate() == nil:
+		return fmt.Errorf("%w %q: must not be a savepoint id", ErrInvalidSavepointName, m.Name)
 	}
 	return nil
 }

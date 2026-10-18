@@ -21,9 +21,9 @@ import (
 	"github.com/ziflex/lecho/v3"
 )
 
-// enrichLogger stamps the request's logger into its context and reports the
-// request's start. Its completion line is skipped: journalAnswered writes it.
-func enrichLogger(logger *lecho.Logger) echo.MiddlewareFunc {
+// newEnrichLogger stamps the request's logger into its context and reports the
+// request's start. Its completion line is skipped: newJournalLogger writes it.
+func newEnrichLogger(logger *lecho.Logger) echo.MiddlewareFunc {
 	return lecho.Middleware(lecho.Config{
 		Logger: logger,
 		Enricher: func(_ echo.Context, l zerolog.Context) zerolog.Context {
@@ -34,10 +34,10 @@ func enrichLogger(logger *lecho.Logger) echo.MiddlewareFunc {
 	})
 }
 
-// journalAnswered reports the end of every request — at DEBUG when an operation
+// newJournalLogger reports the end of every request — at DEBUG when an operation
 // answered, at ERROR when an error escaped one — and is the only place the
 // cause of a 500 is written down.
-func journalAnswered() echo.MiddlewareFunc {
+func newJournalLogger() echo.MiddlewareFunc {
 	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		// HandleError lets the error handler pick the status before the line is
 		// written, or the journal reports one it decided itself.
@@ -76,7 +76,7 @@ func logStarted(c echo.Context) {
 	evt.Msg("restic rest request")
 }
 
-// logAnswered writes one completion line through the logger enrichLogger stamped.
+// logAnswered writes one completion line through the logger newEnrichLogger stamped.
 func logAnswered(c echo.Context, v middleware.RequestLoggerValues) error {
 	logger := zerolog.Ctx(c.Request().Context())
 	evt := logger.Debug()

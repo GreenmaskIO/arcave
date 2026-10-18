@@ -69,11 +69,11 @@ func labelChanges(labels map[string]string) []string {
 // SaveImage streams one image out of the daemon as a save archive. The caller
 // owns the stream and closes it.
 func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
-	src, err := e.api.ImageSave(ctx, []string{imageID.String()})
+	archive, err := e.api.ImageSave(ctx, []string{imageID.String()})
 	if err != nil {
 		return nil, fmt.Errorf("save image %s: %w", imageID, err)
 	}
-	return src, nil
+	return archive, nil
 }
 
 // RemoveImage drops one image from the daemon. Not forced, so an image something

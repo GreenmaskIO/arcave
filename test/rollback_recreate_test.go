@@ -202,7 +202,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
-		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
+		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &recreateEnv{

@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	sessionListFlagAll bool
+	sessionListAll bool
 
 	sessionListCmd = &cobra.Command{
 		Use:   "list",
@@ -39,12 +39,12 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
-		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(), model.ListSessionsRequest{All: sessionListFlagAll, Ref: sessionRef})
+		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(), model.ListSessionsRequest{All: sessionListAll, Ref: sessionRef})
 	})
 }
 
 func init() {
-	sessionListCmd.Flags().BoolVar(&sessionListFlagAll, "all", false,
+	sessionListCmd.Flags().BoolVar(&sessionListAll, "all", false,
 		"Also list the trees without a record: forks cloning, failed or left incomplete")
 	sessionCmd.AddCommand(sessionListCmd)
 }

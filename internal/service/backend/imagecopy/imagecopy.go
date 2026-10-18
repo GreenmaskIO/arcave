@@ -129,8 +129,8 @@ func NewCopier(
 
 // writableLayerArchiver returns the archiver of a writable layer backend; one the copier was not built with
 // is refused before anything is committed or loaded.
-func (c *Copier) writableLayerArchiver(kind model.ImageBackendKind) (ImageArchiver, error) {
-	archiver, ok := c.writableLayerArchivers[kind]
+func (s *Copier) writableLayerArchiver(kind model.ImageBackendKind) (ImageArchiver, error) {
+	archiver, ok := s.writableLayerArchivers[kind]
 	if !ok {
 		return nil, fmt.Errorf("%w: image backend %q", model.ErrUnsupportedImageArchive, kind)
 	}
@@ -140,29 +140,29 @@ func (c *Copier) writableLayerArchiver(kind model.ImageBackendKind) (ImageArchiv
 // CaptureWritableLayer commits one stopped container, stores the committed image and
 // drops it from the daemon. The commit is stamped with the container's upstream, so a
 // container later rebuilt on this layer still names it.
-func (c *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error) {
-	archiver, err := c.writableLayerArchiver(req.Backend)
+func (s *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error) {
+	archiver, err := s.writableLayerArchiver(req.Backend)
 	if err != nil {
 		return model.WritableLayer{}, err
 	}
-	imageStore, err := writableLayerStorage(c.store, req.SnapshotID, req.Container.Service, req.Container.Replica)
+	imageStore, err := writableLayerStorage(s.store, req.SnapshotID, req.Container.Service, req.Container.Replica)
 	if err != nil {
 		return model.WritableLayer{}, err
 	}
 	comment := "arcave savepoint " + req.SnapshotID.String()
-	imageID, err := c.dockerImageEngine.CommitContainer(ctx, req.Container.ID, comment, upstreamLabels(req.Container))
+	imageID, err := s.dockerImageEngine.CommitContainer(ctx, req.Container.ID, comment, newUpstreamLabels(req.Container))
 	if err != nil {
 		return model.WritableLayer{}, err
 	}
 
-	size, err := c.storeImage(ctx, archiver, imageStore, imageID)
+	size, err := s.storeImage(ctx, archiver, imageStore, imageID)
 	if err != nil {
 		return model.WritableLayer{}, err
 	}
 
 	// Best-effort: the store is the source of truth, and a capture that is written
 	// has succeeded whether or not the daemon's dangling copy could be dropped.
-	if err := c.dockerImageEngine.RemoveImage(ctx, imageID); err != nil {
+	if err := s.dockerImageEngine.RemoveImage(ctx, imageID); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("image_id", imageID.String()).
 			Msg("committed image is stored but could not be removed from the daemon")
 	}
@@ -180,9 +180,9 @@ func (c *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLay
 	}, nil
 }
 
-// upstreamLabels are the labels a commit carries forward; none for what is
+// newUpstreamLabels are the labels a commit carries forward; none for what is
 // unknown, so a layer never names an upstream it was not told.
-func upstreamLabels(container model.ContainerRef) map[string]string {
+func newUpstreamLabels(container model.ContainerRef) map[string]string {
 	var labels map[string]string
 	if container.UpstreamImageID != "" {
 		labels = map[string]string{model.BaseImageIDLabel: container.UpstreamImageID.String()}
@@ -200,13 +200,13 @@ func upstreamLabels(container model.ContainerRef) map[string]string {
 // naming it. An image neither the store nor the daemon holds, or one the daemon
 // fails to hand over, is recorded by identity alone: a missing image must not
 // cost the savepoint its data.
-func (c *Copier) CaptureImage(
+func (s *Copier) CaptureImage(
 	ctx context.Context, req model.ImageCaptureRequest,
 ) (model.Image, error) {
 	image := req.Image
 	image.Stored, image.StoredBytes = false, 0
 
-	upstreamStore, err := imageStorage(c.store, image.ID)
+	upstreamStore, err := imageStorage(s.store, image.ID)
 	if err != nil {
 		return model.Image{}, err
 	}
@@ -224,7 +224,7 @@ func (c *Copier) CaptureImage(
 		log.Warn().Msg("the image is in neither the store nor the daemon; only its identity is recorded")
 		return image, nil
 	}
-	size, err := c.storeImage(ctx, c.imageArchiver, upstreamStore, image.ID)
+	size, err := s.storeImage(ctx, s.imageArchiver, upstreamStore, image.ID)
 	if err != nil {
 		if ctx.Err() != nil {
 			return model.Image{}, err
@@ -238,10 +238,10 @@ func (c *Copier) CaptureImage(
 }
 
 // storeImage streams one image out of the daemon and hands it to archiver.
-func (c *Copier) storeImage(
+func (s *Copier) storeImage(
 	ctx context.Context, archiver ImageArchiver, imageStore storages.Writer, imageID model.ImageDigestID,
 ) (StoredSize, error) {
-	archive, err := c.dockerImageEngine.SaveImage(ctx, imageID)
+	archive, err := s.dockerImageEngine.SaveImage(ctx, imageID)
 	if err != nil {
 		return StoredSize{}, err
 	}
@@ -256,12 +256,12 @@ func (c *Copier) storeImage(
 // RestoreWritableLayer loads one recorded writable layer's committed image back into the
 // daemon and tags it req.Tag. An image the daemon already holds is only tagged: a load costs the whole archive,
 // and the id in the record identifies it either way.
-func (c *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error) {
-	archiver, err := c.writableLayerArchiver(req.Layer.ImageBackend)
+func (s *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error) {
+	archiver, err := s.writableLayerArchiver(req.Layer.ImageBackend)
 	if err != nil {
 		return model.WritableLayerRestoreResult{}, err
 	}
-	imageStore, err := writableLayerStorage(c.store, req.SnapshotID, req.Layer.Service, req.Layer.Replica)
+	imageStore, err := writableLayerStorage(s.store, req.SnapshotID, req.Layer.Service, req.Layer.Replica)
 	if err != nil {
 		return model.WritableLayerRestoreResult{}, err
 	}
@@ -270,17 +270,17 @@ func (c *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLay
 			req.Layer.Service, req.Layer.Replica)
 	}
 
-	present, err := c.dockerImageEngine.ImageExists(ctx, req.Layer.CommittedImageID)
+	present, err := s.dockerImageEngine.ImageExists(ctx, req.Layer.CommittedImageID)
 	if err != nil {
 		return model.WritableLayerRestoreResult{}, err
 	}
 	if !present {
-		if err := c.loadImage(ctx, archiver, imageStore, req.Layer.CommittedImageID); err != nil {
+		if err := s.loadImage(ctx, archiver, imageStore, req.Layer.CommittedImageID); err != nil {
 			return model.WritableLayerRestoreResult{}, err
 		}
 	}
 
-	if err := c.dockerImageEngine.TagImage(ctx, req.Layer.CommittedImageID, req.Tag); err != nil {
+	if err := s.dockerImageEngine.TagImage(ctx, req.Layer.CommittedImageID, req.Tag); err != nil {
 		return model.WritableLayerRestoreResult{}, err
 	}
 	return model.WritableLayerRestoreResult{
@@ -295,7 +295,7 @@ func (c *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLay
 // loadImage has archiver render the archive into a pipe the daemon reads from,
 // then confirms the daemon holds the id the record names: a load resolving to
 // another image must fail here and not at the rebuild.
-func (c *Copier) loadImage(
+func (s *Copier) loadImage(
 	ctx context.Context, archiver ImageArchiver, imageStore storages.Storager, imageID model.ImageDigestID,
 ) error {
 	pr, pw := io.Pipe()
@@ -315,7 +315,7 @@ func (c *Copier) loadImage(
 		pw.CloseWithError(err)
 	}()
 
-	if err := c.dockerImageEngine.LoadImage(ctx, pr); err != nil {
+	if err := s.dockerImageEngine.LoadImage(ctx, pr); err != nil {
 		return fmt.Errorf("load image: %w", err)
 	}
 	// The daemon reports a failed load in-band and the reader never sees it, so the
@@ -324,7 +324,7 @@ func (c *Copier) loadImage(
 		return err
 	}
 
-	present, err := c.dockerImageEngine.ImageExists(ctx, imageID)
+	present, err := s.dockerImageEngine.ImageExists(ctx, imageID)
 	if err != nil {
 		return err
 	}

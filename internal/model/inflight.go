@@ -61,6 +61,6 @@ type InterruptedRollbackError struct {
 	Marker InflightMarker
 }
 
-func (e *InterruptedRollbackError) Error() string {
-	return fmt.Sprintf("rollback to savepoint %s was interrupted (%s)", e.Marker.Target, e.Marker.Phase)
+func (m *InterruptedRollbackError) Error() string {
+	return fmt.Sprintf("rollback to savepoint %s was interrupted (%s)", m.Marker.Target, m.Marker.Phase)
 }

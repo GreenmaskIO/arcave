@@ -22,29 +22,30 @@ import "github.com/greenmaskio/arcave/internal/model"
 // it, never on the volume, whose labels compose cannot change without recreating it. A
 // mount is stamped by target alone, so the replicas' anonymous volumes at one target are
 // stamped with one decision, the last replica's.
-func Stamps(res model.IntrospectionResult, policy model.CapturePolicy) map[string]map[string]string {
-	all := map[string]map[string]string{}
-	for _, svc := range res.Project.Services {
+func Stamps(introspection model.IntrospectionResult, capturePolicy model.CapturePolicy) map[string]map[string]string {
+	stampsByService := map[string]map[string]string{}
+	for _, svc := range introspection.Project.Services {
 		stamps := map[string]string{}
-		images := policy.DecideService(svc.Name)
-		stamps[model.StampWritableLayer] = stamp(images.WritableLayer.CaptureDecision, string(images.WritableLayer.Backend))
-		stamps[model.StampImage] = stamp(images.Image, "")
+		serviceDecision := capturePolicy.DecideService(svc.Name)
+		writableLayer := serviceDecision.WritableLayer
+		stamps[model.StampWritableLayer] = stamp(writableLayer.CaptureDecision, string(writableLayer.Backend))
+		stamps[model.StampImage] = stamp(serviceDecision.Image, "")
 
-		for _, sv := range svc.Volumes {
+		for _, mount := range svc.Volumes {
 			var decision model.VolumeDecision
 			switch {
-			case sv.Type == model.VolumeTypeNamed && sv.InheritedFrom == "":
-				decision = policy.DecideNamedVolume(sv.VolumeName)
-			case isMountOwnedByService(sv):
-				decision = policy.DecideMount(model.MountRef{Service: svc.Name, Replica: sv.Replica, Target: sv.Target})
+			case mount.Type == model.VolumeTypeNamed && mount.InheritedFrom == "":
+				decision = capturePolicy.DecideNamedVolume(mount.VolumeName)
+			case isMountOwnedByService(mount):
+				decision = capturePolicy.DecideMount(model.MountRef{Service: svc.Name, Replica: mount.Replica, Target: mount.Target})
 			default:
 				continue
 			}
-			stamps[model.MountStamp(sv.Target)] = stamp(decision.CaptureDecision, string(decision.Backend))
+			stamps[model.MountStamp(mount.Target)] = stamp(decision.CaptureDecision, string(decision.Backend))
 		}
-		all[svc.Name] = stamps
+		stampsByService[svc.Name] = stamps
 	}
-	return all
+	return stampsByService
 }
 
 // stamp renders one decision; backend is named only for a unit captured.

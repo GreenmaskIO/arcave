@@ -207,7 +207,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
-		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
+		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &imageRollbackEnv{

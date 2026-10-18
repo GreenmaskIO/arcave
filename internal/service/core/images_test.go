@@ -689,7 +689,7 @@ func TestRestoredLayerTag_IsAlwaysNameable(t *testing.T) {
 	}
 }
 
-func TestPairReplicas(t *testing.T) {
+func TestNewReplicaPairs(t *testing.T) {
 	tests := []struct {
 		name     string
 		recorded []int
@@ -722,7 +722,7 @@ func TestPairReplicas(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := pairReplicas(tt.recorded, tt.created)
+			got, err := newReplicaPairs(tt.recorded, tt.created)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -806,7 +806,7 @@ func TestService_rebuildDivergentReplicas(t *testing.T) {
 					ref = demoRestoredTag(tt.recorded[0])
 				}
 				replicas = append(replicas, recordedReplica{
-					service: demoService, replica: n, containerName: demoContainerName(n), image: ref,
+					service: demoService, number: n, containerName: demoContainerName(n), image: ref,
 				})
 			}
 			built := demoIntrospection()
@@ -853,8 +853,8 @@ func TestService_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 	rebuilder := &mockContainerRebuilder{}
 	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	replicas := []recordedReplica{
-		{service: demoService, replica: 2, image: demoRestoredTag(1)},
-		{service: demoService, replica: 1, image: demoRestoredTag(1)},
+		{service: demoService, number: 2, image: demoRestoredTag(1)},
+		{service: demoService, number: 1, image: demoRestoredTag(1)},
 	}
 
 	// Act
@@ -883,8 +883,8 @@ func TestService_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T
 
 	// Act
 	err := s.rebuildDivergentReplicas(ctx, []recordedReplica{
-		{service: demoService, replica: 1, containerName: demoContainerName(1), image: demoRestoredTag(1)},
-		{service: demoService, replica: 3, containerName: demoContainerName(3), image: demoRestoredTag(3)},
+		{service: demoService, number: 1, containerName: demoContainerName(1), image: demoRestoredTag(1)},
+		{service: demoService, number: 3, containerName: demoContainerName(3), image: demoRestoredTag(3)},
 	})
 
 	// Assert
@@ -901,7 +901,7 @@ func createdID(n int) string { return fmt.Sprintf("created-%d", n) }
 // imageOf is the image recorded replica n is built on.
 func imageOf(replicas []recordedReplica, n int) string {
 	for _, replica := range replicas {
-		if replica.replica == n {
+		if replica.number == n {
 			return replica.image
 		}
 	}

@@ -38,8 +38,8 @@ type capturePolicyChange struct {
 // warnCapturePolicyDrift warns of every resource the latest savepoint captured otherwise
 // than this capture will: a label added or dropped, an override file left out, the labels
 // a rollback put back. Best-effort: a spec it cannot read is only logged.
-func (s *Service) warnCapturePolicyDrift(ctx context.Context, records []model.Savepoint, current *types.Project) {
-	latest, ok := findLatestSavepoint(records)
+func (s *Service) warnCapturePolicyDrift(ctx context.Context, savepoints []model.Savepoint, current *types.Project) {
+	latest, ok := findLatestSavepoint(savepoints)
 	if !ok {
 		return
 	}
@@ -56,12 +56,12 @@ func (s *Service) warnCapturePolicyDrift(ctx context.Context, records []model.Sa
 	}
 }
 
-// findLatestSavepoint is the newest of records: a SavepointID is a UUIDv7, so the greatest.
-func findLatestSavepoint(records []model.Savepoint) (model.Savepoint, bool) {
-	if len(records) == 0 {
+// findLatestSavepoint is the newest of savepoints: a SavepointID is a UUIDv7, so the greatest.
+func findLatestSavepoint(savepoints []model.Savepoint) (model.Savepoint, bool) {
+	if len(savepoints) == 0 {
 		return model.Savepoint{}, false
 	}
-	return slices.MaxFunc(records, func(a, b model.Savepoint) int {
+	return slices.MaxFunc(savepoints, func(a, b model.Savepoint) int {
 		return strings.Compare(string(a.ID), string(b.ID))
 	}), true
 }

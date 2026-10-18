@@ -45,85 +45,85 @@ const (
 	labelDisable = "label=disable"
 )
 
-// serviceConfig renders one service off its first replica. What the image
+// newServiceConfig renders one service off its first replica. What the image
 // contributed is declared verbatim.
-func (s assembly) serviceConfig(svc model.Service) types.ServiceConfig {
-	cfg := s.baseConfig(svc)
+func (a assembly) newServiceConfig(svc model.Service) types.ServiceConfig {
+	cfg := a.newBaseConfig(svc)
 	if len(svc.Containers) > 0 {
-		s.applyReplica(&cfg, svc.Name, svc.Containers[0])
+		a.applyReplica(&cfg, svc.Name, svc.Containers[0])
 	}
 	return cfg
 }
 
-// baseConfig is what the service declares apart from any one replica.
-func (s assembly) baseConfig(svc model.Service) types.ServiceConfig {
+// newBaseConfig is what the service declares apart from any one replica.
+func (a assembly) newBaseConfig(svc model.Service) types.ServiceConfig {
 	scale := len(svc.Containers)
 	return types.ServiceConfig{
 		Name:       svc.Name,
 		Image:      svc.Image,
 		Labels:     userLabels(svc.Labels),
 		Scale:      &scale,
-		DependsOn:  s.dependsOn(svc.Labels[api.DependenciesLabel]),
+		DependsOn:  a.parseDependsOn(svc.Labels[api.DependenciesLabel]),
 		PullPolicy: pullPolicyMissing,
-		Volumes:    serviceVolumes(ownVolumes(declaredVolumes(svc))),
+		Volumes:    newServiceVolumes(ownVolumes(declaredVolumes(svc))),
 	}
 }
 
 // applyReplica reads one replica's container into cfg.
-func (s assembly) applyReplica(cfg *types.ServiceConfig, svcName string, c model.Container) {
-	s.applyContainerConfig(cfg, c.Inspect)
-	s.applyImage(cfg, c)
-	s.applyHostConfig(cfg, c.Inspect)
+func (a assembly) applyReplica(cfg *types.ServiceConfig, service string, replica model.Container) {
+	a.applyContainerConfig(cfg, replica.Inspect)
+	a.applyImage(cfg, replica)
+	a.applyHostConfig(cfg, replica.Inspect)
 	cfg.Expose = unpublished(cfg.Expose, cfg.Ports)
-	applyNetworks(cfg, svcName, c.Inspect, s.netKeys)
-	s.applyLinks(cfg, c)
+	applyNetworks(cfg, service, replica.Inspect, a.networkKeys)
+	a.applyLinks(cfg, replica)
 	dropSharedNetworkFields(cfg)
-	s.dropHostNetworkHostname(cfg)
+	a.dropHostNetworkHostname(cfg)
 	addSharedDependencies(cfg)
 }
 
 // applyContainerConfig reads the container's own declaration.
-func (s assembly) applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
-	c := inspect.Config
-	if c == nil {
+func (a assembly) applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
+	config := inspect.Config
+	if config == nil {
 		return
 	}
-	cfg.Environment = types.NewMappingWithEquals(c.Env)
-	cfg.Command = types.ShellCommand(c.Cmd)
-	cfg.Entrypoint = types.ShellCommand(c.Entrypoint)
-	cfg.WorkingDir = c.WorkingDir
-	cfg.User = c.User
-	cfg.DomainName = c.Domainname
-	cfg.Hostname = declaredHostname(c.Hostname, inspect.ID)
-	cfg.Tty = c.Tty
-	cfg.StdinOpen = c.OpenStdin
-	cfg.StopSignal = c.StopSignal
-	cfg.Expose = exposedPorts(c.ExposedPorts)
-	cfg.HealthCheck = healthCheck(c.Healthcheck)
-	cfg.ContainerName = declaredContainerName(inspect.Name, c.Labels)
-	if labels := userLabels(c.Labels); labels != nil {
+	cfg.Environment = types.NewMappingWithEquals(config.Env)
+	cfg.Command = types.ShellCommand(config.Cmd)
+	cfg.Entrypoint = types.ShellCommand(config.Entrypoint)
+	cfg.WorkingDir = config.WorkingDir
+	cfg.User = config.User
+	cfg.DomainName = config.Domainname
+	cfg.Hostname = declaredHostname(config.Hostname, inspect.ID)
+	cfg.Tty = config.Tty
+	cfg.StdinOpen = config.OpenStdin
+	cfg.StopSignal = config.StopSignal
+	cfg.Expose = toExposedPorts(config.ExposedPorts)
+	cfg.HealthCheck = newHealthCheck(config.Healthcheck)
+	cfg.ContainerName = declaredContainerName(inspect.Name, config.Labels)
+	if labels := userLabels(config.Labels); labels != nil {
 		cfg.Labels = labels
 	}
-	if c.StopTimeout != nil && !s.isDaemonStopTimeout(*c.StopTimeout) {
-		grace := types.Duration(time.Duration(*c.StopTimeout) * time.Second)
+	if config.StopTimeout != nil && !a.isDaemonStopTimeout(*config.StopTimeout) {
+		grace := types.Duration(time.Duration(*config.StopTimeout) * time.Second)
 		cfg.StopGracePeriod = &grace
 	}
 }
 
 // applyImage declares the upstream rather than the arcave tag a rollback ran the
 // container on. An upstream no registry knows is never pulled.
-func (s assembly) applyImage(cfg *types.ServiceConfig, c model.Container) {
-	if c.Inspect.Config != nil && c.Inspect.Config.Image != "" {
-		cfg.Image = c.Inspect.Config.Image
+func (a assembly) applyImage(cfg *types.ServiceConfig, replica model.Container) {
+	if replica.Inspect.Config != nil && replica.Inspect.Config.Image != "" {
+		cfg.Image = replica.Inspect.Config.Image
 	}
-	id, ref, ok := model.ResolveUpstream(s.res, c)
+	id, ref, ok := model.ResolveUpstream(a.introspection, replica)
 	if !ok {
 		return
 	}
 	if ref != "" {
 		cfg.Image = ref
 	}
-	if inspect, found := s.res.Images[id]; found && isLocalImage(inspect) {
+	if inspect, found := a.introspection.Images[id]; found && isLocalImage(inspect) {
 		cfg.PullPolicy = pullPolicyNever
 	}
 }
@@ -139,108 +139,108 @@ func isLocalImage(inspect image.InspectResponse) bool {
 
 // applyHostConfig reads what the container was created against the host with.
 // What the daemon fills in by itself is left out.
-func (s assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
+func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
 	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
 		return
 	}
-	h := inspect.HostConfig
-	daemon := s.res.Daemon
+	hostConfig := inspect.HostConfig
+	daemon := a.introspection.Daemon
 
-	cfg.Ports = publishedPorts(h.PortBindings)
-	cfg.Restart = restartPolicy(h.RestartPolicy)
-	cfg.NetworkMode = declaredNetworkMode(string(h.NetworkMode), s.replicas, s.foreign)
-	cfg.Logging = logging(h.LogConfig, daemon.LoggingDriver)
-	cfg.ExtraHosts = extraHosts(h.ExtraHosts)
-	cfg.Tmpfs = tmpfsMounts(h.Tmpfs, cfg.Volumes)
+	cfg.Ports = newPublishedPorts(hostConfig.PortBindings)
+	cfg.Restart = toRestartPolicy(hostConfig.RestartPolicy)
+	cfg.NetworkMode = declaredNetworkMode(string(hostConfig.NetworkMode), a.serviceByReplica, a.foreignNames)
+	cfg.Logging = newLogging(hostConfig.LogConfig, daemon.LoggingDriver)
+	cfg.ExtraHosts = parseExtraHosts(hostConfig.ExtraHosts)
+	cfg.Tmpfs = toTmpfsList(hostConfig.Tmpfs, cfg.Volumes)
 
-	cfg.CapAdd = h.CapAdd
-	cfg.CapDrop = h.CapDrop
-	cfg.GroupAdd = h.GroupAdd
-	cfg.SecurityOpt = declaredSecurityOpt(h)
-	cfg.DNS = types.StringList(h.DNS)
-	cfg.DNSOpts = h.DNSOptions
-	cfg.DNSSearch = types.StringList(h.DNSSearch)
-	cfg.VolumesFrom = declaredVolumesFrom(h.VolumesFrom, s.replicas)
-	cfg.VolumeDriver = h.VolumeDriver
-	cfg.Sysctls = types.Mapping(h.Sysctls)
-	cfg.StorageOpt = h.StorageOpt
-	cfg.Privileged = h.Privileged
-	cfg.ReadOnly = h.ReadonlyRootfs
-	cfg.Init = h.Init
-	if h.ShmSize != defaultShmSize {
-		cfg.ShmSize = types.UnitBytes(h.ShmSize)
+	cfg.CapAdd = hostConfig.CapAdd
+	cfg.CapDrop = hostConfig.CapDrop
+	cfg.GroupAdd = hostConfig.GroupAdd
+	cfg.SecurityOpt = declaredSecurityOpt(hostConfig)
+	cfg.DNS = types.StringList(hostConfig.DNS)
+	cfg.DNSOpts = hostConfig.DNSOptions
+	cfg.DNSSearch = types.StringList(hostConfig.DNSSearch)
+	cfg.VolumesFrom = declaredVolumesFrom(hostConfig.VolumesFrom, a.serviceByReplica)
+	cfg.VolumeDriver = hostConfig.VolumeDriver
+	cfg.Sysctls = types.Mapping(hostConfig.Sysctls)
+	cfg.StorageOpt = hostConfig.StorageOpt
+	cfg.Privileged = hostConfig.Privileged
+	cfg.ReadOnly = hostConfig.ReadonlyRootfs
+	cfg.Init = hostConfig.Init
+	if hostConfig.ShmSize != defaultShmSize {
+		cfg.ShmSize = types.UnitBytes(hostConfig.ShmSize)
 	}
-	if h.Runtime != daemon.DefaultRuntime {
-		cfg.Runtime = h.Runtime
+	if hostConfig.Runtime != daemon.DefaultRuntime {
+		cfg.Runtime = hostConfig.Runtime
 	}
-	cfg.Isolation = string(h.Isolation)
-	cfg.Ipc = declaredNamespace(string(h.IpcMode), s.replicas, s.foreign)
-	cfg.Pid = declaredNamespace(string(h.PidMode), s.replicas, s.foreign)
-	cfg.Uts = string(h.UTSMode)
-	cfg.UserNSMode = string(h.UsernsMode)
-	cfg.Cgroup = string(h.CgroupnsMode)
-	cfg.OomScoreAdj = int64(h.OomScoreAdj)
+	cfg.Isolation = string(hostConfig.Isolation)
+	cfg.Ipc = declaredNamespace(string(hostConfig.IpcMode), a.serviceByReplica, a.foreignNames)
+	cfg.Pid = declaredNamespace(string(hostConfig.PidMode), a.serviceByReplica, a.foreignNames)
+	cfg.Uts = string(hostConfig.UTSMode)
+	cfg.UserNSMode = string(hostConfig.UsernsMode)
+	cfg.Cgroup = string(hostConfig.CgroupnsMode)
+	cfg.OomScoreAdj = int64(hostConfig.OomScoreAdj)
 
-	applyResources(cfg, h.Resources)
+	applyResources(cfg, hostConfig.Resources)
 }
 
 // dropHostNetworkHostname clears the hostname a container in the host's network reports:
 // it is the host's own.
-func (s assembly) dropHostNetworkHostname(cfg *types.ServiceConfig) {
-	if container.NetworkMode(cfg.NetworkMode).IsHost() && cfg.Hostname == s.res.Daemon.Name {
+func (a assembly) dropHostNetworkHostname(cfg *types.ServiceConfig) {
+	if container.NetworkMode(cfg.NetworkMode).IsHost() && cfg.Hostname == a.introspection.Daemon.Name {
 		cfg.Hostname = ""
 	}
 }
 
 // isDaemonStopTimeout reports a stop timeout the daemon stamped rather than the user declared.
-func (s assembly) isDaemonStopTimeout(seconds int) bool {
-	return s.res.Daemon.OperatingSystem == desktopOperatingSystem && seconds == desktopStopTimeout
+func (a assembly) isDaemonStopTimeout(seconds int) bool {
+	return a.introspection.Daemon.OperatingSystem == desktopOperatingSystem && seconds == desktopStopTimeout
 }
 
 // applyResources carries the cgroup limits. Only a limit that was set is
 // declared: a zero is docker's "unset", not a limit of zero.
-func applyResources(cfg *types.ServiceConfig, r container.Resources) {
-	cfg.MemLimit = types.UnitBytes(r.Memory)
-	cfg.MemReservation = types.UnitBytes(r.MemoryReservation)
-	cfg.CPUShares = r.CPUShares
-	cfg.CPUPeriod = r.CPUPeriod
-	cfg.CPUQuota = r.CPUQuota
-	cfg.CPURTPeriod = r.CPURealtimePeriod
-	cfg.CPURTRuntime = r.CPURealtimeRuntime
-	cfg.CPUSet = r.CpusetCpus
-	cfg.CgroupParent = r.CgroupParent
-	cfg.DeviceCgroupRules = r.DeviceCgroupRules
-	cfg.Devices = devices(r.Devices)
-	cfg.Ulimits = ulimits(r.Ulimits)
+func applyResources(cfg *types.ServiceConfig, resources container.Resources) {
+	cfg.MemLimit = types.UnitBytes(resources.Memory)
+	cfg.MemReservation = types.UnitBytes(resources.MemoryReservation)
+	cfg.CPUShares = resources.CPUShares
+	cfg.CPUPeriod = resources.CPUPeriod
+	cfg.CPUQuota = resources.CPUQuota
+	cfg.CPURTPeriod = resources.CPURealtimePeriod
+	cfg.CPURTRuntime = resources.CPURealtimeRuntime
+	cfg.CPUSet = resources.CpusetCpus
+	cfg.CgroupParent = resources.CgroupParent
+	cfg.DeviceCgroupRules = resources.DeviceCgroupRules
+	cfg.Devices = newDevices(resources.Devices)
+	cfg.Ulimits = newUlimits(resources.Ulimits)
 
-	if r.MemorySwap > 0 && r.MemorySwap != 2*r.Memory {
+	if resources.MemorySwap > 0 && resources.MemorySwap != 2*resources.Memory {
 		// Twice the memory is the swap the daemon gives a limit declared without one.
-		cfg.MemSwapLimit = types.UnitBytes(r.MemorySwap)
+		cfg.MemSwapLimit = types.UnitBytes(resources.MemorySwap)
 	}
-	if r.MemorySwappiness != nil && *r.MemorySwappiness >= 0 {
-		cfg.MemSwappiness = types.UnitBytes(*r.MemorySwappiness)
+	if resources.MemorySwappiness != nil && *resources.MemorySwappiness >= 0 {
+		cfg.MemSwappiness = types.UnitBytes(*resources.MemorySwappiness)
 	}
-	if r.NanoCPUs > 0 {
-		cfg.CPUS = float32(r.NanoCPUs) / nanoCPUs
+	if resources.NanoCPUs > 0 {
+		cfg.CPUS = float32(resources.NanoCPUs) / nanoCPUs
 	}
-	if r.PidsLimit != nil && *r.PidsLimit > 0 {
-		cfg.PidsLimit = *r.PidsLimit
+	if resources.PidsLimit != nil && *resources.PidsLimit > 0 {
+		cfg.PidsLimit = *resources.PidsLimit
 	}
-	if r.OomKillDisable != nil {
-		cfg.OomKillDisable = *r.OomKillDisable
+	if resources.OomKillDisable != nil {
+		cfg.OomKillDisable = *resources.OomKillDisable
 	}
 }
 
 // applyNetworks attaches the service to the project's networks. A container in a
 // predefined network is described by network_mode, and compose refuses both.
-func applyNetworks(cfg *types.ServiceConfig, svcName string, inspect container.InspectResponse, netKeys map[string]string) {
+func applyNetworks(cfg *types.ServiceConfig, service string, inspect container.InspectResponse, networkKeys map[string]string) {
 	if cfg.NetworkMode != "" || inspect.NetworkSettings == nil {
 		return
 	}
-	generated := []string{svcName, strings.TrimPrefix(inspect.Name, "/")}
+	generated := []string{service, strings.TrimPrefix(inspect.Name, "/")}
 	attached := make(map[string]*types.ServiceNetworkConfig, len(inspect.NetworkSettings.Networks))
 	for name, endpoint := range inspect.NetworkSettings.Networks {
-		key, ok := netKeys[name]
+		key, ok := networkKeys[name]
 		if !ok || endpoint == nil {
 			continue
 		}
@@ -300,11 +300,11 @@ func declaredContainerName(name string, labels map[string]string) string {
 
 // declaredSecurityOpt drops the label=disable the daemon adds to a container sharing the
 // host's pid or ipc namespace, or a privileged one.
-func declaredSecurityOpt(h *container.HostConfig) []string {
-	if !h.PidMode.IsHost() && !h.IpcMode.IsHost() && !h.Privileged {
-		return h.SecurityOpt
+func declaredSecurityOpt(hostConfig *container.HostConfig) []string {
+	if !hostConfig.PidMode.IsHost() && !hostConfig.IpcMode.IsHost() && !hostConfig.Privileged {
+		return hostConfig.SecurityOpt
 	}
-	declared := slices.DeleteFunc(slices.Clone(h.SecurityOpt), func(opt string) bool {
+	declared := slices.DeleteFunc(slices.Clone(hostConfig.SecurityOpt), func(opt string) bool {
 		return opt == labelDisable
 	})
 	if len(declared) == 0 {
@@ -315,10 +315,10 @@ func declaredSecurityOpt(h *container.HostConfig) []string {
 
 // declaredNetworkMode keeps only a mode the user could have written; a compose
 // network's name lands there too, and the networks: section already carries it.
-func declaredNetworkMode(mode string, replicas, foreign map[string]string) string {
+func declaredNetworkMode(mode string, serviceByReplica, foreignNames map[string]string) string {
 	if slices.Contains(predefinedNetworks, mode) ||
 		strings.HasPrefix(mode, types.ContainerPrefix) || strings.HasPrefix(mode, types.ServicePrefix) {
-		return declaredNamespace(mode, replicas, foreign)
+		return declaredNamespace(mode, serviceByReplica, foreignNames)
 	}
 	return ""
 }
@@ -326,15 +326,15 @@ func declaredNetworkMode(mode string, replicas, foreign map[string]string) strin
 // declaredNamespace turns compose's container:<id> back into what it resolved: the service:<name>
 // of a replica, since Down removes that container, or the name of one outside the project, since
 // its id changes once it is recreated. An id neither resolves to stays as written.
-func declaredNamespace(mode string, replicas, foreign map[string]string) string {
+func declaredNamespace(mode string, serviceByReplica, foreignNames map[string]string) string {
 	id, ok := strings.CutPrefix(mode, types.ContainerPrefix)
 	if !ok {
 		return mode
 	}
-	if service, ok := replicas[id]; ok {
+	if service, ok := serviceByReplica[id]; ok {
 		return types.ServicePrefix + service
 	}
-	if name, ok := foreign[id]; ok {
+	if name, ok := foreignNames[id]; ok {
 		return types.ContainerPrefix + name
 	}
 	return mode
@@ -342,14 +342,14 @@ func declaredNamespace(mode string, replicas, foreign map[string]string) string 
 
 // declaredVolumesFrom turns the bare ids compose wrote back into service names, and
 // prefixes any other container: unprefixed, the loader takes it for a service.
-func declaredVolumesFrom(entries []string, replicas map[string]string) []string {
+func declaredVolumesFrom(entries []string, serviceByReplica map[string]string) []string {
 	if len(entries) == 0 {
 		return nil
 	}
 	declared := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		name, mode, hasMode := strings.Cut(entry, ":")
-		if service, ok := replicas[name]; ok {
+		if service, ok := serviceByReplica[name]; ok {
 			name = service
 		} else {
 			name = types.ContainerPrefix + name
@@ -428,8 +428,8 @@ func declaredAliases(aliases []string, containerID string, generated []string) [
 	return kept
 }
 
-// exposedPorts renders EXPOSE, sorted so one compose project renders one spec.
-func exposedPorts(set nat.PortSet) types.StringOrNumberList {
+// toExposedPorts renders EXPOSE, sorted so one compose project renders one spec.
+func toExposedPorts(set nat.PortSet) types.StringOrNumberList {
 	if len(set) == 0 {
 		return nil
 	}
@@ -460,9 +460,9 @@ func unpublished(expose types.StringOrNumberList, ports []types.ServicePortConfi
 	return kept
 }
 
-// publishedPorts renders the ports: section from the bindings, not from the running
+// newPublishedPorts renders the ports: section from the bindings, not from the running
 // container: an empty published port asks for a random one and must not be pinned.
-func publishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
+func newPublishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
 	published := make([]types.ServicePortConfig, 0, len(bindings))
 	for port, hosts := range bindings {
 		target, err := strconv.ParseUint(port.Port(), 10, 32)
@@ -490,8 +490,8 @@ func publishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
 	return published
 }
 
-// restartPolicy renders the restart: shorthand; docker's "no" is compose's default.
-func restartPolicy(policy container.RestartPolicy) string {
+// toRestartPolicy renders the restart: shorthand; docker's "no" is compose's default.
+func toRestartPolicy(policy container.RestartPolicy) string {
 	name := string(policy.Name)
 	if name == "" || name == "no" {
 		return ""
@@ -502,8 +502,8 @@ func restartPolicy(policy container.RestartPolicy) string {
 	return name
 }
 
-// healthCheck renders healthcheck:; a test of NONE is compose's disable.
-func healthCheck(from *container.HealthConfig) *types.HealthCheckConfig {
+// newHealthCheck renders healthcheck:; a test of NONE is compose's disable.
+func newHealthCheck(from *container.HealthConfig) *types.HealthCheckConfig {
 	if from == nil || len(from.Test) == 0 {
 		return nil
 	}
@@ -513,16 +513,16 @@ func healthCheck(from *container.HealthConfig) *types.HealthCheckConfig {
 
 	check := &types.HealthCheckConfig{Test: from.Test}
 	if from.Interval > 0 {
-		check.Interval = duration(from.Interval)
+		check.Interval = toDuration(from.Interval)
 	}
 	if from.Timeout > 0 {
-		check.Timeout = duration(from.Timeout)
+		check.Timeout = toDuration(from.Timeout)
 	}
 	if from.StartPeriod > 0 {
-		check.StartPeriod = duration(from.StartPeriod)
+		check.StartPeriod = toDuration(from.StartPeriod)
 	}
 	if from.StartInterval > 0 {
-		check.StartInterval = duration(from.StartInterval)
+		check.StartInterval = toDuration(from.StartInterval)
 	}
 	if from.Retries > 0 {
 		retries := uint64(from.Retries)
@@ -531,21 +531,21 @@ func healthCheck(from *container.HealthConfig) *types.HealthCheckConfig {
 	return check
 }
 
-func duration(d time.Duration) *types.Duration {
+func toDuration(d time.Duration) *types.Duration {
 	converted := types.Duration(d)
 	return &converted
 }
 
-// logging renders logging:, unless it is the daemon's own driver with no options.
-func logging(from container.LogConfig, daemonDriver string) *types.LoggingConfig {
+// newLogging renders newLogging:, unless it is the daemon's own driver with no options.
+func newLogging(from container.LogConfig, daemonDriver string) *types.LoggingConfig {
 	if from.Type == "" || (from.Type == daemonDriver && len(from.Config) == 0) {
 		return nil
 	}
 	return &types.LoggingConfig{Driver: from.Type, Options: from.Config}
 }
 
-// extraHosts inverts docker's "host:ip" list into compose's host-to-addresses map.
-func extraHosts(hosts []string) types.HostsList {
+// parseExtraHosts inverts docker's "host:ip" list into compose's host-to-addresses map.
+func parseExtraHosts(hosts []string) types.HostsList {
 	if len(hosts) == 0 {
 		return nil
 	}
@@ -563,22 +563,22 @@ func extraHosts(hosts []string) types.HostsList {
 	return list
 }
 
-func devices(mapped []container.DeviceMapping) []types.DeviceMapping {
+func newDevices(mapped []container.DeviceMapping) []types.DeviceMapping {
 	if len(mapped) == 0 {
 		return nil
 	}
 	devices := make([]types.DeviceMapping, 0, len(mapped))
-	for _, d := range mapped {
+	for _, device := range mapped {
 		devices = append(devices, types.DeviceMapping{
-			Source:      d.PathOnHost,
-			Target:      d.PathInContainer,
-			Permissions: d.CgroupPermissions,
+			Source:      device.PathOnHost,
+			Target:      device.PathInContainer,
+			Permissions: device.CgroupPermissions,
 		})
 	}
 	return devices
 }
 
-func ulimits(limits []*container.Ulimit) map[string]*types.UlimitsConfig {
+func newUlimits(limits []*container.Ulimit) map[string]*types.UlimitsConfig {
 	if len(limits) == 0 {
 		return nil
 	}

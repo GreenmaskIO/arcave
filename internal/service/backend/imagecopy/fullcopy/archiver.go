@@ -45,7 +45,7 @@ func New() *Archiver { return &Archiver{} }
 
 // Store writes the archive whole. Nothing is deduplicated, so every byte written is
 // a byte this capture added.
-func (a *Archiver) Store(
+func (s *Archiver) Store(
 	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
 ) (imagecopy.StoredSize, error) {
 	counted := utils.NewCountingReader(archive)
@@ -64,7 +64,7 @@ func (a *Archiver) Store(
 }
 
 // Load streams the stored archive back out.
-func (a *Archiver) Load(
+func (s *Archiver) Load(
 	ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer,
 ) error {
 	manifest, err := imagecopy.ReadManifest(ctx, src, imagecopy.FormatArchive)

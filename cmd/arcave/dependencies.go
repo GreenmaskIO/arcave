@@ -83,10 +83,10 @@ type dependencies struct {
 	printer      *json.Printer
 }
 
-// initAllDependencies wires the savepoint workflows for the project rooted at projectPath, in the
+// newDependencies wires the savepoint workflows for the project rooted at projectPath, in the
 // session sessionRef resolves to on the store it opens. Every store arrives from storefactory
 // already rooted.
-func initAllDependencies(
+func newDependencies(
 	ctx context.Context, projectPath string, cfg config.Config,
 	sessionRef string, composeProject model.DockerComposeProjectName,
 ) (*dependencies, error) {
@@ -118,13 +118,13 @@ func initAllDependencies(
 	}
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
-	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
+	progressWriter := newProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
 	opened.add("compose progress writer", progressWriter)
 
 	// One docker/cli instance is the single daemon connection both halves of
 	// client/docker are built over, so they cannot target different daemons. Its
 	// closers belong to the returned dependencies — never deferred here.
-	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, progressWriter)
+	dockerCli, dockerClientAPI, err := newDockerClient(cfg.Docker, progressWriter)
 	if err != nil {
 		return nil, fmt.Errorf("initialise docker client: %w", err)
 	}
@@ -181,7 +181,7 @@ func initAllDependencies(
 			// the value the backend is handed, so nothing below holds the server.
 			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcContainerHost, resticPort),
 			RepositoryRoot: resticRoot,
-			Options:        cdcOptions(cdcCfg, cdcHostNetwork),
+			Options:        newCDCOptions(cdcCfg, cdcHostNetwork),
 		}),
 	)
 	if err != nil {
@@ -214,7 +214,7 @@ func initAllDependencies(
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:        inflightrepo.New(projectPath),
 		Store:           composeProjectStore,
-		CaptureDefaults: captureDefaults(cfg),
+		CaptureDefaults: newCaptureDefaults(cfg),
 		Session:         session.ID,
 		ComposeProject:  composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
@@ -260,9 +260,9 @@ func resolveCDCTransport(
 	}
 }
 
-// cdcOptions translates the backends.cdc section into the backend's own
+// newCDCOptions translates the backends.cdc section into the backend's own
 // options, plus the transport resolveCDCTransport picked.
-func cdcOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
+func newCDCOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
@@ -279,11 +279,13 @@ type partial struct {
 }
 
 type namedCloser struct {
-	name string
-	c    io.Closer
+	name   string
+	closer io.Closer
 }
 
-func (p *partial) add(name string, c io.Closer) { p.closers = append(p.closers, namedCloser{name, c}) }
+func (p *partial) add(name string, closer io.Closer) {
+	p.closers = append(p.closers, namedCloser{name, closer})
+}
 
 func (p *partial) keep() { p.kept = true }
 
@@ -292,7 +294,7 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 		return
 	}
 	for i := len(p.closers) - 1; i >= 0; i-- {
-		closeQuietly(ctx, p.closers[i].name, p.closers[i].c)
+		closeQuietly(ctx, p.closers[i].name, p.closers[i].closer)
 	}
 }
 
@@ -311,18 +313,18 @@ func (d *dependencies) Close(ctx context.Context) error {
 // severed connection as a repository error rather than as the shutdown it was.
 // The deadline is detached from ctx, which is routinely already cancelled by the
 // time Close runs from a defer — and a cancelled Shutdown severs at once.
-func shutdownResticServer(ctx context.Context, e *echo.Echo) {
+func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resticShutdownTimeout)
 	defer cancel()
 
-	if err := e.Shutdown(shutdownCtx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("shut down restic server")
 	}
 }
 
-// initServiceDeps wires `arcave init`: somewhere to write the config, nothing
+// newInitDependencies wires `arcave init`: somewhere to write the config, nothing
 // more. Nothing here holds a resource.
-func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
+func newInitDependencies(projectPath string) (*core.InitService, *json.Printer) {
 	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), json.New(os.Stdout)
 }
 
@@ -334,7 +336,7 @@ type sessionDependencies struct {
 	printer *json.Printer
 }
 
-func initSessionDependencies(projectPath string, cfg config.Config) (*sessionDependencies, error) {
+func newSessionDependencies(projectPath string, cfg config.Config) (*sessionDependencies, error) {
 	root, arcaveProjectStore, err := openArcaveProjectStore(cfg, projectPath)
 	if err != nil {
 		return nil, err
@@ -353,7 +355,7 @@ func newSessionService(
 		Inflight:   inflightrepo.New(projectPath),
 		Current:    currentsession.New(projectPath),
 		Store:      arcaveProjectStore,
-		RunnerInfo: heartbeatRunnerInfo(),
+		RunnerInfo: newRunnerInfo(),
 	})
 }
 
@@ -361,8 +363,8 @@ func (d *sessionDependencies) Close() error {
 	return d.store.Close()
 }
 
-// heartbeatRunnerInfo identifies this process in a heartbeat; an unknown host stays blank.
-func heartbeatRunnerInfo() heartbeat.RunnerInfo {
+// newRunnerInfo identifies this process in a heartbeat; an unknown host stays blank.
+func newRunnerInfo() heartbeat.RunnerInfo {
 	host, err := os.Hostname()
 	if err != nil {
 		log.Debug().Err(err).Msg("reading the hostname for the heartbeat")
@@ -388,13 +390,13 @@ func openArcaveProjectStore(cfg config.Config, projectPath string) (root, arcave
 }
 
 // closeQuietly closes c and logs any error without failing the caller.
-func closeQuietly(ctx context.Context, name string, c io.Closer) {
-	if err := c.Close(); err != nil {
+func closeQuietly(ctx context.Context, name string, closer io.Closer) {
+	if err := closer.Close(); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("close " + name)
 	}
 }
 
-func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
+func newDockerClientOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	if cfg.Host != "" && cfg.Context != "" {
 		return nil, fmt.Errorf("docker.host and docker.context are mutually exclusive: %q already names a daemon, so remove one of the two", cfg.Context)
 	}
@@ -405,7 +407,7 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	}
 	opts.Context = cfg.Context
 
-	tlsOpts, useTLS, err := dockerTLSOptions(cfg)
+	tlsOpts, useTLS, err := newDockerTLSOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -417,11 +419,11 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	return opts, nil
 }
 
-// dockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
+// newDockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
 // and reports whether any TLS material was configured (all-empty means "read the
 // environment"). cert_file/key_file are a mutual-TLS pair, checked here because
 // docker/cli would surface a half-set one only as an opaque handshake failure.
-func dockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
+func newDockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
 	caFile := tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem")
 	certFile := tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem")
 	keyFile := tlsFile(cfg.KeyFile, cfg.CertPath, "key.pem")
@@ -465,11 +467,11 @@ type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
 
-// composeProgressWriter translates compose.progress into the library's global
+// newProgressWriter translates compose.progress into the library's global
 // render mode (progress.Mode) plus the writer compose renders on. The destination
 // is always stderr or nothing — stdout carries arcave's JSON — and the default
 // re-emits compose's events as arcave log records, so the run speaks one format.
-func composeProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
+func newProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
 	switch mode {
 	case config.ProgressQuiet:
 		// Discarding the stream too covers the warnings compose writes outside the UI.
@@ -485,12 +487,12 @@ func composeProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
 	}
 }
 
-// initDockerClient resolves cfg into the one docker/cli instance both halves of
+// newDockerClient resolves cfg into the one docker/cli instance both halves of
 // client/docker are built over, plus the APIClient it uses. progressOut becomes
 // the CLI's error stream once the endpoint resolves; until then that stream is a
 // buffer, being the only place docker/cli reports a failed resolution.
-func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerCli, client.APIClient, error) {
-	clientOpts, err := getDockerOptions(cfg)
+func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerCli, client.APIClient, error) {
+	clientOpts, err := newDockerClientOptions(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
 	}
@@ -565,9 +567,9 @@ func newImageBackend(composeProjectStore storages.Navigator, engine *docker.Engi
 	}, dedup), nil
 }
 
-// captureDefaults is what the config says of a unit no arcave.* label names. The
+// newCaptureDefaults is what the config says of a unit no arcave.* label names. The
 // capture keys are read as ApplyDefaults left them: every one set.
-func captureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
+func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        cfg.Snapshot.BackendKind(),
 		WritableLayerBackend: cfg.WritableLayers.BackendKind(),
