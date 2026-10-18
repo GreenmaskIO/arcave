@@ -22,7 +22,8 @@ import (
 )
 
 var (
-	sessionListAll bool
+	sessionListAll  bool
+	sessionListSort = string(model.SortDesc)
 
 	sessionListCmd = &cobra.Command{
 		Use:   "list",
@@ -38,13 +39,20 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
+	order, err := model.ParseSortOrder(sessionListSort)
+	if err != nil {
+		return err
+	}
 	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
-		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(), model.ListSessionsRequest{All: sessionListAll, Ref: sessionRef})
+		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(),
+			model.ListSessionsRequest{All: sessionListAll, Ref: sessionRef, Sort: order})
 	})
 }
 
 func init() {
 	sessionListCmd.Flags().BoolVar(&sessionListAll, "all", false,
 		"Also list the trees without a record: forks cloning, failed or left incomplete")
+	sessionListCmd.Flags().StringVar(&sessionListSort, "sort", string(model.SortDesc),
+		"order by age: desc (newest first) or asc")
 	sessionCmd.AddCommand(sessionListCmd)
 }

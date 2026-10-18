@@ -962,8 +962,18 @@ func TestService_ListSavepoints(t *testing.T) {
 	}{
 		{name: "hidden by default", req: model.ListRequest{}, want: []model.Savepoint{demoRecord()}},
 		{
-			name: "shown with the flag",
+			name: "shown with the flag, newest first by default",
 			req:  model.ListRequest{IncludeSafetySnapshots: true},
+			want: []model.Savepoint{demoSafetySnapshot(), demoRecord()},
+		},
+		{
+			name: "desc",
+			req:  model.ListRequest{IncludeSafetySnapshots: true, Sort: model.SortDesc},
+			want: []model.Savepoint{demoSafetySnapshot(), demoRecord()},
+		},
+		{
+			name: "asc keeps the repository's order",
+			req:  model.ListRequest{IncludeSafetySnapshots: true, Sort: model.SortAsc},
 			want: []model.Savepoint{demoRecord(), demoSafetySnapshot()},
 		},
 	}

@@ -19,15 +19,16 @@ It reads the store, stops nothing and changes nothing. Only **committed** savepo
 | Flag | Default | Description |
 |---|---|---|
 | `--include-safety-snapshots` | `false` | Also list the safety snapshots a rollback takes of the live state. |
+| `--sort` | `desc` | Order by age: `desc` lists the newest first, `asc` the oldest. Any other value is refused. |
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
 ## Order
 
-arcave does not sort the array. The store lists the savepoint directories by name, and an id is a UUIDv7 — its leading digits are the capture's millisecond — so what comes back is **oldest first**.
+The array is **newest first**; `--sort asc` lists the oldest first. An id is a UUIDv7 — its leading digits are the capture's millisecond — so the order by age is the order by id.
 
 ```shell title="The newest savepoint"
-arcave savepoint list | jq -r 'max_by(.created_at).id'
+arcave savepoint list | jq -r '.[0].id'
 ```
 
 ## Safety snapshots are hidden
@@ -96,7 +97,7 @@ arcave savepoint list --include-safety-snapshots \
 ```
 
 ```shell title="What the last savepoint cost the store"
-arcave savepoint list | jq '[.[-1].images[].stored_bytes] | add'
+arcave savepoint list | jq '[.[0].images[].stored_bytes] | add'
 ```
 
 ## Next step

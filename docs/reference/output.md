@@ -46,7 +46,7 @@ Steps still in flight — `Waiting`, `Starting`, `Creating`, image-pull progress
 |---|---|
 | [`init`](cli/init.md) | nothing |
 | [`savepoint create`](cli/savepoint_create.md) | one savepoint record |
-| [`savepoint list`](cli/savepoint_list.md) | an array of savepoint records, oldest first; `[]` when there are none |
+| [`savepoint list`](cli/savepoint_list.md) | an array of savepoint records, newest first unless `--sort asc`; `[]` when there are none |
 | [`savepoint remove`](cli/savepoint_remove.md) | `{"dry_run": …, "removed": [ … ]}` |
 | [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "images": [ … ]}` |
 | [`mcp`](cli/mcp.md) | nothing — the stream is the protocol |
@@ -164,7 +164,7 @@ arcave savepoint list | jq -r 'max_by(.created_at).id'
 ```
 
 ```shell title="What a savepoint covers"
-arcave savepoint list | jq -r '.[-1].stats[].volume.object_id'
+arcave savepoint list | jq -r '.[0].stats[].volume.object_id'
 ```
 
 ```shell title="Layer bytes stored against layer bytes captured"

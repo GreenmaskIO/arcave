@@ -60,6 +60,11 @@ func signal(wrote chan<- struct{}) func(mock.Arguments) {
 	return func(mock.Arguments) { wrote <- struct{}{} }
 }
 
+// allowLateTicks accepts the beats of ticks that land between the last awaited write and Stop.
+func allowLateTicks(w *mockWriter, err error) {
+	w.On("Write", mock.Anything, beatOf(StatusInProgress, "")).Return(err).Maybe()
+}
+
 // startWorker starts a worker beating every interval and cancelling once deadline is reached.
 func startWorker(
 	t *testing.T, ctx context.Context, w *mockWriter, interval, deadline time.Duration, cancel context.CancelCauseFunc,
@@ -116,6 +121,7 @@ func TestWorker_run_WritesOnEveryTick(t *testing.T) {
 	ticked := w.On("Write", mock.Anything, beatOf(StatusInProgress, "")).
 		Run(signal(wrote)).Return(nil).Twice()
 	mock.InOrder(first, ticked)
+	allowLateTicks(w, nil)
 	opCtx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	hb := startWorker(t, context.Background(), w, fastInterval, time.Hour, cancel)
@@ -140,6 +146,7 @@ func TestWorker_run_FailedWriteIsRetried(t *testing.T) {
 	retried := w.On("Write", mock.Anything, beatOf(StatusInProgress, "")).
 		Run(signal(wrote)).Return(nil).Once()
 	mock.InOrder(first, failed, retried)
+	allowLateTicks(w, nil)
 	opCtx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	hb := startWorker(t, context.Background(), w, fastInterval, time.Hour, cancel)
@@ -165,6 +172,7 @@ func TestWorker_run_FailedWriteKeepsTheDeadline(t *testing.T) {
 	failed := w.On("Write", mock.Anything, beatOf(StatusInProgress, "")).
 		Run(signal(wrote)).Return(errStore).Once()
 	mock.InOrder(first, failed)
+	allowLateTicks(w, errStore)
 	hb := startWorker(t, context.Background(), w, fastInterval, time.Hour, func(error) {})
 
 	// Act

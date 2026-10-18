@@ -111,6 +111,7 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 			compose.write(t, compose.replicas(t)[0], "v2")
 			sp2 := decode[model.Savepoint](t, run("savepoint", "create", "sp2"))
 			listed := decode[[]model.Savepoint](t, run("savepoint", "list"))
+			ascending := decode[[]model.Savepoint](t, run("savepoint", "list", "--sort", "asc"))
 			rolledBack := decode[model.RollbackResponse](t, run("rollback", "sp1"))
 			replica := compose.replicas(t)[0]
 			volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
@@ -121,12 +122,13 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 			afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
 
 			// Assert
-			assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(listed))
+			assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(listed), "newest first by default")
+			assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(ascending))
 			assert.Equal(t, sp1.ID, rolledBack.RolledBackTo.ID)
 			assert.Equal(t, "v1", volumeAfter, "the volume is back at sp1")
 			assert.Equal(t, "v1", layerAfter, "the writable layer is back at sp1")
-			assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(withSafety), "the safety snapshot is dropped")
-			assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(inFork), "the fork holds the copied savepoints")
+			assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(withSafety), "the safety snapshot is dropped")
+			assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(inFork), "the fork holds the copied savepoints")
 			assert.Equal(t, []model.SavepointID{sp2.ID}, savepointIDs(removed.Removed))
 			assert.Equal(t, []string{"sp1"}, savepointNames(afterRemove))
 

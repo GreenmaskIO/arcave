@@ -116,6 +116,9 @@ var (
 
 	// ErrInvalidCapturePolicy reports an arcave.* label arcave cannot act on.
 	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
+
+	// ErrInvalidSortOrder reports a listing order other than asc or desc.
+	ErrInvalidSortOrder = errors.New("invalid sort order")
 )
 
 // AmbiguousSavepointNameError reports a name more than one savepoint carries;

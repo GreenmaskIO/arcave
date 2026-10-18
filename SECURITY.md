@@ -57,7 +57,7 @@ trust.
 ### Stored data
 
 - Point arcave only at development data. Don't take savepoints of production data unless
-  it has been anonymized first, for example with [Greenmask](https://greenmask.io).
+  it has been anonymized first, for example with [Greenmask](https://www.greenmask.io/).
 - Restrict the storage path to your user (`chmod 700`).
 - Keep secrets out of the compose file's `environment:`, or treat every savepoint as a
   secret.

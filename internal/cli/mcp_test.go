@@ -66,19 +66,30 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 	tests := []struct {
 		name string
 		in   listSavepointInput
+		sort model.SortOrder
 		svc  []model.Savepoint
 		want listOutput
 	}{
-		{name: "hidden by default", in: listSavepointInput{Project: "demo"}, svc: savepoints, want: listOutput{Savepoints: savepoints}},
+		{name: "hidden by default", in: listSavepointInput{Project: "demo"}, sort: model.SortDesc, svc: savepoints,
+			want: listOutput{Savepoints: savepoints}},
 		{
 			name: "include_safety_snapshots reaches the service",
 			in:   listSavepointInput{Project: "demo", IncludeSafetySnapshots: true},
+			sort: model.SortDesc,
+			svc:  savepoints,
+			want: listOutput{Savepoints: savepoints},
+		},
+		{
+			name: "sort reaches the service",
+			in:   listSavepointInput{Project: "demo", Sort: "asc"},
+			sort: model.SortAsc,
 			svc:  savepoints,
 			want: listOutput{Savepoints: savepoints},
 		},
 		{
 			name: "no savepoints answers an empty array",
 			in:   listSavepointInput{Project: "demo"},
+			sort: model.SortDesc,
 			want: listOutput{Savepoints: []model.Savepoint{}},
 		},
 	}
@@ -88,7 +99,7 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 			// Arrange
 			svc := &mockService{}
 			svc.On("ListSavepoints", mock.Anything,
-				model.ListRequest{IncludeSafetySnapshots: tt.in.IncludeSafetySnapshots}).
+				model.ListRequest{IncludeSafetySnapshots: tt.in.IncludeSafetySnapshots, Sort: tt.sort}).
 				Return(tt.svc, nil).Once()
 			var gotProject string
 			released := false
@@ -110,6 +121,20 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 			svc.AssertExpectations(t)
 		})
 	}
+}
+
+func TestMCPHandler_listSavepointsMCP_ABadSortIsRefused(t *testing.T) {
+	// Arrange: a factory that fails the test, so a refusal must come before anything is opened.
+	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+		t.Fatal("a bad sort must not open the store")
+		return nil, nil, nil
+	}, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+	// Act
+	_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "demo", Sort: "newest"})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrInvalidSortOrder)
 }
 
 func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
@@ -145,7 +170,7 @@ func TestMCPHandler_openService_SessionPrecedence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			svc := &mockService{}
-			svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint(nil), nil).Once()
+			svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint(nil), nil).Once()
 			var gotSession string
 			factory := func(_ context.Context, _, session string) (MCPService, func(), error) {
 				gotSession = session
@@ -202,7 +227,7 @@ func TestMCPHandler_listSessionsMCP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			svc := &mockService{}
-			svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true}).Return(tt.svc, nil).Once()
+			svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true, Sort: model.SortDesc}).Return(tt.svc, nil).Once()
 			released := false
 			h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), model.SessionID{}, model.LeftoverVolumesOverwrite)
 
@@ -386,7 +411,7 @@ func TestMCPHandler_currentSessionMCP(t *testing.T) {
 func TestMCPHandler_PinnedSessionTools(t *testing.T) {
 	// Arrange
 	svc := &mockService{}
-	svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{Ref: handlerSession.String()}).
+	svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{Ref: handlerSession.String(), Sort: model.SortDesc}).
 		Return([]model.SessionSummary(nil), nil).Once()
 	svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "feat", Pinned: handlerSession}).
 		Return(model.DeleteSessionResponse{}, model.ErrCurrentSessionDelete).Once()
@@ -420,7 +445,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			}, want: savepoint},
 		{tool: "savepoint_list", args: map[string]any{"project": "demo", "session": "feat"},
 			setup: func(svc *mockService) {
-				svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint{savepoint}, nil).Once()
+				svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint{savepoint}, nil).Once()
 			}, want: listOutput{Savepoints: []model.Savepoint{savepoint}}},
 		{tool: "savepoint_remove", args: map[string]any{"project": "demo", "ids": []string{savepoint.ID.String()}},
 			setup: func(svc *mockService) {
@@ -434,7 +459,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			}, want: model.RollbackResponse{RolledBackTo: savepoint, WritableLayers: layers}},
 		{tool: "session_list", args: map[string]any{"all": true},
 			setup: func(svc *mockService) {
-				svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true}).
+				svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true, Sort: model.SortDesc}).
 					Return([]model.SessionSummary{{Session: record, Status: model.SessionStatusReady, Current: true}}, nil).Once()
 			}, want: sessionListOutput{Sessions: []model.SessionSummary{{Session: record, Status: model.SessionStatusReady, Current: true}}}},
 		{tool: "session_create", args: map[string]any{"name": "feat", "from": "baseline"},
@@ -554,7 +579,7 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 				<-unwound // the revert core runs on its own context
 			}).Return(model.RollbackResult{}, context.Canceled).Once()
 			if tt.wantServing {
-				svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint{}, nil).Once()
+				svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint{}, nil).Once()
 			}
 			h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 				return svc, func() {}, nil

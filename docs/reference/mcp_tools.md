@@ -45,6 +45,7 @@ Reads the store. Stops nothing, and takes no lock.
 |---|---|---|
 | `project` | yes | The compose project. |
 | `include_safety_snapshots` | no | Also list the safety snapshots a rollback commits of the live state before it overwrites it. Hidden by default. |
+| `sort` | no | `desc` (the default) lists the newest first, `asc` the oldest. Any other value is refused. |
 
 Returns an object, because MCP structured output must be one — the array the CLI prints is the `savepoints` field:
 
@@ -103,11 +104,10 @@ Returns the environment to a savepoint. Destructive: every volume it covers is w
 
 ## Where the tools differ from the CLI
 
-Three differences an agent's caller should know about.
+Two differences an agent's caller should know about.
 
 * **`before_date` is described as `YYYY-MM-DD` and parsed as RFC3339Nano.** `2026-06-01` is refused with `invalid --before-date "2026-06-01": …`; pass `2026-06-01T00:00:00Z`.
 * **`rollback` returns no `images` field.** The CLI prints one entry per writable layer put back, with the local reference it now answers to; the tool's result stops at `rolled_back_to` and `restored`. The layers are restored either way.
-* **`savepoint_list` is described as newest first and answers oldest first**, exactly as the CLI does. Sort on `created_at` rather than taking the first element.
 
 `wait_timeout` takes a unit-bearing duration in both tools that accept it. A bare number is refused:
 

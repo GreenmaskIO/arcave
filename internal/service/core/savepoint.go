@@ -121,12 +121,19 @@ func requireUniqueName(visible []model.Savepoint, name string) error {
 	return nil
 }
 
-// ListSavepoints returns the committed savepoints req asks for.
+// ListSavepoints returns the committed savepoints req asks for, in req.Sort's order.
 func (s *Service) ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error) {
-	return s.listSavepoints(ctx, req.IncludeSafetySnapshots)
+	savepoints, err := s.listSavepoints(ctx, req.IncludeSafetySnapshots)
+	if err != nil {
+		return nil, err
+	}
+	if req.Sort != model.SortAsc {
+		slices.Reverse(savepoints)
+	}
+	return savepoints, nil
 }
 
-// listSavepoints is core's only read of the repository, so the rule that hides a
+// listSavepoints, oldest first, is core's only read of the repository, so the rule that hides a
 // safety snapshot has one place to be forgotten. Which selector may see one is
 // findSavepoint's and selectSavepointsToRemove's call.
 func (s *Service) listSavepoints(ctx context.Context, includeSafetySnapshots bool) ([]model.Savepoint, error) {

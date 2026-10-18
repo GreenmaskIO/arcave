@@ -195,7 +195,8 @@ func (s *SessionService) UnsetSession(ctx context.Context) (model.Session, error
 	})
 }
 
-// ListSessions returns every session oldest first; the default, created by no one, leads.
+// ListSessions returns every session in req.Sort's order; the default, created by no one, is
+// the oldest.
 // req.All adds the trees without a record, each with the status its heartbeat gives it; the
 // session req.Ref resolves to is marked current.
 func (s *SessionService) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
@@ -224,6 +225,9 @@ func (s *SessionService) ListSessions(ctx context.Context, req model.ListSession
 	zerolog.Ctx(ctx).Debug().Int("committed", len(sessions)).Int("listed", len(summaries)).
 		Str("current", current.String()).Bool("all", req.All).Msg("sessions listed")
 	slices.SortStableFunc(summaries, func(a, b model.SessionSummary) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	if req.Sort != model.SortAsc {
+		slices.Reverse(summaries)
+	}
 	return summaries, nil
 }
 
