@@ -112,11 +112,11 @@ func (e *sessionEnv) create(t *testing.T, name string) model.Session {
 	return record
 }
 
-// names are the listed sessions' names, in listing order.
+// names are the listed sessions' names, oldest first.
 func (e *sessionEnv) names(t *testing.T) []string {
 	t.Helper()
 
-	summaries, err := e.sessions.ListSessions(e.ctx, model.ListSessionsRequest{})
+	summaries, err := e.sessions.ListSessions(e.ctx, model.ListSessionsRequest{Sort: model.SortAsc})
 	require.NoError(t, err)
 	names := make([]string, len(summaries))
 	for i, s := range summaries {
@@ -150,7 +150,7 @@ func TestSession_CreateListResolveDelete(t *testing.T) {
 	unnamed := env.create(t, "")
 
 	// Act
-	summaries, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{})
+	summaries, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{Sort: model.SortAsc})
 
 	// Assert
 	require.NoError(t, err)

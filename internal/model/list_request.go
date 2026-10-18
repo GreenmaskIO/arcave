@@ -14,6 +14,30 @@
 
 package model
 
+import "fmt"
+
+// SortOrder orders a listing by age.
+type SortOrder string
+
+const (
+	// SortDesc lists the newest first; the zero value means it too.
+	SortDesc SortOrder = "desc"
+	// SortAsc lists the oldest first.
+	SortAsc SortOrder = "asc"
+)
+
+// ParseSortOrder validates a sort token; an empty one is SortDesc.
+func ParseSortOrder(token string) (SortOrder, error) {
+	switch order := SortOrder(token); order {
+	case "", SortDesc:
+		return SortDesc, nil
+	case SortAsc:
+		return order, nil
+	default:
+		return "", fmt.Errorf("%w: %q, want %q or %q", ErrInvalidSortOrder, token, SortDesc, SortAsc)
+	}
+}
+
 // ListRequest selects which savepoints a listing answers with. A struct rather
 // than a bool parameter, like every request type here: the next flag does not
 // change the signature.
@@ -22,4 +46,6 @@ type ListRequest struct {
 	// default: one exists only while a rollback runs, and a leftover is the shard
 	// of a killed one.
 	IncludeSafetySnapshots bool
+	// Sort orders the listing by age; zero is newest first.
+	Sort SortOrder
 }

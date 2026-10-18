@@ -12,7 +12,7 @@ None of the `session` commands touches the Docker daemon, and none of them takes
 
 ```text title="Synopsis"
 arcave session create [--name <name>] [--from <session>]
-arcave session list [--all]
+arcave session list [--all] [--sort desc|asc]
 arcave session delete [--force] <id|name>
 ```
 
@@ -51,7 +51,7 @@ Four things to know before you run it.
 
 ## `session list`
 
-The project's sessions as a JSON array, `baseline` first and the rest oldest first: each one's id, name, `status`, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store.
+The project's sessions as a JSON array, newest first — `baseline`, created by no one, comes last — or oldest first with `--sort asc`: each one's id, name, `status`, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store.
 
 Without `--all` every session listed is `ready`. `--all` adds the session directories that never got their record — what a fork leaves while it copies, or after it failed. They have no name; address them by id.
 

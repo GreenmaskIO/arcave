@@ -83,6 +83,8 @@ type ListSessionsRequest struct {
 	All bool
 	// Ref marks as current the session it names; empty marks the current session.
 	Ref string
+	// Sort orders the listing by age; zero is newest first.
+	Sort SortOrder
 }
 
 // DeleteSessionRequest carries what DeleteSession needs.

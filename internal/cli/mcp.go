@@ -107,8 +107,8 @@ const (
 		"safe to roll back to — only the restart failed, so report that id to the user and " +
 		"investigate the compose project (the services are stopped or unhealthy), rather than taking " +
 		"another savepoint."
-	descList = "List the project's savepoints, newest first, with their id, name, description " +
-		"and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
+	descList = "List the project's savepoints, newest first unless sort is asc, with their id, name, " +
+		"description and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
 		"rollback or savepoint_remove. Safety snapshots — the undo a rollback commits of the live " +
 		"state before it overwrites it — are hidden unless include_safety_snapshots is set: one " +
 		"exists only while a rollback runs, and one that outlived its rollback means that rollback " +
@@ -125,8 +125,8 @@ const (
 		"a service only sees a subpath of. arcave takes a safety snapshot of the live state first " +
 		"and replays it automatically if the rollback fails, so a failed rollback leaves the " +
 		"environment as it was. Services are stopped and started again."
-	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — oldest " +
-		"first, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current " +
+	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — newest " +
+		"first unless sort is asc, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current " +
 		"marks the session the other tools work in when they are given no session — the one session_current " +
 		"names. all adds session trees " +
 		"without a record — forks still cloning, failed or left incomplete — with their status."
@@ -211,18 +211,23 @@ type listSavepointInput struct {
 	Project                string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
 	Session                string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	IncludeSafetySnapshots bool   `json:"include_safety_snapshots,omitempty" jsonschema:"also list the safety snapshots a rollback commits for its own undo; hidden by default"`
+	Sort                   string `json:"sort,omitempty" jsonschema:"desc (newest first, the default) or asc"`
 }
 
 // listSavepoints reports the savepoints in the store. It reaches no daemon and
 // takes no lock, so it is safe to call while another workflow is running.
 func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in listSavepointInput) (*mcpsdk.CallToolResult, listOutput, error) {
+	order, err := model.ParseSortOrder(in.Sort)
+	if err != nil {
+		return nil, listOutput{}, err
+	}
 	svc, release, err := h.openService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, listOutput{}, err
 	}
 	defer release()
 
-	savepoints, err := svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots})
+	savepoints, err := svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots, Sort: order})
 	if err != nil {
 		return nil, listOutput{}, mcpError(err)
 	}
@@ -296,23 +301,28 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 
 // sessionListInput is session_list's input schema.
 type sessionListInput struct {
-	All bool `json:"all,omitempty" jsonschema:"also list session trees without a record: forks cloning, failed or left incomplete"`
+	All  bool   `json:"all,omitempty" jsonschema:"also list session trees without a record: forks cloning, failed or left incomplete"`
+	Sort string `json:"sort,omitempty" jsonschema:"desc (newest first, the default) or asc"`
 }
 
 // sessionListOutput wraps the sessions, because MCP structured output must be a JSON object.
 type sessionListOutput struct {
-	Sessions []model.SessionSummary `json:"sessions" jsonschema:"the arcave project's sessions, oldest first"`
+	Sessions []model.SessionSummary `json:"sessions" jsonschema:"the arcave project's sessions, newest first unless sort is asc"`
 }
 
 // listSessionsMCP reports the arcave project's sessions.
 func (h *MCPHandler) listSessionsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionListInput) (*mcpsdk.CallToolResult, sessionListOutput, error) {
+	order, err := model.ParseSortOrder(in.Sort)
+	if err != nil {
+		return nil, sessionListOutput{}, err
+	}
 	svc, release, err := h.openSessionService(ctx)
 	if err != nil {
 		return nil, sessionListOutput{}, err
 	}
 	defer release()
 
-	sessions, err := svc.ListSessions(ctx, model.ListSessionsRequest{All: in.All, Ref: h.pinRef()})
+	sessions, err := svc.ListSessions(ctx, model.ListSessionsRequest{All: in.All, Ref: h.pinRef(), Sort: order})
 	if err != nil {
 		return nil, sessionListOutput{}, mcpError(err)
 	}

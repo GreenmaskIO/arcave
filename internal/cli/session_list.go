@@ -33,7 +33,7 @@ func NewSessionListHandler(svc sessionListService, printer printer) *SessionList
 	return &SessionListHandler{svc: svc, printer: printer}
 }
 
-// SessionList prints the arcave project's sessions as a JSON array, oldest first; req.All adds
+// SessionList prints the arcave project's sessions as a JSON array in req.Sort's order; req.All adds
 // the trees without a record, each with its status.
 func (h *SessionListHandler) SessionList(ctx context.Context, req model.ListSessionsRequest) error {
 	sessions, err := h.svc.ListSessions(ctx, req)

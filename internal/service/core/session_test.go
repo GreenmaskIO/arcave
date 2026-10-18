@@ -221,7 +221,7 @@ func TestSessionService_ResolveSession(t *testing.T) {
 }
 
 func TestSessionService_ListSessions(t *testing.T) {
-	// Arrange: records come back in any order and are listed oldest first; the default has
+	// Arrange: records come back in any order and asc lists them oldest first; the default has
 	// no creation time, so it leads.
 	older := sessionRecord(otherSession, "old", sessionNow.Add(-time.Hour))
 	newer := sessionRecord(demoSession, "new", sessionNow)
@@ -242,7 +242,7 @@ func TestSessionService_ListSessions(t *testing.T) {
 	svc := NewSessionService(SessionDeps{Current: &fakePointer{}, Sessions: repo})
 
 	// Act
-	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{})
+	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Sort: model.SortAsc})
 
 	// Assert
 	require.NoError(t, err)
@@ -254,6 +254,42 @@ func TestSessionService_ListSessions(t *testing.T) {
 			ComposeProjects: []model.DockerComposeProjectName{"shop"}, SizeBytes: 512},
 	}, got)
 	repo.AssertExpectations(t)
+}
+
+func TestSessionService_ListSessions_Sort(t *testing.T) {
+	older := sessionRecord(otherSession, "old", sessionNow.Add(-time.Hour))
+	newer := sessionRecord(demoSession, "new", sessionNow)
+	tests := []struct {
+		name string
+		sort model.SortOrder
+		want []model.SessionID
+	}{
+		{name: "zero is newest first", want: []model.SessionID{demoSession, otherSession, model.DefaultSession}},
+		{name: "desc", sort: model.SortDesc, want: []model.SessionID{demoSession, otherSession, model.DefaultSession}},
+		{name: "asc", sort: model.SortAsc, want: []model.SessionID{model.DefaultSession, otherSession, demoSession}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			repo := &mockSessionRepo{}
+			repo.On("ListSessions", mock.Anything).Return([]model.Session{newer, model.DefaultSessionRecord, older}, nil).Once()
+			repo.On("ListSessionSavepoints", mock.Anything, mock.Anything).Return([]model.ComposeProjectSavepoints(nil), nil)
+			repo.On("SessionSize", mock.Anything, mock.Anything).Return(int64(0), nil)
+			svc := NewSessionService(SessionDeps{Current: &fakePointer{}, Sessions: repo})
+
+			// Act
+			got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Sort: tt.sort})
+
+			// Assert
+			require.NoError(t, err)
+			ids := make([]model.SessionID, len(got))
+			for i, row := range got {
+				ids[i] = row.ID
+			}
+			assert.Equal(t, tt.want, ids)
+			repo.AssertExpectations(t)
+		})
+	}
 }
 
 func TestSessionService_ListSessions_All(t *testing.T) {
@@ -292,7 +328,7 @@ func TestSessionService_ListSessions_All(t *testing.T) {
 	}
 
 	// Act
-	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{All: true})
+	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{All: true, Sort: model.SortAsc})
 
 	// Assert
 	require.NoError(t, err)
@@ -1048,7 +1084,7 @@ func TestSessionService_ListSessions_MarksTheCurrentSession(t *testing.T) {
 	svc := NewSessionService(SessionDeps{Current: pointerAt(demoSession), Sessions: repo})
 
 	// Act
-	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{})
+	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Sort: model.SortAsc})
 
 	// Assert
 	require.NoError(t, err)
@@ -1155,7 +1191,7 @@ func TestSessionService_ListSessions_Ref(t *testing.T) {
 			svc := NewSessionService(SessionDeps{Current: tt.pointer, Sessions: repo})
 
 			// Act
-			got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Ref: tt.ref})
+			got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Ref: tt.ref, Sort: model.SortAsc})
 
 			// Assert
 			require.NoError(t, err)

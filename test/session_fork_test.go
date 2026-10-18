@@ -177,7 +177,7 @@ func TestSessionFork_FailedTreeIsListedAndDeleted(t *testing.T) {
 	// Act
 	ready, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{})
 	require.NoError(t, err)
-	all, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{All: true})
+	all, err := env.sessions.ListSessions(env.ctx, model.ListSessionsRequest{All: true, Sort: model.SortAsc})
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 	failed := all[1]
