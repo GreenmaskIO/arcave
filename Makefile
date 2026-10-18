@@ -13,6 +13,8 @@ UNIT_PKGS := ./cmd/... ./internal/...
 INTEGRATION_PKGS := ./test/...
 # Concurrent tests per integration package: the daemon's disk, not the CPU, is the bound.
 INTEGRATION_PARALLEL := 4
+# Extra go test flags for the integration run, e.g. -run or -skip to split it across CI legs.
+INTEGRATION_FLAGS ?=
 
 test: test-unit test-integration
 
@@ -20,7 +22,7 @@ test-unit:
 	go test $(UNIT_PKGS)
 
 test-integration:
-	go test -timeout 30m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_PKGS)
+	go test -timeout 30m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_FLAGS) $(INTEGRATION_PKGS)
 
 test-verbose:
 	go test -v -timeout 30m ./...
