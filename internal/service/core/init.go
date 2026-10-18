@@ -41,8 +41,9 @@ func NewInitService(projectRoot string, writer configWriter) *InitService {
 	return &InitService{projectRoot: projectRoot, configWriter: writer}
 }
 
-// Init writes cfg to .arcave/config.yaml verbatim, returning the resolved project
-// name and the file's path. An initialised project is an error unless override.
+// Init fills cfg's defaults, validates it and writes it to .arcave/config.yaml,
+// returning the resolved project name and the file's path. An initialised project
+// is an error unless override.
 func (s *InitService) Init(_ context.Context, cfg config.Config, override bool) (resolvedName, path string, err error) {
 	exists, err := s.configWriter.Exists()
 	if err != nil {
@@ -52,8 +53,10 @@ func (s *InitService) Init(_ context.Context, cfg config.Config, override bool) 
 		return "", "", fmt.Errorf("project already initialized: %s exists (use --override to overwrite)", s.configWriter.Path())
 	}
 
-	// Re-applied here because an MCP caller may hand over a Config it assembled by hand.
 	cfg.ApplyDefaults(s.projectRoot)
+	if err := cfg.Validate(); err != nil {
+		return "", "", err
+	}
 
 	if err := s.configWriter.Save(cfg); err != nil {
 		return "", "", fmt.Errorf("saving config.yaml file: %w", err)

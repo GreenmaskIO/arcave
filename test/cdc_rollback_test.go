@@ -322,7 +322,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	// session — savepoints, a rollback's undo and the cdc repositories alike. The
 	// arcave project is named apart from the compose project, so an assertion on the tree shows
 	// both levels rather than one name standing in for two.
-	composeProjectStore, err := storefactory.New(e.storageCfg, e.projectRoot, cdcArcaveProject, session, cdcProject)
+	composeProjectStore, err := storefactory.New(t.Context(), e.storageCfg, e.projectRoot, cdcArcaveProject, session, cdcProject)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, composeProjectStore.Close()) })
 
@@ -370,7 +370,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 func (e *cdcEnv) arcaveProjectStore(t *testing.T) storages.Storager {
 	t.Helper()
 
-	root, err := storefactory.Root(e.storageCfg, e.projectRoot)
+	root, err := storefactory.Root(t.Context(), e.storageCfg, e.projectRoot)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, root.Close()) })
 	store, err := storefactory.ArcaveProject(root, cdcArcaveProject)

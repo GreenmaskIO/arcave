@@ -21,10 +21,10 @@ These are bound to flags, so they work in any project:
 | `ARCAVE_COMPOSE_WAIT_TIMEOUT` | `compose.wait_timeout` |
 | `ARCAVE_COMPOSE_STOP_TIMEOUT` | `compose.stop_timeout` |
 | `ARCAVE_COMPOSE_PROGRESS` | `compose.progress` |
-| `ARCAVE_PROJECT_NAME` | `project.name` — **and** the compose project, see below |
-| `ARCAVE_STORAGE_DIRECTORY_PATH` | `storage.directory.path` |
 
-Any other key works when the file declares it. `arcave init` writes `storage.type`, `snapshot.backend` and the `project`, `compose` and `log` sections, so `ARCAVE_SNAPSHOT_BACKEND` overrides a default config out of the box:
+`ARCAVE_PROJECT_NAME` is read as `project.name`, which every config carries, **and** as the compose project — see below.
+
+Any other key works when the file declares it. No variable reaches the file `arcave init` writes — it is a template of the defaults and `--name`; `ARCAVE_LOG_LEVEL` and `ARCAVE_LOG_FORMAT` steer only its own log. That template carries `storage.type`, `storage.directory.path`, `snapshot.backend` and the `project`, `compose` and `log` sections, so `ARCAVE_SNAPSHOT_BACKEND` overrides a default config out of the box:
 
 ```shell
 ARCAVE_SNAPSHOT_BACKEND=cdc arcave -p myapp savepoint create nightly

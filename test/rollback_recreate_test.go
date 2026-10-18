@@ -177,7 +177,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	codec := composespec.NewCodec()
 
 	projectRoot := t.TempDir()
-	store, err := storefactory.New(config.Storage{
+	store, err := storefactory.New(t.Context(), config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}, projectRoot, "arcave-recreate-tenant", model.DefaultSession, model.DockerComposeProjectName(project))

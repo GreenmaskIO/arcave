@@ -72,8 +72,15 @@ func buildArcave(t *testing.T) string {
 func arcaveCommand(t *testing.T, env *sessionEnv, args ...string) *exec.Cmd {
 	t.Helper()
 
+	return arcaveCommandIn(t, env.projectRoot, args...)
+}
+
+// arcaveCommandIn runs the binary in projectRoot, unswayed by the caller's ARCAVE_* environment.
+func arcaveCommandIn(t *testing.T, projectRoot string, args ...string) *exec.Cmd {
+	t.Helper()
+
 	cmd := exec.Command(buildArcave(t), args...)
-	cmd.Dir = env.projectRoot
+	cmd.Dir = projectRoot
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "ARCAVE_") {
 			cmd.Env = append(cmd.Env, kv)

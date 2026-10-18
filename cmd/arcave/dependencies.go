@@ -94,7 +94,7 @@ func newDependencies(
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	storeRoot, arcaveProjectStore, err := openArcaveProjectStore(cfg, projectPath)
+	storeRoot, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
@@ -336,8 +336,8 @@ type sessionDependencies struct {
 	printer *json.Printer
 }
 
-func newSessionDependencies(projectPath string, cfg config.Config) (*sessionDependencies, error) {
-	root, arcaveProjectStore, err := openArcaveProjectStore(cfg, projectPath)
+func newSessionDependencies(ctx context.Context, projectPath string, cfg config.Config) (*sessionDependencies, error) {
+	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
@@ -374,8 +374,8 @@ func newRunnerInfo() heartbeat.RunnerInfo {
 
 // openArcaveProjectStore opens the store root and descends to the arcave project; the root
 // is what the caller closes.
-func openArcaveProjectStore(cfg config.Config, projectPath string) (root, arcaveProjectStore storages.Storager, err error) {
-	root, err = storefactory.Root(cfg.Storage, projectPath)
+func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (root, arcaveProjectStore storages.Storager, err error) {
+	root, err = storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialise store root: %w", err)
 	}

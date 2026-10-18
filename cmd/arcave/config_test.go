@@ -70,6 +70,17 @@ func TestResolveConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "the file names a storage secret by its variable",
+			file: "project:\n  name: proj\n" +
+				"storage:\n  type: s3\n  s3:\n    bucket: savepoints\n    secret_access_key: ${S3_SECRET}\n",
+			env:       map[string]string{"S3_SECRET": "secret"},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				require.NotNil(t, cfg.Storage.S3)
+				assert.Equal(t, "secret", cfg.Storage.S3.SecretAccessKey)
+			},
+		},
+		{
 			name:      "changed flag beats file",
 			file:      "project:\n  name: proj\nlog:\n  level: warn\n",
 			flags:     map[string]string{"log-level": "debug"},
@@ -95,15 +106,6 @@ func TestResolveConfig(t *testing.T) {
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, "warn", cfg.Log.Level)
-			},
-		},
-		{
-			name:      "init flags feed the config",
-			flags:     map[string]string{"name": "flagproj", "savepoint-dir": "/snaps"},
-			wantFound: false,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, "flagproj", cfg.Project.Name)
-				assert.Equal(t, "/snaps", cfg.Storage.DirectoryPath())
 			},
 		},
 		{
@@ -195,7 +197,7 @@ func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 		},
 		{
 			name:    "a storage tag naming an arm arcave does not implement",
-			file:    "storage:\n  type: s3\n",
+			file:    "storage:\n  type: gcs\n",
 			wantMsg: "unsupported storage.type",
 		},
 		{
@@ -225,6 +227,37 @@ func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 // Only bound flags feed the config: an unbound flag, even when changed, must not
 // override a lower-precedence source. This is what keeps a command's transient
 // flags (--override, --dry-run) out of the persisted config.
+// init reads no file: one that exists is only reported, however broken it is.
+func TestResolveWithoutFile(t *testing.T) {
+	tests := []struct {
+		name      string
+		file      string // .arcave/config.yaml body; empty means no file
+		wantFound bool
+	}{
+		{name: "no file", wantFound: false},
+		{name: "a valid file is not read", file: "project:\n  name: other\n", wantFound: true},
+		{name: "an unparsable file does not stop it", file: "project: [\n", wantFound: true},
+		{name: "an unset variable does not stop it", file: "project:\n  name: ${ARCAVE_IT_UNSET_NAME}\n", wantFound: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			root := t.TempDir()
+			if tt.file != "" {
+				writeConfig(t, root, tt.file)
+			}
+
+			// Act
+			cfg, found, err := resolveWithoutFile(testViper(root), root, config.Path(root))
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFound, found)
+			assert.Equal(t, filepath.Base(root), cfg.Project.Name, "the file's name is never taken")
+		})
+	}
+}
+
 func TestResolveConfig_IgnoresUnboundFlags(t *testing.T) {
 	// Arrange
 	root := t.TempDir()
@@ -265,7 +298,7 @@ func testViper(root string) *viper.Viper {
 }
 
 // boundFlags returns a flag set carrying the flags a command may bind — the
-// root-persistent log flags plus init's flags — each bound to v exactly as the
+// root-persistent log and compose flags — each bound to v exactly as the
 // real commands do. Only changed flags override lower-precedence sources.
 func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	t.Helper()
@@ -273,19 +306,15 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	fs.String("log-level", utils.DefaultLogLevel, "")
 	fs.String("log-format", utils.DefaultLogFormat, "")
-	fs.String("name", "", "")
-	fs.String("savepoint-dir", "", "")
 	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
 	fs.String("progress", config.ProgressLog, "")
 	viperBind(v, fs, map[string]string{
-		"log-level":     "log.level",
-		"log-format":    "log.format",
-		"name":          "project.name",
-		"savepoint-dir": "storage.directory.path",
-		"wait-timeout":  "compose.wait_timeout",
-		"stop-timeout":  "compose.stop_timeout",
-		"progress":      "compose.progress",
+		"log-level":    "log.level",
+		"log-format":   "log.format",
+		"wait-timeout": "compose.wait_timeout",
+		"stop-timeout": "compose.stop_timeout",
+		"progress":     "compose.progress",
 	})
 	return fs
 }

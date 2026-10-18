@@ -21,7 +21,7 @@
 // The config *is* its viper decode — the mapstructure tags below are the schema
 // viper fills — so Unmarshal takes a *viper.Viper rather than re-implementing
 // that decode over a settings map. The pluggable sections still declare plain
-// local union arms rather than embedding directory.Config or a future s3.Config:
+// local union arms rather than embedding directory.Config or s3.Config:
 // embedding would drag a cloud SDK into the import graph of repository/config,
 // and therefore of `arcave init`. cmd/arcave translates each section into its package's
 // own options struct.
@@ -43,11 +43,6 @@ const fileName = "config.yaml"
 // ErrInvalid reports a config value arcave cannot act on; every error Unmarshal
 // returns wraps it.
 var ErrInvalid = errors.New("invalid config")
-
-// StorageTypeDirectory names the local-filesystem arm of the storage union. It
-// is the only arm implemented today; the union exists so adding "s3" is a new
-// arm rather than a new set of top-level keys.
-const StorageTypeDirectory = "directory"
 
 // The tokens snapshot.backend accepts.
 const (
@@ -284,51 +279,6 @@ func (c Compose) Validate() error {
 	}
 }
 
-// Storage is a tagged union: Type names the arm, and exactly that arm must be
-// present. The arms are pointers so an unset one is omitted on marshal rather
-// than written out as a block of zero values.
-type Storage struct {
-	Type      string            `yaml:"type" mapstructure:"type"`
-	Directory *DirectoryStorage `yaml:"directory,omitempty" mapstructure:"directory"`
-}
-
-// DirectoryStorage is the local-filesystem arm. Path is resolved against the
-// project root when relative, and rooted under the static arcave namespace, by
-// internal/storefactory.New — which is the only place that turns it into a
-// Storager.
-type DirectoryStorage struct {
-	Path string `yaml:"path" mapstructure:"path"`
-}
-
-// Validate rejects a union whose tag names an arm that is not present, or an arm
-// arcave does not implement.
-func (s Storage) Validate() error {
-	switch s.Type {
-	case StorageTypeDirectory:
-		if s.Directory == nil {
-			return fmt.Errorf("%w: storage.type is %q but no storage.directory section is present", ErrInvalid, s.Type)
-		}
-		if s.Directory.Path == "" {
-			return fmt.Errorf("%w: storage.directory.path is required", ErrInvalid)
-		}
-		return nil
-	default:
-		return fmt.Errorf("%w: unsupported storage.type %q (supported: %s)", ErrInvalid, s.Type, StorageTypeDirectory)
-	}
-}
-
-// DirectoryPath returns the directory arm's path, or "" when the union does not
-// name that arm. A caller that only wants to *read* the savepoint directory (a
-// status report; a test asserting on a resolved config) uses this rather than
-// dereferencing an arm a hand-written config may not carry. Nothing turns the
-// path into a store this way — that is storefactory.New's alone.
-func (s Storage) DirectoryPath() string {
-	if s.Directory == nil {
-		return ""
-	}
-	return s.Directory.Path
-}
-
 // Snapshot selects the snapshot backend that owns the read→write pipeline. It
 // says which backend a *new* savepoint uses; a rollback reads the backend out of
 // the record it restores, so changing this never orphans an existing savepoint.
@@ -543,26 +493,7 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Compose.Progress == "" {
 		c.Compose.Progress = ProgressLog
 	}
-	if c.Storage.Type == "" {
-		c.Storage.Type = StorageTypeDirectory
-	}
-	if c.Storage.Type == StorageTypeDirectory {
-		// Fill a copy of the arm and re-point at it, never through the caller's
-		// pointer: a Config is passed around by value (InitService.Init takes
-		// one), and mutating the pointee would reach back into the caller's own
-		// value across that copy.
-		dir := DirectoryStorage{}
-		if c.Storage.Directory != nil {
-			dir = *c.Storage.Directory
-		}
-		if dir.Path == "" {
-			// No project segment here: storefactory roots every store at
-			// arcave/projects/<project>/…, so naming it twice would give
-			// .arcave/storage/demo/arcave/projects/demo/….
-			dir.Path = filepath.Join(model.StateDir, "storage")
-		}
-		c.Storage.Directory = &dir
-	}
+	c.Storage = c.Storage.withDefaults()
 	if c.Snapshot.Backend == "" {
 		c.Snapshot.Backend = SnapshotBackendFullCopy
 	}

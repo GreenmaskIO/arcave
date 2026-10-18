@@ -85,6 +85,9 @@ jobs:
           docker pull busybox
           docker pull alpine:3.22
           docker pull restic/restic:0.19.1
+          docker pull cgr.dev/chainguard/minio@sha256:4692462f35d97d7e82c30371d82f057703c5d9489bcae726010594c812f2d285
+          docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0@sha256:647c63a91102a9d8e8000aab803436e1fc85fbb285e7ce830a82ee5d6661cf37
+          docker pull atmoz/sftp:alpine@sha256:a6cb3eb29202ca7f57e73bb7e527286e66e0e822fff65609207c7e0ef2d135a3
 
       - name: Run integration tests
         run: make test-integration INTEGRATION_PKGS="${{ matrix.pkgs }}"

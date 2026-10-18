@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-verbose test-fidelity lint clean generate-restic-api
+.PHONY: build test test-unit test-integration test-verbose test-fidelity test-storage lint clean generate-restic-api
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
@@ -29,6 +29,11 @@ test-verbose:
 # minutes, not seconds, so it stays out of `test` behind its build tag.
 test-fidelity:
 	go test -tags fidelity -run TestIntrospectAssemble -count=1 -timeout 30m ./test/
+
+# The core workflow through the built binary on every storage backend, each against its
+# server in a container; part of test-integration too, this runs it alone.
+test-storage:
+	go test -run TestStorageE2E -count=1 -timeout 20m -parallel $(INTEGRATION_PARALLEL) ./test/
 
 lint:
 	golangci-lint run ./...

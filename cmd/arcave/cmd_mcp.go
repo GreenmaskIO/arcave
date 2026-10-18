@@ -67,7 +67,7 @@ func mcpServiceFactory(ctx context.Context, project, sessionRef string) (cli.MCP
 
 // mcpSessionServiceFactory wires the session commands for one tool call.
 func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(), error) {
-	deps, err := newSessionDependencies(projectRoot, projectCfg)
+	deps, err := newSessionDependencies(ctx, projectRoot, projectCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init session dependencies: %w", err)
 	}

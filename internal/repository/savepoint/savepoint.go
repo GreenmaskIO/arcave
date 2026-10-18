@@ -40,6 +40,8 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
+	"strings"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog/log"
@@ -123,7 +125,8 @@ func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte
 	return spec, nil
 }
 
-// ListSavepoints returns every committed record.
+// ListSavepoints returns every committed record, oldest first: sorted by id, a
+// UUIDv7, since not every store lists in key order (SFTP lists in readdir order).
 //
 // It walks the store's namespace directories, keeps those whose name is a valid
 // savepoint id, and reads each one's record. A namespace with no record is an
@@ -131,8 +134,9 @@ func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte
 // a record that is present but will not decode is a corrupt commit and is an
 // error, never a silent skip.
 //
-// That is N+1 round-trips rather than a single index read, which is free on a
-// local filesystem and, on an object store, collapses into one prefix listing.
+// That is a listing plus two requests per savepoint (Exists, then GetObject)
+// rather than a single index read: free on a local filesystem, a round trip each
+// on an object store or over SFTP.
 func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
 	_, dirs, err := r.storage.ListDir(ctx)
 	if err != nil {
@@ -156,6 +160,7 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, err
 		}
 		records = append(records, record)
 	}
+	slices.SortFunc(records, func(a, b model.Savepoint) int { return strings.Compare(a.ID.String(), b.ID.String()) })
 	return records, nil
 }
 

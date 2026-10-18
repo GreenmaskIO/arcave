@@ -71,6 +71,23 @@ func resolveConfig(v *viper.Viper, projectRoot string) (config.Config, bool, err
 	return cfg, found, nil
 }
 
+// resolveWithoutFile resolves the config from flags, env and defaults alone, for
+// init: an existing file, broken or not, is only reported as found, never read.
+func resolveWithoutFile(v *viper.Viper, projectRoot, configPath string) (config.Config, bool, error) {
+	found := true
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		found = false
+	} else if err != nil {
+		return config.Config{}, false, fmt.Errorf("stat config: %w", err)
+	}
+
+	cfg, err := config.Unmarshal(v, projectRoot)
+	if err != nil {
+		return config.Config{}, false, fmt.Errorf("unmarshal config: %w", err)
+	}
+	return cfg, found, nil
+}
+
 // viperBind binds each flag to its config key, so resolveConfig reads it with
 // viper precedence — a changed flag > env > file > the flag's default. Only bound
 // flags feed the config, which keeps a command's transient flags (--override,

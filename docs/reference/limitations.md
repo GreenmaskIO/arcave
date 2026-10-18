@@ -113,9 +113,13 @@ Each session's restic repositories live inside that session's own store root and
 
 A fork that fails or is interrupted leaves what it copied in the store, and nothing collects it on its own yet. `session list --all` shows it — `failed`, or `cloning` for up to 30 minutes after a fork that was killed — and `session delete <id>` removes it (`--force` for a `cloning` one).
 
-## The local filesystem is the only store
+## A shared store has no lock of its own
 
-`storage.type` is a union with one arm implemented: `directory`. Two machines can share a store through a filesystem they both mount, with the one-writer rule above as the only thing keeping them apart.
+A bucket, a container or an SFTP directory can be reached from several machines, and the project lock is local to each: the one-writer rule above is the only thing keeping two hosts writing one store apart.
+
+A fork's heartbeat ages by the store's own clock — an object's last-modified time — read against the host's. A host whose clock is far off the store's misjudges how old a fork is; it takes a skew near the 30-minute stale age to change a verdict.
+
+The `ssh` storage does not verify the server's host key.
 
 ## Next step
 

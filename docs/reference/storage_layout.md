@@ -6,10 +6,10 @@ keywords: [arcave storage layout, store root, object id, savepoint directory, de
 
 # Storage layout
 
-Everything arcave stores lives under one root, computed from [`storage.directory.path`](configuration.md#storage):
+Everything arcave stores lives under one root, computed from the [storage](configuration.md#storage) path — `storage.directory.path`, or the `prefix` of a bucket, a container or an SFTP directory:
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/
+<path or prefix>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/
 ```
 
 Four things are named there, outermost first:
@@ -66,7 +66,7 @@ The [`cdc` backend](configuration.md#snapshot) keeps one restic repository per v
 
 ## Moving a savepoint
 
-Everything about one savepoint is under its own directory, except the image blobs it shares. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as `storage.directory.path`, `project.name` and `-p` point at the same three segments.
+Everything about one savepoint is under its own directory, except the image blobs it shares. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as the storage path, `project.name` and `-p` point at the same three segments.
 
 ## Next step
 

@@ -51,12 +51,13 @@ log:
     format: text
 ```
 
-Two flags are worth knowing now:
+One flag is worth knowing now:
 
 ```shell
 arcave init --name myapp                        # the storage tenant name
-arcave init --savepoint-dir /backups/myapp      # where savepoint data goes
 ```
+
+Savepoint data goes to `.arcave/storage`. To keep it elsewhere — another directory, an S3 bucket, an Azure container, an SFTP server — edit `storage` in `.arcave/config.yaml`; see [Configuration](reference/configuration.md#storage).
 
 You will want `.arcave/` in your `.gitignore`.
 

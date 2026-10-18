@@ -71,7 +71,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}
-	root, err := storefactory.Root(storage, projectRoot)
+	root, err := storefactory.Root(t.Context(), storage, projectRoot)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = root.Close() })
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
@@ -339,11 +339,11 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
 
-	root, err := storefactory.Root(e.storage, e.projectRoot)
+	root, err := storefactory.Root(t.Context(), e.storage, e.projectRoot)
 	require.NoError(t, err)
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
 	require.NoError(t, err)
-	store, err := storefactory.New(e.storage, e.projectRoot, sessionArcaveProject, session,
+	store, err := storefactory.New(t.Context(), e.storage, e.projectRoot, sessionArcaveProject, session,
 		model.DockerComposeProjectName(e.project))
 	require.NoError(t, err)
 	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
