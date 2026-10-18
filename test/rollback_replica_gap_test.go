@@ -58,7 +58,7 @@ func TestRollback_KeepsAGapInReplicaNumbering(t *testing.T) {
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "with-a-gap"})
 	require.NoError(t, err)
-	require.Len(t, savepoint.Images, 2)
+	require.Len(t, savepoint.WritableLayers, 2)
 
 	for _, c := range env.workers(t) {
 		env.stamp(t, c.ID, "drifted")

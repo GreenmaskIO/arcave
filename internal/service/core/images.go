@@ -17,6 +17,7 @@ package core
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -31,6 +32,10 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// errImageUnavailable refuses a rollback that would rebuild a service on an image
+// neither the savepoint nor the daemon holds, and compose may not pull.
+var errImageUnavailable = errors.New("image is neither in the savepoint nor in the daemon")
+
 // maxRepositoryPath is docker's own cap on a repository path, the registry domain
 // aside — RepositoryNameTotalLengthMax of github.com/distribution/reference.
 const maxRepositoryPath = 255
@@ -41,72 +46,81 @@ type replicaPair struct {
 	created  int
 }
 
-// replicaRebuild is one restored layer and the created container it is rebuilt over.
+// recordedReplica is one replica a savepoint recorded and the image a rollback builds
+// it on: its restored layer's tag, or its service's own image.
+type recordedReplica struct {
+	service       string
+	replica       int
+	containerName string
+	image         string
+}
+
+// replicaRebuild is one recorded replica and the created container it is rebuilt over.
 type replicaRebuild struct {
-	image       model.ImageRestore
+	replica     recordedReplica
 	created     int
 	containerID string
 }
 
-// captureImages commits every container's writable layer under one savepoint id,
-// concurrently, and returns one capture per container in input order.
-func (s *Service) captureImages(
-	ctx context.Context, snapshotID model.SavepointID, containers []model.ContainerRef,
-) ([]model.ImageCapture, error) {
-	if len(containers) == 0 {
+// captureWritableLayers commits every requested writable layer under one savepoint id,
+// concurrently, and returns one capture per request in input order.
+func (s *Service) captureWritableLayers(
+	ctx context.Context, snapshotID model.SavepointID, reqs []model.WritableLayerCaptureRequest,
+) ([]model.WritableLayer, error) {
+	if len(reqs) == 0 {
 		return nil, nil
 	}
 	if err := snapshotID.Validate(); err != nil {
 		return nil, fmt.Errorf("validate savepoint id: %w", err)
 	}
 
-	captures := make([]model.ImageCapture, len(containers))
+	captures := make([]model.WritableLayer, len(reqs))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
-	for i, container := range containers {
+	for i, req := range reqs {
 		eg.Go(func() error {
+			container := req.Container
+			req.SnapshotID = snapshotID
 			opCtx := imageOpContext(egCtx, container, snapshotID)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
-			log.Info().Msg("image capture started")
-			capture, err := s.imageBackend.Capture(opCtx, model.ImageCaptureRequest{
-				SnapshotID: snapshotID,
-				Container:  container,
-			})
+			log.Info().Msg("writable layer capture started")
+			capture, err := s.imageBackend.CaptureWritableLayer(opCtx, req)
 			if err != nil {
-				return fmt.Errorf("capture image of %s/%d: %w", container.Service, container.Replica, err)
+				return fmt.Errorf("capture writable layer of %s/%d: %w", container.Service, container.Replica, err)
 			}
 			captures[i] = capture
 			log.Info().Dur("duration", time.Since(started)).Int64("size_bytes", capture.SizeBytes).
-				Msg("image capture finished")
+				Msg("writable layer capture finished")
 			return nil
 		})
 	}
 	if err := eg.Wait(); err != nil {
 		zerolog.Ctx(ctx).Warn().Str("snapshot_id", snapshotID.String()).
-			Msg("the partial image capture is retained for a later gc")
+			Msg("the partial writable layer capture is retained for a later gc")
 		return nil, err
 	}
 	return captures, nil
 }
 
-// captureUpstreams keeps every distinct upstream image, concurrently, apart from
-// the layers: a savepoint holds its upstreams whether or not it holds a layer.
-func (s *Service) captureUpstreams(
-	ctx context.Context, snapshotID model.SavepointID, reqs []model.UpstreamImageCaptureRequest,
-) ([]model.UpstreamImage, error) {
+// captureImages keeps every distinct image, concurrently, apart from the writable
+// layers: a savepoint holds its images whether or not it holds a layer.
+func (s *Service) captureImages(
+	ctx context.Context, snapshotID model.SavepointID, reqs []model.ImageCaptureRequest,
+) ([]model.Image, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
 
-	images := make([]model.UpstreamImage, len(reqs))
+	images := make([]model.Image, len(reqs))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, req := range reqs {
 		eg.Go(func() error {
 			opCtx := zerolog.Ctx(egCtx).With().
-				Str("upstream_image_id", req.Image.ID.String()).
+				Str("image_id", req.Image.ID.String()).
+				Strs("image", req.Image.Refs).
 				Str("snapshot_id", snapshotID.String()).
 				Str("op", "save").
 				Logger().
@@ -114,14 +128,14 @@ func (s *Service) captureUpstreams(
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
-			log.Info().Msg("upstream image capture started")
-			image, err := s.imageBackend.CaptureUpstream(opCtx, req)
+			log.Info().Msg("image capture started")
+			image, err := s.imageBackend.CaptureImage(opCtx, req)
 			if err != nil {
-				return fmt.Errorf("capture upstream image %s: %w", req.Image.ID, err)
+				return fmt.Errorf("capture image %s: %w", req.Image.ID, err)
 			}
 			images[i] = image
 			log.Info().Dur("duration", time.Since(started)).Bool("stored", image.Stored).
-				Int64("stored_bytes", image.StoredBytes).Msg("upstream image capture finished")
+				Int64("stored_bytes", image.StoredBytes).Msg("image capture finished")
 			return nil
 		})
 	}
@@ -131,39 +145,39 @@ func (s *Service) captureUpstreams(
 	return images, nil
 }
 
-// restoreImages loads every writable layer the record holds back into the daemon,
-// concurrently, and names each under a tag of its own. A record predating image
-// capture restores nothing.
-func (s *Service) restoreImages(
+// restoreWritableLayers loads every writable layer the record holds back into the daemon,
+// concurrently, and names each under a tag of its own. A record holding no
+// writable layer restores nothing.
+func (s *Service) restoreWritableLayers(
 	ctx context.Context, record model.Savepoint, project string,
-) ([]model.ImageRestore, error) {
-	if len(record.Images) == 0 {
+) ([]model.WritableLayerRestoreResult, error) {
+	if len(record.WritableLayers) == 0 {
 		zerolog.Ctx(ctx).Info().Str("snapshot_id", record.ID.String()).
 			Msg("the savepoint holds no writable layers; nothing to restore")
 		return nil, nil
 	}
 
-	restored := make([]model.ImageRestore, len(record.Images))
+	restored := make([]model.WritableLayerRestoreResult, len(record.WritableLayers))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
-	for i, capture := range record.Images {
+	for i, capture := range record.WritableLayers {
 		eg.Go(func() error {
 			opCtx := imageRestoreContext(egCtx, capture, record.ID)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
-			log.Info().Msg("image restore started")
-			image, err := s.imageBackend.Restore(opCtx, model.ImageRestoreRequest{
+			log.Info().Msg("writable layer restore started")
+			image, err := s.imageBackend.RestoreWritableLayer(opCtx, model.WritableLayerRestoreRequest{
 				SnapshotID: record.ID,
-				Capture:    capture,
-				ImageRef:   restoredImageRef(project, record.ID, capture),
+				Layer:      capture,
+				Tag:        restoredLayerTag(project, record.ID, capture),
 			})
 			if err != nil {
-				return fmt.Errorf("restore image of %s/%d: %w", capture.Service, capture.Replica, err)
+				return fmt.Errorf("restore writable layer of %s/%d: %w", capture.Service, capture.Replica, err)
 			}
 			restored[i] = image
-			log.Info().Dur("duration", time.Since(started)).Str("image_ref", image.ImageRef).
-				Msg("image restore finished")
+			log.Info().Dur("duration", time.Since(started)).Str("tag", image.Tag).
+				Msg("writable layer restore finished")
 			return nil
 		})
 	}
@@ -173,19 +187,44 @@ func (s *Service) restoreImages(
 	return restored, nil
 }
 
+// requireImages refuses, before anything is stopped, a service the rollback would build
+// on an image compose may not pull and the daemon does not hold.
+func (s *Service) requireImages(ctx context.Context, project *types.Project, restored []model.WritableLayerRestoreResult) error {
+	for _, name := range slices.Sorted(maps.Keys(project.Services)) {
+		svc := project.Services[name]
+		if svc.PullPolicy != types.PullPolicyNever ||
+			slices.ContainsFunc(restored, func(r model.WritableLayerRestoreResult) bool { return r.Service == name }) {
+			continue
+		}
+		present, err := s.imageLookup.ImageRefExists(ctx, svc.Image)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return fmt.Errorf("%w: service %s runs on %s", errImageUnavailable, name, svc.Image)
+		}
+	}
+	return nil
+}
+
 // retargetImages points every restored service, on a copy of the project, at its lowest
 // recorded replica's image with pull_policy never: the tag exists only in the local daemon.
-func retargetImages(project *types.Project, restored []model.ImageRestore) *types.Project {
+func retargetImages(project *types.Project, restored []model.WritableLayerRestoreResult) *types.Project {
 	if len(restored) == 0 {
 		return project
 	}
 
-	_, byService := restoredByService(restored)
+	lowest := map[string]model.WritableLayerRestoreResult{}
+	for _, layer := range restored {
+		if current, ok := lowest[layer.Service]; !ok || layer.Replica < current.Replica {
+			lowest[layer.Service] = layer
+		}
+	}
 	retargeted := *project
 	retargeted.Services = make(types.Services, len(project.Services))
 	for name, service := range project.Services {
-		if images, ok := byService[name]; ok {
-			service.Image = images[0].ImageRef
+		if layer, ok := lowest[name]; ok {
+			service.Image = layer.Tag
 			service.PullPolicy = types.PullPolicyNever
 		}
 		retargeted.Services[name] = service
@@ -195,8 +234,8 @@ func retargetImages(project *types.Project, restored []model.ImageRestore) *type
 
 // rebuildDivergentReplicas rebuilds each replica the compose spec cannot name on its own layer
 // and recorded number. It must run before the volume restore, which resolves through containers.
-func (s *Service) rebuildDivergentReplicas(ctx context.Context, restored []model.ImageRestore) error {
-	if createdAsRecorded(restored) {
+func (s *Service) rebuildDivergentReplicas(ctx context.Context, replicas []recordedReplica) error {
+	if createdAsRecorded(replicas) {
 		return nil
 	}
 
@@ -204,43 +243,43 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, restored []model
 	if err != nil {
 		return fmt.Errorf("introspecting the rebuilt compose project: %w", err)
 	}
-	rebuilds, err := replicaRebuilds(restored, builtContainers(res))
+	rebuilds, err := replicaRebuilds(replicas, builtContainers(res))
 	if err != nil {
 		return err
 	}
 
 	log := zerolog.Ctx(ctx)
 	for _, r := range rebuilds {
-		image := r.image
-		if image.Replica != r.created {
-			log.Warn().Str("service", image.Service).Int("replica", image.Replica).Int("created_replica", r.created).
+		replica := r.replica
+		if replica.replica != r.created {
+			log.Warn().Str("service", replica.service).Int("replica", replica.replica).Int("created_replica", r.created).
 				Msg("compose numbers replicas without gaps and created this one under another number; " +
 					"it is recreated under the number and name the savepoint recorded")
 		}
-		as := model.ReplicaIdentity{Name: image.ContainerName, Number: image.Replica}
-		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, r.containerID, as, image.ImageRef)
+		as := model.ReplicaIdentity{Name: replica.containerName, Number: replica.replica}
+		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, r.containerID, as, replica.image)
 		if err != nil {
 			return fmt.Errorf("rebuild replica %d of service %s from %s: %w",
-				image.Replica, image.Service, image.ImageRef, err)
+				replica.replica, replica.service, replica.image, err)
 		}
-		log.Info().Str("service", image.Service).Int("replica", image.Replica).
-			Str("container", rebuilt).Str("image_ref", image.ImageRef).Msg("replica rebuilt on its own layer")
+		log.Info().Str("service", replica.service).Int("replica", replica.replica).
+			Str("container", rebuilt).Str("image", replica.image).Msg("replica rebuilt as the savepoint recorded it")
 	}
 	return nil
 }
 
-// restoredImageRef names one restored layer in the local daemon:
+// restoredLayerTag names one restored layer in the local daemon:
 // arcave/<project>-<service>-<replica>-<base image>:sp-<savepoint id>. The
 // repository carries the identity and the tag the savepoint, so `docker images`
 // reads as one row per savepoint under a row per replica.
-func restoredImageRef(project string, snapshotID model.SavepointID, capture model.ImageCapture) string {
+func restoredLayerTag(project string, snapshotID model.SavepointID, capture model.WritableLayer) string {
 	return restoredImageRepository(project, capture) + ":" + model.LayerTagPrefix + snapshotID.String()
 }
 
 // restoredImageRepository builds the repository half and keeps it addressable: the
 // base image is the one segment carrying no identity, so it is what gets cut when
 // the name would pass docker's cap, and the replica is still named without it.
-func restoredImageRepository(project string, capture model.ImageCapture) string {
+func restoredImageRepository(project string, capture model.WritableLayer) string {
 	identity := model.LayerImageNamespace + "/" +
 		joinSegments(refSegment(project), refSegment(capture.Service), strconv.Itoa(capture.Replica))
 
@@ -289,19 +328,53 @@ func refSegment(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-// restoredByService groups the restored layers by service, each group ascending
-// by replica, and lists the services in the order they first appear.
-func restoredByService(restored []model.ImageRestore) ([]string, map[string][]model.ImageRestore) {
-	var services []string
-	byService := map[string][]model.ImageRestore{}
-	for _, image := range restored {
-		if _, ok := byService[image.Service]; !ok {
-			services = append(services, image.Service)
-		}
-		byService[image.Service] = append(byService[image.Service], image)
+// recordedReplicas lists every replica record holds under the number and name it
+// recorded: one with a restored layer on its tag, one without on its service's own
+// image. A restore resolves an anonymous volume by recorded number, so a gap in the
+// numbering is rebuilt without a layer too.
+func recordedReplicas(
+	record model.Savepoint, project *types.Project, restored []model.WritableLayerRestoreResult,
+) []recordedReplica {
+	replicas := make([]recordedReplica, 0, len(restored))
+	for _, layer := range restored {
+		replicas = append(replicas, recordedReplica{
+			service:       layer.Service,
+			replica:       layer.Replica,
+			containerName: layer.ContainerName,
+			image:         layer.Tag,
+		})
 	}
-	for _, images := range byService {
-		slices.SortFunc(images, func(a, b model.ImageRestore) int { return cmp.Compare(a.Replica, b.Replica) })
+	if record.NotCovered == nil {
+		return replicas
+	}
+	for _, skipped := range record.NotCovered.WritableLayers {
+		svc, ok := project.Services[skipped.Service]
+		if !ok {
+			continue
+		}
+		replicas = append(replicas, recordedReplica{
+			service:       skipped.Service,
+			replica:       skipped.Replica,
+			containerName: skipped.Container,
+			image:         svc.Image,
+		})
+	}
+	return replicas
+}
+
+// replicasByService groups the replicas by service, each group ascending by replica,
+// and lists the services in the order they first appear.
+func replicasByService(replicas []recordedReplica) ([]string, map[string][]recordedReplica) {
+	var services []string
+	byService := map[string][]recordedReplica{}
+	for _, replica := range replicas {
+		if _, ok := byService[replica.service]; !ok {
+			services = append(services, replica.service)
+		}
+		byService[replica.service] = append(byService[replica.service], replica)
+	}
+	for _, group := range byService {
+		slices.SortFunc(group, func(a, b recordedReplica) int { return cmp.Compare(a.replica, b.replica) })
 	}
 	return services, byService
 }
@@ -309,11 +382,11 @@ func restoredByService(restored []model.ImageRestore) ([]string, map[string][]mo
 // createdAsRecorded reports whether every service's replicas count from 1 without a gap,
 // all on the one image the service was retargeted to. It trusts compose to number a
 // freshly created service 1..N, which is what lets it skip reading the created containers.
-func createdAsRecorded(restored []model.ImageRestore) bool {
-	_, byService := restoredByService(restored)
-	for _, images := range byService {
-		for i, image := range images {
-			if image.Replica != i+1 || image.ImageRef != images[0].ImageRef {
+func createdAsRecorded(replicas []recordedReplica) bool {
+	_, byService := replicasByService(replicas)
+	for _, group := range byService {
+		for i, replica := range group {
+			if replica.replica != i+1 || replica.image != group[0].image {
 				return false
 			}
 		}
@@ -321,27 +394,25 @@ func createdAsRecorded(restored []model.ImageRestore) bool {
 	return true
 }
 
-// replicaRebuilds is the replicas whose layer or number compose did not reproduce, highest
+// replicaRebuilds is the replicas whose image or number compose did not reproduce, highest
 // recorded number first per service so each claimed name has already been freed.
-func replicaRebuilds(
-	restored []model.ImageRestore, built map[string]map[int]string,
-) ([]replicaRebuild, error) {
-	services, byService := restoredByService(restored)
+func replicaRebuilds(replicas []recordedReplica, built map[string]map[int]string) ([]replicaRebuild, error) {
+	services, byService := replicasByService(replicas)
 	var rebuilds []replicaRebuild
 	for _, service := range services {
-		images := byService[service]
+		group := byService[service]
 		created := slices.Sorted(maps.Keys(built[service]))
-		pairs, err := pairReplicas(replicaNumbers(images), created)
+		pairs, err := pairReplicas(replicaNumbers(group), created)
 		if err != nil {
 			return nil, fmt.Errorf("service %s: %w", service, err)
 		}
-		for i := len(images) - 1; i >= 0; i-- {
-			image, pair := images[i], pairs[i]
-			if image.ImageRef == images[0].ImageRef && pair.recorded == pair.created {
+		for i := len(group) - 1; i >= 0; i-- {
+			replica, pair := group[i], pairs[i]
+			if replica.image == group[0].image && pair.recorded == pair.created {
 				continue
 			}
 			rebuilds = append(rebuilds, replicaRebuild{
-				image: image, created: pair.created, containerID: built[service][pair.created],
+				replica: replica, created: pair.created, containerID: built[service][pair.created],
 			})
 		}
 	}
@@ -363,11 +434,11 @@ func pairReplicas(recorded, created []int) ([]replicaPair, error) {
 	return pairs, nil
 }
 
-// replicaNumbers is the replica number of each layer, in order.
-func replicaNumbers(images []model.ImageRestore) []int {
-	numbers := make([]int, len(images))
-	for i, image := range images {
-		numbers[i] = image.Replica
+// replicaNumbers is the number of each replica, in order.
+func replicaNumbers(replicas []recordedReplica) []int {
+	numbers := make([]int, len(replicas))
+	for i, replica := range replicas {
+		numbers[i] = replica.replica
 	}
 	return numbers
 }
@@ -402,7 +473,7 @@ func imageOpContext(
 
 // imageRestoreContext attributes every line the restore logs.
 func imageRestoreContext(
-	ctx context.Context, capture model.ImageCapture, snapshotID model.SavepointID,
+	ctx context.Context, capture model.WritableLayer, snapshotID model.SavepointID,
 ) context.Context {
 	return zerolog.Ctx(ctx).With().
 		Str("service", capture.Service).

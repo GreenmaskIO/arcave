@@ -25,6 +25,8 @@ const (
 	SkipReasonCluster              SkipReason = "cluster"
 	SkipReasonUnknownType          SkipReason = "unknown_type"
 	SkipReasonInheritedFromOutside SkipReason = "inherited_from_outside"
+	// SkipReasonExcluded is a unit an arcave.* label leaves out.
+	SkipReasonExcluded SkipReason = "excluded"
 )
 
 // NotCovered is the state a savepoint does not hold. The zero value covers everything.
@@ -39,21 +41,29 @@ type NotCovered struct {
 	KilledContainers []KilledContainer `json:"killed_containers,omitempty"`
 	// ReplicaGaps are the services missing a replica below their highest one.
 	ReplicaGaps []ReplicaGap `json:"replica_gaps,omitempty"`
-	// UnresolvedUpstreams are the containers whose upstream image cannot be named:
-	// their layer is held, the image under it is not.
-	UnresolvedUpstreams []UnresolvedUpstream `json:"unresolved_upstreams,omitempty"`
+	// UnresolvedImages are the containers whose image cannot be named: a rollback
+	// cannot rebuild them from it, so only a held writable layer brings them back.
+	UnresolvedImages []UnresolvedImage `json:"unresolved_images,omitempty"`
+	// WritableLayers are the replicas whose writable layer a label leaves out.
+	WritableLayers []SkippedWritableLayer `json:"writable_layers,omitempty"`
+	// Images are the services whose image a label leaves out.
+	Images []SkippedImage `json:"images,omitempty"`
 }
 
 // IsEmpty reports whether nothing is left out.
 func (n NotCovered) IsEmpty() bool {
 	return len(n.Mounts) == 0 && len(n.ServicesWithoutVolumes) == 0 && len(n.KilledContainers) == 0 &&
-		len(n.ReplicaGaps) == 0 && len(n.UnresolvedUpstreams) == 0
+		len(n.ReplicaGaps) == 0 && len(n.UnresolvedImages) == 0 && len(n.WritableLayers) == 0 && len(n.Images) == 0
 }
 
 // SkippedVolume is a mount the backup decision did not take. Not deduplicated:
 // two tmpfs mounts are two skips.
 type SkippedVolume struct {
+	// Volume is the docker name of a named volume left out whole; Service and
+	// Target name a mount.
+	Volume  string     `json:"volume,omitempty"`
 	Service string     `json:"service,omitempty"`
+	Replica int        `json:"replica,omitempty"` // an anonymous volume's replica
 	Target  string     `json:"target,omitempty"`
 	RawType string     `json:"raw_type,omitempty"` // the compose mount type
 	Reason  SkipReason `json:"reason"`
@@ -76,10 +86,29 @@ type KilledContainer struct {
 	Container string `json:"container"`
 }
 
-// UnresolvedUpstream is a container whose upstream image cannot be named.
-type UnresolvedUpstream struct {
+// UnresolvedImage is a container whose image cannot be named, whether or not its
+// writable layer is held.
+type UnresolvedImage struct {
 	Service   string `json:"service"`
 	Replica   int    `json:"replica"`
 	Container string `json:"container"`
 	Image     string `json:"image,omitempty"` // what Config.Image reads
+}
+
+// SkippedWritableLayer is a replica whose writable layer is left out; a rollback creates
+// it fresh from its image.
+type SkippedWritableLayer struct {
+	Service   string     `json:"service"`
+	Replica   int        `json:"replica"`
+	Container string     `json:"container"`
+	Reason    SkipReason `json:"reason"`
+	Detail    string     `json:"detail,omitempty"`
+}
+
+// SkippedImage is a service whose image bytes are left out.
+type SkippedImage struct {
+	Service string     `json:"service"`
+	Image   string     `json:"image,omitempty"` // the image's reference
+	Reason  SkipReason `json:"reason"`
+	Detail  string     `json:"detail,omitempty"`
 }

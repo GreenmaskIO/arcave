@@ -32,7 +32,7 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 	volume := model.Volume{
 		ObjectID: "volume-named-demo_pgdata",
 		Type:     model.VolumeTypeNamed,
-		Backend:  model.SnapshotBackendCopy,
+		Backend:  model.SnapshotBackendFullCopy,
 		Named: &model.VolumePropertiesNamed{
 			VolumeName: "demo_pgdata",
 			UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
@@ -89,13 +89,13 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 // expectation, so a dispatch fails the run where it happened.
 func TestSnapshotBackendRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
 	// Arrange
-	factory := &mockBackendFactory{kind: model.SnapshotBackendCopy}
+	factory := &mockBackendFactory{kind: model.SnapshotBackendFullCopy}
 	registry, err := NewSnapshotBackendRegistry(factory)
 	require.NoError(t, err)
 
 	// Act
 	_, err = registry.New(model.BackendSpec{
-		Volume: model.Volume{ObjectID: "volume-named-demo_pgdata", Backend: model.SnapshotBackendCopy},
+		Volume: model.Volume{ObjectID: "volume-named-demo_pgdata", Backend: model.SnapshotBackendFullCopy},
 	})
 
 	// Assert
@@ -108,9 +108,9 @@ func TestSnapshotBackendRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
 func TestSnapshotBackendRegistry_New_PassesTheSpecThrough(t *testing.T) {
 	// Arrange
 	store := newDirStore(t)
-	volume := model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendCopy}
+	volume := model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendFullCopy}
 
-	factory := &mockBackendFactory{kind: model.SnapshotBackendCopy}
+	factory := &mockBackendFactory{kind: model.SnapshotBackendFullCopy}
 	var got model.BackendSpec
 	factory.On("New", model.BackendSpec{Store: store, Volume: volume}).
 		Run(func(args mock.Arguments) {

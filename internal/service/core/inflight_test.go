@@ -72,7 +72,7 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 		BackendRegistry:  registry,
 		Inflight:         standingMarker(t, model.InflightRestoring),
 		Store:            nil,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -99,7 +99,7 @@ func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
 		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: nil, Inflight: standingMarker(t, model.InflightInconsistent),
-		Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+		Store: nil, CaptureDefaults: demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -136,7 +136,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 		BackendRegistry:  registry,
 		Inflight:         standingMarker(t, model.InflightRestoring),
 		Store:            nil,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -171,7 +171,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { newSafetyID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "undo-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "undo-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
@@ -201,7 +201,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -255,7 +255,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
@@ -289,7 +289,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 		ComposeProject:   "demo",
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -334,7 +334,7 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
@@ -360,7 +360,7 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -398,7 +398,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
@@ -431,7 +431,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -485,8 +485,8 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 			if tt.passes {
 				vol := record.Stats[0].Volume
 				repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
-				images.On("Restore", mock.Anything, mock.Anything).Return(demoImageRestore(), nil).Once()
-				target := matchRetargetedImage(demoService, demoRestoredRef(1))
+				images.On("RestoreWritableLayer", mock.Anything, mock.Anything).Return(demoWritableLayerRestoreResult(), nil).Once()
+				target := matchRetargetedImage(demoService, demoRestoredTag(1))
 				runner.On("Create", mock.Anything, target).Return(nil).Once()
 				runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
 				backend := &mockBackend{volume: vol}

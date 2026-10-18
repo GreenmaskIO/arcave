@@ -46,7 +46,6 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -66,7 +65,7 @@ services:
       MODE: %[2]s
       KEEP: constant
     labels:
-      arcave.it: %[2]s
+      test.arcave-it: %[2]s
     working_dir: /data
     hostname: app-host
     stop_signal: SIGKILL
@@ -136,7 +135,7 @@ func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
 	assert.Equal(t, before.Config.Hostname, after.Config.Hostname, "hostname")
 	assert.Equal(t, before.Config.StopSignal, after.Config.StopSignal, "stop_signal")
 	assert.Equal(t, before.Config.Healthcheck, after.Config.Healthcheck, "healthcheck")
-	assert.Equal(t, before.Config.Labels["arcave.it"], after.Config.Labels["arcave.it"], "labels")
+	assert.Equal(t, before.Config.Labels["test.arcave-it"], after.Config.Labels["test.arcave-it"], "labels")
 	assert.Equal(t, before.HostConfig.PortBindings, after.HostConfig.PortBindings, "ports")
 	assert.Equal(t, mountTargets(before), mountTargets(after), "mounts")
 	assert.Equal(t, networkAliases(before), networkAliases(after), "network aliases")
@@ -197,12 +196,13 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		SpecCodec:          codec,
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
+		ImageBackend:       newImageCopier(store, engine, blobStore),
 		ContainerRebuilder: engine,
+		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
-		DefaultBackend:     model.SnapshotBackendCopy,
+		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &recreateEnv{

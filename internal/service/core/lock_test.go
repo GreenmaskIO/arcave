@@ -70,7 +70,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
 				ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-				Store: nil, DefaultBackend: model.SnapshotBackendCopy,
+				Store: nil, CaptureDefaults: demoCaptureDefaults,
 			})
 			ctx := zerolog.Nop().WithContext(context.Background())
 

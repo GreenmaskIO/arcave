@@ -111,8 +111,11 @@ var (
 	// but still owns volumes the rollback would overwrite.
 	ErrLeftoverVolumes = errors.New("compose project is not running but its volumes survive")
 
-	// ErrUnsupportedDaemon reports a Docker daemon too old for the image backend.
+	// ErrUnsupportedDaemon reports a Docker daemon older than arcave supports.
 	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
+
+	// ErrInvalidCapturePolicy reports an arcave.* label arcave cannot act on.
+	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
 )
 
 // AmbiguousSavepointNameError reports a name more than one savepoint carries;

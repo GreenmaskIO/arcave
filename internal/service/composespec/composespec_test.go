@@ -515,6 +515,12 @@ func TestUserLabels(t *testing.T) {
 			want: types.Labels{"tier": "data"},
 		},
 		{name: "nothing left renders as nil", labels: map[string]string{model.BaseImageRefLabel: "postgres:16"}, want: nil},
+		{
+			// The capture policy travels in the spec, so a rollback restores it with the topology.
+			name:   "the capture policy is kept",
+			labels: map[string]string{model.LabelCapture: "false", model.LabelMountsExclude: "/app"},
+			want:   types.Labels{model.LabelCapture: "false", model.LabelMountsExclude: "/app"},
+		},
 	}
 
 	for _, tt := range tests {

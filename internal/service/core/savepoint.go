@@ -63,7 +63,11 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 	if _, err := s.requireNoInflight(ctx, ""); err != nil {
 		return model.Savepoint{}, err
 	}
-	if err := s.requireUniqueName(ctx, req.Name); err != nil {
+	visible, err := s.listSavepoints(ctx, false)
+	if err != nil {
+		return model.Savepoint{}, err
+	}
+	if err := requireUniqueName(visible, req.Name); err != nil {
 		return model.Savepoint{}, err
 	}
 
@@ -72,6 +76,7 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
+	s.warnCapturePolicyDrift(ctx, visible, ws.project)
 
 	killed, err := s.stopServices(ctx, ws)
 	if err != nil {
@@ -102,17 +107,13 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 	return record, nil
 }
 
-// requireUniqueName refuses a name another savepoint of the compose project carries.
-// Safety snapshots do not count: a name selector never sees them.
-func (s *Service) requireUniqueName(ctx context.Context, name string) error {
+// requireUniqueName refuses a name another of the visible savepoints carries. Safety
+// snapshots do not count: a name selector never sees them.
+func requireUniqueName(visible []model.Savepoint, name string) error {
 	if name == "" {
 		return nil
 	}
-	records, err := s.listSavepoints(ctx, false)
-	if err != nil {
-		return err
-	}
-	for _, r := range records {
+	for _, r := range visible {
 		if r.Name == name {
 			return fmt.Errorf("%w: %q names savepoint %s", model.ErrSavepointNameTaken, name, r.ID)
 		}

@@ -59,27 +59,27 @@ func (m *mockSavepointRepo) DeleteSavepoint(ctx context.Context, id model.Savepo
 // mockImageBackend doubles imageBackend.
 type mockImageBackend struct{ mock.Mock }
 
-func (m *mockImageBackend) Capture(
-	ctx context.Context, req model.ImageCaptureRequest,
-) (model.ImageCapture, error) {
+func (m *mockImageBackend) CaptureWritableLayer(
+	ctx context.Context, req model.WritableLayerCaptureRequest,
+) (model.WritableLayer, error) {
 	args := m.Called(ctx, req)
-	capture, _ := args.Get(0).(model.ImageCapture)
+	capture, _ := args.Get(0).(model.WritableLayer)
 	return capture, args.Error(1)
 }
 
-func (m *mockImageBackend) CaptureUpstream(
-	ctx context.Context, req model.UpstreamImageCaptureRequest,
-) (model.UpstreamImage, error) {
+func (m *mockImageBackend) CaptureImage(
+	ctx context.Context, req model.ImageCaptureRequest,
+) (model.Image, error) {
 	args := m.Called(ctx, req)
-	image, _ := args.Get(0).(model.UpstreamImage)
+	image, _ := args.Get(0).(model.Image)
 	return image, args.Error(1)
 }
 
-func (m *mockImageBackend) Restore(
-	ctx context.Context, req model.ImageRestoreRequest,
-) (model.ImageRestore, error) {
+func (m *mockImageBackend) RestoreWritableLayer(
+	ctx context.Context, req model.WritableLayerRestoreRequest,
+) (model.WritableLayerRestoreResult, error) {
 	args := m.Called(ctx, req)
-	restored, _ := args.Get(0).(model.ImageRestore)
+	restored, _ := args.Get(0).(model.WritableLayerRestoreResult)
 	return restored, args.Error(1)
 }
 
@@ -341,4 +341,11 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+type mockImageLookup struct{ mock.Mock }
+
+func (m *mockImageLookup) ImageRefExists(ctx context.Context, ref string) (bool, error) {
+	args := m.Called(ctx, ref)
+	return args.Bool(0), args.Error(1)
 }

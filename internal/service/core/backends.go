@@ -108,12 +108,13 @@ func (s *Service) performSavepoint(
 		return model.Savepoint{}, err
 	}
 
-	record.Images, err = s.captureImages(ctx, record.ID, ws.containers)
+	// The images first: a writable layer's stored_bytes is then what it adds over its image.
+	record.Images, err = s.captureImages(ctx, record.ID, ws.images.upstreams)
 	if err != nil {
 		return model.Savepoint{}, err
 	}
 
-	record.UpstreamImages, err = s.captureUpstreams(ctx, record.ID, ws.upstreams)
+	record.WritableLayers, err = s.captureWritableLayers(ctx, record.ID, ws.images.writableLayers)
 	if err != nil {
 		return model.Savepoint{}, err
 	}

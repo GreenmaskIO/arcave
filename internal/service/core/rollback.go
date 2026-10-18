@@ -40,16 +40,16 @@ const revertBudget = 10 * time.Minute
 // is written: the savepoint's spec pointed at its loaded layers, and one backend per volume.
 type rollbackTarget struct {
 	project  *types.Project
-	restored []model.ImageRestore
+	restored []model.WritableLayerRestoreResult
 	backends []model.VolumeSnapshotBackend
 }
 
 // result reports a rollback to record that built t.
 func (t rollbackTarget) result(record model.Savepoint) model.RollbackResult {
 	return model.RollbackResult{
-		Savepoint: record,
-		Restored:  volumesOf(record),
-		Images:    t.restored,
+		Savepoint:      record,
+		Restored:       volumesOf(record),
+		WritableLayers: t.restored,
 	}
 }
 
@@ -102,6 +102,10 @@ func (s *Service) rollback(ctx context.Context, req model.RollbackRequest) (mode
 		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
 	}
+	if err := requireDaemon(ctx, res.Daemon, s.minDaemonMajor); err != nil {
+		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
+		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
+	}
 	if composeProjectAbsent(res) {
 		return s.rollbackColdStart(ctx, req, record, res, interrupted)
 	}
@@ -115,12 +119,19 @@ func (s *Service) rollbackLive(
 ) (model.RollbackResult, error) {
 	log := zerolog.Ctx(ctx)
 
-	// First, so a daemon the image backend cannot serve is refused before any layer
-	// is loaded.
-	ws, err := s.workingSetOf(ctx, res, req.WaitTimeout)
+	// The live compose project as the safety snapshot captures it, built before the stop so
+	// a project that cannot be captured stays running. What it leaves out is logged as the
+	// safety snapshot's, not the rollback's.
+	safetyCtx := log.With().Bool("safety_snapshot", true).Logger().WithContext(ctx)
+	capturePolicy, err := s.safetySnapshotCapturePolicy(safetyCtx, res, record)
 	if err != nil {
 		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
-		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
+		return model.RollbackResult{}, fmt.Errorf("resolve the safety snapshot's capture policy: %w", preferInterrupt(ctx, err))
+	}
+	ws, err := s.workingSetOf(safetyCtx, res, req.WaitTimeout, capturePolicy)
+	if err != nil {
+		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
+		return model.RollbackResult{}, fmt.Errorf("build the safety snapshot's working set: %w", preferInterrupt(ctx, err))
 	}
 
 	// Ahead of the stop: whatever cannot be prepared leaves the project running.
@@ -208,6 +219,7 @@ func (s *Service) rollbackLive(
 	defer cancel()
 	s.reapAnonymousVolumes(cleanupCtx, ws, volumesOf(record))
 	s.releaseSafetySnapshot(cleanupCtx, safetySnapshot, ws.backends)
+	logRestoredLayers(ctx, target.restored)
 	return target.result(record), nil
 }
 
@@ -223,16 +235,33 @@ func (s *Service) prepareTarget(ctx context.Context, record model.Savepoint) (ro
 	if err != nil {
 		return rollbackTarget{}, fmt.Errorf("load the savepoint's compose spec: %w", err)
 	}
+	if err := checkCaptureStamps(ctx, record, project); err != nil {
+		return rollbackTarget{}, err
+	}
 	// Also the check of the archives themselves: one the daemon will not take fails here.
-	restored, err := s.restoreImages(ctx, record, project.Name)
+	restored, err := s.restoreWritableLayers(ctx, record, project.Name)
 	if err != nil {
 		return rollbackTarget{}, fmt.Errorf("restore the savepoint's writable layers: %w", err)
+	}
+	if err := s.requireImages(ctx, project, restored); err != nil {
+		return rollbackTarget{}, err
 	}
 	return rollbackTarget{
 		project:  retargetImages(project, restored),
 		restored: restored,
 		backends: backends,
 	}, nil
+}
+
+// logRestoredLayers says where the restored layers live: only in the containers the
+// rollback built, which compose replaces on its own images at the next `up` of the file.
+func logRestoredLayers(ctx context.Context, restored []model.WritableLayerRestoreResult) {
+	if len(restored) == 0 {
+		return
+	}
+	zerolog.Ctx(ctx).Info().Int("writable_layers", len(restored)).
+		Msg("the containers run on the savepoint's writable layers: `docker compose up` from your " +
+			"compose file recreates them on its images and drops those layers; roll back again to restore them")
 }
 
 // rollbackColdStart rolls back a compose project with no containers (never started, or taken
@@ -246,13 +275,6 @@ func (s *Service) rollbackColdStart(
 ) (model.RollbackResult, error) {
 	log := zerolog.Ctx(ctx)
 	log.Info().Msg("the compose project is not running: building it from the savepoint")
-
-	// Only loading layers needs Docker 25+; a savepoint without layers runs on any daemon.
-	if len(record.Images) > 0 {
-		if err := requireDaemon(ctx, res.Daemon, s.minDaemonMajor); err != nil {
-			return model.RollbackResult{}, fmt.Errorf("prepare: %w", err)
-		}
-	}
 
 	// Repeating an interrupted rollback: the volumes it finds are its own partial writes, so
 	// they are not refused, and the marker must not claim again that nothing was written.
@@ -293,6 +315,7 @@ func (s *Service) rollbackColdStart(
 	if err := s.inflightMarker.Clear(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to clear the inflight marker")
 	}
+	logRestoredLayers(ctx, target.restored)
 	return target.result(record), nil
 }
 
@@ -432,7 +455,7 @@ func (s *Service) buildFromSavepoint(
 	if err := s.composeCreate(ctx, target.project); err != nil {
 		return err
 	}
-	if err := s.rebuildDivergentReplicas(ctx, target.restored); err != nil {
+	if err := s.rebuildDivergentReplicas(ctx, recordedReplicas(record, target.project, target.restored)); err != nil {
 		return err
 	}
 
@@ -471,7 +494,7 @@ func (s *Service) revert(
 ) error {
 	// The safety snapshot holds the layers the live compose project had, so the undo has to
 	// put them back — the same parity the capture side already has.
-	restored, err := s.restoreImages(ctx, safetySnapshot, ws.project.Name)
+	restored, err := s.restoreWritableLayers(ctx, safetySnapshot, ws.project.Name)
 	if err != nil {
 		return fmt.Errorf("restore the safety snapshot's writable layers: %w", err)
 	}
@@ -488,7 +511,7 @@ func (s *Service) revert(
 	if err := s.composeCreate(ctx, live); err != nil {
 		return err
 	}
-	if err := s.rebuildDivergentReplicas(ctx, restored); err != nil {
+	if err := s.rebuildDivergentReplicas(ctx, recordedReplicas(safetySnapshot, live, restored)); err != nil {
 		return err
 	}
 

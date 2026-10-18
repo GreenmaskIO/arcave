@@ -358,7 +358,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 		BackendRegistry:  registry,
 		Inflight:         inflightrepo.New(e.projectRoot),
 		Store:            composeProjectStore,
-		DefaultBackend:   model.SnapshotBackendCDC,
+		CaptureDefaults:  captureDefaults(model.SnapshotBackendCDC),
 		Session:          session,
 		ComposeProject:   cdcProject,
 		Sessions:         sessionrepo.New(e.arcaveProjectStore(t)),

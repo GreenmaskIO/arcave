@@ -64,7 +64,7 @@ func TestParseDigestID_RefusesWhatIsNotContent(t *testing.T) {
 
 func TestDigestID_UnmarshalJSON(t *testing.T) {
 	// Arrange
-	var capture model.ImageCapture
+	var capture model.WritableLayer
 
 	// Act
 	err := json.Unmarshal([]byte(`{"committed_image_id":"`+validDigest+`"}`), &capture)
@@ -76,7 +76,7 @@ func TestDigestID_UnmarshalJSON(t *testing.T) {
 
 func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
 	// Arrange
-	var capture model.ImageCapture
+	var capture model.WritableLayer
 
 	// Act
 	err := json.Unmarshal([]byte(`{"committed_image_id":"postgres:16"}`), &capture)
@@ -87,7 +87,7 @@ func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
 
 func TestDigestID_MarshalJSON_RoundTrips(t *testing.T) {
 	// Arrange
-	capture := model.ImageCapture{CommittedImageID: model.ImageDigestID(validDigest)}
+	capture := model.WritableLayer{CommittedImageID: model.ImageDigestID(validDigest)}
 
 	// Act
 	body, err := json.Marshal(capture)
