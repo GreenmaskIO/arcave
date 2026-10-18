@@ -154,7 +154,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	})
 
 	projectRoot := t.TempDir()
-	store, err := storefactory.New(config.Storage{
+	store, err := storefactory.New(t.Context(), config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.DockerComposeProjectName(project))

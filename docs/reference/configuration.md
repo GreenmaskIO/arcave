@@ -1,7 +1,7 @@
 ---
 title: Configuration
-description: Every key of .arcave/config.yaml — project, docker, compose, storage, snapshot, backends and log — with its default, its validation rule and the precedence between flags, environment and file.
-keywords: [arcave configuration, config.yaml, snapshot backend, cdc, restic, storage, docker compose]
+description: Every key of .arcave/config.yaml — project, docker, compose, storage (directory, s3, azure, ssh), snapshot, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
+keywords: [arcave configuration, config.yaml, snapshot backend, cdc, restic, storage, s3, azure, sftp, docker compose]
 ---
 
 # Configuration
@@ -60,7 +60,7 @@ Four sources, highest first:
 4.  The flag's default
 ```
 
-Only **bound** flags feed the config. `--project-name`, `--config`, `--override`, `--dry-run` and `savepoint create --name` are unbound on purpose: they steer one run rather than describing the project. `savepoint create --name` in particular would otherwise collide with `init --name` on the shared `name` key, conflating a savepoint's name with the project's.
+Only **bound** flags feed the config. `--project-name`, `--config`, `--override`, `--dry-run`, `init --name` and `savepoint create --name` are unbound on purpose: they steer one run rather than describing the project. `init` binds none of its flags: it writes a template, and reads neither the environment nor the existing file.
 
 Which keys an environment variable can reach is narrower than it looks — [Environment variables](environment_variables.md) owns that.
 
@@ -131,27 +131,116 @@ unsupported compose.progress "loud" (supported: log, tty, quiet)
 
 ## `storage`
 
-Where savepoint data is written. A tagged union: `type` names the arm, and that arm must be present.
+Where savepoint data is written. A tagged union: `type` names the arm, that arm must be present, and any other arm is dropped. Each arm is one backend of [`github.com/greenmaskio/storages`](https://github.com/greenmaskio/storages).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `storage.type` | string | `directory` | The storage arm. `directory` is the only one implemented. |
+| `storage.type` | string | `directory` | `directory`, `s3`, `azure` or `ssh`. |
+
+### `storage.directory`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
 | `storage.directory.path` | string | `.arcave/storage` | A local filesystem path. Relative resolves against the project root; absolute is taken verbatim. |
 
-The path you configure is not the path arcave writes to. Every store is rooted under a static `arcave` segment, and the full layout is in [Storage layout](storage_layout.md):
+A **relative** path materialises on first use. An **absolute** path must already exist — that asymmetry keeps a typo from quietly growing a fresh tree somewhere unexpected.
+
+### `storage.s3`
+
+An S3-compatible bucket: AWS, MinIO, and the like.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `storage.s3.bucket` | string | *(required)* | The bucket. It must exist. |
+| `storage.s3.prefix` | string | `""` | A key prefix inside the bucket. |
+| `storage.s3.region` | string | `""` | The bucket's region. |
+| `storage.s3.endpoint` | string | `""` | A non-AWS endpoint, `http://minio:9000`. Must carry no user info or query string. |
+| `storage.s3.force_path_style` | bool | `true` | Path-style addressing, which MinIO needs. |
+| `storage.s3.access_key_id` | string | `""` | With `secret_access_key`, a static credential. Both empty: the AWS default chain (environment, profile, instance role). |
+| `storage.s3.secret_access_key` | string | `""` | **Secret.** |
+| `storage.s3.session_token` | string | `""` | **Secret.** |
+| `storage.s3.role_arn`, `session_name` | string | `""` | A role to assume. |
+| `storage.s3.storage_class` | string | `STANDARD` | The class every object is written with. |
+| `storage.s3.sse`, `kms_key_arn`, `bucket_key_enabled` | | `""` | Server-side encryption: `AES256`, `aws:kms` or `aws:kms:dsse`, and the KMS key. |
+| `storage.s3.disable_ssl`, `no_verify_ssl`, `cert_file` | | | TLS: plain HTTP, no certificate check, a CA bundle. |
+| `storage.s3.max_retries`, `max_part_size`, `concurrency` | int | `3`, 50 MiB, `0` | Request tuning. |
+
+### `storage.azure`
+
+An Azure Blob Storage container.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `storage.azure.container` | string | *(required)* | The container. It must exist. |
+| `storage.azure.storage_account` | string | *(required)* | The account. |
+| `storage.azure.prefix` | string | `""` | A blob prefix inside the container. |
+| `storage.azure.access_key` | string | `""` | **Secret.** The shared key. |
+| `storage.azure.sas_token` | string | `""` | **Secret.** Used when there is no `access_key`; with neither, `DefaultAzureCredential`. |
+| `storage.azure.endpoint` | string | `""` | The service URL, path-style: `http://azurite:10000/devstoreaccount1`. Must carry no query string — a SAS token goes in `sas_token`. |
+| `storage.azure.endpoint_suffix`, `environment_name` | string | `AzurePublicCloud` | A sovereign cloud. |
+| `storage.azure.max_retries` | int | `3` | Retries after a failed try; negative for none. |
+
+### `storage.ssh`
+
+A directory on an SFTP server.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `storage.ssh.host` | string | *(required)* | The server. |
+| `storage.ssh.port` | int | `22` | |
+| `storage.ssh.user` | string | *(required)* | |
+| `storage.ssh.password` | string | `""` | **Secret.** One of `password` or `private_key_path` is required. |
+| `storage.ssh.private_key_path` | string | `""` | A private key file. |
+| `storage.ssh.private_key_passphrase` | string | `""` | **Secret.** Decrypts an encrypted key. |
+| `storage.ssh.prefix` | string | `""` | The remote directory; relative resolves against the user's home. |
+| `storage.ssh.connect_timeout` | duration | `30s` | Bounds the TCP dial and the SSH handshake. |
+
+The server's host key is **not** verified: use `ssh` on a network you trust.
+
+### Layout and reachability
+
+The path or prefix you configure is not the path arcave writes to. Every store is rooted under a static `arcave` segment, and the full layout is in [Storage layout](storage_layout.md):
 
 ```text
-<storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/
+<path or prefix>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/
 ```
 
 That segment is not configurable, and it is what bounds every write and every delete arcave makes: point the path at `/etc` and arcave operates in `/etc/arcave`. Every segment below it is checked against an allowlist, because a list of what a path segment must *not* be is never provably complete.
 
-A **relative** path materialises on first use. An **absolute** path must already exist — that asymmetry keeps a typo from quietly growing a fresh tree somewhere unexpected.
+Every command that opens the store reaches it first — a `HEAD` on the bucket, a property read on the container, an SFTP session — so a wrong endpoint or a refused credential fails before anything is stopped.
 
 ```text
-storage.type is "s3" but no storage.directory section is present
-unsupported storage.type "s3" (supported: directory)
+storage.type is "s3" but no storage.s3 section is present
+storage.s3.bucket is required
+unsupported storage.type "gcs" (supported: directory, s3, azure, ssh)
 ```
+
+### Credentials
+
+Keep a secret out of the file by naming its environment variable — see [Interpolation](#interpolation). `arcave init` never writes one: it writes a template of the defaults and `--name`, with the `directory` storage, so a credential reaches the file only when you put it there.
+
+## Interpolation
+
+Any string value may name an environment variable, expanded when the config is read:
+
+| Form | Expands to |
+|---|---|
+| `${VAR}`, `$VAR` | The variable's value. **Unset is an error**, never an empty string. |
+| `${VAR:-default}` | The value, or `default` when unset or empty. `${VAR:-}` says "empty" explicitly. |
+| `${VAR-default}` | The value, or `default` when unset. |
+| `${VAR?message}` | The value; unset fails with `message`. |
+| `$$` | A literal `$`. |
+
+```yaml
+storage:
+  type: s3
+  s3:
+    bucket: savepoints
+    access_key_id: AKIAEXAMPLE
+    secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+```
+
+A value with a `$` that is not a reference — a password like `pa$word` — is written `pa$$word`. That holds wherever the value comes from: an `ARCAVE_*` variable or a flag is interpolated the same way as the file, so `ARCAVE_STORAGE_SSH_PASSWORD='pa$$word'`.
 
 ## `snapshot`
 

@@ -141,8 +141,11 @@ arcave savepoint remove 019e8488-3ac8-7000-8000-000000000000
 
 Or give the baseline a store of its own, so no retention sweep in the working store can reach it:
 
-```shell
-arcave init --override --savepoint-dir /var/lib/arcave-baselines
+```yaml title=".arcave/config.yaml"
+storage:
+    type: directory
+    directory:
+        path: /var/lib/arcave-baselines
 ```
 
 ## Related docs

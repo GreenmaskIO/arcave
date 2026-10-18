@@ -50,7 +50,7 @@ func directoryStorage(path string) config.Storage {
 // the configured path varying.
 func newComposeProjectStore(t *testing.T, cfg config.Storage, projectRoot string) (storages.Storager, error) {
 	t.Helper()
-	return New(cfg, projectRoot, testArcaveProject, model.DefaultSession, testComposeProject)
+	return New(t.Context(), cfg, projectRoot, testArcaveProject, model.DefaultSession, testComposeProject)
 }
 
 // layout is the path below the configured one that every store is rooted at.
@@ -194,7 +194,7 @@ func TestNew(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				// Act
-				store, err := New(directoryStorage("snaps"), t.TempDir(), tt.arcaveProject, tt.session, tt.composeProject)
+				store, err := New(t.Context(), directoryStorage("snaps"), t.TempDir(), tt.arcaveProject, tt.session, tt.composeProject)
 
 				// Assert
 				require.ErrorContains(t, err, tt.wantMsg)
@@ -205,18 +205,52 @@ func TestNew(t *testing.T) {
 
 	t.Run("an arm arcave does not implement is rejected", func(t *testing.T) {
 		// Act
-		_, err := newComposeProjectStore(t, config.Storage{Type: "s3"}, t.TempDir())
+		_, err := newComposeProjectStore(t, config.Storage{Type: "gcs"}, t.TempDir())
 
 		// Assert
 		require.ErrorContains(t, err, "unsupported storage.type")
 	})
 }
 
+func TestRoot_UnreachableStorage(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.Storage
+		wantMsg string
+	}{
+		{
+			name: "s3",
+			cfg: config.Storage{Type: config.StorageTypeS3, S3: &config.S3Storage{
+				Endpoint: "http://127.0.0.1:1", Bucket: "savepoints", Region: "us-east-1",
+				AccessKeyID: "key", SecretAccessKey: "secret", MaxRetries: 1,
+			}},
+			wantMsg: "reach s3 storage",
+		},
+		{
+			name: "ssh",
+			cfg: config.Storage{Type: config.StorageTypeSSH, SSH: &config.SSHStorage{
+				Host: "127.0.0.1", Port: 1, User: "arcave", Password: "secret",
+			}},
+			wantMsg: "reach ssh storage",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			store, err := Root(t.Context(), tt.cfg, t.TempDir())
+
+			// Assert
+			require.ErrorContains(t, err, tt.wantMsg)
+			assert.Nil(t, store)
+		})
+	}
+}
+
 func TestDescent(t *testing.T) {
 	t.Run("each step descends one segment and the chain equals New", func(t *testing.T) {
 		// Arrange
 		root := t.TempDir()
-		rootStore, err := Root(directoryStorage("snaps"), root)
+		rootStore, err := Root(t.Context(), directoryStorage("snaps"), root)
 		require.NoError(t, err)
 
 		// Act
@@ -237,7 +271,7 @@ func TestDescent(t *testing.T) {
 
 	t.Run("each step gates its own segment", func(t *testing.T) {
 		// Arrange
-		rootStore, err := Root(directoryStorage("snaps"), t.TempDir())
+		rootStore, err := Root(t.Context(), directoryStorage("snaps"), t.TempDir())
 		require.NoError(t, err)
 
 		// Act
@@ -257,7 +291,7 @@ func TestComposeProjects(t *testing.T) {
 		// Arrange
 		ctx := context.Background()
 		root := t.TempDir()
-		rootStore, err := Root(directoryStorage("snaps"), root)
+		rootStore, err := Root(t.Context(), directoryStorage("snaps"), root)
 		require.NoError(t, err)
 		arcaveProjectStore, err := ArcaveProject(rootStore, testArcaveProject)
 		require.NoError(t, err)
@@ -277,7 +311,7 @@ func TestComposeProjects(t *testing.T) {
 
 	t.Run("a session holding nothing yet lists empty", func(t *testing.T) {
 		// Arrange
-		rootStore, err := Root(directoryStorage("snaps"), t.TempDir())
+		rootStore, err := Root(t.Context(), directoryStorage("snaps"), t.TempDir())
 		require.NoError(t, err)
 		sessionStore, err := Session(rootStore, model.DefaultSession)
 		require.NoError(t, err)

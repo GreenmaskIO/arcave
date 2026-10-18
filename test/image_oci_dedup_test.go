@@ -91,7 +91,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	})
 
 	projectRoot := t.TempDir()
-	composeProjectStore, err := storefactory.New(config.Storage{
+	composeProjectStore, err := storefactory.New(t.Context(), config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.DockerComposeProjectName(project))

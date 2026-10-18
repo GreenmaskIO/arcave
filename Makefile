@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-verbose test-fidelity lint clean generate-restic-api
+.PHONY: build test test-unit test-integration test-verbose test-fidelity test-storage lint clean generate-restic-api
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
@@ -13,6 +13,8 @@ UNIT_PKGS := ./cmd/... ./internal/...
 INTEGRATION_PKGS := ./test/...
 # Concurrent tests per integration package: the daemon's disk, not the CPU, is the bound.
 INTEGRATION_PARALLEL := 4
+# Extra go test flags for the integration run, e.g. -run or -skip to split it across CI legs.
+INTEGRATION_FLAGS ?=
 
 test: test-unit test-integration
 
@@ -20,7 +22,7 @@ test-unit:
 	go test $(UNIT_PKGS)
 
 test-integration:
-	go test -timeout 30m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_PKGS)
+	go test -timeout 30m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_FLAGS) $(INTEGRATION_PKGS)
 
 test-verbose:
 	go test -v -timeout 30m ./...
@@ -29,6 +31,11 @@ test-verbose:
 # minutes, not seconds, so it stays out of `test` behind its build tag.
 test-fidelity:
 	go test -tags fidelity -run TestIntrospectAssemble -count=1 -timeout 30m ./test/
+
+# The core workflow through the built binary on every storage backend, each against its
+# server in a container; part of test-integration too, this runs it alone.
+test-storage:
+	go test -run TestStorageE2E -count=1 -timeout 20m -parallel $(INTEGRATION_PARALLEL) ./test/
 
 lint:
 	golangci-lint run ./...

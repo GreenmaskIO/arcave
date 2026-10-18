@@ -77,15 +77,16 @@ var rootCmd = &cobra.Command{
 	// PersistentPreRunE, not PreRunE: cobra runs PreRunE only for the command
 	// that actually executes, so a plain PreRunE here would never fire for a
 	// subcommand and every command would see a zero-valued config.
-	PersistentPreRunE: func(*cobra.Command, []string) error {
-		return initRoot()
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		return initRoot(cmd == configInitCmd)
 	},
 }
 
 // initRoot is the shared prologue of every command: it locates the project root,
 // points viper at the config file, resolves the effective config (flag > env >
-// file > default), and sets up the context logger from the result.
-func initRoot() error {
+// file > default), and sets up the context logger from the result. For init it
+// reads no file — init writes a template — and only notes whether one exists.
+func initRoot(isInitCommand bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get current working directory: %w", err)
@@ -106,12 +107,11 @@ func initRoot() error {
 		sessionRef = os.Getenv(sessionEnv)
 	}
 
-	// A config arcave cannot speak is held, not raised: it must not stop `arcave init
-	// --override`, which is the fix the error names. requireInitialized raises it
-	// for every command that reads the project instead. Anything else — an
-	// unreadable file, an unknown key — is fatal here, since no command can
-	// proceed and init would overwrite a file the user may not mean to lose.
-	projectCfg, configFound, err = resolveConfig(cfgViper, projectRoot)
+	if isInitCommand {
+		projectCfg, configFound, err = resolveWithoutFile(cfgViper, projectRoot, configPath)
+	} else {
+		projectCfg, configFound, err = resolveConfig(cfgViper, projectRoot)
+	}
 	if err != nil {
 		return fmt.Errorf("resolve config: %w", err)
 	}
@@ -185,7 +185,7 @@ func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
 // withSessionDeps runs fn over the session dependencies, which reach no daemon and
 // name no compose project.
 func withSessionDeps(ctx context.Context, fn func(d *sessionDependencies) error) error {
-	deps, err := newSessionDependencies(projectRoot, projectCfg)
+	deps, err := newSessionDependencies(ctx, projectRoot, projectCfg)
 	if err != nil {
 		return fmt.Errorf("init session dependencies: %w", err)
 	}

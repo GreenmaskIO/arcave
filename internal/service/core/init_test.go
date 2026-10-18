@@ -54,9 +54,13 @@ func TestInitService_Init(t *testing.T) {
 			exists:   true,
 		},
 		{
-			// Init persists the config verbatim, so a section it has no flag for
-			// survives an --override.
-			name: "override preserves the sections init has no flag for",
+			name:    "an invalid name is refused before anything is written",
+			cfg:     config.Config{Project: config.Project{Name: "My App"}},
+			wantErr: "project.name",
+		},
+		{
+			// Init writes the config it is handed; what that holds is the caller's.
+			name: "writes every section it is handed",
 			cfg: config.Config{
 				Project:  config.Project{Name: "demo"},
 				Docker:   config.Docker{Host: "tcp://remote:2375"},

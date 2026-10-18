@@ -182,7 +182,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	})
 
 	projectRoot := t.TempDir()
-	store, err := storefactory.New(config.Storage{
+	store, err := storefactory.New(t.Context(), config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
 	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
