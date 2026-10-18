@@ -67,18 +67,18 @@ func (b *blobStore) put(ctx context.Context, digest string, r io.Reader, size in
 	defer unlock()
 
 	key := blobKey(digest)
-	keyStat, err := b.store.Stat(key)
+	existing, err := b.store.Stat(key)
 	if err != nil {
 		return 0, fmt.Errorf("stat blob %s: %w", digest, err)
 	}
-	if keyStat != nil && keyStat.Exist && keyStat.Size == size {
+	if existing != nil && existing.Exist && existing.Size == size {
 		// The member's remaining bytes are left to tar.Next, which drops them.
 		return 0, nil
 	}
 
 	hasher := sha256.New()
-	countReader := utils.NewCountingReader(io.TeeReader(r, hasher))
-	if err := b.store.PutObject(ctx, key, countReader); err != nil {
+	counted := utils.NewCountingReader(io.TeeReader(r, hasher))
+	if err := b.store.PutObject(ctx, key, counted); err != nil {
 		return 0, fmt.Errorf("write blob %s: %w", digest, err)
 	}
 	if gotHash := hex.EncodeToString(hasher.Sum(nil)); gotHash != digest {
@@ -89,7 +89,7 @@ func (b *blobStore) put(ctx context.Context, digest string, r io.Reader, size in
 		}
 		return 0, fmt.Errorf("blob %s hashes to %s", digest, gotHash)
 	}
-	return countReader.N(), nil
+	return counted.N(), nil
 }
 
 // open reads one blob and reports its size.

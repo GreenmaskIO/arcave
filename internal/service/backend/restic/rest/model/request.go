@@ -28,8 +28,8 @@ type ListBlobsRequest struct {
 }
 
 // NewListBlobsRequest judges a namespace segment.
-func NewListBlobsRequest(t string) (ListBlobsRequest, error) {
-	objectType, err := ParseObjectType(t)
+func NewListBlobsRequest(rawType string) (ListBlobsRequest, error) {
+	objectType, err := ParseObjectType(rawType)
 	if err != nil {
 		return ListBlobsRequest{}, fmt.Errorf("parse object type: %w", err)
 	}
@@ -43,21 +43,21 @@ type StatBlobRequest struct {
 }
 
 // NewStatBlobRequest judges both segments of an object's path.
-func NewStatBlobRequest(t, name string) (StatBlobRequest, error) {
-	objectType, id, err := parseAddress(t, name)
+func NewStatBlobRequest(rawType, name string) (StatBlobRequest, error) {
+	objectType, id, err := parseAddress(rawType, name)
 	if err != nil {
 		return StatBlobRequest{}, fmt.Errorf("parse address: %w", err)
 	}
 	return StatBlobRequest{Type: objectType, ID: id}, nil
 }
 
-// Read is the read this stat resolved into: the address was judged once, on the
+// ReadRange is the read this stat resolved into: the address was judged once, on the
 // way in, and the interval is the one the Range header resolved against the size
 // this request answered with.
-func (r StatBlobRequest) Read(offset, length int64) OpenBlobRangeRequest {
+func (m StatBlobRequest) ReadRange(offset, length int64) OpenBlobRangeRequest {
 	return OpenBlobRangeRequest{
-		Type:   r.Type,
-		ID:     r.ID,
+		Type:   m.Type,
+		ID:     m.ID,
 		Offset: offset,
 		Length: length,
 	}
@@ -82,8 +82,8 @@ type SaveBlobRequest struct {
 
 // NewSaveBlobRequest judges both segments of an object's path and takes the body
 // verbatim: what an upload carries is the client's, and this layer never reads it.
-func NewSaveBlobRequest(t, name string, body io.Reader) (SaveBlobRequest, error) {
-	objectType, id, err := parseAddress(t, name)
+func NewSaveBlobRequest(rawType, name string, body io.Reader) (SaveBlobRequest, error) {
+	objectType, id, err := parseAddress(rawType, name)
 	if err != nil {
 		return SaveBlobRequest{}, fmt.Errorf("parse address: %w", err)
 	}
@@ -97,8 +97,8 @@ type DeleteBlobRequest struct {
 }
 
 // NewDeleteBlobRequest judges both segments of an object's path.
-func NewDeleteBlobRequest(t, name string) (DeleteBlobRequest, error) {
-	objectType, id, err := parseAddress(t, name)
+func NewDeleteBlobRequest(rawType, name string) (DeleteBlobRequest, error) {
+	objectType, id, err := parseAddress(rawType, name)
 	if err != nil {
 		return DeleteBlobRequest{}, fmt.Errorf("parse address: %w", err)
 	}
@@ -108,8 +108,8 @@ func NewDeleteBlobRequest(t, name string) (DeleteBlobRequest, error) {
 // parseAddress is the one place the two parsers are called together, so no
 // request can be built carrying half an address. It stays unexported: what
 // crosses the package boundary is a named request, never this pair.
-func parseAddress(t, name string) (ObjectType, ObjectID, error) {
-	objectType, err := ParseObjectType(t)
+func parseAddress(rawType, name string) (ObjectType, ObjectID, error) {
+	objectType, err := ParseObjectType(rawType)
 	if err != nil {
 		return "", "", fmt.Errorf("parse object type: %w", err)
 	}

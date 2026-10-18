@@ -37,8 +37,8 @@ type InitService struct {
 }
 
 // NewInitService wires an InitService for the project rooted at projectRoot.
-func NewInitService(projectRoot string, cw configWriter) *InitService {
-	return &InitService{projectRoot: projectRoot, configWriter: cw}
+func NewInitService(projectRoot string, writer configWriter) *InitService {
+	return &InitService{projectRoot: projectRoot, configWriter: writer}
 }
 
 // Init writes cfg to .arcave/config.yaml verbatim, returning the resolved project

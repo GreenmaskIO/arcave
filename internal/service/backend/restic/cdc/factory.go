@@ -106,8 +106,8 @@ func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendC
 // New resolves what is fixed for an instance's life: the volume's repository.
 // The volume's own mount source is not — resolving it may reach the daemon, and a
 // constructor has no ctx to do that on.
-func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
-	repoStore, err := f.deps.RepositoryRoot.SubStorage(spec.Volume.ObjectID, true)
+func (s *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+	repoStore, err := s.deps.RepositoryRoot.SubStorage(spec.Volume.ObjectID, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the %s repository: %w", spec.Volume.ObjectID, err)
 	}
@@ -115,8 +115,8 @@ func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 		volume: spec.Volume,
 		// The two halves of the same repository: what a restic container reaches
 		// over the protocol, and what arcave addresses as objects of its own.
-		repo:    objectRepo{store: repoStore},
-		deps:    f.deps,
-		mounted: path.Join(mountRoot, spec.Volume.ObjectID),
+		repo:      objectRepo{store: repoStore},
+		deps:      s.deps,
+		mountPath: path.Join(mountRoot, spec.Volume.ObjectID),
 	}, nil
 }

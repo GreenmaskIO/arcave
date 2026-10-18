@@ -79,8 +79,8 @@ type Options struct {
 
 // NewClient returns a runner over the engine's daemon connection. opts carries the
 // project's bounds; a zero Options means this package's defaults.
-func NewClient(svc dockerComposeAPI, opts Options) *Client {
-	return &Client{api: svc, opts: opts, pollInterval: waitPollInterval}
+func NewClient(composeAPI dockerComposeAPI, opts Options) *Client {
+	return &Client{api: composeAPI, opts: opts, pollInterval: waitPollInterval}
 }
 
 // Stop stops all project services, waits for the containers to exit, and returns
@@ -193,8 +193,8 @@ func (c *Client) runningContainers(ctx context.Context, project *types.Project) 
 		return nil
 	}
 	running := make(map[string]bool, len(containers))
-	for _, ctr := range containers {
-		running[ctr.ID] = true
+	for _, summary := range containers {
+		running[summary.ID] = true
 	}
 	return running
 }
@@ -214,19 +214,19 @@ func (c *Client) killedContainers(
 		return nil
 	}
 	var killed []string
-	for _, ctr := range containers {
+	for _, summary := range containers {
 		// ExitCode alone: compose reads it from inspect, State from the list, which
 		// the daemon may not have caught up yet when the stop returns.
-		if !running[ctr.ID] || ctr.ExitCode != sigkillExitCode {
+		if !running[summary.ID] || summary.ExitCode != sigkillExitCode {
 			continue
 		}
-		if service, ok := project.Services[ctr.Service]; ok && stopsWithSIGKILL(service.StopSignal) {
+		if service, ok := project.Services[summary.Service]; ok && stopsWithSIGKILL(service.StopSignal) {
 			continue
 		}
-		logger.Warn().Str("container", ctr.Name).Str("stop_timeout", timeout.String()).
+		logger.Warn().Str("container", summary.Name).Str("stop_timeout", timeout.String()).
 			Msgf("container %s did not exit within %s and was killed; its volumes may hold a crash state — "+
-				"raise compose.stop_timeout or the service's stop_grace_period", ctr.Name, timeout)
-		killed = append(killed, ctr.ID)
+				"raise compose.stop_timeout or the service's stop_grace_period", summary.Name, timeout)
+		killed = append(killed, summary.ID)
 	}
 	return killed
 }
@@ -320,22 +320,22 @@ func (c *Client) containersReady(ctx context.Context, project *types.Project, on
 	}
 
 	ready := true
-	for _, ctr := range containers {
-		if oneShots[ctr.Service] {
+	for _, summary := range containers {
+		if oneShots[summary.Service] {
 			continue
 		}
-		switch ctr.State {
-		case string(container.StateExited), string(container.StateDead):
-			return false, fmt.Errorf("container %s exited (%d)", ctr.Name, ctr.ExitCode)
-		case string(container.StateRunning):
+		switch summary.State {
+		case container.StateExited, container.StateDead:
+			return false, fmt.Errorf("container %s exited (%d)", summary.Name, summary.ExitCode)
+		case container.StateRunning:
 		default:
 			ready = false
 			continue
 		}
-		switch ctr.Health {
+		switch summary.Health {
 		case "", container.Healthy:
 		case container.Unhealthy:
-			return false, fmt.Errorf("container %s is unhealthy", ctr.Name)
+			return false, fmt.Errorf("container %s is unhealthy", summary.Name)
 		default:
 			ready = false
 		}

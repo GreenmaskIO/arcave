@@ -39,31 +39,31 @@ func NewReader(st storages.Storager) *Reader {
 }
 
 // SetStaleAfter sets how long an in-progress heartbeat stays alive unrewritten.
-func (r *Reader) SetStaleAfter(v time.Duration) *Reader {
-	r.staleAfter = v
-	return r
+func (s *Reader) SetStaleAfter(staleAfter time.Duration) *Reader {
+	s.staleAfter = staleAfter
+	return s
 }
 
 // Read returns the heartbeat with its status as of now, aged by the store's LastModified: an
 // in-progress one gone stale reads as failed. None is model.ErrHeartbeatNotFound.
-func (r *Reader) Read(ctx context.Context) (Heartbeat, error) {
-	lastModified, err := r.lastModified()
+func (s *Reader) Read(ctx context.Context) (Heartbeat, error) {
+	lastModified, err := s.lastModified()
 	if err != nil {
 		return Heartbeat{}, err
 	}
-	h, err := r.decode(ctx)
+	beat, err := s.decode(ctx)
 	if err != nil {
 		return Heartbeat{}, err
 	}
-	if h.Status, err = h.StatusAt(lastModified, time.Now(), r.staleAfter); err != nil {
+	if beat.Status, err = beat.StatusAt(lastModified, time.Now(), s.staleAfter); err != nil {
 		return Heartbeat{}, fmt.Errorf("read heartbeat: %w", err)
 	}
-	return h, nil
+	return beat, nil
 }
 
 // lastModified is when the store last wrote the heartbeat.
-func (r *Reader) lastModified() (time.Time, error) {
-	stat, err := r.st.Stat(FileName)
+func (s *Reader) lastModified() (time.Time, error) {
+	stat, err := s.st.Stat(FileName)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("stat heartbeat: %w", err)
 	}
@@ -73,8 +73,8 @@ func (r *Reader) lastModified() (time.Time, error) {
 	return stat.LastModified, nil
 }
 
-func (r *Reader) decode(ctx context.Context) (Heartbeat, error) {
-	obj, err := r.st.GetObject(ctx, FileName)
+func (s *Reader) decode(ctx context.Context) (Heartbeat, error) {
+	file, err := s.st.GetObject(ctx, FileName)
 	if errors.Is(err, storages.ErrFileNotFound) {
 		// Deleted since it was stat'ed.
 		return Heartbeat{}, model.ErrHeartbeatNotFound
@@ -83,13 +83,13 @@ func (r *Reader) decode(ctx context.Context) (Heartbeat, error) {
 		return Heartbeat{}, fmt.Errorf("get heartbeat: %w", err)
 	}
 	defer func() {
-		if err := obj.Close(); err != nil {
+		if err := file.Close(); err != nil {
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("closing the heartbeat")
 		}
 	}()
-	var h Heartbeat
-	if err := json.NewDecoder(obj).Decode(&h); err != nil {
+	var beat Heartbeat
+	if err := json.NewDecoder(file).Decode(&beat); err != nil {
 		return Heartbeat{}, fmt.Errorf("decode heartbeat: %w", err)
 	}
-	return h, nil
+	return beat, nil
 }

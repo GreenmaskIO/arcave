@@ -882,7 +882,7 @@ func TestService_Rollback_RefusesASavepointWithNoSpec(t *testing.T) {
 func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 	// Arrange
 	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: demoProject,
 		Services: []model.Service{{
 			Name: "app",
@@ -903,7 +903,7 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 	var safetySnapshotID model.SavepointID
 	expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(res, nil)
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil)
 	locker := &mockLocker{}
 	expectLock(locker)
 
@@ -940,7 +940,7 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
 		ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(res),
+		ProjectAssembler: assemblerFor(introspection),
 		SpecCodec:        demoCodec(),
 		ComposeRunner:    runner,
 		BackendRegistry:  registry,
@@ -979,10 +979,10 @@ func coldStartDeps(t *testing.T, record model.Savepoint) (Deps, *mockSavepointRe
 	t.Helper()
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
-	res := demoAbsentIntrospection()
-	res.Daemon.ServerVersion = "27.3.1"
+	introspection := demoAbsentIntrospection()
+	introspection.Daemon.ServerVersion = "27.3.1"
 	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(res, nil).Once()
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	locker := &mockLocker{}
 	expectLock(locker)
 	codec := &mockCodec{}
@@ -1185,11 +1185,11 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 
 // demoAbsentIntrospectionWith is demoAbsentIntrospection owning the extra volumes too.
 func demoAbsentIntrospectionWith(names ...string) model.IntrospectionResult {
-	res := demoAbsentIntrospection()
+	introspection := demoAbsentIntrospection()
 	for _, name := range names {
-		res.Project.Volumes = append(res.Project.Volumes, model.NamedVolume{Key: name, Name: name})
+		introspection.Project.Volumes = append(introspection.Project.Volumes, model.NamedVolume{Key: name, Name: name})
 	}
-	return res
+	return introspection
 }
 
 // Repeating an interrupted no-container rollback is not refused over the volumes it wrote
@@ -1243,10 +1243,10 @@ func TestService_Rollback_ColdStartUnsupportedDaemonLoadsNothing(t *testing.T) {
 	// Arrange
 	record := demoColdRecord()
 	deps, repo, _ := coldStartDeps(t, record)
-	res := demoAbsentIntrospection()
-	res.Daemon.ServerVersion = "24.0.7"
+	introspection := demoAbsentIntrospection()
+	introspection.Daemon.ServerVersion = "24.0.7"
 	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(res, nil).Once()
+	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	images := &mockImageBackend{}
 	runner := &mockComposeRunner{}
 	deps.ComposeInspector, deps.ImageBackend, deps.ComposeRunner = inspector, images, runner

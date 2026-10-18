@@ -24,11 +24,11 @@ const LayerTagPrefix = "sp-"
 
 // ImageID is the id of the image the container runs on; empty when the daemon
 // reported none or one that is no digest.
-func (c Container) ImageID() ImageDigestID {
-	if c.Inspect.ContainerJSONBase == nil {
+func (m Container) ImageID() ImageDigestID {
+	if m.Inspect.ContainerJSONBase == nil {
 		return ""
 	}
-	id, err := ParseImageDigestID(c.Inspect.Image)
+	id, err := ParseImageDigestID(m.Inspect.Image)
 	if err != nil {
 		return ""
 	}

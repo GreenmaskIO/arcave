@@ -106,17 +106,17 @@ func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte
 		return nil, err
 	}
 
-	src, err := r.storage.GetObject(ctx, specKey(id))
+	obj, err := r.storage.GetObject(ctx, specKey(id))
 	if err != nil {
 		return nil, fmt.Errorf("read savepoint spec %s: %w", id, err)
 	}
 	defer func() {
-		if err := src.Close(); err != nil {
+		if err := obj.Close(); err != nil {
 			log.Ctx(ctx).Debug().Err(err).Str("savepoint", id.String()).Msg("close savepoint spec")
 		}
 	}()
 
-	spec, err := io.ReadAll(src)
+	spec, err := io.ReadAll(obj)
 	if err != nil {
 		return nil, fmt.Errorf("read savepoint spec %s: %w", id, err)
 	}
@@ -173,18 +173,18 @@ func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Save
 		return model.Savepoint{}, false, nil
 	}
 
-	src, err := r.storage.GetObject(ctx, recordKey(id))
+	obj, err := r.storage.GetObject(ctx, recordKey(id))
 	if err != nil {
 		return model.Savepoint{}, false, fmt.Errorf("read savepoint record %s: %w", id, err)
 	}
 	defer func() {
-		if err := src.Close(); err != nil {
+		if err := obj.Close(); err != nil {
 			log.Ctx(ctx).Debug().Err(err).Str("savepoint", id.String()).Msg("close savepoint record")
 		}
 	}()
 
 	var record model.Savepoint
-	if err := json.NewDecoder(src).Decode(&record); err != nil {
+	if err := json.NewDecoder(obj).Decode(&record); err != nil {
 		return model.Savepoint{}, false, fmt.Errorf("parse savepoint record %s: %w", id, err)
 	}
 	return record, true, nil

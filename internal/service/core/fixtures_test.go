@@ -85,7 +85,7 @@ func demoSafetySnapshot() model.Savepoint {
 	return model.Savepoint{
 		ID:        "019e844b-7818-7000-8000-000000000000",
 		Name:      safetySnapshotName(demoRecord().ID),
-		Labels:    safetySnapshotLabels(),
+		Labels:    newSafetySnapshotLabels(),
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
 		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
 		Spec:      demoSpecRef(),
@@ -111,10 +111,10 @@ func demoIntrospection() model.IntrospectionResult {
 // demoAbsentIntrospection is what the inspector reports once the compose project was
 // taken down: no service, its named volume left behind.
 func demoAbsentIntrospection() model.IntrospectionResult {
-	res := demoIntrospection()
-	res.Project.Services = nil
-	res.Project.Volumes[0].UsedBy = nil
-	return res
+	introspection := demoIntrospection()
+	introspection.Project.Services = nil
+	introspection.Project.Volumes[0].UsedBy = nil
+	return introspection
 }
 
 // The one replica demoIntrospectionWithContainers reports for demoService — the
@@ -167,8 +167,8 @@ func demoImage() model.Image {
 // demoIntrospectionWithContainers is demoIntrospection with the daemon holding
 // one container for demoService: what a workflow that captures layers sees.
 func demoIntrospectionWithContainers() model.IntrospectionResult {
-	res := demoIntrospection()
-	res.Project.Services = []model.Service{{
+	introspection := demoIntrospection()
+	introspection.Project.Services = []model.Service{{
 		Name: demoService,
 		Containers: []model.Container{{
 			ID:      demoContainerID,
@@ -177,13 +177,13 @@ func demoIntrospectionWithContainers() model.IntrospectionResult {
 			Inspect: demoContainerInspect(),
 		}},
 	}}
-	res.Images = map[model.ImageDigestID]image.InspectResponse{
+	introspection.Images = map[model.ImageDigestID]image.InspectResponse{
 		demoUpstreamID: {
 			ID: demoUpstreamID.String(), RepoTags: []string{demoBaseImage},
 			RepoDigests: []string{"postgres@sha256:dd"}, Size: 1 << 20,
 		},
 	}
-	return res
+	return introspection
 }
 
 // demoWritableLayer is what the copier reports for demoContainerRef.
@@ -232,14 +232,14 @@ const (
 // demoScaledIntrospection is demoIntrospectionWithContainers with demoService
 // scaled to two replicas.
 func demoScaledIntrospection() model.IntrospectionResult {
-	res := demoIntrospectionWithContainers()
-	res.Project.Services[0].Containers = append(res.Project.Services[0].Containers, model.Container{
+	introspection := demoIntrospectionWithContainers()
+	introspection.Project.Services[0].Containers = append(introspection.Project.Services[0].Containers, model.Container{
 		ID:      demoSecondContainerID,
 		Name:    demoContainerName(2),
 		Number:  2,
 		Inspect: demoContainerInspect(),
 	})
-	return res
+	return introspection
 }
 
 // demoSecondWritableLayer is the second replica's own layer.
@@ -279,9 +279,9 @@ var (
 func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
 
 // assemblerFor is demoAssembler for a test that reports its own introspection.
-func assemblerFor(res model.IntrospectionResult) *mockAssembler {
+func assemblerFor(introspection model.IntrospectionResult) *mockAssembler {
 	assembler := &mockAssembler{}
-	assembler.On("Assemble", mock.Anything, res).Return(demoAssembled, nil)
+	assembler.On("Assemble", mock.Anything, introspection).Return(demoAssembled, nil)
 	return assembler
 }
 

@@ -40,7 +40,7 @@ func runConfigInit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("project already initialized use --override")
 	}
 
-	svc, printer := initServiceDeps(projectRoot)
+	svc, printer := newInitDependencies(projectRoot)
 	h := cli.NewConfigInitHandler(svc, printer)
 	return h.Init(cmd.Context(), projectCfg, configInitOverride)
 }

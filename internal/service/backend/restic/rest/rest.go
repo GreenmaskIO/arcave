@@ -60,13 +60,13 @@ func NewEcho(ctx context.Context, repos model.RepositoryResolver) *echo.Echo {
 	// the logger the command resolved rather than zerolog's global.
 	e.Server.BaseContext = func(net.Listener) context.Context { return ctx }
 
-	// Order is load-bearing: RequestID before enrichLogger stamps a logger from
+	// Order is load-bearing: RequestID before newEnrichLogger stamps a logger from
 	// it, the journal inside that so it writes through the stamped logger, and
 	// Recover inside the journal so a recovered panic names its request and
 	// still ends in a served line.
 	e.Use(middleware.RequestID())
-	e.Use(enrichLogger(logger))
-	e.Use(journalAnswered())
+	e.Use(newEnrichLogger(logger))
+	e.Use(newJournalLogger())
 	// Recover's default level is none of the ones it switches on, so the stack
 	// would be logged with no level at all.
 	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{LogLevel: gommonlog.ERROR}))

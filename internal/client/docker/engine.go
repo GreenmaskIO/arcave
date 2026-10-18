@@ -137,7 +137,7 @@ func (e *Engine) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
 	return runOneShotContainer(ctx, e.api, spec)
 }
 
-// ResolveMountSource answers what a container binds to reach v's data. The
+// ResolveMountSource answers what a container binds to reach volume's data. The
 // compose project alone answers for a named volume and a bind; only an
 // anonymous volume — whose docker name is created per container — has to be
 // looked up through the service that mounts it.
@@ -145,8 +145,8 @@ func (e *Engine) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
 // A named volume that does not exist is an error here, before anything creates
 // it: `docker create -v name:/x` would create the volume itself, so an empty
 // capture would silently replace live data at the next rollback.
-func (e *Engine) ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error) {
-	if src, ok := v.MountSource(); ok {
+func (e *Engine) ResolveMountSource(ctx context.Context, volume model.Volume) (model.MountSource, error) {
+	if src, ok := volume.MountSource(); ok {
 		if src.Type == model.MountSourceVolume {
 			if _, err := e.api.VolumeInspect(ctx, src.Source); err != nil {
 				return model.MountSource{}, fmt.Errorf(
@@ -156,18 +156,18 @@ func (e *Engine) ResolveMountSource(ctx context.Context, v model.Volume) (model.
 		return src, nil
 	}
 
-	service, replica, target, ok := v.LookupMount()
+	service, replica, target, ok := volume.LookupMount()
 	if !ok {
 		return model.MountSource{}, fmt.Errorf(
-			"volume %s of type %s carries no way to reach its data", v.ObjectID, v.Type)
+			"volume %s of type %s carries no way to reach its data", volume.ObjectID, volume.Type)
 	}
 	// An anonymous volume exists only as long as the container it was created
 	// for, so this is the one case a missing container is fatal.
-	mnt, err := findServiceMount(ctx, e.api, v.ComposeProject, service, replica, target)
+	mount, err := findServiceMount(ctx, e.api, volume.ComposeProject, service, replica, target)
 	if err != nil {
 		return model.MountSource{}, err
 	}
-	return mountSourceOf(mnt)
+	return mountSourceOf(mount)
 }
 
 // OpenVolume streams the whole volume out as a tar, through a throwaway
@@ -258,32 +258,32 @@ type mountInfo struct {
 func findServiceMount(
 	ctx context.Context, api dockerAPI, projectName, service string, replica int, target string,
 ) (mountInfo, error) {
-	f := filters.NewArgs(
+	filter := filters.NewArgs(
 		filters.Arg("label", composeProjectLabel+"="+projectName),
 		filters.Arg("label", composeServiceLabel+"="+service),
 	)
-	containers, err := api.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
+	containers, err := api.ContainerList(ctx, container.ListOptions{All: true, Filters: filter})
 	if err != nil {
 		return mountInfo{}, fmt.Errorf("list containers for service %q: %w", service, err)
 	}
-	mnt, ok := matchMount(containers, replica, target)
+	mount, ok := matchMount(containers, replica, target)
 	if !ok {
 		return mountInfo{}, fmt.Errorf("no container for service %q replica %d in project %q mounts %q (is the project created?)",
 			service, replica, projectName, target)
 	}
-	return mnt, nil
+	return mount, nil
 }
 
 // matchMount returns the details of the mount at target in the container that mounts it;
 // a non-zero replica admits only that container. ok is false when none does.
 func matchMount(containers []container.Summary, replica int, target string) (mountInfo, bool) {
-	for _, c := range containers {
-		if replica != 0 && c.Labels[composeNumberLabel] != strconv.Itoa(replica) {
+	for _, summary := range containers {
+		if replica != 0 && summary.Labels[composeNumberLabel] != strconv.Itoa(replica) {
 			continue
 		}
-		for _, m := range c.Mounts {
-			if m.Destination == target {
-				return mountInfo{Type: string(m.Type), Name: m.Name, Source: m.Source}, true
+		for _, mount := range summary.Mounts {
+			if mount.Destination == target {
+				return mountInfo{Type: string(mount.Type), Name: mount.Name, Source: mount.Source}, true
 			}
 		}
 	}
@@ -317,18 +317,18 @@ func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error
 // volume name, bind mounts by host path. The one place a daemon-side mount
 // becomes a MountSource, so what a lookup answers cannot disagree with what the
 // compose project answers directly.
-func mountSourceOf(mnt mountInfo) (model.MountSource, error) {
+func mountSourceOf(mount mountInfo) (model.MountSource, error) {
 	var src model.MountSource
-	switch mnt.Type {
+	switch mount.Type {
 	case "volume":
-		src = model.MountSource{Type: model.MountSourceVolume, Source: mnt.Name}
+		src = model.MountSource{Type: model.MountSourceVolume, Source: mount.Name}
 	case "bind":
-		src = model.MountSource{Type: model.MountSourceBind, Source: mnt.Source}
+		src = model.MountSource{Type: model.MountSourceBind, Source: mount.Source}
 	default:
-		return model.MountSource{}, fmt.Errorf("unsupported mount type %q", mnt.Type)
+		return model.MountSource{}, fmt.Errorf("unsupported mount type %q", mount.Type)
 	}
 	if src.Source == "" {
-		return model.MountSource{}, fmt.Errorf("cannot resolve backing storage for %q mount", mnt.Type)
+		return model.MountSource{}, fmt.Errorf("cannot resolve backing storage for %q mount", mount.Type)
 	}
 	return src, nil
 }

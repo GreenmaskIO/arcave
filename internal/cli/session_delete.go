@@ -36,9 +36,9 @@ func NewSessionDeleteHandler(svc sessionDeleteService, printer printer) *Session
 // SessionDelete deletes a session by id or name, or a recordless tree by id, and prints which
 // one went and the bytes it freed.
 func (h *SessionDeleteHandler) SessionDelete(ctx context.Context, req model.DeleteSessionRequest) error {
-	resp, err := h.svc.DeleteSession(ctx, req)
+	res, err := h.svc.DeleteSession(ctx, req)
 	if err != nil {
 		return err
 	}
-	return h.printer.Print(resp)
+	return h.printer.Print(res)
 }

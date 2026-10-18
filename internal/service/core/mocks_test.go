@@ -208,8 +208,8 @@ func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResu
 
 type mockAssembler struct{ mock.Mock }
 
-func (m *mockAssembler) Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error) {
-	args := m.Called(ctx, res)
+func (m *mockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
+	args := m.Called(ctx, introspection)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)
 }

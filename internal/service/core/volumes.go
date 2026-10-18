@@ -53,9 +53,9 @@ var inheritedSkipReason = skipReason{model.SkipReasonInheritedFromOutside, "inhe
 // covers, and the mounts and services it leaves out. Every workflow comes through
 // here, so create and rollback cannot differ.
 func (s *Service) resolveBackupVolumes(
-	ctx context.Context, res model.IntrospectionResult, capturePolicy model.CapturePolicy,
+	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
 ) ([]model.Volume, model.NotCovered, error) {
-	volumes, notCovered, err := FindBackupVolumes(res, capturePolicy)
+	volumes, notCovered, err := FindBackupVolumes(introspection, capturePolicy)
 	if err != nil {
 		return nil, model.NotCovered{}, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
@@ -88,7 +88,7 @@ func (s *Service) resolveBackupVolumes(
 // FindBackupVolumes decides, as capturePolicy says, which units a savepoint captures with
 // which backend, and what it leaves out; two units rendering one ObjectID are an error.
 func FindBackupVolumes(
-	res model.IntrospectionResult, capturePolicy model.CapturePolicy,
+	introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
 ) ([]model.Volume, model.NotCovered, error) {
 	var (
 		volumes []model.Volume
@@ -102,7 +102,7 @@ func FindBackupVolumes(
 
 	// Named volumes come from the project level: a volume three services mount is
 	// one unit, and only this level knows every mount of it.
-	for _, named := range res.Project.Volumes {
+	for _, named := range introspection.Project.Volumes {
 		decision := capturePolicy.DecideNamedVolume(named.Name)
 		if !decision.Capture {
 			excludedNamed[named.Name] = true
@@ -118,17 +118,17 @@ func FindBackupVolumes(
 			covered[ref.Service] = true
 		}
 		namedIdentity := volumeIdentity{dockerName: named.Name}
-		objectIDIsRegistered, err := isObjectIDRegistered(registered, named.ObjectID(), namedIdentity)
+		duplicate, err := isObjectIDRegistered(registered, named.ObjectID(), namedIdentity)
 		if err != nil {
 			return nil, model.NotCovered{}, err
 		}
-		if objectIDIsRegistered {
+		if duplicate {
 			continue
 		}
 		registered[named.ObjectID()] = namedIdentity
 		volumes = append(volumes, model.Volume{
 			ObjectID:       named.ObjectID(),
-			ComposeProject: res.Project.Name,
+			ComposeProject: introspection.Project.Name,
 			Type:           model.VolumeTypeNamed,
 			Backend:        decision.Backend,
 			Named: &model.VolumePropertiesNamed{
@@ -140,8 +140,8 @@ func FindBackupVolumes(
 
 	// Bind and anonymous mounts belong to the service that declares them; one inherited
 	// through volumes_from belongs to its source.
-	inProject := projectContainers(res.Project.Services)
-	for _, service := range res.Project.Services {
+	inProject := projectContainers(introspection.Project.Services)
+	for _, service := range introspection.Project.Services {
 		for _, serviceVolume := range service.Volumes {
 			if serviceVolume.Type == model.VolumeTypeNamed {
 				// Only a reference to the unit decided above.
@@ -191,27 +191,27 @@ func FindBackupVolumes(
 				replica: serviceVolume.Replica,
 				target:  serviceVolume.Target,
 			}
-			isRegistered, err := isObjectIDRegistered(registered, objectID, mountIdentity)
+			duplicate, err := isObjectIDRegistered(registered, objectID, mountIdentity)
 			if err != nil {
 				return nil, model.NotCovered{}, err
 			}
-			if isRegistered {
+			if duplicate {
 				continue
 			}
 			registered[objectID] = mountIdentity
 			volumes = append(volumes, model.Volume{
 				ObjectID:       objectID,
-				ComposeProject: res.Project.Name,
+				ComposeProject: introspection.Project.Name,
 				Type:           serviceVolume.Type,
 				Backend:        decision.Backend,
-				Bind:           bindProperties(service.Name, serviceVolume),
-				Anon:           anonProperties(service.Name, serviceVolume),
+				Bind:           newBindProperties(service.Name, serviceVolume),
+				Anon:           newAnonProperties(service.Name, serviceVolume),
 			})
 		}
 	}
 
 	var uncovered []string
-	for _, service := range res.Project.Services {
+	for _, service := range introspection.Project.Services {
 		if !covered[service.Name] && !excludedFrom[service.Name] {
 			uncovered = append(uncovered, service.Name)
 		}
@@ -292,9 +292,9 @@ func reasonFor(volumeType model.VolumeType) skipReason {
 	return skipReasons[model.VolumeTypeUnknown]
 }
 
-// bindProperties and anonProperties each fill their arm or return nil, so
+// newBindProperties and newAnonProperties each fill their arm or return nil, so
 // exactly one arm of the Volume literal above ends up non-nil.
-func bindProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesBind {
+func newBindProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesBind {
 	if serviceVolume.Type != model.VolumeTypeBind {
 		return nil
 	}
@@ -306,7 +306,7 @@ func bindProperties(service string, serviceVolume model.ServiceVolume) *model.Vo
 	}
 }
 
-func anonProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesAnon {
+func newAnonProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesAnon {
 	if serviceVolume.Type != model.VolumeTypeAnon {
 		return nil
 	}

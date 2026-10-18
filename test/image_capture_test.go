@@ -177,7 +177,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
-		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
+		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &imageCaptureEnv{
@@ -225,9 +225,9 @@ func newImageCopier(store storages.Navigator, engine *dockerclient.Engine, blobS
 	}, dedup)
 }
 
-// captureDefaults are the capture defaults the DI root builds from a config that names
+// newCaptureDefaults are the capture defaults the DI root builds from a config that names
 // only the volume backend: every kind captured, layers deduplicated.
-func captureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.CaptureDefaults {
+func newCaptureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.CaptureDefaults {
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        volumeBackend,
 		WritableLayerBackend: model.ImageBackendDedupCopy,

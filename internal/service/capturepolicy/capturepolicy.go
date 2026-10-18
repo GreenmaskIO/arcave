@@ -84,7 +84,7 @@ type volumeLabels struct {
 // defaults; a label arcave cannot act on is model.ErrInvalidCapturePolicy. arcave's own
 // io.arcave.* stamps are never read.
 func Resolve(
-	ctx context.Context, res model.IntrospectionResult, defaults CaptureDefaults,
+	ctx context.Context, introspection model.IntrospectionResult, defaults CaptureDefaults,
 ) (model.CapturePolicy, error) {
 	capturePolicy := model.CapturePolicy{
 		VolumeBackend:        defaults.VolumeBackend,
@@ -95,27 +95,27 @@ func Resolve(
 	}
 
 	services := map[string]serviceLabels{}
-	for _, service := range res.Project.Services {
-		labels, err := parseServiceLabels(ctx, service, findImageLabels(res, service))
+	for _, service := range introspection.Project.Services {
+		labels, err := parseServiceLabels(ctx, service, findImageLabels(introspection, service))
 		if err != nil {
 			return model.CapturePolicy{}, err
 		}
 		services[service.Name] = labels
 		capturePolicy.Services[service.Name] = labels.decideWritableLayerAndImage(defaults)
-		for _, serviceVolume := range service.Volumes {
-			if !isMountOwnedByService(serviceVolume) {
+		for _, mount := range service.Volumes {
+			if !isMountOwnedByService(mount) {
 				continue
 			}
-			decision, err := labels.decideMount(ctx, serviceVolume, defaults)
+			decision, err := labels.decideMount(ctx, mount, defaults)
 			if err != nil {
 				return model.CapturePolicy{}, err
 			}
-			ref := model.MountRef{Service: service.Name, Replica: serviceVolume.Replica, Target: serviceVolume.Target}
+			ref := model.MountRef{Service: service.Name, Replica: mount.Replica, Target: mount.Target}
 			capturePolicy.Mounts[ref] = decision
 		}
 	}
 
-	for _, named := range res.Project.Volumes {
+	for _, named := range introspection.Project.Volumes {
 		decision, err := decideNamed(ctx, named, services, defaults)
 		if err != nil {
 			return model.CapturePolicy{}, err
@@ -127,24 +127,24 @@ func Resolve(
 
 // ResolveWithoutLabels decides every resource by the defaults alone, every label ignored.
 func ResolveWithoutLabels(
-	ctx context.Context, res model.IntrospectionResult, defaults CaptureDefaults,
+	ctx context.Context, introspection model.IntrospectionResult, defaults CaptureDefaults,
 ) (model.CapturePolicy, error) {
-	unlabelled := res
-	unlabelled.Project.Services = make([]model.Service, len(res.Project.Services))
-	for serviceIdx, service := range res.Project.Services {
+	unlabelled := introspection
+	unlabelled.Project.Services = make([]model.Service, len(introspection.Project.Services))
+	for serviceIdx, service := range introspection.Project.Services {
 		service.Labels = nil
 		service.Volumes = slices.Clone(service.Volumes)
-		for volumeIdx, serviceVolume := range service.Volumes {
-			if serviceVolume.Volume != nil {
-				mount := *serviceVolume.Volume
-				mount.Labels = nil
-				service.Volumes[volumeIdx].Volume = &mount
+		for volumeIdx, mount := range service.Volumes {
+			if mount.Volume != nil {
+				options := *mount.Volume
+				options.Labels = nil
+				service.Volumes[volumeIdx].Volume = &options
 			}
 		}
 		unlabelled.Project.Services[serviceIdx] = service
 	}
-	unlabelled.Project.Volumes = make([]model.NamedVolume, len(res.Project.Volumes))
-	for volumeIdx, named := range res.Project.Volumes {
+	unlabelled.Project.Volumes = make([]model.NamedVolume, len(introspection.Project.Volumes))
+	for volumeIdx, named := range introspection.Project.Volumes {
 		named.Labels = nil
 		unlabelled.Project.Volumes[volumeIdx] = named
 	}
@@ -154,11 +154,11 @@ func ResolveWithoutLabels(
 }
 
 // findImageLabels are the labels of the image the service's first replica runs on.
-func findImageLabels(res model.IntrospectionResult, service model.Service) map[string]string {
+func findImageLabels(introspection model.IntrospectionResult, service model.Service) map[string]string {
 	if len(service.Containers) == 0 {
 		return nil
 	}
-	inspect, ok := res.Images[service.Containers[0].ImageID()]
+	inspect, ok := introspection.Images[service.Containers[0].ImageID()]
 	if !ok || inspect.Config == nil {
 		return nil
 	}
@@ -168,35 +168,39 @@ func findImageLabels(res model.IntrospectionResult, service model.Service) map[s
 // isMountOwnedByService reports whether a mount is decided per service: a bind or an
 // anonymous volume, not inherited through volumes_from. A named volume is decided once
 // for every service mounting it.
-func isMountOwnedByService(serviceVolume model.ServiceVolume) bool {
-	isOwnType := serviceVolume.Type == model.VolumeTypeBind || serviceVolume.Type == model.VolumeTypeAnon
-	return isOwnType && serviceVolume.InheritedFrom == ""
+func isMountOwnedByService(mount model.ServiceVolume) bool {
+	isOwnType := mount.Type == model.VolumeTypeBind || mount.Type == model.VolumeTypeAnon
+	return isOwnType && mount.InheritedFrom == ""
 }
 
 // parseServiceLabels reads and checks a service's labels, its mount targets against
 // the mounts it has.
-func parseServiceLabels(ctx context.Context, service model.Service, image map[string]string) (serviceLabels, error) {
+func parseServiceLabels(
+	ctx context.Context,
+	service model.Service,
+	imageLabels map[string]string,
+) (serviceLabels, error) {
 	where := "service " + service.Name
-	live := service.Labels
-	if err := refuseUnknownLabels(ctx, live, serviceLabelKeys, image, where); err != nil {
+	raw := service.Labels
+	if err := refuseUnknownLabels(ctx, raw, serviceLabelKeys, imageLabels, where); err != nil {
 		return serviceLabels{}, err
 	}
 
-	labels := serviceLabels{name: service.Name, rawLabels: live, backendByTarget: map[string]model.SnapshotBackendKind{}}
+	labels := serviceLabels{name: service.Name, rawLabels: raw, backendByTarget: map[string]model.SnapshotBackendKind{}}
 	var err error
-	if labels.capture, err = parseCaptureLabel(live, model.LabelCapture, where); err != nil {
+	if labels.capture, err = parseCaptureLabel(raw, model.LabelCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.writableLayerCapture, err = parseCaptureLabel(live, model.LabelWritableLayerCapture, where); err != nil {
+	if labels.writableLayerCapture, err = parseCaptureLabel(raw, model.LabelWritableLayerCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.imageCapture, err = parseCaptureLabel(live, model.LabelImageCapture, where); err != nil {
+	if labels.imageCapture, err = parseCaptureLabel(raw, model.LabelImageCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.volumeBackend, err = parseVolumeBackend(live, model.LabelVolumeBackend, where); err != nil {
+	if labels.volumeBackend, err = parseVolumeBackend(raw, model.LabelVolumeBackend, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if value, ok := live[model.LabelWritableLayerBackend]; ok {
+	if value, ok := raw[model.LabelWritableLayerBackend]; ok {
 		backend, ok := model.ParseImageBackend(value)
 		if !ok {
 			return serviceLabels{}, newInvalidLabelError(
@@ -205,36 +209,36 @@ func parseServiceLabels(ctx context.Context, service model.Service, image map[st
 		labels.writableLayerBackend = &backend
 	}
 
-	if labels.excludedTargets, err = parseTargets(service, live, model.LabelMountsExclude); err != nil {
+	if labels.excludedTargets, err = parseTargets(service, raw, model.LabelMountsExclude); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.includedTargets, err = parseTargets(service, live, model.LabelMountsInclude); err != nil {
+	if labels.includedTargets, err = parseTargets(service, raw, model.LabelMountsInclude); err != nil {
 		return serviceLabels{}, err
 	}
 	for _, target := range labels.includedTargets {
 		if slices.Contains(labels.excludedTargets, target) {
-			return serviceLabels{}, newInvalidLabelError(where, model.LabelMountsInclude, live[model.LabelMountsInclude],
+			return serviceLabels{}, newInvalidLabelError(where, model.LabelMountsInclude, raw[model.LabelMountsInclude],
 				fmt.Sprintf("target %s is also in %s", target, model.LabelMountsExclude))
 		}
 	}
-	for _, list := range []struct {
+	for _, targetList := range []struct {
 		key     string
 		backend model.SnapshotBackendKind
 	}{
 		{model.LabelMountsFullCopy, model.SnapshotBackendFullCopy},
 		{model.LabelMountsCDC, model.SnapshotBackendCDC},
 	} {
-		targets, err := parseTargets(service, live, list.key)
+		targets, err := parseTargets(service, raw, targetList.key)
 		if err != nil {
 			return serviceLabels{}, err
 		}
 		for _, target := range targets {
 			if _, taken := labels.backendByTarget[target]; taken {
-				return serviceLabels{}, newInvalidLabelError(where, list.key, live[list.key],
+				return serviceLabels{}, newInvalidLabelError(where, targetList.key, raw[targetList.key],
 					fmt.Sprintf("target %s is listed for both %s and %s",
 						target, model.LabelMountsFullCopy, model.LabelMountsCDC))
 			}
-			labels.backendByTarget[target] = list.backend
+			labels.backendByTarget[target] = targetList.backend
 		}
 	}
 	return labels, nil
@@ -242,92 +246,92 @@ func parseServiceLabels(ctx context.Context, service model.Service, image map[st
 
 // decideWritableLayerAndImage decides a service's writable layer and image: its own
 // label, else the service's arcave.capture, else the config.
-func (l serviceLabels) decideWritableLayerAndImage(defaults CaptureDefaults) model.ServiceDecision {
+func (sl serviceLabels) decideWritableLayerAndImage(defaults CaptureDefaults) model.ServiceDecision {
 	writableLayerConfig := newConfigDecision(defaults.SavepointCapture.WritableLayers, "writable_layers")
 	writableLayer := model.WritableLayerDecision{
-		CaptureDecision: l.decideWithFallback(l.writableLayerCapture, writableLayerConfig),
+		CaptureDecision: sl.decideWithFallback(sl.writableLayerCapture, writableLayerConfig),
 		Backend:         defaults.WritableLayerBackend,
 	}
-	if l.writableLayerBackend != nil {
-		writableLayer.Backend = *l.writableLayerBackend
+	if sl.writableLayerBackend != nil {
+		writableLayer.Backend = *sl.writableLayerBackend
 	}
-	image := l.decideWithFallback(l.imageCapture, newConfigDecision(defaults.SavepointCapture.Images, "images"))
+	image := sl.decideWithFallback(sl.imageCapture, newConfigDecision(defaults.SavepointCapture.Images, "images"))
 	return model.ServiceDecision{WritableLayer: writableLayer, Image: image}
 }
 
 // decideMount decides one bind or anonymous mount of the service, most specific first:
 // the anonymous volume's own label, the target lists, the service's defaults, the config.
-func (l serviceLabels) decideMount(
-	ctx context.Context, serviceVolume model.ServiceVolume, defaults CaptureDefaults,
+func (sl serviceLabels) decideMount(
+	ctx context.Context, mount model.ServiceVolume, defaults CaptureDefaults,
 ) (model.VolumeDecision, error) {
 	var ownLabels volumeLabels
-	if serviceVolume.Type == model.VolumeTypeAnon && serviceVolume.Volume != nil {
+	if mount.Type == model.VolumeTypeAnon && mount.Volume != nil {
 		var err error
-		where := "the anonymous volume at " + serviceVolume.Target + " of service " + l.name
-		ownLabels, err = parseVolumeLabels(ctx, serviceVolume.Volume.Labels, where)
+		where := "the anonymous volume at " + mount.Target + " of service " + sl.name
+		ownLabels, err = parseVolumeLabels(ctx, mount.Volume.Labels, where)
 		if err != nil {
 			return model.VolumeDecision{}, err
 		}
 	}
 
-	config := newConfigDecision(defaults.SavepointCapture.BindVolumes, "volumes.bind")
-	if serviceVolume.Type == model.VolumeTypeAnon {
-		config = newConfigDecision(defaults.SavepointCapture.AnonymousVolumes, "volumes.anonymous")
+	configDecision := newConfigDecision(defaults.SavepointCapture.BindVolumes, "volumes.bind")
+	if mount.Type == model.VolumeTypeAnon {
+		configDecision = newConfigDecision(defaults.SavepointCapture.AnonymousVolumes, "volumes.anonymous")
 	}
-	decision := model.VolumeDecision{CaptureDecision: l.decideWithFallback(ownLabels.capture, config)}
+	decision := model.VolumeDecision{CaptureDecision: sl.decideWithFallback(ownLabels.capture, configDecision)}
 	if ownLabels.capture == nil {
-		if listed, ok := l.decideByTargetLists(serviceVolume.Target); ok {
+		if listed, ok := sl.decideByTargetLists(mount.Target); ok {
 			decision.CaptureDecision = listed
 		}
 	}
 
 	decision.Backend = defaults.VolumeBackend
-	switch backend, listed := l.findListedBackend(serviceVolume.Target); {
+	switch backend, listed := sl.findListedBackend(mount.Target); {
 	case ownLabels.backend != nil:
 		decision.Backend = *ownLabels.backend
 	case listed:
 		decision.Backend = backend
-	case l.volumeBackend != nil:
-		decision.Backend = *l.volumeBackend
+	case sl.volumeBackend != nil:
+		decision.Backend = *sl.volumeBackend
 	}
 	return decision, nil
 }
 
 // decideByTargetLists is what arcave.mounts.exclude and .include say of a target, if
 // either does.
-func (l serviceLabels) decideByTargetLists(target string) (model.CaptureDecision, bool) {
+func (sl serviceLabels) decideByTargetLists(target string) (model.CaptureDecision, bool) {
 	switch {
-	case slices.Contains(l.excludedTargets, target):
-		return newLabelDecision(false, l.formatListSource(model.LabelMountsExclude)), true
-	case slices.Contains(l.includedTargets, target):
-		return newLabelDecision(true, l.formatListSource(model.LabelMountsInclude)), true
+	case slices.Contains(sl.excludedTargets, target):
+		return newLabelDecision(false, sl.formatListSource(model.LabelMountsExclude)), true
+	case slices.Contains(sl.includedTargets, target):
+		return newLabelDecision(true, sl.formatListSource(model.LabelMountsInclude)), true
 	default:
 		return model.CaptureDecision{}, false
 	}
 }
 
 // findListedBackend is the backend the target lists name for a target.
-func (l serviceLabels) findListedBackend(target string) (model.SnapshotBackendKind, bool) {
-	backend, ok := l.backendByTarget[target]
+func (sl serviceLabels) findListedBackend(target string) (model.SnapshotBackendKind, bool) {
+	backend, ok := sl.backendByTarget[target]
 	return backend, ok
 }
 
 // formatListSource names a target list label of the service as a decision's source.
-func (l serviceLabels) formatListSource(key string) string {
-	return formatLabelSource(key, l.rawLabels[key], "service "+l.name)
+func (sl serviceLabels) formatListSource(key string) string {
+	return formatLabelSource(key, sl.rawLabels[key], "service "+sl.name)
 }
 
-// decideWithFallback is decision when set, else the service's arcave.capture, else config.
-func (l serviceLabels) decideWithFallback(
-	decision *model.CaptureDecision, config model.CaptureDecision,
+// decideWithFallback is decision when set, else the service's arcave.capture, else configDecision.
+func (sl serviceLabels) decideWithFallback(
+	decision *model.CaptureDecision, configDecision model.CaptureDecision,
 ) model.CaptureDecision {
 	switch {
 	case decision != nil:
 		return *decision
-	case l.capture != nil:
-		return *l.capture
+	case sl.capture != nil:
+		return *sl.capture
 	default:
-		return config
+		return configDecision
 	}
 }
 
@@ -422,9 +426,9 @@ func decideByServicesCapture(
 // key that says so.
 func newConfigDecision(capture bool, key string) model.CaptureDecision {
 	if !capture {
-		return model.ConfigDecision(false, fmt.Sprintf("capture.%s=false in the config", key))
+		return model.NewConfigDecision(false, fmt.Sprintf("capture.%s=false in the config", key))
 	}
-	return model.ConfigDecision(true, "")
+	return model.NewConfigDecision(true, "")
 }
 
 // newLabelDecision is a decision a label made.
@@ -456,14 +460,14 @@ func parseVolumeLabels(ctx context.Context, labels map[string]string, where stri
 // refuseUnknownLabels refuses an arcave.* label not among allowed. One the image carries
 // with the same value is the image's, not the user's: it is skipped with a warning.
 func refuseUnknownLabels(
-	ctx context.Context, labels map[string]string, allowed []string, image map[string]string, where string,
+	ctx context.Context, labels map[string]string, allowed []string, imageLabels map[string]string, where string,
 ) error {
 	// Sorted, so of several unknown keys the same one is named every run.
 	for _, key := range slices.Sorted(maps.Keys(labels)) {
 		if !strings.HasPrefix(key, model.LabelPrefix) || slices.Contains(allowed, key) {
 			continue
 		}
-		if value, ok := image[key]; ok && value == labels[key] {
+		if value, ok := imageLabels[key]; ok && value == labels[key] {
 			zerolog.Ctx(ctx).Warn().Str("label", key).Str("where", where).
 				Msg("the image carries a label arcave does not read; it is ignored")
 			continue
@@ -530,8 +534,8 @@ func parseTargets(service model.Service, labels map[string]string, key string) (
 // anonymous volumes or named volume mounts.
 func requireMountedTarget(service model.Service, key, value, target string) error {
 	where := "service " + service.Name
-	volumeIdx := slices.IndexFunc(service.Volumes, func(serviceVolume model.ServiceVolume) bool {
-		return serviceVolume.Target == target
+	volumeIdx := slices.IndexFunc(service.Volumes, func(mount model.ServiceVolume) bool {
+		return mount.Target == target
 	})
 	switch {
 	case volumeIdx < 0:

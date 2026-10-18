@@ -322,7 +322,7 @@ func (e *sessionEnv) withComposeProject(t *testing.T) {
 }
 
 // in is the compose project as seen from session: a core.Service wired the way
-// initAllDependencies wires one, over the same project root, lock and marker.
+// newDependencies wires one, over the same project root, lock and marker.
 func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv {
 	t.Helper()
 
@@ -363,7 +363,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           e.inflight,
 		Store:              store,
-		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
+		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 		Session:            session,
 		ComposeProject:     model.DockerComposeProjectName(e.project),
 		Sessions:           sessionrepo.New(arcaveProjectStore),

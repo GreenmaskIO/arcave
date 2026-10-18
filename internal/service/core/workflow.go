@@ -67,13 +67,13 @@ type imageSet struct {
 	skippedImages         []model.SkippedImage
 }
 
-// notCovered is what a capture of ws leaves out, killed being the containers the
+// newNotCovered is what a capture of ws leaves out, killed being the containers the
 // stop killed; nil when it leaves out nothing.
-func (ws workingSet) notCovered(killed []string) *model.NotCovered {
+func (ws workingSet) newNotCovered(killed []string) *model.NotCovered {
 	notCovered := model.NotCovered{
 		Mounts:                 ws.skippedMounts,
 		ServicesWithoutVolumes: ws.servicesWithoutVolumes,
-		KilledContainers:       ws.killedContainers(killed),
+		KilledContainers:       ws.newKilledContainers(killed),
 		ReplicaGaps:            ws.replicaGaps,
 		UnresolvedImages:       ws.unresolvedImages,
 		WritableLayers:         ws.images.skippedWritableLayers,
@@ -85,73 +85,70 @@ func (ws workingSet) notCovered(killed []string) *model.NotCovered {
 	return &notCovered
 }
 
-// killedContainers names the replica behind each container id the stop killed.
-func (ws workingSet) killedContainers(ids []string) []model.KilledContainer {
-	var killed []model.KilledContainer
+// newKilledContainers names the replica behind each container id the stop killed.
+func (ws workingSet) newKilledContainers(ids []string) []model.KilledContainer {
+	var killedContainers []model.KilledContainer
 	for _, id := range ids {
-		k := model.KilledContainer{Container: id}
+		killed := model.KilledContainer{Container: id}
 		if i := slices.IndexFunc(ws.containers, func(c model.ContainerRef) bool { return c.ID == id }); i >= 0 {
-			c := ws.containers[i]
-			k = model.KilledContainer{
-				Service:   c.Service,
-				Replica:   c.Replica,
-				Container: c.Name,
+			ref := ws.containers[i]
+			killed = model.KilledContainer{
+				Service:   ref.Service,
+				Replica:   ref.Replica,
+				Container: ref.Name,
 			}
 		}
-		killed = append(killed, k)
+		killedContainers = append(killedContainers, killed)
 	}
-	return killed
+	return killedContainers
 }
 
 // prepare introspects the compose project and builds the working set of it.
 func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (workingSet, error) {
-	res, err := s.introspect(ctx)
+	introspection, err := s.introspect(ctx)
 	if err != nil {
 		return workingSet{}, err
 	}
-	if err := requireDaemon(ctx, res.Daemon, s.minDaemonMajor); err != nil {
+	if err := requireDaemon(ctx, introspection.Daemon, s.minDaemonMajor); err != nil {
 		return workingSet{}, err
 	}
 	// Before anything else: a bad label fails while the project is still running.
-	capturePolicy, err := capturepolicy.Resolve(ctx, res, s.captureDefaults)
+	capturePolicy, err := capturepolicy.Resolve(ctx, introspection, s.captureDefaults)
 	if err != nil {
 		return workingSet{}, err
 	}
-	return s.workingSetOf(ctx, res, waitTimeout, capturePolicy)
+	return s.newWorkingSet(ctx, introspection, waitTimeout, capturePolicy)
 }
 
 // introspect reads the compose project as the daemon holds it now.
 func (s *Service) introspect(ctx context.Context) (model.IntrospectionResult, error) {
-	res, err := s.composeInspector.Introspect(ctx)
+	introspection, err := s.composeInspector.Introspect(ctx)
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
 	}
-	return res, nil
+	return introspection, nil
 }
 
-// workingSetOf renders and parses back the compose project's spec and builds one backend
+// newWorkingSet renders and parses back the compose project's spec and builds one backend
 // per live volume, capturing what capturePolicy takes; an absent compose project or an empty
 // capture is refused.
-func (s *Service) workingSetOf(
-	ctx context.Context, res model.IntrospectionResult, waitTimeout time.Duration, capturePolicy model.CapturePolicy,
+func (s *Service) newWorkingSet(
+	ctx context.Context, introspection model.IntrospectionResult, waitTimeout time.Duration, capturePolicy model.CapturePolicy,
 ) (workingSet, error) {
-	if composeProjectAbsent(res) {
-		return workingSet{}, fmt.Errorf("compose project %q: %w", res.Project.Name, errComposeProjectAbsent)
+	if composeProjectAbsent(introspection) {
+		return workingSet{}, fmt.Errorf("compose project %q: %w", introspection.Project.Name, errComposeProjectAbsent)
 	}
 
-	containers := capturableContainers(ctx, res)
-	images, err := s.imageSetOf(ctx, res, capturePolicy, containers)
-	if err != nil {
-		return workingSet{}, err
-	}
+	containers := newContainerRefs(ctx, introspection)
+	images := newImageSet(ctx, introspection, capturePolicy, containers)
 
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
-	assembled, err := s.projectAssembler.Assemble(ctx, res)
+	assembled, err := s.projectAssembler.Assemble(ctx, introspection)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("assembling the compose spec: %w", err)
 	}
 	// The spec says what this capture takes and why, so the savepoint explains itself.
-	stampServices(assembled, capturepolicy.Stamps(res, capturePolicy))
+	stampServices(assembled, capturepolicy.Stamps(introspection, capturePolicy))
 	spec, err := s.specCodec.Marshal(assembled)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("rendering the compose spec: %w", err)
@@ -163,7 +160,7 @@ func (s *Service) workingSetOf(
 		return workingSet{}, fmt.Errorf("parsing the compose spec: %w", err)
 	}
 
-	volumes, notCovered, err := s.resolveBackupVolumes(ctx, res, capturePolicy)
+	volumes, notCovered, err := s.resolveBackupVolumes(ctx, introspection, capturePolicy)
 	if err != nil {
 		return workingSet{}, err
 	}
@@ -171,7 +168,7 @@ func (s *Service) workingSetOf(
 		return workingSet{}, errNoVolumesToBackUp
 	}
 
-	backends, err := s.buildBackends(volumes)
+	backends, err := s.newBackends(volumes)
 	if err != nil {
 		return workingSet{}, err
 	}
@@ -183,30 +180,30 @@ func (s *Service) workingSetOf(
 		backends:    backends,
 		containers:  containers,
 		images:      images,
-		anonVolumes: anonymousVolumes(res),
+		anonVolumes: anonymousVolumes(introspection),
 
 		skippedMounts:          notCovered.Mounts,
 		servicesWithoutVolumes: notCovered.ServicesWithoutVolumes,
-		replicaGaps:            replicaGaps(ctx, res),
-		unresolvedImages:       unresolvedImages(res, containers),
+		replicaGaps:            newReplicaGaps(ctx, introspection),
+		unresolvedImages:       newUnresolvedImages(introspection, containers),
 	}, nil
 }
 
-// imageSetOf decides the writable layers and images a capture takes.
-func (s *Service) imageSetOf(
+// newImageSet decides the writable layers and images a capture takes.
+func newImageSet(
 	ctx context.Context,
-	res model.IntrospectionResult,
+	introspection model.IntrospectionResult,
 	capturePolicy model.CapturePolicy,
 	containers []model.ContainerRef,
-) (imageSet, error) {
-	writableLayers, skippedWritableLayers := writableLayerCaptures(ctx, containers, capturePolicy)
+) imageSet {
+	writableLayers, skippedWritableLayers := newLayerCaptures(ctx, containers, capturePolicy)
 	upstreamContainers, skippedImages := imageCaptureContainers(ctx, containers, capturePolicy)
 	return imageSet{
 		writableLayers:        writableLayers,
-		upstreams:             imageCaptures(res, upstreamContainers),
+		upstreams:             newImageCaptures(introspection, upstreamContainers),
 		skippedWritableLayers: skippedWritableLayers,
 		skippedImages:         skippedImages,
-	}, nil
+	}
 }
 
 // stampServices adds labels to the services of project they name.
@@ -225,57 +222,57 @@ func stampServices(project *types.Project, labels map[string]map[string]string) 
 	}
 }
 
-// safetySnapshotCapturePolicy is the capture policy of the safety snapshot taken before a
+// newSafetySnapshotPolicy is the capture policy of the safety snapshot taken before a
 // rollback to restoring: the live labels, as a savepoint reads them, with two exceptions.
 // A label that cannot be parsed warns and falls back to the config instead of failing
 // the rollback, and every volume the rollback overwrites is captured whatever its label
 // says, since the safety snapshot is the only copy of it.
-func (s *Service) safetySnapshotCapturePolicy(
-	ctx context.Context, res model.IntrospectionResult, restoring model.Savepoint,
+func (s *Service) newSafetySnapshotPolicy(
+	ctx context.Context, introspection model.IntrospectionResult, restoring model.Savepoint,
 ) (model.CapturePolicy, error) {
-	capturePolicy, err := capturepolicy.Resolve(ctx, res, s.captureDefaults)
+	capturePolicy, err := capturepolicy.Resolve(ctx, introspection, s.captureDefaults)
 	if err != nil {
 		if !errors.Is(err, model.ErrInvalidCapturePolicy) {
 			return model.CapturePolicy{}, err
 		}
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("the safety snapshot ignores the labels and follows the config")
-		if capturePolicy, err = capturepolicy.ResolveWithoutLabels(ctx, res, s.captureDefaults); err != nil {
+		if capturePolicy, err = capturepolicy.ResolveWithoutLabels(ctx, introspection, s.captureDefaults); err != nil {
 			return model.CapturePolicy{}, err
 		}
 	}
-	return keepRestored(capturePolicy, res, restoring), nil
+	return keepRestored(capturePolicy, introspection, restoring), nil
 }
 
-// keepRestored captures every live unit record restores into, so the safety snapshot
+// keepRestored captures every live unit savepoint restores into, so the safety snapshot
 // holds what the rollback overwrites.
-func keepRestored(capturePolicy model.CapturePolicy, res model.IntrospectionResult, record model.Savepoint) model.CapturePolicy {
+func keepRestored(capturePolicy model.CapturePolicy, introspection model.IntrospectionResult, savepoint model.Savepoint) model.CapturePolicy {
 	restored := map[string]bool{}
-	for _, v := range volumesOf(record) {
+	for _, v := range volumesOf(savepoint) {
 		restored[v.ObjectID] = true
 	}
-	keep := func(d model.VolumeDecision) model.VolumeDecision {
-		d.CaptureDecision = model.ConfigDecision(true, "the rollback restores into it")
-		return d
+	keep := func(decision model.VolumeDecision) model.VolumeDecision {
+		decision.CaptureDecision = model.NewConfigDecision(true, "the rollback restores into it")
+		return decision
 	}
 
 	named := maps.Clone(capturePolicy.NamedVolumes)
 	if named == nil {
 		named = map[string]model.VolumeDecision{}
 	}
-	for _, v := range res.Project.Volumes {
-		if d := capturePolicy.DecideNamedVolume(v.Name); restored[v.ObjectID()] && !d.Capture {
-			named[v.Name] = keep(d)
+	for _, volume := range introspection.Project.Volumes {
+		if decision := capturePolicy.DecideNamedVolume(volume.Name); restored[volume.ObjectID()] && !decision.Capture {
+			named[volume.Name] = keep(decision)
 		}
 	}
 	mounts := maps.Clone(capturePolicy.Mounts)
 	if mounts == nil {
 		mounts = map[model.MountRef]model.VolumeDecision{}
 	}
-	for _, svc := range res.Project.Services {
-		for _, sv := range svc.Volumes {
-			ref := model.MountRef{Service: svc.Name, Replica: sv.Replica, Target: sv.Target}
-			if d := capturePolicy.DecideMount(ref); sv.Type != model.VolumeTypeNamed && restored[sv.ObjectID(svc.Name)] && !d.Capture {
-				mounts[ref] = keep(d)
+	for _, svc := range introspection.Project.Services {
+		for _, mount := range svc.Volumes {
+			ref := model.MountRef{Service: svc.Name, Replica: mount.Replica, Target: mount.Target}
+			if decision := capturePolicy.DecideMount(ref); mount.Type != model.VolumeTypeNamed && restored[mount.ObjectID(svc.Name)] && !decision.Capture {
+				mounts[ref] = keep(decision)
 			}
 		}
 	}
@@ -285,15 +282,15 @@ func keepRestored(capturePolicy model.CapturePolicy, res model.IntrospectionResu
 
 // composeProjectAbsent reports whether the daemon holds no container of the compose project:
 // it was never started, or was taken down.
-func composeProjectAbsent(res model.IntrospectionResult) bool {
-	return len(res.Project.Services) == 0
+func composeProjectAbsent(introspection model.IntrospectionResult) bool {
+	return len(introspection.Project.Services) == 0
 }
 
 // stopServices puts the services down and returns the containers the stop deadline
 // killed.
-func (s *Service) stopServices(ctx context.Context, ws workingSet) ([]string, error) {
+func (s *Service) stopServices(ctx context.Context, working workingSet) ([]string, error) {
 	zerolog.Ctx(ctx).Info().Msg("stopping services")
-	killed, err := s.composeRunner.Stop(ctx, ws.project)
+	killed, err := s.composeRunner.Stop(ctx, working.project)
 	if err != nil {
 		return nil, fmt.Errorf("stopping services: %w", err)
 	}
@@ -321,9 +318,9 @@ func (s *Service) composeCreate(ctx context.Context, project *types.Project) err
 }
 
 // startServices brings the services back and waits on their health checks.
-func (s *Service) startServices(ctx context.Context, ws workingSet) error {
+func (s *Service) startServices(ctx context.Context, working workingSet) error {
 	zerolog.Ctx(ctx).Info().Msg("starting services")
-	if err := s.composeRunner.Start(ctx, ws.project, ws.waitTimeout); err != nil {
+	if err := s.composeRunner.Start(ctx, working.project, working.waitTimeout); err != nil {
 		return fmt.Errorf("starting services: %w", err)
 	}
 	return nil
@@ -331,10 +328,10 @@ func (s *Service) startServices(ctx context.Context, ws workingSet) error {
 
 // restartServices brings back the services a workflow stopped, on a revertContext:
 // the interrupt that aborted the workflow must not leave the compose project stopped.
-func (s *Service) restartServices(ctx context.Context, ws workingSet) error {
+func (s *Service) restartServices(ctx context.Context, working workingSet) error {
 	ctx, cancel := revertContext(ctx)
 	defer cancel()
-	return s.startServices(ctx, ws)
+	return s.startServices(ctx, working)
 }
 
 // revertContext strips ctx of its cancellation and bounds it by revertBudget instead, for a
@@ -362,13 +359,13 @@ func preferInterrupt(ctx context.Context, err error) error {
 	return fmt.Errorf("interrupted: %w", ctxErr)
 }
 
-// replicaGaps warns of and returns each service missing a replica below its highest one.
-func replicaGaps(ctx context.Context, res model.IntrospectionResult) []model.ReplicaGap {
+// newReplicaGaps warns of and returns each service missing a replica below its highest one.
+func newReplicaGaps(ctx context.Context, introspection model.IntrospectionResult) []model.ReplicaGap {
 	var gaps []model.ReplicaGap
-	for _, svc := range res.Project.Services {
+	for _, svc := range introspection.Project.Services {
 		numbers := make([]int, 0, len(svc.Containers))
-		for _, c := range svc.Containers {
-			numbers = append(numbers, c.Number)
+		for _, container := range svc.Containers {
+			numbers = append(numbers, container.Number)
 		}
 		missing := missingReplicas(numbers)
 		if len(missing) == 0 {
@@ -403,12 +400,12 @@ func missingReplicas(numbers []int) []int {
 
 // anonymousVolumes indexes the docker names of the compose project's anonymous volumes by
 // the identity their data is captured under.
-func anonymousVolumes(res model.IntrospectionResult) map[string]string {
+func anonymousVolumes(introspection model.IntrospectionResult) map[string]string {
 	names := map[string]string{}
-	for _, svc := range res.Project.Services {
-		for _, v := range svc.Volumes {
-			if v.Type == model.VolumeTypeAnon && v.VolumeName != "" {
-				names[v.ObjectID(svc.Name)] = v.VolumeName
+	for _, svc := range introspection.Project.Services {
+		for _, mount := range svc.Volumes {
+			if mount.Type == model.VolumeTypeAnon && mount.VolumeName != "" {
+				names[mount.ObjectID(svc.Name)] = mount.VolumeName
 			}
 		}
 	}

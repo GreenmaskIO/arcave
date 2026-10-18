@@ -52,31 +52,31 @@ const (
 
 // Validate refuses a request whose selector is nil or zero-valued, or whose
 // leftover-volumes policy is unknown.
-func (r RollbackRequest) Validate() error {
+func (m RollbackRequest) Validate() error {
 	switch {
-	case r.ID != nil && *r.ID != "":
-	case r.Name != nil && *r.Name != "":
-	case r.Latest != nil && *r.Latest:
+	case m.ID != nil && *m.ID != "":
+	case m.Name != nil && *m.Name != "":
+	case m.Latest != nil && *m.Latest:
 	default:
 		return ErrRollbackNoSelector
 	}
-	switch r.LeftoverVolumes {
+	switch m.LeftoverVolumes {
 	case "", LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
 		return nil
 	default:
-		return fmt.Errorf("unsupported leftover volumes policy %q", r.LeftoverVolumes)
+		return fmt.Errorf("unsupported leftover volumes policy %q", m.LeftoverVolumes)
 	}
 }
 
 // Ref renders the selector back as the word the user typed, for error messages
 // to quote.
-func (r RollbackRequest) Ref() string {
+func (m RollbackRequest) Ref() string {
 	switch {
-	case r.ID != nil:
-		return r.ID.String()
-	case r.Name != nil:
-		return *r.Name
-	case r.Latest != nil && *r.Latest:
+	case m.ID != nil:
+		return m.ID.String()
+	case m.Name != nil:
+		return *m.Name
+	case m.Latest != nil && *m.Latest:
 		return RefLatest
 	default:
 		return ""

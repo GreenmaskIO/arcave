@@ -34,7 +34,7 @@ import (
 
 func TestAssembler_Assemble(t *testing.T) {
 	// Arrange
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Services: []model.Service{
 			{
@@ -83,7 +83,7 @@ func TestAssembler_Assemble(t *testing.T) {
 	}}
 
 	// Act
-	project, err := NewAssembler().Assemble(context.Background(), res)
+	project, err := NewAssembler().Assemble(context.Background(), introspection)
 
 	// Assert
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 					},
 				}}
 			}
-			res := model.IntrospectionResult{Project: model.Project{
+			introspection := model.IntrospectionResult{Project: model.Project{
 				Name: "demo",
 				Services: []model.Service{{
 					Name:  "web",
@@ -177,7 +177,7 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 			}}
 
 			// Act
-			project, err := NewAssembler().Assemble(context.Background(), res)
+			project, err := NewAssembler().Assemble(context.Background(), introspection)
 
 			// Assert
 			require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := model.IntrospectionResult{Project: model.Project{
+			introspection := model.IntrospectionResult{Project: model.Project{
 				Name: "demo",
 				Services: []model.Service{{Name: "app", Containers: []model.Container{{
 					Inspect: container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{ID: "c1"}},
@@ -229,7 +229,7 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 			}}
 
 			// Act
-			project, err := NewAssembler().Assemble(context.Background(), res)
+			project, err := NewAssembler().Assemble(context.Background(), introspection)
 
 			// Assert
 			require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 // only the containers name it.
 func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 	// Arrange
-	res := model.IntrospectionResult{Project: model.Project{
+	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
 		Services: []model.Service{{
 			Name:  "app",
@@ -268,7 +268,7 @@ func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 	}}
 
 	// Act
-	project, err := NewAssembler().Assemble(context.Background(), res)
+	project, err := NewAssembler().Assemble(context.Background(), introspection)
 
 	// Assert
 	require.NoError(t, err)
@@ -329,7 +329,7 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			res := model.IntrospectionResult{Project: model.Project{
+			introspection := model.IntrospectionResult{Project: model.Project{
 				Name: "demo",
 				Services: []model.Service{
 					{
@@ -351,7 +351,7 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 			assembler := NewAssembler()
 
 			// Act
-			project, err := assembler.Assemble(context.Background(), res)
+			project, err := assembler.Assemble(context.Background(), introspection)
 
 			// Assert
 			require.NoError(t, err)
@@ -399,7 +399,7 @@ func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 					}},
 				}}
 			}
-			res := model.IntrospectionResult{Project: model.Project{
+			introspection := model.IntrospectionResult{Project: model.Project{
 				Name: "demo",
 				Services: []model.Service{{Name: "web", Containers: []model.Container{
 					replica("aaaaaaaaaaaaaaaa", 1, []string{"MODE=a"}),
@@ -410,7 +410,7 @@ func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 			ctx := zerolog.New(&logs).WithContext(context.Background())
 
 			// Act
-			_, err := NewAssembler().Assemble(ctx, res)
+			_, err := NewAssembler().Assemble(ctx, introspection)
 
 			// Assert
 			require.NoError(t, err)
@@ -463,7 +463,7 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 					Config: &container.Config{Image: "busybox"},
 				}}
 			}
-			res := model.IntrospectionResult{
+			introspection := model.IntrospectionResult{
 				Project: model.Project{Name: "demo", Services: []model.Service{
 					{Name: "app", Containers: []model.Container{replica(goneID)}},
 				}},
@@ -473,7 +473,7 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 			ctx := zerolog.New(&logs).WithContext(context.Background())
 
 			// Act
-			project, err := NewAssembler().Assemble(ctx, res)
+			project, err := NewAssembler().Assemble(ctx, introspection)
 
 			// Assert
 			require.NoError(t, err)

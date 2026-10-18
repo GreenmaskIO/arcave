@@ -61,96 +61,96 @@ func NewAssembler() *Assembler { return &Assembler{} }
 
 // assembly is what rendering one service reads beyond the service itself.
 type assembly struct {
-	res     model.IntrospectionResult
-	netKeys map[string]string
-	known   map[string]bool
+	introspection model.IntrospectionResult
+	networkKeys   map[string]string
+	known         map[string]bool
 	// healthchecked are the services whose first replica runs a healthcheck.
 	healthchecked map[string]bool
-	// replicas maps a replica's container id to its service: compose writes a service
+	// serviceByReplica maps a replica's container id to its service: compose writes a service
 	// reference as the id of the replica it resolved it to.
-	replicas map[string]string
-	// containers maps a replica's container name to its service: a link names its target by name.
-	containers map[string]string
-	// foreign maps a container outside the project, by id and by name, to its name: compose
+	serviceByReplica map[string]string
+	// serviceByName maps a replica's container name to its service: a link names its target by name.
+	serviceByName map[string]string
+	// foreignNames maps a container outside the project, by id and by name, to its name: compose
 	// writes a container: namespace as the id it resolved the name to.
-	foreign map[string]string
+	foreignNames map[string]string
 }
 
-func newAssembly(res model.IntrospectionResult) assembly {
-	s := assembly{
-		res:           res,
-		netKeys:       networkKeys(res.Project.Networks, res.Project.Services),
-		known:         make(map[string]bool, len(res.Project.Services)),
-		healthchecked: map[string]bool{},
-		replicas:      map[string]string{},
-		containers:    map[string]string{},
-		foreign:       map[string]string{},
+func newAssembly(introspection model.IntrospectionResult) assembly {
+	a := assembly{
+		introspection:    introspection,
+		networkKeys:      networkKeys(introspection.Project.Networks, introspection.Project.Services),
+		known:            make(map[string]bool, len(introspection.Project.Services)),
+		healthchecked:    map[string]bool{},
+		serviceByReplica: map[string]string{},
+		serviceByName:    map[string]string{},
+		foreignNames:     map[string]string{},
 	}
-	for id, inspect := range res.Referenced {
+	for id, inspect := range introspection.Referenced {
 		if name := strings.TrimPrefix(inspect.Name, "/"); name != "" {
-			s.foreign[id] = name
-			s.foreign[name] = name
+			a.foreignNames[id] = name
+			a.foreignNames[name] = name
 		}
 	}
-	for _, svc := range res.Project.Services {
-		s.known[svc.Name] = true
+	for _, svc := range introspection.Project.Services {
+		a.known[svc.Name] = true
 		if len(svc.Containers) > 0 && hasHealthCheck(svc.Containers[0].Inspect.Config) {
-			s.healthchecked[svc.Name] = true
+			a.healthchecked[svc.Name] = true
 		}
-		for _, c := range svc.Containers {
-			if c.ID != "" {
-				s.replicas[c.ID] = svc.Name
+		for _, replica := range svc.Containers {
+			if replica.ID != "" {
+				a.serviceByReplica[replica.ID] = svc.Name
 			}
-			if c.Name != "" {
-				s.containers[strings.TrimPrefix(c.Name, "/")] = svc.Name
+			if replica.Name != "" {
+				a.serviceByName[strings.TrimPrefix(replica.Name, "/")] = svc.Name
 			}
 		}
 	}
-	return s
+	return a
 }
 
 // Assemble builds the compose spec of the introspected compose project.
-func (a *Assembler) Assemble(ctx context.Context, res model.IntrospectionResult) (*types.Project, error) {
-	if len(res.Project.Services) == 0 {
-		return nil, fmt.Errorf("compose project %q has no services to act on", res.Project.Name)
+func (*Assembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
+	if len(introspection.Project.Services) == 0 {
+		return nil, fmt.Errorf("compose project %q has no services to act on", introspection.Project.Name)
 	}
 
-	s := newAssembly(res)
-	s.warnOnMissingContainers(ctx)
-	workingDir, files := projectOrigin(res.Project.Services)
+	a := newAssembly(introspection)
+	a.warnOnMissingContainers(ctx)
+	workingDir, files := projectOrigin(introspection.Project.Services)
 	return &types.Project{
-		Name:         res.Project.Name,
+		Name:         introspection.Project.Name,
 		WorkingDir:   workingDir,
 		ComposeFiles: files,
-		Services:     s.services(ctx),
-		Volumes:      volumes(res.Project.Volumes),
-		Networks:     networks(res.Project.Networks, s.netKeys, staticAddressNetworks(res.Project.Services)),
+		Services:     a.newServices(ctx),
+		Volumes:      newVolumes(introspection.Project.Volumes),
+		Networks:     newNetworks(introspection.Project.Networks, a.networkKeys, staticAddressNetworks(introspection.Project.Services)),
 	}, nil
 }
 
-// services renders one ServiceConfig per introspected service.
-func (s assembly) services(ctx context.Context) types.Services {
-	services := make(types.Services, len(s.res.Project.Services))
-	for _, svc := range s.res.Project.Services {
-		services[svc.Name] = s.serviceConfig(svc)
-		s.warnOnDivergentReplicas(ctx, svc, services[svc.Name])
+// newServices renders one ServiceConfig per introspected service.
+func (a assembly) newServices(ctx context.Context) types.Services {
+	services := make(types.Services, len(a.introspection.Project.Services))
+	for _, svc := range a.introspection.Project.Services {
+		services[svc.Name] = a.newServiceConfig(svc)
+		a.warnOnDivergentReplicas(ctx, svc, services[svc.Name])
 	}
 	return services
 }
 
 // warnOnMissingContainers reports, once each, a container: namespace naming a container the
 // daemon no longer has: the spec keeps the id, and a rollback fails to create on it.
-func (s assembly) warnOnMissingContainers(ctx context.Context) {
+func (a assembly) warnOnMissingContainers(ctx context.Context) {
 	var warned []string
-	for _, svc := range s.res.Project.Services {
-		for _, c := range svc.Containers {
-			if c.Inspect.ContainerJSONBase == nil || c.Inspect.HostConfig == nil {
+	for _, svc := range a.introspection.Project.Services {
+		for _, replica := range svc.Containers {
+			if replica.Inspect.ContainerJSONBase == nil || replica.Inspect.HostConfig == nil {
 				continue
 			}
-			h := c.Inspect.HostConfig
-			for _, mode := range []string{string(h.NetworkMode), string(h.IpcMode), string(h.PidMode)} {
+			hostConfig := replica.Inspect.HostConfig
+			for _, mode := range []string{string(hostConfig.NetworkMode), string(hostConfig.IpcMode), string(hostConfig.PidMode)} {
 				ref, ok := strings.CutPrefix(mode, types.ContainerPrefix)
-				if !ok || s.replicas[ref] != "" || s.foreign[ref] != "" || slices.Contains(warned, ref) {
+				if !ok || a.serviceByReplica[ref] != "" || a.foreignNames[ref] != "" || slices.Contains(warned, ref) {
 					continue
 				}
 				warned = append(warned, ref)
@@ -161,19 +161,19 @@ func (s assembly) warnOnMissingContainers(ctx context.Context) {
 	}
 }
 
-// dependsOn parses compose's `service:condition:restart` dependency label. A dependency the
+// parseDependsOn parses compose's `service:condition:restart` dependency label. A dependency the
 // compose project no longer holds is dropped, so every one kept exists and is required, as compose's default.
-func (s assembly) dependsOn(label string) types.DependsOnConfig {
+func (a assembly) parseDependsOn(label string) types.DependsOnConfig {
 	if label == "" {
 		return nil
 	}
 	depends := types.DependsOnConfig{}
 	for _, entry := range strings.Split(label, ",") {
 		parts := strings.Split(entry, ":")
-		if !s.known[parts[0]] {
+		if !a.known[parts[0]] {
 			continue
 		}
-		dependency := types.ServiceDependency{Condition: s.defaultCondition(parts[0]), Restart: true, Required: true}
+		dependency := types.ServiceDependency{Condition: a.defaultCondition(parts[0]), Restart: true, Required: true}
 		if len(parts) > 1 {
 			dependency.Condition = parts[1]
 		}
@@ -193,8 +193,8 @@ func (s assembly) dependsOn(label string) types.DependsOnConfig {
 
 // defaultCondition is the condition of a dependency whose label names none. compose reads it as
 // "healthy if the service has a healthcheck, else running", which no compose file can spell.
-func (s assembly) defaultCondition(service string) string {
-	if s.healthchecked[service] {
+func (a assembly) defaultCondition(service string) string {
+	if a.healthchecked[service] {
 		return types.ServiceConditionHealthy
 	}
 	return types.ServiceConditionStarted
@@ -206,43 +206,43 @@ func hasHealthCheck(config *container.Config) bool {
 		config.Healthcheck.Test[0] != "NONE"
 }
 
-// volumes renders the volumes: section. Name is always explicit: it is the docker
+// newVolumes renders the newVolumes: section. Name is always explicit: it is the docker
 // name the capture was taken from, and compose must not prefix it a second time.
-func volumes(introspected []model.NamedVolume) types.Volumes {
+func newVolumes(introspected []model.NamedVolume) types.Volumes {
 	volumes := make(types.Volumes, len(introspected))
-	for _, v := range introspected {
-		if v.External {
+	for _, volume := range introspected {
+		if volume.External {
 			// compose rejects a declaration of a volume it does not own.
-			volumes[v.Key] = types.VolumeConfig{Name: v.Name, External: true}
+			volumes[volume.Key] = types.VolumeConfig{Name: volume.Name, External: true}
 			continue
 		}
-		volumes[v.Key] = types.VolumeConfig{
-			Name:       v.Name,
-			Driver:     v.Driver,
-			DriverOpts: v.DriverOpts,
-			Labels:     userLabels(v.Labels),
+		volumes[volume.Key] = types.VolumeConfig{
+			Name:       volume.Name,
+			Driver:     volume.Driver,
+			DriverOpts: volume.DriverOpts,
+			Labels:     userLabels(volume.Labels),
 		}
 	}
 	return volumes
 }
 
-// networks renders the networks: section, foreign ones keyed by docker name and external.
+// newNetworks renders the newNetworks: section, foreign ones keyed by docker name and external.
 // Address pools are declared only where a container holds a static address.
-func networks(introspected []model.Network, keys map[string]string, static map[string]bool) types.Networks {
+func newNetworks(introspected []model.Network, keys map[string]string, static map[string]bool) types.Networks {
 	owned := make(map[string]bool, len(introspected))
 	networks := make(types.Networks, len(keys))
-	for _, n := range introspected {
-		owned[n.Key] = true
-		networks[n.Key] = types.NetworkConfig{
-			Name:       n.Name,
-			Driver:     n.Inspect.Driver,
-			DriverOpts: networkOptions(n.Inspect.Options),
-			Ipam:       ipam(n.Inspect.IPAM, static[n.Name]),
-			Internal:   n.Inspect.Internal,
-			Attachable: n.Inspect.Attachable,
-			EnableIPv4: declaredIPFamily(n.Inspect.Options, enableIPv4Option, n.Inspect.EnableIPv4),
-			EnableIPv6: declaredIPFamily(n.Inspect.Options, enableIPv6Option, n.Inspect.EnableIPv6),
-			Labels:     userLabels(n.Inspect.Labels),
+	for _, projectNetwork := range introspected {
+		owned[projectNetwork.Key] = true
+		networks[projectNetwork.Key] = types.NetworkConfig{
+			Name:       projectNetwork.Name,
+			Driver:     projectNetwork.Inspect.Driver,
+			DriverOpts: networkOptions(projectNetwork.Inspect.Options),
+			Ipam:       newIPAM(projectNetwork.Inspect.IPAM, static[projectNetwork.Name]),
+			Internal:   projectNetwork.Inspect.Internal,
+			Attachable: projectNetwork.Inspect.Attachable,
+			EnableIPv4: declaredIPFamily(projectNetwork.Inspect.Options, enableIPv4Option, projectNetwork.Inspect.EnableIPv4),
+			EnableIPv6: declaredIPFamily(projectNetwork.Inspect.Options, enableIPv6Option, projectNetwork.Inspect.EnableIPv6),
+			Labels:     userLabels(projectNetwork.Inspect.Labels),
 		}
 	}
 	for name, key := range keys {
@@ -256,9 +256,9 @@ func networks(introspected []model.Network, keys map[string]string, static map[s
 // networkOptions drops the options the daemon writes itself; nil when nothing is left.
 func networkOptions(options map[string]string) types.Options {
 	kept := types.Options{}
-	for k, v := range options {
-		if !slices.Contains(daemonNetworkOptions, k) {
-			kept[k] = v
+	for key, value := range options {
+		if !slices.Contains(daemonNetworkOptions, key) {
+			kept[key] = value
 		}
 	}
 	if len(kept) == 0 {
@@ -275,9 +275,9 @@ func declaredIPFamily(options map[string]string, defaulted string, enabled bool)
 	return &enabled
 }
 
-// ipam carries the driver, and the pools verbatim only when withPools: a static address needs
+// newIPAM carries the driver, and the pools verbatim only when withPools: a static address needs
 // the pool it was allocated from, while pinning an auto-assigned one risks an overlap on create.
-func ipam(from network.IPAM, withPools bool) types.IPAMConfig {
+func newIPAM(from network.IPAM, withPools bool) types.IPAMConfig {
 	config := types.IPAMConfig{Driver: from.Driver}
 	if !withPools {
 		return config
@@ -298,11 +298,11 @@ func ipam(from network.IPAM, withPools bool) types.IPAMConfig {
 func staticAddressNetworks(services []model.Service) map[string]bool {
 	static := map[string]bool{}
 	for _, svc := range services {
-		for _, c := range svc.Containers {
-			if c.Inspect.NetworkSettings == nil {
+		for _, replica := range svc.Containers {
+			if replica.Inspect.NetworkSettings == nil {
 				continue
 			}
-			for name, endpoint := range c.Inspect.NetworkSettings.Networks {
+			for name, endpoint := range replica.Inspect.NetworkSettings.Networks {
 				if hasStaticAddress(endpoint) {
 					static[name] = true
 				}
@@ -328,11 +328,11 @@ func networkKeys(introspected []model.Network, services []model.Service) map[str
 		keys[n.Name] = n.Key
 	}
 	for _, svc := range services {
-		for _, c := range svc.Containers {
-			if c.Inspect.NetworkSettings == nil {
+		for _, replica := range svc.Containers {
+			if replica.Inspect.NetworkSettings == nil {
 				continue
 			}
-			for name := range c.Inspect.NetworkSettings.Networks {
+			for name := range replica.Inspect.NetworkSettings.Networks {
 				if _, ok := keys[name]; !ok && !slices.Contains(predefinedNetworks, name) {
 					keys[name] = name
 				}
@@ -346,11 +346,11 @@ func networkKeys(introspected []model.Network, services []model.Service) map[str
 // creates: without them the docker CLI no longer finds the compose project from its path.
 func projectOrigin(services []model.Service) (workingDir string, files []string) {
 	for _, svc := range services {
-		for _, c := range svc.Containers {
-			if dir := c.Labels[api.WorkingDirLabel]; dir != "" && workingDir == "" {
+		for _, replica := range svc.Containers {
+			if dir := replica.Labels[api.WorkingDirLabel]; dir != "" && workingDir == "" {
 				workingDir = dir
 			}
-			if list := c.Labels[api.ConfigFilesLabel]; list != "" && files == nil {
+			if list := replica.Labels[api.ConfigFilesLabel]; list != "" && files == nil {
 				files = strings.Split(list, ",")
 			}
 			if workingDir != "" && files != nil {
@@ -377,10 +377,10 @@ func userLabels(labels map[string]string) types.Labels {
 	)
 
 	kept := types.Labels{}
-	for k, v := range labels {
-		if !strings.HasPrefix(k, composeLabelPrefix) && !strings.HasPrefix(k, desktopLabelPrefix) &&
-			!strings.HasPrefix(k, arcaveLabelPrefix) {
-			kept[k] = v
+	for key, value := range labels {
+		if !strings.HasPrefix(key, composeLabelPrefix) && !strings.HasPrefix(key, desktopLabelPrefix) &&
+			!strings.HasPrefix(key, arcaveLabelPrefix) {
+			kept[key] = value
 		}
 	}
 	if len(kept) == 0 {

@@ -27,15 +27,15 @@ import (
 // Declaring it would push compose onto the mount API, which creates no missing host path.
 const defaultBindPropagation = "rprivate"
 
-// serviceVolumes renders the volumes: of one service, every mount type included:
+// newServiceVolumes renders the volumes: of one service, every mount type included:
 // a mount arcave does not capture still has to come back.
-func serviceVolumes(mounts []model.ServiceVolume) []types.ServiceVolumeConfig {
+func newServiceVolumes(mounts []model.ServiceVolume) []types.ServiceVolumeConfig {
 	if len(mounts) == 0 {
 		return nil
 	}
 	volumes := make([]types.ServiceVolumeConfig, 0, len(mounts))
-	for _, m := range mounts {
-		volumes = append(volumes, serviceVolume(m))
+	for _, mount := range mounts {
+		volumes = append(volumes, newServiceVolume(mount))
 	}
 	return volumes
 }
@@ -48,49 +48,49 @@ func declaredVolumes(svc model.Service) []model.ServiceVolume {
 	}
 	first := svc.Containers[0].Number
 	declared := make([]model.ServiceVolume, 0, len(svc.Volumes))
-	for _, v := range svc.Volumes {
-		if v.Type != model.VolumeTypeAnon || v.Replica == first {
-			declared = append(declared, v)
+	for _, mount := range svc.Volumes {
+		if mount.Type != model.VolumeTypeAnon || mount.Replica == first {
+			declared = append(declared, mount)
 		}
 	}
 	return declared
 }
 
-// serviceVolume renders one mount. An anonymous volume renders as a bare target:
+// newServiceVolume renders one mount. An anonymous volume renders as a bare target:
 // naming the one Down orphaned would make compose reuse it instead of a fresh one.
-func serviceVolume(m model.ServiceVolume) types.ServiceVolumeConfig {
-	volume := types.ServiceVolumeConfig{
-		Type:     m.RawType,
-		Source:   m.Source,
-		Target:   m.Target,
-		ReadOnly: m.ReadOnly,
+func newServiceVolume(mount model.ServiceVolume) types.ServiceVolumeConfig {
+	config := types.ServiceVolumeConfig{
+		Type:     mount.RawType,
+		Source:   mount.Source,
+		Target:   mount.Target,
+		ReadOnly: mount.ReadOnly,
 	}
 
-	switch m.Type {
+	switch mount.Type {
 	case model.VolumeTypeAnon:
-		volume.Source = ""
-		volume.Volume = volumeOptions(m.Volume)
+		config.Source = ""
+		config.Volume = newVolumeOptions(mount.Volume)
 	case model.VolumeTypeNamed:
-		volume.Volume = volumeOptions(m.Volume)
+		config.Volume = newVolumeOptions(mount.Volume)
 	case model.VolumeTypeBind:
-		volume.Bind = bindOptions(m.Bind)
+		config.Bind = newBindOptions(mount.Bind)
 	case model.VolumeTypeTmpfs:
-		volume.Source = ""
-		if m.Tmpfs != nil {
-			volume.Tmpfs = &types.ServiceVolumeTmpfs{
-				Size: types.UnitBytes(m.Tmpfs.SizeBytes),
-				Mode: m.Tmpfs.Mode,
+		config.Source = ""
+		if mount.Tmpfs != nil {
+			config.Tmpfs = &types.ServiceVolumeTmpfs{
+				Size: types.UnitBytes(mount.Tmpfs.SizeBytes),
+				Mode: mount.Tmpfs.Mode,
 			}
 		}
 	case model.VolumeTypeImage:
-		if m.Image != nil {
-			volume.Image = &types.ServiceVolumeImage{SubPath: m.Image.Subpath}
+		if mount.Image != nil {
+			config.Image = &types.ServiceVolumeImage{SubPath: mount.Image.Subpath}
 		}
 	}
-	return volume
+	return config
 }
 
-func volumeOptions(from *model.VolumeMount) *types.ServiceVolumeVolume {
+func newVolumeOptions(from *model.VolumeMount) *types.ServiceVolumeVolume {
 	if from == nil {
 		return nil
 	}
@@ -101,9 +101,9 @@ func volumeOptions(from *model.VolumeMount) *types.ServiceVolumeVolume {
 	}
 }
 
-// bindOptions renders a bind's options. With none reported, compose creates a missing
+// newBindOptions renders a bind's options. With none reported, compose creates a missing
 // host path, as it does for a bind declared with no options at all.
-func bindOptions(from *model.BindMount) *types.ServiceVolumeBind {
+func newBindOptions(from *model.BindMount) *types.ServiceVolumeBind {
 	bind := &types.ServiceVolumeBind{CreateHostPath: true}
 	if from == nil {
 		return bind
@@ -121,17 +121,17 @@ func bindOptions(from *model.BindMount) *types.ServiceVolumeBind {
 // they would be created afresh rather than shared.
 func ownVolumes(mounts []model.ServiceVolume) []model.ServiceVolume {
 	own := make([]model.ServiceVolume, 0, len(mounts))
-	for _, m := range mounts {
-		if m.InheritedFrom == "" {
-			own = append(own, m)
+	for _, mount := range mounts {
+		if mount.InheritedFrom == "" {
+			own = append(own, mount)
 		}
 	}
 	return own
 }
 
-// tmpfsMounts renders the tmpfs: shorthand, which the daemon reports apart from the
+// toTmpfsList renders the tmpfs: shorthand, which the daemon reports apart from the
 // mounts. A target already mounted is skipped: compose would declare it twice.
-func tmpfsMounts(mounts map[string]string, declared []types.ServiceVolumeConfig) types.StringList {
+func toTmpfsList(mounts map[string]string, declared []types.ServiceVolumeConfig) types.StringList {
 	if len(mounts) == 0 {
 		return nil
 	}

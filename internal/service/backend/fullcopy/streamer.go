@@ -74,11 +74,11 @@ func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendF
 // New binds the instance to the root the caller handed it — the one thing fixed
 // for its life. The volume's mount source is not, and cannot be: resolving it may
 // reach the daemon, and a constructor has no ctx to do that on.
-func (f *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (s *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
 	if spec.Store == nil {
 		return nil, errNoStore
 	}
-	return &Snapshotter{volume: spec.Volume, store: spec.Store, docker: f.docker}, nil
+	return &Snapshotter{volume: spec.Volume, store: spec.Store, docker: s.docker}, nil
 }
 
 // Snapshotter captures one volume into one root.
@@ -94,30 +94,30 @@ func (s *Snapshotter) Volume() model.Volume { return s.volume }
 func (s *Snapshotter) Snapshot(
 	ctx context.Context, req model.BackendSnapshotRequest,
 ) (model.SnapshotStat, error) {
-	capture, err := s.captureStore(req.SnapshotID)
+	captureStore, err := s.captureStore(req.SnapshotID)
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
 
-	mnt, err := s.mountSource(ctx)
+	src, err := s.mountSource(ctx)
 	if err != nil {
 		return model.SnapshotStat{}, err
 	}
 
-	src, err := s.docker.OpenVolume(ctx, mnt)
+	archive, err := s.docker.OpenVolume(ctx, src)
 	if err != nil {
-		return model.SnapshotStat{}, fmt.Errorf("open docker volume %s: %w", mnt.Source, err)
+		return model.SnapshotStat{}, fmt.Errorf("open docker volume %s: %w", src.Source, err)
 	}
 	defer func() {
-		if err := src.Close(); err != nil {
+		if err := archive.Close(); err != nil {
 			zerolog.Ctx(ctx).Error().Err(err).Msg("close docker mount")
 		}
 	}()
 
 	// The counter sits in the stream, so the size reported is the size
 	// actually written.
-	counted := utils.NewCountingReader(src)
-	if err := capture.PutObject(ctx, archiveName, counted); err != nil {
+	counted := utils.NewCountingReader(archive)
+	if err := captureStore.PutObject(ctx, archiveName, counted); err != nil {
 		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
 	return model.SnapshotStat{
@@ -130,28 +130,28 @@ func (s *Snapshotter) Snapshot(
 // Restore hands the stored tar stream to WriteVolume, which wipes the volume
 // and extracts into it. req.Payload is not read: the key is recomputed.
 func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
-	capture, err := s.captureStore(req.SnapshotID)
+	captureStore, err := s.captureStore(req.SnapshotID)
 	if err != nil {
 		return err
 	}
 
-	mnt, err := s.mountSource(ctx)
+	src, err := s.mountSource(ctx)
 	if err != nil {
 		return err
 	}
 
-	src, err := capture.GetObject(ctx, archiveName)
+	archive, err := captureStore.GetObject(ctx, archiveName)
 	if err != nil {
 		return fmt.Errorf("open archive: %w", err)
 	}
 	defer func() {
-		if err := src.Close(); err != nil {
+		if err := archive.Close(); err != nil {
 			zerolog.Ctx(ctx).Error().Err(err).Msg("close archive")
 		}
 	}()
 
-	if err := s.docker.WriteVolume(ctx, mnt, src); err != nil {
-		return fmt.Errorf("write docker volume %s: %w", mnt.Source, err)
+	if err := s.docker.WriteVolume(ctx, src, archive); err != nil {
+		return fmt.Errorf("write docker volume %s: %w", src.Source, err)
 	}
 	return nil
 }
@@ -160,21 +160,21 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 // rather than held on the instance: it may cost a round trip to the daemon, and
 // only the two methods that move bytes need it.
 func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error) {
-	mnt, err := s.docker.ResolveMountSource(ctx, s.volume)
+	src, err := s.docker.ResolveMountSource(ctx, s.volume)
 	if err != nil {
 		return model.MountSource{}, fmt.Errorf("resolve the mount source of volume %s: %w", s.volume.ObjectID, err)
 	}
-	return mnt, nil
+	return src, nil
 }
 
 // Remove deletes the archive and stops: a Storager may not delete its own root,
 // so the caller sweeps the directory. An archive already gone is not an error.
 func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
-	capture, err := s.captureStore(req.SnapshotID)
+	captureStore, err := s.captureStore(req.SnapshotID)
 	if err != nil {
 		return err
 	}
-	if err := capture.Delete(ctx, archiveName); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+	if err := captureStore.Delete(ctx, archiveName); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
 		return fmt.Errorf("delete archive: %w", err)
 	}
 	return nil
@@ -187,9 +187,9 @@ func (s *Snapshotter) captureStore(snapshotID model.SavepointID) (storages.Stora
 	if err := snapshotID.Validate(); err != nil {
 		return nil, err
 	}
-	capture, err := s.store.SubStorage(path.Join(snapshotID.String(), s.volume.ObjectID), true)
+	captureStore, err := s.store.SubStorage(path.Join(snapshotID.String(), s.volume.ObjectID), true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at capture %s: %w", snapshotID, err)
 	}
-	return capture, nil
+	return captureStore, nil
 }

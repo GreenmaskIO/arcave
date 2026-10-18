@@ -29,9 +29,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// maxConcurrentSavepointRemovals caps how many savepoints applyRemoval deletes
+// maxParallelRemovals caps how many savepoints applyRemoval deletes
 // in parallel; each fans out over its own volumes in turn.
-const maxConcurrentSavepointRemovals = 5
+const maxParallelRemovals = 5
 
 // errNoVolumesToBackUp refuses a savepoint that would cover nothing. It stays
 // unexported: no adapter matches on it, so it is not a seam contract and does
@@ -71,18 +71,18 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 		return model.Savepoint{}, err
 	}
 
-	ws, err := s.prepare(ctx, req.WaitTimeout)
+	working, err := s.prepare(ctx, req.WaitTimeout)
 	if err != nil {
 		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
-	s.warnCapturePolicyDrift(ctx, visible, ws.project)
+	s.warnCapturePolicyDrift(ctx, visible, working.project)
 
-	killed, err := s.stopServices(ctx, ws)
+	killed, err := s.stopServices(ctx, working)
 	if err != nil {
 		// A stop that failed or was interrupted partway may have stopped some services.
 		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")
-		if err := s.restartServices(ctx, ws); err != nil {
+		if err := s.restartServices(ctx, working); err != nil {
 			log.Error().Err(err).Msg("services failed to restart after stop failure")
 		}
 		return model.Savepoint{}, preferInterrupt(ctx, err)
@@ -90,21 +90,21 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 
 	// Capture while the services are stopped. The capture error is what the caller
 	// gets; the restart on top of it is best-effort and only logged.
-	record, err := s.performSavepoint(ctx, ws, killed, req.Name, req.Description, req.Labels)
+	savepoint, err := s.performSavepoint(ctx, working, killed, req.Name, req.Description, req.Labels)
 	if err != nil {
 		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
 		err = preferInterrupt(ctx, err)
-		if err := s.restartServices(ctx, ws); err != nil {
+		if err := s.restartServices(ctx, working); err != nil {
 			log.Error().Err(err).Msg("services failed to restart after capture failure")
 		}
 		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", err)
 	}
 
 	logInterrupt(ctx, "savepoint committed before the interrupt: restarting services")
-	if err := s.restartServices(ctx, ws); err != nil {
-		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", record.ID, err)
+	if err := s.restartServices(ctx, working); err != nil {
+		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", savepoint.ID, err)
 	}
-	return record, nil
+	return savepoint, nil
 }
 
 // requireUniqueName refuses a name another of the visible savepoints carries. Safety
@@ -113,9 +113,9 @@ func requireUniqueName(visible []model.Savepoint, name string) error {
 	if name == "" {
 		return nil
 	}
-	for _, r := range visible {
-		if r.Name == name {
-			return fmt.Errorf("%w: %q names savepoint %s", model.ErrSavepointNameTaken, name, r.ID)
+	for _, savepoint := range visible {
+		if savepoint.Name == name {
+			return fmt.Errorf("%w: %q names savepoint %s", model.ErrSavepointNameTaken, name, savepoint.ID)
 		}
 	}
 	return nil
@@ -130,23 +130,23 @@ func (s *Service) ListSavepoints(ctx context.Context, req model.ListRequest) ([]
 // safety snapshot has one place to be forgotten. Which selector may see one is
 // findSavepoint's and selectSavepointsToRemove's call.
 func (s *Service) listSavepoints(ctx context.Context, includeSafetySnapshots bool) ([]model.Savepoint, error) {
-	records, err := s.savepointRepo.ListSavepoints(ctx)
+	savepoints, err := s.savepointRepo.ListSavepoints(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing savepoints: %w", err)
 	}
 	if includeSafetySnapshots {
-		return records, nil
+		return savepoints, nil
 	}
-	return visibleSavepoints(records), nil
+	return visibleSavepoints(savepoints), nil
 }
 
 // visibleSavepoints drops the safety snapshots. Non-nil, so an empty listing
 // marshals as [] rather than null.
-func visibleSavepoints(records []model.Savepoint) []model.Savepoint {
-	visible := make([]model.Savepoint, 0, len(records))
-	for _, r := range records {
-		if !r.IsSafetySnapshot() {
-			visible = append(visible, r)
+func visibleSavepoints(savepoints []model.Savepoint) []model.Savepoint {
+	visible := make([]model.Savepoint, 0, len(savepoints))
+	for _, savepoint := range savepoints {
+		if !savepoint.IsSafetySnapshot() {
+			visible = append(visible, savepoint)
 		}
 	}
 	return visible
@@ -181,12 +181,12 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 func (s *Service) removeSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error) {
 	// Everything, safety snapshots included: which of them this request may see is
 	// selectSavepointsToRemove's call, and it differs by selector.
-	records, err := s.listSavepoints(ctx, true)
+	savepoints, err := s.listSavepoints(ctx, true)
 	if err != nil {
 		return model.RemoveResult{}, err
 	}
 
-	_, removed, err := s.selectSavepointsToRemove(records, req)
+	_, removed, err := s.selectSavepointsToRemove(savepoints, req)
 	if err != nil {
 		return model.RemoveResult{}, err
 	}
@@ -231,37 +231,37 @@ func validateRemoveRequest(req model.RemoveRequest) error {
 // rules scan, and a scan sees only what `savepoint list` shows: an undo must
 // neither count as one of the N newest, nor be swept by an age rule.
 func (s *Service) selectSavepointsToRemove(
-	records []model.Savepoint,
+	savepoints []model.Savepoint,
 	req model.RemoveRequest,
 ) (kept, removed []model.Savepoint, err error) {
 	if len(req.IDs) > 0 {
-		return partitionByIDs(records, req.IDs)
+		return partitionByIDs(savepoints, req.IDs)
 	}
-	cutoffs, err := s.retentionCutoffs(req)
+	cutoffs, err := s.parseRetentionCutoffs(req)
 	if err != nil {
 		return nil, nil, err
 	}
-	kept, removed = partitionSavepoints(visibleSavepoints(records), req.RetainRecent, cutoffs)
+	kept, removed = partitionSavepoints(visibleSavepoints(savepoints), req.RetainRecent, cutoffs)
 	return kept, removed, nil
 }
 
-// retentionCutoffs parses the time-based retention flags into cutoff instants;
+// parseRetentionCutoffs parses the time-based retention flags into cutoff instants;
 // each marks savepoints created before it as deletable.
-func (s *Service) retentionCutoffs(req model.RemoveRequest) ([]time.Time, error) {
+func (s *Service) parseRetentionCutoffs(req model.RemoveRequest) ([]time.Time, error) {
 	var cutoffs []time.Time
 	if req.RetainFor != "" {
-		d, err := str2duration.ParseDuration(req.RetainFor)
+		retainFor, err := str2duration.ParseDuration(req.RetainFor)
 		if err != nil {
 			return nil, fmt.Errorf("invalid --retain-for %q: %w", req.RetainFor, err)
 		}
-		cutoffs = append(cutoffs, time.Now().UTC().Add(-d))
+		cutoffs = append(cutoffs, time.Now().UTC().Add(-retainFor))
 	}
 	if req.BeforeDate != "" {
-		t, err := time.Parse(time.RFC3339Nano, req.BeforeDate)
+		before, err := time.Parse(time.RFC3339Nano, req.BeforeDate)
 		if err != nil {
 			return nil, fmt.Errorf("invalid --before-date %q: %w", req.BeforeDate, err)
 		}
-		cutoffs = append(cutoffs, t)
+		cutoffs = append(cutoffs, before)
 	}
 	return cutoffs, nil
 }
@@ -270,7 +270,7 @@ func (s *Service) retentionCutoffs(req model.RemoveRequest) ([]time.Time, error)
 // and the rest (kept). It errors if any requested ID is not present, so a typo
 // never silently deletes nothing.
 func partitionByIDs(
-	records []model.Savepoint,
+	savepoints []model.Savepoint,
 	ids []model.SavepointID,
 ) (kept, removed []model.Savepoint, err error) {
 	want := make(map[model.SavepointID]bool, len(ids))
@@ -278,12 +278,12 @@ func partitionByIDs(
 		want[id] = true
 	}
 	seen := make(map[model.SavepointID]bool, len(ids))
-	for _, r := range records {
-		if want[r.ID] {
-			removed = append(removed, r)
-			seen[r.ID] = true
+	for _, savepoint := range savepoints {
+		if want[savepoint.ID] {
+			removed = append(removed, savepoint)
+			seen[savepoint.ID] = true
 		} else {
-			kept = append(kept, r)
+			kept = append(kept, savepoint)
 		}
 	}
 	var missing []string
@@ -301,14 +301,14 @@ func partitionByIDs(
 // partitionSavepoints removes a record only when every active rule marks it
 // deletable: outside the retainRecent newest, and older than every cutoff.
 func partitionSavepoints(
-	records []model.Savepoint,
+	savepoints []model.Savepoint,
 	retainRecent int,
 	cutoffs []time.Time,
 ) (kept, removed []model.Savepoint) {
 	retainedByRecency := map[model.SavepointID]bool{}
 	hasRecent := retainRecent > 0
 	if hasRecent {
-		byNewest := append([]model.Savepoint(nil), records...)
+		byNewest := append([]model.Savepoint(nil), savepoints...)
 		sort.Slice(byNewest, func(i, j int) bool {
 			return byNewest[i].CreatedAt.After(byNewest[j].CreatedAt)
 		})
@@ -317,17 +317,17 @@ func partitionSavepoints(
 		}
 	}
 
-	for _, r := range records {
-		del := !hasRecent || !retainedByRecency[r.ID]
-		for _, c := range cutoffs {
-			if !r.CreatedAt.Before(c) {
-				del = false
+	for _, savepoint := range savepoints {
+		deletable := !hasRecent || !retainedByRecency[savepoint.ID]
+		for _, cutoff := range cutoffs {
+			if !savepoint.CreatedAt.Before(cutoff) {
+				deletable = false
 			}
 		}
-		if del {
-			removed = append(removed, r)
+		if deletable {
+			removed = append(removed, savepoint)
 		} else {
-			kept = append(kept, r)
+			kept = append(kept, savepoint)
 		}
 	}
 	return kept, removed
@@ -341,15 +341,15 @@ func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) e
 	// mid-delete. Wait reports only the first failure, so each goroutine records
 	// its own — that is what names the savepoints whose data survived.
 	errs := make([]error, len(removed))
-	g := new(errgroup.Group)
-	g.SetLimit(maxConcurrentSavepointRemovals)
-	for i, r := range removed {
-		g.Go(func() error {
-			errs[i] = s.removeSavepoint(ctx, r)
+	eg := new(errgroup.Group)
+	eg.SetLimit(maxParallelRemovals)
+	for i, savepoint := range removed {
+		eg.Go(func() error {
+			errs[i] = s.removeSavepoint(ctx, savepoint)
 			return errs[i]
 		})
 	}
-	if err := g.Wait(); err != nil {
+	if err := eg.Wait(); err != nil {
 		return errors.Join(errs...)
 	}
 	return nil
@@ -357,13 +357,13 @@ func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) e
 
 // removeSavepoint drops one savepoint from the savepoint store. The backends are
 // built first: one that cannot be built leaves the savepoint whole.
-func (s *Service) removeSavepoint(ctx context.Context, record model.Savepoint) error {
-	backends, err := s.buildBackends(volumesOf(record))
+func (s *Service) removeSavepoint(ctx context.Context, savepoint model.Savepoint) error {
+	backends, err := s.newBackends(volumesOf(savepoint))
 	if err != nil {
 		return err
 	}
-	if err := s.dropSavepoint(ctx, record, backends); err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", record.ID.String()).
+	if err := s.dropSavepoint(ctx, savepoint, backends); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", savepoint.ID.String()).
 			Msg("savepoint was uncommitted but its data could not be removed; the directory is orphaned")
 		return err
 	}
@@ -379,18 +379,18 @@ func (s *Service) removeSavepoint(ctx context.Context, record model.Savepoint) e
 // `savepoint list` shows.
 //
 // The caller has run req.Validate, so the branches read nil-ness alone.
-func findSavepoint(records []model.Savepoint, req model.RollbackRequest) (model.Savepoint, error) {
+func findSavepoint(savepoints []model.Savepoint, req model.RollbackRequest) (model.Savepoint, error) {
 	if req.ID != nil {
-		for _, r := range records {
-			if r.ID == *req.ID {
-				return r, nil
+		for _, savepoint := range savepoints {
+			if savepoint.ID == *req.ID {
+				return savepoint, nil
 			}
 		}
 		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", *req.ID)
 	}
 
-	records = visibleSavepoints(records)
-	if len(records) == 0 {
+	savepoints = visibleSavepoints(savepoints)
+	if len(savepoints) == 0 {
 		return model.Savepoint{}, errors.New("no savepoints exist")
 	}
 
@@ -398,19 +398,19 @@ func findSavepoint(records []model.Savepoint, req model.RollbackRequest) (model.
 		if req.Latest == nil || !*req.Latest {
 			return model.Savepoint{}, model.ErrRollbackNoSelector
 		}
-		latest := records[0]
-		for _, r := range records[1:] {
-			if r.CreatedAt.After(latest.CreatedAt) {
-				latest = r
+		latest := savepoints[0]
+		for _, savepoint := range savepoints[1:] {
+			if savepoint.CreatedAt.After(latest.CreatedAt) {
+				latest = savepoint
 			}
 		}
 		return latest, nil
 	}
 
 	var byName []model.Savepoint
-	for _, r := range records {
-		if r.Name == *req.Name {
-			byName = append(byName, r)
+	for _, savepoint := range savepoints {
+		if savepoint.Name == *req.Name {
+			byName = append(byName, savepoint)
 		}
 	}
 	switch len(byName) {
@@ -420,8 +420,8 @@ func findSavepoint(records []model.Savepoint, req model.RollbackRequest) (model.
 		return byName[0], nil
 	default:
 		ids := make([]model.SavepointID, len(byName))
-		for i, r := range byName {
-			ids[i] = r.ID
+		for i, savepoint := range byName {
+			ids[i] = savepoint.ID
 		}
 		slices.Sort(ids)
 		return model.Savepoint{}, &model.AmbiguousSavepointNameError{Name: *req.Name, IDs: ids}

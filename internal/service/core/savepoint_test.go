@@ -687,7 +687,7 @@ func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
 
 func TestRequireUniqueName(t *testing.T) {
 	const id = model.SavepointID("019e843e-1650-7000-8000-000000000000")
-	safety := model.Savepoint{ID: id, Name: "pre-rollback", Labels: safetySnapshotLabels()}
+	safety := model.Savepoint{ID: id, Name: "pre-rollback", Labels: newSafetySnapshotLabels()}
 
 	tests := []struct {
 		name     string
@@ -1209,11 +1209,11 @@ func TestValidateRemoveRequest(t *testing.T) {
 	}
 }
 
-// TestService_retentionCutoffs pins the two rules against each other: --retain-for
+// TestService_parseRetentionCutoffs pins the two rules against each other: --retain-for
 // counts back from the wall clock, --before-date is taken verbatim, and both
 // together keep that order. A relative cutoff is checked against the clock the
 // call itself read, so the tolerance is the test's own runtime.
-func TestService_retentionCutoffs(t *testing.T) {
+func TestService_parseRetentionCutoffs(t *testing.T) {
 	beforeDate := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
@@ -1257,7 +1257,7 @@ func TestService_retentionCutoffs(t *testing.T) {
 			now := time.Now()
 
 			// Act
-			got, err := svc.retentionCutoffs(tt.req)
+			got, err := svc.parseRetentionCutoffs(tt.req)
 
 			// Assert
 			if tt.wantErr {
@@ -1336,7 +1336,7 @@ func TestFindSavepoint(t *testing.T) {
 	// The safety snapshot is the newest record and shares a name with two others, so
 	// it is in reach of every scanning selector — and must be picked by none.
 	safetySnapshot := model.Savepoint{
-		ID: "400", Name: "dup", Labels: safetySnapshotLabels(), CreatedAt: now.Add(3 * time.Hour),
+		ID: "400", Name: "dup", Labels: newSafetySnapshotLabels(), CreatedAt: now.Add(3 * time.Hour),
 	}
 	records := []model.Savepoint{
 		{ID: "100", Name: "before-migration", CreatedAt: now},
@@ -1420,7 +1420,7 @@ func TestFindSavepoint_AmbiguousName(t *testing.T) {
 	records := []model.Savepoint{
 		{ID: "300", Name: name, CreatedAt: now},
 		{ID: "200", Name: name, CreatedAt: now},
-		{ID: "400", Name: name, Labels: safetySnapshotLabels(), CreatedAt: now},
+		{ID: "400", Name: name, Labels: newSafetySnapshotLabels(), CreatedAt: now},
 	}
 
 	// Act

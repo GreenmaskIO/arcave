@@ -28,8 +28,8 @@ import (
 )
 
 // applyLinks declares the links compose wrote back as links: and external_links:.
-func (s assembly) applyLinks(cfg *types.ServiceConfig, c model.Container) {
-	cfg.Links, cfg.ExternalLinks = s.declaredLinks(linkEntries(c.Inspect), c.Number)
+func (a assembly) applyLinks(cfg *types.ServiceConfig, replica model.Container) {
+	cfg.Links, cfg.ExternalLinks = a.declaredLinks(linkEntries(replica.Inspect), replica.Number)
 }
 
 // linkEntries are the links the daemon reports: per endpoint on a user network, and in
@@ -51,20 +51,20 @@ func linkEntries(inspect container.InspectResponse) []string {
 
 // declaredLinks maps each entry's target container to its service, dropping the aliases
 // compose adds itself; a target outside the project is an external link. Sorted, deduplicated.
-func (s assembly) declaredLinks(entries []string, number int) (links, external []string) {
+func (a assembly) declaredLinks(entries []string, number int) (links, external []string) {
 	for _, entry := range entries {
 		target, alias, ok := splitLink(entry)
 		if !ok {
 			continue
 		}
-		service, inProject := s.containers[target]
+		service, inProject := a.serviceByName[target]
 		if !inProject {
 			if spec := linkSpec(target, alias); !slices.Contains(external, spec) {
 				external = append(external, spec)
 			}
 			continue
 		}
-		if s.isGeneratedAlias(alias, target, service, number) {
+		if a.isGeneratedAlias(alias, target, service, number) {
 			continue
 		}
 		if spec := linkSpec(service, alias); !slices.Contains(links, spec) {
@@ -85,9 +85,9 @@ func splitLink(entry string) (target, alias string, ok bool) {
 
 // isGeneratedAlias reports an alias compose adds to every link: the target's own name, and
 // <service>-<n> and <project>-<service>-<n>, numbered after the linking replica.
-func (s assembly) isGeneratedAlias(alias, target, service string, number int) bool {
+func (a assembly) isGeneratedAlias(alias, target, service string, number int) bool {
 	numbered := service + api.Separator + strconv.Itoa(number)
-	return alias == target || alias == numbered || alias == s.res.Project.Name+api.Separator+numbered
+	return alias == target || alias == numbered || alias == a.introspection.Project.Name+api.Separator+numbered
 }
 
 // linkSpec renders name:alias, or the bare name when the alias repeats it.

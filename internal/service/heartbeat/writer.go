@@ -37,15 +37,15 @@ func NewWriter(st storages.Writer) *Writer {
 }
 
 // Write validates and stores h.
-func (w *Writer) Write(ctx context.Context, h Heartbeat) error {
-	if err := h.Status.Validate(); err != nil {
+func (s *Writer) Write(ctx context.Context, beat Heartbeat) error {
+	if err := beat.Status.Validate(); err != nil {
 		return fmt.Errorf("write heartbeat: %w", err)
 	}
-	data, err := json.Marshal(h)
+	data, err := json.Marshal(beat)
 	if err != nil {
 		return fmt.Errorf("encode heartbeat: %w", err)
 	}
-	if err := w.st.PutObject(ctx, FileName, bytes.NewReader(data)); err != nil {
+	if err := s.st.PutObject(ctx, FileName, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("write heartbeat: %w", err)
 	}
 	return nil

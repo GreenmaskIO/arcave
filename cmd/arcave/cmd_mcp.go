@@ -40,21 +40,21 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 	}
 	// --session or ARCAVE_SESSION pins the server to the session it names now, by id: a session
 	// created later under the same name is not the pinned one.
-	var pin model.SessionID
+	var pinnedSession model.SessionID
 	if sessionRef != "" {
 		var err error
-		if pin, err = resolveSession(cmd.Context(), sessionRef); err != nil {
+		if pinnedSession, err = resolveSession(cmd.Context(), sessionRef); err != nil {
 			return err
 		}
 	}
-	return cli.NewMCPHandler(mcpServiceFactory, mcpSessionServiceFactory, pin, projectCfg.Rollback.Policy()).
+	return cli.NewMCPHandler(mcpServiceFactory, mcpSessionServiceFactory, pinnedSession, projectCfg.Rollback.Policy()).
 		MCPRun(cmd.Context())
 }
 
 // mcpServiceFactory wires the savepoint workflows for the compose project and session a tool
 // call named, "" being the current session, and returns the release that closes them.
 func mcpServiceFactory(ctx context.Context, project, sessionRef string) (cli.MCPService, func(), error) {
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(project))
+	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(project))
 	if err != nil {
 		return nil, nil, fmt.Errorf("init dependencies: %w", err)
 	}
@@ -67,7 +67,7 @@ func mcpServiceFactory(ctx context.Context, project, sessionRef string) (cli.MCP
 
 // mcpSessionServiceFactory wires the session commands for one tool call.
 func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(), error) {
-	deps, err := initSessionDependencies(projectRoot, projectCfg)
+	deps, err := newSessionDependencies(projectRoot, projectCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init session dependencies: %w", err)
 	}

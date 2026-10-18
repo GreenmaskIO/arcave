@@ -37,12 +37,12 @@ type ContainerExitError struct {
 
 // Error renders a compact one-line message. It never prints the whole of Output:
 // a caller that needs it recovers the value with errors.As.
-func (e *ContainerExitError) Error() string {
-	if len(e.Output) == 0 {
-		return fmt.Sprintf("%s container exited with status %d", e.Image, e.StatusCode)
+func (m *ContainerExitError) Error() string {
+	if len(m.Output) == 0 {
+		return fmt.Sprintf("%s container exited with status %d", m.Image, m.StatusCode)
 	}
 	// A short tail — the container's last line — is enough to diagnose; the rest
 	// stays in Output for errors.As.
 	return fmt.Sprintf("%s container exited with status %d: %s",
-		e.Image, e.StatusCode, e.Output[len(e.Output)-1])
+		m.Image, m.StatusCode, m.Output[len(m.Output)-1])
 }

@@ -28,7 +28,7 @@ const exitInterrupted = 130
 
 // main executes the command tree. Config resolution and logger setup happen in
 // rootCmd's PersistentPreRunE (cmd_root.go); each command builds the dependencies
-// it needs via initAllDependencies (dependencies.go) and releases them on return.
+// it needs via newDependencies (dependencies.go) and releases them on return.
 func main() {
 	ctx, stop := notifyInterrupt()
 	err := rootCmd.ExecuteContext(ctx)

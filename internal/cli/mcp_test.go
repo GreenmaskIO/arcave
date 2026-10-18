@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ import (
 
 func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	// Arrange
-	sp := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", NotCovered: &model.NotCovered{
+	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", NotCovered: &model.NotCovered{
 		Mounts: []model.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
 			Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
 		ServicesWithoutVolumes: []string{"web"},
@@ -42,7 +43,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	}}
 	svc := &mockService{}
 	svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "before-migration"}).
-		Return(sp, nil).Once()
+		Return(savepoint, nil).Once()
 	released := false
 	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 		return svc, func() { released = true }, nil
@@ -54,13 +55,13 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Nil(t, res)
-	assert.Equal(t, sp, out)
+	assert.Equal(t, savepoint, out)
 	assert.True(t, released, "what the call opened must not outlive it")
 	svc.AssertExpectations(t)
 }
 
 func TestMCPHandler_listSavepointsMCP(t *testing.T) {
-	sps := []model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration"}}
+	savepoints := []model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration"}}
 
 	tests := []struct {
 		name string
@@ -68,12 +69,12 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 		svc  []model.Savepoint
 		want listOutput
 	}{
-		{name: "hidden by default", in: listSavepointInput{Project: "demo"}, svc: sps, want: listOutput{Savepoints: sps}},
+		{name: "hidden by default", in: listSavepointInput{Project: "demo"}, svc: savepoints, want: listOutput{Savepoints: savepoints}},
 		{
 			name: "include_safety_snapshots reaches the service",
 			in:   listSavepointInput{Project: "demo", IncludeSafetySnapshots: true},
-			svc:  sps,
-			want: listOutput{Savepoints: sps},
+			svc:  savepoints,
+			want: listOutput{Savepoints: savepoints},
 		},
 		{
 			name: "no savepoints answers an empty array",
@@ -237,9 +238,9 @@ func TestMCPHandler_createSessionMCP(t *testing.T) {
 
 func TestMCPHandler_deleteSessionMCP(t *testing.T) {
 	// Arrange
-	resp := model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}
+	res := model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}
 	svc := &mockService{}
-	svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "exp", Force: true}).Return(resp, nil).Once()
+	svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "exp", Force: true}).Return(res, nil).Once()
 	released := false
 	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), model.SessionID{}, model.LeftoverVolumesOverwrite)
 
@@ -248,7 +249,7 @@ func TestMCPHandler_deleteSessionMCP(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, resp, out)
+	assert.Equal(t, res, out)
 	assert.True(t, released)
 	svc.AssertExpectations(t)
 }
@@ -287,7 +288,7 @@ func TestMCPHandler_setSessionMCP_RefusedWhenPinned(t *testing.T) {
 	svc.AssertExpectations(t)
 }
 
-func TestOutputSchema_ValidatesWhatASessionToolReturns(t *testing.T) {
+func TestNewOutputSchema_ValidatesWhatASessionToolReturns(t *testing.T) {
 	// Arrange: every SessionID position — a record's id, its origin, a listing row, a delete response.
 	record := model.Session{ID: handlerSession, Name: "exp", From: &model.SessionOrigin{Session: model.DefaultSession}}
 	tests := []struct {
@@ -295,10 +296,10 @@ func TestOutputSchema_ValidatesWhatASessionToolReturns(t *testing.T) {
 		schema *jsonschema.Schema
 		value  any
 	}{
-		{name: "a record", schema: outputSchema[model.Session](), value: record},
-		{name: "a listing", schema: outputSchema[sessionListOutput](),
+		{name: "a record", schema: newOutputSchema[model.Session](), value: record},
+		{name: "a listing", schema: newOutputSchema[sessionListOutput](),
 			value: sessionListOutput{Sessions: []model.SessionSummary{{Session: record, Current: true}}}},
-		{name: "a delete", schema: outputSchema[model.DeleteSessionResponse](),
+		{name: "a delete", schema: newOutputSchema[model.DeleteSessionResponse](),
 			value: model.DeleteSessionResponse{Session: handlerSession, Deleted: true}},
 	}
 	for _, tt := range tests {
@@ -403,8 +404,10 @@ func TestMCPHandler_PinnedSessionTools(t *testing.T) {
 }
 
 func TestMCPHandler_Server_EveryTool(t *testing.T) {
-	sp := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "v1"}
+	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "v1"}
 	record := model.Session{ID: handlerSession, Name: "feat", From: &model.SessionOrigin{Session: model.DefaultSession}}
+	layers := []model.WritableLayerRestoreResult{{Service: "db", Replica: 1, ContainerName: "demo-db-1",
+		ImageID: model.ImageDigestID("sha256:" + strings.Repeat("a", 64)), Tag: "arcave/demo-db-1-postgres-16:sp-v1"}}
 	tests := []struct {
 		tool  string
 		args  map[string]any
@@ -413,21 +416,22 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	}{
 		{tool: "savepoint_create", args: map[string]any{"project": "demo", "name": "v1"},
 			setup: func(svc *mockService) {
-				svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "v1"}).Return(sp, nil).Once()
-			}, want: sp},
+				svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "v1"}).Return(savepoint, nil).Once()
+			}, want: savepoint},
 		{tool: "savepoint_list", args: map[string]any{"project": "demo", "session": "feat"},
 			setup: func(svc *mockService) {
-				svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint{sp}, nil).Once()
-			}, want: listOutput{Savepoints: []model.Savepoint{sp}}},
-		{tool: "savepoint_remove", args: map[string]any{"project": "demo", "ids": []string{sp.ID.String()}},
+				svc.On("ListSavepoints", mock.Anything, model.ListRequest{}).Return([]model.Savepoint{savepoint}, nil).Once()
+			}, want: listOutput{Savepoints: []model.Savepoint{savepoint}}},
+		{tool: "savepoint_remove", args: map[string]any{"project": "demo", "ids": []string{savepoint.ID.String()}},
 			setup: func(svc *mockService) {
-				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{IDs: []model.SavepointID{sp.ID}}).
+				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{IDs: []model.SavepointID{savepoint.ID}}).
 					Return(model.RemoveResult{}, nil).Once()
 			}, want: model.RemoveResponse{}},
 		{tool: "rollback", args: map[string]any{"project": "demo", "ref": "latest"},
 			setup: func(svc *mockService) {
-				svc.On("Rollback", mock.Anything, mock.Anything).Return(model.RollbackResult{Savepoint: sp}, nil).Once()
-			}, want: model.RollbackResponse{RolledBackTo: sp}},
+				svc.On("Rollback", mock.Anything, mock.Anything).
+					Return(model.RollbackResult{Savepoint: savepoint, WritableLayers: layers}, nil).Once()
+			}, want: model.RollbackResponse{RolledBackTo: savepoint, WritableLayers: layers}},
 		{tool: "session_list", args: map[string]any{"all": true},
 			setup: func(svc *mockService) {
 				svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true}).

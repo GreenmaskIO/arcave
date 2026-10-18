@@ -76,8 +76,8 @@ func resolveConfig(v *viper.Viper, projectRoot string) (config.Config, bool, err
 // flags feed the config, which keeps a command's transient flags (--override,
 // --dry-run) out of it. A missing flag is a wiring bug, so this panics rather than
 // silently dropping the binding.
-func viperBind(v *viper.Viper, flags *pflag.FlagSet, flag2cfg map[string]string) {
-	for name, key := range flag2cfg {
+func viperBind(v *viper.Viper, flags *pflag.FlagSet, flagKeys map[string]string) {
+	for name, key := range flagKeys {
 		flag := flags.Lookup(name)
 		if flag == nil {
 			panic(fmt.Sprintf("bind config key %q: no flag %q", key, name))

@@ -133,7 +133,7 @@ func TestNewSaveBlobRequest(t *testing.T) {
 
 // TestStatBlobRequest_Read pins the only way to an OpenBlobRangeRequest: the
 // address is carried over already judged, and the interval is the caller's.
-func TestStatBlobRequest_Read(t *testing.T) {
+func TestStatBlobRequest_ReadRange(t *testing.T) {
 	tests := []struct {
 		name   string
 		offset int64
@@ -150,7 +150,7 @@ func TestStatBlobRequest_Read(t *testing.T) {
 			stat := StatBlobRequest{Type: TypeData, ID: ObjectID(validID)}
 
 			// Act
-			got := stat.Read(tt.offset, tt.length)
+			got := stat.ReadRange(tt.offset, tt.length)
 
 			// Assert
 			assert.Equal(t, OpenBlobRangeRequest{

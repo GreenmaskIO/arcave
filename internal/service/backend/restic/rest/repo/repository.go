@@ -62,21 +62,21 @@ func New(store storages.Storager) *Repository {
 // when the object is written — so there is nothing to do and nothing that could
 // fail. It stays on the seam because a repository that does have something to
 // create is the only thing that would need it back.
-func (s *Repository) Create(ctx context.Context) error {
-	zerolog.Ctx(ctx).Debug().Str("store", s.store.GetCwd()).Msg("restic repository created")
+func (r *Repository) Create(ctx context.Context) error {
+	zerolog.Ctx(ctx).Debug().Str("store", r.store.GetCwd()).Msg("restic repository created")
 	return nil
 }
 
 // StatConfig reports the config's size, or ErrObjectNotFound. restic asks it to
 // decide whether a repository is initialised at all.
-func (s *Repository) StatConfig(_ context.Context) (int64, error) {
-	return s.statObject(configKey)
+func (r *Repository) StatConfig(_ context.Context) (int64, error) {
+	return r.statObject(configKey)
 }
 
 // OpenConfig opens the config for reading, whole: it is small, never fetched by
 // range, and the caller streams it out unchanged.
-func (s *Repository) OpenConfig(ctx context.Context) (io.ReadCloser, error) {
-	rc, err := s.store.GetObject(ctx, configKey)
+func (r *Repository) OpenConfig(ctx context.Context) (io.ReadCloser, error) {
+	rc, err := r.store.GetObject(ctx, configKey)
 	if err != nil {
 		if errors.Is(err, storages.ErrFileNotFound) {
 			return nil, fmt.Errorf("%w: %s", model.ErrObjectNotFound, configKey)
@@ -94,23 +94,23 @@ func (s *Repository) OpenConfig(ctx context.Context) (io.ReadCloser, error) {
 // data, and restic reports exactly that to the user. The Exists/PutObject pair
 // is not atomic and does not need to be — init is a single client doing one
 // thing.
-func (s *Repository) SaveConfig(ctx context.Context, body io.Reader) error {
-	exists, err := s.store.Exists(ctx, configKey)
+func (r *Repository) SaveConfig(ctx context.Context, body io.Reader) error {
+	exists, err := r.store.Exists(ctx, configKey)
 	if err != nil {
 		return fmt.Errorf("checking %s: %w", configKey, err)
 	}
 	if exists {
 		return model.ErrConfigExists
 	}
-	if err := s.store.PutObject(ctx, configKey, body); err != nil {
+	if err := r.store.PutObject(ctx, configKey, body); err != nil {
 		return fmt.Errorf("writing %s: %w", configKey, err)
 	}
 	return nil
 }
 
 // DeleteConfig removes the config, idempotently.
-func (s *Repository) DeleteConfig(ctx context.Context) error {
-	return s.deleteObject(ctx, configKey)
+func (r *Repository) DeleteConfig(ctx context.Context) error {
+	return r.deleteObject(ctx, configKey)
 }
 
 // ListBlobs reports every blob of one type, from a single List of that type's
@@ -119,9 +119,9 @@ func (s *Repository) DeleteConfig(ctx context.Context) error {
 // A type holding nothing is an empty slice, never an error: Create makes no
 // directories here, so "absent" and "empty" are the same state, and restic must
 // be able to list a fresh repository.
-func (s *Repository) ListBlobs(ctx context.Context, req model.ListBlobsRequest) ([]model.Blob, error) {
+func (r *Repository) ListBlobs(ctx context.Context, req model.ListBlobsRequest) ([]model.Blob, error) {
 	objectType := string(req.Type)
-	stats, err := s.store.List(ctx, objectType)
+	stats, err := r.store.List(ctx, objectType)
 	if err != nil {
 		return nil, fmt.Errorf("listing %s: %w", objectType, err)
 	}
@@ -147,8 +147,8 @@ func (s *Repository) ListBlobs(ctx context.Context, req model.ListBlobsRequest) 
 
 // StatBlob reports one blob's size, or ErrObjectNotFound. restic asks it to
 // decide whether it already holds a pack.
-func (s *Repository) StatBlob(_ context.Context, req model.StatBlobRequest) (int64, error) {
-	return s.statObject(blobKey(req.Type, req.ID))
+func (r *Repository) StatBlob(_ context.Context, req model.StatBlobRequest) (int64, error) {
+	return r.statObject(blobKey(req.Type, req.ID))
 }
 
 // OpenBlobRange opens the interval the request names, and nothing outside it:
@@ -158,13 +158,13 @@ func (s *Repository) StatBlob(_ context.Context, req model.StatBlobRequest) (int
 // A zero-length interval is answered without asking the store: an empty blob
 // legitimately has one, and every range over a zero-length object is
 // ErrInvalidRange down there.
-func (s *Repository) OpenBlobRange(ctx context.Context, req model.OpenBlobRangeRequest) (io.ReadCloser, error) {
+func (r *Repository) OpenBlobRange(ctx context.Context, req model.OpenBlobRangeRequest) (io.ReadCloser, error) {
 	if req.Length == 0 {
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 
 	key := blobKey(req.Type, req.ID)
-	rc, err := s.store.GetObjectRange(ctx, key, req.Offset, req.Length)
+	rc, err := r.store.GetObjectRange(ctx, key, req.Offset, req.Length)
 	if err != nil {
 		if errors.Is(err, storages.ErrFileNotFound) {
 			return nil, fmt.Errorf("%w: %s", model.ErrObjectNotFound, key)
@@ -185,9 +185,9 @@ func (s *Repository) OpenBlobRange(ctx context.Context, req model.OpenBlobRangeR
 // be refused.
 //
 // (Append-only mode, when it lands, refuses an overwrite here.)
-func (s *Repository) SaveBlob(ctx context.Context, req model.SaveBlobRequest) error {
+func (r *Repository) SaveBlob(ctx context.Context, req model.SaveBlobRequest) error {
 	key := blobKey(req.Type, req.ID)
-	if err := s.store.PutObject(ctx, key, req.Body); err != nil {
+	if err := r.store.PutObject(ctx, key, req.Body); err != nil {
 		return fmt.Errorf("writing %s: %w", key, err)
 	}
 	return nil
@@ -196,15 +196,15 @@ func (s *Repository) SaveBlob(ctx context.Context, req model.SaveBlobRequest) er
 // DeleteBlob removes one blob, idempotently.
 //
 // (Append-only mode, when it lands, refuses here — for every type but locks.)
-func (s *Repository) DeleteBlob(ctx context.Context, req model.DeleteBlobRequest) error {
-	return s.deleteObject(ctx, blobKey(req.Type, req.ID))
+func (r *Repository) DeleteBlob(ctx context.Context, req model.DeleteBlobRequest) error {
+	return r.deleteObject(ctx, blobKey(req.Type, req.ID))
 }
 
 // statObject is the size-or-ErrObjectNotFound both Stat methods answer with.
 // The store reports absence as a value rather than an error, so this is where
 // that becomes the sentinel the operation turns into a 404.
-func (s *Repository) statObject(key string) (int64, error) {
-	st, err := s.store.Stat(key)
+func (r *Repository) statObject(key string) (int64, error) {
+	st, err := r.store.Stat(key)
 	if err != nil {
 		return 0, fmt.Errorf("stat %s: %w", key, err)
 	}
@@ -225,8 +225,8 @@ func (s *Repository) statObject(key string) (int64, error) {
 //
 // Deleting straight away and swallowing the absence beats asking Exists first:
 // one round trip instead of two, and no window between the question and the act.
-func (s *Repository) deleteObject(ctx context.Context, key string) error {
-	if err := s.store.Delete(ctx, key); err != nil {
+func (r *Repository) deleteObject(ctx context.Context, key string) error {
+	if err := r.store.Delete(ctx, key); err != nil {
 		if !errors.Is(err, storages.ErrFileNotFound) {
 			return fmt.Errorf("delete %s: %w", key, err)
 		}
