@@ -15,7 +15,7 @@
 // Package fullcopy keeps a container's committed image as the archive the daemon
 // handed over: one object per capture, nothing shared, nothing addressable.
 //
-// It is the layout that costs nothing to reason about, and the only one a daemon
+// It is the archiver that costs nothing to reason about, and the only one a daemon
 // too old to export an addressable archive can use.
 package fullcopy
 
@@ -36,16 +36,16 @@ import (
 // archiveName is the whole save archive, stored verbatim.
 const archiveName = "image.tar"
 
-// Layout writes one archive per capture and reads it straight back.
-type Layout struct{}
+// Archiver writes one archive per capture and reads it straight back.
+type Archiver struct{}
 
-// New returns the layout. It holds nothing: the store it writes to and the archive
+// New returns the archiver. It holds nothing: the store it writes to and the archive
 // it writes come per call.
-func New() *Layout { return &Layout{} }
+func New() *Archiver { return &Archiver{} }
 
 // Store writes the archive whole. Nothing is deduplicated, so every byte written is
 // a byte this capture added.
-func (l *Layout) Store(
+func (a *Archiver) Store(
 	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
 ) (imagecopy.StoredSize, error) {
 	counted := utils.NewCountingReader(archive)
@@ -64,7 +64,7 @@ func (l *Layout) Store(
 }
 
 // Load streams the stored archive back out.
-func (l *Layout) Load(
+func (a *Archiver) Load(
 	ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer,
 ) error {
 	manifest, err := imagecopy.ReadManifest(ctx, src, imagecopy.FormatArchive)

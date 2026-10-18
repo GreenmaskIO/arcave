@@ -36,7 +36,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	// Arrange
 	introspection := demoIntrospectionWithContainers()
 	vol := demoVolume()
-	repo := &mockSavepointRepo{}
+	repo := emptySavepointRepo()
 	locker := &mockLocker{}
 	expectLock(locker)
 	inspector := &mockInspector{}
@@ -46,24 +46,24 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	backend := &mockBackend{volume: vol}
 	snapshot := backend.On("Snapshot", mock.Anything, mock.Anything).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy}, nil).Once()
 	capturer := &mockImageBackend{}
 	// The id comes off the clock, so only the container half can be named.
-	capture := capturer.On("Capture", mock.Anything, mock.MatchedBy(func(req model.ImageCaptureRequest) bool {
+	capture := capturer.On("CaptureWritableLayer", mock.Anything, mock.MatchedBy(func(req model.WritableLayerCaptureRequest) bool {
 		return req.SnapshotID.Validate() == nil && req.Container == demoContainerRef()
-	})).Return(demoImageCapture(), nil).Once()
-	upstream := capturer.On("CaptureUpstream", mock.Anything, demoUpstreamCaptureRequest()).
-		Return(demoUpstreamImage(), nil).Once()
+	})).Return(demoWritableLayer(), nil).Once()
+	upstream := capturer.On("CaptureImage", mock.Anything, demoImageCaptureRequest()).
+		Return(demoImage(), nil).Once()
 	spec := expectSpecCommit(repo)
 	commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return len(r.Images) == 1 && r.Images[0] == demoImageCapture() &&
-			assert.ObjectsAreEqual([]model.UpstreamImage{demoUpstreamImage()}, r.UpstreamImages)
+		return len(r.WritableLayers) == 1 && r.WritableLayers[0] == demoWritableLayer() &&
+			assert.ObjectsAreEqual([]model.Image{demoImage()}, r.Images)
 	})).Return(nil).Once()
 	start := runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 
-	// The layer is committed while the services are down, after the volumes; the
-	// upstream follows it, then the spec, and the record stays last.
-	mock.InOrder(stop, snapshot, capture, upstream, spec, commit, start)
+	// The images are kept while the services are down, after the volumes; the writable
+	// layer follows them, then the spec, and the record stays last.
+	mock.InOrder(stop, snapshot, upstream, capture, spec, commit, start)
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -81,7 +81,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 		ImageBackend:     capturer,
 		Inflight:         &fakeInflight{},
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -90,8 +90,8 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []model.ImageCapture{demoImageCapture()}, savepoint.Images)
-	assert.Equal(t, []model.UpstreamImage{demoUpstreamImage()}, savepoint.UpstreamImages)
+	assert.Equal(t, []model.WritableLayer{demoWritableLayer()}, savepoint.WritableLayers)
+	assert.Equal(t, []model.Image{demoImage()}, savepoint.Images)
 	assert.Nil(t, savepoint.NotCovered, "everything is covered")
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -107,7 +107,7 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 	introspection := demoIntrospectionWithContainers()
 	vol := demoVolume()
 	commitErr := errors.New("daemon refused to commit")
-	repo := &mockSavepointRepo{}
+	repo := emptySavepointRepo()
 	locker := &mockLocker{}
 	expectLock(locker)
 	inspector := &mockInspector{}
@@ -120,9 +120,10 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
 	backend := &mockBackend{volume: vol}
 	backend.On("Snapshot", mock.Anything, mock.Anything).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy}, nil).Once()
 	capturer := &mockImageBackend{}
-	capturer.On("Capture", mock.Anything, mock.Anything).Return(model.ImageCapture{}, commitErr).Once()
+	capturer.On("CaptureImage", mock.Anything, demoImageCaptureRequest()).Return(demoImage(), nil).Once()
+	capturer.On("CaptureWritableLayer", mock.Anything, mock.Anything).Return(model.WritableLayer{}, commitErr).Once()
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -140,7 +141,7 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 		ImageBackend:     capturer,
 		Inflight:         &fakeInflight{},
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -178,18 +179,18 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	safetyBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	capturer := &mockImageBackend{}
 	// The id is read at match time, filled by the volume capture that runs first.
-	captureSafety := capturer.On("Capture", mock.Anything, mock.MatchedBy(func(req model.ImageCaptureRequest) bool {
+	captureSafety := capturer.On("CaptureWritableLayer", mock.Anything, mock.MatchedBy(func(req model.WritableLayerCaptureRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Container == demoContainerRef()
-	})).Return(demoImageCapture(), nil).Once()
-	upstreamSafety := capturer.On("CaptureUpstream", mock.Anything, demoUpstreamCaptureRequest()).
-		Return(demoUpstreamImage(), nil).Once()
+	})).Return(demoWritableLayer(), nil).Once()
+	upstreamSafety := capturer.On("CaptureImage", mock.Anything, demoImageCaptureRequest()).
+		Return(demoImage(), nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.IsSafetySnapshot() && len(r.Images) == 1 && r.Images[0] == demoImageCapture() &&
-			assert.ObjectsAreEqual([]model.UpstreamImage{demoUpstreamImage()}, r.UpstreamImages) &&
+		return r.IsSafetySnapshot() && len(r.WritableLayers) == 1 && r.WritableLayers[0] == demoWritableLayer() &&
+			assert.ObjectsAreEqual([]model.Image{demoImage()}, r.Images) &&
 			assert.ObjectsAreEqual(&model.NotCovered{KilledContainers: []model.KilledContainer{
 				{Service: demoService, Replica: 1, Container: demoContainerName(1)},
 			}}, r.NotCovered)
@@ -205,7 +206,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	})).Return(nil).Once()
 
 	// The containers it commits exist only between the stop and the teardown.
-	mock.InOrder(stop, snapshotSafety, captureSafety, upstreamSafety, specSafety, commitSafety, down, create,
+	mock.InOrder(stop, snapshotSafety, upstreamSafety, captureSafety, specSafety, commitSafety, down, create,
 		restore, start, uncommitSafety, removeSafety)
 
 	store := newDirStore(t)
@@ -225,7 +226,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 		ImageBackend:     capturer,
 		Inflight:         &fakeInflight{},
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -251,21 +252,21 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	var safetySnapshotID model.SavepointID
 	images := &mockImageBackend{}
 	// The load runs on the live compose project: it is this workflow's pre-flight.
-	restoreImage := images.On("Restore", mock.Anything, model.ImageRestoreRequest{
-		SnapshotID: record.ID, Capture: demoImageCapture(), ImageRef: demoRestoredRef(1),
-	}).Return(demoImageRestore(), nil).Once()
+	restoreImage := images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
+		SnapshotID: record.ID, Layer: demoWritableLayer(), Tag: demoRestoredTag(1),
+	}).Return(demoWritableLayerRestoreResult(), nil).Once()
 	runner := &mockComposeRunner{}
 	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	// The compose project is rebuilt on the restored layer, and never off a registry.
-	target := matchRetargetedImage(demoService, demoRestoredRef(1))
+	target := matchRetargetedImage(demoService, demoRestoredTag(1))
 	create := runner.On("Create", mock.Anything, target).Return(nil).Once()
 	restoreVolume := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
@@ -295,16 +296,18 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 		ImageBackend:     images,
 		Inflight:         &fakeInflight{},
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
-	ctx := zerolog.Nop().WithContext(context.Background())
+	logs := &syncBuffer{}
+	ctx := zerolog.New(logs).WithContext(context.Background())
 
 	// Act
 	res, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []model.ImageRestore{demoImageRestore()}, res.Images)
+	assert.Contains(t, logs.String(), "`docker compose up` from your compose file recreates them", "the user is told the layers are the containers'")
+	assert.Equal(t, []model.WritableLayerRestoreResult{demoWritableLayerRestoreResult()}, res.WritableLayers)
 	repo.AssertExpectations(t)
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
@@ -327,14 +330,14 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	inspector.On("Introspect", mock.Anything).Return(demoScaledIntrospection(), nil).Once()
 
 	images := &mockImageBackend{}
-	images.On("Restore", mock.Anything, model.ImageRestoreRequest{
-		SnapshotID: record.ID, Capture: demoImageCapture(), ImageRef: demoRestoredRef(1),
-	}).Return(demoImageRestore(), nil).Once()
-	images.On("Restore", mock.Anything, model.ImageRestoreRequest{
-		SnapshotID: record.ID, Capture: demoSecondImageCapture(), ImageRef: demoRestoredRef(2),
-	}).Return(model.ImageRestore{
+	images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
+		SnapshotID: record.ID, Layer: demoWritableLayer(), Tag: demoRestoredTag(1),
+	}).Return(demoWritableLayerRestoreResult(), nil).Once()
+	images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
+		SnapshotID: record.ID, Layer: demoSecondWritableLayer(), Tag: demoRestoredTag(2),
+	}).Return(model.WritableLayerRestoreResult{
 		Service: demoService, Replica: 2, ContainerName: demoContainerName(2),
-		ImageID: demoSecondImageID, ImageRef: demoRestoredRef(2),
+		ImageID: demoSecondImageID, Tag: demoRestoredTag(2),
 	}, nil).Once()
 
 	runner := &mockComposeRunner{}
@@ -342,16 +345,16 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	expectSpecCommit(repo)
 	expectSafetySnapshotCommit(repo, record.ID)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	// The spec carries the first replica's image; only the second is rebuilt.
-	target := matchRetargetedImage(demoService, demoRestoredRef(1))
+	target := matchRetargetedImage(demoService, demoRestoredTag(1))
 	create := runner.On("Create", mock.Anything, target).Return(nil).Once()
 	rebuilder := &mockContainerRebuilder{}
 	rebuild := rebuilder.On("RecreateWithImage", mock.Anything, demoSecondContainerID,
-		model.ReplicaIdentity{Name: demoContainerName(2), Number: 2}, demoRestoredRef(2)).
+		model.ReplicaIdentity{Name: demoContainerName(2), Number: 2}, demoRestoredTag(2)).
 		Return("rebuilt", nil).Once()
 	restoreVolume := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
@@ -380,7 +383,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 		ContainerRebuilder: rebuilder,
 		Inflight:           &fakeInflight{},
 		Store:              store,
-		DefaultBackend:     model.SnapshotBackendCopy,
+		CaptureDefaults:    demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -389,7 +392,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Len(t, res.Images, 2)
+	assert.Len(t, res.WritableLayers, 2)
 	inspector.AssertExpectations(t)
 	repo.AssertExpectations(t)
 	runner.AssertExpectations(t)
@@ -414,7 +417,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendCopy, Payload: "safety-payload"}, nil).Once()
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	expectSpecCommit(repo)
 	expectSafetySnapshotCommit(repo, record.ID)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
@@ -444,7 +447,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 		ContainerRebuilder: rebuilder,
 		Inflight:           &fakeInflight{},
 		Store:              store,
-		DefaultBackend:     model.SnapshotBackendCopy,
+		CaptureDefaults:    demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -453,7 +456,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Empty(t, res.Images)
+	assert.Empty(t, res.WritableLayers)
 	images.AssertExpectations(t)
 	rebuilder.AssertExpectations(t)
 	runner.AssertExpectations(t)
@@ -467,8 +470,8 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 	repo, inspector, locker := demoResolution(record)
 
 	images := &mockImageBackend{}
-	images.On("Restore", mock.Anything, mock.Anything).
-		Return(model.ImageRestore{}, model.ErrSavepointImageMissing).Once()
+	images.On("RestoreWritableLayer", mock.Anything, mock.Anything).
+		Return(model.WritableLayerRestoreResult{}, model.ErrSavepointImageMissing).Once()
 
 	// The runner carries no expectation at all: a load that fails is a pre-flight
 	// failure, and the project is still running when it is reported.
@@ -489,7 +492,7 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 		ImageBackend:     images,
 		Inflight:         &fakeInflight{},
 		Store:            store,
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -518,7 +521,7 @@ func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
 	images := &mockImageBackend{}
 	assembler := &mockAssembler{}
 	runner := &mockComposeRunner{}
-	repo := &mockSavepointRepo{}
+	repo := emptySavepointRepo()
 	svc := New(Deps{
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -531,7 +534,7 @@ func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
 		ImageBackend:     images,
 		Inflight:         &fakeInflight{},
 		Store:            newDirStore(t),
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 		MinDaemonMajor:   25,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -578,7 +581,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 		ImageBackend:     images,
 		Inflight:         inflight,
 		Store:            newDirStore(t),
-		DefaultBackend:   model.SnapshotBackendCopy,
+		CaptureDefaults:  demoCaptureDefaults,
 		MinDaemonMajor:   25,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -599,7 +602,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 	locker.AssertExpectations(t)
 }
 
-func TestRestoredImageRef(t *testing.T) {
+func TestRestoredLayerTag(t *testing.T) {
 	const id = model.SavepointID("019e843e-1650-7000-8000-000000000000")
 	// A repository path may hold at most 255 characters, and a path component only
 	// lower-case alphanumerics joined by separators — neither is arcave's to widen.
@@ -608,31 +611,31 @@ func TestRestoredImageRef(t *testing.T) {
 	tests := []struct {
 		name    string
 		project string
-		capture model.ImageCapture
+		capture model.WritableLayer
 		want    string
 	}{
 		{
 			name:    "project, service, replica and upstream image",
 			project: "demo",
-			capture: model.ImageCapture{Service: "db", Replica: 1, UpstreamImageRef: "postgres:16"},
+			capture: model.WritableLayer{Service: "db", Replica: 1, UpstreamImageRef: "postgres:16"},
 			want:    "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "a registry-qualified upstream image",
 			project: "demo",
-			capture: model.ImageCapture{Service: "web", Replica: 2, UpstreamImageRef: "ghcr.io/Org/App:1.2.3"},
+			capture: model.WritableLayer{Service: "web", Replica: 2, UpstreamImageRef: "ghcr.io/Org/App:1.2.3"},
 			want:    "arcave/demo-web-2-ghcr-io-org-app-1-2-3:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "an upper-case service, which a repository path refuses",
 			project: "Demo_App",
-			capture: model.ImageCapture{Service: "DB", Replica: 1, UpstreamImageRef: "busybox"},
+			capture: model.WritableLayer{Service: "DB", Replica: 1, UpstreamImageRef: "busybox"},
 			want:    "arcave/demo-app-db-1-busybox:sp-019e843e-1650-7000-8000-000000000000",
 		},
 		{
 			name:    "a capture whose upstream could not be traced is still addressable",
 			project: "demo",
-			capture: model.ImageCapture{Service: "db", Replica: 1},
+			capture: model.WritableLayer{Service: "db", Replica: 1},
 			want:    "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000000",
 		},
 	}
@@ -640,7 +643,7 @@ func TestRestoredImageRef(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := restoredImageRef(tt.project, id, tt.capture)
+			got := restoredLayerTag(tt.project, id, tt.capture)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -649,7 +652,7 @@ func TestRestoredImageRef(t *testing.T) {
 
 	t.Run("an upstream image too long for the cap is cut, never the identity", func(t *testing.T) {
 		// Act
-		got := restoredImageRef("demo", id, model.ImageCapture{
+		got := restoredLayerTag("demo", id, model.WritableLayer{
 			Service: "db", Replica: 1, UpstreamImageRef: longImage,
 		})
 
@@ -661,10 +664,10 @@ func TestRestoredImageRef(t *testing.T) {
 	})
 }
 
-// TestRestoredImageRef_IsAlwaysNameable pins the ref against docker's own path
+// TestRestoredLayerTag_IsAlwaysNameable pins the ref against docker's own path
 // grammar: lower-case alphanumeric runs joined by single dashes is a subset of it,
 // so no service or image name can produce something the daemon refuses to tag.
-func TestRestoredImageRef_IsAlwaysNameable(t *testing.T) {
+func TestRestoredLayerTag_IsAlwaysNameable(t *testing.T) {
 	nameable := regexp.MustCompile(`^arcave/[a-z0-9]+(-[a-z0-9]+)*:sp-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
 
 	names := []string{"", "___", "..", "-lead", "trail-", "UPPER", "a b/c:d@e", "юникод"}
@@ -673,7 +676,7 @@ func TestRestoredImageRef_IsAlwaysNameable(t *testing.T) {
 		for _, service := range names {
 			for _, base := range bases {
 				// Act
-				got := restoredImageRef(project, "019e843e-1650-7000-8000-000000000000", model.ImageCapture{
+				got := restoredLayerTag(project, "019e843e-1650-7000-8000-000000000000", model.WritableLayer{
 					Service: service, Replica: 1, UpstreamImageRef: base,
 				})
 
@@ -738,16 +741,16 @@ func TestRetargetImages_LowestRecordedReplica(t *testing.T) {
 	project := &types.Project{Name: demoProject, Services: types.Services{
 		demoService: {Name: demoService, Image: demoBaseImage},
 	}}
-	restored := []model.ImageRestore{
-		{Service: demoService, Replica: 3, ImageRef: demoRestoredRef(3)},
-		{Service: demoService, Replica: 2, ImageRef: demoRestoredRef(2)},
+	restored := []model.WritableLayerRestoreResult{
+		{Service: demoService, Replica: 3, Tag: demoRestoredTag(3)},
+		{Service: demoService, Replica: 2, Tag: demoRestoredTag(2)},
 	}
 
 	// Act
 	got := retargetImages(project, restored)
 
 	// Assert
-	assert.Equal(t, demoRestoredRef(2), got.Services[demoService].Image)
+	assert.Equal(t, demoRestoredTag(2), got.Services[demoService].Image)
 	assert.Equal(t, types.PullPolicyNever, got.Services[demoService].PullPolicy)
 	assert.Equal(t, demoBaseImage, project.Services[demoService].Image, "the input project is left alone")
 }
@@ -796,14 +799,14 @@ func TestService_rebuildDivergentReplicas(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			restored := make([]model.ImageRestore, 0, len(tt.recorded))
+			replicas := make([]recordedReplica, 0, len(tt.recorded))
 			for _, n := range tt.recorded {
-				ref := demoRestoredRef(n)
+				ref := demoRestoredTag(n)
 				if tt.sameImage {
-					ref = demoRestoredRef(tt.recorded[0])
+					ref = demoRestoredTag(tt.recorded[0])
 				}
-				restored = append(restored, model.ImageRestore{
-					Service: demoService, Replica: n, ContainerName: demoContainerName(n), ImageRef: ref,
+				replicas = append(replicas, recordedReplica{
+					service: demoService, replica: n, containerName: demoContainerName(n), image: ref,
 				})
 			}
 			built := demoIntrospection()
@@ -819,7 +822,7 @@ func TestService_rebuildDivergentReplicas(t *testing.T) {
 			for _, w := range tt.want {
 				calls = append(calls, rebuilder.On("RecreateWithImage", mock.Anything, createdID(w.created),
 					model.ReplicaIdentity{Name: demoContainerName(w.recorded), Number: w.recorded},
-					refOf(restored, w.recorded)).
+					imageOf(replicas, w.recorded)).
 					Return("rebuilt", nil).Once())
 			}
 			// A name is claimed only once the container holding it has been rebuilt away.
@@ -828,7 +831,7 @@ func TestService_rebuildDivergentReplicas(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			err := s.rebuildDivergentReplicas(ctx, restored)
+			err := s.rebuildDivergentReplicas(ctx, replicas)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -849,13 +852,13 @@ func TestService_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 	inspector := &mockInspector{}
 	rebuilder := &mockContainerRebuilder{}
 	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
-	restored := []model.ImageRestore{
-		{Service: demoService, Replica: 2, ImageRef: demoRestoredRef(1)},
-		{Service: demoService, Replica: 1, ImageRef: demoRestoredRef(1)},
+	replicas := []recordedReplica{
+		{service: demoService, replica: 2, image: demoRestoredTag(1)},
+		{service: demoService, replica: 1, image: demoRestoredTag(1)},
 	}
 
 	// Act
-	err := s.rebuildDivergentReplicas(zerolog.Nop().WithContext(context.Background()), restored)
+	err := s.rebuildDivergentReplicas(zerolog.Nop().WithContext(context.Background()), replicas)
 
 	// Assert
 	require.NoError(t, err)
@@ -873,15 +876,15 @@ func TestService_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T
 	inspector.On("Introspect", mock.Anything).Return(built, nil).Once()
 	rebuilder := &mockContainerRebuilder{}
 	rebuilder.On("RecreateWithImage", mock.Anything, createdID(2),
-		model.ReplicaIdentity{Name: demoContainerName(3), Number: 3}, demoRestoredRef(3)).Return("rebuilt", nil).Once()
+		model.ReplicaIdentity{Name: demoContainerName(3), Number: 3}, demoRestoredTag(3)).Return("rebuilt", nil).Once()
 	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
 	// Act
-	err := s.rebuildDivergentReplicas(ctx, []model.ImageRestore{
-		{Service: demoService, Replica: 1, ContainerName: demoContainerName(1), ImageRef: demoRestoredRef(1)},
-		{Service: demoService, Replica: 3, ContainerName: demoContainerName(3), ImageRef: demoRestoredRef(3)},
+	err := s.rebuildDivergentReplicas(ctx, []recordedReplica{
+		{service: demoService, replica: 1, containerName: demoContainerName(1), image: demoRestoredTag(1)},
+		{service: demoService, replica: 3, containerName: demoContainerName(3), image: demoRestoredTag(3)},
 	})
 
 	// Assert
@@ -895,12 +898,52 @@ func TestService_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T
 // createdID is the id of the container compose created as replica n.
 func createdID(n int) string { return fmt.Sprintf("created-%d", n) }
 
-// refOf is the ref the restore of replica n carries.
-func refOf(restored []model.ImageRestore, n int) string {
-	for _, image := range restored {
-		if image.Replica == n {
-			return image.ImageRef
+// imageOf is the image recorded replica n is built on.
+func imageOf(replicas []recordedReplica, n int) string {
+	for _, replica := range replicas {
+		if replica.replica == n {
+			return replica.image
 		}
 	}
 	return ""
 }
+
+func TestService_requireImages(t *testing.T) {
+	tests := []struct {
+		name     string
+		policy   string
+		restored []model.WritableLayerRestoreResult
+		present  *bool
+		wantErr  bool
+	}{
+		{name: "an image compose may pull is not looked up", policy: types.PullPolicyMissing},
+		{name: "a service on a restored layer is not looked up", policy: types.PullPolicyNever,
+			restored: []model.WritableLayerRestoreResult{{Service: "db"}}},
+		{name: "a local image the daemon holds passes", policy: types.PullPolicyNever, present: boolPtr(true)},
+		{name: "a local image the daemon lacks is refused", policy: types.PullPolicyNever, present: boolPtr(false), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			project := &types.Project{Services: types.Services{"db": {Name: "db", Image: "local:1", PullPolicy: tt.policy}}}
+			lookup := &mockImageLookup{}
+			if tt.present != nil {
+				lookup.On("ImageRefExists", mock.Anything, "local:1").Return(*tt.present, nil).Once()
+			}
+			svc := New(Deps{ImageLookup: lookup})
+
+			// Act
+			err := svc.requireImages(context.Background(), project, tt.restored)
+
+			// Assert
+			if tt.wantErr {
+				require.ErrorIs(t, err, errImageUnavailable)
+			} else {
+				require.NoError(t, err)
+			}
+			lookup.AssertExpectations(t)
+		})
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }

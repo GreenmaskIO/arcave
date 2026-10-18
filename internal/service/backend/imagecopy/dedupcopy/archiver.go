@@ -33,25 +33,25 @@ import (
 const BlobPrefix = "shared/oci/blobs"
 
 // MinDaemonMajor is the first Docker whose `docker save` writes the OCI layout this
-// layout splits by digest.
+// archiver splits by digest.
 const MinDaemonMajor = 25
 
-// Layout splits an archive between the blob store its captures share and each
+// Archiver splits an archive between the blob store its captures share and each
 // capture's own metadata.
-type Layout struct {
+type Archiver struct {
 	blobs *blobStore
 }
 
-// New binds the layout to the blob store every capture under it shares.
-func New(blobStore storages.Storager) *Layout {
-	return &Layout{blobs: newBlobStore(blobStore)}
+// New binds the archiver to the blob store every capture under it shares.
+func New(blobStore storages.Storager) *Archiver {
+	return &Archiver{blobs: newBlobStore(blobStore)}
 }
 
 // Store walks the archive once, writing every blob under the digest its member
 // name carries and the metadata beside the savepoint. Nothing is decompressed: the
-// member name is the key, and that is what makes one pass enough. The layout is
+// member name is the key, and that is what makes one pass enough. The OCI layout is
 // therefore the gate — see requiredMetadata.
-func (l *Layout) Store(
+func (a *Archiver) Store(
 	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
 ) (imagecopy.StoredSize, error) {
 	var size imagecopy.StoredSize
@@ -72,7 +72,7 @@ func (l *Layout) Store(
 			continue
 		}
 
-		member, written, err := l.storeMember(ctx, dst, reader, header.Name, header.Size)
+		member, written, err := a.storeMember(ctx, dst, reader, header.Name, header.Size)
 		if err != nil {
 			return imagecopy.StoredSize{}, err
 		}
@@ -98,11 +98,11 @@ func (l *Layout) Store(
 
 // storeMember puts one archive member where its kind belongs and reports how many
 // bytes that added. An unaddressable name must never become a storage key.
-func (l *Layout) storeMember(
+func (a *Archiver) storeMember(
 	ctx context.Context, dst storages.Writer, body io.Reader, name string, size int64,
 ) (imagecopy.Member, int64, error) {
 	if digest, isBlob := parseBlobName(name); isBlob {
-		written, err := l.blobs.put(ctx, digest, body, size)
+		written, err := a.blobs.put(ctx, digest, body, size)
 		if err != nil {
 			return imagecopy.Member{}, 0, err
 		}
@@ -123,7 +123,7 @@ func (l *Layout) storeMember(
 // Members go back under the names and in the order the capture recorded, their bytes
 // verbatim: an image's id is the digest of those, never of the tar headers, which are
 // written anew and which a load ignores.
-func (l *Layout) Load(
+func (a *Archiver) Load(
 	ctx context.Context, src storages.Storager, imageID model.ImageDigestID, archive io.Writer,
 ) error {
 	manifest, err := imagecopy.ReadManifest(ctx, src, imagecopy.FormatBlobs)
@@ -137,7 +137,7 @@ func (l *Layout) Load(
 
 	writer := tar.NewWriter(archive)
 	for _, member := range manifest.Members {
-		if err := l.writeMember(ctx, writer, src, member); err != nil {
+		if err := a.writeMember(ctx, writer, src, member); err != nil {
 			return err
 		}
 	}
@@ -145,10 +145,10 @@ func (l *Layout) Load(
 }
 
 // writeMember copies one stored member into the archive under its original name.
-func (l *Layout) writeMember(
+func (a *Archiver) writeMember(
 	ctx context.Context, archive *tar.Writer, src storages.Storager, member imagecopy.Member,
 ) error {
-	body, size, err := l.openMember(ctx, src, member)
+	body, size, err := a.openMember(ctx, src, member)
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (l *Layout) writeMember(
 }
 
 // openMember resolves one member to the store that holds it.
-func (l *Layout) openMember(
+func (a *Archiver) openMember(
 	ctx context.Context, src storages.Storager, member imagecopy.Member,
 ) (io.ReadCloser, int64, error) {
 	switch member.Kind {
@@ -178,7 +178,7 @@ func (l *Layout) openMember(
 			return nil, 0, fmt.Errorf("%w: member %q names digest %q",
 				model.ErrUnsupportedImageArchive, member.Name, member.Digest)
 		}
-		src, size, err := l.blobs.open(ctx, member.Digest)
+		src, size, err := a.blobs.open(ctx, member.Digest)
 		if err != nil {
 			return nil, 0, fmt.Errorf("%w: %w", model.ErrSavepointImageMissing, err)
 		}

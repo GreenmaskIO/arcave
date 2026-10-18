@@ -69,7 +69,7 @@ type Factory struct {
 // New(docker).New(spec) at every call site.
 func NewFactory(docker VolumeStreamer) *Factory { return &Factory{docker: docker} }
 
-func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendCopy }
+func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendFullCopy }
 
 // New binds the instance to the root the caller handed it — the one thing fixed
 // for its life. The volume's mount source is not, and cannot be: resolving it may
@@ -122,7 +122,7 @@ func (s *Snapshotter) Snapshot(
 	}
 	return model.SnapshotStat{
 		Volume:  s.volume,
-		Type:    model.SnapshotBackendCopy,
+		Type:    model.SnapshotBackendFullCopy,
 		Payload: Payload{SizeBytes: counted.N()},
 	}, nil
 }

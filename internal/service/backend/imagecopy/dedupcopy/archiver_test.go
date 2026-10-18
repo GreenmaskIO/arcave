@@ -47,7 +47,7 @@ const (
 	ociLayoutName = "oci-layout"
 )
 
-func TestLayout_Store_KeepsEachBlobOnce(t *testing.T) {
+func TestArchiver_Store_KeepsEachBlobOnce(t *testing.T) {
 	// Arrange
 	shared, writable := []byte("a layer two replicas share"), []byte("the writable layer")
 	archive := ociArchive(t, blob(shared), blob(shared), blob(writable))
@@ -75,7 +75,7 @@ func TestLayout_Store_KeepsEachBlobOnce(t *testing.T) {
 	}, manifest.Members, "the manifest names every member, in stream order")
 }
 
-func TestLayout_Store_RewritesABlobLeftShortByAKilledRun(t *testing.T) {
+func TestArchiver_Store_RewritesABlobLeftShortByAKilledRun(t *testing.T) {
 	// Arrange: a previous run died mid-blob, so the store holds a truncated one.
 	body := []byte("a layer a killed run only half wrote")
 	archive := ociArchive(t, blob(body))
@@ -92,7 +92,7 @@ func TestLayout_Store_RewritesABlobLeftShortByAKilledRun(t *testing.T) {
 		"a short blob is rewritten, not adopted")
 }
 
-func TestLayout_Store_DropsABlobThatDoesNotVerify(t *testing.T) {
+func TestArchiver_Store_DropsABlobThatDoesNotVerify(t *testing.T) {
 	// Arrange
 	named := strings.Repeat("ab", 32)
 	archive := ociArchive(t, member{name: "blobs/sha256/" + named, body: []byte("bytes of another layer")})
@@ -107,7 +107,7 @@ func TestLayout_Store_DropsABlobThatDoesNotVerify(t *testing.T) {
 	assert.Empty(t, storedBlobs(t, blobs), "it is not left under a good name")
 }
 
-func TestLayout_Store_RefusesAnArchiveItCannotAddress(t *testing.T) {
+func TestArchiver_Store_RefusesAnArchiveItCannotAddress(t *testing.T) {
 	tests := []struct {
 		name    string
 		archive func(t *testing.T) []byte
@@ -158,7 +158,7 @@ func TestLayout_Store_RefusesAnArchiveItCannotAddress(t *testing.T) {
 	}
 }
 
-func TestLayout_Store_SerialisesConcurrentWritersOfOneBlob(t *testing.T) {
+func TestArchiver_Store_SerialisesConcurrentWritersOfOneBlob(t *testing.T) {
 	// Arrange: the same archive stored twice at once, as a scaled service does.
 	body := bytes.Repeat([]byte("shared layer bytes "), 4096)
 	archive := ociArchive(t, blob(body))
@@ -166,7 +166,7 @@ func TestLayout_Store_SerialisesConcurrentWritersOfOneBlob(t *testing.T) {
 	first, blobs := newStores(t)
 	second, err := first.SubStorage("second", true)
 	require.NoError(t, err)
-	layout := dedupcopy.New(blobs)
+	archiver := dedupcopy.New(blobs)
 
 	// Act
 	var wg sync.WaitGroup
@@ -175,7 +175,7 @@ func TestLayout_Store_SerialisesConcurrentWritersOfOneBlob(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = layout.Store(ctx, dst, imageID, bytes.NewReader(archive))
+			_, errs[i] = archiver.Store(ctx, dst, imageID, bytes.NewReader(archive))
 		}()
 	}
 	wg.Wait()
@@ -186,18 +186,18 @@ func TestLayout_Store_SerialisesConcurrentWritersOfOneBlob(t *testing.T) {
 		"neither writer truncated the other")
 }
 
-func TestLayout_Load_RendersTheArchiveMemberForMember(t *testing.T) {
+func TestArchiver_Load_RendersTheArchiveMemberForMember(t *testing.T) {
 	// Arrange
 	archive := ociArchive(t, blob([]byte("base layer")), blob([]byte("writable layer")))
 	ctx := zerolog.Nop().WithContext(context.Background())
 	capture, blobs := newStores(t)
-	layout := dedupcopy.New(blobs)
-	_, err := layout.Store(ctx, capture, imageID, bytes.NewReader(archive))
+	archiver := dedupcopy.New(blobs)
+	_, err := archiver.Store(ctx, capture, imageID, bytes.NewReader(archive))
 	require.NoError(t, err)
 
 	// Act
 	var out bytes.Buffer
-	err = layout.Load(ctx, capture, imageID, &out)
+	err = archiver.Load(ctx, capture, imageID, &out)
 
 	// Assert
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestLayout_Load_RendersTheArchiveMemberForMember(t *testing.T) {
 		"the members come back under the same names, in the same order")
 }
 
-func TestLayout_Load_RefusesWhatItCannotAddress(t *testing.T) {
+func TestArchiver_Load_RefusesWhatItCannotAddress(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest imagecopy.Manifest

@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
 // The project every workflow test runs against: one service mounting one named
@@ -36,9 +37,29 @@ const (
 	demoVolumeName = "demo_db"
 )
 
+// demoCaptureDefaults are the backends every test Service captures by, every kind captured.
+var demoCaptureDefaults = capturepolicy.CaptureDefaults{
+	VolumeBackend:        model.SnapshotBackendFullCopy,
+	WritableLayerBackend: model.ImageBackendDedupCopy,
+	SavepointCapture: capturepolicy.SavepointCaptureSettings{
+		WritableLayers:   true,
+		Images:           true,
+		NamedVolumes:     true,
+		BindVolumes:      true,
+		AnonymousVolumes: true,
+	},
+}
+
+// cdcCaptureDefaults are demoCaptureDefaults with volumes captured by cdc.
+func cdcCaptureDefaults() capturepolicy.CaptureDefaults {
+	defaults := demoCaptureDefaults
+	defaults.VolumeBackend = model.SnapshotBackendCDC
+	return defaults
+}
+
 // demoVolume is the unit, in the form the mock tests address it by.
 func demoVolume() model.Volume {
-	return model.Volume{ObjectID: "volume-named-" + demoVolumeName, Backend: model.SnapshotBackendCopy}
+	return model.Volume{ObjectID: "volume-named-" + demoVolumeName, Backend: model.SnapshotBackendFullCopy}
 }
 
 // demoRecord is a committed savepoint of demoVolume.
@@ -47,7 +68,7 @@ func demoRecord() model.Savepoint {
 		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendCopy, Payload: "sp-payload"}},
+		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}},
 		Spec:      demoSpecRef(),
 	}
 }
@@ -66,7 +87,7 @@ func demoSafetySnapshot() model.Savepoint {
 		Name:      safetySnapshotName(demoRecord().ID),
 		Labels:    safetySnapshotLabels(),
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendCopy, Payload: "safety-payload"}},
+		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
 		Spec:      demoSpecRef(),
 	}
 }
@@ -125,19 +146,19 @@ func demoContainerInspect() container.InspectResponse {
 	}
 }
 
-// demoUpstreamCaptureRequest is the one upstream demoIntrospectionWithContainers names.
-func demoUpstreamCaptureRequest() model.UpstreamImageCaptureRequest {
-	return model.UpstreamImageCaptureRequest{
-		Image: model.UpstreamImage{
+// demoImageCaptureRequest is the one upstream demoIntrospectionWithContainers names.
+func demoImageCaptureRequest() model.ImageCaptureRequest {
+	return model.ImageCaptureRequest{
+		Image: model.Image{
 			ID: demoUpstreamID, Refs: []string{demoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
 		},
-		InDaemon: true,
+		ExistsInDaemon: true,
 	}
 }
 
-// demoUpstreamImage is what the copier reports for demoUpstreamCaptureRequest.
-func demoUpstreamImage() model.UpstreamImage {
-	image := demoUpstreamCaptureRequest().Image
+// demoImage is what the copier reports for demoImageCaptureRequest.
+func demoImage() model.Image {
+	image := demoImageCaptureRequest().Image
 	image.Stored = true
 	image.StoredBytes = 512
 	return image
@@ -165,14 +186,15 @@ func demoIntrospectionWithContainers() model.IntrospectionResult {
 	return res
 }
 
-// demoImageCapture is what the copier reports for demoContainerRef.
-func demoImageCapture() model.ImageCapture {
-	return model.ImageCapture{
+// demoWritableLayer is what the copier reports for demoContainerRef.
+func demoWritableLayer() model.WritableLayer {
+	return model.WritableLayer{
 		Service:          demoService,
 		Replica:          1,
 		ContainerID:      demoContainerID,
 		ContainerName:    demoContainerName(1),
 		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ImageBackend:     model.ImageBackendDedupCopy,
 		UpstreamImageID:  demoUpstreamID,
 		UpstreamImageRef: demoBaseImage,
 		SizeBytes:        4096,
@@ -182,21 +204,21 @@ func demoImageCapture() model.ImageCapture {
 // demoRecordWithImages is demoRecord carrying the writable layer of its one replica.
 func demoRecordWithImages() model.Savepoint {
 	record := demoRecord()
-	record.Images = []model.ImageCapture{demoImageCapture()}
+	record.WritableLayers = []model.WritableLayer{demoWritableLayer()}
 	return record
 }
 
-// demoRestoredRef is the tag a rollback of demoRecord puts on one replica's layer;
+// demoRestoredTag is the tag a rollback of demoRecord puts on one replica's layer;
 // demoBaseImage's colon is what a docker repository path cannot carry.
-func demoRestoredRef(replica int) string {
+func demoRestoredTag(replica int) string {
 	return fmt.Sprintf("arcave/%s-%s-%d-postgres-16:sp-%s", demoProject, demoService, replica, demoRecord().ID)
 }
 
-// demoImageRestore is what the copier reports for demoImageCapture.
-func demoImageRestore() model.ImageRestore {
-	return model.ImageRestore{
+// demoWritableLayerRestoreResult is what the copier reports for demoWritableLayer.
+func demoWritableLayerRestoreResult() model.WritableLayerRestoreResult {
+	return model.WritableLayerRestoreResult{
 		Service: demoService, Replica: 1, ContainerName: demoContainerName(1),
-		ImageID: demoImageCapture().CommittedImageID, ImageRef: demoRestoredRef(1),
+		ImageID: demoWritableLayer().CommittedImageID, Tag: demoRestoredTag(1),
 	}
 }
 
@@ -220,9 +242,9 @@ func demoScaledIntrospection() model.IntrospectionResult {
 	return res
 }
 
-// demoSecondImageCapture is the second replica's own layer.
-func demoSecondImageCapture() model.ImageCapture {
-	capture := demoImageCapture()
+// demoSecondWritableLayer is the second replica's own layer.
+func demoSecondWritableLayer() model.WritableLayer {
+	capture := demoWritableLayer()
 	capture.Replica = 2
 	capture.ContainerID = demoSecondContainerID
 	capture.ContainerName = demoContainerName(2)
@@ -233,7 +255,7 @@ func demoSecondImageCapture() model.ImageCapture {
 // demoScaledRecord is a savepoint of the scaled compose project: one capture per replica.
 func demoScaledRecord() model.Savepoint {
 	record := demoRecord()
-	record.Images = []model.ImageCapture{demoImageCapture(), demoSecondImageCapture()}
+	record.WritableLayers = []model.WritableLayer{demoWritableLayer(), demoSecondWritableLayer()}
 	return record
 }
 
@@ -290,6 +312,14 @@ func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector,
 func expectLock(locker *mockLocker) *mock.Call {
 	locker.On("Release").Return(nil).Once()
 	return locker.On("Acquire", mock.Anything).Return(nil).Once()
+}
+
+// emptySavepointRepo is a compose project with no savepoint yet, as the listing a create
+// opens with finds it.
+func emptySavepointRepo() *mockSavepointRepo {
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint(nil), nil).Once()
+	return repo
 }
 
 // expectSpecCommit declares the artifact a capture writes before its record. The

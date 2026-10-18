@@ -41,6 +41,8 @@ import (
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
+	imagefullcopy "github.com/greenmaskio/arcave/internal/service/backend/imagecopy/fullcopy"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -79,8 +81,8 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, savepoint.Images, 1, "one container, one capture")
-	capture := savepoint.Images[0]
+	require.Len(t, savepoint.WritableLayers, 1, "one container, one capture")
+	capture := savepoint.WritableLayers[0]
 	assert.Equal(t, "app", capture.Service)
 	assert.Equal(t, 1, capture.Replica)
 	assert.NotEmpty(t, capture.CommittedImageID)
@@ -96,8 +98,8 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	for _, name := range []string{"image.json", "index.json", "manifest.json", "oci-layout"} {
 		assert.Contains(t, keys, filepath.Join(captureDir, name))
 	}
-	assert.Equal(t, capture.SizeBytes, capture.StoredBytes,
-		"the first capture of a cold store reuses nothing")
+	assert.Less(t, capture.StoredBytes, capture.SizeBytes,
+		"the image is kept first, so the writable layer stores only what it adds over it")
 
 	var shared int
 	for _, key := range keys {
@@ -108,8 +110,8 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	assert.Positive(t, shared, "the archive's blobs went to the shared store")
 
 	// The upstream is kept once, by content, beside the blobs it shares with the layer.
-	require.Len(t, savepoint.UpstreamImages, 1)
-	upstream := savepoint.UpstreamImages[0]
+	require.Len(t, savepoint.Images, 1)
+	upstream := savepoint.Images[0]
 	assert.Equal(t, capture.UpstreamImageID, upstream.ID)
 	assert.Contains(t, upstream.Refs, "busybox")
 	assert.True(t, upstream.Stored)
@@ -169,12 +171,13 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
+		ImageBackend:       newImageCopier(store, engine, blobStore),
 		ContainerRebuilder: engine,
+		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
-		DefaultBackend:     model.SnapshotBackendCopy,
+		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &imageCaptureEnv{
@@ -210,4 +213,30 @@ func storeKeys(t *testing.T, store storages.Storager) []string {
 		keys = append(keys, object.Name)
 	}
 	return keys
+}
+
+// newImageCopier is the image backend the DI root builds: both writable layer archivers, and
+// images deduplicated.
+func newImageCopier(store storages.Navigator, engine *dockerclient.Engine, blobStore storages.Storager) *imagecopy.Copier {
+	dedup := dedupcopy.New(blobStore)
+	return imagecopy.NewCopier(store, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
+		model.ImageBackendDedupCopy: dedup,
+		model.ImageBackendFullCopy:  imagefullcopy.New(),
+	}, dedup)
+}
+
+// captureDefaults are the capture defaults the DI root builds from a config that names
+// only the volume backend: every kind captured, layers deduplicated.
+func captureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.CaptureDefaults {
+	return capturepolicy.CaptureDefaults{
+		VolumeBackend:        volumeBackend,
+		WritableLayerBackend: model.ImageBackendDedupCopy,
+		SavepointCapture: capturepolicy.SavepointCaptureSettings{
+			WritableLayers:   true,
+			Images:           true,
+			NamedVolumes:     true,
+			BindVolumes:      true,
+			AnonymousVolumes: true,
+		},
+	}
 }

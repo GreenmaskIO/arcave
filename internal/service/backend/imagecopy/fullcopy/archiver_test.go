@@ -37,7 +37,7 @@ const (
 	archive = "a save archive, verbatim"
 )
 
-func TestLayout_Store(t *testing.T) {
+func TestArchiver_Store(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	dst := newStore(t)
@@ -57,7 +57,7 @@ func TestLayout_Store(t *testing.T) {
 	assert.Equal(t, []imagecopy.Member{{Name: "image.tar", Kind: imagecopy.KindArchive}}, manifest.Members)
 }
 
-func TestLayout_Load(t *testing.T) {
+func TestArchiver_Load(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	store := newStore(t)
@@ -73,7 +73,7 @@ func TestLayout_Load(t *testing.T) {
 	assert.Equal(t, archive, out.String(), "what went in comes back byte for byte")
 }
 
-func TestLayout_Load_RefusesWhatIsNotItsOwn(t *testing.T) {
+func TestArchiver_Load_RefusesWhatIsNotItsOwn(t *testing.T) {
 	tests := []struct {
 		name     string
 		manifest *imagecopy.Manifest
@@ -81,7 +81,7 @@ func TestLayout_Load_RefusesWhatIsNotItsOwn(t *testing.T) {
 		wantErr  error
 	}{
 		{
-			name: "a capture stored by the other layout",
+			name: "a capture stored by the other archiver",
 			manifest: &imagecopy.Manifest{
 				ImageID: imageID, Format: imagecopy.FormatBlobs,
 				Members: []imagecopy.Member{{Name: "index.json", Kind: imagecopy.KindMetadata}},

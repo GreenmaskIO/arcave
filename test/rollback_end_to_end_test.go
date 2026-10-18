@@ -124,9 +124,9 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 		containers["sidecar-1"].Inspect.HostConfig.NetworkMode, "sidecar joins the new db")
 	assert.Equal(t, container.NetworkMode("bridge"), containers["legacy-1"].Inspect.HostConfig.NetworkMode)
 
-	require.Len(t, second.UpstreamImages, 2)
+	require.Len(t, second.Images, 2)
 	var refs []string
-	for _, upstream := range second.UpstreamImages {
+	for _, upstream := range second.Images {
 		refs = append(refs, upstream.Refs...)
 	}
 	assert.Subset(t, refs, []string{"busybox", "alpine:3.22"})
@@ -319,8 +319,8 @@ func (e *imageRollbackEnv) spec(t *testing.T, id model.SavepointID) string {
 }
 
 func upstreamIDs(savepoint model.Savepoint) []model.ImageDigestID {
-	ids := make([]model.ImageDigestID, 0, len(savepoint.UpstreamImages))
-	for _, upstream := range savepoint.UpstreamImages {
+	ids := make([]model.ImageDigestID, 0, len(savepoint.Images))
+	for _, upstream := range savepoint.Images {
 		ids = append(ids, upstream.ID)
 	}
 	return ids

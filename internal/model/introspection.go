@@ -51,9 +51,9 @@ const (
 type SnapshotBackendKind string
 
 const (
-	SnapshotBackendCDC     SnapshotBackendKind = "cdc"
-	SnapshotBackendCopy    SnapshotBackendKind = "copy"
-	SnapshotBackendUnknown SnapshotBackendKind = "unknown"
+	SnapshotBackendCDC      SnapshotBackendKind = "cdc"
+	SnapshotBackendFullCopy SnapshotBackendKind = "fullcopy"
+	SnapshotBackendUnknown  SnapshotBackendKind = "unknown"
 )
 
 // An ObjectID is one path segment: it is the name of a directory in a store and

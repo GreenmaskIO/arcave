@@ -96,24 +96,24 @@ func TestCapturableContainers(t *testing.T) {
 	}
 }
 
-func TestUnresolvedUpstreams(t *testing.T) {
+func TestUnresolvedImages(t *testing.T) {
 	// Arrange
 	res := demoIntrospectionWithContainers()
 	resolved := demoContainerRef()
 	unresolved := model.ContainerRef{Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1)}
 
 	// Act
-	none := unresolvedUpstreams(res, []model.ContainerRef{resolved})
-	got := unresolvedUpstreams(res, []model.ContainerRef{unresolved})
+	none := unresolvedImages(res, []model.ContainerRef{resolved})
+	got := unresolvedImages(res, []model.ContainerRef{unresolved})
 
 	// Assert
 	assert.Nil(t, none)
-	assert.Equal(t, []model.UnresolvedUpstream{{
+	assert.Equal(t, []model.UnresolvedImage{{
 		Service: demoService, Replica: 1, Container: demoContainerName(1), Image: demoBaseImage,
 	}}, got)
 }
 
-func TestUpstreamImages(t *testing.T) {
+func TestImageCaptures(t *testing.T) {
 	// Arrange: two replicas on one upstream, one on an upstream gone from the daemon,
 	// one that cannot be traced.
 	goneID := model.ImageDigestID("sha256:9999999999999999999999999999999999999999999999999999999999999999")
@@ -126,11 +126,54 @@ func TestUpstreamImages(t *testing.T) {
 	}
 
 	// Act
-	got := upstreamImages(res, containers)
+	got := imageCaptures(res, containers)
 
 	// Assert
-	assert.Equal(t, []model.UpstreamImageCaptureRequest{
-		demoUpstreamCaptureRequest(),
-		{Image: model.UpstreamImage{ID: goneID, Refs: []string{"redis:7"}}},
+	assert.Equal(t, []model.ImageCaptureRequest{
+		demoImageCaptureRequest(),
+		{Image: model.Image{ID: goneID, Refs: []string{"redis:7"}}},
 	}, got)
+}
+
+func TestWarnOnComposeImageMismatch(t *testing.T) {
+	const (
+		runningID = model.ImageDigestID("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+		otherID   = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	)
+	tests := []struct {
+		name      string
+		composeID string
+		mediaType string
+		want      bool
+	}{
+		{name: "the image compose created it from", composeID: runningID.String()},
+		{name: "another image", composeID: otherID, mediaType: ocispec.MediaTypeImageManifest, want: true},
+		{name: "a manifest of the index it runs on", composeID: otherID, mediaType: ocispec.MediaTypeImageIndex},
+		{name: "a manifest of a docker manifest list", composeID: otherID, mediaType: dockerManifestList},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			c := model.Container{
+				ID:     "c1",
+				Labels: map[string]string{composeImageLabel: tt.composeID},
+				Inspect: container.InspectResponse{
+					ContainerJSONBase: &container.ContainerJSONBase{Image: runningID.String()},
+				},
+			}
+			inspect := image.InspectResponse{}
+			if tt.mediaType != "" {
+				inspect.Descriptor = &ocispec.Descriptor{MediaType: tt.mediaType}
+			}
+			res := model.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{runningID: inspect}}
+			logs := &syncBuffer{}
+			ctx := zerolog.New(logs).WithContext(context.Background())
+
+			// Act
+			warnOnComposeImageMismatch(ctx, res, c)
+
+			// Assert
+			assert.Equal(t, tt.want, logs.String() != "")
+		})
+	}
 }

@@ -45,7 +45,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		{
 			ObjectID: "volume-named-demo_pgdata",
 			Type:     model.VolumeTypeNamed,
-			Backend:  model.SnapshotBackendCopy,
+			Backend:  model.SnapshotBackendFullCopy,
 			Named: &model.VolumePropertiesNamed{
 				VolumeName: "demo_pgdata",
 				UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
@@ -54,7 +54,7 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		{
 			ObjectID: "volume-anon-cache-1-data",
 			Type:     model.VolumeTypeAnon,
-			Backend:  model.SnapshotBackendCopy,
+			Backend:  model.SnapshotBackendFullCopy,
 			Anon:     &model.VolumePropertiesAnon{Service: "cache", Replica: 1, Target: "/data"},
 		},
 	}

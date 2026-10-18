@@ -40,7 +40,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -80,7 +79,7 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "with-layer"})
 	require.NoError(t, err)
-	require.Len(t, savepoint.Images, 1)
+	require.Len(t, savepoint.WritableLayers, 1)
 
 	// The layer drifts, and so does the volume beside it.
 	env.write(t, env.replicas(t)[0], "drifted")
@@ -90,8 +89,8 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, res.Images, 1)
-	assert.Equal(t, fmt.Sprintf("arcave/%s-app-1-busybox:sp-%s", env.project, savepoint.ID), res.Images[0].ImageRef)
+	require.Len(t, res.WritableLayers, 1)
+	assert.Equal(t, fmt.Sprintf("arcave/%s-app-1-busybox:sp-%s", env.project, savepoint.ID), res.WritableLayers[0].Tag)
 
 	rebuilt := env.replicas(t)
 	require.Len(t, rebuilt, 1)
@@ -99,23 +98,23 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	assert.Equal(t, "original", env.read(t, rebuilt[0], volumeMarker), "the volume beside it")
 
 	// The restored layer names its upstream, so a savepoint taken on it still does.
-	restored, err := env.daemon.ImageInspect(env.ctx, res.Images[0].ImageRef)
+	restored, err := env.daemon.ImageInspect(env.ctx, res.WritableLayers[0].Tag)
 	require.NoError(t, err)
 	require.NotNil(t, restored.Config)
-	assert.Equal(t, savepoint.Images[0].UpstreamImageID.String(), restored.Config.Labels[model.BaseImageIDLabel])
+	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID.String(), restored.Config.Labels[model.BaseImageIDLabel])
 	assert.Equal(t, "busybox", restored.Config.Labels[model.BaseImageRefLabel])
 
 	next, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "on-the-layer"})
 	require.NoError(t, err)
+	require.Len(t, next.WritableLayers, 1)
+	assert.Equal(t, "busybox", next.WritableLayers[0].UpstreamImageRef)
+	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID, next.WritableLayers[0].UpstreamImageID)
 	require.Len(t, next.Images, 1)
-	assert.Equal(t, "busybox", next.Images[0].UpstreamImageRef)
-	assert.Equal(t, savepoint.Images[0].UpstreamImageID, next.Images[0].UpstreamImageID)
-	require.Len(t, next.UpstreamImages, 1)
-	assert.True(t, next.UpstreamImages[0].Stored)
-	assert.Zero(t, next.UpstreamImages[0].StoredBytes, "the upstream is already in the store")
+	assert.True(t, next.Images[0].Stored)
+	assert.Zero(t, next.Images[0].StoredBytes, "the upstream is already in the store")
 	t.Logf("upstream %s: first capture stored %d of %d bytes, second stored %d",
-		next.UpstreamImages[0].ID, savepoint.UpstreamImages[0].StoredBytes,
-		savepoint.UpstreamImages[0].SizeBytes, next.UpstreamImages[0].StoredBytes)
+		next.Images[0].ID, savepoint.Images[0].StoredBytes,
+		savepoint.Images[0].SizeBytes, next.Images[0].StoredBytes)
 }
 
 func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
@@ -131,7 +130,7 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "scaled"})
 	require.NoError(t, err)
-	require.Len(t, savepoint.Images, 2, "one capture per replica")
+	require.Len(t, savepoint.WritableLayers, 2, "one capture per replica")
 
 	env.write(t, env.replicas(t)[0], "drifted")
 	env.write(t, env.replicas(t)[1], "drifted")
@@ -141,7 +140,7 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, res.Images, 2)
+	require.Len(t, res.WritableLayers, 2)
 
 	// A compose service names one image, so the second replica is the one the
 	// per-replica fixup had to rebuild.
@@ -202,12 +201,13 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.NewCopier(store, engine, dedupcopy.New(blobStore)),
+		ImageBackend:       newImageCopier(store, engine, blobStore),
 		ContainerRebuilder: engine,
+		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
-		DefaultBackend:     model.SnapshotBackendCopy,
+		CaptureDefaults:    captureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &imageRollbackEnv{

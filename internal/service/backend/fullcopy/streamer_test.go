@@ -54,7 +54,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 				assert.Equal(t, []string{archiveKey}, objectNames(t, store))
 				assert.Equal(t, payload, readObject(t, store, archiveKey))
 				assert.Equal(t, volume, stat.Volume, "the stat carries the unit it captured")
-				assert.Equal(t, model.SnapshotBackendCopy, stat.Type)
+				assert.Equal(t, model.SnapshotBackendFullCopy, stat.Type)
 				assert.Equal(t, Payload{SizeBytes: int64(len(payload))}, stat.Payload)
 			},
 		},

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
 // errComposeProjectAbsent refuses a capture of a compose project the daemon holds no
@@ -40,10 +42,10 @@ type workingSet struct {
 	spec        []byte
 	waitTimeout time.Duration
 	backends    []model.VolumeSnapshotBackend
-	// containers are the replicas whose writable layer a capture commits.
+	// containers are every replica of the compose project.
 	containers []model.ContainerRef
-	// upstreams are the distinct images the containers' compose file named.
-	upstreams []model.UpstreamImageCaptureRequest
+	// images are the layers and upstreams the capture takes.
+	images imageSet
 	// anonVolumes maps a mount's ObjectID to the docker name behind it — the only
 	// record of what a teardown orphans.
 	anonVolumes map[string]string
@@ -51,7 +53,18 @@ type workingSet struct {
 	skippedMounts          []model.SkippedVolume
 	servicesWithoutVolumes []string
 	replicaGaps            []model.ReplicaGap
-	unresolvedUpstreams    []model.UnresolvedUpstream
+	unresolvedImages       []model.UnresolvedImage
+}
+
+// imageSet is what a capture takes of the images, as the policy decides.
+type imageSet struct {
+	// writableLayers are the replicas whose writable layer a capture commits, each with
+	// its backend; the savepoint id is filled in at the capture.
+	writableLayers []model.WritableLayerCaptureRequest
+	// upstreams are the distinct images the captured services' compose file named.
+	upstreams             []model.ImageCaptureRequest
+	skippedWritableLayers []model.SkippedWritableLayer
+	skippedImages         []model.SkippedImage
 }
 
 // notCovered is what a capture of ws leaves out, killed being the containers the
@@ -62,7 +75,9 @@ func (ws workingSet) notCovered(killed []string) *model.NotCovered {
 		ServicesWithoutVolumes: ws.servicesWithoutVolumes,
 		KilledContainers:       ws.killedContainers(killed),
 		ReplicaGaps:            ws.replicaGaps,
-		UnresolvedUpstreams:    ws.unresolvedUpstreams,
+		UnresolvedImages:       ws.unresolvedImages,
+		WritableLayers:         ws.images.skippedWritableLayers,
+		Images:                 ws.images.skippedImages,
 	}
 	if notCovered.IsEmpty() {
 		return nil
@@ -94,7 +109,15 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 	if err != nil {
 		return workingSet{}, err
 	}
-	return s.workingSetOf(ctx, res, waitTimeout)
+	if err := requireDaemon(ctx, res.Daemon, s.minDaemonMajor); err != nil {
+		return workingSet{}, err
+	}
+	// Before anything else: a bad label fails while the project is still running.
+	capturePolicy, err := capturepolicy.Resolve(ctx, res, s.captureDefaults)
+	if err != nil {
+		return workingSet{}, err
+	}
+	return s.workingSetOf(ctx, res, waitTimeout, capturePolicy)
 }
 
 // introspect reads the compose project as the daemon holds it now.
@@ -107,21 +130,19 @@ func (s *Service) introspect(ctx context.Context) (model.IntrospectionResult, er
 }
 
 // workingSetOf renders and parses back the compose project's spec and builds one backend
-// per live volume; an absent compose project or an empty capture is refused.
+// per live volume, capturing what capturePolicy takes; an absent compose project or an empty
+// capture is refused.
 func (s *Service) workingSetOf(
-	ctx context.Context, res model.IntrospectionResult, waitTimeout time.Duration,
+	ctx context.Context, res model.IntrospectionResult, waitTimeout time.Duration, capturePolicy model.CapturePolicy,
 ) (workingSet, error) {
 	if composeProjectAbsent(res) {
 		return workingSet{}, fmt.Errorf("compose project %q: %w", res.Project.Name, errComposeProjectAbsent)
 	}
 
-	// First, before any work is wasted: with no layer to commit there is nothing to
-	// refuse.
 	containers := capturableContainers(ctx, res)
-	if len(containers) > 0 {
-		if err := requireDaemon(ctx, res.Daemon, s.minDaemonMajor); err != nil {
-			return workingSet{}, err
-		}
+	images, err := s.imageSetOf(ctx, res, capturePolicy, containers)
+	if err != nil {
+		return workingSet{}, err
 	}
 
 	// Before the stop, so a spec that cannot be rebuilt leaves the project running.
@@ -129,6 +150,8 @@ func (s *Service) workingSetOf(
 	if err != nil {
 		return workingSet{}, fmt.Errorf("assembling the compose spec: %w", err)
 	}
+	// The spec says what this capture takes and why, so the savepoint explains itself.
+	stampServices(assembled, capturepolicy.Stamps(res, capturePolicy))
 	spec, err := s.specCodec.Marshal(assembled)
 	if err != nil {
 		return workingSet{}, fmt.Errorf("rendering the compose spec: %w", err)
@@ -140,7 +163,7 @@ func (s *Service) workingSetOf(
 		return workingSet{}, fmt.Errorf("parsing the compose spec: %w", err)
 	}
 
-	volumes, notCovered, err := s.resolveBackupVolumes(ctx, res)
+	volumes, notCovered, err := s.resolveBackupVolumes(ctx, res, capturePolicy)
 	if err != nil {
 		return workingSet{}, err
 	}
@@ -159,14 +182,105 @@ func (s *Service) workingSetOf(
 		waitTimeout: waitTimeout,
 		backends:    backends,
 		containers:  containers,
-		upstreams:   upstreamImages(res, containers),
+		images:      images,
 		anonVolumes: anonymousVolumes(res),
 
 		skippedMounts:          notCovered.Mounts,
 		servicesWithoutVolumes: notCovered.ServicesWithoutVolumes,
 		replicaGaps:            replicaGaps(ctx, res),
-		unresolvedUpstreams:    unresolvedUpstreams(res, containers),
+		unresolvedImages:       unresolvedImages(res, containers),
 	}, nil
+}
+
+// imageSetOf decides the writable layers and images a capture takes.
+func (s *Service) imageSetOf(
+	ctx context.Context,
+	res model.IntrospectionResult,
+	capturePolicy model.CapturePolicy,
+	containers []model.ContainerRef,
+) (imageSet, error) {
+	writableLayers, skippedWritableLayers := writableLayerCaptures(ctx, containers, capturePolicy)
+	upstreamContainers, skippedImages := imageCaptureContainers(ctx, containers, capturePolicy)
+	return imageSet{
+		writableLayers:        writableLayers,
+		upstreams:             imageCaptures(res, upstreamContainers),
+		skippedWritableLayers: skippedWritableLayers,
+		skippedImages:         skippedImages,
+	}, nil
+}
+
+// stampServices adds labels to the services of project they name.
+func stampServices(project *types.Project, labels map[string]map[string]string) {
+	for name, stamp := range labels {
+		svc, ok := project.Services[name]
+		if !ok {
+			continue
+		}
+		svc.Labels = maps.Clone(svc.Labels)
+		if svc.Labels == nil {
+			svc.Labels = types.Labels{}
+		}
+		maps.Copy(svc.Labels, stamp)
+		project.Services[name] = svc
+	}
+}
+
+// safetySnapshotCapturePolicy is the capture policy of the safety snapshot taken before a
+// rollback to restoring: the live labels, as a savepoint reads them, with two exceptions.
+// A label that cannot be parsed warns and falls back to the config instead of failing
+// the rollback, and every volume the rollback overwrites is captured whatever its label
+// says, since the safety snapshot is the only copy of it.
+func (s *Service) safetySnapshotCapturePolicy(
+	ctx context.Context, res model.IntrospectionResult, restoring model.Savepoint,
+) (model.CapturePolicy, error) {
+	capturePolicy, err := capturepolicy.Resolve(ctx, res, s.captureDefaults)
+	if err != nil {
+		if !errors.Is(err, model.ErrInvalidCapturePolicy) {
+			return model.CapturePolicy{}, err
+		}
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("the safety snapshot ignores the labels and follows the config")
+		if capturePolicy, err = capturepolicy.ResolveWithoutLabels(ctx, res, s.captureDefaults); err != nil {
+			return model.CapturePolicy{}, err
+		}
+	}
+	return keepRestored(capturePolicy, res, restoring), nil
+}
+
+// keepRestored captures every live unit record restores into, so the safety snapshot
+// holds what the rollback overwrites.
+func keepRestored(capturePolicy model.CapturePolicy, res model.IntrospectionResult, record model.Savepoint) model.CapturePolicy {
+	restored := map[string]bool{}
+	for _, v := range volumesOf(record) {
+		restored[v.ObjectID] = true
+	}
+	keep := func(d model.VolumeDecision) model.VolumeDecision {
+		d.CaptureDecision = model.ConfigDecision(true, "the rollback restores into it")
+		return d
+	}
+
+	named := maps.Clone(capturePolicy.NamedVolumes)
+	if named == nil {
+		named = map[string]model.VolumeDecision{}
+	}
+	for _, v := range res.Project.Volumes {
+		if d := capturePolicy.DecideNamedVolume(v.Name); restored[v.ObjectID()] && !d.Capture {
+			named[v.Name] = keep(d)
+		}
+	}
+	mounts := maps.Clone(capturePolicy.Mounts)
+	if mounts == nil {
+		mounts = map[model.MountRef]model.VolumeDecision{}
+	}
+	for _, svc := range res.Project.Services {
+		for _, sv := range svc.Volumes {
+			ref := model.MountRef{Service: svc.Name, Replica: sv.Replica, Target: sv.Target}
+			if d := capturePolicy.DecideMount(ref); sv.Type != model.VolumeTypeNamed && restored[sv.ObjectID(svc.Name)] && !d.Capture {
+				mounts[ref] = keep(d)
+			}
+		}
+	}
+	capturePolicy.NamedVolumes, capturePolicy.Mounts = named, mounts
+	return capturePolicy
 }
 
 // composeProjectAbsent reports whether the daemon holds no container of the compose project:

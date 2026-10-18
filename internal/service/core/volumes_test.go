@@ -62,7 +62,7 @@ func TestFindBackupVolumes(t *testing.T) {
 					ObjectID:       "volume-named-demo_pgdata",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeNamed,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Named: &model.VolumePropertiesNamed{
 						VolumeName: "demo_pgdata",
 						UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
@@ -72,14 +72,14 @@ func TestFindBackupVolumes(t *testing.T) {
 					ObjectID:       "volume-service-app-etc-cfg",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeBind,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg", ReadOnly: true},
 				},
 				{
 					ObjectID:       "volume-anon-db-1-data",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeAnon,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Anon:           &model.VolumePropertiesAnon{Service: "db", Replica: 1, Target: "/data", Subpath: "inner"},
 				},
 			},
@@ -104,14 +104,14 @@ func TestFindBackupVolumes(t *testing.T) {
 					ObjectID:       "volume-anon-worker-1-cache",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeAnon,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Anon:           &model.VolumePropertiesAnon{Service: "worker", Replica: 1, Target: "/cache"},
 				},
 				{
 					ObjectID:       "volume-anon-worker-2-cache",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeAnon,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Anon:           &model.VolumePropertiesAnon{Service: "worker", Replica: 2, Target: "/cache"},
 				},
 			},
@@ -143,7 +143,7 @@ func TestFindBackupVolumes(t *testing.T) {
 					ObjectID:       "volume-anon-data-1-data",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeAnon,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Anon:           &model.VolumePropertiesAnon{Service: "data", Replica: 1, Target: "/data"},
 				},
 			},
@@ -176,7 +176,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				ObjectID:       "volume-named-demo_assets",
 				ComposeProject: "demo",
 				Type:           model.VolumeTypeNamed,
-				Backend:        model.SnapshotBackendCopy,
+				Backend:        model.SnapshotBackendFullCopy,
 				Named: &model.VolumePropertiesNamed{
 					VolumeName: "demo_assets",
 					UsedBy: []model.ServiceReference{
@@ -196,8 +196,8 @@ func TestFindBackupVolumes(t *testing.T) {
 				},
 			},
 			want: []model.Volume{
-				{ObjectID: "volume-named-demo_orphan", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "demo_orphan"}},
-				{ObjectID: "volume-named-shared_pgdata", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendCopy, Named: &model.VolumePropertiesNamed{VolumeName: "shared_pgdata"}},
+				{ObjectID: "volume-named-demo_orphan", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendFullCopy, Named: &model.VolumePropertiesNamed{VolumeName: "demo_orphan"}},
+				{ObjectID: "volume-named-shared_pgdata", ComposeProject: "demo", Type: model.VolumeTypeNamed, Backend: model.SnapshotBackendFullCopy, Named: &model.VolumePropertiesNamed{VolumeName: "shared_pgdata"}},
 			},
 		},
 		{
@@ -236,7 +236,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				ObjectID:       "volume-service-app-etc-cfg",
 				ComposeProject: "demo",
 				Type:           model.VolumeTypeBind,
-				Backend:        model.SnapshotBackendCopy,
+				Backend:        model.SnapshotBackendFullCopy,
 				Bind:           &model.VolumePropertiesBind{Service: "app", Target: "/etc/cfg", Source: "/host/cfg"},
 			}},
 			wantSkipped: []model.SkippedVolume{
@@ -279,7 +279,7 @@ func TestFindBackupVolumes(t *testing.T) {
 				ObjectID:       "volume-named-demo_data",
 				ComposeProject: "demo",
 				Type:           model.VolumeTypeNamed,
-				Backend:        model.SnapshotBackendCopy,
+				Backend:        model.SnapshotBackendFullCopy,
 				Named: &model.VolumePropertiesNamed{VolumeName: "demo_data",
 					UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
 			}},
@@ -306,14 +306,14 @@ func TestFindBackupVolumes(t *testing.T) {
 					ObjectID:       "volume-service-api-etc-cfg",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeBind,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Bind:           &model.VolumePropertiesBind{Service: "api", Target: "/etc/cfg", Source: "/host/cfg"},
 				},
 				{
 					ObjectID:       "volume-service-web-etc-cfg",
 					ComposeProject: "demo",
 					Type:           model.VolumeTypeBind,
-					Backend:        model.SnapshotBackendCopy,
+					Backend:        model.SnapshotBackendFullCopy,
 					Bind:           &model.VolumePropertiesBind{Service: "web", Target: "/etc/cfg", Source: "/host/cfg"},
 				},
 			},
@@ -323,7 +323,7 @@ func TestFindBackupVolumes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, notCovered, err := FindBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.SnapshotBackendCopy)
+			got, notCovered, err := FindBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
 
 			// Assert
 			require.NoError(t, err)
@@ -353,7 +353,7 @@ func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 	}}
 
 	// Act
-	got, notCovered, err := FindBackupVolumes(res, model.SnapshotBackendCopy)
+	got, notCovered, err := FindBackupVolumes(res, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
 
 	// Assert
 	require.ErrorIs(t, err, errObjectIDCollision)
@@ -379,7 +379,7 @@ func TestFindBackupVolumes_StampsTheGivenBackend(t *testing.T) {
 	}}
 
 	// Act
-	got, _, err := FindBackupVolumes(res, model.SnapshotBackendCDC)
+	got, _, err := FindBackupVolumes(res, model.CapturePolicy{VolumeBackend: model.SnapshotBackendCDC})
 
 	// Assert
 	require.NoError(t, err)
@@ -404,4 +404,48 @@ func assertOneArmPerType(t *testing.T, volumes []model.Volume) {
 			assert.Equal(t, volumeType == v.Type, isSet, "volume %s of type %s: arm %s", v.ObjectID, v.Type, volumeType)
 		}
 	}
+}
+
+// Each unit takes its policy's decision: a unit left out is reported under its
+// reason and source.
+func TestFindBackupVolumes_AppliesThePolicy(t *testing.T) {
+	// Arrange
+	res := model.IntrospectionResult{Project: model.Project{
+		Name: "demo",
+		Services: []model.Service{
+			{Name: "app", Volumes: []model.ServiceVolume{
+				{Type: model.VolumeTypeBind, RawType: "bind", Source: "/src", Target: "/app"},
+				{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: 1},
+			}},
+			{Name: "db", Volumes: []model.ServiceVolume{
+				{Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata", Target: "/data", VolumeName: "demo_pgdata"},
+			}},
+		},
+		Volumes: []model.NamedVolume{{Key: "pgdata", Name: "demo_pgdata",
+			UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}}},
+	}}
+	excluded := model.VolumeDecision{CaptureDecision: model.CaptureDecision{Source: "a label"}}
+	policy := model.CapturePolicy{
+		VolumeBackend: model.SnapshotBackendFullCopy,
+		Mounts: map[model.MountRef]model.VolumeDecision{
+			{Service: "app", Target: "/app"}: excluded,
+			{Service: "app", Replica: 1, Target: "/cache"}: {
+				CaptureDecision: model.CaptureDecision{Capture: true}, Backend: model.SnapshotBackendCDC},
+		},
+		NamedVolumes: map[string]model.VolumeDecision{"demo_pgdata": excluded},
+	}
+
+	// Act
+	got, notCovered, err := FindBackupVolumes(res, policy)
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "volume-anon-app-1-cache", got[0].ObjectID)
+	assert.Equal(t, model.SnapshotBackendCDC, got[0].Backend)
+	assert.Equal(t, []model.SkippedVolume{
+		{Volume: "demo_pgdata", RawType: "volume", Reason: model.SkipReasonExcluded, Detail: "a label"},
+		{Service: "app", Target: "/app", RawType: "bind", Reason: model.SkipReasonExcluded, Detail: "a label"},
+	}, notCovered.Mounts)
+	assert.Empty(t, notCovered.ServicesWithoutVolumes, "db's volume is reported as excluded, not as missing")
 }

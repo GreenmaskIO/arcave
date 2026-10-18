@@ -112,6 +112,17 @@ func (e *Engine) TagImage(ctx context.Context, imageID model.ImageDigestID, ref 
 	return nil
 }
 
+// ImageRefExists reports whether the daemon holds an image under ref.
+func (e *Engine) ImageRefExists(ctx context.Context, ref string) (bool, error) {
+	if _, err := e.api.ImageInspect(ctx, ref); err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect image %s: %w", ref, err)
+	}
+	return true, nil
+}
+
 // ImageExists reports whether the daemon holds the image. A daemon that answers
 // "not found" is not an error — that is the answer. The argument is a digest, so
 // this is an identity check and not a lookup by name.

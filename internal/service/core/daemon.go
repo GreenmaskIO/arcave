@@ -36,11 +36,12 @@ func requireDaemon(ctx context.Context, info system.Info, minMajor int) error {
 	major, ok := daemonMajor(info.ServerVersion)
 	if !ok {
 		zerolog.Ctx(ctx).Warn().Str("server_version", info.ServerVersion).
-			Msg("cannot read the docker daemon version; assuming it is new enough")
+			Msg("cannot read the daemon version: the engine may not be Docker (Podman and others report " +
+				"their own); assuming its image export is supported")
 		return nil
 	}
 	if major < minMajor {
-		return fmt.Errorf("%w: the daemon is Docker %s; capturing container layers needs Docker %d or newer",
+		return fmt.Errorf("%w: the daemon reports version %s; arcave needs Docker %d or newer",
 			model.ErrUnsupportedDaemon, info.ServerVersion, minMajor)
 	}
 	return nil

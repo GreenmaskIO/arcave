@@ -214,7 +214,7 @@ func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
 		ObjectID:       "volume-named-" + name,
 		ComposeProject: itProject,
 		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendCopy,
+		Backend:        model.SnapshotBackendFullCopy,
 		Named:          &model.VolumePropertiesNamed{VolumeName: name, UsedBy: usedBy},
 	}
 }

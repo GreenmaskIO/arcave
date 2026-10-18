@@ -28,7 +28,10 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // cdcOptions is the translation that keeps internal/config free of any package
@@ -498,4 +501,35 @@ func TestInitDockerClient_RejectsAnUnbuildableClient(t *testing.T) {
 
 	// Assert
 	require.ErrorContains(t, err, "DOCKER_CUSTOM_HEADERS")
+}
+
+// The config's capture keys reach the policy as written; one left unset is captured,
+// because ApplyDefaults sets it.
+func TestCaptureDefaults(t *testing.T) {
+	// Arrange
+	cfg := config.Config{
+		Snapshot:       config.Snapshot{Backend: config.SnapshotBackendCDC},
+		WritableLayers: config.WritableLayers{Backend: "fullcopy"},
+		Capture: config.Capture{
+			WritableLayers: utils.New(false),
+			Volumes:        config.CaptureVolumes{Bind: utils.New(false), Named: utils.New(true)},
+		},
+	}
+	cfg.ApplyDefaults(t.TempDir())
+
+	// Act
+	got := captureDefaults(cfg)
+
+	// Assert
+	assert.Equal(t, capturepolicy.CaptureDefaults{
+		VolumeBackend:        model.SnapshotBackendCDC,
+		WritableLayerBackend: model.ImageBackendFullCopy,
+		SavepointCapture: capturepolicy.SavepointCaptureSettings{
+			WritableLayers:   false,
+			Images:           true,
+			NamedVolumes:     true,
+			BindVolumes:      false,
+			AnonymousVolumes: true,
+		},
+	}, got)
 }

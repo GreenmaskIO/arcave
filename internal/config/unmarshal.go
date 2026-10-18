@@ -27,7 +27,7 @@ import (
 func Unmarshal(v *viper.Viper, projectRoot string) (Config, error) {
 	cfg := NewConfig()
 	if err := v.Unmarshal(&cfg, rejectUnknownKeys); err != nil {
-		return Config{}, fmt.Errorf("parse config: %w", err)
+		return Config{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	cfg.ApplyDefaults(projectRoot)
 	if err := cfg.Validate(); err != nil {

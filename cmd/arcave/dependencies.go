@@ -48,9 +48,11 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
+	imagefullcopy "github.com/greenmaskio/arcave/internal/service/backend/imagecopy/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -58,6 +60,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
@@ -202,16 +205,18 @@ func initAllDependencies(
 		VolumeRemover:    engine,
 		ImageBackend:     imageBackend,
 		MinDaemonMajor:   dedupcopy.MinDaemonMajor,
+		Concurrency:      cfg.Common.Concurrency,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: engine,
+		ImageLookup:        engine,
 		BackendRegistry:    backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
-		Inflight:       inflightrepo.New(projectPath),
-		Store:          composeProjectStore,
-		DefaultBackend: cfg.Snapshot.BackendKind(),
-		Session:        session.ID,
-		ComposeProject: composeProject,
+		Inflight:        inflightrepo.New(projectPath),
+		Store:           composeProjectStore,
+		CaptureDefaults: captureDefaults(cfg),
+		Session:         session.ID,
+		ComposeProject:  composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
 		Sessions: sessions,
 	})
@@ -546,12 +551,32 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	return dockerCli, apiClient, nil
 }
 
-// newImageBackend builds the one image backend: layers are always deduplicated,
-// which needs a daemon of Docker 25 or newer.
+// newImageBackend builds the image backend over both archivers a writable layer may name;
+// images are always deduplicated, which needs a daemon of Docker 25 or newer.
 func newImageBackend(composeProjectStore storages.Navigator, engine *docker.Engine) (*imagecopy.Copier, error) {
 	blobStore, err := composeProjectStore.SubStorage(dedupcopy.BlobPrefix, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}
-	return imagecopy.NewCopier(composeProjectStore, engine, dedupcopy.New(blobStore)), nil
+	dedup := dedupcopy.New(blobStore)
+	return imagecopy.NewCopier(composeProjectStore, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
+		model.ImageBackendDedupCopy: dedup,
+		model.ImageBackendFullCopy:  imagefullcopy.New(),
+	}, dedup), nil
+}
+
+// captureDefaults is what the config says of a unit no arcave.* label names. The
+// capture keys are read as ApplyDefaults left them: every one set.
+func captureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
+	return capturepolicy.CaptureDefaults{
+		VolumeBackend:        cfg.Snapshot.BackendKind(),
+		WritableLayerBackend: cfg.WritableLayers.BackendKind(),
+		SavepointCapture: capturepolicy.SavepointCaptureSettings{
+			WritableLayers:   utils.Value(cfg.Capture.WritableLayers),
+			Images:           utils.Value(cfg.Capture.Images),
+			NamedVolumes:     utils.Value(cfg.Capture.Volumes.Named),
+			BindVolumes:      utils.Value(cfg.Capture.Volumes.Bind),
+			AnonymousVolumes: utils.Value(cfg.Capture.Volumes.Anonymous),
+		},
+	}
 }

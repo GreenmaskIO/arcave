@@ -62,7 +62,20 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, ProgressLog, cfg.Compose.Progress)
 				assert.Equal(t, LeftoverVolumesOverwrite, cfg.Rollback.LeftoverVolumes)
 				assert.Equal(t, model.LeftoverVolumesOverwrite, cfg.Rollback.Policy())
+				assert.Equal(t, DefaultConcurrency, cfg.Common.Concurrency)
 			},
+		},
+		{
+			name: "the common section is read",
+			yaml: "common:\n  concurrency: 2\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, 2, cfg.Common.Concurrency)
+			},
+		},
+		{
+			name:       "a negative concurrency is rejected",
+			yaml:       "common:\n  concurrency: -1\n",
+			wantErrMsg: "common.concurrency must be at least 1, got -1",
 		},
 		{
 			name: "a rollback may refuse leftover volumes",
@@ -251,6 +264,50 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: "unsupported snapshot.backend",
 		},
 		{
+			name: "layers are deduplicated by default",
+			yaml: "",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, model.ImageBackendDedupCopy, cfg.WritableLayers.BackendKind())
+			},
+		},
+		{
+			name: "writable_layers.backend fullcopy is taken",
+			yaml: "writable_layers:\n  backend: fullcopy\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, model.ImageBackendFullCopy, cfg.WritableLayers.BackendKind())
+			},
+		},
+		{
+			name: "every kind is captured by default",
+			yaml: "",
+			verify: func(t *testing.T, cfg Config) {
+				for _, on := range []*bool{cfg.Capture.WritableLayers, cfg.Capture.Images,
+					cfg.Capture.Volumes.Named, cfg.Capture.Volumes.Bind, cfg.Capture.Volumes.Anonymous} {
+					require.NotNil(t, on)
+					assert.True(t, *on)
+				}
+			},
+		},
+		{
+			name: "a kind left out stays out, the rest default on",
+			yaml: "capture:\n  volumes:\n    bind: false\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.False(t, *cfg.Capture.Volumes.Bind)
+				assert.True(t, *cfg.Capture.Volumes.Named)
+				assert.True(t, *cfg.Capture.WritableLayers)
+			},
+		},
+		{
+			name:       "an unknown kind is rejected",
+			yaml:       "capture:\n  volumes:\n    tmpfs: true\n",
+			wantErrMsg: "tmpfs",
+		},
+		{
+			name:       "an image backend arcave does not know is rejected",
+			yaml:       "writable_layers:\n  backend: copy\n",
+			wantErrMsg: "unsupported writable_layers.backend",
+		},
+		{
 			name:       "an unknown key under backends is rejected",
 			yaml:       "backends:\n  cdc:\n    password: hunter2\n",
 			wantErrMsg: "password",
@@ -267,6 +324,7 @@ func TestUnmarshal(t *testing.T) {
 
 			// Assert
 			if tt.wantErrMsg != "" {
+				require.ErrorIs(t, err, ErrInvalid)
 				require.ErrorContains(t, err, tt.wantErrMsg)
 			} else {
 				require.NoError(t, err)
@@ -310,6 +368,7 @@ func TestUnmarshal_DefaultsTheProjectNameFromTheDirectory(t *testing.T) {
 
 			// Assert
 			if tt.wantErrMsg != "" {
+				require.ErrorIs(t, err, ErrInvalid)
 				require.ErrorContains(t, err, tt.wantErrMsg)
 				return
 			}

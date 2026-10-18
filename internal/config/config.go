@@ -28,6 +28,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -39,6 +40,10 @@ import (
 
 const fileName = "config.yaml"
 
+// ErrInvalid reports a config value arcave cannot act on; every error Unmarshal
+// returns wraps it.
+var ErrInvalid = errors.New("invalid config")
+
 // StorageTypeDirectory names the local-filesystem arm of the storage union. It
 // is the only arm implemented today; the union exists so adding "s3" is a new
 // arm rather than a new set of top-level keys.
@@ -47,10 +52,10 @@ const StorageTypeDirectory = "directory"
 // The tokens snapshot.backend accepts.
 const (
 	// SnapshotBackendFullCopy stores each mount's tar stream verbatim.
-	SnapshotBackendFullCopy = "fullcopy"
+	SnapshotBackendFullCopy = string(model.SnapshotBackendFullCopy)
 	// SnapshotBackendCDC captures into a restic repository that outlives any one
 	// savepoint, writing only the chunks that changed.
-	SnapshotBackendCDC = "cdc"
+	SnapshotBackendCDC = string(model.SnapshotBackendCDC)
 )
 
 // The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
@@ -146,6 +151,10 @@ const (
 	ProgressQuiet = "quiet"
 )
 
+// DefaultConcurrency is how many volumes, writable layers or images one workflow
+// moves at once.
+const DefaultConcurrency = 5
+
 // The tokens rollback.leftover_volumes accepts.
 const (
 	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
@@ -160,12 +169,15 @@ const (
 // One section per subsystem: a new subsystem adds a section rather than another
 // top-level key.
 type Config struct {
-	Project  Project  `yaml:"project" mapstructure:"project"`
-	Docker   Docker   `yaml:"docker,omitempty" mapstructure:"docker"`
-	Compose  Compose  `yaml:"compose" mapstructure:"compose"`
-	Storage  Storage  `yaml:"storage" mapstructure:"storage"`
-	Snapshot Snapshot `yaml:"snapshot" mapstructure:"snapshot"`
-	Rollback Rollback `yaml:"rollback" mapstructure:"rollback"`
+	Project        Project        `yaml:"project" mapstructure:"project"`
+	Common         Common         `yaml:"common" mapstructure:"common"`
+	Docker         Docker         `yaml:"docker,omitempty" mapstructure:"docker"`
+	Compose        Compose        `yaml:"compose" mapstructure:"compose"`
+	Storage        Storage        `yaml:"storage" mapstructure:"storage"`
+	Snapshot       Snapshot       `yaml:"snapshot" mapstructure:"snapshot"`
+	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
+	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
+	Rollback       Rollback       `yaml:"rollback" mapstructure:"rollback"`
 	// Backends holds the settings of the individual snapshot backends, one
 	// section per backend, present only for the backends a project configures.
 	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
@@ -185,7 +197,22 @@ type Project struct {
 // directory normalized to nothing and the user has to say what to call it.
 func (p Project) Validate() error {
 	if err := model.ArcaveProjectName(p.Name).Validate(); err != nil {
-		return fmt.Errorf("project.name: %w (set project.name explicitly)", err)
+		return fmt.Errorf("%w: project.name: %w (set project.name explicitly)", ErrInvalid, err)
+	}
+	return nil
+}
+
+// Common holds the settings every workflow shares.
+type Common struct {
+	// Concurrency caps how many volumes, writable layers or images a capture or a
+	// restore works at once.
+	Concurrency int `yaml:"concurrency" mapstructure:"concurrency"`
+}
+
+// Validate rejects a concurrency no workflow could run with.
+func (c Common) Validate() error {
+	if c.Concurrency < 1 {
+		return fmt.Errorf("%w: common.concurrency must be at least 1, got %d", ErrInvalid, c.Concurrency)
 	}
 	return nil
 }
@@ -243,16 +270,16 @@ type Compose struct {
 // is not on offer: it is the failure mode the bound exists to turn into an error.
 func (c Compose) Validate() error {
 	if c.WaitTimeout <= 0 {
-		return fmt.Errorf("compose.wait_timeout must be a positive duration, got %s", c.WaitTimeout)
+		return fmt.Errorf("%w: compose.wait_timeout must be a positive duration, got %s", ErrInvalid, c.WaitTimeout)
 	}
 	if c.StopTimeout < 0 {
-		return fmt.Errorf("compose.stop_timeout must not be negative, got %s", c.StopTimeout)
+		return fmt.Errorf("%w: compose.stop_timeout must not be negative, got %s", ErrInvalid, c.StopTimeout)
 	}
 	switch c.Progress {
 	case ProgressLog, ProgressTTY, ProgressQuiet:
 		return nil
 	default:
-		return fmt.Errorf("unsupported compose.progress %q (supported: %s, %s, %s)",
+		return fmt.Errorf("%w: unsupported compose.progress %q (supported: %s, %s, %s)", ErrInvalid,
 			c.Progress, ProgressLog, ProgressTTY, ProgressQuiet)
 	}
 }
@@ -279,14 +306,14 @@ func (s Storage) Validate() error {
 	switch s.Type {
 	case StorageTypeDirectory:
 		if s.Directory == nil {
-			return fmt.Errorf("storage.type is %q but no storage.directory section is present", s.Type)
+			return fmt.Errorf("%w: storage.type is %q but no storage.directory section is present", ErrInvalid, s.Type)
 		}
 		if s.Directory.Path == "" {
-			return fmt.Errorf("storage.directory.path is required")
+			return fmt.Errorf("%w: storage.directory.path is required", ErrInvalid)
 		}
 		return nil
 	default:
-		return fmt.Errorf("unsupported storage.type %q (supported: %s)", s.Type, StorageTypeDirectory)
+		return fmt.Errorf("%w: unsupported storage.type %q (supported: %s)", ErrInvalid, s.Type, StorageTypeDirectory)
 	}
 }
 
@@ -315,7 +342,7 @@ func (s Snapshot) Validate() error {
 	case SnapshotBackendFullCopy, SnapshotBackendCDC:
 		return nil
 	default:
-		return fmt.Errorf("unsupported snapshot.backend %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported snapshot.backend %q (supported: %s, %s)", ErrInvalid,
 			s.Backend, SnapshotBackendFullCopy, SnapshotBackendCDC)
 	}
 }
@@ -325,14 +352,44 @@ func (s Snapshot) Validate() error {
 // SnapshotBackendUnknown, which the registry refuses by name; Validate has
 // rejected it long before.
 func (s Snapshot) BackendKind() model.SnapshotBackendKind {
-	switch s.Backend {
-	case SnapshotBackendFullCopy:
-		return model.SnapshotBackendCopy
-	case SnapshotBackendCDC:
-		return model.SnapshotBackendCDC
-	default:
-		return model.SnapshotBackendUnknown
+	kind, _ := model.ParseVolumeBackend(s.Backend)
+	return kind
+}
+
+// WritableLayers selects the layout a new savepoint stores writable layers in, unless a
+// service's arcave.writable-layer.backend label says otherwise.
+type WritableLayers struct {
+	Backend string `yaml:"backend" mapstructure:"backend"`
+}
+
+// Validate rejects a layout arcave does not know.
+func (i WritableLayers) Validate() error {
+	if _, ok := model.ParseImageBackend(i.Backend); !ok {
+		return fmt.Errorf("%w: unsupported writable_layers.backend %q (supported: %s, %s)", ErrInvalid,
+			i.Backend, model.ImageBackendDedupCopy, model.ImageBackendFullCopy)
 	}
+	return nil
+}
+
+// BackendKind is the configured layout as the kind a capture carries.
+func (i WritableLayers) BackendKind() model.ImageBackendKind {
+	kind, _ := model.ParseImageBackend(i.Backend)
+	return kind
+}
+
+// Capture says, by kind of unit, what a savepoint takes when no arcave.* label says
+// otherwise. It names no service or volume: those are the compose file's, by label.
+type Capture struct {
+	WritableLayers *bool          `yaml:"writable_layers" mapstructure:"writable_layers"`
+	Images         *bool          `yaml:"images" mapstructure:"images"`
+	Volumes        CaptureVolumes `yaml:"volumes" mapstructure:"volumes"`
+}
+
+// CaptureVolumes says which kinds of volume a savepoint takes.
+type CaptureVolumes struct {
+	Named     *bool `yaml:"named" mapstructure:"named"`
+	Bind      *bool `yaml:"bind" mapstructure:"bind"`
+	Anonymous *bool `yaml:"anonymous" mapstructure:"anonymous"`
 }
 
 // Rollback configures the rollback workflow.
@@ -348,7 +405,7 @@ func (r Rollback) Validate() error {
 	case LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
 		return nil
 	default:
-		return fmt.Errorf("unsupported rollback.leftover_volumes %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported rollback.leftover_volumes %q (supported: %s, %s)", ErrInvalid,
 			r.LeftoverVolumes, LeftoverVolumesOverwrite, LeftoverVolumesRefuse)
 	}
 }
@@ -406,39 +463,39 @@ func (c CDCBackend) Validate() error {
 	switch c.RestoreMode {
 	case RestoreModeWipe, RestoreModeIncremental:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.restore_mode %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.restore_mode %q (supported: %s, %s)", ErrInvalid,
 			c.RestoreMode, RestoreModeWipe, RestoreModeIncremental)
 	}
 	switch c.Overwrite {
 	case OverwriteIfChanged, OverwriteAlways:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.overwrite %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.overwrite %q (supported: %s, %s)", ErrInvalid,
 			c.Overwrite, OverwriteIfChanged, OverwriteAlways)
 	}
 	if c.Image == "" {
-		return fmt.Errorf("backends.cdc.image is required")
+		return fmt.Errorf("%w: backends.cdc.image is required", ErrInvalid)
 	}
 	if c.ServerAddress == "" {
-		return fmt.Errorf("backends.cdc.server_address is required")
+		return fmt.Errorf("%w: backends.cdc.server_address is required", ErrInvalid)
 	}
 	// The address is bound, so it must split into host and port here rather than
 	// at listen time, halfway through wiring a command.
 	if _, _, err := net.SplitHostPort(c.ServerAddress); err != nil {
-		return fmt.Errorf("backends.cdc.server_address %q is not a host:port address: %w", c.ServerAddress, err)
+		return fmt.Errorf("%w: backends.cdc.server_address %q is not a host:port address: %w", ErrInvalid, c.ServerAddress, err)
 	}
 	switch c.ServerScheme {
 	case SchemeHTTP, SchemeHTTPS:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.server_scheme %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.server_scheme %q (supported: %s, %s)", ErrInvalid,
 			c.ServerScheme, SchemeHTTP, SchemeHTTPS)
 	}
 	if c.ContainerHost == "" {
-		return fmt.Errorf("backends.cdc.container_host is required")
+		return fmt.Errorf("%w: backends.cdc.container_host is required", ErrInvalid)
 	}
 	switch c.NetworkMode {
 	case NetworkModeAuto, NetworkModeHost, NetworkModeBridge:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.network_mode %q (supported: %s, %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.network_mode %q (supported: %s, %s, %s)", ErrInvalid,
 			c.NetworkMode, NetworkModeAuto, NetworkModeHost, NetworkModeBridge)
 	}
 	return nil
@@ -474,6 +531,9 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 		// one place that says "name the project explicitly".
 		c.Project.Name = model.NormalizeArcaveProjectName(filepath.Base(projectRoot)).String()
 	}
+	if c.Common.Concurrency == 0 {
+		c.Common.Concurrency = DefaultConcurrency
+	}
 	if c.Compose.WaitTimeout == 0 {
 		c.Compose.WaitTimeout = DefaultWaitTimeout
 	}
@@ -505,6 +565,24 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	}
 	if c.Snapshot.Backend == "" {
 		c.Snapshot.Backend = SnapshotBackendFullCopy
+	}
+	if c.WritableLayers.Backend == "" {
+		c.WritableLayers.Backend = string(model.ImageBackendDedupCopy)
+	}
+	if c.Capture.WritableLayers == nil {
+		c.Capture.WritableLayers = utils.New(true)
+	}
+	if c.Capture.Images == nil {
+		c.Capture.Images = utils.New(true)
+	}
+	if c.Capture.Volumes.Named == nil {
+		c.Capture.Volumes.Named = utils.New(true)
+	}
+	if c.Capture.Volumes.Bind == nil {
+		c.Capture.Volumes.Bind = utils.New(true)
+	}
+	if c.Capture.Volumes.Anonymous == nil {
+		c.Capture.Volumes.Anonymous = utils.New(true)
 	}
 	if c.Rollback.LeftoverVolumes == "" {
 		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
@@ -565,6 +643,9 @@ func (c *Config) Validate() error {
 	if err := c.Project.Validate(); err != nil {
 		return err
 	}
+	if err := c.Common.Validate(); err != nil {
+		return err
+	}
 	if err := c.Compose.Validate(); err != nil {
 		return err
 	}
@@ -572,6 +653,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Snapshot.Validate(); err != nil {
+		return err
+	}
+	if err := c.WritableLayers.Validate(); err != nil {
 		return err
 	}
 	if err := c.Rollback.Validate(); err != nil {
