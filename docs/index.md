@@ -24,7 +24,7 @@ Your code is versioned. The state your environment accumulates is not — and th
 
 **Any compose project.** Postgres, MySQL, Kafka, Redis, MinIO, your own services — whatever is in your compose file. There is no allowlist, because arcave reads the project your daemon is running rather than guessing at what the services are.
 
-Bring the project up, get it to a production-like state with real data, save it — and come back to that state in seconds instead of rebuilding it. Try a migration, an experiment, an agent session; when it goes wrong, go back. People and agents do the same thing at different speeds.
+Bring the project up, get it to a [production-like state with real data](use_cases/prod_like_data.md), save it — and come back to that state in seconds instead of rebuilding it. Try a migration, an experiment, an agent session; when it goes wrong, go back. People and agents do the same thing at different speeds.
 
 ```shell title="The whole idea"
 arcave savepoint create before-migration

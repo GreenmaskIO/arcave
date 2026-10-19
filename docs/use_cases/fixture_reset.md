@@ -20,6 +20,8 @@ docker compose up -d
 arcave savepoint create clean --description "seeded baseline, do not delete"
 ```
 
+The seed does not have to be a script. A masked copy of production gives the demo and the suite realistic data — see [Prod-like data](prod_like_data.md).
+
 ## Reset for the rest of the project's life
 
 ```shell
@@ -85,6 +87,7 @@ A dump-based reset gets the first of those four.
 
 ## Related docs
 
+* [Prod-like data](prod_like_data.md) — seed with a masked production copy instead of a script.
 * [Testing destructive migrations](migration_testing.md) — the same reset around a schema change.
 * [How arcave works](../how_it_works.md#what-a-savepoint-covers) — precisely what is and is not captured.
 * [savepoint remove](../reference/cli/savepoint_remove.md) — retention rules and `--dry-run`.

@@ -1,6 +1,6 @@
 ---
 title: Use cases
-description: What arcave savepoints are good for — agent iteration loops, environment branching, destructive migration testing and fixture resets — and the three properties that make them work.
+description: What arcave savepoints are good for — prod-like data, agent iteration loops, environment branching, destructive migration testing and fixture resets — and the three properties that make them work.
 keywords: [arcave use cases, savepoint workflow, agent development loop, database branching, migration testing, docker compose, Open-Source, Greenmask]
 ---
 
@@ -28,6 +28,10 @@ arcave savepoint remove <ID>         # prune
 Four commands. Every workflow below is a way of arranging them. When the savepoints need more than one line — a branch per feature, a baseline kept apart — the [`arcave session`](../reference/cli/session.md) commands add independent lines of savepoints beside the default one; see [Sessions and branching](../sessions.md).
 
 ## A workflow for every situation
+
+### [Prod-like data](prod_like_data.md)
+
+Every workflow below is only as good as the state it saves. Load a masked copy of production — with Greenmask for PostgreSQL, or any seeding approach — save it once, and reuse it everywhere.
 
 ### [Agent iteration loops](agent_loops.md)
 
