@@ -35,7 +35,10 @@ var (
 	DefaultLogFormat = LogFormatText
 )
 
-var errUnknownLogFormat = fmt.Errorf("unknown log format")
+var (
+	errUnknownLogLevel  = fmt.Errorf("unknown log level")
+	errUnknownLogFormat = fmt.Errorf("unknown log format")
+)
 
 func NewLogger(levelName string, logFormat string) (zerolog.Logger, error) {
 
@@ -48,7 +51,7 @@ func NewLogger(levelName string, logFormat string) (zerolog.Logger, error) {
 	case zerolog.LevelWarnValue:
 		logLevel = zerolog.WarnLevel
 	default:
-		return zerolog.Logger{}, fmt.Errorf("log level %s: %w", levelName, errUnknownLogFormat)
+		return zerolog.Logger{}, fmt.Errorf("log level %s: %w", levelName, errUnknownLogLevel)
 	}
 
 	var formatWriter io.Writer
@@ -57,6 +60,10 @@ func NewLogger(levelName string, logFormat string) (zerolog.Logger, error) {
 		formatWriter = os.Stderr
 	case LogFormatText:
 		formatWriter = zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	default:
+		// zerolog discards everything written to a nil writer, so an unknown
+		// format would otherwise silence every log line.
+		return zerolog.Logger{}, fmt.Errorf("log format %s: %w", logFormat, errUnknownLogFormat)
 	}
 
 	if levelName == zerolog.LevelDebugValue {

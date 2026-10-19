@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every key of .arcave/config.yaml — project, docker, compose, storage (directory, s3, azure, ssh), snapshot, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
+description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
 keywords: [arcave configuration, config.yaml, snapshot backend, cdc, restic, storage, s3, azure, sftp, docker compose]
 ---
 
@@ -13,6 +13,8 @@ It is the one file arcave reads through the operating system rather than through
 ```yaml title="A config with every section present"
 project:
     name: myapp
+common:
+    concurrency: 5
 docker:
     host: unix:///var/run/docker.sock
 compose:
@@ -25,6 +27,17 @@ storage:
         path: .arcave/storage
 snapshot:
     backend: cdc
+writable_layers:
+    backend: dedupcopy
+capture:
+    writable_layers: true
+    images: true
+    volumes:
+        named: true
+        bind: true
+        anonymous: true
+rollback:
+    leftover_volumes: overwrite
 backends:
     cdc:
         restore_mode: incremental
@@ -42,10 +55,12 @@ log:
 **An unknown key is an error, not a value quietly ignored.** A typo fails the command rather than falling back to a default you did not choose:
 
 ```text
-resolve config: unmarshal config: parse config: decoding failed due to the following error(s):
+resolve config: unmarshal config: invalid config: decoding failed due to the following error(s):
 
 'project' has invalid keys: nam
 ```
+
+Every config error is reported after that same `resolve config: unmarshal config: invalid config: ` prefix, which the examples below leave out. The `docker` and `log` errors are not config errors and are quoted whole.
 
 arcave never rewrites this file on its own; that would clobber a path you set deliberately. `arcave init --override` is the one command that replaces it.
 
@@ -60,7 +75,7 @@ Four sources, highest first:
 4.  The flag's default
 ```
 
-Only **bound** flags feed the config. `--project-name`, `--config`, `--override`, `--dry-run`, `init --name` and `savepoint create --name` are unbound on purpose: they steer one run rather than describing the project. `init` binds none of its flags: it writes a template, and reads neither the environment nor the existing file.
+Only **bound** flags feed the config. `--project-name`, `--session`, `--config`, `--override`, `--dry-run`, `init --name` and `savepoint create --name` are unbound on purpose: they steer one run rather than describing the project. `init` binds none of its flags: it writes a template, and reads neither the environment nor the existing file.
 
 Which keys an environment variable can reach is narrower than it looks — [Environment variables](environment_variables.md) owns that.
 
@@ -75,6 +90,18 @@ The storage tenant every store root is scoped by.
 Validated against an allowlist: it starts with `[a-z0-9]` and continues with `[a-z0-9_-]`. The directory name is normalised into that charset — `MyApp` becomes `myapp` — and a name that normalises to nothing is reported rather than guessed at.
 
 The compose project is **not** here. It is named per invocation with `-p/--project-name`, because one project directory may hold several compose projects and a persisted name would pin arcave to one of them.
+
+## `common`
+
+Settings every workflow shares.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `common.concurrency` | int | `5` | How many volumes, writable layers or images a capture or a restore works on at once. |
+
+```text
+common.concurrency must be at least 1, got -1
+```
 
 ## `docker`
 
@@ -92,6 +119,13 @@ How arcave reaches the daemon. Honoured by both halves of the Docker client, so 
 | `docker.tls_verify` | bool | `false` | Verify the daemon's TLS certificate. |
 
 The three `*_file` keys exist for certificates that do not follow the `cert_path` naming convention.
+
+`docker.host` and `docker.context` both name a daemon, so set at most one; a client certificate needs both halves. These are checked when a command connects, not when the config is read:
+
+```text
+initialise docker client: docker.host and docker.context are mutually exclusive: "remote" already names a daemon, so remove one of the two
+initialise docker client: docker.cert_file is set but docker.key_file is missing: a client certificate needs both, or set docker.cert_path to supply the pair from one directory
+```
 
 ## `compose`
 
@@ -176,8 +210,9 @@ An Azure Blob Storage container.
 | `storage.azure.prefix` | string | `""` | A blob prefix inside the container. |
 | `storage.azure.access_key` | string | `""` | **Secret.** The shared key. |
 | `storage.azure.sas_token` | string | `""` | **Secret.** Used when there is no `access_key`; with neither, `DefaultAzureCredential`. |
-| `storage.azure.endpoint` | string | `""` | The service URL, path-style: `http://azurite:10000/devstoreaccount1`. Must carry no query string — a SAS token goes in `sas_token`. |
-| `storage.azure.endpoint_suffix`, `environment_name` | string | `AzurePublicCloud` | A sovereign cloud. |
+| `storage.azure.endpoint` | string | `""` | The service URL, path-style: `http://azurite:10000/devstoreaccount1`. Must carry no user info or query string — a SAS token goes in `sas_token`. |
+| `storage.azure.endpoint_suffix` | string | `""` | A sovereign cloud's endpoint suffix. |
+| `storage.azure.environment_name` | string | `AzurePublicCloud` | A sovereign cloud by name. |
 | `storage.azure.max_retries` | int | `3` | Retries after a failed try; negative for none. |
 
 ### `storage.ssh`
@@ -195,7 +230,13 @@ A directory on an SFTP server.
 | `storage.ssh.prefix` | string | `""` | The remote directory; relative resolves against the user's home. |
 | `storage.ssh.connect_timeout` | duration | `30s` | Bounds the TCP dial and the SSH handshake. |
 
-The server's host key is **not** verified: use `ssh` on a network you trust.
+The server's host key is **not** verified — arcave warns `ssh storage does not verify the server's host key` — so use `ssh` on a network you trust.
+
+```text
+storage.ssh needs password or private_key_path
+storage.ssh.private_key_passphrase needs private_key_path
+storage.ssh.connect_timeout must not be negative, got -1s
+```
 
 ### Layout and reachability
 
@@ -212,6 +253,8 @@ Every command that opens the store reaches it first — a `HEAD` on the bucket, 
 ```text
 storage.type is "s3" but no storage.s3 section is present
 storage.s3.bucket is required
+storage.s3.endpoint must not carry user info; set the credential fields instead
+storage.azure.endpoint must not carry a query string; put a SAS token in storage.azure.sas_token
 unsupported storage.type "gcs" (supported: directory, s3, azure, ssh)
 ```
 
@@ -226,6 +269,7 @@ Any string value may name an environment variable, expanded when the config is r
 | Form | Expands to |
 |---|---|
 | `${VAR}`, `$VAR` | The variable's value. **Unset is an error**, never an empty string. |
+| `${VAR:offset}`, `${VAR:offset:length}` | A substring of the value. Unset is an error. |
 | `${VAR:-default}` | The value, or `default` when unset or empty. `${VAR:-}` says "empty" explicitly. |
 | `${VAR-default}` | The value, or `default` when unset. |
 | `${VAR?message}` | The value; unset fails with `message`. |
@@ -238,6 +282,12 @@ storage:
     bucket: savepoints
     access_key_id: AKIAEXAMPLE
     secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+```
+
+An unset variable fails the command:
+
+```text
+environment variable AWS_SECRET_ACCESS_KEY is not set (write ${AWS_SECRET_ACCESS_KEY:-} for an empty default, or $$ for a literal $)
 ```
 
 A value with a `$` that is not a reference — a password like `pa$word` — is written `pa$$word`. That holds wherever the value comes from: an `ARCAVE_*` variable or a flag is interpolated the same way as the file, so `ARCAVE_STORAGE_SSH_PASSWORD='pa$$word'`.
@@ -258,10 +308,54 @@ A rollback reads the backend out of the record it is applying, so changing this 
 | What a second savepoint costs | Full volume size, again | Only the chunks that changed |
 | What it needs | Nothing beyond Docker | Pulls and runs `restic/restic` containers, which must reach a loopback port on your host |
 
-Writable layers are deduplicated whichever backend is selected — that is not a property of this key. See [Storage layout](storage_layout.md#shared-blobs).
+This key covers volumes only; writable layers are [`writable_layers`](#writable_layers). A label can pick another backend for one volume — see [Capture labels](capture_labels.md).
 
 ```text
 unsupported snapshot.backend "restic" (supported: fullcopy, cdc)
+```
+
+## `writable_layers`
+
+How a **new** savepoint stores each container's writable layer.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `writable_layers.backend` | string | `dedupcopy` | `dedupcopy` or `fullcopy`. |
+
+`dedupcopy` splits each committed layer into the blob store every savepoint of the compose project shares, so a base layer every savepoint carries is written once — see [Storage layout](storage_layout.md#shared-blobs). `fullcopy` stores each layer whole, as one `image.tar`. The service label `arcave.writable-layer.backend` overrides it for one service. The images services run on are always stored deduplicated, whatever this key says. Like `snapshot.backend`, it applies to new savepoints only: a rollback reads each layer back the way its record says it was stored.
+
+```text
+unsupported writable_layers.backend "zstd" (supported: dedupcopy, fullcopy)
+```
+
+## `capture`
+
+Which kinds of unit a savepoint captures when no [capture label](capture_labels.md) says otherwise. Everything is on by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `capture.writable_layers` | bool | `true` | Every container's writable layer. |
+| `capture.images` | bool | `true` | The image each service's `image:` names. |
+| `capture.volumes.named` | bool | `true` | Named volumes. |
+| `capture.volumes.bind` | bool | `true` | Bind mounts. |
+| `capture.volumes.anonymous` | bool | `true` | Anonymous volumes. |
+
+These are the defaults a label overrides: `capture.volumes.bind: false` with `arcave.mounts.include: /app/data` on one service captures that one bind and no other. They steer a running compose project without recreating it, which a label cannot. What a savepoint left out is listed in its `not_covered`.
+
+## `rollback`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `rollback.leftover_volumes` | string | `overwrite` | What a rollback does when the compose project has no containers but still owns named volumes the savepoint restores into: `overwrite` them, with a warning naming each, or `refuse`. |
+
+It matters only for a compose project that is not running — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. `refuse` fails before anything is created:
+
+```text
+compose project is not running but its volumes survive: myapp_pgdata
+```
+
+```text
+unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)
 ```
 
 ## `backends`
@@ -309,6 +403,13 @@ unsupported backends.cdc.network_mode "none" (supported: auto, host, bridge)
 |---|---|---|---|
 | `log.level` | `--log-level` | `info` | `debug`, `info` or `warn`. |
 | `log.format` | `--log-format` | `text` | `text` or `json`. |
+
+Both are checked when a command starts, and an unknown value fails it rather than silencing the log:
+
+```text
+set log level: get logger: log level trace: unknown log level
+set log level: get logger: log format yaml: unknown log format
+```
 
 Logs go to stderr; results go to stdout as JSON. `--log-format json` makes the whole stderr stream machine-readable, which is what a CI job or an agent wants.
 

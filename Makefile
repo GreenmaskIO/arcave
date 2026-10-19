@@ -5,8 +5,15 @@
 RESTIC_API_DIR := internal/service/backend/restic/rest
 OAPI_CODEGEN_VERSION := v2.6.0
 
+# The build stamps cmd/arcave/cmd_root.go declares; goreleaser fills the same vars in CI.
+# Prefixed so an unrelated VERSION or COMMIT in the environment is never stamped in.
+ARCAVE_VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+ARCAVE_COMMIT     ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
+ARCAVE_BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -X main.version=$(ARCAVE_VERSION) -X main.commit=$(ARCAVE_COMMIT) -X main.buildDate=$(ARCAVE_BUILD_DATE)
+
 build:
-	go build -o bin/arcave ./cmd/arcave
+	go build -ldflags "$(LDFLAGS)" -o bin/arcave ./cmd/arcave
 
 # Unit tests need no daemon; the integration suites under test/ need a reachable one.
 UNIT_PKGS := ./cmd/... ./internal/...

@@ -1,6 +1,6 @@
 ---
 title: Storage layout
-description: Where arcave writes — the store root and its segments, a savepoint's own directory, how a volume is named, and the blobs savepoints share.
+description: Where arcave writes — the store root and its segments, a session's and a savepoint's own directories, how a volume is named, the blobs and images savepoints share, and the host-local files under .arcave/.
 keywords: [arcave storage layout, store root, object id, savepoint directory, deduplication, restic]
 ---
 
@@ -25,6 +25,17 @@ The static `arcave` segment is what bounds every write and every delete: point t
 
 `compose/` has a reserved sibling for a second timeline that is not built yet, which is why the compose project sits one level down rather than at the root.
 
+## Inside a session
+
+```text
+sessions/<session>/
+  session.json                                 the session's record — written last, deleted first
+  heartbeat.json                               the state of the fork that wrote the tree
+  compose/<compose-project>/                   one store root per compose project
+```
+
+A session directory without `session.json` is not a session: no `--session` finds it, and only `session list --all` shows it, with the status its `heartbeat.json` gives. The default session `baseline` has no record; it always exists. See [Sessions](../sessions.md).
+
 ## Inside a compose project's store root
 
 ```text
@@ -34,13 +45,17 @@ The static `arcave` segment is what bounds every write and every delete: point t
     project.yaml                               the compose spec the project was captured under
     volume-named-myapp_pgdata/
       data.tar                                 a fullcopy capture of one volume
-    images/app/replicas/1/
+    images/app/replicas/1/                     one container's writable layer, dedupcopy
       index.json                               verbatim from the image archive
       manifest.json                            verbatim from the image archive
       oci-layout                               verbatim from the image archive
       image.json                               what to rebuild the layer from — written last
+    images/worker/replicas/1/                  one container's writable layer, fullcopy
+      image.tar                                the whole image archive
+      image.json                               written last
   019e8488-3ac8-7000-8000-000000000000/                                  the next savepoint
   shared/oci/blobs/sha256/<digest>             the image blobs every savepoint here shares
+  shared/oci/images/sha256/<hex>/              one image a service runs on, keyed by its id
   restic/volume-named-myapp_pgdata/            one cdc repository per volume
 ```
 
@@ -50,11 +65,21 @@ A savepoint id is a canonical UUID, so a directory that is not one is never mist
 
 ## Object ids
 
-Each volume in a savepoint is named by its `object_id`, in the output, in the logs and in the store. It says which volume it is: `volume-named-myapp_pgdata` is the named volume `myapp_pgdata`, and `volume-anon-redis-1-data` is the anonymous volume at `/data` of `redis` replica 1.
+Each volume in a savepoint is named by its `object_id`, in the output, in the logs and in the store. It says which volume it is:
+
+| Object id | Volume |
+|---|---|
+| `volume-named-myapp_pgdata` | The named volume `myapp_pgdata`, whichever services mount it. |
+| `volume-service-app-app-src` | The bind mount at `/app/src` of service `app`, shared by its replicas. |
+| `volume-anon-redis-1-data` | The anonymous volume at `/data` of `redis` replica 1 — each replica has its own. |
+
+The slashes of a mount target become dashes.
 
 ## Shared blobs
 
-A container's writable layer is committed as an image and split as it is stored: every blob goes to `shared/oci/blobs/sha256/` under the digest its own name already carries, and only the archive's small metadata stays with the savepoint. The base layer a compose project's every savepoint carries is therefore written once, and `stored_bytes` against `size_bytes` in the record is where you see it.
+Under the default [`writable_layers.backend: dedupcopy`](configuration.md#writable_layers), a container's writable layer is committed as an image and split as it is stored: every blob goes to `shared/oci/blobs/sha256/` under the digest its own name already carries, and only the archive's small metadata stays with the savepoint. The base layer a compose project's every savepoint carries is therefore written once, and `stored_bytes` against `size_bytes` in the record is where you see it.
+
+The images services run on — `postgres:16`, say — are kept the same way, always: each one's metadata under `shared/oci/images/sha256/<hex>/`, named by its image id, and its blobs in the same blob store. An image is written once for every savepoint and replica naming it, and a layer's `stored_bytes` is what it adds over that image. Under `writable_layers.backend: fullcopy` a layer is stored whole, as `image.tar`, and shares nothing.
 
 The blob store is shared by every savepoint of one **compose project**, inside the session root. That keeps a session self-contained and dying whole, at the price of no sharing across sessions or compose projects.
 
@@ -66,7 +91,17 @@ The [`cdc` backend](configuration.md#snapshot) keeps one restic repository per v
 
 ## Moving a savepoint
 
-Everything about one savepoint is under its own directory, except the image blobs it shares. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as the storage path, `project.name` and `-p` point at the same three segments.
+Everything about one savepoint is under its own directory, except the blobs and images it shares and its cdc repositories. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as the storage path, `project.name` and `-p` point at the same three segments.
+
+## On the host
+
+Three files under the project's `.arcave/` belong to the machine, not to the store, and are never copied with it:
+
+| File | What it is |
+|---|---|
+| `.arcave/lock` | The lock every command that changes something takes. |
+| `.arcave/inflight.json` | The marker an interrupted rollback leaves; see [Troubleshooting](troubleshooting.md). |
+| `.arcave/current_session` | The current session, set by `session set`, cleared by `session unset`. |
 
 ## Next step
 

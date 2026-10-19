@@ -25,19 +25,19 @@ Savepoints close that gap. Snapshot before the attempt, roll back after a failed
 ```shell title="The same loop, in shell"
 SP=$(arcave savepoint create "attempt-${N}" | jq -r .id)
 
-if ! ./run-migration.sh && ./run-tests.sh; then
+if ! { ./run-migration.sh && ./run-tests.sh; }; then
   arcave rollback "$SP"
 fi
 ```
 
 Because every command prints JSON on stdout and logs on stderr, `jq -r .id` is enough — there is no output to scrape.
 
-## Why this is a session, not a backup
+## Why this is a checkpoint, not a backup
 
-An agent session has a shape: it runs for a while, produces many intermediate states, and almost all of them are throwaway. Savepoints match that shape.
+An agent run has a shape: it goes on for a while, produces many intermediate states, and almost all of them are throwaway. Savepoints match that shape.
 
 * **Cheap to create**, with the [`cdc` backend](../reference/configuration.md#snapshot) — only the chunks that changed since the last capture are written. A loop that snapshots twenty times does not cost twenty full copies.
-* **Cheap to discard** — `arcave savepoint remove --retain-recent 5` at the end of a session, or `--retain-for 24h` on a schedule.
+* **Cheap to discard** — `arcave savepoint remove --retain-recent 5` at the end of a run, or `--retain-for 24h` on a schedule.
 * **Addressable by name** — `attempt-3`, `before-schema-rewrite`, `known-good`. The agent chooses names that mean something to its own reasoning.
 
 ## Giving the agent the tools directly
@@ -48,16 +48,18 @@ Rather than teaching an agent to shell out and parse output, run the MCP server:
 arcave mcp
 ```
 
-It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child process, no port and no network configuration. Four tools appear in the agent's tool list:
+It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child process, no port and no network configuration. Ten tools appear in the agent's tool list. Four work on savepoints:
 
 | Tool | What it does |
 |---|---|
-| `savepoint_create` | Capture the environment. Takes `project`, and optionally `name`, `description`, `wait_timeout`. |
-| `savepoint_list` | List savepoints, newest first. Takes `project`, optionally `include_safety_snapshots`. |
-| `savepoint_remove` | Delete by `ids`, or by `retain_recent` / `retain_for` / `before_date`. Supports `dry_run`. |
-| `rollback` | Restore to `ref` — an id, a name, or `latest`. |
+| `savepoint_create` | Capture the environment. Takes `project`, and optionally `session`, `name`, `description`, `wait_timeout`. |
+| `savepoint_list` | List savepoints, newest first. Takes `project`, optionally `session`, `include_safety_snapshots`, `sort` (`desc` or `asc`). |
+| `savepoint_remove` | Delete by `ids`, or by `retain_recent` / `retain_for` / `before_date`. Takes `project`, optionally `session`. Supports `dry_run`. |
+| `rollback` | Restore to `ref` — an id, a name, or `latest`. Takes `project`, optionally `session`, `wait_timeout`. |
 
-Every tool takes `project` explicitly: one server serves many compose projects, and the agent names the one it means per call.
+Every savepoint tool takes `project` explicitly: one server serves many compose projects, and the agent names the one it means per call. `session` picks the [session](../sessions.md) for that call only; without it the tool works in the current one.
+
+The other six manage sessions: `session_list`, `session_create`, `session_delete`, `session_current`, `session_set` and `session_unset`. An agent can fork its own session from `baseline` with `session_create` and keep its checkpoints there, apart from yours. `arcave mcp --session <name>` pins the server to one session instead; a pinned server refuses `session_set` and `session_unset`.
 
 ```json title=".mcp.json / claude_desktop_config.json"
 {
@@ -107,5 +109,5 @@ The loop also serialises. Every workflow stops the project and holds the project
 ## Related docs
 
 * [arcave mcp](../reference/cli/mcp.md) — the command reference.
-* [Environment branching](environment_branching.md) — when the checkpoints outlive the session.
+* [Environment branching](environment_branching.md) — when the checkpoints outlive the run.
 * [Limitations](../reference/limitations.md) — the downtime, and what a savepoint does not cover.

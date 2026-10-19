@@ -8,7 +8,15 @@ keywords: [arcave sessions, branching, fork, savepoint, environment branching, d
 
 A **session** is an independent line of savepoints inside a project. A session starts empty or as a copy of another session, and the lines do not mix. A branch is a session, and its name is the session's name.
 
-`arcave init` puts you in `baseline`, the default session. A command that names no session works there, which is why the diagrams below start in it. Creating a session does not switch you into it: you name the one you want with `--session` or `ARCAVE_SESSION`, by id or by name.
+`arcave init` puts you in `baseline`, the default session, which is why the diagrams below start in it. Creating a session does not switch you into it. A command works in the session you name with `--session` or `ARCAVE_SESSION`, by id or by name; when you name none, it works in the **current session**, and in `baseline` when no current session is set:
+
+| Command | What it does |
+|---|---|
+| `arcave session set <session>` | Makes `<session>` the current one. |
+| `arcave session current` | Shows the current session. |
+| `arcave session unset` | Goes back to `baseline`. |
+
+The current session is recorded in `.arcave/current_session`, so it holds for this project directory on this host only. A current session that has since been deleted is an error, never a silent fall back to `baseline`, and deleting the current session takes `--force`, which also clears it.
 
 A fork copies the session it starts from rather than sharing data with it. That is what keeps the two lines independent — nothing one of them writes can reach the other — and it is why a fork costs the size of the session it copies.
 
@@ -44,7 +52,7 @@ flowchart LR
 
 ## A fork copies the line, a rollback deploys it
 
-`arcave session create --from=baseline --name=feat/add-new-table` opens a second line beside `baseline`, holding a copy of every savepoint `baseline` holds — same ids, same names. The Docker daemon is not touched: the project keeps running whatever it ran.
+`arcave session create --from=baseline --name=feat/add-new-table` opens a second line beside `baseline`, holding a copy of everything `baseline` holds — every savepoint of every compose project, with the same ids and names, the safety snapshots, and the data they share. The Docker daemon is not touched: the project keeps running whatever it ran.
 
 To start working on a state of the new line, roll back to it there: `arcave rollback --session=feat/add-new-table -p shop v1.0`. That is an ordinary rollback, safety snapshot included. The commands that follow name the session they work in. [`arcave session`](reference/cli/session.md) has both in full.
 
@@ -67,7 +75,7 @@ A savepoint id is unique within its session, not across sessions: the copy of `v
 
 ```shell
 arcave session create --from=baseline --name=feat/add-new-table
-export ARCAVE_SESSION=feat/add-new-table
+export ARCAVE_SESSION=feat/add-new-table   # or: arcave session set feat/add-new-table
 arcave rollback -p shop v1.0
 ```
 

@@ -6,13 +6,13 @@ keywords: [arcave savepoint list, savepoints, safety snapshot, docker compose]
 
 # arcave savepoint list
 
-Prints the project's committed savepoints as a JSON array.
+Prints the committed savepoints of the compose project, in the session the command works in, as a JSON array.
 
 ```text title="Synopsis"
 arcave savepoint list [flags]
 ```
 
-It reads the store, stops nothing and changes nothing. Only **committed** savepoints appear: a capture killed before its record was written left data no record names, and nothing lists it or puts it back.
+It reads the store, stops nothing, changes nothing and takes no lock, so it runs while another arcave command holds the project. Only **committed** savepoints appear: a capture killed before its record was written left data no record names, and nothing lists it or puts it back.
 
 ## Flags
 
@@ -47,13 +47,14 @@ It is hidden because one normally exists only *while* a rollback runs. One that 
     "description": "before the v2 schema",
     "created_at": "2026-06-01T19:41:12.123456789Z",
     "stats": [ … ],
+    "writable_layers": [ … ],
     "images": [ … ],
     "spec": { "format": "compose-yaml" }
   }
 ]
 ```
 
-Each element is the whole record, exactly as [`savepoint create`](savepoint_create.md#output) printed it — `stats`, `images` and `spec` included. An empty store prints `[]`.
+Each element is the whole record, exactly as [`savepoint create`](savepoint_create.md#output) printed it — `stats`, `writable_layers`, `images`, `spec` and `not_covered` included. An empty store prints `[]`.
 
 With `--include-safety-snapshots`, a leftover safety snapshot carries its label and its generated name:
 
@@ -97,7 +98,7 @@ arcave savepoint list --include-safety-snapshots \
 ```
 
 ```shell title="What the last savepoint cost the store"
-arcave savepoint list | jq '[.[0].images[].stored_bytes] | add'
+arcave savepoint list | jq '[.[0] | (.stats // [])[].payload.size_bytes, (.writable_layers // [])[].stored_bytes, (.images // [])[].stored_bytes] | map(. // 0) | add'
 ```
 
 ## Next step
