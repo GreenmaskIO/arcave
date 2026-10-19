@@ -6,7 +6,7 @@ keywords: [schema migration, migration testing, destructive migration, rollback,
 
 # Testing destructive migrations
 
-A migration that only ever runs against an empty schema is not tested. The interesting failures — a `NOT NULL` added to a column that has nulls, a type change that truncates, a backfill that takes locks it should not — need real data to show up.
+A migration that only ever runs against an empty schema is not tested. The interesting failures — a `NOT NULL` added to a column that has nulls, a type change that truncates, a backfill that takes locks it should not — need real data to show up. [Prod-like data](prod_like_data.md) shows how to get a masked copy of it into the project.
 
 The reason people do not test that way is the reset. Once the migration has run, getting back to "before" means dropping the database and reloading a dump, and after the fourth iteration that is where all the time goes.
 
@@ -74,6 +74,7 @@ Budget for the stop-and-start window. Every `savepoint create` and every `rollba
 
 ## Related docs
 
+* [Prod-like data](prod_like_data.md) — a masked production copy to run the migration against.
 * [Resetting fixtures and demos](fixture_reset.md) — the same reset, for seeded data rather than schemas.
 * [savepoint create](../reference/cli/savepoint_create.md) — flags and output.
 * [rollback](../reference/cli/rollback.md) — what a rollback restores, exactly.

@@ -12,6 +12,8 @@ Code has version control for exactly this. State does not. An agent that ran a m
 
 Savepoints close that gap. Snapshot before the attempt, roll back after a failed one, and every iteration starts from the same known state.
 
+Make that known state realistic, and never production itself: give the agent a masked copy of production data — see [Prod-like data](prod_like_data.md).
+
 ## The loop
 
 ```text title="One iteration"
@@ -106,6 +108,7 @@ The loop also serialises. Every workflow stops the project and holds the project
 
 ## Related docs
 
+* [Prod-like data](prod_like_data.md) — masked, realistic data for the agent to work on.
 * [arcave mcp](../reference/cli/mcp.md) — the command reference.
 * [Environment branching](environment_branching.md) — when the checkpoints outlive the session.
 * [Limitations](../reference/limitations.md) — the downtime, and what a savepoint does not cover.

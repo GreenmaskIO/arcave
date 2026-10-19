@@ -44,6 +44,11 @@
           "items": [
             {
               "type": "doc",
+              "id": "use_cases/prod_like_data",
+              "label": "Prod-like data"
+            },
+            {
+              "type": "doc",
               "id": "use_cases/agent_loops",
               "label": "Agent iteration loops"
             },
