@@ -49,14 +49,14 @@ want, `arcave savepoint create` saves it the same way. The workflow above is unc
 
 ## Two things to get right
 
-:::danger Keep unmasked data out of the project you save
+:::danger[Keep unmasked data out of the project you save]
 A savepoint captures **every** volume and container filesystem in the project. If the source database you dump from
 runs in the same project — or in the same database instance as the restore target — the savepoint holds the
 original, unmasked data as well, written to arcave's [store](../concepts.md#store). Run the source outside the
 project, and protect the store as you would the data inside it.
 :::
 
-:::warning A rollback also reverts dump storage inside the project
+:::warning[A rollback also reverts dump storage inside the project]
 If the dumps live in a service of the same project — a MinIO bucket, for example — a rollback returns that service to
 the state it had at the savepoint, and dumps created after it disappear. Keep the dump storage outside the project,
 or take a new savepoint after each dump you want to keep.
