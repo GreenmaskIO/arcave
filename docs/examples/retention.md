@@ -25,6 +25,10 @@ arcave savepoint list
 ]
 ```
 
+Each entry is the full savepoint record — `stats`, `writable_layers`, `images`, `spec` and the rest. The samples on this page keep only the fields that tell the savepoints apart.
+
+The listing is newest first; `--sort asc` turns it around.
+
 ## 2. Always preview first
 
 ```shell
@@ -35,14 +39,14 @@ arcave savepoint remove --retain-recent 3 --dry-run
 {
   "dry_run": true,
   "removed": [
-    { "id": "019e84ab-9d60-7000-8000-000000000000", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
+    { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean",     "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" },
     { "id": "019e849d-e1c0-7000-8000-000000000000", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" },
-    { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean",     "description": "seeded baseline", "created_at": "2026-06-01T18:36:40Z" }
+    { "id": "019e84ab-9d60-7000-8000-000000000000", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" }
   ]
 }
 ```
 
-`clean` is in that list. This is exactly why you dry-run first — retention rules do not know which savepoint matters.
+`removed` lists the savepoints oldest first. `clean` is in that list. This is exactly why you dry-run first — retention rules do not know which savepoint matters.
 
 A `--dry-run` takes no project lock, because it only reads.
 
@@ -75,8 +79,8 @@ arcave savepoint remove 019e84ab-9d60-7000-8000-000000000000 019e849d-e1c0-7000-
 {
   "dry_run": false,
   "removed": [
-    { "id": "019e84ab-9d60-7000-8000-000000000000", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" },
-    { "id": "019e849d-e1c0-7000-8000-000000000000", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" }
+    { "id": "019e849d-e1c0-7000-8000-000000000000", "name": "attempt-3", "description": "", "created_at": "2026-06-01T21:56:40Z" },
+    { "id": "019e84ab-9d60-7000-8000-000000000000", "name": "attempt-4", "description": "", "created_at": "2026-06-01T22:11:40Z" }
   ]
 }
 ```
@@ -88,7 +92,7 @@ arcave savepoint remove 019e84ab-9d60-7000-8000-000000000000 019e9999-9999-7999-
 ```
 
 ```text title="stderr"
-Error: savepoint not found: 019e9999-9999-7999-8999-999999999999
+Error: savepoint(s) not found: 019e9999-9999-7999-8999-999999999999
 ```
 
 `019e84ab-9d60-7000-8000-000000000000` is still there.
@@ -128,7 +132,7 @@ The `OR` semantics are what you want here: the newest five survive no matter how
 
 ## 7. Deleting a leftover safety snapshot
 
-Retention rules never see [safety snapshots](../concepts.md#safety-snapshot), so they accumulate only when a rollback died mid-flight. Find one explicitly:
+Retention rules never see [safety snapshots](../concepts.md#safety-snapshot). A rollback drops its own once it succeeds or reverts, so one is left only when a rollback died mid-flight or its revert failed. Find one explicitly:
 
 ```shell
 arcave savepoint list --include-safety-snapshots \
@@ -142,6 +146,14 @@ arcave savepoint list --include-safety-snapshots \
 ```shell
 arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```
+
+While the rollback that left it is unrecovered — `.arcave/inflight.json` still stands — every removal that is not a `--dry-run` is refused, because the safety snapshot may be the way back:
+
+```text title="stderr"
+Error: rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)
+```
+
+The log line before it names the rollback that recovers. Run that first; the removal works once the marker is cleared.
 
 :::warning
 Only after you are certain you do not need the pre-rollback state it holds. A safety snapshot that outlived its rollback is the last copy of that state — see [Troubleshooting](../reference/troubleshooting.md#an-interrupted-rollback).

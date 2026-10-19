@@ -16,8 +16,13 @@ How we develop arcave. A pull request is reviewed against this document.
   make test
   ```
 
+  `make test` runs the unit tests, then the integration tests under `test/`, which need a
+  running Docker daemon. `make test-unit` runs the unit tests alone and needs none.
+
   `make test-fidelity` runs the spec-fidelity catalog against a live Docker daemon. Run it
-  when you touch introspection, the compose spec or the compose client.
+  when you touch introspection, the compose spec or the compose client. `make test-storage`
+  runs the end-to-end workflow on every storage backend, each against its server in a
+  container.
 
 ## Go conventions
 
@@ -73,6 +78,8 @@ flowchart TD
     service -. interface .-> repository
     service -. interface .-> client
     cli --> model[internal/model]
+    cli --> config[internal/config]
+    cli --> utils[internal/utils]
     service --> model
     repository --> model
     client --> model
@@ -85,7 +92,8 @@ declares, with no import; `cmd/arcave` wires the concrete types in.
 - `repository`: storage CRUD, no business logic.
 - `client`: the outside world (Docker API, compose). Imports only `model`.
 - `service`: business logic. Reaches repositories and clients only through interfaces.
-- `cli`: adapters that parse input, call a service and print the result.
+- `cli`: adapters that parse input, call a service and print the result. Besides `model`, it
+  imports only `config` and `utils`.
 - `cmd/arcave`: the composition root, the only place concrete types are wired together.
 
 Interfaces belong to the consumer: a service declares the small interface it needs next

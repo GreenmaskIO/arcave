@@ -44,29 +44,31 @@ Repeat until the migration is right. Every iteration starts from byte-identical 
 ## Testing the down migration properly
 
 ```shell
-arcave savepoint create pre-migration
+arcave savepoint create before-up
 ./migrate up
-arcave savepoint create post-migration
+arcave savepoint create after-up
 ./migrate down
 
 # Now compare the state after `down` against the state before `up`.
 # Then get back to a known point either way:
-arcave rollback pre-migration      # to try `up` again
-arcave rollback post-migration     # to try `down` again
+arcave rollback before-up          # to try `up` again
+arcave rollback after-up           # to try `down` again
 ```
 
-Two savepoints and two names give you both ends of the migration as fixed points, which is what makes the comparison meaningful.
+Two savepoints and two names give you both ends of the migration as fixed points, which is what makes the comparison meaningful. A name is unique within the compose project's session, so pick new ones here: `savepoint create pre-migration` a second time fails with `savepoint name is already taken: "pre-migration" names savepoint <id>`.
 
 ## In CI
 
-The same loop runs unattended. Machine-readable output is the default, so there is nothing to parse:
+The same loop runs unattended. Every command prints JSON on stdout, so `jq` is all the parsing it needs:
 
 ```shell
-arcave --log-format json savepoint create ci-baseline
-./migrate up || { arcave rollback ci-baseline; exit 1; }
-./run-integration-tests.sh || { arcave rollback ci-baseline; exit 1; }
+SP=$(arcave --log-format json savepoint create "ci-${CI_RUN_ID}" | jq -r .id)
+./migrate up || { arcave rollback "$SP"; exit 1; }
+./run-integration-tests.sh || { arcave rollback "$SP"; exit 1; }
 arcave savepoint remove --retain-recent 3
 ```
+
+The run id keeps each run's savepoint name unique — a fixed name such as `ci-baseline` would be refused on the second run while the first one's savepoint is kept. Use whatever your CI provides, such as `$GITHUB_RUN_ID` or `$CI_PIPELINE_ID`.
 
 :::note
 Budget for the stop-and-start window. Every `savepoint create` and every `rollback` restarts the project and waits for health checks — up to [`--wait-timeout`](../reference/configuration.md#compose), two minutes by default. On a slow-starting project, raise it rather than letting a timeout read as a migration failure.

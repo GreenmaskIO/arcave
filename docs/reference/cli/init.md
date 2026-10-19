@@ -38,6 +38,8 @@ The file it writes for a default project:
 ```yaml title=".arcave/config.yaml"
 project:
     name: myapp
+common:
+    concurrency: 5
 compose:
     wait_timeout: 2m0s
     stop_timeout: 10s
@@ -48,12 +50,23 @@ storage:
         path: .arcave/storage
 snapshot:
     backend: fullcopy
+writable_layers:
+    backend: dedupcopy
+capture:
+    writable_layers: true
+    images: true
+    volumes:
+        named: true
+        bind: true
+        anonymous: true
+rollback:
+    leftover_volumes: overwrite
 log:
     level: info
     format: text
 ```
 
-No `backends.cdc` block is written: a project that does not name `cdc` carries no section for it. Every key is in [Configuration](../configuration.md).
+No `backends.cdc` block is written: a project that does not name `cdc` carries no section for it. Every key is in [Configuration](../configuration.md). The `capture` defaults say what a savepoint takes by kind; `arcave.*` labels in the compose file refine them per service and per volume — see [Capture labels](../capture_labels.md).
 
 Savepoint data goes to the `directory` storage at `.arcave/storage`. Another directory, a bucket, a container or an SFTP server is set by editing `storage` in the file — see [Configuration](../configuration.md#storage). No credential is ever written: the secret keys are left out of the file `init` writes.
 
@@ -98,7 +111,7 @@ arcave init --override
 
 ## After init
 
-Add `.arcave/` to `.gitignore`. It holds the config, the lock file, the interrupted-rollback marker and — by default — the savepoint data itself.
+Add `.arcave/` to `.gitignore`. It holds the config, the lock file (`lock`), the interrupted-rollback marker (`inflight.json`), the current-session pointer (`current_session`) and — by default — the savepoint data itself (`storage/`).
 
 ## Next step
 

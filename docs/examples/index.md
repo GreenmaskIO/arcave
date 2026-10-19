@@ -1,5 +1,5 @@
 ---
-title: Index
+title: Examples
 description: Worked arcave examples on a multi-service Docker Compose project — rolling back a failed migration, resetting a seeded environment, pruning savepoints and driving arcave from an AI agent.
 keywords: [arcave examples, docker compose, postgres rollback, minio, redis, savepoint, tutorial, Open-Source, Greenmask]
 ---
@@ -10,7 +10,7 @@ Complete walkthroughs, each starting from the same project. Where [Use cases](..
 
 ## The project
 
-Every example below runs against one compose project with three different kinds of persistent mount, so a single savepoint exercises all of them.
+Every example below runs against one compose project with two kinds of persistent mount across three services, so a single savepoint exercises all of them. A runnable copy, with a small web app on top that shows each store's data, is in [`examples/demo`](https://github.com/GreenmaskIO/arcave/tree/main/examples/demo).
 
 ```yaml title="docker-compose.yaml"
 name: arcave-demo
@@ -59,7 +59,7 @@ volumes:
   miniodata:
 ```
 
-Three mount kinds, three different capture paths:
+Three volumes, two volume types:
 
 | Service | Mount | Volume type |
 |---|---|---|
@@ -72,14 +72,12 @@ Every service defines a **health check**. arcave waits for them after each resta
 ## Setup, once
 
 ```shell
-docker compose up -d
-arcave init --name demo
+docker compose up -d --wait
+arcave init
 export ARCAVE_PROJECT_NAME=arcave-demo
 ```
 
-:::note
-`--name demo` is the storage tenant; `ARCAVE_PROJECT_NAME=arcave-demo` is the compose project, as `name:` declares it in the compose file. They differ here on purpose, to keep the two ideas visibly distinct — see [Concepts](../concepts.md#the-compose-project-versus-the-storage-tenant). Note that exporting the variable also overrides `project.name`, so with both set as above, pass `-p arcave-demo` per command instead if you want the tenant to stay `demo`.
-:::
+`ARCAVE_PROJECT_NAME` names the compose project, as `name:` declares it in the compose file, so the commands below need no `-p`. The variable also sets `project.name`, the storage tenant, so savepoints are stored under `arcave-demo` too — see [Concepts](../concepts.md#the-compose-project-versus-the-storage-tenant).
 
 ## The examples
 

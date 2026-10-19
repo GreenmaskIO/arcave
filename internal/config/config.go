@@ -55,9 +55,9 @@ const (
 
 // The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
 const (
-	// RestoreModeWipe clears the mount and restores it whole. The default.
+	// RestoreModeWipe clears the mount and restores it whole.
 	RestoreModeWipe = "wipe"
-	// RestoreModeIncremental restores over the live data, writing only what
+	// RestoreModeIncremental, the default, restores over the live data, writing only what
 	// differs and deleting what the snapshot does not carry.
 	RestoreModeIncremental = "incremental"
 )

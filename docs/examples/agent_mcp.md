@@ -13,8 +13,8 @@ Runs against the [demo project](index.md#the-project).
 ## 1. Initialise the project
 
 ```shell
-docker compose up -d
-arcave init --name demo
+docker compose up -d --wait
+arcave init
 ```
 
 The MCP server refuses to start without `.arcave/config.yaml`.
@@ -38,16 +38,22 @@ Start the host **in the project directory**, so `.arcave/config.yaml` resolves t
 
 ## 3. What the agent sees
 
-Four tools:
+Ten tools:
 
 | Tool | Purpose |
 |---|---|
 | `savepoint_create` | Capture the environment |
-| `savepoint_list` | Find previous captures |
+| `savepoint_list` | Find previous captures, newest first; `sort: "asc"` turns it around |
 | `savepoint_remove` | Prune |
 | `rollback` | Restore |
+| `session_list` | List the [sessions](../sessions.md) |
+| `session_create` | Create a session, empty or a copy of another (`from`) |
+| `session_delete` | Delete a session and its savepoints |
+| `session_current` | Show the session calls work in |
+| `session_set` | Make a session the current one |
+| `session_unset` | Go back to `baseline` |
 
-Every one takes `project` explicitly — one server serves many compose projects, and the agent names the one it means per call.
+The four savepoint tools take `project` explicitly — one server serves many compose projects, and the agent names the one it means per call. They also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `project`: a session holds every compose project of the directory.
 
 ```json title="A savepoint_create call"
 {
@@ -65,6 +71,25 @@ Every one takes `project` explicitly — one server serves many compose projects
 ```
 
 `ref` takes an id, a name, or the literal `latest`.
+
+To keep the agent's checkpoints apart from yours, give it a session of its own:
+
+```json title="A session_create call"
+{
+  "name": "agent",
+  "from": "baseline"
+}
+```
+
+```json title="A savepoint_create call in that session"
+{
+  "project": "arcave-demo",
+  "session": "agent",
+  "name": "attempt-1"
+}
+```
+
+Or pin the whole server to it with `"args": ["mcp", "--session", "agent"]`; a pinned server refuses `session_set` and `session_unset`.
 
 ## 4. The loop the agent runs
 
@@ -98,17 +123,17 @@ Both tools that restart the project accept `wait_timeout`. Without it they use t
 arcave --log-format json mcp 2> arcave-mcp.log
 ```
 
-```json title="arcave-mcp.log"
+```json title="arcave-mcp.log (trimmed)"
 {"level":"info","message":"stopping services"}
-{"level":"info","object_id":"volume-named-arcave-demo_pgdata","message":"volume operation started"}
-{"level":"info","object_id":"volume-named-arcave-demo_pgdata","message":"volume operation finished"}
+{"level":"info","volume":"volume-named-arcave-demo_pgdata","backend":"fullcopy","op":"snapshot","message":"volume operation started"}
+{"level":"info","volume":"volume-named-arcave-demo_pgdata","backend":"fullcopy","op":"snapshot","message":"volume operation finished"}
 {"level":"info","message":"starting services"}
 {"level":"info","kind":"Container","name":"arcave-demo-postgres-1","status":"Healthy","message":"compose"}
 ```
 
-If the host launches the server itself, it usually surfaces stderr in its own log view.
+Each record also carries its time, and the volume records `snapshot_id` and `duration`. If the host launches the server itself, it usually surfaces stderr in its own log view.
 
-## 7. Prune at the end of a session
+## 7. Prune at the end of a run
 
 ```json title="savepoint_remove"
 {
@@ -127,7 +152,7 @@ If the host launches the server itself, it usually surfaces stderr in its own lo
 
 ## 8. Make the loop cheap
 
-An agent that snapshots twenty times per session should not pay for twenty full copies:
+An agent that snapshots twenty times per run should not pay for twenty full copies:
 
 ```yaml title=".arcave/config.yaml"
 snapshot:

@@ -142,17 +142,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # GoReleaser reads the tag history to derive the version and build the
-          # changelog; a shallow clone has neither.
+          # GoReleaser reads the tag history to derive the version; a shallow
+          # clone has none.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
+      # The release body is the tag's section of CHANGELOG.md. It is written to
+      # RUNNER_TEMP, outside the checkout, so goreleaser's dirty-tree check never
+      # sees it; a tag with no section fails the release.
+      - name: Extract release notes
+        run: |
+          awk -v tag="${GITHUB_REF_NAME}" '
+            $1 == "##" && $2 == tag {found=1; next}
+            found && $1 == "##" {exit}
+            found {print}' CHANGELOG.md > "${RUNNER_TEMP}/release-notes.md"
+          test -s "${RUNNER_TEMP}/release-notes.md" || { echo "CHANGELOG.md has no section for ${GITHUB_REF_NAME}"; exit 1; }
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

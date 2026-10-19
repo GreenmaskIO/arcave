@@ -119,7 +119,7 @@ const (
 		"modes cannot be combined, and at least one is required. Pass dry_run to see what would " +
 		"be deleted without deleting anything. Deletion is permanent."
 	descRollback = "Restore the environment to a savepoint, selected by id, by name, or by the " +
-		"literal 'latest'. DESTRUCTIVE: every volume it covers is wiped whole and replaced with " +
+		"literal 'latest'. DESTRUCTIVE: every volume it covers is overwritten with " +
 		"the savepoint's data, so any change made since that savepoint is lost — including in " +
 		"bind mounts, which are the user's own host folders, and including the parts of a volume " +
 		"a service only sees a subpath of. arcave takes a safety snapshot of the live state first " +
@@ -247,7 +247,7 @@ type removeSavepointInput struct {
 	IDs          []string `json:"ids,omitempty" jsonschema:"savepoint ids to delete; cannot be combined with the retention fields"`
 	RetainRecent int      `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest"`
 	RetainFor    string   `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
-	BeforeDate   string   `json:"before_date,omitempty" jsonschema:"delete savepoints created before this date (YYYY-MM-DD)"`
+	BeforeDate   string   `json:"before_date,omitempty" jsonschema:"delete savepoints created before this RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z"`
 	DryRun       bool     `json:"dry_run,omitempty" jsonschema:"report what would be deleted without deleting anything"`
 }
 

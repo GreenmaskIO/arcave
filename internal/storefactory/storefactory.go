@@ -219,7 +219,7 @@ func openSSH(ctx context.Context, cfg config.SSHStorage) (storages.Storager, err
 	}
 	// Once per process: arcave mcp opens the store on every tool call.
 	warnHostKeyOnce.Do(func() {
-		log.Ctx(ctx).Warn().Str("host", cfg.Host).Msg("ssh storage does not verify the sshCfg's host key")
+		log.Ctx(ctx).Warn().Str("host", cfg.Host).Msg("ssh storage does not verify the server's host key")
 	})
 	return ssh.New(sshCfg)
 }

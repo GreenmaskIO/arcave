@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Recovering from an interrupted rollback, a held project lock, a torn-down project, a missing volume, a health-check timeout and cdc container networking.
+description: Recovering from an interrupted rollback, a held project lock, a torn-down project, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
@@ -10,7 +10,7 @@ Each entry names the symptom as arcave reports it, what happened, and what to do
 
 ## An interrupted rollback
 
-**Symptom.** Every mutating command refuses to run:
+**Symptom.** Every command that changes something refuses to run (`rollback` prefixes it with `require no inflight: `):
 
 ```text
 rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)
@@ -18,7 +18,13 @@ rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (rest
 
 **What happened.** A rollback was killed after it began writing. `.arcave/inflight.json` records the phase it died in, and that marker refuses the next mutating workflow so nothing is built on a half-written environment.
 
-**The remedy.** Return to the safety snapshot that rollback took of the pre-rollback state. It is the one operation the marker lets through, and only in the session and compose project the marker names — the error's hint prints the full command, `--session` and `-p` included. Pass the same two flags to the commands below.
+**The remedy.** Return to the safety snapshot that rollback took of the pre-rollback state. It is the one operation the marker lets through, and only in the session and compose project the marker names. An error log line on stderr, just before the error, prints the full command, `--session` and `-p` included:
+
+```text
+… volumes may mix states; recover with `arcave rollback --session 00000000-0000-0000-0000-000000000001 -p myapp 019e8491-04c8-7000-8000-000000000000`
+```
+
+Pass the same two flags to the commands below.
 
 ```shell title="1. Find it"
 arcave savepoint list --include-safety-snapshots
@@ -59,15 +65,23 @@ Not before. Until then it is the last copy of the pre-rollback state.
 | `restore-done` | Every volume was written back; only the start did not finish. Starting the project and removing `.arcave/inflight.json` is enough, if that is what you want. |
 | `inconsistent` | The automatic replay failed too. The safety snapshot is retained and is the last copy of the pre-rollback state. |
 
+**A rollback of a project that had no containers** — never started, or taken down — takes no safety snapshot, so there is nothing to return to. The hint says so, and names the savepoint the rollback was applying:
+
+```text
+… a rollback into a compose project that was not running was interrupted; volumes may be half-restored; recover with `arcave rollback --session 00000000-0000-0000-0000-000000000001 -p myapp 019e843e-1650-7000-8000-000000000000`
+```
+
+Run that same rollback again; the marker lets it through, and it finishes what the first one started.
+
 ## `another arcave command is already running in this project`
 
-Another arcave process holds the lock on `.arcave/lock`. The lock is not a queue — a second run fails rather than waiting.
+Another arcave process holds the lock on `.arcave/lock`. Only commands that change something take it — `savepoint list`, `session list` and `session current` always run. The lock is not a queue — a second run fails rather than waiting.
 
 ```shell
 ps aux | grep '[a]rcave'
 ```
 
-Usual causes: a background `arcave mcp` server serving an agent, a CI job that has not finished, a second terminal. The lock is released when the holding process exits, a crash included — it is an operating-system lock, not a file arcave has to clean up. If nothing is running, retry.
+Usual causes: a background `arcave mcp` server serving an agent, a CI job that has not finished, a fork (`session create --from`) still copying, a second terminal. The lock is released when the holding process exits, a crash included — it is an operating-system lock, not a file arcave has to clean up. If nothing is running, retry.
 
 ## `config is not found: run 'arcave init' if not yet initialized`
 
@@ -80,7 +94,7 @@ arcave --config /path/to/.arcave/config.yaml savepoint list    # or point at it
 
 ## `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME`
 
-Every command but `init` acts on one compose project, and nothing guesses which.
+The `savepoint` commands and `rollback` act on one compose project, and nothing guesses which.
 
 ```shell
 arcave -p myapp savepoint list
@@ -88,15 +102,27 @@ arcave -p myapp savepoint list
 
 The name is what `docker compose ls` shows in the first column: the compose file's `name:` if it declares one, and the directory name otherwise. Before exporting `ARCAVE_PROJECT_NAME`, read what else [it names](environment_variables.md#arcave_project_name).
 
-## `no containers found for compose project "myapp"`
+## `compose project "myapp": no containers found`
 
-**What happened.** `docker compose down` was run, or the project was never brought up. Down removes the containers, and with them everything arcave knows about the project.
+```text
+compose project "myapp": no containers found: bring the compose project up once, or name another project with -p
+```
+
+**What happened.** `savepoint create` found no containers: `docker compose down` was run, or the project was never brought up. Down removes the containers, and with them everything arcave knows about the project.
 
 ```shell
 docker compose up -d
 ```
 
-arcave reads the running project from the daemon, not from your compose files. `docker compose stop` is fine — stopped containers still describe the project.
+arcave reads the running project from the daemon, not from your compose files. `docker compose stop` is fine — stopped containers still describe the project. A `rollback` needs no containers: it rebuilds the project from the savepoint.
+
+## `compose project is not running but its volumes survive`
+
+```text
+compose project is not running but its volumes survive: myapp_pgdata
+```
+
+A rollback into a project with no containers found named volumes the savepoint would restore into — usually left behind by `docker compose down` — and [`rollback.leftover_volumes`](configuration.md#rollback) is `refuse`. Nothing was created. Remove the volumes if you do not need them (`docker volume rm myapp_pgdata`), or set `leftover_volumes: overwrite` to have the rollback write over them.
 
 ## `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`
 
@@ -186,7 +212,7 @@ The project is rebuilt from the compose spec the savepoint recorded, and savepoi
 ## `unsupported docker daemon` or `unsupported image archive format`
 
 ```text
-unsupported docker daemon: the daemon is Docker 24.0.7; capturing container layers needs Docker 25 or newer
+unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer
 ```
 
 `savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on a daemon whose version arcave could not read:
@@ -196,6 +222,30 @@ unsupported image archive format: member "…" is neither a blob nor metadata; a
 ```
 
 Either way the daemon is older than Docker 25. Upgrade it — see [Requirements](requirements.md#docker-25-or-newer).
+
+## `invalid capture policy label`
+
+```text
+invalid capture policy label: arcave.capture="no" on service app: want true or false
+```
+
+An `arcave.*` label in the compose project is one arcave cannot act on: an unknown key, a value it does not accept, or a mount target the service does not mount. `savepoint create` refuses it before anything is stopped. Fix the label against [Capture labels](capture_labels.md) and recreate the containers with `docker compose up -d`, since arcave reads the labels off the running containers.
+
+## `savepoint name is already taken`
+
+```text
+savepoint name is already taken: "pre-migration" names savepoint 019e843e-1650-7000-8000-000000000000
+```
+
+Names are unique within a compose project and session. Pick another name, or remove the old savepoint first. In a loop, put something unique in the name, such as a run id.
+
+## `the current session no longer exists`
+
+```text
+init dependencies: resolve session: the current session no longer exists: 019e9a10-7c2e-7000-8000-000000000000, named by .arcave/current_session; run 'arcave session unset' or 'arcave session set <session>'
+```
+
+`.arcave/current_session` names a session that was deleted, from another machine or by hand in the store. arcave refuses rather than quietly falling back to `baseline`. Run `arcave session unset` to return to `baseline`, or `arcave session set <session>` to pick another.
 
 ## `two volumes address the same object id`
 
@@ -233,14 +283,22 @@ For a remote daemon, `container_host` has to be a name that resolves **from insi
 ## An unknown key fails the command
 
 ```text
-resolve config: unmarshal config: parse config: decoding failed due to the following error(s):
+resolve config: unmarshal config: invalid config: decoding failed due to the following error(s):
 
 'project' has invalid keys: nam
 ```
 
-Unknown keys are an error, not a value quietly ignored. Check the key against [Configuration](configuration.md); arcave never rewrites the file on its own, so fix it by hand, or regenerate it with `arcave init --override` — and set `storage.directory.path` again in the same command if it was pointing somewhere non-default, since savepoints under the old path stop being visible otherwise.
+Unknown keys are an error, not a value quietly ignored. Check the key against [Configuration](configuration.md); arcave never rewrites the file on its own, so fix it by hand. `arcave init --override` regenerates it from the defaults, but it takes no storage settings: if your storage pointed somewhere non-default, edit it back into the file afterwards, since savepoints under the old path stop being visible otherwise.
 
-## `initialise compose project store: stat /srv/arcave/myapp: no such file or directory`
+## `docker.host and docker.context are mutually exclusive`
+
+```text
+init dependencies: initialise docker client: docker.host and docker.context are mutually exclusive: "remote" already names a daemon, so remove one of the two
+```
+
+Both keys name a daemon. Keep the one you mean and delete the other from the [`docker`](configuration.md#docker) section.
+
+## `init dependencies: initialise store root: open directory storage: stat /srv/arcave/myapp: no such file or directory`
 
 An absolute `storage.directory.path` must already exist. Only a relative one materialises on first use — the asymmetry is what keeps a typo from growing a fresh tree somewhere unexpected.
 
