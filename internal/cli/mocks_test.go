@@ -64,11 +64,11 @@ func (m *mockService) CreateSavepoint(ctx context.Context, req model.CreateSavep
 
 func (m *mockService) ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error) {
 	args := m.Called(ctx, req)
-	var sps []model.Savepoint
+	var savepoints []model.Savepoint
 	if v := args.Get(0); v != nil {
-		sps = v.([]model.Savepoint)
+		savepoints = v.([]model.Savepoint)
 	}
-	return sps, args.Error(1)
+	return savepoints, args.Error(1)
 }
 
 func (m *mockService) RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error) {
@@ -79,4 +79,40 @@ func (m *mockService) RemoveSavepoints(ctx context.Context, req model.RemoveRequ
 func (m *mockService) Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error) {
 	args := m.Called(ctx, req)
 	return args.Get(0).(model.RollbackResult), args.Error(1)
+}
+
+func (m *mockService) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
+	args := m.Called(ctx, req)
+	var sessions []model.SessionSummary
+	if v := args.Get(0); v != nil {
+		sessions = v.([]model.SessionSummary)
+	}
+	return sessions, args.Error(1)
+}
+
+func (m *mockService) CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error) {
+	args := m.Called(ctx, req)
+	return args.Get(0).(model.Session), args.Error(1)
+}
+
+func (m *mockService) DeleteSession(
+	ctx context.Context, req model.DeleteSessionRequest,
+) (model.DeleteSessionResponse, error) {
+	args := m.Called(ctx, req)
+	return args.Get(0).(model.DeleteSessionResponse), args.Error(1)
+}
+
+func (m *mockService) SetSession(ctx context.Context, ref string) (model.Session, error) {
+	args := m.Called(ctx, ref)
+	return args.Get(0).(model.Session), args.Error(1)
+}
+
+func (m *mockService) UnsetSession(ctx context.Context) (model.Session, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(model.Session), args.Error(1)
+}
+
+func (m *mockService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
+	args := m.Called(ctx, ref)
+	return args.Get(0).(model.Session), args.Error(1)
 }

@@ -25,7 +25,7 @@ arcave rollback <NAME|ID|latest>     # restore
 arcave savepoint remove <ID>         # prune
 ```
 
-Four commands. Every workflow below is a way of arranging them.
+Four commands. Every workflow below is a way of arranging them. When the savepoints need more than one line — a branch per feature, a baseline kept apart — the [`arcave session`](../reference/cli/session.md) commands add independent lines of savepoints beside the default one; see [Sessions and branching](../sessions.md).
 
 ## A workflow for every situation
 
@@ -39,7 +39,7 @@ An autonomous agent modifies schemas, runs migrations, and writes to databases a
 
 ### [Environment branching](environment_branching.md)
 
-A savepoint per feature branch, switched by name. It resembles database branching enough to be useful and differs from it enough to be worth stating precisely — that page does both.
+A session per feature branch, forked from a shared baseline and switched by name. It resembles database branching enough to be useful and differs from it enough to be worth stating precisely — that page does both.
 
 ### [Testing destructive migrations](migration_testing.md)
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Demo stack for arcave. Each store is backed by a different Docker volume
+# Demo compose project for arcave. Each store is backed by a different Docker volume
 # type so a single `arcave savepoint create` / `arcave rollback` captures and restores
 # all three:
 #

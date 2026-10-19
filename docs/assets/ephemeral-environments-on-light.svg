@@ -34,7 +34,7 @@ text{font-family:var(--sans)}
 .f-danger{fill:var(--danger)}
 </style>
 <title id="ttl">Static environments versus ephemeral environments with arcave</title>
-<desc id="desc">On the left, two developers share one static environment: one person’s seed wipes the other’s data, there is no savepoint to go back to, and the only way back is to wipe it and set it up from scratch. On the right, arcave keeps a baseline line of named savepoints — v1.0, v1.1, v2.0 — where every step adds a savepoint, sessions fork off any of them, and each session can move back to a savepoint inside its own line.</desc>
+<desc id="desc">On the left, two developers share one static environment: one person’s seed wipes the other’s data, there is no savepoint to go back to, and the only way back is to wipe it and set it up from scratch. On the right, arcave keeps a baseline line of named savepoints — v1.0, v1.1, v2.0 — where every step adds a savepoint, a session forks the line and starts from any of them by rolling back to it, and each session can move back to a savepoint inside its own line.</desc>
 <defs>
   <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-brand"/></marker>
   <marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-muted"/></marker>
@@ -95,7 +95,7 @@ text{font-family:var(--sans)}
 <path class="back" d="M1185,236 Q1042,294 907,238" marker-end="url(#ab)"/>
 <text class="dim" x="1042" y="316" text-anchor="middle">rollback to step-1</text>
 <path class="flow" d="M615,434 V240" marker-end="url(#ab)"/>
-<text class="dim" x="633" y="366">fork from v1.0</text>
+<text class="dim" x="633" y="366">fork, roll back to v1.0</text>
 <text class="ses" x="550" y="414">baseline</text>
 <path class="flow" d="M672,460 H841" marker-end="url(#ab)"/>
 <text class="dim" x="756" y="444" text-anchor="middle">+ savepoint</text>
@@ -108,7 +108,7 @@ text{font-family:var(--sans)}
 <rect class="node" x="1130" y="438" width="110" height="44" rx="22"/>
 <text class="nodetext" x="1185" y="468" text-anchor="middle">v2.0</text>
 <path class="flow" d="M900,484 V634" marker-end="url(#ab)"/>
-<text class="dim" x="930" y="548">fork from v1.1</text>
+<text class="dim" x="930" y="548">fork, roll back to v1.1</text>
 <text class="ses" x="550" y="614">agent/refactor</text>
 <path class="flow" d="M957,660 H1126" marker-end="url(#ab)"/>
 <text class="dim" x="1041" y="644" text-anchor="middle">+ savepoint</text>
@@ -118,7 +118,7 @@ text{font-family:var(--sans)}
 <text class="nodetext" x="1185" y="668" text-anchor="middle">try-1</text>
 <path class="back" d="M1185,686 Q1042,744 907,688" marker-end="url(#ab)"/>
 <text class="dim" x="1042" y="766" text-anchor="middle">rollback to v1.1</text>
-<text class="cap" x="550" y="816">Fork from any savepoint. Move back inside a line.</text>
+<text class="cap" x="550" y="816">Fork a line, start from any savepoint. Move back inside it.</text>
 <text class="dim" x="550" y="846">Two lines at once? Give each session its own Docker daemon.</text>
 <g transform="translate(1148,145)"><circle cx="12" cy="7" r="5" class="f-actor"/><path class="f-actor" d="M2,22 a10,10 0 0 1 20,0 z"/></g>
 <text class="actor" x="1250" y="164" text-anchor="end">user 1</text>

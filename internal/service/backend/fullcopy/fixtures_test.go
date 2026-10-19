@@ -25,7 +25,7 @@ func namedVolume(dockerName string, usedBy ...model.ServiceReference) model.Volu
 		ObjectID:       model.NamedVolume{Name: dockerName}.ObjectID(),
 		ComposeProject: testComposeProject,
 		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendCopy,
+		Backend:        model.SnapshotBackendFullCopy,
 		Named:          &model.VolumePropertiesNamed{VolumeName: dockerName, UsedBy: usedBy},
 	}
 }
@@ -35,7 +35,7 @@ func bindVolume(service, target string) model.Volume {
 		ObjectID:       model.ServiceVolume{Type: model.VolumeTypeBind, Target: target}.ObjectID(service),
 		ComposeProject: testComposeProject,
 		Type:           model.VolumeTypeBind,
-		Backend:        model.SnapshotBackendCopy,
+		Backend:        model.SnapshotBackendFullCopy,
 		Bind:           &model.VolumePropertiesBind{Service: service, Target: target, Source: "/host" + target},
 	}
 }

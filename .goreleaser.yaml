@@ -104,13 +104,15 @@ snapshot:
   # version only has to be unique and obviously not a release.
   version_template: "{{ incpatch .Version }}-dev-{{ .ShortCommit }}"
 
-changelog:
-  disable: true
+# No changelog section: the release notes are the tag's section of CHANGELOG.md, which
+# the CI release job passes with --release-notes, and that skips generation. Setting
+# changelog.disable would drop that file too.
 
 release:
-  # prerelease: auto marks a tag carrying a pre-release suffix (v0.0.1-rc1) as a
-  # GitHub pre-release, which is what makes a rehearsal tag safe to push.
-  prerelease: auto
+  # Not `auto`: every alpha tag (v0.1.0-alpha.1) would become a GitHub pre-release,
+  # which /releases/latest skips, and install.sh resolves the latest release there.
+  # The alpha status is stated in the tag and the release notes instead.
+  prerelease: false
   # The licence and readme ride along as their own release assets. They used to
   # travel inside the tar.gz via `archives.files`, which the `binary` format
   # left nowhere to put; attaching them here puts them back in the release,

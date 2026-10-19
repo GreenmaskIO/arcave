@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -58,18 +57,11 @@ func (r *objectRepo) HasConfig(ctx context.Context) (bool, error) {
 // operation is an orphan. Only at the start — restic refreshes its own lock
 // while it works.
 func (r *objectRepo) ClearLocks(ctx context.Context) error {
-	locks, err := r.store.List(ctx, locksPrefix)
-	if err != nil {
-		return fmt.Errorf("list repository locks: %w", err)
+	// A repository without locks/ has nothing to clear.
+	if err := r.store.DeleteAll(ctx, locksPrefix); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+		return fmt.Errorf("delete stale repository locks: %w", err)
 	}
-	for _, lock := range locks {
-		key := path.Join(locksPrefix, lock.Name)
-		// List and Delete are two calls: a lock already gone is fine.
-		if err := r.store.Delete(ctx, key); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
-			return fmt.Errorf("delete stale repository lock %s: %w", key, err)
-		}
-		zerolog.Ctx(ctx).Debug().Str("lock", key).Msg("cleared a stale restic lock")
-	}
+	zerolog.Ctx(ctx).Debug().Msg("cleared stale restic locks")
 	return nil
 }
 

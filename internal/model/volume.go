@@ -27,7 +27,7 @@ package model
 type Volume struct {
 	ObjectID string `json:"object_id"` // stable identity: ServiceVolume.ObjectID() / NamedVolume.ObjectID()
 	// ComposeProject is the project name at capture time — how docker locates
-	// the stack's containers.
+	// the compose project's containers.
 	ComposeProject string              `json:"compose_project"`
 	Type           VolumeType          `json:"type"`
 	Backend        SnapshotBackendKind `json:"backend"`
@@ -59,6 +59,7 @@ type VolumePropertiesBind struct {
 // this is the one arm that has to ask the daemon.
 type VolumePropertiesAnon struct {
 	Service  string `json:"service"`
+	Replica  int    `json:"replica"` // the replica the volume was created for, from 1
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only,omitempty"`
 	// Subpath is carried for the record and read by nobody: the daemon refuses

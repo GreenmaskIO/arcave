@@ -14,27 +14,32 @@
 
 package model
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+)
 
 // SavepointID addresses one capture — a savepoint's or a safety snapshot's — and
 // doubles as the directory it lives in. It carries its own gate, so a value that
 // reached a storage key was validated.
 type SavepointID string
 
-// Validate accepts a non-empty run of decimal digits, since an id is the Unix
-// second the savepoint was created.
-//
-// This is arcave's first path-safety gate: digits alone cannot name a parent, an
-// absolute path or the store root. Every layer that renders an id into a storage
-// key calls it first.
+// NewSavepointID returns a fresh UUIDv7: its canonical form sorts by creation
+// time, so a store listing directories by name lists savepoints oldest first.
+func NewSavepointID() SavepointID {
+	return SavepointID(uuid.Must(uuid.NewV7()).String())
+}
+
+// Validate accepts a canonical UUID only, which cannot name a parent, an absolute path
+// or a sibling such as shared/; the round trip refuses braces, urn:uuid: and upper case.
 func (m SavepointID) Validate() error {
 	if m == "" {
 		return fmt.Errorf("%w: must not be empty", ErrInvalidSavepointID)
 	}
-	for _, r := range m {
-		if r < '0' || r > '9' {
-			return fmt.Errorf("%w %q: must be a Unix timestamp (digits only)", ErrInvalidSavepointID, string(m))
-		}
+	parsed, err := uuid.Parse(string(m))
+	if err != nil || parsed.String() != string(m) {
+		return fmt.Errorf("%w %q: must be a canonical UUID", ErrInvalidSavepointID, string(m))
 	}
 	return nil
 }

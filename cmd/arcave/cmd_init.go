@@ -20,9 +20,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/config"
 )
 
 var (
+	configInitName     string
 	configInitOverride bool
 
 	configInitCmd = &cobra.Command{
@@ -33,34 +35,30 @@ var (
 	}
 )
 
-// runConfigInit creates the config the other commands require: it names no stack
-// and opens neither the storage backend nor the Docker engine.
+// runConfigInit writes the config the other commands require: a template of the
+// defaults and --name, whatever the environment or an existing file says. It names
+// no compose project and opens neither the storage backend nor the Docker engine.
 func runConfigInit(cmd *cobra.Command, _ []string) error {
 	if configFound && !configInitOverride {
 		return fmt.Errorf("project already initialized use --override")
 	}
 
-	svc, printer := initServiceDeps(projectRoot)
+	template := config.NewConfig()
+	template.Project.Name = configInitName
+	svc, printer := newInitDependencies(projectRoot)
 	h := cli.NewConfigInitHandler(svc, printer)
-	return h.Init(cmd.Context(), projectCfg, configInitOverride)
+	return h.Init(cmd.Context(), template, configInitOverride)
 }
 
 func init() {
 	flags := configInitCmd.Flags()
-	flags.String("name", "",
+	flags.StringVar(&configInitName, "name", "",
 		"Project name (default: current directory name)")
-	flags.String("savepoint-dir", "",
-		"Savepoint backup directory (default: .arcave/storage)")
 	flags.BoolVar(&configInitOverride, "override", false,
 		"Overwrite an existing arcave configuration")
 
-	// --override is transient (never persisted), so it carries no config binding.
-	// --savepoint-dir survives as sugar for the directory arm of the storage
-	// union: it binds to storage.directory.path, not to a top-level key.
-	viperBind(cfgViper, flags, map[string]string{
-		"name":          "project.name",
-		"savepoint-dir": "storage.directory.path",
-	})
+	// Neither flag is bound: the template takes --name directly, and --override is
+	// transient. The storage is the directory one at its default path.
 
 	rootCmd.AddCommand(configInitCmd)
 }

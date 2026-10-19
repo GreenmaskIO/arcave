@@ -1,7 +1,7 @@
 ---
 title: Environment variables
-description: The ARCAVE_ variables arcave reads — which config keys they reach, and the two different things ARCAVE_PROJECT_NAME names.
-keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, config keys, docker compose]
+description: The ARCAVE_ variables arcave reads — which config keys they reach, the two different things ARCAVE_PROJECT_NAME names, and ARCAVE_SESSION.
+keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, config keys, docker compose]
 ---
 
 # Environment variables
@@ -21,10 +21,10 @@ These are bound to flags, so they work in any project:
 | `ARCAVE_COMPOSE_WAIT_TIMEOUT` | `compose.wait_timeout` |
 | `ARCAVE_COMPOSE_STOP_TIMEOUT` | `compose.stop_timeout` |
 | `ARCAVE_COMPOSE_PROGRESS` | `compose.progress` |
-| `ARCAVE_PROJECT_NAME` | `project.name` — **and** the compose project, see below |
-| `ARCAVE_STORAGE_DIRECTORY_PATH` | `storage.directory.path` |
 
-Any other key works when the file declares it. `arcave init` writes `storage.type`, `snapshot.backend` and the `project`, `compose` and `log` sections, so `ARCAVE_SNAPSHOT_BACKEND` overrides a default config out of the box:
+`ARCAVE_PROJECT_NAME` is read as `project.name`, which every config carries, **and** as the compose project — see below.
+
+Any other key works when the file declares it. No variable reaches the file `arcave init` writes — it is a template of the defaults and `--name`; `ARCAVE_LOG_LEVEL` and `ARCAVE_LOG_FORMAT` steer only its own log. That template carries `storage.type`, `storage.directory.path`, `snapshot.backend`, `writable_layers.backend` and the `project`, `common`, `compose`, `capture`, `rollback` and `log` sections, so `ARCAVE_SNAPSHOT_BACKEND`, `ARCAVE_CAPTURE_IMAGES` or `ARCAVE_ROLLBACK_LEFTOVER_VOLUMES` override a default config out of the box:
 
 ```shell
 ARCAVE_SNAPSHOT_BACKEND=cdc arcave -p myapp savepoint create nightly
@@ -36,7 +36,7 @@ A `backends.cdc` block, which `init` does not write, is the case to watch: until
 
 This one variable names two different things.
 
-* **The compose project**, which every command but `init` acts on — the same thing `-p/--project-name` names, as `docker compose ls` shows it.
+* **The compose project**, which `savepoint create`, `savepoint list`, `savepoint remove` and `rollback` act on — the same thing `-p/--project-name` names, as `docker compose ls` shows it.
 * **The storage tenant** `project.name`, the segment of the store path that keeps two projects sharing one storage location apart.
 
 They are usually the same string, and then this is invisible. When they must differ, pass `-p` on the command line and leave the variable unset:
@@ -52,6 +52,17 @@ arcave -p myapp-green savepoint create nightly
 ```
 
 Both compose projects store under the tenant `project.name` from the config file, in [store roots](storage_layout.md) that differ in their last segment. Exporting `ARCAVE_PROJECT_NAME=myapp-blue` instead would have moved the tenant too, and the green project's savepoints would have gone somewhere else.
+
+## `ARCAVE_SESSION`
+
+The session a command works in, by id or by name — the same thing `--session` names, and beaten by it. It is not a config key. Unset, a command works in the current session `arcave session set` chose, else in `baseline`. See [`arcave session`](cli/session.md#naming-the-session-a-command-works-in).
+
+```shell title="Work in one session for the rest of the shell"
+export ARCAVE_SESSION=feat/add-new-table
+arcave -p myapp savepoint create step-1
+```
+
+For [`arcave mcp`](cli/mcp.md) it pins the server: every tool call given no `session` works in that session, and `session_set` and `session_unset` are refused.
 
 ## Variables that are not arcave's
 

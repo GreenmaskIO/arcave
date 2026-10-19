@@ -19,11 +19,13 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
 // The project every workflow test runs against: one service mounting one named
@@ -35,18 +37,38 @@ const (
 	demoVolumeName = "demo_db"
 )
 
+// demoCaptureDefaults are the backends every test Service captures by, every kind captured.
+var demoCaptureDefaults = capturepolicy.CaptureDefaults{
+	VolumeBackend:        model.SnapshotBackendFullCopy,
+	WritableLayerBackend: model.ImageBackendDedupCopy,
+	SavepointCapture: capturepolicy.SavepointCaptureSettings{
+		WritableLayers:   true,
+		Images:           true,
+		NamedVolumes:     true,
+		BindVolumes:      true,
+		AnonymousVolumes: true,
+	},
+}
+
+// cdcCaptureDefaults are demoCaptureDefaults with volumes captured by cdc.
+func cdcCaptureDefaults() capturepolicy.CaptureDefaults {
+	defaults := demoCaptureDefaults
+	defaults.VolumeBackend = model.SnapshotBackendCDC
+	return defaults
+}
+
 // demoVolume is the unit, in the form the mock tests address it by.
 func demoVolume() model.Volume {
-	return model.Volume{ObjectID: "volume-named-" + demoVolumeName, Backend: model.SnapshotBackendCopy}
+	return model.Volume{ObjectID: "volume-named-" + demoVolumeName, Backend: model.SnapshotBackendFullCopy}
 }
 
 // demoRecord is a committed savepoint of demoVolume.
 func demoRecord() model.Savepoint {
 	return model.Savepoint{
-		ID:        "1780335122",
+		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendCopy, Payload: "sp-payload"}},
+		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}},
 		Spec:      demoSpecRef(),
 	}
 }
@@ -61,22 +83,38 @@ func demoSpecRef() *model.SpecRef {
 // the ref the rollback that took it was aiming at.
 func demoSafetySnapshot() model.Savepoint {
 	return model.Savepoint{
-		ID:        "1780335999",
+		ID:        "019e844b-7818-7000-8000-000000000000",
 		Name:      safetySnapshotName(demoRecord().ID),
-		Labels:    safetySnapshotLabels(),
+		Labels:    newSafetySnapshotLabels(),
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendCopy, Payload: "safety-payload"}},
+		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
 		Spec:      demoSpecRef(),
 	}
 }
 
-// demoIntrospection is what the inspector reports for the live stack.
+// demoIntrospection is what the inspector reports for the live compose project: one
+// service mounting the named volume. It holds no container, so no layer is captured.
 func demoIntrospection() model.IntrospectionResult {
 	return model.IntrospectionResult{Project: model.Project{
 		Name: demoProject,
+		Services: []model.Service{{
+			Name: demoService,
+			Volumes: []model.ServiceVolume{{
+				Type: model.VolumeTypeNamed, Source: "db", Target: demoTarget, VolumeName: demoVolumeName,
+			}},
+		}},
 		Volumes: []model.NamedVolume{{Key: "db", Name: demoVolumeName,
 			UsedBy: []model.ServiceReference{{Service: demoService, Target: demoTarget}}}},
 	}}
+}
+
+// demoAbsentIntrospection is what the inspector reports once the compose project was
+// taken down: no service, its named volume left behind.
+func demoAbsentIntrospection() model.IntrospectionResult {
+	introspection := demoIntrospection()
+	introspection.Project.Services = nil
+	introspection.Project.Volumes[0].UsedBy = nil
+	return introspection
 }
 
 // The one replica demoIntrospectionWithContainers reports for demoService — the
@@ -84,60 +122,103 @@ func demoIntrospection() model.IntrospectionResult {
 const (
 	demoContainerID = "c0ffee"
 	demoBaseImage   = "postgres:16"
+	demoUpstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
 // demoContainerRef is that replica in the form a capture request addresses it by.
 func demoContainerRef() model.ContainerRef {
 	return model.ContainerRef{
-		Service: demoService, Replica: 1, ID: demoContainerID, BaseImage: demoBaseImage,
+		Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1),
+		UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage,
 	}
+}
+
+// demoContainerName is the name compose gives replica n of demoService.
+func demoContainerName(n int) string {
+	return fmt.Sprintf("%s-%s-%d", demoProject, demoService, n)
+}
+
+// demoContainerInspect is a replica running on demoBaseImage.
+func demoContainerInspect() container.InspectResponse {
+	return container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{Image: demoUpstreamID.String()},
+		Config:            &container.Config{Image: demoBaseImage},
+	}
+}
+
+// demoImageCaptureRequest is the one upstream demoIntrospectionWithContainers names.
+func demoImageCaptureRequest() model.ImageCaptureRequest {
+	return model.ImageCaptureRequest{
+		Image: model.Image{
+			ID: demoUpstreamID, Refs: []string{demoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
+		},
+		ExistsInDaemon: true,
+	}
+}
+
+// demoImage is what the copier reports for demoImageCaptureRequest.
+func demoImage() model.Image {
+	image := demoImageCaptureRequest().Image
+	image.Stored = true
+	image.StoredBytes = 512
+	return image
 }
 
 // demoIntrospectionWithContainers is demoIntrospection with the daemon holding
 // one container for demoService: what a workflow that captures layers sees.
 func demoIntrospectionWithContainers() model.IntrospectionResult {
-	res := demoIntrospection()
-	res.Project.Services = []model.Service{{
+	introspection := demoIntrospection()
+	introspection.Project.Services = []model.Service{{
 		Name: demoService,
 		Containers: []model.Container{{
 			ID:      demoContainerID,
+			Name:    demoContainerName(1),
 			Number:  1,
-			Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+			Inspect: demoContainerInspect(),
 		}},
 	}}
-	return res
+	introspection.Images = map[model.ImageDigestID]image.InspectResponse{
+		demoUpstreamID: {
+			ID: demoUpstreamID.String(), RepoTags: []string{demoBaseImage},
+			RepoDigests: []string{"postgres@sha256:dd"}, Size: 1 << 20,
+		},
+	}
+	return introspection
 }
 
-// demoImageCapture is what the copier reports for demoContainerRef.
-func demoImageCapture() model.ImageCapture {
-	return model.ImageCapture{
-		Service:     demoService,
-		Replica:     1,
-		ContainerID: demoContainerID,
-		ImageID:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		BaseImage:   demoBaseImage,
-		SizeBytes:   4096,
+// demoWritableLayer is what the copier reports for demoContainerRef.
+func demoWritableLayer() model.WritableLayer {
+	return model.WritableLayer{
+		Service:          demoService,
+		Replica:          1,
+		ContainerID:      demoContainerID,
+		ContainerName:    demoContainerName(1),
+		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ImageBackend:     model.ImageBackendDedupCopy,
+		UpstreamImageID:  demoUpstreamID,
+		UpstreamImageRef: demoBaseImage,
+		SizeBytes:        4096,
 	}
 }
 
 // demoRecordWithImages is demoRecord carrying the writable layer of its one replica.
 func demoRecordWithImages() model.Savepoint {
 	record := demoRecord()
-	record.Images = []model.ImageCapture{demoImageCapture()}
+	record.WritableLayers = []model.WritableLayer{demoWritableLayer()}
 	return record
 }
 
-// demoRestoredRef is the tag a rollback of demoRecord puts on one replica's layer;
+// demoRestoredTag is the tag a rollback of demoRecord puts on one replica's layer;
 // demoBaseImage's colon is what a docker repository path cannot carry.
-func demoRestoredRef(replica int) string {
+func demoRestoredTag(replica int) string {
 	return fmt.Sprintf("arcave/%s-%s-%d-postgres-16:sp-%s", demoProject, demoService, replica, demoRecord().ID)
 }
 
-// demoImageRestore is what the copier reports for demoImageCapture.
-func demoImageRestore() model.ImageRestore {
-	return model.ImageRestore{
-		Service: demoService, Replica: 1,
-		ImageID: demoImageCapture().ImageID, ImageRef: demoRestoredRef(1),
+// demoWritableLayerRestoreResult is what the copier reports for demoWritableLayer.
+func demoWritableLayerRestoreResult() model.WritableLayerRestoreResult {
+	return model.WritableLayerRestoreResult{
+		Service: demoService, Replica: 1, ContainerName: demoContainerName(1),
+		ImageID: demoWritableLayer().CommittedImageID, Tag: demoRestoredTag(1),
 	}
 }
 
@@ -151,53 +232,66 @@ const (
 // demoScaledIntrospection is demoIntrospectionWithContainers with demoService
 // scaled to two replicas.
 func demoScaledIntrospection() model.IntrospectionResult {
-	res := demoIntrospectionWithContainers()
-	res.Project.Services[0].Containers = append(res.Project.Services[0].Containers, model.Container{
+	introspection := demoIntrospectionWithContainers()
+	introspection.Project.Services[0].Containers = append(introspection.Project.Services[0].Containers, model.Container{
 		ID:      demoSecondContainerID,
+		Name:    demoContainerName(2),
 		Number:  2,
-		Inspect: container.InspectResponse{Config: &container.Config{Image: demoBaseImage}},
+		Inspect: demoContainerInspect(),
 	})
-	return res
+	return introspection
 }
 
-// demoSecondImageCapture is the second replica's own layer.
-func demoSecondImageCapture() model.ImageCapture {
-	capture := demoImageCapture()
+// demoSecondWritableLayer is the second replica's own layer.
+func demoSecondWritableLayer() model.WritableLayer {
+	capture := demoWritableLayer()
 	capture.Replica = 2
 	capture.ContainerID = demoSecondContainerID
-	capture.ImageID = demoSecondImageID
+	capture.ContainerName = demoContainerName(2)
+	capture.CommittedImageID = demoSecondImageID
 	return capture
 }
 
-// demoScaledRecord is a savepoint of the scaled stack: one capture per replica.
+// demoScaledRecord is a savepoint of the scaled compose project: one capture per replica.
 func demoScaledRecord() model.Savepoint {
 	record := demoRecord()
-	record.Images = []model.ImageCapture{demoImageCapture(), demoSecondImageCapture()}
+	record.WritableLayers = []model.WritableLayer{demoWritableLayer(), demoSecondWritableLayer()}
 	return record
 }
 
-// demoSpec is what the assembler materialises demoIntrospection into, demoSpecBytes
-// its artifact, and demoTargetSpec what that artifact parses back to. The two
-// projects are distinct values: expectations match them by identity, so a call
-// handed the live stack instead of the savepoint's fails.
+// demoAssembled is what the assembler materialises demoIntrospection into, demoSpecBytes
+// its artifact and demoSpec what that artifact parses back to — the live compose project
+// a workflow acts on. demoTargetSpecBytes is a savepoint's artifact and demoTargetSpec
+// what it parses back to. The projects are distinct values: expectations match them by
+// identity, so a call handed the assembled project, or the live one instead of the
+// savepoint's, fails.
 var (
+	demoAssembled  = &types.Project{Name: demoProject}
 	demoSpec       = &types.Project{Name: demoProject}
 	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{
 		demoService: {Name: demoService, Image: demoBaseImage},
 	}}
-	demoSpecBytes = []byte("name: demo\n")
+	demoSpecBytes       = []byte("name: demo\n")
+	demoTargetSpecBytes = []byte("name: demo\nservices: {db: {image: postgres:16}}\n")
 )
 
-// demoAssembler materialises demoIntrospection into demoSpec.
+// demoAssembler materialises demoIntrospection into demoAssembled.
 func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
 
 // assemblerFor is demoAssembler for a test that reports its own introspection.
-func assemblerFor(res model.IntrospectionResult) *mockAssembler {
+func assemblerFor(introspection model.IntrospectionResult) *mockAssembler {
 	assembler := &mockAssembler{}
-	assembler.On("Assemble", res).Return(demoSpec, nil)
-	assembler.On("Marshal", demoSpec).Return(demoSpecBytes, nil)
-	assembler.On("Parse", mock.Anything, demoSpecBytes).Return(demoTargetSpec, nil)
+	assembler.On("Assemble", mock.Anything, introspection).Return(demoAssembled, nil)
 	return assembler
+}
+
+// demoCodec renders demoAssembled and parses both artifacts back.
+func demoCodec() *mockCodec {
+	codec := &mockCodec{}
+	codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil)
+	codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil)
+	codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil)
+	return codec
 }
 
 // demoResolution is the three reads every rollback opens with: the records, the
@@ -205,7 +299,7 @@ func assemblerFor(res model.IntrospectionResult) *mockAssembler {
 func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector, *mockLocker) {
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoSpecBytes, nil)
+	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil)
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
@@ -218,6 +312,14 @@ func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector,
 func expectLock(locker *mockLocker) *mock.Call {
 	locker.On("Release").Return(nil).Once()
 	return locker.On("Acquire", mock.Anything).Return(nil).Once()
+}
+
+// emptySavepointRepo is a compose project with no savepoint yet, as the listing a create
+// opens with finds it.
+func emptySavepointRepo() *mockSavepointRepo {
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint(nil), nil).Once()
+	return repo
 }
 
 // expectSpecCommit declares the artifact a capture writes before its record. The

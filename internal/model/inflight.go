@@ -19,12 +19,12 @@ import (
 	"time"
 )
 
-// InflightPhase says how far an interrupted rollback got. The remedy differs by phase.
+// InflightPhase says how far an interrupted rollback got, which decides how to recover from it.
 type InflightPhase string
 
 const (
-	// InflightRecreating stands from the teardown until the containers exist again.
-	// The volumes are untouched: the remedy is to rebuild, not to restore.
+	// InflightRecreating covers `compose down` up to the containers existing again. The
+	// volumes are untouched: recovering means rebuilding the containers, not restoring data.
 	InflightRecreating   InflightPhase = "recreating"
 	InflightRestoring    InflightPhase = "restoring"
 	InflightRestoreDone  InflightPhase = "restore-done"
@@ -34,10 +34,25 @@ const (
 // InflightMarker is the intent record a rollback writes before its first destructive
 // write and clears once the environment is consistent again.
 type InflightMarker struct {
-	Phase  InflightPhase `json:"phase"`
-	Target SavepointID   `json:"target"` // the savepoint being restored
-	Safety SavepointID   `json:"safety"` // the undo every phase's remedy points at
-	At     time.Time     `json:"at"`
+	Phase InflightPhase `json:"phase"`
+	// Session and ComposeProject say where Target lives: a forked savepoint keeps its
+	// id, so the id alone names no single savepoint.
+	Session        SessionID                `json:"session"`
+	ComposeProject DockerComposeProjectName `json:"compose_project"`
+	Target         SavepointID              `json:"target"` // the savepoint being restored
+	// Safety is the safety snapshot that undoes the interrupted rollback; empty when the compose
+	// project had no containers, where running the same rollback again is the fix.
+	Safety SavepointID `json:"safety"`
+	At     time.Time   `json:"at"`
+}
+
+// RecoveryID is the savepoint to roll back to to recover: the safety snapshot, or, when the
+// rollback took none, its own target again.
+func (m InflightMarker) RecoveryID() SavepointID {
+	if m.Safety == "" {
+		return m.Target
+	}
+	return m.Safety
 }
 
 // InterruptedRollbackError refuses a mutating workflow while a marker stands. What
@@ -46,6 +61,6 @@ type InterruptedRollbackError struct {
 	Marker InflightMarker
 }
 
-func (e *InterruptedRollbackError) Error() string {
-	return fmt.Sprintf("rollback to savepoint %s was interrupted (%s)", e.Marker.Target, e.Marker.Phase)
+func (m *InterruptedRollbackError) Error() string {
+	return fmt.Sprintf("rollback to savepoint %s was interrupted (%s)", m.Marker.Target, m.Marker.Phase)
 }

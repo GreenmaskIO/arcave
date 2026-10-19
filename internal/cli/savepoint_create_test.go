@@ -33,13 +33,14 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 		Description: "schema v2",
 		WaitTimeout: waitTimeout,
 	}
-	sp := model.Savepoint{ID: "1780335122", Name: "before-migration", Description: "schema v2"}
+	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration", Description: "schema v2",
+		NotCovered: &model.NotCovered{ServicesWithoutVolumes: []string{"web"}}}
 	svcErr := errors.New("services did not become healthy")
 	printErr := errors.New("stdout closed")
 
 	tests := []struct {
 		name        string
-		sp          model.Savepoint // what the service returns
+		savepoint   model.Savepoint // what the service returns
 		svcErr      error           // the service's error, if any
 		printerErr  error           // the printer's error, if any
 		wantErr     error           // what SavepointCreate must return
@@ -47,15 +48,15 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 	}{
 		{
 			name:        "prints the created savepoint",
-			sp:          sp,
+			savepoint:   savepoint,
 			svcErr:      nil,
 			printerErr:  nil,
 			wantErr:     nil,
-			wantPrinted: []any{sp},
+			wantPrinted: []any{savepoint},
 		},
 		{
 			name:        "service error skips printing",
-			sp:          model.Savepoint{},
+			savepoint:   model.Savepoint{},
 			svcErr:      svcErr,
 			printerErr:  nil,
 			wantErr:     svcErr,
@@ -63,11 +64,11 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 		},
 		{
 			name:        "printer error surfaces",
-			sp:          sp,
+			savepoint:   savepoint,
 			svcErr:      nil,
 			printerErr:  printErr,
 			wantErr:     printErr,
-			wantPrinted: []any{sp},
+			wantPrinted: []any{savepoint},
 		},
 	}
 
@@ -77,7 +78,7 @@ func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
 			p := &capturePrinter{}
 			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
 			svc := &mockService{}
-			svc.On("CreateSavepoint", mock.Anything, wantReq).Return(tt.sp, tt.svcErr)
+			svc.On("CreateSavepoint", mock.Anything, wantReq).Return(tt.savepoint, tt.svcErr)
 			h := NewSavepointCreateHandler(svc, p)
 
 			// Act

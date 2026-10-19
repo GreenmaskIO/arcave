@@ -32,35 +32,78 @@ import (
 )
 
 const (
-	snapshotID  = model.SavepointID("1780335122")
+	snapshotID  = model.SavepointID("019e843e-1650-7000-8000-000000000000")
 	containerID = "c0ffee"
 	imageID     = model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	upstreamID  = model.ImageDigestID("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	commitNote  = "arcave savepoint 019e843e-1650-7000-8000-000000000000"
 )
 
-func demoRequest() model.ImageCaptureRequest {
-	return model.ImageCaptureRequest{
+func demoRequest() model.WritableLayerCaptureRequest {
+	return model.WritableLayerCaptureRequest{
 		SnapshotID: snapshotID,
 		Container: model.ContainerRef{
-			Service: "db", Replica: 1, ID: containerID, BaseImage: "postgres:16",
+			Service: "db", Replica: 1, ID: containerID, Name: "demo-db-1",
+			UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
 		},
+		Backend: model.ImageBackendDedupCopy,
 	}
 }
 
-func TestImageStorage_AddressesOneImage(t *testing.T) {
+func demoUpstreamLabels() map[string]string {
+	return map[string]string{
+		model.BaseImageIDLabel:  upstreamID.String(),
+		model.BaseImageRefLabel: "postgres:16",
+	}
+}
+
+func demoUpstream() model.Image {
+	return model.Image{
+		ID: upstreamID, Refs: []string{"postgres:16"}, RepoDigests: []string{"postgres@sha256:cc"}, SizeBytes: 900,
+	}
+}
+
+func TestWritableLayerStorage_AddressesOneImage(t *testing.T) {
 	// Arrange
 	store := newStore(t)
 
 	// Act
-	imageStore, err := imageStorage(store, snapshotID, "db", 1)
+	imageStore, err := writableLayerStorage(store, snapshotID, "db", 1)
 
 	// Assert
 	require.NoError(t, err)
 	require.NoError(t, imageStore.PutObject(context.Background(), "probe", strings.NewReader("x")))
-	assert.Equal(t, []string{"1780335122/images/db/replicas/1/probe"}, objectNames(t, store),
+	assert.Equal(t, []string{"019e843e-1650-7000-8000-000000000000/images/db/replicas/1/probe"}, objectNames(t, store),
 		"the key both backends must agree on")
 }
 
-func TestImageStorage_RejectsAnUnaddressableImage(t *testing.T) {
+func TestImageStorage_AddressesOneImageByContent(t *testing.T) {
+	// Arrange
+	store := newStore(t)
+
+	// Act
+	imageStore, err := imageStorage(store, upstreamID)
+
+	// Assert
+	require.NoError(t, err)
+	require.NoError(t, imageStore.PutObject(context.Background(), "probe", strings.NewReader("x")))
+	assert.Equal(t, []string{"shared/oci/images/sha256/" + strings.TrimPrefix(upstreamID.String(), "sha256:") + "/probe"},
+		objectNames(t, store))
+}
+
+func TestImageStorage_RejectsAnIDThatIsNoDigest(t *testing.T) {
+	// Arrange
+	store := newStore(t)
+
+	// Act
+	_, err := imageStorage(store, "../../escape")
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrInvalidDigestID)
+	assert.Empty(t, objectNames(t, store))
+}
+
+func TestWritableLayerStorage_RejectsAnUnaddressableImage(t *testing.T) {
 	tests := []struct {
 		name       string
 		snapshotID model.SavepointID
@@ -78,7 +121,7 @@ func TestImageStorage_RejectsAnUnaddressableImage(t *testing.T) {
 			store := newStore(t)
 
 			// Act
-			_, err := imageStorage(store, tt.snapshotID, tt.service, tt.replica)
+			_, err := writableLayerStorage(store, tt.snapshotID, tt.service, tt.replica)
 
 			// Assert
 			require.Error(t, err)
@@ -90,7 +133,7 @@ func TestImageStorage_RejectsAnUnaddressableImage(t *testing.T) {
 func TestManifest_RoundTrip(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
-	imageStore, err := imageStorage(newStore(t), snapshotID, "db", 1)
+	imageStore, err := writableLayerStorage(newStore(t), snapshotID, "db", 1)
 	require.NoError(t, err)
 	written := Manifest{
 		ImageID: imageID,
@@ -140,7 +183,7 @@ func TestManifest_RefusesWhatItCannotRead(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			ctx := zerolog.Nop().WithContext(context.Background())
-			imageStore, err := imageStorage(newStore(t), snapshotID, "db", 1)
+			imageStore, err := writableLayerStorage(newStore(t), snapshotID, "db", 1)
 			require.NoError(t, err)
 			if tt.written != nil {
 				if tt.written.Members == nil && tt.wantErr == model.ErrUnsupportedImageArchive {
@@ -158,139 +201,297 @@ func TestManifest_RefusesWhatItCannotRead(t *testing.T) {
 	}
 }
 
-func TestCopier_Capture(t *testing.T) {
+func TestCopier_CaptureWritableLayer(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	store := newStore(t)
-	docker := &mockContainerImager{}
-	commit := docker.On("CommitContainer", mock.Anything, containerID).Return(imageID, nil).Once()
-	save := docker.On("SaveImage", mock.Anything, imageID).
+	engine := &mockImageEngine{}
+	commit := engine.On("CommitContainer", mock.Anything, containerID, commitNote, demoUpstreamLabels()).
+		Return(imageID, nil).Once()
+	save := engine.On("SaveImage", mock.Anything, imageID).
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
-	// The daemon's copy goes only once the layout has stored the archive.
-	remove := docker.On("RemoveImage", mock.Anything, imageID).Return(nil).Once()
+	// The daemon's copy goes only once the archiver has stored the archive.
+	remove := engine.On("RemoveImage", mock.Anything, imageID).Return(nil).Once()
 	mock.InOrder(commit, save, remove)
-	layout := &stubLayout{size: StoredSize{Image: 900, Written: 100}}
+	archiver := &stubArchiver{size: StoredSize{Image: 900, Written: 100}}
 
 	// Act
-	capture, err := NewCopier(store, docker, layout).Capture(ctx, demoRequest())
+	capture, err := newCopier(store, engine, archiver).CaptureWritableLayer(ctx, demoRequest())
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ImageCapture{
-		Service: "db", Replica: 1, ContainerID: containerID,
-		ImageID: imageID, BaseImage: "postgres:16", SizeBytes: 900, StoredBytes: 100,
+	assert.Equal(t, model.WritableLayer{
+		Service: "db", Replica: 1, ContainerID: containerID, ContainerName: "demo-db-1",
+		CommittedImageID: imageID, ImageBackend: model.ImageBackendDedupCopy,
+		UpstreamImageID: upstreamID, UpstreamImageRef: "postgres:16",
+		SizeBytes: 900, StoredBytes: 100,
 	}, capture)
-	assert.Equal(t, "archive", layout.stored, "the layout is handed the daemon's stream")
-	docker.AssertExpectations(t)
+	assert.Equal(t, "archive", archiver.stored, "the archiver is handed the daemon's stream")
+	engine.AssertExpectations(t)
 }
 
-func TestCopier_Capture_KeepsTheImageWhenTheLayoutFails(t *testing.T) {
+// A layer is stored by the archiver its backend names, and recorded under it.
+func TestCopier_CaptureWritableLayer_StoresByTheRequestedBackend(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
-	docker := &mockContainerImager{}
-	docker.On("CommitContainer", mock.Anything, containerID).Return(imageID, nil).Once()
-	docker.On("SaveImage", mock.Anything, imageID).
+	engine := &mockImageEngine{}
+	engine.On("CommitContainer", mock.Anything, containerID, commitNote, demoUpstreamLabels()).
+		Return(imageID, nil).Once()
+	engine.On("SaveImage", mock.Anything, imageID).
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
-	layout := &stubLayout{storeErr: errors.New("the store is full")}
+	engine.On("RemoveImage", mock.Anything, imageID).Return(nil).Once()
+	dedup, full := &stubArchiver{}, &stubArchiver{}
+	copier := NewCopier(newStore(t), engine, map[model.ImageBackendKind]ImageArchiver{
+		model.ImageBackendDedupCopy: dedup,
+		model.ImageBackendFullCopy:  full,
+	}, dedup)
+	req := demoRequest()
+	req.Backend = model.ImageBackendFullCopy
+
+	// Act
+	capture, err := copier.CaptureWritableLayer(ctx, req)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, model.ImageBackendFullCopy, capture.ImageBackend)
+	assert.Equal(t, "archive", full.stored)
+	assert.Empty(t, dedup.stored)
+	engine.AssertExpectations(t)
+}
+
+// A backend the copier was not built with is refused before anything is
+// committed or loaded.
+func TestCopier_RefusesAnUnknownBackend(t *testing.T) {
+	// Arrange: the imager carries no expectation, so any call fails the test.
+	ctx := zerolog.Nop().WithContext(context.Background())
+	engine := &mockImageEngine{}
+	copier := NewCopier(newStore(t), engine, map[model.ImageBackendKind]ImageArchiver{}, &stubArchiver{})
+	restore := demoRestoreRequest()
+	restore.Layer.ImageBackend = ""
+
+	// Act
+	_, captureErr := copier.CaptureWritableLayer(ctx, demoRequest())
+	_, restoreErr := copier.RestoreWritableLayer(ctx, restore)
+
+	// Assert
+	require.ErrorIs(t, captureErr, model.ErrUnsupportedImageArchive)
+	require.ErrorIs(t, restoreErr, model.ErrUnsupportedImageArchive)
+	engine.AssertExpectations(t)
+}
+
+func TestCopier_CaptureWritableLayer_KeepsTheImageWhenTheArchiverFails(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	engine := &mockImageEngine{}
+	engine.On("CommitContainer", mock.Anything, containerID, commitNote, demoUpstreamLabels()).
+		Return(imageID, nil).Once()
+	engine.On("SaveImage", mock.Anything, imageID).
+		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
+	archiver := &stubArchiver{storeErr: errors.New("the store is full")}
 
 	// Act: RemoveImage carries no expectation, so calling it fails the test — a
 	// capture that did not land must leave the daemon's copy alone.
-	_, err := NewCopier(newStore(t), docker, layout).Capture(ctx, demoRequest())
+	_, err := newCopier(newStore(t), engine, archiver).CaptureWritableLayer(ctx, demoRequest())
 
 	// Assert
 	require.ErrorContains(t, err, "the store is full")
-	docker.AssertExpectations(t)
+	engine.AssertExpectations(t)
 }
 
-func TestCopier_Restore_TagsWhatTheDaemonAlreadyHolds(t *testing.T) {
-	// Arrange
+func TestCopier_CaptureWritableLayer_StampsNoUpstreamItWasNotTold(t *testing.T) {
+	// Arrange: a broken chain leaves the upstream unknown.
 	ctx := zerolog.Nop().WithContext(context.Background())
-	docker := &mockContainerImager{}
-	docker.On("ImageExists", mock.Anything, imageID).Return(true, nil).Once()
-	docker.On("TagImage", mock.Anything, imageID, "arcave/demo:sp-1").Return(nil).Once()
-	layout := &stubLayout{}
+	engine := &mockImageEngine{}
+	engine.On("CommitContainer", mock.Anything, containerID, commitNote, map[string]string(nil)).
+		Return(imageID, nil).Once()
+	engine.On("SaveImage", mock.Anything, imageID).
+		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
+	engine.On("RemoveImage", mock.Anything, imageID).Return(nil).Once()
+	req := demoRequest()
+	req.Container.UpstreamImageID, req.Container.UpstreamImageRef = "", ""
 
 	// Act
-	restored, err := NewCopier(newStore(t), docker, layout).Restore(ctx, demoRestoreRequest())
+	capture, err := newCopier(newStore(t), engine, &stubArchiver{}).CaptureWritableLayer(ctx, req)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, "arcave/demo:sp-1", restored.ImageRef)
-	assert.False(t, layout.loaded, "a load costs the whole archive and is not worth taking twice")
-	docker.AssertExpectations(t)
+	assert.Empty(t, capture.UpstreamImageID)
+	engine.AssertExpectations(t)
 }
 
-func TestCopier_Restore_LoadsWhatTheLayoutRenders(t *testing.T) {
+func TestCopier_CaptureImage(t *testing.T) {
+	intact := `{"image_id":"` + upstreamID.String() + `","format":"oci-blobs","members":[{"name":"index.json","kind":"metadata"}]}`
+	tests := []struct {
+		name           string
+		stored         string // the manifest already in the store, verbatim; empty for none
+		existsInDaemon bool
+		saveErr        error
+		wantStored     bool
+		wantBytes      int64
+		wantSaved      bool
+	}{
+		{name: "already in the store", stored: intact, existsInDaemon: true, wantStored: true},
+		{
+			name: "a torn manifest is stored again", stored: intact[:40], existsInDaemon: true,
+			wantStored: true, wantBytes: 40, wantSaved: true,
+		},
+		{
+			name:   "a manifest of another image is stored again",
+			stored: strings.Replace(intact, upstreamID.String(), imageID.String(), 1), existsInDaemon: true,
+			wantStored: true, wantBytes: 40, wantSaved: true,
+		},
+		{
+			name: "a manifest naming no members is stored again", stored: `{"image_id":"` + upstreamID.String() + `"}`,
+			existsInDaemon: true, wantStored: true, wantBytes: 40, wantSaved: true,
+		},
+		{name: "in the daemon", existsInDaemon: true, wantStored: true, wantBytes: 40, wantSaved: true},
+		{name: "nowhere", wantStored: false},
+		{name: "the daemon fails to hand it over", existsInDaemon: true, saveErr: errors.New("content digest not found")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := zerolog.Nop().WithContext(context.Background())
+			store := newStore(t)
+			if tt.stored != "" {
+				upstreamStore, err := imageStorage(store, upstreamID)
+				require.NoError(t, err)
+				require.NoError(t, upstreamStore.PutObject(ctx, manifestName, strings.NewReader(tt.stored)))
+			}
+			engine := &mockImageEngine{}
+			if tt.wantSaved || tt.saveErr != nil {
+				engine.On("SaveImage", mock.Anything, upstreamID).
+					Return(io.NopCloser(strings.NewReader("upstream archive")), tt.saveErr).Once()
+			}
+			archiver := &stubArchiver{size: StoredSize{Image: 900, Written: 40}}
+
+			// Act
+			got, err := newCopier(store, engine, archiver).CaptureImage(ctx, model.ImageCaptureRequest{
+				Image: demoUpstream(), ExistsInDaemon: tt.existsInDaemon,
+			})
+
+			// Assert
+			require.NoError(t, err, "a missing upstream never fails the savepoint")
+			want := demoUpstream()
+			want.Stored, want.StoredBytes = tt.wantStored, tt.wantBytes
+			assert.Equal(t, want, got)
+			if tt.wantSaved {
+				assert.Equal(t, "upstream archive", archiver.stored)
+			}
+			engine.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCopier_CaptureImage_FailsWhenTheRunIsCancelled(t *testing.T) {
 	// Arrange
-	ctx := zerolog.Nop().WithContext(context.Background())
-	docker := &mockContainerImager{}
-	docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
-	docker.On("LoadImage", mock.Anything, "rendered archive").Return(nil).Once()
-	docker.On("ImageExists", mock.Anything, imageID).Return(true, nil).Once()
-	docker.On("TagImage", mock.Anything, imageID, "arcave/demo:sp-1").Return(nil).Once()
-	layout := &stubLayout{renders: "rendered archive"}
+	ctx, cancel := context.WithCancel(zerolog.Nop().WithContext(context.Background()))
+	cancel()
+	engine := &mockImageEngine{}
+	engine.On("SaveImage", mock.Anything, upstreamID).Return(nil, context.Canceled).Once()
 
 	// Act
-	restored, err := NewCopier(newStore(t), docker, layout).Restore(ctx, demoRestoreRequest())
+	_, err := newCopier(newStore(t), engine, &stubArchiver{}).CaptureImage(ctx, model.ImageCaptureRequest{
+		Image: demoUpstream(), ExistsInDaemon: true,
+	})
+
+	// Assert
+	require.ErrorIs(t, err, context.Canceled)
+	engine.AssertExpectations(t)
+}
+
+func TestCopier_RestoreWritableLayer_TagsWhatTheDaemonAlreadyHolds(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	engine := &mockImageEngine{}
+	engine.On("ImageExists", mock.Anything, imageID).Return(true, nil).Once()
+	engine.On("TagImage", mock.Anything, imageID, "arcave/demo:sp-1").Return(nil).Once()
+	archiver := &stubArchiver{}
+
+	// Act
+	restored, err := newCopier(newStore(t), engine, archiver).RestoreWritableLayer(ctx, demoRestoreRequest())
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, model.WritableLayerRestoreResult{
+		Service: "db", Replica: 1, ContainerName: "demo-db-1", ImageID: imageID, Tag: "arcave/demo:sp-1",
+	}, restored, "the restore names the container the replica is rebuilt as")
+	assert.False(t, archiver.loaded, "a load costs the whole archive and is not worth taking twice")
+	engine.AssertExpectations(t)
+}
+
+func TestCopier_RestoreWritableLayer_LoadsWhatTheArchiverRenders(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	engine := &mockImageEngine{}
+	engine.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+	engine.On("LoadImage", mock.Anything, "rendered archive").Return(nil).Once()
+	engine.On("ImageExists", mock.Anything, imageID).Return(true, nil).Once()
+	engine.On("TagImage", mock.Anything, imageID, "arcave/demo:sp-1").Return(nil).Once()
+	archiver := &stubArchiver{renders: "rendered archive"}
+
+	// Act
+	restored, err := newCopier(newStore(t), engine, archiver).RestoreWritableLayer(ctx, demoRestoreRequest())
 
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, imageID, restored.ImageID)
-	docker.AssertExpectations(t)
+	engine.AssertExpectations(t)
 }
 
-func TestCopier_Restore_RefusesALoadThatResolvedElsewhere(t *testing.T) {
+func TestCopier_RestoreWritableLayer_RefusesALoadThatResolvedElsewhere(t *testing.T) {
 	// Arrange: the daemon takes the archive but ends up holding another image.
 	ctx := zerolog.Nop().WithContext(context.Background())
-	docker := &mockContainerImager{}
-	docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
-	docker.On("LoadImage", mock.Anything, "rendered archive").Return(nil).Once()
-	docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+	engine := &mockImageEngine{}
+	engine.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+	engine.On("LoadImage", mock.Anything, "rendered archive").Return(nil).Once()
+	engine.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
 
 	// Act
-	_, err := NewCopier(newStore(t), docker, &stubLayout{renders: "rendered archive"}).
-		Restore(ctx, demoRestoreRequest())
+	_, err := newCopier(newStore(t), engine, &stubArchiver{renders: "rendered archive"}).
+		RestoreWritableLayer(ctx, demoRestoreRequest())
 
 	// Assert
 	require.ErrorContains(t, err, "does not hold image")
-	docker.AssertExpectations(t)
+	engine.AssertExpectations(t)
 }
 
-func TestCopier_Restore_ReportsWhyTheLayoutCouldNotRender(t *testing.T) {
-	// Arrange: the daemon swallows a broken stream, so the layout's own error is the
+func TestCopier_RestoreWritableLayer_ReportsWhyTheArchiverCouldNotRender(t *testing.T) {
+	// Arrange: the daemon swallows a broken stream, so the archiver's own error is the
 	// only account of why the image never arrived.
 	ctx := zerolog.Nop().WithContext(context.Background())
-	docker := &mockContainerImager{}
-	docker.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
-	docker.On("LoadImage", mock.Anything, mock.Anything).Return(nil).Once()
-	layout := &stubLayout{renders: "half an ", loadErr: model.ErrSavepointImageMissing}
+	engine := &mockImageEngine{}
+	engine.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+	engine.On("LoadImage", mock.Anything, mock.Anything).Return(nil).Once()
+	archiver := &stubArchiver{renders: "half an ", loadErr: model.ErrSavepointImageMissing}
 
 	// Act
-	_, err := NewCopier(newStore(t), docker, layout).Restore(ctx, demoRestoreRequest())
+	_, err := newCopier(newStore(t), engine, archiver).RestoreWritableLayer(ctx, demoRestoreRequest())
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrSavepointImageMissing)
-	docker.AssertExpectations(t)
+	engine.AssertExpectations(t)
 }
 
-func TestCopier_Restore_RefusesAnEmptyReference(t *testing.T) {
+func TestCopier_RestoreWritableLayer_RefusesAnEmptyReference(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
-	docker := &mockContainerImager{}
+	engine := &mockImageEngine{}
 	req := demoRestoreRequest()
-	req.ImageRef = ""
+	req.Tag = ""
 
 	// Act
-	_, err := NewCopier(newStore(t), docker, &stubLayout{}).Restore(ctx, req)
+	_, err := newCopier(newStore(t), engine, &stubArchiver{}).RestoreWritableLayer(ctx, req)
 
 	// Assert
 	require.ErrorContains(t, err, "under no reference")
-	docker.AssertExpectations(t)
+	engine.AssertExpectations(t)
 }
 
-// stubLayout stands in for a real layout: it records the archive it was given and
+// stubArchiver stands in for a real archiver: it records the archive it was given and
 // renders back whatever it was told to.
-type stubLayout struct {
+type stubArchiver struct {
 	size     StoredSize
 	storeErr error
 	renders  string
@@ -300,8 +501,8 @@ type stubLayout struct {
 	loaded bool
 }
 
-func (s *stubLayout) Store(
-	_ context.Context, _ storages.Storager, _ model.ImageDigestID, archive io.Reader,
+func (s *stubArchiver) Store(
+	_ context.Context, _ storages.Writer, _ model.ImageDigestID, archive io.Reader,
 ) (StoredSize, error) {
 	body, err := io.ReadAll(archive)
 	if err != nil {
@@ -314,7 +515,7 @@ func (s *stubLayout) Store(
 	return s.size, nil
 }
 
-func (s *stubLayout) Load(_ context.Context, _ storages.Storager, _ model.ImageDigestID, archive io.Writer) error {
+func (s *stubArchiver) Load(_ context.Context, _ storages.Storager, _ model.ImageDigestID, archive io.Writer) error {
 	s.loaded = true
 	if _, err := io.WriteString(archive, s.renders); err != nil {
 		return err
@@ -322,14 +523,23 @@ func (s *stubLayout) Load(_ context.Context, _ storages.Storager, _ model.ImageD
 	return s.loadErr
 }
 
-func demoRestoreRequest() model.ImageRestoreRequest {
-	return model.ImageRestoreRequest{
+func demoRestoreRequest() model.WritableLayerRestoreRequest {
+	return model.WritableLayerRestoreRequest{
 		SnapshotID: snapshotID,
-		Capture: model.ImageCapture{
-			Service: "db", Replica: 1, ContainerID: containerID, ImageID: imageID,
+		Layer: model.WritableLayer{
+			Service: "db", Replica: 1, ContainerID: containerID, ContainerName: "demo-db-1",
+			CommittedImageID: imageID, ImageBackend: model.ImageBackendDedupCopy,
 		},
-		ImageRef: "arcave/demo:sp-1",
+		Tag: "arcave/demo:sp-1",
 	}
+}
+
+// newCopier builds a copier whose every archiver, the images' included, is archiver.
+func newCopier(store storages.Navigator, engine dockerImageEngine, archiver ImageArchiver) *Copier {
+	return NewCopier(store, engine, map[model.ImageBackendKind]ImageArchiver{
+		model.ImageBackendDedupCopy: archiver,
+		model.ImageBackendFullCopy:  archiver,
+	}, archiver)
 }
 
 func newStore(t *testing.T) storages.Storager {

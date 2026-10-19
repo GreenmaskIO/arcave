@@ -37,7 +37,7 @@ import (
 func TestSnapshotter_Snapshot(t *testing.T) {
 	const payload = "tar-stream-bytes"
 	volume := bindVolume("app", "/etc/cfg")
-	archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
+	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
 
 	tests := []struct {
 		name       string
@@ -54,7 +54,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 				assert.Equal(t, []string{archiveKey}, objectNames(t, store))
 				assert.Equal(t, payload, readObject(t, store, archiveKey))
 				assert.Equal(t, volume, stat.Volume, "the stat carries the unit it captured")
-				assert.Equal(t, model.SnapshotBackendCopy, stat.Type)
+				assert.Equal(t, model.SnapshotBackendFullCopy, stat.Type)
 				assert.Equal(t, Payload{SizeBytes: int64(len(payload))}, stat.Payload)
 			},
 		},
@@ -103,7 +103,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			require.NoError(t, err)
 
 			// Act
-			stat, err := snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+			stat, err := snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 			// Assert
 			tt.verify(t, stat, err, store)
@@ -118,7 +118,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 	// Arrange
 	volume := bindVolume("app", "/etc/cfg")
-	archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
+	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
 	docker := &mockVolumeStreamer{}
 	docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
 	docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).
@@ -128,7 +128,7 @@ func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 	require.NoError(t, err)
 
 	// Act
-	_, err = snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+	_, err = snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 	// Assert
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 func TestSnapshotter_Restore(t *testing.T) {
 	const payload = "tar-stream-bytes"
 	volume := bindVolume("app", "/etc/cfg")
-	archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
+	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
 
 	tests := []struct {
 		name       string
@@ -207,7 +207,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 			require.NoError(t, err)
 
 			// Act
-			err = snapshotter.Restore(ctx, model.BackendRestoreRequest{SnapshotID: "1780335122", Payload: tt.reqPayload})
+			err = snapshotter.Restore(ctx, model.BackendRestoreRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000", Payload: tt.reqPayload})
 
 			// Assert
 			tt.verify(t, err, restored.String(), docker)
@@ -239,14 +239,14 @@ func TestSnapshotter_Remove(t *testing.T) {
 			store := newStore(t, "savepoints")
 			ctx := context.Background()
 			if tt.seed {
-				archiveKey := "1780335122/" + volume.ObjectID + "/" + archiveName
+				archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
 				require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(payload)))
 			}
 			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
-			err = snapshotter.Remove(ctx, model.BackendRemoveRequest{SnapshotID: "1780335122", Payload: tt.reqPayload})
+			err = snapshotter.Remove(ctx, model.BackendRemoveRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000", Payload: tt.reqPayload})
 
 			// Assert
 			assert.NoError(t, err)

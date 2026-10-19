@@ -29,9 +29,9 @@ import (
 // error must short-circuit before the printer runs; a printer error must reach
 // the caller.
 func TestSavepointListHandler_SavepointList(t *testing.T) {
-	sps := []model.Savepoint{
-		{ID: "1780335122", Name: "before-migration"},
-		{ID: "1780335999", Name: "after-migration"},
+	savepoints := []model.Savepoint{
+		{ID: "019e843e-1650-7000-8000-000000000000", Name: "before-migration"},
+		{ID: "019e844b-7818-7000-8000-000000000000", Name: "after-migration"},
 	}
 	svcErr := errors.New("manifest unreadable")
 	printErr := errors.New("stdout closed")
@@ -47,19 +47,19 @@ func TestSavepointListHandler_SavepointList(t *testing.T) {
 	}{
 		{
 			name:        "prints every savepoint",
-			savepoints:  sps,
+			savepoints:  savepoints,
 			listErr:     nil,
 			printerErr:  nil,
 			wantErr:     nil,
-			wantPrinted: []any{sps},
+			wantPrinted: []any{savepoints},
 		},
 		{
 			// The flag is the handler's only input, and it must reach the service
 			// verbatim: matched exactly below, so dropping it fails here.
 			name:        "--include-safety-snapshots reaches the service",
 			req:         model.ListRequest{IncludeSafetySnapshots: true},
-			savepoints:  sps,
-			wantPrinted: []any{sps},
+			savepoints:  savepoints,
+			wantPrinted: []any{savepoints},
 		},
 		{
 			name:        "empty manifest prints an empty list",
@@ -79,11 +79,11 @@ func TestSavepointListHandler_SavepointList(t *testing.T) {
 		},
 		{
 			name:        "printer error surfaces",
-			savepoints:  sps,
+			savepoints:  savepoints,
 			listErr:     nil,
 			printerErr:  printErr,
 			wantErr:     printErr,
-			wantPrinted: []any{sps},
+			wantPrinted: []any{savepoints},
 		},
 	}
 

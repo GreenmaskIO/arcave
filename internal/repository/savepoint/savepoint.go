@@ -40,6 +40,8 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
+	"strings"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog/log"
@@ -106,24 +108,25 @@ func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte
 		return nil, err
 	}
 
-	src, err := r.storage.GetObject(ctx, specKey(id))
+	obj, err := r.storage.GetObject(ctx, specKey(id))
 	if err != nil {
 		return nil, fmt.Errorf("read savepoint spec %s: %w", id, err)
 	}
 	defer func() {
-		if err := src.Close(); err != nil {
+		if err := obj.Close(); err != nil {
 			log.Ctx(ctx).Debug().Err(err).Str("savepoint", id.String()).Msg("close savepoint spec")
 		}
 	}()
 
-	spec, err := io.ReadAll(src)
+	spec, err := io.ReadAll(obj)
 	if err != nil {
 		return nil, fmt.Errorf("read savepoint spec %s: %w", id, err)
 	}
 	return spec, nil
 }
 
-// ListSavepoints returns every committed record.
+// ListSavepoints returns every committed record, oldest first: sorted by id, a
+// UUIDv7, since not every store lists in key order (SFTP lists in readdir order).
 //
 // It walks the store's namespace directories, keeps those whose name is a valid
 // savepoint id, and reads each one's record. A namespace with no record is an
@@ -131,8 +134,9 @@ func (r *Repository) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte
 // a record that is present but will not decode is a corrupt commit and is an
 // error, never a silent skip.
 //
-// That is N+1 round-trips rather than a single index read, which is free on a
-// local filesystem and, on an object store, collapses into one prefix listing.
+// That is a listing plus two requests per savepoint (Exists, then GetObject)
+// rather than a single index read: free on a local filesystem, a round trip each
+// on an object store or over SFTP.
 func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
 	_, dirs, err := r.storage.ListDir(ctx)
 	if err != nil {
@@ -156,6 +160,7 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, err
 		}
 		records = append(records, record)
 	}
+	slices.SortFunc(records, func(a, b model.Savepoint) int { return strings.Compare(a.ID.String(), b.ID.String()) })
 	return records, nil
 }
 
@@ -173,18 +178,18 @@ func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Save
 		return model.Savepoint{}, false, nil
 	}
 
-	src, err := r.storage.GetObject(ctx, recordKey(id))
+	obj, err := r.storage.GetObject(ctx, recordKey(id))
 	if err != nil {
 		return model.Savepoint{}, false, fmt.Errorf("read savepoint record %s: %w", id, err)
 	}
 	defer func() {
-		if err := src.Close(); err != nil {
+		if err := obj.Close(); err != nil {
 			log.Ctx(ctx).Debug().Err(err).Str("savepoint", id.String()).Msg("close savepoint record")
 		}
 	}()
 
 	var record model.Savepoint
-	if err := json.NewDecoder(src).Decode(&record); err != nil {
+	if err := json.NewDecoder(obj).Decode(&record); err != nil {
 		return model.Savepoint{}, false, fmt.Errorf("parse savepoint record %s: %w", id, err)
 	}
 	return record, true, nil

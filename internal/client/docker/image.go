@@ -18,6 +18,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
+	"strconv"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -29,12 +32,19 @@ import (
 )
 
 // CommitContainer snapshots a stopped container's writable layer as a new,
-// untagged image and returns its id. The daemon's answer is parsed here, the one
-// place an image id enters arcave: what travels on is a digest, never a name.
-func (e *Engine) CommitContainer(ctx context.Context, containerID string) (model.ImageDigestID, error) {
+// untagged image carrying comment and labels, and returns its id. The daemon's
+// answer is parsed here, the one place an image id enters arcave: what travels on
+// is a digest, never a name.
+func (e *Engine) CommitContainer(
+	ctx context.Context, containerID, comment string, labels map[string]string,
+) (model.ImageDigestID, error) {
 	// Unpaused: the caller has already stopped the services, and a stopped container
 	// cannot be paused.
-	resp, err := e.api.ContainerCommit(ctx, containerID, container.CommitOptions{Pause: false})
+	resp, err := e.api.ContainerCommit(ctx, containerID, container.CommitOptions{
+		Pause:   false,
+		Comment: comment,
+		Changes: labelChanges(labels),
+	})
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
@@ -45,14 +55,25 @@ func (e *Engine) CommitContainer(ctx context.Context, containerID string) (model
 	return imageID, nil
 }
 
+// labelChanges renders labels as Dockerfile LABEL instructions, in key order so the
+// changes are deterministic.
+func labelChanges(labels map[string]string) []string {
+	keys := slices.Sorted(maps.Keys(labels))
+	changes := make([]string, 0, len(keys))
+	for _, key := range keys {
+		changes = append(changes, "LABEL "+strconv.Quote(key)+"="+strconv.Quote(labels[key]))
+	}
+	return changes
+}
+
 // SaveImage streams one image out of the daemon as a save archive. The caller
 // owns the stream and closes it.
 func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
-	src, err := e.api.ImageSave(ctx, []string{imageID.String()})
+	archive, err := e.api.ImageSave(ctx, []string{imageID.String()})
 	if err != nil {
 		return nil, fmt.Errorf("save image %s: %w", imageID, err)
 	}
-	return src, nil
+	return archive, nil
 }
 
 // RemoveImage drops one image from the daemon. Not forced, so an image something
@@ -89,6 +110,17 @@ func (e *Engine) TagImage(ctx context.Context, imageID model.ImageDigestID, ref 
 		return fmt.Errorf("tag image %s as %s: %w", imageID, ref, err)
 	}
 	return nil
+}
+
+// ImageRefExists reports whether the daemon holds an image under ref.
+func (e *Engine) ImageRefExists(ctx context.Context, ref string) (bool, error) {
+	if _, err := e.api.ImageInspect(ctx, ref); err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect image %s: %w", ref, err)
+	}
+	return true, nil
 }
 
 // ImageExists reports whether the daemon holds the image. A daemon that answers

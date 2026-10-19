@@ -51,12 +51,14 @@ const (
 	busyboxImage = "busybox"
 	// idFirst is the id every case captures under — a constant, not the clock, so
 	// a failure names the same id on every run.
-	idFirst = model.SavepointID("1780000001")
+	idFirst = model.SavepointID("019e7044-8be8-7000-8000-000000000000")
 )
 
 // A capture is round: the volume comes back byte for byte, ownership and
 // permissions included, and what was written after the capture is gone.
 func TestSnapshotter_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		volume func(t *testing.T, e *env) model.Volume
@@ -116,6 +118,8 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 // A capture of a volume the daemon does not have is refused before anything
 // creates it: an empty capture would wipe live data at the next rollback.
 func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	e := newEnv(t)
 	vol := namedVolume(itProject + "-never-created-" + randomSuffix(t))
@@ -210,7 +214,7 @@ func namedVolume(name string, usedBy ...model.ServiceReference) model.Volume {
 		ObjectID:       "volume-named-" + name,
 		ComposeProject: itProject,
 		Type:           model.VolumeTypeNamed,
-		Backend:        model.SnapshotBackendCopy,
+		Backend:        model.SnapshotBackendFullCopy,
 		Named:          &model.VolumePropertiesNamed{VolumeName: name, UsedBy: usedBy},
 	}
 }

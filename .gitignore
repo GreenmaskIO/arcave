@@ -44,3 +44,8 @@ examples/demo/repo/
 
 .mcp.json
 .agents
+# agent files, kept local
+CLAUDE.md
+AGENTS.md
+skills-lock.json
+arcave

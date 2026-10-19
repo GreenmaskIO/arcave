@@ -17,14 +17,53 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/rs/zerolog"
 )
+
+// exitInterrupted is the shell's code for a process ended by SIGINT.
+const exitInterrupted = 130
 
 // main executes the command tree. Config resolution and logger setup happen in
 // rootCmd's PersistentPreRunE (cmd_root.go); each command builds the dependencies
-// it needs via initAllDependencies (dependencies.go) and releases them on return.
+// it needs via newDependencies (dependencies.go) and releases them on return.
 func main() {
-	if err := rootCmd.ExecuteContext(context.Background()); err != nil {
+	ctx, stop := notifyInterrupt()
+	err := rootCmd.ExecuteContext(ctx)
+	interrupted := ctx.Err() != nil
+	stop()
+	if err != nil {
 		// cobra has already reported the error on stderr.
+		if interrupted {
+			os.Exit(exitInterrupted)
+		}
 		os.Exit(1)
+	}
+}
+
+// notifyInterrupt returns a context the first SIGINT or SIGTERM cancels, so a
+// workflow unwinds through its own cleanup; a second signal exits at once.
+func notifyInterrupt() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		select {
+		case <-signals:
+		case <-ctx.Done():
+			return
+		}
+		zerolog.Ctx(ctx).Warn().Msg("interrupted: cleaning up, interrupt again to exit at once")
+		cancel()
+		<-signals
+		os.Exit(exitInterrupted)
+	}()
+
+	return ctx, func() {
+		signal.Stop(signals)
+		cancel()
 	}
 }

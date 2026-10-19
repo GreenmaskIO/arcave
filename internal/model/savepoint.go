@@ -39,12 +39,17 @@ type Savepoint struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
 	Stats       []SnapshotStat    `json:"stats,omitempty"` // one per snapshotted volume
-	// Images is one capture per container whose writable layer was committed. It is
-	// empty on records predating image capture and on workflows that take none.
-	Images []ImageCapture `json:"images,omitempty"`
+	// WritableLayers is one capture per container whose writable layer was committed;
+	// empty when a capture takes none.
+	WritableLayers []WritableLayer `json:"writable_layers,omitempty"`
+	// Images is one entry per distinct image the compose file named, kept
+	// whether or not a writable layer was captured over it.
+	Images []Image `json:"images,omitempty"`
 	// Spec names the compose spec committed beside this record. A savepoint without
-	// one cannot be rolled back to: the stack is rebuilt from the spec.
+	// one cannot be rolled back to: the compose project is rebuilt from the spec.
 	Spec *SpecRef `json:"spec,omitempty"`
+	// NotCovered is what this savepoint does not hold; nil when it holds everything.
+	NotCovered *NotCovered `json:"not_covered,omitempty"`
 }
 
 // SpecRef is the reference to a savepoint's compose spec artifact.
@@ -54,6 +59,6 @@ type SpecRef struct {
 
 // IsSafetySnapshot reports whether this record is a rollback's undo rather than
 // a savepoint a user asked for.
-func (s Savepoint) IsSafetySnapshot() bool {
-	return s.Labels[SafetySnapshotLabel] == SafetySnapshotLabelValue
+func (m Savepoint) IsSafetySnapshot() bool {
+	return m.Labels[SafetySnapshotLabel] == SafetySnapshotLabelValue
 }

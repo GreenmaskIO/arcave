@@ -40,22 +40,22 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		Latest:      &wantLatest,
 		WaitTimeout: waitTimeout,
 	}
-	sp := model.Savepoint{ID: "1780335122"}
+	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000"}
 	restored := []model.Volume{
 		{
 			ObjectID: "volume-named-demo_pgdata",
 			Type:     model.VolumeTypeNamed,
-			Backend:  model.SnapshotBackendCopy,
+			Backend:  model.SnapshotBackendFullCopy,
 			Named: &model.VolumePropertiesNamed{
 				VolumeName: "demo_pgdata",
 				UsedBy:     []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
 			},
 		},
 		{
-			ObjectID: "volume-service-cache-data",
+			ObjectID: "volume-anon-cache-1-data",
 			Type:     model.VolumeTypeAnon,
-			Backend:  model.SnapshotBackendCopy,
-			Anon:     &model.VolumePropertiesAnon{Service: "cache", Target: "/data"},
+			Backend:  model.SnapshotBackendFullCopy,
+			Anon:     &model.VolumePropertiesAnon{Service: "cache", Replica: 1, Target: "/data"},
 		},
 	}
 	svcErr := errors.New("savepoint not found")
@@ -75,25 +75,25 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			// service's now, not this adapter's.
 			name: "forwards every restored volume",
 			res: model.RollbackResult{
-				Savepoint: sp,
+				Savepoint: savepoint,
 				Restored:  restored,
 			},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
 			wantPrinted: []any{model.RollbackResponse{
-				RolledBackTo: sp,
+				RolledBackTo: savepoint,
 				Restored:     restored,
 			}},
 		},
 		{
 			name:       "restores nothing",
-			res:        model.RollbackResult{Savepoint: sp, Restored: []model.Volume{}},
+			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
 			wantPrinted: []any{model.RollbackResponse{
-				RolledBackTo: sp,
+				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
 		},
@@ -107,12 +107,12 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		},
 		{
 			name:       "printer error surfaces",
-			res:        model.RollbackResult{Savepoint: sp, Restored: []model.Volume{}},
+			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: printErr,
 			wantErr:    printErr,
 			wantPrinted: []any{model.RollbackResponse{
-				RolledBackTo: sp,
+				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
 		},
@@ -138,10 +138,8 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 	}
 }
 
-// The one token both adapters take becomes exactly one of the three selectors,
-// and the classification is the whole of what "1780335122" means to arcave. An
-// id must never be read as a name, or `rollback <id>` would silently resolve to
-// a savepoint that merely calls itself that.
+// An id must never be read as a name, or `rollback <id>` would resolve to a
+// savepoint that merely calls itself that.
 func TestNewRollbackRequest(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -152,11 +150,13 @@ func TestNewRollbackRequest(t *testing.T) {
 		wantErr    error
 	}{
 		{name: "the reserved word", ref: "latest", wantLatest: ptr(true)},
-		{name: "a run of digits is an id", ref: "1780335122", wantID: ptr(model.SavepointID("1780335122"))},
+		{name: "a canonical UUID is an id", ref: "019e843e-1650-7000-8000-000000000000", wantID: ptr(model.SavepointID("019e843e-1650-7000-8000-000000000000"))},
 		{name: "anything else is a name", ref: "before-migration", wantName: ptr("before-migration")},
-		// Digits with anything else in them is not an id — SavepointID.Validate
-		// admits digits alone — so it can only be a name.
-		{name: "digits with a suffix are a name", ref: "1780335122-b", wantName: ptr("1780335122-b")},
+		// SavepointID.Validate admits the canonical spelling alone, so a suffix,
+		// upper case or a run of digits can only be a name.
+		{name: "a UUID with a suffix is a name", ref: "019e843e-1650-7000-8000-000000000000-b", wantName: ptr("019e843e-1650-7000-8000-000000000000-b")},
+		{name: "an upper-case UUID is a name", ref: "019E843E-1650-7000-8000-000000000000", wantName: ptr("019E843E-1650-7000-8000-000000000000")},
+		{name: "a run of digits is a name", ref: "1780335122", wantName: ptr("1780335122")},
 		// The empty token needs no case of its own: it lands on the name branch and
 		// Validate refuses it, which is what keeps `arcave rollback ""` from
 		// resolving to anything.
@@ -166,13 +166,14 @@ func TestNewRollbackRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newRollbackRequest(tt.ref, 90*time.Second)
+			got := newRollbackRequest(tt.ref, 90*time.Second, model.LeftoverVolumesRefuse)
 
 			// Assert
 			assert.Equal(t, tt.wantID, got.ID)
 			assert.Equal(t, tt.wantName, got.Name)
 			assert.Equal(t, tt.wantLatest, got.Latest)
 			assert.Equal(t, 90*time.Second, got.WaitTimeout)
+			assert.Equal(t, model.LeftoverVolumesRefuse, got.LeftoverVolumes)
 			assert.ErrorIs(t, got.Validate(), tt.wantErr)
 			// Whatever it chose renders back as the word that was typed, which is what
 			// error messages quote and what a safety snapshot's name carries.

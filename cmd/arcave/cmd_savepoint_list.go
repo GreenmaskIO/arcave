@@ -24,7 +24,8 @@ import (
 )
 
 var (
-	savepointListFlagIncludeSafetySnapshots = false
+	savepointListIncludeSafety = false
+	savepointListSort          = string(model.SortDesc)
 
 	savepointListCmd = &cobra.Command{
 		Use:   "list",
@@ -38,16 +39,23 @@ func runSavepointList(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
+	order, err := model.ParseSortOrder(savepointListSort)
+	if err != nil {
+		return err
+	}
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewSavepointListHandler(d.service, d.printer)
 		return h.SavepointList(ctx, model.ListRequest{
-			IncludeSafetySnapshots: savepointListFlagIncludeSafetySnapshots,
+			IncludeSafetySnapshots: savepointListIncludeSafety,
+			Sort:                   order,
 		})
 	})
 }
 
 func init() {
-	savepointListCmd.Flags().BoolVar(&savepointListFlagIncludeSafetySnapshots, "include-safety-snapshots", false,
+	savepointListCmd.Flags().BoolVar(&savepointListIncludeSafety, "include-safety-snapshots", false,
 		"also list the safety snapshots a rollback takes of the live state; one that outlived its rollback can be rolled back to by id")
+	savepointListCmd.Flags().StringVar(&savepointListSort, "sort", string(model.SortDesc),
+		"order by age: desc (newest first) or asc")
 	savepointCmd.AddCommand(savepointListCmd)
 }

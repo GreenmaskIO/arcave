@@ -16,6 +16,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -32,32 +33,50 @@ type RollbackRequest struct {
 	Latest *bool        // when true, the newest savepoint by CreatedAt
 
 	WaitTimeout time.Duration // bounds the health check on restart; <= 0 lets the compose runner apply its default
+
+	// LeftoverVolumes is what a rollback into a compose project with no containers does with
+	// the volumes that still exist; empty means LeftoverVolumesOverwrite.
+	LeftoverVolumes LeftoverVolumesPolicy
 }
 
-// Validate refuses a request that names no savepoint. A pointer set to the zero
-// value does not count: an empty id or name selects nothing, and Latest set to
-// false says "not the latest", which selects nothing either. So a selector this
-// accepts is one findSavepoint can branch on by nil-ness alone.
-func (r RollbackRequest) Validate() error {
+// LeftoverVolumesPolicy is what a rollback does with a volume that outlived its compose
+// project's containers.
+type LeftoverVolumesPolicy string
+
+const (
+	// LeftoverVolumesOverwrite restores over the volume and warns, naming it.
+	LeftoverVolumesOverwrite LeftoverVolumesPolicy = "overwrite"
+	// LeftoverVolumesRefuse fails the rollback before anything is created.
+	LeftoverVolumesRefuse LeftoverVolumesPolicy = "refuse"
+)
+
+// Validate refuses a request whose selector is nil or zero-valued, or whose
+// leftover-volumes policy is unknown.
+func (m RollbackRequest) Validate() error {
 	switch {
-	case r.ID != nil && *r.ID != "":
-	case r.Name != nil && *r.Name != "":
-	case r.Latest != nil && *r.Latest:
+	case m.ID != nil && *m.ID != "":
+	case m.Name != nil && *m.Name != "":
+	case m.Latest != nil && *m.Latest:
 	default:
 		return ErrRollbackNoSelector
 	}
-	return nil
+	switch m.LeftoverVolumes {
+	case "", LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
+		return nil
+	default:
+		return fmt.Errorf("unsupported leftover volumes policy %q", m.LeftoverVolumes)
+	}
 }
 
 // Ref renders the selector back as the word the user typed, for error messages
 // to quote.
-func (r RollbackRequest) Ref() string {
+func (m RollbackRequest) Ref() string {
 	switch {
-	case r.ID != nil:
-		return r.ID.String()
-	case r.Name != nil:
-		return *r.Name
-	case r.Latest != nil && *r.Latest:
+	case m.ID != nil:
+		return m.ID.String()
+	case m.Name != nil:
+		return *m.Name
+	case m.Latest != nil && *m.Latest:
 		return RefLatest
 	default:
 		return ""

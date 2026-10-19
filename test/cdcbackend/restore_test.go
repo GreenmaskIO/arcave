@@ -29,6 +29,8 @@ import (
 // R1/R2: both modes converge on the snapshot — the mutation is rolled back and the
 // file it never carried is gone.
 func TestSnapshotter_Restore(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		opts cdc.Options
@@ -64,6 +66,8 @@ func TestSnapshotter_Restore(t *testing.T) {
 // R3: a payload out of a stored record arrives as a map, not the struct the
 // capture returned. The round trip through JSON is the decode, not a fallback.
 func TestSnapshotter_Restore_DecodesAStoredPayload(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
@@ -93,6 +97,8 @@ func TestSnapshotter_Restore_DecodesAStoredPayload(t *testing.T) {
 // it fails after the wipe, honestly, and the service layer's revert owes the
 // volume.
 func TestSnapshotter_Restore_RefusesAnUnusablePayload(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		payload any
@@ -125,6 +131,8 @@ func TestSnapshotter_Restore_RefusesAnUnusablePayload(t *testing.T) {
 // mount may already be wiped by then — the backend owes only the truth, and the
 // service layer's revert owes the volume.
 func TestSnapshotter_Restore_SnapshotDeletedBehindArcave(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")

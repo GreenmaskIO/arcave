@@ -85,7 +85,7 @@ func TestFactory_New(t *testing.T) {
 			// server resolves a name against, so the two halves cannot diverge.
 			assert.Equal(t, root.GetCwd()+"/"+tt.volume.ObjectID, snapshotter.repo.store.GetCwd())
 			assert.Equal(t, demoRepoURLBase+"/"+tt.volume.ObjectID+"/", snapshotter.repositoryURL())
-			assert.Equal(t, tt.wantMounted, snapshotter.mounted)
+			assert.Equal(t, tt.wantMounted, snapshotter.mountPath)
 		})
 	}
 }

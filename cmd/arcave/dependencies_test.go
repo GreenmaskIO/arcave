@@ -28,12 +28,15 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// cdcOptions is the translation that keeps internal/config free of any package
+// newCDCOptions is the translation that keeps internal/config free of any package
 // carrying a client: the config's own vocabulary in, the backend's own out.
-func TestCDCOptions(t *testing.T) {
+func TestNewCDCOptions(t *testing.T) {
 	tests := []struct {
 		name        string
 		cfg         config.CDCBackend
@@ -93,7 +96,7 @@ func TestCDCOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := cdcOptions(tt.cfg, tt.hostNetwork)
+			got := newCDCOptions(tt.cfg, tt.hostNetwork)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -101,10 +104,10 @@ func TestCDCOptions(t *testing.T) {
 	}
 }
 
-// getDockerOptions is what carries the config into docker/cli. An unset option
+// newDockerClientOptions is what carries the config into docker/cli. An unset option
 // must not be passed through: an empty host would override the environment's
 // DOCKER_HOST rather than defer to it.
-func TestGetDockerOptions(t *testing.T) {
+func TestNewDockerClientOptions(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     config.Docker
@@ -252,7 +255,7 @@ func TestGetDockerOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := getDockerOptions(tt.cfg)
+			got, err := newDockerClientOptions(tt.cfg)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -265,11 +268,11 @@ func TestGetDockerOptions(t *testing.T) {
 	}
 }
 
-// dockerTLSOptions honours docker's two-part TLS model: a cert_file/key_file pair
+// newDockerTLSOptions honours docker's two-part TLS model: a cert_file/key_file pair
 // (mutual TLS) that must be supplied together, and ca_file/tls_verify governing
 // server verification independently. The useTLS return is what keeps an all-empty
 // config off TLS entirely, so it is asserted alongside the resolved paths.
-func TestDockerTLSOptions(t *testing.T) {
+func TestNewDockerTLSOptions(t *testing.T) {
 	tests := []struct {
 		name        string
 		cfg         config.Docker
@@ -333,7 +336,7 @@ func TestDockerTLSOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			opts, useTLS, err := dockerTLSOptions(tt.cfg)
+			opts, useTLS, err := newDockerTLSOptions(tt.cfg)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -359,7 +362,7 @@ func TestDockerTLSOptions(t *testing.T) {
 // Compose's progress is what turns a two-minute health-check wait from a hang
 // into something a user can watch, so every channel must reach the library — and
 // none of them may reach stdout, which carries arcave's JSON.
-func TestComposeProgressWriter(t *testing.T) {
+func TestNewProgressWriter(t *testing.T) {
 	tests := []struct {
 		name     string
 		mode     string
@@ -394,7 +397,7 @@ func TestComposeProgressWriter(t *testing.T) {
 			t.Cleanup(func() { progress.Mode = original })
 
 			// Act
-			out := composeProgressWriter(tt.mode, zerolog.Nop())
+			out := newProgressWriter(tt.mode, zerolog.Nop())
 
 			// Assert
 			assert.Equal(t, tt.wantMode, progress.Mode)
@@ -413,13 +416,13 @@ func TestComposeProgressWriter(t *testing.T) {
 
 // A host resolves to an endpoint whether or not anything is listening on it:
 // arcave savepoint list has to work with docker stopped.
-func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
+func TestNewDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 	// Arrange: an empty config dir, so the developer's own docker config cannot
 	// steer the resolution.
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	dockerCli, apiClient, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	dockerCli, apiClient, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
@@ -432,13 +435,13 @@ func TestInitDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 // through the environment: docker/cli reads DOCKER_API_VERSION and otherwise
 // negotiates. arcave spawns no child processes, so setting it configures arcave's own
 // client and nothing else.
-func TestInitDockerClient_PinsAPIVersion(t *testing.T) {
+func TestNewDockerClient_PinsAPIVersion(t *testing.T) {
 	// Arrange: an empty config dir, and a known-empty env var t restores afterwards.
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 	t.Setenv(client.EnvOverrideAPIVersion, "")
 
 	// Act
-	_, apiClient, err := initDockerClient(config.Docker{
+	_, apiClient, err := newDockerClient(config.Docker{
 		Host:       "unix:///nowhere/docker.sock",
 		APIVersion: "1.45",
 	}, io.Discard)
@@ -453,13 +456,13 @@ func TestInitDockerClient_PinsAPIVersion(t *testing.T) {
 // An unset api_version leaves DOCKER_API_VERSION untouched, so docker/cli
 // negotiates rather than being pinned to a stale value the caller never asked
 // for — the empty field is "read the environment", not "clear it".
-func TestInitDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
+func TestNewDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
 	// Arrange
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 	t.Setenv(client.EnvOverrideAPIVersion, "1.40")
 
 	// Act
-	_, apiClient, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	_, apiClient, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
@@ -472,12 +475,12 @@ func TestInitDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
 // answer is to print to the (discarded) error stream and os.Exit(1), which would
 // kill arcave with no output at all — so the endpoint is resolved up front, where a
 // failure is still returnable.
-func TestInitDockerClient_RejectsAnUnknownContext(t *testing.T) {
+func TestNewDockerClient_RejectsAnUnknownContext(t *testing.T) {
 	// Arrange: an empty config dir, so no context store can define the name.
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	_, _, err := initDockerClient(config.Docker{Context: "nosuchcontext"}, io.Discard)
+	_, _, err := newDockerClient(config.Docker{Context: "nosuchcontext"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "nosuchcontext")
@@ -488,14 +491,45 @@ func TestInitDockerClient_RejectsAnUnknownContext(t *testing.T) {
 // client from it that fails, so docker/cli holds the failure behind a perfectly
 // good Host and only answers on the next Client() call — by exiting. Building
 // the client up front is what turns it into an error.
-func TestInitDockerClient_RejectsAnUnbuildableClient(t *testing.T) {
+func TestNewDockerClient_RejectsAnUnbuildableClient(t *testing.T) {
 	// Arrange
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 	t.Setenv("DOCKER_CUSTOM_HEADERS", "not-a-key-value-pair")
 
 	// Act
-	_, _, err := initDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	_, _, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "DOCKER_CUSTOM_HEADERS")
+}
+
+// The config's capture keys reach the policy as written; one left unset is captured,
+// because ApplyDefaults sets it.
+func TestNewCaptureDefaults(t *testing.T) {
+	// Arrange
+	cfg := config.Config{
+		Snapshot:       config.Snapshot{Backend: config.SnapshotBackendCDC},
+		WritableLayers: config.WritableLayers{Backend: "fullcopy"},
+		Capture: config.Capture{
+			WritableLayers: utils.New(false),
+			Volumes:        config.CaptureVolumes{Bind: utils.New(false), Named: utils.New(true)},
+		},
+	}
+	cfg.ApplyDefaults(t.TempDir())
+
+	// Act
+	got := newCaptureDefaults(cfg)
+
+	// Assert
+	assert.Equal(t, capturepolicy.CaptureDefaults{
+		VolumeBackend:        model.SnapshotBackendCDC,
+		WritableLayerBackend: model.ImageBackendFullCopy,
+		SavepointCapture: capturepolicy.SavepointCaptureSettings{
+			WritableLayers:   false,
+			Images:           true,
+			NamedVolumes:     true,
+			BindVolumes:      false,
+			AnonymousVolumes: true,
+		},
+	}, got)
 }

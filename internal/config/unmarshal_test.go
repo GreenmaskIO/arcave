@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,7 +61,34 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, DefaultWaitTimeout, cfg.Compose.WaitTimeout)
 				assert.Equal(t, DefaultStopTimeout, cfg.Compose.StopTimeout)
 				assert.Equal(t, ProgressLog, cfg.Compose.Progress)
+				assert.Equal(t, LeftoverVolumesOverwrite, cfg.Rollback.LeftoverVolumes)
+				assert.Equal(t, model.LeftoverVolumesOverwrite, cfg.Rollback.Policy())
+				assert.Equal(t, DefaultConcurrency, cfg.Common.Concurrency)
 			},
+		},
+		{
+			name: "the common section is read",
+			yaml: "common:\n  concurrency: 2\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, 2, cfg.Common.Concurrency)
+			},
+		},
+		{
+			name:       "a negative concurrency is rejected",
+			yaml:       "common:\n  concurrency: -1\n",
+			wantErrMsg: "common.concurrency must be at least 1, got -1",
+		},
+		{
+			name: "a rollback may refuse leftover volumes",
+			yaml: "rollback:\n  leftover_volumes: refuse\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, model.LeftoverVolumesRefuse, cfg.Rollback.Policy())
+			},
+		},
+		{
+			name:       "a leftover-volumes policy arcave does not know is rejected",
+			yaml:       "rollback:\n  leftover_volumes: keep\n",
+			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
 			name: "the compose section is read",
@@ -118,17 +146,79 @@ func TestUnmarshal(t *testing.T) {
 			// gated here rather than at the syscall that would have used it.
 			name:       "a project name outside the store-root charset is rejected",
 			yaml:       "project:\n  name: MyApp\n",
-			wantErrMsg: `invalid project name "MyApp"`,
+			wantErrMsg: `invalid arcave project name "MyApp"`,
 		},
 		{
 			name:       "a project name that is a path is rejected",
 			yaml:       "project:\n  name: ../elsewhere\n",
-			wantErrMsg: "invalid project name",
+			wantErrMsg: "invalid arcave project name",
 		},
 		{
 			name:       "an unimplemented storage arm is rejected",
-			yaml:       "storage:\n  type: s3\n",
+			yaml:       "storage:\n  type: gcs\n",
 			wantErrMsg: "unsupported storage.type",
+		},
+		{
+			name:       "an s3 arm without a bucket is rejected",
+			yaml:       "storage:\n  type: s3\n  s3:\n    region: us-east-1\n",
+			wantErrMsg: "storage.s3.bucket is required",
+		},
+		{
+			name: "an s3 arm defaults to path-style addressing and drops the other arms",
+			yaml: "storage:\n  type: s3\n  directory:\n    path: /data\n  s3:\n    bucket: savepoints\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Storage.S3)
+				assert.Equal(t, "savepoints", cfg.Storage.S3.Bucket)
+				assert.Equal(t, utils.New(true), cfg.Storage.S3.ForcePathStyle)
+				assert.Nil(t, cfg.Storage.Directory)
+			},
+		},
+		{
+			name:       "an s3 type without its section is rejected like every other arm",
+			yaml:       "storage:\n  type: s3\n",
+			wantErrMsg: "no storage.s3 section is present",
+		},
+		{
+			name:       "an s3 endpoint carrying user info is rejected",
+			yaml:       "storage:\n  type: s3\n  s3:\n    bucket: b\n    endpoint: http://key:secret@minio:9000\n",
+			wantErrMsg: "storage.s3.endpoint must not carry user info",
+		},
+		{
+			name: "an azure endpoint carrying a sas token is rejected",
+			yaml: "storage:\n  type: azure\n  azure:\n    container: c\n    storage_account: a\n" +
+				"    endpoint: https://a.blob.core.windows.net/?sv=2024&sig=abc\n",
+			wantErrMsg: "put a SAS token in storage.azure.sas_token",
+		},
+		{
+			name:       "an ssh passphrase without a private key is rejected",
+			yaml:       "storage:\n  type: ssh\n  ssh:\n    host: h\n    user: u\n    password: p\n    private_key_passphrase: x\n",
+			wantErrMsg: "private_key_passphrase needs private_key_path",
+		},
+		{
+			name: "an ssh connect timeout is read as a duration",
+			yaml: "storage:\n  type: ssh\n  ssh:\n    host: h\n    user: u\n    password: p\n    connect_timeout: 5s\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Storage.SSH)
+				assert.Equal(t, 5*time.Second, cfg.Storage.SSH.ConnectTimeout)
+			},
+		},
+		{
+			name:       "an azure arm without a storage account is rejected",
+			yaml:       "storage:\n  type: azure\n  azure:\n    container: savepoints\n",
+			wantErrMsg: "storage.azure.storage_account is required",
+		},
+		{
+			name:       "an ssh arm without credentials is rejected",
+			yaml:       "storage:\n  type: ssh\n  ssh:\n    host: backup\n    user: arcave\n",
+			wantErrMsg: "password or private_key_path",
+		},
+		{
+			name: "an ssh arm defaults its port",
+			yaml: "storage:\n  type: ssh\n  ssh:\n    host: backup\n    user: arcave\n    password: secret\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Storage.SSH)
+				assert.Equal(t, DefaultSSHPort, cfg.Storage.SSH.Port)
+			},
 		},
 		{
 			name:       "another unknown key is rejected",
@@ -237,6 +327,50 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: "unsupported snapshot.backend",
 		},
 		{
+			name: "layers are deduplicated by default",
+			yaml: "",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, model.ImageBackendDedupCopy, cfg.WritableLayers.BackendKind())
+			},
+		},
+		{
+			name: "writable_layers.backend fullcopy is taken",
+			yaml: "writable_layers:\n  backend: fullcopy\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, model.ImageBackendFullCopy, cfg.WritableLayers.BackendKind())
+			},
+		},
+		{
+			name: "every kind is captured by default",
+			yaml: "",
+			verify: func(t *testing.T, cfg Config) {
+				for _, on := range []*bool{cfg.Capture.WritableLayers, cfg.Capture.Images,
+					cfg.Capture.Volumes.Named, cfg.Capture.Volumes.Bind, cfg.Capture.Volumes.Anonymous} {
+					require.NotNil(t, on)
+					assert.True(t, *on)
+				}
+			},
+		},
+		{
+			name: "a kind left out stays out, the rest default on",
+			yaml: "capture:\n  volumes:\n    bind: false\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.False(t, *cfg.Capture.Volumes.Bind)
+				assert.True(t, *cfg.Capture.Volumes.Named)
+				assert.True(t, *cfg.Capture.WritableLayers)
+			},
+		},
+		{
+			name:       "an unknown kind is rejected",
+			yaml:       "capture:\n  volumes:\n    tmpfs: true\n",
+			wantErrMsg: "tmpfs",
+		},
+		{
+			name:       "an image backend arcave does not know is rejected",
+			yaml:       "writable_layers:\n  backend: copy\n",
+			wantErrMsg: "unsupported writable_layers.backend",
+		},
+		{
 			name:       "an unknown key under backends is rejected",
 			yaml:       "backends:\n  cdc:\n    password: hunter2\n",
 			wantErrMsg: "password",
@@ -253,6 +387,7 @@ func TestUnmarshal(t *testing.T) {
 
 			// Assert
 			if tt.wantErrMsg != "" {
+				require.ErrorIs(t, err, ErrInvalid)
 				require.ErrorContains(t, err, tt.wantErrMsg)
 			} else {
 				require.NoError(t, err)
@@ -296,11 +431,88 @@ func TestUnmarshal_DefaultsTheProjectNameFromTheDirectory(t *testing.T) {
 
 			// Assert
 			if tt.wantErrMsg != "" {
+				require.ErrorIs(t, err, ErrInvalid)
 				require.ErrorContains(t, err, tt.wantErrMsg)
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantName, cfg.Project.Name)
+		})
+	}
+}
+
+func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
+	t.Setenv("ARCAVE_IT_S3_SECRET", "s3cr3t")
+	t.Setenv("ARCAVE_IT_WAIT", "45s")
+
+	tests := []struct {
+		name       string
+		yaml       string
+		wantErrMsg string
+		verify     func(t *testing.T, cfg Config)
+	}{
+		{
+			name: "a secret is read from the variable the file names",
+			yaml: "storage:\n  type: s3\n  s3:\n    bucket: savepoints\n    secret_access_key: ${ARCAVE_IT_S3_SECRET}\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Storage.S3)
+				assert.Equal(t, "s3cr3t", cfg.Storage.S3.SecretAccessKey)
+			},
+		},
+		{
+			name: "an unset variable falls back to its default",
+			yaml: "storage:\n  type: s3\n  s3:\n    bucket: ${ARCAVE_IT_UNSET_BUCKET:-savepoints}\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Storage.S3)
+				assert.Equal(t, "savepoints", cfg.Storage.S3.Bucket)
+			},
+		},
+		{
+			name: "an interpolated value still goes through the duration hook",
+			yaml: "compose:\n  wait_timeout: ${ARCAVE_IT_WAIT}\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, 45*time.Second, cfg.Compose.WaitTimeout)
+			},
+		},
+		{
+			name: "$$ escapes a literal dollar",
+			yaml: "storage:\n  type: ssh\n  ssh:\n    host: backup\n    user: arcave\n    password: pa$$word\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Storage.SSH)
+				assert.Equal(t, "pa$word", cfg.Storage.SSH.Password)
+			},
+		},
+		{
+			name:       "an unset variable without a default is an error, not an empty value",
+			yaml:       "storage:\n  type: ssh\n  ssh:\n    host: h\n    user: u\n    password: hun$ter2\n",
+			wantErrMsg: "environment variable ter2 is not set",
+		},
+		{
+			name: "an explicit empty default is honoured",
+			yaml: "storage:\n  type: s3\n  s3:\n    bucket: b\n    prefix: ${ARCAVE_IT_UNSET_PREFIX:-}\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Storage.S3)
+				assert.Empty(t, cfg.Storage.S3.Prefix)
+			},
+		},
+		{
+			name:       "an unset required variable is an error",
+			yaml:       "storage:\n  type: s3\n  s3:\n    bucket: ${ARCAVE_IT_UNSET_BUCKET?bucket must be set}\n",
+			wantErrMsg: "bucket must be set",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			cfg, err := Unmarshal(newViper(t, tt.yaml), t.TempDir())
+
+			// Assert
+			if tt.wantErrMsg != "" {
+				require.ErrorContains(t, err, tt.wantErrMsg)
+				return
+			}
+			require.NoError(t, err)
+			tt.verify(t, cfg)
 		})
 	}
 }

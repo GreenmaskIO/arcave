@@ -160,6 +160,11 @@
             },
             {
               "type": "doc",
+              "id": "reference/capture_labels",
+              "label": "Capture labels"
+            },
+            {
+              "type": "doc",
               "id": "reference/environment_variables",
               "label": "Environment variables"
             },

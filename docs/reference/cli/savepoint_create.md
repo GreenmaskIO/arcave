@@ -6,13 +6,15 @@ keywords: [arcave savepoint create, volume capture, writable layer, compose spec
 
 # arcave savepoint create
 
-Captures a savepoint: every stateful volume, every container's writable layer, and the compose spec of the project.
+Captures a savepoint: every stateful volume, every container's writable layer, the images the services run on, and the compose spec of the project.
 
 ```text title="Synopsis"
 arcave savepoint create [name] [flags]
 ```
 
 The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. The sequence is [the savepoint flow](../../how_it_works.md#the-savepoint-flow); what ends up inside is [what a savepoint covers](../../how_it_works.md#what-a-savepoint-covers).
+
+Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `not_covered`. When a unit is captured differently than in the latest savepoint, `savepoint create` warns of it before it stops anything.
 
 ## Flags
 
@@ -34,13 +36,15 @@ arcave savepoint create before-migration --name something-else     # savepoint n
 
 A savepoint does not need a name. The id is assigned either way.
 
+A name is unique within the compose project and session: `savepoint create` refuses one another savepoint already carries (safety snapshots aside), one containing `/`, and one `rollback` would read as something else — `latest`, or a savepoint id. All are refused before anything is stopped.
+
 ## Output
 
 The savepoint record, as JSON on stdout.
 
 ```json title="stdout"
 {
-  "id": "1780335122",
+  "id": "019e843e-1650-7000-8000-000000000000",
   "name": "before-migration",
   "description": "before the v2 schema",
   "created_at": "2026-06-01T19:41:12.123456789Z",
@@ -50,7 +54,7 @@ The savepoint record, as JSON on stdout.
         "object_id": "volume-named-myapp_pgdata",
         "compose_project": "myapp",
         "type": "named",
-        "backend": "copy",
+        "backend": "fullcopy",
         "named": {
           "volume_name": "myapp_pgdata",
           "used_by": [
@@ -58,34 +62,52 @@ The savepoint record, as JSON on stdout.
           ]
         }
       },
-      "type": "copy",
+      "type": "fullcopy",
       "payload": { "size_bytes": 41172480 }
     }
   ],
-  "images": [
+  "writable_layers": [
     {
       "service": "app",
       "replica": 1,
       "container_id": "3f1a9c0b2e77…",
-      "image_id": "sha256:aaaa…",
-      "base_image": "myapp:latest",
+      "container_name": "myapp-app-1",
+      "committed_image_id": "sha256:aaaa…",
+      "imagebackend": "dedupcopy",
+      "upstream_image_id": "sha256:bbbb…",
+      "upstream_image_ref": "myapp:latest",
       "size_bytes": 83887104,
       "stored_bytes": 214016
     }
   ],
-  "spec": { "format": "compose-yaml" }
+  "images": [
+    {
+      "id": "sha256:bbbb…",
+      "refs": ["myapp:latest"],
+      "size_bytes": 83673088,
+      "stored": true
+    }
+  ],
+  "spec": { "format": "compose-yaml" },
+  "not_covered": {
+    "services_without_volumes": ["app"]
+  }
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `id` | The Unix second the capture started, in decimal digits. What `rollback` and `savepoint remove` take. |
+| `id` | A UUIDv7 in canonical form, assigned at capture. What `rollback` and `savepoint remove` take. |
 | `name`, `description` | What you passed, or empty strings. |
 | `created_at` | RFC3339Nano. |
-| `stats` | One entry per captured volume, keyed by `volume.object_id` — the grammar is in [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `copy` or `cdc`. `payload` is the backend's own bookkeeping. |
-| `images` | One entry per container whose writable layer was committed. `size_bytes` is the layer's own size; `stored_bytes` is what it added to the store after deduplication. |
+| `stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `payload` is the backend's own bookkeeping. |
+| `writable_layers` | One entry per container whose writable layer was committed. `imagebackend` is `dedupcopy` or `fullcopy`; `size_bytes` is the committed image's size, `stored_bytes` what it added to the store after deduplication. |
+| `images` | One entry per distinct image the services run on, stored once however many savepoints and replicas name it. `stored_bytes` is what this savepoint added, omitted when the image was already stored; `stored: false` means only its identity could be recorded. |
 | `spec` | The compose spec committed beside the record. `format` is always `compose-yaml`. |
+| `not_covered` | What the savepoint does not hold: skipped mounts with a reason code, services with no captured volume, containers killed at the stop deadline, replica gaps, unresolvable images, layers and images a label left out. Omitted when it holds everything. **Read it before relying on the savepoint.** |
 | `labels` | Present only on a [safety snapshot](savepoint_list.md#safety-snapshots-are-hidden). |
+
+Each field is omitted when empty, except `id`, `name`, `description` and `created_at`.
 
 Full shapes for every command are in [Output](../output.md).
 
@@ -93,16 +115,22 @@ Full shapes for every command are in [Output](../output.md).
 
 | Condition | What happens |
 |---|---|
-| The project is not in the Docker daemon | `no containers found for compose project "myapp": bring the stack up once, or name another project with -p` |
+| The project is not in the Docker daemon | `compose project "myapp": no containers found: bring the compose project up once, or name another project with -p` |
+| A daemon older than Docker 25 | `unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer` — before anything is stopped. See [Requirements](../requirements.md). |
+| An `arcave.*` label arcave cannot read | `invalid capture policy label: arcave.capture="maybe" on service app: want true or false` — before anything is stopped. See [Capture labels](../capture_labels.md#what-a-bad-label-does). |
 | A declared named volume the daemon does not hold | `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`. An error, never a skip: an empty capture would silently replace live data at the next rollback. |
-| An anonymous volume whose container is gone | `no container for service "app" in project "myapp" mounts "/data" (is the project created?)` |
-| The project has no volume to capture | `no stateful volumes found; nothing to capture` |
+| An anonymous volume whose container is gone | `no container for service "app" replica 1 in project "myapp" mounts "/data" (is the project created?)` |
+| The name is taken in this compose project | `savepoint name is already taken: "before-migration" names savepoint 019e843e-1650-7000-8000-000000000000` |
+| The name carries `/`, is `latest` or is a savepoint id | `invalid savepoint name "feat/v1": must not contain "/"`, `…: is reserved`, or `…: must not be a savepoint id` |
+| The project has no volume to capture, or labels left every one out | `no stateful volumes found; nothing to capture` |
 | Two volumes render one object id | `two volumes address the same object id: service "app" at "/var/lib" and service "app-var" at "/lib" both address "volume-service-app-var-lib"; rename one of them` |
-| The savepoint directory already holds objects | `capture directory is not empty: 1780335122 holds 3 object(s) — a savepoint of this same second, or an interrupted run's remains; retry, and check what is there before removing it` |
-| A daemon older than Docker 25 | `unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape`. See [Requirements](../requirements.md). |
-| An interrupted rollback is marked | `rollback to savepoint 1780335122 was interrupted (restoring)` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
+| The savepoint directory already holds objects | `capture directory is not empty: 019e843e-1650-7000-8000-000000000000 holds 3 object(s), an interrupted run's remains; check what is there before removing it` |
+| A daemon whose version could not be read exports an old archive shape | `capturing volumes: … unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape`. See [Requirements](../requirements.md). |
+| An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
-| The services do not become healthy in `--wait-timeout` | `savepoint 1780335122 committed; services failed to start: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the project. |
+| The services do not become healthy in `--wait-timeout` | `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the project. |
+
+An error raised during the capture itself — after the services are stopped — is prefixed `capturing volumes: `, and the services are started again.
 
 A capture that fails before the record is committed leaves no savepoint. What the failed run wrote is named in the log and left in place; the next capture refuses that directory rather than sweeping it.
 

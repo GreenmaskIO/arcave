@@ -73,7 +73,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 				Run(respondWith(backupStatusLine, backupSummaryLine)).Return(nil).Once()
 
 			// Act
-			stat, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+			stat, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 			// Assert
 			require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 
 	// Act
 	_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{
-		SnapshotID: "1780335122",
+		SnapshotID: "019e843e-1650-7000-8000-000000000000",
 		Labels:     map[string]string{"team": "payments", "arcave-safety-snapshot": "true"},
 	})
 
@@ -125,7 +125,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 	assert.Equal(t, []string{
 		"backup", demoMounted,
 		"--host", demoProject,
-		"--tag", "arcave-savepoint=1780335122",
+		"--tag", "arcave-savepoint=019e843e-1650-7000-8000-000000000000",
 		"--tag", "arcave-safety-snapshot=true",
 		"--tag", "team=payments",
 		"--json",
@@ -156,7 +156,7 @@ func TestSnapshotter_Snapshot_HostNetwork(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+	_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 	// Assert
 	require.NoError(t, err)
@@ -186,19 +186,19 @@ func TestSnapshotter_Snapshot_SafetySnapshotDiffersOnlyByItsLabel(t *testing.T) 
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err := savepoint.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+	_, err := savepoint.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 	require.NoError(t, err)
 	_, err = safety.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{
-		SnapshotID: "1780335123",
+		SnapshotID: "019e843e-1a38-7000-8000-000000000000",
 		Labels:     map[string]string{"arcave-safety-snapshot": "true"},
 	})
 	require.NoError(t, err)
 
 	// Assert
 	assert.Equal(t, []string{"backup", demoMounted, "--host", demoProject,
-		"--tag", "arcave-savepoint=1780335122", "--json"}, savepoint.runner.Specs()[1].Cmd)
+		"--tag", "arcave-savepoint=019e843e-1650-7000-8000-000000000000", "--json"}, savepoint.runner.Specs()[1].Cmd)
 	assert.Equal(t, []string{"backup", demoMounted, "--host", demoProject,
-		"--tag", "arcave-savepoint=1780335123", "--tag", "arcave-safety-snapshot=true", "--json"},
+		"--tag", "arcave-savepoint=019e843e-1a38-7000-8000-000000000000", "--tag", "arcave-safety-snapshot=true", "--json"},
 		safety.runner.Specs()[1].Cmd,
 		"host and path are what restic picks a parent by, so the two name the same ones")
 	assert.Contains(t, savepoint.runner.Specs()[1].Env, "RESTIC_REPOSITORY="+demoRepoURL)
@@ -232,7 +232,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err = snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+	_, err = snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 
 	// Assert
 	require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 	assert.Equal(t, []string{demoVolName + ":" + demoMounted + ":ro"}, backup.Binds,
 		"the bind is the volume, never the subpath a service happens to see")
 	assert.Equal(t, []string{"backup", demoMounted, "--host", demoProject,
-		"--tag", "arcave-savepoint=1780335122", "--json"}, backup.Cmd)
+		"--tag", "arcave-savepoint=019e843e-1650-7000-8000-000000000000", "--json"}, backup.Cmd)
 	for _, arg := range backup.Cmd {
 		assert.NotContains(t, arg, "pgdata/", "no subpath may narrow what the capture covers")
 	}
@@ -310,7 +310,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 
 			// Act
 			err := h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
-				SnapshotID: "1780335122",
+				SnapshotID: "019e843e-1650-7000-8000-000000000000",
 				Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
 			})
 
@@ -340,7 +340,7 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 
 	// Act
 	err := h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
-		SnapshotID: "1780335122",
+		SnapshotID: "019e843e-1650-7000-8000-000000000000",
 		Payload: map[string]any{
 			"restic_snapshot_id":    "3f8a1c0d9b",
 			"data_added":            float64(1048576),
@@ -393,7 +393,7 @@ func TestSnapshotter_Remove(t *testing.T) {
 
 			// Act
 			err := h.snapshotter.Remove(ctx, model.BackendRemoveRequest{
-				SnapshotID: "1780335122",
+				SnapshotID: "019e843e-1650-7000-8000-000000000000",
 				Payload:    tt.payload,
 			})
 
@@ -428,7 +428,7 @@ func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 					Return(errors.New("backup boom")).Once()
 			},
 			act: func(ctx context.Context, h *harness) error {
-				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 				return err
 			},
 			wantErr: "backup boom",
@@ -441,7 +441,7 @@ func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 					Run(respondWith(backupStatusLine)).Return(nil).Once()
 			},
 			act: func(ctx context.Context, h *harness) error {
-				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "1780335122"})
+				_, err := h.snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
 				return err
 			},
 			wantErr: "no restic snapshot id",
@@ -455,7 +455,7 @@ func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 			},
 			act: func(ctx context.Context, h *harness) error {
 				return h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
-					SnapshotID: "1780335122",
+					SnapshotID: "019e843e-1650-7000-8000-000000000000",
 					Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
 				})
 			},
@@ -500,7 +500,7 @@ func TestSnapshotter_RejectsUnusableIDs(t *testing.T) {
 			name: "a payload naming no snapshot never reaches a restore",
 			act: func(ctx context.Context, h *harness) error {
 				return h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
-					SnapshotID: "1780335122",
+					SnapshotID: "019e843e-1650-7000-8000-000000000000",
 					Payload:    Payload{SnapshotObjectID: ""},
 				})
 			},

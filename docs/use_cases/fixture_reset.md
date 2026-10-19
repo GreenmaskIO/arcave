@@ -51,12 +51,28 @@ Keep the baseline savepoint permanently and exclude it from pruning by removing 
 
 ```shell
 arcave savepoint list                          # find the ids you want gone
-arcave savepoint remove 1780339981 1780341002  # and remove only those
+arcave savepoint remove 019e8488-3ac8-7000-8000-000000000000 019e8497-cf10-7000-8000-000000000000  # and remove only those
 ```
 
 :::warning
-Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, prune by id, or keep it in a store of its own via [`storage.directory.path`](../reference/configuration.md#storage).
+Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, prune by id, or keep it in a [session](../sessions.md) of its own.
 :::
+
+## A session for the baseline
+
+Retention works within one session, so a baseline in a dedicated session is out of reach of whatever prunes the session you work in:
+
+```shell title="Seed once, into a session that holds nothing else"
+arcave session create --name fixtures
+./seed.sh
+arcave --session fixtures savepoint create clean --description "seeded baseline, do not delete"
+```
+
+```shell title="Reset from it, wherever you work"
+arcave --session fixtures rollback clean
+```
+
+`savepoint remove --retain-recent 5` in your working session never sees `clean`. The rollback runs in `fixtures`, so its safety snapshot is recorded there and dropped again once the rollback succeeds.
 
 ## Why the whole project matters here
 

@@ -34,12 +34,12 @@ var _ model.RepositoryResolver = (*Resolver)(nil)
 // that would leave the root. Nothing has to be published for an operation and
 // withdrawn when it ends.
 type Resolver struct {
-	root storages.Storager
+	root storages.Navigator
 }
 
 // NewResolver returns the resolver over root — the tree every repository lives
 // in, and the whole of what this server can reach.
-func NewResolver(root storages.Storager) *Resolver {
+func NewResolver(root storages.Navigator) *Resolver {
 	return &Resolver{root: root}
 }
 

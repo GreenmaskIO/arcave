@@ -15,10 +15,14 @@
 package model
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 )
 
 // VolumeType is arcave's classification of a mount: a refinement of the compose
@@ -47,20 +51,21 @@ const (
 type SnapshotBackendKind string
 
 const (
-	SnapshotBackendCDC     SnapshotBackendKind = "cdc"
-	SnapshotBackendCopy    SnapshotBackendKind = "copy"
-	SnapshotBackendUnknown SnapshotBackendKind = "unknown"
+	SnapshotBackendCDC      SnapshotBackendKind = "cdc"
+	SnapshotBackendFullCopy SnapshotBackendKind = "fullcopy"
+	SnapshotBackendUnknown  SnapshotBackendKind = "unknown"
 )
 
 // An ObjectID is one path segment: it is the name of a directory in a store and
 // the name of a repository on the restic wire, and both want a segment rather
-// than a tree. Both prefixes open with "volume-" — everything addressed here is
+// than a tree. Every prefix opens with "volume-" — everything addressed here is
 // a volume — and the second word says how it is addressed, which keeps the
 // identity spaces apart: a volume named "db" and a service named "db" must not
 // produce the same id.
 const (
 	storageIDNamedPrefix   = "volume-named-"
 	storageIDServicePrefix = "volume-service-"
+	storageIDAnonPrefix    = "volume-anon-"
 )
 
 // namedStorageID identifies a named volume by the volume itself: its data
@@ -69,14 +74,25 @@ func namedStorageID(dockerName string) string {
 	return storageIDNamedPrefix + dockerName
 }
 
-// serviceStorageID identifies a bind or anonymous mount by service and target: a
-// bind has no docker name, and an anonymous volume's is created per container.
+// serviceStorageID identifies a bind by service and target: a bind has no docker
+// name, and every replica of the service mounts the same host path.
 //
 // The target is flattened into the segment, so two identities can render the
 // same id ({app, /var/lib} and {app-var, /lib}). Deciding what to do about that
 // needs the whole project's set of volumes, and belongs where that set is known.
 func serviceStorageID(service, target string) string {
-	return storageIDServicePrefix + service + "-" + strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")
+	return storageIDServicePrefix + service + "-" + flattenTarget(target)
+}
+
+// anonStorageID identifies an anonymous volume by service, replica and target:
+// docker creates one per container, so every replica holds its own data.
+func anonStorageID(service string, replica int, target string) string {
+	return storageIDAnonPrefix + service + "-" + strconv.Itoa(replica) + "-" + flattenTarget(target)
+}
+
+// flattenTarget renders a mount path as part of one path segment.
+func flattenTarget(target string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")
 }
 
 // ServiceVolume is one mount declared by one service — a fact, not a decision.
@@ -100,6 +116,12 @@ type ServiceVolume struct {
 	// ReadOnly does not affect reading the data, but a restore cannot be written
 	// through such a mount.
 	ReadOnly bool
+	// Replica is the number of the replica an anonymous volume belongs to; 0 for
+	// every other type, which the replicas of a service share.
+	Replica int
+	// InheritedFrom is the id of the container this mount is inherited from through
+	// volumes_from; empty for a mount the container requested itself.
+	InheritedFrom string
 
 	// At most one of these is non-nil, matching Type (Volume serves both named and
 	// anon); nil when compose declared no options of that type. Verbatim facts.
@@ -116,12 +138,14 @@ type ServiceVolume struct {
 //
 // A rename produces a new identity, deliberately: docker creates an empty volume on
 // a rename, so an old backup must not map onto it.
-func (v ServiceVolume) ObjectID(service string) string {
-	switch v.Type {
+func (m ServiceVolume) ObjectID(service string) string {
+	switch m.Type {
 	case VolumeTypeNamed:
-		return namedStorageID(v.VolumeName)
-	case VolumeTypeBind, VolumeTypeAnon:
-		return serviceStorageID(service, v.Target)
+		return namedStorageID(m.VolumeName)
+	case VolumeTypeBind:
+		return serviceStorageID(service, m.Target)
+	case VolumeTypeAnon:
+		return anonStorageID(service, m.Replica, m.Target)
 	default:
 		return ""
 	}
@@ -162,9 +186,11 @@ type ImageMount struct {
 // Service is one service of the project: what it declares, and the containers
 // the daemon holds for it.
 type Service struct {
-	Name    string
-	Image   string
-	Labels  map[string]string
+	Name   string
+	Image  string
+	Labels map[string]string
+	// Volumes are the first replica's mounts plus every later replica's anonymous
+	// volumes, sorted by (Target, Replica).
 	Volumes []ServiceVolume
 	// Containers are the service's replicas, sorted by Number. Empty for a
 	// service the daemon holds nothing for.
@@ -185,7 +211,7 @@ type Container struct {
 }
 
 // Network is one network of the project. Nothing arcave captures lives in one;
-// it is reported because a stack cannot be started again without it.
+// it is reported because a compose project cannot be started again without it.
 type Network struct {
 	// Key is the network's name inside the compose project, Name its name in
 	// docker — the same two levels NamedVolume documents.
@@ -247,8 +273,8 @@ type NamedVolume struct {
 }
 
 // ObjectID is the id a named ServiceVolume referencing this volume also returns.
-func (v NamedVolume) ObjectID() string {
-	return namedStorageID(v.Name)
+func (m NamedVolume) ObjectID() string {
+	return namedStorageID(m.Name)
 }
 
 // Project is the compose project as arcave sees it. Services are sorted by name,
@@ -260,16 +286,19 @@ type Project struct {
 	Networks []Network
 }
 
+// IntrospectionResult is everything a workflow reads from the daemon about a compose project, taken
+// in one pass before anything is stopped. Daemon answers are verbatim.
 type IntrospectionResult struct {
 	Project Project
-}
-
-// SkippedVolume is a mount the backup decision did not take, reported so callers
-// can tell the user which state a savepoint does not cover. Not deduplicated:
-// two tmpfs mounts are two skips.
-type SkippedVolume struct {
-	Service string `json:"service,omitempty"`
-	Target  string `json:"target,omitempty"`
-	RawType string `json:"raw_type,omitempty"` // the compose mount type — the diagnosis
-	Reason  string `json:"reason"`
+	// Daemon is what `docker info` reports.
+	Daemon system.Info
+	// Images are the images the compose project's containers run on and the base images those name
+	// by BaseImageIDLabel, keyed by id, verbatim.
+	Images map[ImageDigestID]image.InspectResponse
+	// Volumes are the volumes the project owns and every other volume a container mounts,
+	// keyed by docker name, verbatim.
+	Volumes map[string]volume.Volume
+	// Referenced are the containers outside the project a replica names in container: network,
+	// ipc or pid mode or in volumes_from, keyed by id, verbatim. One the daemon no longer has is absent.
+	Referenced map[string]container.InspectResponse
 }

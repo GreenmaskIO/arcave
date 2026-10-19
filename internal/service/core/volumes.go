@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/docker/docker/api/types/mount"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -30,73 +31,106 @@ import (
 // would share a repository and a capture directory, each overwriting the other.
 var errObjectIDCollision = errors.New("two volumes address the same object id")
 
+// skipReason is why a mount is not a unit of backup, as a code and as prose.
+type skipReason struct {
+	code   model.SkipReason
+	detail string
+}
+
 // skipReasons says why a mount type is not a unit of backup.
-var skipReasons = map[model.VolumeType]string{
-	model.VolumeTypeTmpfs:   "non-persistent (tmpfs lives in RAM)",
-	model.VolumeTypeNPipe:   "a named pipe is a channel, not data",
-	model.VolumeTypeImage:   "read-only image content, reproducible from the image",
-	model.VolumeTypeCluster: "CSI volume: data lives outside the docker daemon",
-	model.VolumeTypeUnknown: "unknown mount type",
+var skipReasons = map[model.VolumeType]skipReason{
+	model.VolumeTypeTmpfs:   {model.SkipReasonTmpfs, "non-persistent (tmpfs lives in RAM)"},
+	model.VolumeTypeNPipe:   {model.SkipReasonNPipe, "a named pipe is a channel, not data"},
+	model.VolumeTypeImage:   {model.SkipReasonImage, "read-only image content, reproducible from the image"},
+	model.VolumeTypeCluster: {model.SkipReasonCluster, "CSI volume: data lives outside the docker daemon"},
+	model.VolumeTypeUnknown: {model.SkipReasonUnknownType, "unknown mount type"},
 }
 
-// resolveBackupVolumes returns the units a savepoint of the introspected stack
-// covers. Every workflow comes through here, so create and rollback cannot differ.
-func (s *Service) resolveBackupVolumes(ctx context.Context, res model.IntrospectionResult) ([]model.Volume, error) {
-	volumes, skipped, err := FindBackupVolumes(res, s.defaultBackend)
+// inheritedSkipReason skips a mount inherited from a container the project does not stop or capture.
+var inheritedSkipReason = skipReason{model.SkipReasonInheritedFromOutside, "inherited from a container outside the project"}
+
+// resolveBackupVolumes returns the units a savepoint of the introspected compose project
+// covers, and the mounts and services it leaves out. Every workflow comes through
+// here, so create and rollback cannot differ.
+func (s *Service) resolveBackupVolumes(
+	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
+) ([]model.Volume, model.NotCovered, error) {
+	volumes, notCovered, err := FindBackupVolumes(introspection, capturePolicy)
 	if err != nil {
-		return nil, fmt.Errorf("deciding which volumes to back up: %w", err)
+		return nil, model.NotCovered{}, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
 
-	for _, sk := range skipped {
-		zerolog.Ctx(ctx).Warn().
-			Str("service", sk.Service).
-			Str("target", sk.Target).
-			Str("raw_type", sk.RawType).
-			Str("reason", sk.Reason).
-			Msg("volume will not be backed up")
+	log := zerolog.Ctx(ctx)
+	for _, skippedMount := range notCovered.Mounts {
+		event := log.Warn()
+		if skippedMount.Volume != "" {
+			event = event.Str("volume", skippedMount.Volume)
+		}
+		if skippedMount.Service != "" {
+			event = event.Str("service", skippedMount.Service).
+				Str("target", skippedMount.Target).
+				Str("raw_type", skippedMount.RawType)
+		}
+		msg := "volume will not be backed up"
+		// A mount of compose type volume is an anonymous one: a named volume is left out whole.
+		if skippedMount.Reason == model.SkipReasonExcluded &&
+			skippedMount.Volume == "" && skippedMount.RawType == string(mount.TypeVolume) {
+			msg = "volume will not be backed up; a rollback to this savepoint recreates it empty"
+		}
+		event.Str("reason", skippedMount.Detail).Msg(msg)
 	}
-	return volumes, nil
+	for _, serviceName := range notCovered.ServicesWithoutVolumes {
+		log.Warn().Str("service", serviceName).Msg("service has no volume to back up")
+	}
+	return volumes, notCovered, nil
 }
 
-// FindBackupVolumes decides what a savepoint captures — which units, with which
-// backend — plus the mounts it leaves out and why. Introspection reports facts;
-// the policy lives here. Skips are returned rather than logged, so every adapter
-// renders them as it likes.
-//
-// Today it applies the defaults only: every named volume and every bind or
-// anonymous mount, all on backend, deduplicated by ObjectID. The one place
-// ComposeProject is stamped.
-//
-// It is also where an ObjectID collision is caught: this is the only level that
-// sees every volume of the project, so two identities rendering one id are
-// named here as an error rather than quietly merged into one unit.
-//
-// backend is a parameter because it is project config (snapshot.backend),
-// resolved at the DI root. A per-volume choice would plug in here.
+// FindBackupVolumes decides, as capturePolicy says, which units a savepoint captures with
+// which backend, and what it leaves out; two units rendering one ObjectID are an error.
 func FindBackupVolumes(
-	res model.IntrospectionResult, backend model.SnapshotBackendKind,
-) ([]model.Volume, []model.SkippedVolume, error) {
+	introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
+) ([]model.Volume, model.NotCovered, error) {
 	var (
 		volumes []model.Volume
 		skipped []model.SkippedVolume
 	)
-	seen := map[string]volumeIdentity{}
+	registered := map[string]volumeIdentity{}
+	covered := map[string]bool{}
+	excludedNamed := map[string]bool{}
+	// excludedFrom are the services a label left a volume of out: not "without volumes".
+	excludedFrom := map[string]bool{}
 
 	// Named volumes come from the project level: a volume three services mount is
 	// one unit, and only this level knows every mount of it.
-	for _, named := range res.Project.Volumes {
-		duplicate, err := claimObjectID(seen, named.ObjectID(), volumeIdentity{dockerName: named.Name})
+	for _, named := range introspection.Project.Volumes {
+		decision := capturePolicy.DecideNamedVolume(named.Name)
+		if !decision.Capture {
+			excludedNamed[named.Name] = true
+			skipped = append(skipped, model.SkippedVolume{
+				Volume:  named.Name,
+				RawType: string(mount.TypeVolume),
+				Reason:  model.SkipReasonExcluded,
+				Detail:  decision.Source,
+			})
+			continue
+		}
+		for _, ref := range named.UsedBy {
+			covered[ref.Service] = true
+		}
+		namedIdentity := volumeIdentity{dockerName: named.Name}
+		duplicate, err := isObjectIDRegistered(registered, named.ObjectID(), namedIdentity)
 		if err != nil {
-			return nil, nil, err
+			return nil, model.NotCovered{}, err
 		}
 		if duplicate {
 			continue
 		}
+		registered[named.ObjectID()] = namedIdentity
 		volumes = append(volumes, model.Volume{
 			ObjectID:       named.ObjectID(),
-			ComposeProject: res.Project.Name,
+			ComposeProject: introspection.Project.Name,
 			Type:           model.VolumeTypeNamed,
-			Backend:        backend,
+			Backend:        decision.Backend,
 			Named: &model.VolumePropertiesNamed{
 				VolumeName: named.Name,
 				UsedBy:     named.UsedBy,
@@ -104,114 +138,187 @@ func FindBackupVolumes(
 		})
 	}
 
-	// Bind and anonymous mounts belong to the service that declares them.
-	for _, svc := range res.Project.Services {
-		for _, sv := range svc.Volumes {
-			switch sv.Type {
-			case model.VolumeTypeNamed:
-				// Only a reference to the unit already taken above.
+	// Bind and anonymous mounts belong to the service that declares them; one inherited
+	// through volumes_from belongs to its source.
+	inProject := projectContainers(introspection.Project.Services)
+	for _, service := range introspection.Project.Services {
+		for _, serviceVolume := range service.Volumes {
+			if serviceVolume.Type == model.VolumeTypeNamed {
+				// Only a reference to the unit decided above.
+				if excludedNamed[serviceVolume.VolumeName] {
+					excludedFrom[service.Name] = true
+				} else {
+					covered[service.Name] = true
+				}
 				continue
+			}
+			if serviceVolume.InheritedFrom != "" {
+				if inProject[serviceVolume.InheritedFrom] {
+					// Captured through its source.
+					covered[service.Name] = true
+				} else {
+					skipped = append(skipped, newSkippedVolume(service.Name, serviceVolume, inheritedSkipReason))
+				}
+				continue
+			}
+			switch serviceVolume.Type {
 			case model.VolumeTypeBind, model.VolumeTypeAnon:
 				// A unit of its own.
 			default:
-				skipped = append(skipped, model.SkippedVolume{
-					Service: svc.Name,
-					Target:  sv.Target,
-					RawType: sv.RawType,
-					Reason:  skipReason(sv.Type),
-				})
+				skipped = append(skipped, newSkippedVolume(service.Name, serviceVolume, reasonFor(serviceVolume.Type)))
 				continue
 			}
 
-			objectID := sv.ObjectID(svc.Name)
-			duplicate, err := claimObjectID(seen, objectID, volumeIdentity{service: svc.Name, target: sv.Target})
+			decision := capturePolicy.DecideMount(model.MountRef{
+				Service: service.Name,
+				Replica: serviceVolume.Replica,
+				Target:  serviceVolume.Target,
+			})
+			if !decision.Capture {
+				excludedFrom[service.Name] = true
+				skipped = append(skipped, newSkippedVolume(
+					service.Name,
+					serviceVolume,
+					skipReason{model.SkipReasonExcluded, decision.Source},
+				))
+				continue
+			}
+			covered[service.Name] = true
+
+			objectID := serviceVolume.ObjectID(service.Name)
+			mountIdentity := volumeIdentity{
+				service: service.Name,
+				replica: serviceVolume.Replica,
+				target:  serviceVolume.Target,
+			}
+			duplicate, err := isObjectIDRegistered(registered, objectID, mountIdentity)
 			if err != nil {
-				return nil, nil, err
+				return nil, model.NotCovered{}, err
 			}
 			if duplicate {
 				continue
 			}
+			registered[objectID] = mountIdentity
 			volumes = append(volumes, model.Volume{
 				ObjectID:       objectID,
-				ComposeProject: res.Project.Name,
-				Type:           sv.Type,
-				Backend:        backend,
-				Bind:           bindProperties(svc.Name, sv),
-				Anon:           anonProperties(svc.Name, sv),
+				ComposeProject: introspection.Project.Name,
+				Type:           serviceVolume.Type,
+				Backend:        decision.Backend,
+				Bind:           newBindProperties(service.Name, serviceVolume),
+				Anon:           newAnonProperties(service.Name, serviceVolume),
 			})
 		}
 	}
 
-	return volumes, skipped, nil
+	var uncovered []string
+	for _, service := range introspection.Project.Services {
+		if !covered[service.Name] && !excludedFrom[service.Name] {
+			uncovered = append(uncovered, service.Name)
+		}
+	}
+	return volumes, model.NotCovered{Mounts: skipped, ServicesWithoutVolumes: uncovered}, nil
 }
 
-// volumeIdentity is the facts an ObjectID is rendered from — a docker name for a
-// named volume, a service and a target for a bind or anonymous one. Comparable,
-// so two claims of one id are told apart by the identity behind them.
+// newSkippedVolume reports one mount of service left out for reason.
+func newSkippedVolume(service string, serviceVolume model.ServiceVolume, reason skipReason) model.SkippedVolume {
+	skipped := model.SkippedVolume{
+		Service: service,
+		Target:  serviceVolume.Target,
+		RawType: serviceVolume.RawType,
+		Reason:  reason.code,
+		Detail:  reason.detail,
+	}
+	if serviceVolume.Type == model.VolumeTypeAnon {
+		skipped.Replica = serviceVolume.Replica
+	}
+	return skipped
+}
+
+// projectContainers are the ids of the project's replicas.
+func projectContainers(services []model.Service) map[string]bool {
+	ids := map[string]bool{}
+	for _, service := range services {
+		for _, container := range service.Containers {
+			ids[container.ID] = true
+		}
+	}
+	return ids
+}
+
+// volumeIdentity is the facts an ObjectID is rendered from: docker name (named),
+// service and target (bind), plus replica (anonymous). Comparable.
 type volumeIdentity struct {
 	dockerName string
 	service    string
+	replica    int
 	target     string
 }
 
 func (id volumeIdentity) String() string {
-	if id.dockerName != "" {
+	switch {
+	case id.dockerName != "":
 		return fmt.Sprintf("named volume %q", id.dockerName)
+	case id.replica != 0:
+		return fmt.Sprintf("service %q replica %d at %q", id.service, id.replica, id.target)
+	default:
+		return fmt.Sprintf("service %q at %q", id.service, id.target)
 	}
-	return fmt.Sprintf("service %q at %q", id.service, id.target)
 }
 
-// claimObjectID records that identity addresses objectID, reporting a repeat of
-// the same identity as a duplicate to skip and a different one as an error
-// naming both: they would share one unit of backup and overwrite each other.
-func claimObjectID(seen map[string]volumeIdentity, objectID string, identity volumeIdentity) (bool, error) {
-	prior, taken := seen[objectID]
+// isObjectIDRegistered reports whether identity already registered objectID, a unit to
+// skip. An objectID another identity registered is an error naming both: they would
+// share one unit of backup and overwrite each other.
+func isObjectIDRegistered(
+	registered map[string]volumeIdentity, objectID string, identity volumeIdentity,
+) (bool, error) {
+	prior, ok := registered[objectID]
 	switch {
-	case taken && prior == identity:
+	case !ok:
+		return false, nil
+	case prior == identity:
 		return true, nil
-	case taken:
+	default:
 		return false, fmt.Errorf("%w: %s and %s both address %q; rename one of them",
 			errObjectIDCollision, prior, identity, objectID)
 	}
-	seen[objectID] = identity
-	return false, nil
 }
 
-// skipReason falls back to the unknown-type reason, so a VolumeType missing from
+// reasonFor falls back to the unknown-type reason, so a VolumeType missing from
 // the table is still reported rather than dropped.
-func skipReason(volumeType model.VolumeType) string {
+func reasonFor(volumeType model.VolumeType) skipReason {
 	if reason, ok := skipReasons[volumeType]; ok {
 		return reason
 	}
 	return skipReasons[model.VolumeTypeUnknown]
 }
 
-// bindProperties and anonProperties each fill their arm or return nil, so
+// newBindProperties and newAnonProperties each fill their arm or return nil, so
 // exactly one arm of the Volume literal above ends up non-nil.
-func bindProperties(service string, sv model.ServiceVolume) *model.VolumePropertiesBind {
-	if sv.Type != model.VolumeTypeBind {
+func newBindProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesBind {
+	if serviceVolume.Type != model.VolumeTypeBind {
 		return nil
 	}
 	return &model.VolumePropertiesBind{
 		Service:  service,
-		Target:   sv.Target,
-		Source:   sv.Source,
-		ReadOnly: sv.ReadOnly,
+		Target:   serviceVolume.Target,
+		Source:   serviceVolume.Source,
+		ReadOnly: serviceVolume.ReadOnly,
 	}
 }
 
-func anonProperties(service string, sv model.ServiceVolume) *model.VolumePropertiesAnon {
-	if sv.Type != model.VolumeTypeAnon {
+func newAnonProperties(service string, serviceVolume model.ServiceVolume) *model.VolumePropertiesAnon {
+	if serviceVolume.Type != model.VolumeTypeAnon {
 		return nil
 	}
 	var subpath string
-	if sv.Volume != nil {
-		subpath = sv.Volume.Subpath
+	if serviceVolume.Volume != nil {
+		subpath = serviceVolume.Volume.Subpath
 	}
 	return &model.VolumePropertiesAnon{
 		Service:  service,
-		Target:   sv.Target,
-		ReadOnly: sv.ReadOnly,
+		Replica:  serviceVolume.Replica,
+		Target:   serviceVolume.Target,
+		ReadOnly: serviceVolume.ReadOnly,
 		Subpath:  subpath,
 	}
 }

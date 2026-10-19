@@ -1,6 +1,6 @@
 ---
 title: Requirements
-description: What arcave needs — Docker 25 or newer, Linux or macOS, a compose project that exists in the Docker daemon — and the long list of things it does not need.
+description: What arcave needs — Docker 25 or newer, Linux or macOS, a compose project the Docker daemon knows — and the long list of things it does not need.
 keywords: [arcave requirements, Docker 25, prerequisites, Linux, macOS, docker compose]
 ---
 
@@ -8,13 +8,19 @@ keywords: [arcave requirements, Docker 25, prerequisites, Linux, macOS, docker c
 
 ## Docker 25 or newer
 
-arcave captures each container's writable layer by committing it and exporting it, and it stores the export split by content — which needs the OCI layout `docker save` writes from Docker 25 onward. An older daemon exports a shape whose members carry no digest, and the first capture against one is refused rather than guessed at:
+arcave captures each container's writable layer by committing it and exporting it, and it stores the export split by content — which needs the OCI layout `docker save` writes from Docker 25 onward. An older daemon exports a shape whose members carry no digest, so `savepoint create` and `rollback` refuse it before they stop or load anything:
+
+```text
+unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer
+```
+
+`rollback` reports it after `prepare: `. `savepoint list`, `savepoint remove` and the `session` commands touch no image and keep working. A daemon whose version cannot be read — usually an engine that is not Docker, such as Podman, which reports its own version — is let through with a warning, and the capture itself still refuses an archive of the old shape:
 
 ```text
 unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
 ```
 
-The daemon must also be **reachable**. Every command but `init` opens a connection while it wires itself up, before any workflow starts, so an unreachable daemon fails `savepoint list` exactly as it fails `rollback`:
+The daemon must also be **reachable**. The `savepoint` commands and `rollback` open a connection while they wire themselves up, before any workflow starts, so an unreachable daemon fails `savepoint list` exactly as it fails `rollback`. `init` and the `session` commands reach no daemon:
 
 ```text
 init dependencies: resolve backends.cdc.network_mode "auto": read docker daemon info: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
@@ -33,15 +39,17 @@ Released binaries:
 
 **There is no Windows build.** arcave takes its project lock through a system call Windows does not have, so the tool does not build for it at all.
 
-## A compose project that exists in the Docker daemon
+## A compose project the Docker daemon knows
 
 arcave reads the **running project** from the daemon by the labels compose stamps on what it creates. It never opens a compose file — a file that has moved, been edited or been generated changes nothing.
 
-The project does have to be there. `docker compose stop` is fine: stopped containers still describe the project. `docker compose down` is not — it removes the containers, and with them everything arcave knows about the project:
+`savepoint create` needs the project's containers. `docker compose stop` is fine: stopped containers still describe the project. `docker compose down` is not — it removes the containers, and with them everything arcave knows about the project:
 
 ```text
-no containers found for compose project "myapp": bring the stack up once, or name another project with -p
+compose project "myapp": no containers found: bring the compose project up once, or name another project with -p
 ```
+
+`rollback` does not need them: the savepoint carries the spec it rebuilds the project from, so a project never started, or taken down, is rolled back too. Named volumes such a project left behind are overwritten, or refused under [`rollback.leftover_volumes: refuse`](configuration.md#rollback).
 
 Named volumes the project declares have to exist in the daemon too. A capture that finds one missing is an error rather than a skip, because an empty capture would silently replace live data at the next rollback:
 
@@ -49,11 +57,11 @@ Named volumes the project declares have to exist in the daemon too. A capture th
 docker volume "myapp_pgdata" does not exist (bring the project up once to create it)
 ```
 
-One `docker compose up -d` answers both.
+One `docker compose up -d` answers both for `savepoint create`.
 
 ## An initialised project
 
-Every command but `init` needs `.arcave/config.yaml` under the working directory, and a compose project named with `-p/--project-name` or `ARCAVE_PROJECT_NAME`.
+Every command but `init` needs `.arcave/config.yaml` under the working directory. The `savepoint` commands and `rollback` also need a compose project named with `-p/--project-name` or `ARCAVE_PROJECT_NAME`; the `session` commands and `mcp` do not.
 
 ## For the `cdc` backend only
 

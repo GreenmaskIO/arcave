@@ -31,8 +31,8 @@ func New(w io.Writer) *Printer {
 	return &Printer{w: w}
 }
 
-func (p *Printer) Print(v any) error {
-	enc := json.NewEncoder(p.w)
+func (s *Printer) Print(v any) error {
+	enc := json.NewEncoder(s.w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }

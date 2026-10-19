@@ -50,12 +50,12 @@ func NewSnapshotBackendRegistry(factories ...model.SnapshotBackendFactory) (*Sna
 // ErrUnknownBackend. The root is required, checked before any factory runs, and
 // reaches the factory as it was given: narrowing it here would decide a layout
 // this layer must not know.
-func (r *SnapshotBackendRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (s *SnapshotBackendRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
 	if spec.Store == nil {
 		return nil, fmt.Errorf("%w: volume %s", ErrNoStore, spec.Volume.ObjectID)
 	}
 
-	factory, ok := r.factories[spec.Volume.Backend]
+	factory, ok := s.factories[spec.Volume.Backend]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrUnknownBackend, spec.Volume.Backend)
 	}

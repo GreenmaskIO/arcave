@@ -116,21 +116,23 @@ func TestVolume_Address(t *testing.T) {
 // own has one, and a named volume never does — it is addressed by name.
 func TestVolume_LookupMount(t *testing.T) {
 	tests := []struct {
-		name       string
-		volume     Volume
-		wantOK     bool
-		wantSvc    string
-		wantTarget string
+		name        string
+		volume      Volume
+		wantOK      bool
+		wantSvc     string
+		wantReplica int
+		wantTarget  string
 	}{
 		{
-			name: "an anonymous volume is reached through its one mount",
+			name: "an anonymous volume is reached through its one replica's mount",
 			volume: Volume{
 				Type: VolumeTypeAnon,
-				Anon: &VolumePropertiesAnon{Service: "db", Target: "/data"},
+				Anon: &VolumePropertiesAnon{Service: "db", Replica: 2, Target: "/data"},
 			},
-			wantOK:     true,
-			wantSvc:    "db",
-			wantTarget: "/data",
+			wantOK:      true,
+			wantSvc:     "db",
+			wantReplica: 2,
+			wantTarget:  "/data",
 		},
 		{
 			name: "a bind whose source did not resolve is reached through its mount",
@@ -161,11 +163,12 @@ func TestVolume_LookupMount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			service, target, ok := tt.volume.LookupMount()
+			service, replica, target, ok := tt.volume.LookupMount()
 
 			// Assert
 			assert.Equal(t, tt.wantOK, ok)
 			assert.Equal(t, tt.wantSvc, service)
+			assert.Equal(t, tt.wantReplica, replica)
 			assert.Equal(t, tt.wantTarget, target)
 		})
 	}

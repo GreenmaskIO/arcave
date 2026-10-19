@@ -43,7 +43,7 @@ func TestMatchMount(t *testing.T) {
 				},
 			}},
 		{
-			ID: "target", Mounts: []container.MountPoint{
+			ID: "target", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
 				{
 					Type:        mount.TypeVolume,
 					Name:        "demo_pgdata",
@@ -54,29 +54,65 @@ func TestMatchMount(t *testing.T) {
 					Source:      "/host/cfg",
 					Destination: "/etc/cfg",
 				},
+				{
+					Type:        mount.TypeVolume,
+					Name:        "anon-1",
+					Destination: "/cache",
+				},
+			}},
+		{
+			ID: "replica-2", Labels: map[string]string{composeNumberLabel: "2"}, Mounts: []container.MountPoint{
+				{
+					Type:        mount.TypeVolume,
+					Name:        "anon-2",
+					Destination: "/cache",
+				},
 			}},
 	}
 
 	tests := []struct {
 		name    string
+		replica int
 		target  string
 		wantOK  bool
-		wantID  string
 		wantMnt mountInfo
 	}{
 		{
 			name:    "matches volume mount",
 			target:  "/var/lib/postgresql/data",
 			wantOK:  true,
-			wantID:  "target",
 			wantMnt: mountInfo{Type: "volume", Name: "demo_pgdata"},
 		},
 		{
 			name:    "matches bind mount",
 			target:  "/etc/cfg",
 			wantOK:  true,
-			wantID:  "target",
 			wantMnt: mountInfo{Type: "bind", Source: "/host/cfg"},
+		},
+		{
+			name:    "any replica will do without a number: the first that mounts target",
+			target:  "/cache",
+			wantOK:  true,
+			wantMnt: mountInfo{Type: "volume", Name: "anon-1"},
+		},
+		{
+			name:    "a replica number picks that replica's own mount",
+			replica: 2,
+			target:  "/cache",
+			wantOK:  true,
+			wantMnt: mountInfo{Type: "volume", Name: "anon-2"},
+		},
+		{
+			name:    "a replica that does not mount target is no match, though another does",
+			replica: 2,
+			target:  "/var/lib/postgresql/data",
+			wantOK:  false,
+		},
+		{
+			name:    "a replica the containers do not hold is no match",
+			replica: 3,
+			target:  "/cache",
+			wantOK:  false,
 		},
 		{
 			name:   "no container mounts target",
@@ -88,12 +124,11 @@ func TestMatchMount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			id, mnt, ok := matchMount(summaries, tt.target)
+			mnt, ok := matchMount(summaries, tt.replica, tt.target)
 
 			// Assert
 			assert.Equal(t, tt.wantOK, ok)
 			if tt.wantOK {
-				assert.Equal(t, tt.wantID, id)
 				assert.Equal(t, tt.wantMnt, mnt)
 			}
 		})
@@ -147,10 +182,27 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			volume: anonVolume("db", target),
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "db")).
-					Return([]container.Summary{{ID: "pg-1", Mounts: []container.MountPoint{
+					Return([]container.Summary{{ID: "pg-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
 						{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "9f2c0a"},
+		},
+		{
+			name: "another replica's anonymous volume is looked up through that replica",
+			volume: model.Volume{
+				ObjectID: "volume-anon-worker-2-cache", ComposeProject: "demo", Type: model.VolumeTypeAnon,
+				Anon: &model.VolumePropertiesAnon{Service: "worker", Replica: 2, Target: "/cache"},
+			},
+			arrange: func(api *mockAPI) {
+				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "worker")).
+					Return([]container.Summary{
+						{ID: "worker-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
+							{Type: mount.TypeVolume, Name: "a1", Destination: "/cache"}}},
+						{ID: "worker-2", Labels: map[string]string{composeNumberLabel: "2"}, Mounts: []container.MountPoint{
+							{Type: mount.TypeVolume, Name: "a2", Destination: "/cache"}}},
+					}, nil).Once()
+			},
+			want: model.MountSource{Type: model.MountSourceVolume, Source: "a2"},
 		},
 		{
 			name: "a bind whose source never resolved falls back to the same lookup",
@@ -240,6 +292,7 @@ func TestEngine_OpenVolume(t *testing.T) {
 	assertClosed(t, removed, "closing the stream must remove the container")
 	api.AssertExpectations(t)
 	assert.Equal(t, []string{"demo_pgdata:" + scratchMount}, scratch.host.Binds)
+	assert.Equal(t, map[string]string{oneShotLabel: "true"}, scratch.cfg.Labels)
 }
 
 // A restore clears the volume before extracting into it, and extracts at the
@@ -397,10 +450,10 @@ func namedVolume(dockerName string) model.Volume {
 
 func anonVolume(service, target string) model.Volume {
 	return model.Volume{
-		ObjectID:       "volume-service-" + service + target,
+		ObjectID:       "volume-anon-" + service + "-1" + target,
 		ComposeProject: "demo",
 		Type:           model.VolumeTypeAnon,
-		Anon:           &model.VolumePropertiesAnon{Service: service, Target: target},
+		Anon:           &model.VolumePropertiesAnon{Service: service, Replica: 1, Target: target},
 	}
 }
 

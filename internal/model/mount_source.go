@@ -36,34 +36,34 @@ type MountSource struct {
 // anonymous volume, whose docker name is created per container — only the daemon
 // knows it — and for a bind whose source is missing or relative; both fall back
 // to LookupMount.
-func (v Volume) MountSource() (MountSource, bool) {
+func (m Volume) MountSource() (MountSource, bool) {
 	switch {
-	case v.Named != nil:
-		if v.Named.VolumeName == "" {
+	case m.Named != nil:
+		if m.Named.VolumeName == "" {
 			return MountSource{}, false
 		}
-		return MountSource{Type: MountSourceVolume, Source: v.Named.VolumeName}, true
-	case v.Bind != nil:
+		return MountSource{Type: MountSourceVolume, Source: m.Named.VolumeName}, true
+	case m.Bind != nil:
 		// compose-go resolves a bind source against the project directory, so a
 		// relative one means the record never went through it.
-		if !filepath.IsAbs(v.Bind.Source) {
+		if !filepath.IsAbs(m.Bind.Source) {
 			return MountSource{}, false
 		}
-		return MountSource{Type: MountSourceBind, Source: v.Bind.Source}, true
+		return MountSource{Type: MountSourceBind, Source: m.Bind.Source}, true
 	default:
 		return MountSource{}, false
 	}
 }
 
-// LookupMount is the mount the daemon has to be asked through when MountSource
-// cannot answer. ok is false for a Volume carrying no mount of its own.
-func (v Volume) LookupMount() (service, target string, ok bool) {
+// LookupMount is the mount to ask the daemon about when MountSource cannot answer;
+// replica 0 means any replica. ok is false for a Volume with no mount of its own.
+func (m Volume) LookupMount() (service string, replica int, target string, ok bool) {
 	switch {
-	case v.Anon != nil:
-		return v.Anon.Service, v.Anon.Target, true
-	case v.Bind != nil:
-		return v.Bind.Service, v.Bind.Target, true
+	case m.Anon != nil:
+		return m.Anon.Service, m.Anon.Replica, m.Anon.Target, true
+	case m.Bind != nil:
+		return m.Bind.Service, 0, m.Bind.Target, true
 	default:
-		return "", "", false
+		return "", 0, "", false
 	}
 }

@@ -1,6 +1,6 @@
 ---
 title: How arcave works
-description: The arcave savepoint and rollback mechanism end to end — what a savepoint covers, why the project is stopped, how the record commits, and what the automatic safety snapshot guarantees.
+description: The arcave savepoint and rollback mechanism end to end — what a savepoint covers, why the project is stopped, how the record commits, how a rollback rebuilds the project, and what the automatic safety snapshot guarantees.
 keywords: [arcave architecture, savepoint mechanism, docker volume snapshot, rollback, safety snapshot, docker compose, Open-Source, Greenmask]
 ---
 
@@ -10,7 +10,7 @@ arcave sits between you and the Docker daemon. It does not install an agent, pat
 
 ## You, arcave and the Docker daemon
 
-You are between two things: the savepoints arcave keeps, and the live state your Docker daemon is running. Every arcave command moves state across that gap. `savepoint create` reads the live state into a savepoint. `rollback` writes a savepoint back into the daemon. `session create --from` does both: it copies a savepoint into a new session, then deploys that state into the daemon.
+You are between two things: the savepoints arcave keeps, and the live state your Docker daemon is running. Every arcave command moves state across that gap. `savepoint create` reads the live state into a savepoint. `rollback` writes a savepoint back into the daemon. `session create --from` stays on arcave's side: it copies a session's savepoints into a new session and leaves the daemon alone, so a fork is deployed by a `rollback` inside it.
 
 ```mermaid
 sequenceDiagram
@@ -23,13 +23,16 @@ sequenceDiagram
 
     U->>S: arcave savepoint create v1.0
     S->>D: stop the services
-    D-->>S: dump volumes, container filesystems, compose spec
+    D-->>S: dump volumes, container filesystems, images, compose spec
     Note over S: session baseline, savepoint v1.0
     S->>D: start the services
 
-    U->>S: arcave session create --from=baseline/v1.0 --name=feat/add-new-table
-    Note over S: session feat/add-new-table, savepoint v1.0 copied in
-    S->>D: deploy what savepoint v1.0 recorded
+    U->>S: arcave session create --from=baseline --name=feat/add-new-table
+    Note over S: session feat/add-new-table, baseline copied in
+    U->>S: arcave session set feat/add-new-table
+    Note over S: the commands below work in feat/add-new-table
+    U->>S: arcave rollback v1.0
+    S->>D: restore volumes, layers and spec
     Note over D: the project runs on v1.0
 
     U->>D: write code, run a migration, let an agent work
@@ -46,21 +49,21 @@ The fork on that diagram is a **session** — an independent line of savepoints.
 
 ## The project is stopped, on purpose
 
-Every arcave workflow stops the project's services before it reads or writes a byte, and starts them again afterwards.
+`savepoint create` and `rollback` stop the project's services before they read or write a byte, and start them again afterwards. Listing, removing savepoints and the `session` commands never touch the running project.
 
 This is the design's central trade. A running database holds state in memory and in files it is midway through writing; copying those files produces a snapshot that may not restore. Stopping the containers first is what makes "consistent" a claim arcave can actually make for every service a compose file might hold — Postgres, MySQL, Redis, Mongo and whatever else — rather than one engine at a time.
 
 The cost is downtime, proportional to the data being moved plus the time your services take to become healthy again.
 
 :::note
-arcave uses `docker compose stop`, never `down`. Containers are stopped, not removed, and the same containers start again — nothing is recreated and nothing on the host is touched beyond the volume data being captured.
+`savepoint create` stops the containers, it never removes them: the same containers start again, nothing is recreated, and nothing on the host is touched beyond the data being captured. A rollback is different — it removes the containers and creates them again from the savepoint's spec, see [What a rollback restores](#what-a-rollback-restores).
 :::
 
-Two bounds control that window, and both are configurable: [`compose.stop_timeout`](reference/configuration.md#compose) is how long a container gets to exit on its own before it is killed, and [`compose.wait_timeout`](reference/configuration.md#compose) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
+Two bounds control that window, and both are configurable: [`compose.stop_timeout`](reference/configuration.md#compose) is the least time a container gets to exit on its own before it is killed — a service's `stop_grace_period` raises it — and [`compose.wait_timeout`](reference/configuration.md#compose) is how long arcave waits for health checks after the restart. The stop timeout matters more here than it does to plain `docker compose stop`: arcave captures the volumes the moment the containers are down, so a database killed mid-shutdown is captured mid-shutdown.
 
-## The two halves of a savepoint
+## What a savepoint is made of
 
-A savepoint captures two things, and they never overlap.
+A savepoint captures four things, and they never overlap.
 
 **The volumes.** Every persistent mount in the project, addressed as a volume rather than as a mount path.
 
@@ -68,17 +71,24 @@ A savepoint captures two things, and they never overlap.
 
 Data belongs in volumes. The layer capture is what keeps a compose project honest when it is not there.
 
-Layer captures are deduplicated: the base layer every savepoint shares is stored once, so `images[].size_bytes` in the savepoint record is the layer's own size and `images[].stored_bytes` is what the capture actually added.
+**The images.** One copy of each distinct image a service's `image:` names, stored once for every savepoint and replica that uses it. An image arcave cannot get from the daemon is recorded with `"stored": false` and a warning; it never fails the savepoint.
+
+**The compose spec.** `project.yaml`, the spec of the project as it was running, which a rollback rebuilds the project from.
+
+With [`writable_layers.backend`](reference/configuration.md#writable_layers) at its default, `dedupcopy`, layers are deduplicated: the data every savepoint shares, such as the image a layer sits on, is stored once. In the record, `writable_layers[].size_bytes` is the committed image's size and `writable_layers[].stored_bytes` is what the capture actually added; `images[]` carries the same two numbers for each image. `fullcopy` stores each layer whole instead.
 
 ## What a savepoint covers
 
 The unit of backup is the **volume**, not the mount:
 
 * **Every named volume the daemon reports for the project** — including ones no service mounts, and including `external: true` volumes that some service does mount.
-* **Every bind mount and every anonymous volume**, one unit per service and target.
+* **Every bind mount**, one unit per service and target.
+* **Every anonymous volume**, one unit per replica: each replica has its own.
 * A named volume that three services mount is **one** unit, captured once.
 
-Mounts that are not persistent data are skipped, and each skip is reported with its reason: `tmpfs`, `npipe`, `image` and `cluster`.
+Mounts that are not persistent data are skipped, and each skip is reported with its reason: `tmpfs`, `npipe`, `image`, `cluster`, `unknown_type`, and `inherited_from_outside` for a mount a service takes through `volumes_from` from a container outside the project. A mount inherited from another service of the project is captured once, as its source's.
+
+The savepoint's `not_covered` lists everything it does not hold: `mounts` (each with its `reason`), `services_without_volumes`, `killed_containers` — the containers the stop had to kill — `replica_gaps`, `unresolved_images`, and the `writable_layers` and `images` a label left out. It is absent when the savepoint holds everything.
 
 A volume is addressed directly — a named volume by its Docker name, a bind mount by its host path — and read and written through a throwaway container of arcave's own. The project's containers need only *exist*; they do not need to be running.
 
@@ -92,9 +102,15 @@ An external volume that nothing mounts is invisible to arcave: it reads the runn
 
 Volume data is moved one of two ways, chosen by [`snapshot.backend`](reference/configuration.md#snapshot). `fullcopy` streams each mount through the Docker API. `cdc` writes only the chunks that changed since the last savepoint, so the second savepoint of a project costs a fraction of the first, and a rollback rewrites less.
 
+## What you choose to capture
+
+By default a savepoint takes all of the above. `arcave.*` labels in your compose file change that per service or per volume: leave a service, a mount, a writable layer or an image out, or pick the backend a volume is captured with. The [`capture`](reference/configuration.md#capture) keys in `.arcave/config.yaml` set the defaults per kind — writable layers, images, named, bind and anonymous volumes — so you can steer a running project without recreating it. The most specific setting wins: a volume's own label, then the service's, then the config. A mount left out this way is reported in `not_covered.mounts` with the reason `excluded`.
+
+A label arcave cannot read fails `savepoint create` before anything is stopped. When a unit is captured differently than in the latest savepoint, `savepoint create` warns about it. A rollback restores what the savepoint holds, whatever the labels say now; an anonymous volume the savepoint left out comes back empty. [Capture labels](reference/capture_labels.md) has every label.
+
 ## The record is the commit marker
 
-Each savepoint is one self-contained directory, and the record inside it — `savepoint.json` — is what makes the savepoint exist. It is written **last**, after every archive beside it is complete, and deleted **first** when a savepoint is removed. That single ordering rule is what makes the whole thing safe to interrupt:
+Each savepoint has a directory of its own, and the record inside it — `savepoint.json` — is what makes the savepoint exist. It is written **last**, after everything it names is stored, and deleted **first** when a savepoint is removed. That single ordering rule is what makes the whole thing safe to interrupt:
 
 * A run killed before the record is written leaves data that no record names. `arcave savepoint list` does not show it, and nothing will ever restore it.
 * A removal killed after the record is deleted leaves data that no record names — the same harmless state.
@@ -109,51 +125,74 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
 ## The savepoint flow
 
 ```text title="arcave savepoint create before-migration"
-1.  Claim the project lock
-2.  Read the running project from the daemon
-3.  Stop the services
-4.  Capture every volume
-5.  Commit each container's writable layer
-6.  Write project.yaml — the project's compose spec
-7.  Write savepoint.json — the commit marker
-8.  Start the services
-9.  Wait for health checks
+ 1.  Claim the project lock
+ 2.  Refuse a name another savepoint already carries
+ 3.  Read the running project from the daemon, check the Docker version
+ 4.  Resolve the capture labels and render the compose spec
+ 5.  Stop the services
+ 6.  Capture every volume
+ 7.  Store each image
+ 8.  Commit each container's writable layer
+ 9.  Write project.yaml — the project's compose spec
+10.  Write savepoint.json — the commit marker
+11.  Start the services and wait for health checks
 ```
+
+Steps 2 through 4 run **while the project is still up**: a taken name, a Docker older than 25, a bad label or a spec arcave cannot render fails without stopping anything. A project with no containers — never started, or taken down with `docker compose down` — has nothing to capture, and `savepoint create` refuses it.
 
 ## What a rollback restores
 
-A rollback restores **the project the savepoint recorded**, not the one that is running. A service added since is gone. One removed comes back. A changed image, port, environment variable or healthcheck goes back to what it was. That is why `project.yaml` is committed beside the record: it is what the project is rebuilt from.
+A rollback restores **the project the savepoint recorded**, not the one that is running. A service added since is gone. One removed comes back. A changed image, port, environment variable or healthcheck goes back to what it was. That is why `project.yaml` is committed beside the record: it is what the project is rebuilt from. Replicas come back under the numbers they had, gaps included. A few compose settings do not survive this — see [Limitations](reference/limitations.md#some-compose-settings-do-not-survive-a-rollback).
 
 ```text title="arcave rollback before-migration"
  1.  Claim the project lock
  2.  Resolve the savepoint record
  3.  Refuse if an interrupted rollback is marked
- 4.  Build both backend sets — the savepoint's and the live one
- 5.  Load and parse the savepoint's compose spec
- 6.  Load the stored writable layers into the daemon
- 7.  Stop the services
- 8.  Safety snapshot of the live state
- 9.  Write the inflight marker
-10.  Remove containers and networks — volumes are kept
-11.  Recreate the project from the spec, on the restored images
-12.  Wipe and restore every volume
-13.  Start the services and wait for health checks
-14.  Clear the marker, drop the safety snapshot
+ 4.  Read the running project from the daemon, check the Docker version
+ 5.  Build both backend sets — the savepoint's and the live one
+ 6.  Load and parse the savepoint's compose spec
+ 7.  Load the stored writable layers into the daemon
+ 8.  Stop the services
+ 9.  Safety snapshot of the live state
+10.  Write the inflight marker
+11.  Remove containers and networks — volumes are kept
+12.  Create the project from the spec, on the restored layers
+13.  Rebuild each further replica on its own layer, under its recorded number
+14.  Restore every volume
+15.  Start the services and wait for health checks
+16.  Remove the anonymous volumes the teardown orphaned
+17.  Clear the marker, drop the safety snapshot
 ```
 
-Steps 4 through 6 all run **while the project is still up**, and that is the point of them:
+Steps 4 through 7 all run **while the project is still up**, and that is the point of them:
 
 * A backend that cannot be constructed — a missing volume, an unreachable store — fails while the project is still running.
 * A savepoint whose compose spec will not load fails before anything is torn down: a rollback that cannot say what to rebuild must not destroy what is there.
-* An image archive the daemon will not accept fails there too.
+* An image archive the daemon will not accept fails there too, and so does a service whose image no registry serves and the daemon no longer has.
 
-Volumes are **kept** when the containers are removed: a volume arcave did not capture has no copy anywhere, so deleting it would be unrecoverable.
+Compose gives a service one image, but a savepoint holds a layer per replica, so the first replica is created by compose and every further one is rebuilt on its own layer, under the name and number the savepoint recorded.
+
+Volumes are **kept** when the containers are removed: a volume arcave did not capture has no copy anywhere, so deleting it would be unrecoverable. Only the anonymous volumes a restore replaced are removed afterwards.
+
+After a rollback, a container whose layer was restored runs on an `arcave/…:sp-<savepoint id>` image tag rather than on the image its compose file names. A `docker compose up` from your compose file recreates it on the compose file's image and drops the restored layer; roll back again to get it back.
+
+### A project with no containers
+
+A rollback also works on a compose project that has no containers — one never started here, or taken down with `docker compose down`. There is nothing to stop and nothing live to keep, so it takes a short path: no stop, no safety snapshot, no teardown. It loads the layers, creates the project from the spec, restores the volumes and starts the services.
+
+A named volume the project still owns — one `docker compose down` left behind — is overwritten with a warning. Set [`rollback.leftover_volumes`](reference/configuration.md#rollback) to `refuse` to fail instead, before anything is loaded:
+
+```text
+compose project is not running but its volumes survive: myapp_pgdata
+```
+
+If this rollback fails, arcave removes what it created, including the volumes the project did not have before. With no safety snapshot to return to, the recovery from an interrupted one is to run the same rollback again.
 
 ## The safety snapshot
 
 Before a rollback overwrites anything, it takes an ordinary savepoint of the live state. It is not a separate tier or a separate store — it is a normal savepoint carrying the label `arcave-safety-snapshot`, named `safety-snapshot-<id of the savepoint being restored>`, hidden from `arcave savepoint list` unless you pass [`--include-safety-snapshots`](reference/cli/savepoint_list.md), and rollback-able by id like any other.
 
-If any step past that point fails — a restore error, or services that never become healthy — arcave replays the safety snapshot through the very same backend instances that took it, restarts the services, and reports the original error.
+If any step past that point fails — a restore error, or services that never become healthy — arcave replays the safety snapshot through the very same backend instances that took it: it loads its layers back, creates the project again as it was, restores its volumes, starts the services, and reports the original error.
 
 :::note
 The revert runs on a context that ignores cancellation, with its own 10-minute budget. The Ctrl-C that aborted your rollback must not tear down the revert that is trying to save your environment.
@@ -174,7 +213,7 @@ A rollback writes `.arcave/inflight.json` before its first destructive write —
 | `restore-done` | Volumes restored, but the project never came up cleanly. |
 | `inconsistent` | The automatic revert itself failed. The safety snapshot is retained. |
 
-While a marker stands, the next mutating workflow is **refused** — with one exception: a rollback to that marker's own safety snapshot, which is the remedy, and is allowed through.
+While a marker stands, the next mutating workflow is **refused** — with one exception, the remedy, which is allowed through: a rollback to that marker's own safety snapshot, or, for a rollback of a project with no containers, which took no safety snapshot, the same rollback again.
 
 The marker is cleared *before* the safety snapshot is dropped, so a failed clear can never leave a marker pointing at a snapshot that no longer exists.
 
@@ -182,7 +221,7 @@ arcave does not finish a rollback it died in the middle of. Recovery is explicit
 
 ## One project at a time
 
-Every mutating workflow holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second arcave run against the same project fails immediately rather than queuing behind the first. Two workflows interleaving stop, capture and start on one compose project has no correct outcome.
+Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, and `session create`, `delete`, `set` and `unset` — holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second such run against the same project fails immediately rather than queuing behind the first: two workflows interleaving stop, capture and start on one compose project has no correct outcome. Commands that only read — `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` — take no lock and are never refused.
 
 ## Related docs
 

@@ -21,7 +21,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`savepoint list`](savepoint_list.md) | Prints the project's committed savepoints. |
 | [`savepoint remove`](savepoint_remove.md) | Deletes savepoints by id, or by retention rules. |
 | [`rollback`](rollback.md) | Returns the environment to a savepoint, selected by id, by name, or by `latest`. |
-| [`session`](session.md) | Creates, lists and deletes sessions — the independent lines of savepoints inside a project. |
+| [`session`](session.md) | Creates, lists, deletes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `delete`, `set`, `unset`, `current`. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |
 | [`status`](status.md) | Planned. Registered, and returns `not implemented`. |
 | `completion` | Cobra's shell-completion script generator, for bash, zsh, fish and PowerShell. |
@@ -30,20 +30,20 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 
 | Flag | Default | Config key | Description |
 |---|---|---|---|
-| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`. Read from `ARCAVE_PROJECT_NAME` when the flag is absent. |
-| `--session` | `baseline` | *(none)* | The session to work in, by id or by name. Read from `ARCAVE_SESSION` when the flag is absent. See [`arcave session`](session.md). |
+| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`, `mcp`, `status` and the `session` commands; an MCP tool call names its compose project itself. Read from `ARCAVE_PROJECT_NAME` when the flag is absent. |
+| `--session` | the current session, else `baseline` | *(none)* | The session to work in, by id or by name. Read from `ARCAVE_SESSION` when the flag is absent; with neither, the current session `arcave session set` chose, else `baseline`. See [`arcave session`](session.md#naming-the-session-a-command-works-in). |
 | `--config` | `.arcave/config.yaml` | *(none)* | Path to the config file. |
 | `--log-level` | `info` | `log.level` | `debug`, `info` or `warn`. |
 | `--log-format` | `text` | `log.format` | `text` or `json`. |
 | `--wait-timeout` | `2m0s` | `compose.wait_timeout` | How long to wait for services to become healthy after they are started. |
-| `--stop-timeout` | `10s` | `compose.stop_timeout` | How long a container gets to exit on its own before it is killed. |
+| `--stop-timeout` | `10s` | `compose.stop_timeout` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |
 | `--progress` | `log` | `compose.progress` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
 | `-v`, `--version` | — | *(none)* | Print the version, commit and build date. |
 | `-h`, `--help` | — | *(none)* | Show help for the command. |
 
 A flag carrying a **config key** can also be set in `.arcave/config.yaml` or through an `ARCAVE_<KEY>` variable; a changed flag beats the variable, which beats the file, which beats the default. See [Configuration](../configuration.md#precedence).
 
-`--project-name` and `--config` carry no config key on purpose: they steer one run rather than describing the project. In particular the compose project is not a config key — one project directory may hold several compose projects.
+`--project-name`, `--session` and `--config` carry no config key on purpose: they steer one run rather than describing the project. In particular the compose project is not a config key — one project directory may hold several compose projects.
 
 Durations carry their unit — `90s`, `5m`, `1h30m`. A bare number is an error, not a guess.
 
@@ -72,26 +72,40 @@ no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME
 
 ## What a command needs
 
-Every command but `init` needs three things:
+`savepoint create`, `savepoint list`, `savepoint remove` and `rollback` need three things:
 
 * **An initialised project.** Without `.arcave/config.yaml`: `config is not found: run 'arcave init' if not yet initialized`.
 * **A named compose project**, as above.
 * **A reachable Docker daemon.** The daemon is contacted while the command wires itself up, before any workflow starts, so an unreachable one fails `savepoint list` exactly as it fails `rollback`.
 
-`savepoint create` and `rollback` additionally need the project to **exist in the daemon**: arcave reads the running project rather than your compose files. `docker compose stop` is fine — stopped containers still describe the project. `docker compose down` is not:
+The `session` commands need only the initialised project: they name no compose project and reach no daemon, `session create --from` included — a fork copies a session's savepoints and deploys nothing. `mcp` needs the initialised project; each tool call names its compose project.
+
+`savepoint create` additionally needs the project to **exist in the daemon**: arcave reads the running project rather than your compose files. `docker compose stop` is fine — stopped containers still describe the project. `docker compose down` is not:
 
 ```text
-no containers found for compose project "myapp": bring the stack up once, or name another project with -p
+compose project "myapp": no containers found: bring the compose project up once, or name another project with -p
 ```
 
-Every mutating command claims a non-blocking lock on `.arcave/lock`. A second run against the same project fails at once rather than queuing:
+`rollback` does not: a compose project with no containers — never started, or taken down — is built from the savepoint's own spec. See [Rolling back a project that is not running](rollback.md#rolling-back-a-project-that-is-not-running).
+
+Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `session delete`, `session set`, `session unset` — claims a non-blocking lock on `.arcave/lock`. A second one against the same project fails at once rather than queuing:
 
 ```text
 another arcave command is already running in this project
 ```
 
-`savepoint remove --dry-run` is the exception: it only reads, and takes no lock.
+`savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` only read, take no lock, and are never refused.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `1` | Any failure; the cause is on stderr. |
+| `130` | Interrupted by Ctrl-C or `SIGTERM`. The first signal lets the command unwind through its own cleanup; a second one exits at once. |
+
+See [Output and exit codes](../output.md#exit-codes).
 
 ## Next step
 
-[Output and exit codes](../output.md) — the JSON on stdout, the logs on stderr, and the two exit codes.
+[Output and exit codes](../output.md) — the JSON on stdout, the logs on stderr, and the exit codes.

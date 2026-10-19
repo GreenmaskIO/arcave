@@ -44,11 +44,14 @@ flowchart LR
 
 ## What a savepoint holds
 
-Three things, and they do not overlap:
+Four things, and they do not overlap:
 
 * **Volumes and mounts** — named volumes, bind mounts and anonymous volumes, for every service in the project. A named volume three services share is captured once.
 * **Container filesystem** — what a service wrote *outside* all of its mounts. It is captured together with the volumes, and a rollback puts it back together with them.
+* **Images** — the image each service's `image:` names, kept once however many savepoints and replicas use it.
 * **Compose specification** — the Docker Compose spec of the project as it was running, with environment variables resolved to the values the containers actually had. A rollback rebuilds the services, images, ports and networks it records, not the ones running now.
+
+All of it is captured by default; `arcave.*` labels in your compose file can leave a service, a volume, a layer or an image out — see [Capture labels](reference/capture_labels.md).
 
 ## How a savepoint is taken
 
@@ -56,13 +59,13 @@ Every service of the compose project is stopped, the whole environment is captur
 
 ## Sessions
 
-Savepoints live in a **session** — an independent line of them inside the project. `arcave init` puts you in `baseline`, and a fork off any savepoint opens a second line beside it: that is what a branch is here.
+Savepoints live in a **session** — an independent line of them inside the project. `arcave init` puts you in `baseline`, and a fork copies a whole session into a new one beside it: that is what a branch is here.
 
 ## Where to start
 
 * **[Installation](installation.md)** — install the binary and check the requirements.
 * **[Getting started](getting_started.md)** — initialise a project, take your first savepoint, roll it back.
-* **[Sessions and branching](sessions.md)** — the lines savepoints live in, and how a fork opens a new one.
+* **[Sessions and branching](sessions.md)** — the lines savepoints live in, and how a fork copies one into a new one.
 * **[Testing destructive migrations](use_cases/migration_testing.md)** — run the migration for real, against real data, as many times as it takes.
 * **[Agent iteration loops](use_cases/agent_loops.md)** — let an agent take its own savepoint before it acts, and roll back when validation fails.
 * **[How arcave works](how_it_works.md)** — the mechanism, end to end.

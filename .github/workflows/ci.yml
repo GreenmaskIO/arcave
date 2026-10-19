@@ -1,6 +1,6 @@
-#   pull request  -> lint + test
-#   push to main  -> lint + test + build every target (nothing published)
-#   push of a tag -> lint + test + build every target + GitHub Release
+#   pull request  -> lint + unit + integration
+#   push to main  -> lint + unit + integration + build every target (nothing published)
+#   push of a tag -> lint + unit + integration + build every target + GitHub Release
 name: CI
 
 on:
@@ -33,10 +33,10 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.12.2
+          version: v2.14.0
 
-  test:
-    name: Test
+  unit:
+    name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,29 +45,65 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # internal/service/backend/restic/rest skips its conformance test when no
-      # restic binary is on PATH, so without this the suite would go green
-      # having never run it.
+      - name: Run unit tests
+        run: make test-unit
+
+  integration:
+    name: Integration tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    # One runner per slow package: the job takes as long as the slowest of them,
+    # not their sum.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test
+            pkgs: ./test
+            flags: -skip TestStorageE2E
+          # The storage e2e runs a server per backend; its own leg keeps its images
+          # and its failures apart from the rest of ./test.
+          - name: storage
+            pkgs: ./test
+            flags: -run TestStorageE2E
+            images: >-
+              cgr.dev/chainguard/minio@sha256:4692462f35d97d7e82c30371d82f057703c5d9489bcae726010594c812f2d285
+              mcr.microsoft.com/azure-storage/azurite:3.35.0@sha256:647c63a91102a9d8e8000aab803436e1fc85fbb285e7ce830a82ee5d6661cf37
+              atmoz/sftp:alpine@sha256:a6cb3eb29202ca7f57e73bb7e527286e66e0e822fff65609207c7e0ef2d135a3
+          - name: cdcbackend
+            pkgs: ./test/cdcbackend
+          - name: resticrest, tarcopybackend
+            pkgs: ./test/resticrest ./test/tarcopybackend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # test/resticrest skips its conformance test when no restic binary is on
+      # PATH, so without this the suite would go green having never run it.
       - name: Install restic
         run: |
           sudo apt-get update
           sudo apt-get install -y restic
 
-      # The integration suites create busybox containers through raw creates that
-      # never pull, and every restic container runs the default image; pulling
-      # both once here keeps the first test from paying (or flaking on) the pull.
+      # The integration suites create containers through raw creates that never
+      # pull; pulling every image they name once here keeps the first test from
+      # paying (or flaking on) the pull.
       - name: Pre-pull integration test images
         run: |
           docker pull busybox
+          docker pull alpine:3.22
           docker pull restic/restic:0.19.1
+          for image in ${{ matrix.images }}; do docker pull "$image"; done
 
-      - name: Run tests
-        run: go test ./...
+      - name: Run integration tests
+        run: make test-integration INTEGRATION_PKGS="${{ matrix.pkgs }}" INTEGRATION_FLAGS="${{ matrix.flags }}"
 
   build:
     name: Build (all targets)
     if: github.ref == 'refs/heads/main'
-    needs: [lint, test]
+    needs: [lint, unit, integration]
     # macOS, not ubuntu: the darwin targets need cgo (compose/v2 pulls in the cgo-only fsnotify/fsevents)
     runs-on: macos-latest
     steps:
@@ -95,7 +131,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, test]
+    needs: [lint, unit, integration]
     # Same reason as the build job: the darwin targets need cgo, so the release
     # is cut on macOS.
     runs-on: macos-latest
@@ -106,17 +142,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # GoReleaser reads the tag history to derive the version and build the
-          # changelog; a shallow clone has neither.
+          # GoReleaser reads the tag history to derive the version; a shallow
+          # clone has none.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
+      # The release body is the tag's section of CHANGELOG.md. It is written to
+      # RUNNER_TEMP, outside the checkout, so goreleaser's dirty-tree check never
+      # sees it; a tag with no section fails the release.
+      - name: Extract release notes
+        run: |
+          awk -v tag="${GITHUB_REF_NAME}" '
+            $1 == "##" && $2 == tag {found=1; next}
+            found && $1 == "##" {exit}
+            found {print}' CHANGELOG.md > "${RUNNER_TEMP}/release-notes.md"
+          test -s "${RUNNER_TEMP}/release-notes.md" || { echo "CHANGELOG.md has no section for ${GITHUB_REF_NAME}"; exit 1; }
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

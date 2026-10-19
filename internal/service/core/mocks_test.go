@@ -59,19 +59,27 @@ func (m *mockSavepointRepo) DeleteSavepoint(ctx context.Context, id model.Savepo
 // mockImageBackend doubles imageBackend.
 type mockImageBackend struct{ mock.Mock }
 
-func (m *mockImageBackend) Capture(
-	ctx context.Context, req model.ImageCaptureRequest,
-) (model.ImageCapture, error) {
+func (m *mockImageBackend) CaptureWritableLayer(
+	ctx context.Context, req model.WritableLayerCaptureRequest,
+) (model.WritableLayer, error) {
 	args := m.Called(ctx, req)
-	capture, _ := args.Get(0).(model.ImageCapture)
+	capture, _ := args.Get(0).(model.WritableLayer)
 	return capture, args.Error(1)
 }
 
-func (m *mockImageBackend) Restore(
-	ctx context.Context, req model.ImageRestoreRequest,
-) (model.ImageRestore, error) {
+func (m *mockImageBackend) CaptureImage(
+	ctx context.Context, req model.ImageCaptureRequest,
+) (model.Image, error) {
 	args := m.Called(ctx, req)
-	restored, _ := args.Get(0).(model.ImageRestore)
+	image, _ := args.Get(0).(model.Image)
+	return image, args.Error(1)
+}
+
+func (m *mockImageBackend) RestoreWritableLayer(
+	ctx context.Context, req model.WritableLayerRestoreRequest,
+) (model.WritableLayerRestoreResult, error) {
+	args := m.Called(ctx, req)
+	restored, _ := args.Get(0).(model.WritableLayerRestoreResult)
 	return restored, args.Error(1)
 }
 
@@ -79,9 +87,9 @@ func (m *mockImageBackend) Restore(
 type mockContainerRebuilder struct{ mock.Mock }
 
 func (m *mockContainerRebuilder) RecreateWithImage(
-	ctx context.Context, containerID, imageRef string,
+	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
 ) (string, error) {
-	args := m.Called(ctx, containerID, imageRef)
+	args := m.Called(ctx, containerID, as, imageRef)
 	return args.String(0), args.Error(1)
 }
 
@@ -127,6 +135,54 @@ func (f *fakeInflight) Clear(_ context.Context) error {
 	return nil
 }
 
+// fakePointer is a stateful stand-in for .arcave/current_session; the zero value holds none.
+type fakePointer struct {
+	mu       sync.Mutex
+	id       *model.SessionID
+	err      error // returned by every call when set
+	clearErr error // returned by Clear alone when set
+}
+
+func (f *fakePointer) Get(_ context.Context) (model.SessionID, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return model.SessionID{}, false, f.err
+	}
+	if f.id == nil {
+		return model.SessionID{}, false, nil
+	}
+	return *f.id, true, nil
+}
+
+func (f *fakePointer) Put(_ context.Context, id model.SessionID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	f.id = &id
+	return nil
+}
+
+func (f *fakePointer) Clear(_ context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	if f.clearErr != nil {
+		return f.clearErr
+	}
+	f.id = nil
+	return nil
+}
+
+// pointerAt is a fakePointer holding id.
+func pointerAt(id model.SessionID) *fakePointer {
+	return &fakePointer{id: &id}
+}
+
 type mockInflight struct{ mock.Mock }
 
 func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, error) {
@@ -152,19 +208,21 @@ func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResu
 
 type mockAssembler struct{ mock.Mock }
 
-func (m *mockAssembler) Assemble(res model.IntrospectionResult) (*types.Project, error) {
-	args := m.Called(res)
+func (m *mockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
+	args := m.Called(ctx, introspection)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)
 }
 
-func (m *mockAssembler) Marshal(project *types.Project) ([]byte, error) {
+type mockCodec struct{ mock.Mock }
+
+func (m *mockCodec) Marshal(project *types.Project) ([]byte, error) {
 	args := m.Called(project)
 	spec, _ := args.Get(0).([]byte)
 	return spec, args.Error(1)
 }
 
-func (m *mockAssembler) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
+func (m *mockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
 	args := m.Called(ctx, spec)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)
@@ -172,8 +230,10 @@ func (m *mockAssembler) Parse(ctx context.Context, spec []byte) (*types.Project,
 
 type mockComposeRunner struct{ mock.Mock }
 
-func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) error {
-	return m.Called(ctx, project).Error(0)
+func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) ([]string, error) {
+	args := m.Called(ctx, project)
+	killed, _ := args.Get(0).([]string)
+	return killed, args.Error(1)
 }
 
 func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) error {
@@ -281,4 +341,11 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+type mockImageLookup struct{ mock.Mock }
+
+func (m *mockImageLookup) ImageRefExists(ctx context.Context, ref string) (bool, error) {
+	args := m.Called(ctx, ref)
+	return args.Bool(0), args.Error(1)
 }

@@ -39,9 +39,9 @@ func NewSavepointListHandler(svc savepointListService, printer printer) *Savepoi
 // SavepointList prints the savepoints req asks for as a JSON array. It reads
 // only the savepoint store, so it needs no config.
 func (h *SavepointListHandler) SavepointList(ctx context.Context, req model.ListRequest) error {
-	sps, err := h.svc.ListSavepoints(ctx, req)
+	savepoints, err := h.svc.ListSavepoints(ctx, req)
 	if err != nil {
 		return err
 	}
-	return h.printer.Print(sps)
+	return h.printer.Print(savepoints)
 }

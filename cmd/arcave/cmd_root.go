@@ -28,8 +28,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// projectNameEnv is the environment counterpart of -p/--project-name.
-const projectNameEnv = "ARCAVE_PROJECT_NAME"
+const (
+	// projectNameEnv is the environment counterpart of -p/--project-name.
+	projectNameEnv = "ARCAVE_PROJECT_NAME"
+	// sessionEnv is the environment counterpart of --session.
+	sessionEnv = "ARCAVE_SESSION"
+)
 
 // The state every command shares, produced once by initRoot and read from RunE.
 // It is package-level because cobra registers commands from init(), so there is
@@ -40,9 +44,12 @@ var (
 	configFound    bool          // whether .arcave/config.yaml existed
 	rootConfigFile string        // the --config flag's target, read before projectCfg exists
 
-	// projectName is the compose project every stack-bound command operates on. It
-	// is no config key: one project directory may hold several stacks.
+	// projectName is the compose project every project-bound command operates on. It
+	// is no config key: one project directory may hold several compose projects.
 	projectName string
+	// sessionRef names the session, by id or name, every project-bound command works in;
+	// empty is the current session, else model.DefaultSession.
+	sessionRef string
 )
 
 // The build stamps, filled at link time by goreleaser's -X flags (see
@@ -70,15 +77,16 @@ var rootCmd = &cobra.Command{
 	// PersistentPreRunE, not PreRunE: cobra runs PreRunE only for the command
 	// that actually executes, so a plain PreRunE here would never fire for a
 	// subcommand and every command would see a zero-valued config.
-	PersistentPreRunE: func(*cobra.Command, []string) error {
-		return initRoot()
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		return initRoot(cmd == configInitCmd)
 	},
 }
 
 // initRoot is the shared prologue of every command: it locates the project root,
 // points viper at the config file, resolves the effective config (flag > env >
-// file > default), and sets up the context logger from the result.
-func initRoot() error {
+// file > default), and sets up the context logger from the result. For init it
+// reads no file — init writes a template — and only notes whether one exists.
+func initRoot(isInitCommand bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get current working directory: %w", err)
@@ -95,13 +103,15 @@ func initRoot() error {
 	if projectName == "" {
 		projectName = os.Getenv(projectNameEnv)
 	}
+	if sessionRef == "" {
+		sessionRef = os.Getenv(sessionEnv)
+	}
 
-	// A config arcave cannot speak is held, not raised: it must not stop `arcave init
-	// --override`, which is the fix the error names. requireInitialized raises it
-	// for every command that reads the project instead. Anything else — an
-	// unreadable file, an unknown key — is fatal here, since no command can
-	// proceed and init would overwrite a file the user may not mean to lose.
-	projectCfg, configFound, err = resolveConfig(cfgViper, projectRoot)
+	if isInitCommand {
+		projectCfg, configFound, err = resolveWithoutFile(cfgViper, projectRoot, configPath)
+	} else {
+		projectCfg, configFound, err = resolveConfig(cfgViper, projectRoot)
+	}
 	if err != nil {
 		return fmt.Errorf("resolve config: %w", err)
 	}
@@ -129,7 +139,7 @@ func requireConfig() error {
 	return nil
 }
 
-// requireProjectName guards every command bound to a stack.
+// requireProjectName guards every command bound to a compose project.
 func requireProjectName() error {
 	if projectName == "" {
 		return fmt.Errorf("no compose project named: pass -p/--project-name, or set %s", projectNameEnv)
@@ -137,7 +147,7 @@ func requireProjectName() error {
 	return nil
 }
 
-// withDeps runs fn with the dependencies for the stack -p named, released when fn
+// withDeps runs fn with the dependencies for the compose project -p named, released when fn
 // returns. It takes no lock: core.Service claims the project lock itself.
 func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
 	if err := requireProjectName(); err != nil {
@@ -145,7 +155,7 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	}
 
 	ctx := cmd.Context()
-	deps, err := initAllDependencies(ctx, projectRoot, projectCfg, model.StackName(projectName))
+	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(projectName))
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
@@ -157,14 +167,47 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	return fn(ctx, deps)
 }
 
+// resolveSession turns a --session value into the id of a session that exists, for a command that
+// opens no compose project's dependencies; "" is the current session, else the default.
+func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
+	var record model.Session
+	err := withSessionDeps(ctx, func(d *sessionDependencies) error {
+		var err error
+		record, err = d.service.ResolveSession(ctx, ref)
+		return err
+	})
+	if err != nil {
+		return model.SessionID{}, err
+	}
+	return record.ID, nil
+}
+
+// withSessionDeps runs fn over the session dependencies, which reach no daemon and
+// name no compose project.
+func withSessionDeps(ctx context.Context, fn func(d *sessionDependencies) error) error {
+	deps, err := newSessionDependencies(ctx, projectRoot, projectCfg)
+	if err != nil {
+		return fmt.Errorf("init session dependencies: %w", err)
+	}
+	defer func() {
+		if err := deps.Close(); err != nil {
+			log.Ctx(ctx).Error().Err(err).Msg("close session dependencies")
+		}
+	}()
+	return fn(deps)
+}
+
 func init() {
-	pf := rootCmd.PersistentFlags()
-	pf.StringVar(&rootConfigFile, "config", "", "config file path")
+	persistentFlags := rootCmd.PersistentFlags()
+	persistentFlags.StringVar(&rootConfigFile, "config", "", "config file path")
 	// Unbound, like --config: it steers one run rather than describing the project.
-	pf.StringVarP(&projectName, "project-name", "p", "",
+	persistentFlags.StringVarP(&projectName, "project-name", "p", "",
 		fmt.Sprintf("Docker Compose project to operate on, as 'docker compose ls' names it (env %s)", projectNameEnv))
-	pf.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
-	pf.String("log-level", utils.DefaultLogLevel,
+	persistentFlags.StringVar(&sessionRef, "session", "",
+		fmt.Sprintf("Session to work in, by name or id (default: the current session, see 'arcave session set', else %q; env %s)",
+			model.DefaultSessionName, sessionEnv))
+	persistentFlags.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
+	persistentFlags.String("log-level", utils.DefaultLogLevel,
 		fmt.Sprintf(
 			"logging level %s, %s or %s",
 			zerolog.LevelDebugValue,
@@ -179,16 +222,16 @@ func init() {
 	// create` and `rollback` both want --wait-timeout, and whichever init() ran
 	// last would silently own the key for both, so the other command's flag would
 	// parse and then be ignored. Declared once here, every command that restarts
-	// the stack inherits them and the binding is unambiguous.
-	pf.Duration("wait-timeout", config.DefaultWaitTimeout,
+	// the compose project inherits them and the binding is unambiguous.
+	persistentFlags.Duration("wait-timeout", config.DefaultWaitTimeout,
 		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
-	pf.Duration("stop-timeout", config.DefaultStopTimeout,
-		"How long a container gets to exit on its own before it is killed, e.g. 30s")
-	pf.String("progress", config.ProgressLog,
+	persistentFlags.Duration("stop-timeout", config.DefaultStopTimeout,
+		"The least time a container gets to exit on its own before it is killed; a service's stop_grace_period raises it, e.g. 30s")
+	persistentFlags.String("progress", config.ProgressLog,
 		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",
 			config.ProgressLog, config.ProgressTTY, config.ProgressQuiet))
 
-	viperBind(cfgViper, pf, map[string]string{
+	viperBind(cfgViper, persistentFlags, map[string]string{
 		"log-level":    "log.level",
 		"log-format":   "log.format",
 		"wait-timeout": "compose.wait_timeout",

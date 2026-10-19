@@ -41,7 +41,7 @@ func TestParseDigestID_RefusesWhatIsNotContent(t *testing.T) {
 		s    string
 	}{
 		{name: "a tag", s: "postgres:16"},
-		{name: "a tag a rollback left behind", s: "arcave/demo-db-1:sp-1780335122"},
+		{name: "a tag a rollback left behind", s: "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000000"},
 		{name: "an untagged repository", s: "postgres"},
 		{name: "a truncated id", s: "sha256:5f2b8d7c1a4e"},
 		{name: "hex with no algorithm", s: validDigest[len("sha256:"):]},
@@ -64,22 +64,22 @@ func TestParseDigestID_RefusesWhatIsNotContent(t *testing.T) {
 
 func TestDigestID_UnmarshalJSON(t *testing.T) {
 	// Arrange
-	var capture model.ImageCapture
+	var capture model.WritableLayer
 
 	// Act
-	err := json.Unmarshal([]byte(`{"image_id":"`+validDigest+`"}`), &capture)
+	err := json.Unmarshal([]byte(`{"committed_image_id":"`+validDigest+`"}`), &capture)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ImageDigestID(validDigest), capture.ImageID)
+	assert.Equal(t, model.ImageDigestID(validDigest), capture.CommittedImageID)
 }
 
 func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
 	// Arrange
-	var capture model.ImageCapture
+	var capture model.WritableLayer
 
 	// Act
-	err := json.Unmarshal([]byte(`{"image_id":"postgres:16"}`), &capture)
+	err := json.Unmarshal([]byte(`{"committed_image_id":"postgres:16"}`), &capture)
 
 	// Assert: a stored id that is not content fails at the decode, not at the daemon.
 	require.ErrorIs(t, err, model.ErrInvalidDigestID)
@@ -87,12 +87,12 @@ func TestDigestID_UnmarshalJSON_RefusesAReference(t *testing.T) {
 
 func TestDigestID_MarshalJSON_RoundTrips(t *testing.T) {
 	// Arrange
-	capture := model.ImageCapture{ImageID: model.ImageDigestID(validDigest)}
+	capture := model.WritableLayer{CommittedImageID: model.ImageDigestID(validDigest)}
 
 	// Act
 	body, err := json.Marshal(capture)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Contains(t, string(body), `"image_id":"`+validDigest+`"`)
+	assert.Contains(t, string(body), `"committed_image_id":"`+validDigest+`"`)
 }

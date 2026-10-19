@@ -38,24 +38,25 @@ func NewRollbackHandler(svc rollbackService, printer printer) *RollbackHandler {
 	}
 }
 
-// Rollback restores a savepoint and prints what was restored. The wait bound
-// comes from cfg (compose.wait_timeout, overridden by --wait-timeout).
+// Rollback restores a savepoint and prints what was restored; the wait bound and the
+// leftover-volumes policy come from cfg.
 func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref string) error {
-	res, err := h.svc.Rollback(ctx, newRollbackRequest(ref, cfg.Compose.WaitTimeout))
+	res, err := h.svc.Rollback(ctx, newRollbackRequest(ref, cfg.Compose.WaitTimeout, cfg.Rollback.Policy()))
 	if err != nil {
 		return err
 	}
-	return h.printer.Print(model.RollbackResponse{
-		RolledBackTo: res.Savepoint,
-		Restored:     res.Restored,
-		Images:       res.Images,
-	})
+	return h.printer.Print(newRollbackResponse(res))
 }
 
 // newRollbackRequest builds the request both adapters send, so neither drifts on
-// what a ref means: "latest" is reserved, digits are an id, the rest is a name.
-func newRollbackRequest(ref string, waitTimeout time.Duration) model.RollbackRequest {
-	req := model.RollbackRequest{WaitTimeout: waitTimeout}
+// what a ref means: "latest" is reserved, a canonical UUID is an id, the rest is a name.
+func newRollbackRequest(
+	ref string, waitTimeout time.Duration, leftoverVolumesPolicy model.LeftoverVolumesPolicy,
+) model.RollbackRequest {
+	req := model.RollbackRequest{
+		WaitTimeout:     waitTimeout,
+		LeftoverVolumes: leftoverVolumesPolicy,
+	}
 	switch {
 	case ref == model.RefLatest:
 		latest := true
@@ -67,4 +68,13 @@ func newRollbackRequest(ref string, waitTimeout time.Duration) model.RollbackReq
 		req.Name = &ref
 	}
 	return req
+}
+
+// newRollbackResponse builds the response both adapters return, so neither drops a field.
+func newRollbackResponse(res model.RollbackResult) model.RollbackResponse {
+	return model.RollbackResponse{
+		RolledBackTo:   res.Savepoint,
+		Restored:       res.Restored,
+		WritableLayers: res.WritableLayers,
+	}
 }

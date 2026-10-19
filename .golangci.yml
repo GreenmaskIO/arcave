@@ -49,11 +49,12 @@ linters:
         - (*hash/maphash.Hash).WriteByte
         - (*hash/maphash.Hash).WriteString
     recvcheck:
-      # ImageDigestID is the one type that must mix: UnmarshalJSON has to take a
-      # pointer to write through, while every other method reads. The exclusion
-      # names that method rather than the file, so a second mixed type still fails.
+      # ImageDigestID and SessionID must mix: an unmarshaler has to take a pointer
+      # to write through, while every other method reads. The exclusions name the
+      # method rather than the file, so another mixed type still fails.
       exclusions:
         - ImageDigestID.UnmarshalJSON
+        - SessionID.UnmarshalText
     staticcheck:
       # The default set plus ST1016 — one receiver name per type. The other
       # stylistic checks stay disabled: they judge naming this code has settled.

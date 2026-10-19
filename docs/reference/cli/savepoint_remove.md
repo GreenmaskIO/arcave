@@ -6,7 +6,7 @@ keywords: [arcave savepoint remove, retention, dry run, safety snapshot, docker 
 
 # arcave savepoint remove
 
-Deletes savepoints and the data they hold, selected either by id or by retention rules.
+Deletes savepoints of the compose project, in the session the command works in, selected either by id or by retention rules.
 
 ```text title="Synopsis"
 arcave savepoint remove [id...] [flags]
@@ -23,14 +23,14 @@ arcave savepoint remove [id...] [flags]
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
-`--retain-for` accepts `w`, `d`, `h`, `m`, `s`, combined. `--before-date` does not accept a bare date: it wants a full timestamp, `2026-06-01T00:00:00Z`.
+`--retain-for` accepts `w` and `d` beside Go's own units (`h`, `m`, `s`, `ms`…), combined. `--before-date` does not accept a bare date: it wants a full timestamp, `2026-06-01T00:00:00Z`.
 
 ## The two selection modes
 
 **By id** — one or more ids as positional arguments:
 
 ```shell
-arcave savepoint remove 1780335122 1780339981
+arcave savepoint remove 019e843e-1650-7000-8000-000000000000 019e8488-3ac8-7000-8000-000000000000
 ```
 
 **By retention rule** — one or more of `--retain-recent`, `--retain-for`, `--before-date`:
@@ -59,11 +59,12 @@ A scanning selector cannot delete the last copy of a pre-rollback state by accid
   "dry_run": false,
   "removed": [
     {
-      "id": "1780335122",
+      "id": "019e843e-1650-7000-8000-000000000000",
       "name": "before-migration",
       "description": "before the v2 schema",
       "created_at": "2026-06-01T19:41:12.123456789Z",
       "stats": [ … ],
+      "writable_layers": [ … ],
       "images": [ … ],
       "spec": { "format": "compose-yaml" }
     }
@@ -74,11 +75,11 @@ A scanning selector cannot delete the last copy of a pre-rollback state by accid
 | Field | Meaning |
 |---|---|
 | `dry_run` | Whether anything was actually deleted. |
-| `removed` | The savepoints deleted — or, under `--dry-run`, the ones that would be. Each is the whole record. |
+| `removed` | The savepoints deleted — or, under `--dry-run`, the ones that would be — oldest first. Each is the whole record. |
 
 A selection that matches nothing is not an error: `removed` is `null`, and the exit code is `0`.
 
-Deletion is permanent. It frees the savepoint's own directory; the [deduplicated image blobs](../storage_layout.md#shared-blobs) it shared with other savepoints stay where they are.
+Deletion is permanent. It frees the savepoint's own directory; the [deduplicated image blobs](../storage_layout.md#shared-blobs) and images it shared with other savepoints, and a `cdc` repository's data, stay where they are. Deleting the whole session gives everything back — see [`session delete`](session.md#session-delete).
 
 ## Errors
 
@@ -89,8 +90,8 @@ Deletion is permanent. It frees the savepoint's own directory; the [deduplicated
 | A negative `--retain-recent` | `retain-recent must be zero or positive` |
 | An unparseable duration | `invalid --retain-for "2 weeks": …` |
 | A bare date in `--before-date` | `invalid --before-date "2026-06-01": …` — it takes RFC3339Nano. |
-| An id that is not there | `savepoint(s) not found: 1780335122`, **and nothing is deleted**. There are no partial deletes: one typo in a list of five removes none of them. |
-| An interrupted rollback is marked | `rollback to savepoint 1780335122 was interrupted (restoring)`. While the marker stands its safety snapshot is the remedy, and no selector may delete it. |
+| An id that is not there | `savepoint(s) not found: 019e843e-1650-7000-8000-000000000000`, **and nothing is deleted**. Ids are not checked for form, so a name passed as an id is reported the same way. There are no partial deletes: one typo in a list of five removes none of them. |
+| An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)`. While the marker stands every removal but `--dry-run` is refused, by id or by rule: its safety snapshot is the remedy. Recover the rollback first. |
 | Another arcave run holds the lock | `another arcave command is already running in this project`. `--dry-run` takes no lock and is unaffected. |
 
 Each removal uncommits the record first and drops the data second. A removal killed halfway therefore leaves data no record names — invisible to `savepoint list` — rather than a record pointing at data that is already half gone. What it leaves is named in the log.
@@ -115,14 +116,14 @@ arcave savepoint remove --before-date 2026-06-01T00:00:00Z
 
 ```shell title="Delete a leftover safety snapshot, once the environment is right"
 arcave savepoint list --include-safety-snapshots
-arcave savepoint remove 1780340557
+arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```
 
 Until you have confirmed the environment, that snapshot is the last copy of the pre-rollback state.
 
 ## Retention rules do not know which savepoint matters
 
-A seeded `clean` baseline is deleted by `--retain-recent 5` as soon as five newer savepoints exist. A savepoint that has to survive indefinitely is pruned around by id, or kept in a store of its own via [`storage.directory.path`](../configuration.md#storage).
+A seeded `clean` baseline is deleted by `--retain-recent 5` as soon as five newer savepoints exist. A savepoint that has to survive indefinitely is pruned around by id, or kept in a [session](session.md) of its own that the retention runs never name.
 
 ## Next step
 

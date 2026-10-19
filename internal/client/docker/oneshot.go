@@ -34,6 +34,15 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// oneShotLabel marks every throwaway container arcave creates, so one a killed run
+// left behind can be found: `docker ps -a --filter label=arcave.oneshot`.
+const oneShotLabel = "arcave.oneshot"
+
+// newOneShotLabels is the label set of a throwaway container.
+func newOneShotLabels() map[string]string {
+	return map[string]string{oneShotLabel: "true"}
+}
+
 // attaches reports whether the run exchanges any stdio with the container.
 func attaches(spec model.OneShotSpec) bool {
 	return spec.Stdin != nil || spec.Stdout != nil || spec.Stderr != nil
@@ -57,6 +66,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		Image:        spec.Image,
 		Cmd:          spec.Cmd,
 		Env:          spec.Env,
+		Labels:       newOneShotLabels(),
 		OpenStdin:    spec.Stdin != nil,
 		StdinOnce:    spec.Stdin != nil,
 		AttachStdin:  spec.Stdin != nil,
@@ -140,7 +150,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 // so it exits at once and is only ever copied in and out of.
 var scratchCmd = []string{"true"}
 
-// withScratchContainer runs fn against a throwaway container with src mounted
+// withScratchContainer runs fn against a throwaway container with source mounted
 // at scratchMount, and removes it when fn returns.
 func withScratchContainer(
 	ctx context.Context, api dockerAPI, src model.MountSource, fn func(id string) error,
@@ -154,7 +164,7 @@ func withScratchContainer(
 	return fn(id)
 }
 
-// startScratchContainer creates a container holding src at scratchMount, runs
+// startScratchContainer creates a container holding source at scratchMount, runs
 // it to exit, and returns its id together with its removal. The caller runs the
 // removal — a stream copied out of the container has to outlive the call that
 // opened it.
@@ -173,7 +183,7 @@ func startScratchContainer(
 	}
 
 	created, err := api.ContainerCreate(ctx,
-		&container.Config{Image: scratchImage, Cmd: scratchCmd},
+		&container.Config{Image: scratchImage, Cmd: scratchCmd, Labels: newOneShotLabels()},
 		&container.HostConfig{Binds: []string{src.Source + ":" + scratchMount}},
 		nil, nil, "")
 	if err != nil {
@@ -238,17 +248,17 @@ func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 // container blocks writing output nobody drains, arcave blocks writing input nobody
 // reads, and neither ever gets to the other half.
 func exchange(ctx context.Context, attached types.HijackedResponse, spec model.OneShotSpec) error {
-	var g errgroup.Group
+	var eg errgroup.Group
 
 	if spec.Stdin != nil {
-		g.Go(func() error {
-			src := &recordingReader{r: spec.Stdin}
+		eg.Go(func() error {
+			stdin := &recordingReader{r: spec.Stdin}
 			// A container that exits without draining its stdin (think `head`) fails
 			// this copy on the *write* side, which is not an error: the exit status
 			// decides that run's outcome. A failure to read the caller's own source
 			// is an error, and is the only one reported here.
-			if _, err := io.Copy(attached.Conn, src); err != nil && src.err != nil {
-				return fmt.Errorf("read %s container input: %w", spec.Image, src.err)
+			if _, err := io.Copy(attached.Conn, stdin); err != nil && stdin.err != nil {
+				return fmt.Errorf("read %s container input: %w", spec.Image, stdin.err)
 			}
 			// Half-close so the process sees EOF on stdin rather than hanging.
 			if err := attached.CloseWrite(); err != nil {
@@ -259,7 +269,7 @@ func exchange(ctx context.Context, attached types.HijackedResponse, spec model.O
 		})
 	}
 
-	g.Go(func() error {
+	eg.Go(func() error {
 		stdout, stderr := spec.Stdout, spec.Stderr
 		if stdout == nil {
 			stdout = io.Discard
@@ -273,7 +283,7 @@ func exchange(ctx context.Context, attached types.HijackedResponse, spec model.O
 		return nil
 	})
 
-	if err := g.Wait(); err != nil {
+	if err := eg.Wait(); err != nil {
 		// A cancelled run breaks its own connection; report the cause, not the symptom.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("%s container run cancelled: %w", spec.Image, ctxErr)

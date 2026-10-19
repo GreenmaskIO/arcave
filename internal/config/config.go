@@ -21,13 +21,14 @@
 // The config *is* its viper decode — the mapstructure tags below are the schema
 // viper fills — so Unmarshal takes a *viper.Viper rather than re-implementing
 // that decode over a settings map. The pluggable sections still declare plain
-// local union arms rather than embedding directory.Config or a future s3.Config:
+// local union arms rather than embedding directory.Config or s3.Config:
 // embedding would drag a cloud SDK into the import graph of repository/config,
 // and therefore of `arcave init`. cmd/arcave translates each section into its package's
 // own options struct.
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -39,25 +40,24 @@ import (
 
 const fileName = "config.yaml"
 
-// StorageTypeDirectory names the local-filesystem arm of the storage union. It
-// is the only arm implemented today; the union exists so adding "s3" is a new
-// arm rather than a new set of top-level keys.
-const StorageTypeDirectory = "directory"
+// ErrInvalid reports a config value arcave cannot act on; every error Unmarshal
+// returns wraps it.
+var ErrInvalid = errors.New("invalid config")
 
 // The tokens snapshot.backend accepts.
 const (
 	// SnapshotBackendFullCopy stores each mount's tar stream verbatim.
-	SnapshotBackendFullCopy = "fullcopy"
+	SnapshotBackendFullCopy = string(model.SnapshotBackendFullCopy)
 	// SnapshotBackendCDC captures into a restic repository that outlives any one
 	// savepoint, writing only the chunks that changed.
-	SnapshotBackendCDC = "cdc"
+	SnapshotBackendCDC = string(model.SnapshotBackendCDC)
 )
 
 // The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
 const (
-	// RestoreModeWipe clears the mount and restores it whole. The default.
+	// RestoreModeWipe clears the mount and restores it whole.
 	RestoreModeWipe = "wipe"
-	// RestoreModeIncremental restores over the live data, writing only what
+	// RestoreModeIncremental, the default, restores over the live data, writing only what
 	// differs and deleting what the snapshot does not carry.
 	RestoreModeIncremental = "incremental"
 )
@@ -115,7 +115,7 @@ const (
 	NetworkModeBridge = "bridge"
 )
 
-// The bounds arcave gives compose when it stops and starts the stack. They live
+// The bounds arcave gives compose when it stops and starts the compose project. They live
 // here rather than in the compose client because they are project config now:
 // the client applies them, but the user names them, and cmd/arcave advertises
 // them as the --wait-timeout/--stop-timeout defaults.
@@ -124,10 +124,10 @@ const (
 	// bound a service that never becomes healthy (a crash-looping container with
 	// restart: always) would block a savepoint forever.
 	DefaultWaitTimeout = 120 * time.Second
-	// DefaultStopTimeout is the grace period a container gets to exit before
-	// compose sends SIGKILL. It matters more here than it does to `docker compose
-	// stop`: arcave snapshots the volumes the moment the containers are down, so a
-	// database killed mid-shutdown is captured mid-shutdown.
+	// DefaultStopTimeout is the least grace period before compose SIGKILLs a
+	// container; a service's stop_grace_period raises it. It matters more here than
+	// it does to `docker compose stop`: arcave snapshots the volumes the moment the
+	// containers are down, so a database killed mid-shutdown is captured mid-shutdown.
 	DefaultStopTimeout = 10 * time.Second
 )
 
@@ -146,16 +146,33 @@ const (
 	ProgressQuiet = "quiet"
 )
 
+// DefaultConcurrency is how many volumes, writable layers or images one workflow
+// moves at once.
+const DefaultConcurrency = 5
+
+// The tokens rollback.leftover_volumes accepts.
+const (
+	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
+	// containers, and warns. The default.
+	LeftoverVolumesOverwrite = "overwrite"
+	// LeftoverVolumesRefuse fails such a rollback before anything is created.
+	LeftoverVolumesRefuse = "refuse"
+)
+
 // Config is the content persisted to .arcave/config.yaml by init. The yaml tags
 // drive Save; the mapstructure tags drive Unmarshal.
 // One section per subsystem: a new subsystem adds a section rather than another
 // top-level key.
 type Config struct {
-	Project  Project  `yaml:"project" mapstructure:"project"`
-	Docker   Docker   `yaml:"docker,omitempty" mapstructure:"docker"`
-	Compose  Compose  `yaml:"compose" mapstructure:"compose"`
-	Storage  Storage  `yaml:"storage" mapstructure:"storage"`
-	Snapshot Snapshot `yaml:"snapshot" mapstructure:"snapshot"`
+	Project        Project        `yaml:"project" mapstructure:"project"`
+	Common         Common         `yaml:"common" mapstructure:"common"`
+	Docker         Docker         `yaml:"docker,omitempty" mapstructure:"docker"`
+	Compose        Compose        `yaml:"compose" mapstructure:"compose"`
+	Storage        Storage        `yaml:"storage" mapstructure:"storage"`
+	Snapshot       Snapshot       `yaml:"snapshot" mapstructure:"snapshot"`
+	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
+	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
+	Rollback       Rollback       `yaml:"rollback" mapstructure:"rollback"`
 	// Backends holds the settings of the individual snapshot backends, one
 	// section per backend, present only for the backends a project configures.
 	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
@@ -165,7 +182,7 @@ type Config struct {
 }
 
 // Project names the storage tenant every store root is scoped by. The compose
-// stack is not here: it is named per invocation with -p/--project-name.
+// compose project is not here: it is named per invocation with -p/--project-name.
 type Project struct {
 	Name string `yaml:"name" mapstructure:"name"`
 }
@@ -174,8 +191,23 @@ type Project struct {
 // root. ApplyDefaults has run by then, so an empty name means the project
 // directory normalized to nothing and the user has to say what to call it.
 func (p Project) Validate() error {
-	if err := model.ProjectName(p.Name).Validate(); err != nil {
-		return fmt.Errorf("project.name: %w (set project.name explicitly)", err)
+	if err := model.ArcaveProjectName(p.Name).Validate(); err != nil {
+		return fmt.Errorf("%w: project.name: %w (set project.name explicitly)", ErrInvalid, err)
+	}
+	return nil
+}
+
+// Common holds the settings every workflow shares.
+type Common struct {
+	// Concurrency caps how many volumes, writable layers or images a capture or a
+	// restore works at once.
+	Concurrency int `yaml:"concurrency" mapstructure:"concurrency"`
+}
+
+// Validate rejects a concurrency no workflow could run with.
+func (c Common) Validate() error {
+	if c.Concurrency < 1 {
+		return fmt.Errorf("%w: common.concurrency must be at least 1, got %d", ErrInvalid, c.Concurrency)
 	}
 	return nil
 }
@@ -201,22 +233,23 @@ type Docker struct {
 // Compose is how arcave drives the project's lifecycle — the two bounds it gives
 // `docker compose stop`/`up`, and how loudly compose reports its own progress.
 // Unlike Docker, which says *which* daemon to reach, this section says how
-// patient arcave is with the stack once it has it.
+// patient arcave is with the compose project once it has it.
 //
 // It is a section of its own rather than fields on Project because Project
-// identifies the stack (its name, its files) while these are the knobs a user
+// identifies the compose project (its name, its files) while these are the knobs a user
 // turns when a service is slow: a savepoint that reports nothing for two minutes
 // and a database killed mid-shutdown are both fixed from here.
 type Compose struct {
 	// WaitTimeout bounds the health-check wait after a start. Every command that
-	// restarts the stack advertises it as --wait-timeout; a request naming its own
+	// restarts the compose project advertises it as --wait-timeout; a request naming its own
 	// bound (an MCP tool call) overrides it.
 	WaitTimeout time.Duration `yaml:"wait_timeout" mapstructure:"wait_timeout"`
-	// StopTimeout is how long a container gets to exit on its own before compose
-	// sends SIGKILL. Zero means "unset": DefaultStopTimeout applies, so an
-	// immediate kill is spelled 1s, not 0 — the value that reads as "no grace at
-	// all" is the one a user is most likely to leave unset by accident, and a
-	// SIGKILLed database is exactly what this bound exists to prevent.
+	// StopTimeout is the least time a container gets to exit on its own before
+	// compose sends SIGKILL; a service's stop_grace_period raises it. Zero means
+	// "unset": DefaultStopTimeout applies, so an immediate kill is spelled 1s, not 0 —
+	// the value that reads as "no grace at all" is the one a user is most likely to
+	// leave unset by accident, and a SIGKILLed database is exactly what this bound
+	// exists to prevent.
 	StopTimeout time.Duration `yaml:"stop_timeout" mapstructure:"stop_timeout"`
 	// Progress selects the channel compose's own progress goes out on: folded
 	// into arcave's log (the default), rendered by compose itself, or dropped.
@@ -232,63 +265,18 @@ type Compose struct {
 // is not on offer: it is the failure mode the bound exists to turn into an error.
 func (c Compose) Validate() error {
 	if c.WaitTimeout <= 0 {
-		return fmt.Errorf("compose.wait_timeout must be a positive duration, got %s", c.WaitTimeout)
+		return fmt.Errorf("%w: compose.wait_timeout must be a positive duration, got %s", ErrInvalid, c.WaitTimeout)
 	}
 	if c.StopTimeout < 0 {
-		return fmt.Errorf("compose.stop_timeout must not be negative, got %s", c.StopTimeout)
+		return fmt.Errorf("%w: compose.stop_timeout must not be negative, got %s", ErrInvalid, c.StopTimeout)
 	}
 	switch c.Progress {
 	case ProgressLog, ProgressTTY, ProgressQuiet:
 		return nil
 	default:
-		return fmt.Errorf("unsupported compose.progress %q (supported: %s, %s, %s)",
+		return fmt.Errorf("%w: unsupported compose.progress %q (supported: %s, %s, %s)", ErrInvalid,
 			c.Progress, ProgressLog, ProgressTTY, ProgressQuiet)
 	}
-}
-
-// Storage is a tagged union: Type names the arm, and exactly that arm must be
-// present. The arms are pointers so an unset one is omitted on marshal rather
-// than written out as a block of zero values.
-type Storage struct {
-	Type      string            `yaml:"type" mapstructure:"type"`
-	Directory *DirectoryStorage `yaml:"directory,omitempty" mapstructure:"directory"`
-}
-
-// DirectoryStorage is the local-filesystem arm. Path is resolved against the
-// project root when relative, and rooted under the static arcave namespace, by
-// internal/storefactory.New — which is the only place that turns it into a
-// Storager.
-type DirectoryStorage struct {
-	Path string `yaml:"path" mapstructure:"path"`
-}
-
-// Validate rejects a union whose tag names an arm that is not present, or an arm
-// arcave does not implement.
-func (s Storage) Validate() error {
-	switch s.Type {
-	case StorageTypeDirectory:
-		if s.Directory == nil {
-			return fmt.Errorf("storage.type is %q but no storage.directory section is present", s.Type)
-		}
-		if s.Directory.Path == "" {
-			return fmt.Errorf("storage.directory.path is required")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported storage.type %q (supported: %s)", s.Type, StorageTypeDirectory)
-	}
-}
-
-// DirectoryPath returns the directory arm's path, or "" when the union does not
-// name that arm. A caller that only wants to *read* the savepoint directory (a
-// status report; a test asserting on a resolved config) uses this rather than
-// dereferencing an arm a hand-written config may not carry. Nothing turns the
-// path into a store this way — that is storefactory.New's alone.
-func (s Storage) DirectoryPath() string {
-	if s.Directory == nil {
-		return ""
-	}
-	return s.Directory.Path
 }
 
 // Snapshot selects the snapshot backend that owns the read→write pipeline. It
@@ -304,7 +292,7 @@ func (s Snapshot) Validate() error {
 	case SnapshotBackendFullCopy, SnapshotBackendCDC:
 		return nil
 	default:
-		return fmt.Errorf("unsupported snapshot.backend %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported snapshot.backend %q (supported: %s, %s)", ErrInvalid,
 			s.Backend, SnapshotBackendFullCopy, SnapshotBackendCDC)
 	}
 }
@@ -314,14 +302,67 @@ func (s Snapshot) Validate() error {
 // SnapshotBackendUnknown, which the registry refuses by name; Validate has
 // rejected it long before.
 func (s Snapshot) BackendKind() model.SnapshotBackendKind {
-	switch s.Backend {
-	case SnapshotBackendFullCopy:
-		return model.SnapshotBackendCopy
-	case SnapshotBackendCDC:
-		return model.SnapshotBackendCDC
-	default:
-		return model.SnapshotBackendUnknown
+	kind, _ := model.ParseVolumeBackend(s.Backend)
+	return kind
+}
+
+// WritableLayers selects the layout a new savepoint stores writable layers in, unless a
+// service's arcave.writable-layer.backend label says otherwise.
+type WritableLayers struct {
+	Backend string `yaml:"backend" mapstructure:"backend"`
+}
+
+// Validate rejects a layout arcave does not know.
+func (w WritableLayers) Validate() error {
+	if _, ok := model.ParseImageBackend(w.Backend); !ok {
+		return fmt.Errorf("%w: unsupported writable_layers.backend %q (supported: %s, %s)", ErrInvalid,
+			w.Backend, model.ImageBackendDedupCopy, model.ImageBackendFullCopy)
 	}
+	return nil
+}
+
+// BackendKind is the configured layout as the kind a capture carries.
+func (w WritableLayers) BackendKind() model.ImageBackendKind {
+	kind, _ := model.ParseImageBackend(w.Backend)
+	return kind
+}
+
+// Capture says, by kind of unit, what a savepoint takes when no arcave.* label says
+// otherwise. It names no service or volume: those are the compose file's, by label.
+type Capture struct {
+	WritableLayers *bool          `yaml:"writable_layers" mapstructure:"writable_layers"`
+	Images         *bool          `yaml:"images" mapstructure:"images"`
+	Volumes        CaptureVolumes `yaml:"volumes" mapstructure:"volumes"`
+}
+
+// CaptureVolumes says which kinds of volume a savepoint takes.
+type CaptureVolumes struct {
+	Named     *bool `yaml:"named" mapstructure:"named"`
+	Bind      *bool `yaml:"bind" mapstructure:"bind"`
+	Anonymous *bool `yaml:"anonymous" mapstructure:"anonymous"`
+}
+
+// Rollback configures the rollback workflow.
+type Rollback struct {
+	// LeftoverVolumes is what a rollback does when the compose project has no containers
+	// but its volumes still exist: overwrite them, or refuse.
+	LeftoverVolumes string `yaml:"leftover_volumes" mapstructure:"leftover_volumes"`
+}
+
+// Validate rejects a leftover-volumes policy arcave does not know.
+func (r Rollback) Validate() error {
+	switch r.LeftoverVolumes {
+	case LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported rollback.leftover_volumes %q (supported: %s, %s)", ErrInvalid,
+			r.LeftoverVolumes, LeftoverVolumesOverwrite, LeftoverVolumesRefuse)
+	}
+}
+
+// Policy returns the configured token as the policy a rollback request carries.
+func (r Rollback) Policy() model.LeftoverVolumesPolicy {
+	return model.LeftoverVolumesPolicy(r.LeftoverVolumes)
 }
 
 // Backends is one optional section per snapshot backend. The arms are pointers
@@ -372,39 +413,39 @@ func (c CDCBackend) Validate() error {
 	switch c.RestoreMode {
 	case RestoreModeWipe, RestoreModeIncremental:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.restore_mode %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.restore_mode %q (supported: %s, %s)", ErrInvalid,
 			c.RestoreMode, RestoreModeWipe, RestoreModeIncremental)
 	}
 	switch c.Overwrite {
 	case OverwriteIfChanged, OverwriteAlways:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.overwrite %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.overwrite %q (supported: %s, %s)", ErrInvalid,
 			c.Overwrite, OverwriteIfChanged, OverwriteAlways)
 	}
 	if c.Image == "" {
-		return fmt.Errorf("backends.cdc.image is required")
+		return fmt.Errorf("%w: backends.cdc.image is required", ErrInvalid)
 	}
 	if c.ServerAddress == "" {
-		return fmt.Errorf("backends.cdc.server_address is required")
+		return fmt.Errorf("%w: backends.cdc.server_address is required", ErrInvalid)
 	}
 	// The address is bound, so it must split into host and port here rather than
 	// at listen time, halfway through wiring a command.
 	if _, _, err := net.SplitHostPort(c.ServerAddress); err != nil {
-		return fmt.Errorf("backends.cdc.server_address %q is not a host:port address: %w", c.ServerAddress, err)
+		return fmt.Errorf("%w: backends.cdc.server_address %q is not a host:port address: %w", ErrInvalid, c.ServerAddress, err)
 	}
 	switch c.ServerScheme {
 	case SchemeHTTP, SchemeHTTPS:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.server_scheme %q (supported: %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.server_scheme %q (supported: %s, %s)", ErrInvalid,
 			c.ServerScheme, SchemeHTTP, SchemeHTTPS)
 	}
 	if c.ContainerHost == "" {
-		return fmt.Errorf("backends.cdc.container_host is required")
+		return fmt.Errorf("%w: backends.cdc.container_host is required", ErrInvalid)
 	}
 	switch c.NetworkMode {
 	case NetworkModeAuto, NetworkModeHost, NetworkModeBridge:
 	default:
-		return fmt.Errorf("unsupported backends.cdc.network_mode %q (supported: %s, %s, %s)",
+		return fmt.Errorf("%w: unsupported backends.cdc.network_mode %q (supported: %s, %s, %s)", ErrInvalid,
 			c.NetworkMode, NetworkModeAuto, NetworkModeHost, NetworkModeBridge)
 	}
 	return nil
@@ -438,7 +479,10 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 		// normalized rather than taken verbatim: MyApp yields myapp. A basename that
 		// normalizes to nothing stays empty and is reported by Validate, which is the
 		// one place that says "name the project explicitly".
-		c.Project.Name = model.NormalizeProjectName(filepath.Base(projectRoot)).String()
+		c.Project.Name = model.NormalizeArcaveProjectName(filepath.Base(projectRoot)).String()
+	}
+	if c.Common.Concurrency == 0 {
+		c.Common.Concurrency = DefaultConcurrency
 	}
 	if c.Compose.WaitTimeout == 0 {
 		c.Compose.WaitTimeout = DefaultWaitTimeout
@@ -449,28 +493,30 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Compose.Progress == "" {
 		c.Compose.Progress = ProgressLog
 	}
-	if c.Storage.Type == "" {
-		c.Storage.Type = StorageTypeDirectory
-	}
-	if c.Storage.Type == StorageTypeDirectory {
-		// Fill a copy of the arm and re-point at it, never through the caller's
-		// pointer: a Config is passed around by value (InitService.Init takes
-		// one), and mutating the pointee would reach back into the caller's own
-		// value across that copy.
-		dir := DirectoryStorage{}
-		if c.Storage.Directory != nil {
-			dir = *c.Storage.Directory
-		}
-		if dir.Path == "" {
-			// No project segment here: storefactory roots every store at
-			// arcave/projects/<project>/…, so naming it twice would give
-			// .arcave/storage/demo/arcave/projects/demo/….
-			dir.Path = filepath.Join(model.StateDir, "storage")
-		}
-		c.Storage.Directory = &dir
-	}
+	c.Storage = c.Storage.withDefaults()
 	if c.Snapshot.Backend == "" {
 		c.Snapshot.Backend = SnapshotBackendFullCopy
+	}
+	if c.WritableLayers.Backend == "" {
+		c.WritableLayers.Backend = string(model.ImageBackendDedupCopy)
+	}
+	if c.Capture.WritableLayers == nil {
+		c.Capture.WritableLayers = utils.New(true)
+	}
+	if c.Capture.Images == nil {
+		c.Capture.Images = utils.New(true)
+	}
+	if c.Capture.Volumes.Named == nil {
+		c.Capture.Volumes.Named = utils.New(true)
+	}
+	if c.Capture.Volumes.Bind == nil {
+		c.Capture.Volumes.Bind = utils.New(true)
+	}
+	if c.Capture.Volumes.Anonymous == nil {
+		c.Capture.Volumes.Anonymous = utils.New(true)
+	}
+	if c.Rollback.LeftoverVolumes == "" {
+		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
 	}
 	c.applyCDCDefaults()
 }
@@ -493,39 +539,42 @@ func (c *Config) applyCDCDefaults() {
 // fullcopy and the project carries no block. It is the single home of these
 // defaults: ApplyDefaults fills the config through it, and the DI root reads the
 // effective section through it, so neither side can hold a copy that drifts.
-func CDCWithDefaults(cfg *CDCBackend) CDCBackend {
-	c := CDCBackend{}
-	if cfg != nil {
-		c = *cfg
+func CDCWithDefaults(configured *CDCBackend) CDCBackend {
+	cdc := CDCBackend{}
+	if configured != nil {
+		cdc = *configured
 	}
-	if c.RestoreMode == "" {
-		c.RestoreMode = RestoreModeIncremental
+	if cdc.RestoreMode == "" {
+		cdc.RestoreMode = RestoreModeIncremental
 	}
-	if c.Overwrite == "" {
-		c.Overwrite = OverwriteAlways
+	if cdc.Overwrite == "" {
+		cdc.Overwrite = OverwriteAlways
 	}
-	if c.Image == "" {
-		c.Image = DefaultResticImage
+	if cdc.Image == "" {
+		cdc.Image = DefaultResticImage
 	}
-	if c.ServerAddress == "" {
-		c.ServerAddress = DefaultCDCServerAddress
+	if cdc.ServerAddress == "" {
+		cdc.ServerAddress = DefaultCDCServerAddress
 	}
-	if c.ServerScheme == "" {
-		c.ServerScheme = DefaultCDCServerScheme
+	if cdc.ServerScheme == "" {
+		cdc.ServerScheme = DefaultCDCServerScheme
 	}
-	if c.ContainerHost == "" {
-		c.ContainerHost = DefaultCDCContainerHost
+	if cdc.ContainerHost == "" {
+		cdc.ContainerHost = DefaultCDCContainerHost
 	}
-	if c.NetworkMode == "" {
-		c.NetworkMode = DefaultCDCNetworkMode
+	if cdc.NetworkMode == "" {
+		cdc.NetworkMode = DefaultCDCNetworkMode
 	}
-	return c
+	return cdc
 }
 
 // Validate checks the sections whose values arcave must be able to act on. It runs
 // after ApplyDefaults, so an empty section is a default rather than an error.
 func (c *Config) Validate() error {
 	if err := c.Project.Validate(); err != nil {
+		return err
+	}
+	if err := c.Common.Validate(); err != nil {
 		return err
 	}
 	if err := c.Compose.Validate(); err != nil {
@@ -535,6 +584,12 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Snapshot.Validate(); err != nil {
+		return err
+	}
+	if err := c.WritableLayers.Validate(); err != nil {
+		return err
+	}
+	if err := c.Rollback.Validate(); err != nil {
 		return err
 	}
 	return c.Backends.Validate()

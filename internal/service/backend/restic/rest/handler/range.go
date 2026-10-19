@@ -36,7 +36,13 @@ type byteRange struct {
 	requestedWholeBlob bool
 }
 
-func wholeBlobRange(size int64) byteRange {
+// newByteRange is the part of an object a Range header asked for.
+func newByteRange(start, length int64) byteRange {
+	return byteRange{start: start, length: length}
+}
+
+// newWholeBlobRange is all of an object of size bytes.
+func newWholeBlobRange(size int64) byteRange {
 	return byteRange{
 		length:             size,
 		requestedWholeBlob: true,
@@ -69,27 +75,24 @@ func parseRangeHeader(header string) (spec rangeSpec, askedForRange bool) {
 func parseRange(header string, size int64) (byteRange, error) {
 	spec, askedForRange := parseRangeHeader(header)
 	if !askedForRange {
-		return wholeBlobRange(size), nil
+		return newWholeBlobRange(size), nil
 	}
 	// The suffix form, "the final N bytes": restic never sends one, but RFC 9110
 	// defines it and it costs three lines.
 	if spec.first == "" {
-		n, err := strconv.ParseInt(spec.last, 10, 64)
-		if err != nil || n < 0 {
-			return wholeBlobRange(size), nil
+		suffixLength, err := strconv.ParseInt(spec.last, 10, 64)
+		if err != nil || suffixLength < 0 {
+			return newWholeBlobRange(size), nil
 		}
-		if n == 0 || size == 0 {
+		if suffixLength == 0 || size == 0 {
 			return byteRange{}, errRangeNotSatisfiable
 		}
-		return byteRange{
-			start:  max(size-n, 0),
-			length: min(n, size),
-		}, nil
+		return newByteRange(max(size-suffixLength, 0), min(suffixLength, size)), nil
 	}
 
 	start, err := strconv.ParseInt(spec.first, 10, 64)
 	if err != nil || start < 0 {
-		return wholeBlobRange(size), nil
+		return newWholeBlobRange(size), nil
 	}
 	if start >= size {
 		return byteRange{}, errRangeNotSatisfiable
@@ -97,24 +100,18 @@ func parseRange(header string, size int64) (byteRange, error) {
 
 	// An open-ended range runs to the end of the object.
 	if spec.last == "" {
-		return byteRange{
-			start:  start,
-			length: size - start,
-		}, nil
+		return newByteRange(start, size-start), nil
 	}
 
 	end, err := strconv.ParseInt(spec.last, 10, 64)
 	if err != nil {
-		return wholeBlobRange(size), nil
+		return newWholeBlobRange(size), nil
 	}
 	// An end preceding its start is an invalid header, not an unsatisfiable range.
 	if end < start {
-		return wholeBlobRange(size), nil
+		return newWholeBlobRange(size), nil
 	}
 	// Clamping the end is RFC 9110's own rule: the last byte position is the
 	// lesser of the requested one and the final byte of the representation.
-	return byteRange{
-		start:  start,
-		length: min(end, size-1) - start + 1,
-	}, nil
+	return newByteRange(start, min(end, size-1)-start+1), nil
 }

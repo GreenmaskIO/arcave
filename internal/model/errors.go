@@ -16,6 +16,8 @@ package model
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 )
 
 // Sentinel errors that cross a layer seam: a service returns one, an adapter
@@ -43,9 +45,50 @@ var (
 	// mutating workflow in this project.
 	ErrProjectLocked = errors.New("another arcave command is already running in this project")
 
-	// ErrInvalidSavepointID reports an id that is not a run of decimal digits.
+	// ErrInvalidSavepointID reports an id that is not a canonical UUID.
 	// SavepointID.Validate wraps it with the offending id.
 	ErrInvalidSavepointID = errors.New("invalid savepoint id")
+	// ErrInvalidSavepointName reports a name a savepoint may not carry.
+	// CreateSavepointRequest.Validate wraps it with the offending name.
+	ErrInvalidSavepointName = errors.New("invalid savepoint name")
+	// ErrSavepointNameTaken reports a name another savepoint of the compose project
+	// already carries.
+	ErrSavepointNameTaken = errors.New("savepoint name is already taken")
+
+	// ErrInvalidSessionID reports a string that is not a session id: a canonical UUID
+	// other than the nil one. ParseSessionID wraps it with the offending value.
+	ErrInvalidSessionID = errors.New("invalid session id")
+	// ErrSessionNotFound reports a session id or name no session record carries.
+	ErrSessionNotFound = errors.New("session not found")
+	// ErrInvalidSessionName reports a name a session may not carry.
+	// CreateSessionRequest.Validate wraps it with the offending name.
+	ErrInvalidSessionName = errors.New("invalid session name")
+	// ErrSessionNameTaken reports a name another session of the arcave project
+	// already carries.
+	ErrSessionNameTaken = errors.New("session name is already taken")
+	// ErrDefaultSessionDelete refuses to delete DefaultSession, which always exists.
+	ErrDefaultSessionDelete = errors.New("the default session cannot be deleted")
+	// ErrSessionTreeOccupied refuses a fork into a tree that already holds anything, or a copy
+	// of a session onto itself; nothing was written, so the caller must not clean the tree up.
+	ErrSessionTreeOccupied = errors.New("session tree is occupied")
+	// ErrHeartbeatNotFound reports a tree that holds no heartbeat.
+	ErrHeartbeatNotFound = errors.New("heartbeat not found")
+	// ErrSessionCloning refuses to delete a tree whose fork kept its heartbeat fresh, unless forced.
+	ErrSessionCloning = errors.New("session is still being cloned")
+	// ErrSessionStatusUnknown refuses to delete a tree whose heartbeat cannot be read or reports
+	// another operation in progress, unless forced.
+	ErrSessionStatusUnknown = errors.New("session tree status is unknown")
+	// ErrNoSessionRef refuses a command that must name a session but names none.
+	ErrNoSessionRef = errors.New("no session named")
+	// ErrCurrentSessionNotFound reports a current-session pointer naming a session that no
+	// longer exists.
+	ErrCurrentSessionNotFound = errors.New("the current session no longer exists")
+	// ErrCurrentSessionDelete refuses to delete the session the current-session pointer names, or
+	// the one an MCP server is pinned to, unless forced.
+	ErrCurrentSessionDelete = errors.New("session is the current session")
+	// ErrHeartbeatLost stops an operation whose heartbeat could not be kept fresh: a gc may
+	// already have taken its tree for a dead one.
+	ErrHeartbeatLost = errors.New("heartbeat lost")
 
 	// ErrInvalidDigestID reports a string that is not a content digest — a tag, a
 	// truncated id, anything the daemon would resolve by name. ParseImageDigestID wraps
@@ -53,7 +96,7 @@ var (
 	ErrInvalidDigestID = errors.New("invalid image digest id")
 
 	// ErrSavepointNoSpec refuses a rollback to a savepoint that carries no compose
-	// spec: there is nothing to rebuild the stack from.
+	// spec: there is nothing to rebuild the compose project from.
 	ErrSavepointNoSpec = errors.New("savepoint carries no compose spec")
 
 	// ErrSavepointImageMissing reports a record naming a writable-layer capture
@@ -63,4 +106,49 @@ var (
 	// ErrUnsupportedImageArchive reports that an image archive uses a format
 	// this operation does not support (e.g. Docker 24 legacy layout).
 	ErrUnsupportedImageArchive = errors.New("unsupported image archive format")
+
+	// ErrLeftoverVolumes refuses a rollback into a compose project that is not running
+	// but still owns volumes the rollback would overwrite.
+	ErrLeftoverVolumes = errors.New("compose project is not running but its volumes survive")
+
+	// ErrUnsupportedDaemon reports a Docker daemon older than arcave supports.
+	ErrUnsupportedDaemon = errors.New("unsupported docker daemon")
+
+	// ErrInvalidCapturePolicy reports an arcave.* label arcave cannot act on.
+	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
+
+	// ErrInvalidSortOrder reports a listing order other than asc or desc.
+	ErrInvalidSortOrder = errors.New("invalid sort order")
 )
+
+// AmbiguousSavepointNameError reports a name more than one savepoint carries;
+// IDs lists those savepoints.
+type AmbiguousSavepointNameError struct {
+	Name string
+	IDs  []SavepointID
+}
+
+func (m *AmbiguousSavepointNameError) Error() string {
+	ids := make([]string, len(m.IDs))
+	for i, id := range m.IDs {
+		ids[i] = id.String()
+	}
+	return fmt.Sprintf("%d savepoints are named %q; roll back by id instead: %s",
+		len(m.IDs), m.Name, strings.Join(ids, ", "))
+}
+
+// AmbiguousSessionNameError reports a name more than one session carries; IDs
+// lists those sessions.
+type AmbiguousSessionNameError struct {
+	Name string
+	IDs  []SessionID
+}
+
+func (m *AmbiguousSessionNameError) Error() string {
+	ids := make([]string, len(m.IDs))
+	for i, id := range m.IDs {
+		ids[i] = id.String()
+	}
+	return fmt.Sprintf("%d sessions are named %q; name the session by id instead: %s",
+		len(m.IDs), m.Name, strings.Join(ids, ", "))
+}

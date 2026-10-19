@@ -41,20 +41,26 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
+	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
+	imagefullcopy "github.com/greenmaskio/arcave/internal/service/backend/imagecopy/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
@@ -62,13 +68,14 @@ const resticShutdownTimeout = 5 * time.Second
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
-	stackStore     storages.Storager
-	progressWriter io.WriteCloser
-	dockerCli      *command.DockerCli
-	dockerClient   client.APIClient
-	composeService api.Compose
-	engine         *docker.Engine
-	composeRunner  *compose.Client
+	storeRoot           storages.Storager
+	composeProjectStore storages.Storager
+	progressWriter      io.WriteCloser
+	dockerCli           *command.DockerCli
+	dockerClient        client.APIClient
+	composeService      api.Compose
+	engine              *docker.Engine
+	composeRunner       *compose.Client
 	// resticServer is held for one reason only — so Close shuts it down. What goes
 	// down to the backend is the URL base, never the object.
 	resticServer *echo.Echo
@@ -76,34 +83,48 @@ type dependencies struct {
 	printer      *json.Printer
 }
 
-// initAllDependencies wires the savepoint workflows for the project rooted at
-// projectPath. Every store arrives from storefactory already rooted.
-func initAllDependencies(
-	ctx context.Context, projectPath string, cfg config.Config, stack model.StackName,
+// newDependencies wires the savepoint workflows for the project rooted at projectPath, in the
+// session sessionRef resolves to on the store it opens. Every store arrives from storefactory
+// already rooted.
+func newDependencies(
+	ctx context.Context, projectPath string, cfg config.Config,
+	sessionRef string, composeProject model.DockerComposeProjectName,
 ) (*dependencies, error) {
 	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	// One store for the whole stack: savepoint records, fullcopy captures and a
-	// cdc repository root alike, rooted inside the session that they die with.
-	stackStore, err := storefactory.New(
-		cfg.Storage, projectPath,
-		model.ProjectName(cfg.Project.Name), model.DefaultSession, stack,
-	)
+	storeRoot, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
-		return nil, fmt.Errorf("initialise stack store: %w", err)
+		return nil, err
 	}
-	opened.add("stack store", stackStore)
+	opened.add("store root", storeRoot)
+
+	sessions := sessionrepo.New(arcaveProjectStore)
+	session, err := newSessionService(projectPath, arcaveProjectStore, sessions).ResolveSession(ctx, sessionRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session: %w", err)
+	}
+
+	// One store for the whole compose project: savepoint records, fullcopy captures and a
+	// cdc repository root alike, rooted inside the session that they die with.
+	sessionStore, err := storefactory.Session(arcaveProjectStore, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("initialise session store: %w", err)
+	}
+	composeProjectStore, err := storefactory.ComposeProject(sessionStore, composeProject)
+	if err != nil {
+		return nil, fmt.Errorf("initialise compose project store: %w", err)
+	}
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
-	progressWriter := composeProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
+	progressWriter := newProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
 	opened.add("compose progress writer", progressWriter)
 
 	// One docker/cli instance is the single daemon connection both halves of
 	// client/docker are built over, so they cannot target different daemons. Its
 	// closers belong to the returned dependencies — never deferred here.
-	dockerCli, dockerClientAPI, err := initDockerClient(cfg.Docker, progressWriter)
+	dockerCli, dockerClientAPI, err := newDockerClient(cfg.Docker, progressWriter)
 	if err != nil {
 		return nil, fmt.Errorf("initialise docker client: %w", err)
 	}
@@ -111,8 +132,9 @@ func initAllDependencies(
 	opened.add("docker engine", engine)
 
 	// Over the same daemon connection the engine uses.
-	inspector := introspect.NewInspector(dockerClientAPI, stack)
+	inspector := introspect.NewInspector(dockerClientAPI, composeProject)
 	assembler := composespec.NewAssembler()
+	codec := composespec.NewCodec()
 
 	composeService := dockercompose.NewComposeService(dockerCli)
 	composeRunner := compose.NewClient(composeService, compose.Options{
@@ -126,10 +148,10 @@ func initAllDependencies(
 	cdcCfg := config.CDCWithDefaults(cfg.Backends.CDC)
 
 	// The tree every cdc repository lives in — one directory per volume, named by
-	// its ObjectID, beside the stack's savepoint directories. Resolved once and
+	// its ObjectID, beside the compose project's savepoint directories. Resolved once and
 	// handed to both sides, so "the server serves exactly the tree cdc writes
 	// into" is visible in one place rather than kept by two call sites agreeing.
-	resticRoot, err := stackStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
 	if err != nil {
 		return nil, fmt.Errorf("initialise restic repository root: %w", err)
 	}
@@ -159,14 +181,14 @@ func initAllDependencies(
 			// the value the backend is handed, so nothing below holds the server.
 			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcContainerHost, resticPort),
 			RepositoryRoot: resticRoot,
-			Options:        cdcOptions(cdcCfg, cdcHostNetwork),
+			Options:        newCDCOptions(cdcCfg, cdcHostNetwork),
 		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	imageBackend, err := newImageBackend(stackStore, engine)
+	imageBackend, err := newImageBackend(composeProjectStore, engine)
 	if err != nil {
 		return nil, err
 	}
@@ -174,34 +196,43 @@ func initAllDependencies(
 	// One repository over the one store, so every record travels with its data. The
 	// locker is bound to the project root here, so the service never names a path.
 	svc := core.New(core.Deps{
-		SavepointRepo:    sprepo.New(stackStore),
+		SavepointRepo:    sprepo.New(composeProjectStore),
 		ProjectLocker:    lock.New(projectPath),
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,
+		SpecCodec:        codec,
 		ComposeRunner:    composeRunner,
 		VolumeRemover:    engine,
 		ImageBackend:     imageBackend,
+		MinDaemonMajor:   dedupcopy.MinDaemonMajor,
+		Concurrency:      cfg.Common.Concurrency,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: engine,
+		ImageLookup:        engine,
 		BackendRegistry:    backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
-		Inflight:       inflightrepo.New(projectPath),
-		Store:          stackStore,
-		DefaultBackend: cfg.Snapshot.BackendKind(),
+		Inflight:        inflightrepo.New(projectPath),
+		Store:           composeProjectStore,
+		CaptureDefaults: newCaptureDefaults(cfg),
+		Session:         session.ID,
+		ComposeProject:  composeProject,
+		// Re-checked under the lock: a session deleted since --session was resolved.
+		Sessions: sessions,
 	})
 	opened.keep()
 	return &dependencies{
-		stackStore:     stackStore,
-		progressWriter: progressWriter,
-		dockerCli:      dockerCli,
-		dockerClient:   dockerClientAPI,
-		composeService: composeService,
-		engine:         engine,
-		composeRunner:  composeRunner,
-		resticServer:   resticServer,
-		service:        svc,
-		printer:        json.New(os.Stdout),
+		storeRoot:           storeRoot,
+		composeProjectStore: composeProjectStore,
+		progressWriter:      progressWriter,
+		dockerCli:           dockerCli,
+		dockerClient:        dockerClientAPI,
+		composeService:      composeService,
+		engine:              engine,
+		composeRunner:       composeRunner,
+		resticServer:        resticServer,
+		service:             svc,
+		printer:             json.New(os.Stdout),
 	}, nil
 }
 
@@ -229,9 +260,9 @@ func resolveCDCTransport(
 	}
 }
 
-// cdcOptions translates the backends.cdc section into the backend's own
+// newCDCOptions translates the backends.cdc section into the backend's own
 // options, plus the transport resolveCDCTransport picked.
-func cdcOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
+func newCDCOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
@@ -248,11 +279,13 @@ type partial struct {
 }
 
 type namedCloser struct {
-	name string
-	c    io.Closer
+	name   string
+	closer io.Closer
 }
 
-func (p *partial) add(name string, c io.Closer) { p.closers = append(p.closers, namedCloser{name, c}) }
+func (p *partial) add(name string, closer io.Closer) {
+	p.closers = append(p.closers, namedCloser{name, closer})
+}
 
 func (p *partial) keep() { p.kept = true }
 
@@ -261,7 +294,7 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 		return
 	}
 	for i := len(p.closers) - 1; i >= 0; i-- {
-		closeQuietly(ctx, p.closers[i].name, p.closers[i].c)
+		closeQuietly(ctx, p.closers[i].name, p.closers[i].closer)
 	}
 }
 
@@ -273,36 +306,97 @@ func (d *dependencies) Close(ctx context.Context) error {
 	shutdownResticServer(ctx, d.resticServer)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
-	return d.stackStore.Close()
+	return d.storeRoot.Close()
 }
 
 // shutdownResticServer stops serving gracefully: restic in a container reports a
 // severed connection as a repository error rather than as the shutdown it was.
 // The deadline is detached from ctx, which is routinely already cancelled by the
 // time Close runs from a defer — and a cancelled Shutdown severs at once.
-func shutdownResticServer(ctx context.Context, e *echo.Echo) {
+func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resticShutdownTimeout)
 	defer cancel()
 
-	if err := e.Shutdown(shutdownCtx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("shut down restic server")
 	}
 }
 
-// initServiceDeps wires `arcave init`: somewhere to write the config, nothing
+// newInitDependencies wires `arcave init`: somewhere to write the config, nothing
 // more. Nothing here holds a resource.
-func initServiceDeps(projectPath string) (*core.InitService, *json.Printer) {
+func newInitDependencies(projectPath string) (*core.InitService, *json.Printer) {
 	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), json.New(os.Stdout)
 }
 
+// sessionDependencies is what the session commands run on: the arcave project's store
+// and nothing that reaches the daemon.
+type sessionDependencies struct {
+	store   storages.Storager
+	service *core.SessionService
+	printer *json.Printer
+}
+
+func newSessionDependencies(ctx context.Context, projectPath string, cfg config.Config) (*sessionDependencies, error) {
+	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	if err != nil {
+		return nil, err
+	}
+	svc := newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore))
+	return &sessionDependencies{store: root, service: svc, printer: json.New(os.Stdout)}, nil
+}
+
+// newSessionService wires the session commands over the arcave project's store.
+func newSessionService(
+	projectPath string, arcaveProjectStore storages.Storager, sessions *sessionrepo.Repository,
+) *core.SessionService {
+	return core.NewSessionService(core.SessionDeps{
+		Sessions:   sessions,
+		Locker:     lock.New(projectPath),
+		Inflight:   inflightrepo.New(projectPath),
+		Current:    currentsession.New(projectPath),
+		Store:      arcaveProjectStore,
+		RunnerInfo: newRunnerInfo(),
+	})
+}
+
+func (d *sessionDependencies) Close() error {
+	return d.store.Close()
+}
+
+// newRunnerInfo identifies this process in a heartbeat; an unknown host stays blank.
+func newRunnerInfo() heartbeat.RunnerInfo {
+	host, err := os.Hostname()
+	if err != nil {
+		log.Debug().Err(err).Msg("reading the hostname for the heartbeat")
+	}
+	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
+}
+
+// openArcaveProjectStore opens the store root and descends to the arcave project; the root
+// is what the caller closes.
+func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (root, arcaveProjectStore storages.Storager, err error) {
+	root, err = storefactory.Root(ctx, cfg.Storage, projectPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initialise store root: %w", err)
+	}
+	arcaveProjectStore, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name))
+	if err != nil {
+		if closeErr := root.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("close store root")
+		}
+		return nil, nil, fmt.Errorf("initialise arcave project store: %w", err)
+	}
+	return root, arcaveProjectStore, nil
+}
+
 // closeQuietly closes c and logs any error without failing the caller.
-func closeQuietly(ctx context.Context, name string, c io.Closer) {
-	if err := c.Close(); err != nil {
+func closeQuietly(ctx context.Context, name string, closer io.Closer) {
+	if err := closer.Close(); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("close " + name)
 	}
 }
 
-func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
+func newDockerClientOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	if cfg.Host != "" && cfg.Context != "" {
 		return nil, fmt.Errorf("docker.host and docker.context are mutually exclusive: %q already names a daemon, so remove one of the two", cfg.Context)
 	}
@@ -313,7 +407,7 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	}
 	opts.Context = cfg.Context
 
-	tlsOpts, useTLS, err := dockerTLSOptions(cfg)
+	tlsOpts, useTLS, err := newDockerTLSOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -325,11 +419,11 @@ func getDockerOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	return opts, nil
 }
 
-// dockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
+// newDockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
 // and reports whether any TLS material was configured (all-empty means "read the
 // environment"). cert_file/key_file are a mutual-TLS pair, checked here because
 // docker/cli would surface a half-set one only as an opaque handshake failure.
-func dockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
+func newDockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
 	caFile := tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem")
 	certFile := tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem")
 	keyFile := tlsFile(cfg.KeyFile, cfg.CertPath, "key.pem")
@@ -373,11 +467,11 @@ type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
 
-// composeProgressWriter translates compose.progress into the library's global
+// newProgressWriter translates compose.progress into the library's global
 // render mode (progress.Mode) plus the writer compose renders on. The destination
 // is always stderr or nothing — stdout carries arcave's JSON — and the default
 // re-emits compose's events as arcave log records, so the run speaks one format.
-func composeProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
+func newProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
 	switch mode {
 	case config.ProgressQuiet:
 		// Discarding the stream too covers the warnings compose writes outside the UI.
@@ -393,12 +487,12 @@ func composeProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
 	}
 }
 
-// initDockerClient resolves cfg into the one docker/cli instance both halves of
+// newDockerClient resolves cfg into the one docker/cli instance both halves of
 // client/docker are built over, plus the APIClient it uses. progressOut becomes
 // the CLI's error stream once the endpoint resolves; until then that stream is a
 // buffer, being the only place docker/cli reports a failed resolution.
-func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerCli, client.APIClient, error) {
-	clientOpts, err := getDockerOptions(cfg)
+func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerCli, client.APIClient, error) {
+	clientOpts, err := newDockerClientOptions(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
 	}
@@ -459,17 +553,32 @@ func initDockerClient(cfg config.Docker, progressOut io.Writer) (*command.Docker
 	return dockerCli, apiClient, nil
 }
 
-// stackBlobPrefix is relative to the stack store root, so the blobs are shared
-// between that stack's savepoints and nothing wider. It sits beside them rather
-// than inside one: a savepoint id is digits only, so the name cannot collide.
-const stackBlobPrefix = "shared/oci/blobs"
-
-// newImageBackend builds the one image backend: layers are always deduplicated,
-// which needs a daemon of Docker 25 or newer.
-func newImageBackend(stackStore storages.Storager, engine *docker.Engine) (*imagecopy.Copier, error) {
-	blobStore, err := stackStore.SubStorage(stackBlobPrefix, true)
+// newImageBackend builds the image backend over both archivers a writable layer may name;
+// images are always deduplicated, which needs a daemon of Docker 25 or newer.
+func newImageBackend(composeProjectStore storages.Navigator, engine *docker.Engine) (*imagecopy.Copier, error) {
+	blobStore, err := composeProjectStore.SubStorage(dedupcopy.BlobPrefix, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}
-	return imagecopy.NewCopier(stackStore, engine, dedupcopy.New(blobStore)), nil
+	dedup := dedupcopy.New(blobStore)
+	return imagecopy.NewCopier(composeProjectStore, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
+		model.ImageBackendDedupCopy: dedup,
+		model.ImageBackendFullCopy:  imagefullcopy.New(),
+	}, dedup), nil
+}
+
+// newCaptureDefaults is what the config says of a unit no arcave.* label names. The
+// capture keys are read as ApplyDefaults left them: every one set.
+func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
+	return capturepolicy.CaptureDefaults{
+		VolumeBackend:        cfg.Snapshot.BackendKind(),
+		WritableLayerBackend: cfg.WritableLayers.BackendKind(),
+		SavepointCapture: capturepolicy.SavepointCaptureSettings{
+			WritableLayers:   utils.Value(cfg.Capture.WritableLayers),
+			Images:           utils.Value(cfg.Capture.Images),
+			NamedVolumes:     utils.Value(cfg.Capture.Volumes.Named),
+			BindVolumes:      utils.Value(cfg.Capture.Volumes.Bind),
+			AnonymousVolumes: utils.Value(cfg.Capture.Volumes.Anonymous),
+		},
+	}
 }

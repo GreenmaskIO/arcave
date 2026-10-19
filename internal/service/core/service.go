@@ -16,21 +16,20 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 )
 
-// maxConcurrentOperations caps how many volumes one fan-out works at once.
-const maxConcurrentOperations = 5
-
 type savepointRepository interface {
 	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
-	SaveSavepoint(ctx context.Context, record model.Savepoint) error
+	SaveSavepoint(ctx context.Context, savepoint model.Savepoint) error
 	SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error
 	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
 	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
@@ -40,23 +39,28 @@ type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
 }
 
-// composeIntrospector reports the live stack it was bound to at construction.
+// composeIntrospector reports the live compose project it was bound to at construction.
 type composeIntrospector interface {
 	Introspect(ctx context.Context) (model.IntrospectionResult, error)
 }
 
-// projectAssembler materialises the spec the runner acts on — out of a live
-// stack, or out of the artifact a savepoint committed.
+// projectAssembler builds the spec of a live compose project out of its introspection.
 type projectAssembler interface {
-	Assemble(res model.IntrospectionResult) (*types.Project, error)
+	Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error)
+}
+
+// specCodec moves a spec through the artifact a savepoint commits; Parse is compose's
+// loader, so every project the runner acts on has been through it.
+type specCodec interface {
 	Marshal(project *types.Project) ([]byte, error)
 	Parse(ctx context.Context, spec []byte) (*types.Project, error)
 }
 
-// composeRunner is the stack's lifecycle: stop it, tear it down, build it back
+// composeRunner is the compose project's lifecycle: stop it, tear it down, build it back
 // from a spec without starting it, start it.
 type composeRunner interface {
-	Stop(ctx context.Context, project *types.Project) error
+	// Stop returns the ids of the containers its deadline killed.
+	Stop(ctx context.Context, project *types.Project) ([]string, error)
 	Down(ctx context.Context, project *types.Project) error
 	Create(ctx context.Context, project *types.Project) error
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
@@ -67,17 +71,28 @@ type volumeRemover interface {
 	RemoveVolume(ctx context.Context, name string) error
 }
 
-// imageBackend carries one container's writable layer both ways: committed into
-// the store, and loaded back out of it under a tag of its own.
+// imageBackend carries writable layers both ways — committed into the store, and loaded
+// back out of it under a tag of its own — and keeps the images they were taken over.
 type imageBackend interface {
-	Capture(ctx context.Context, req model.ImageCaptureRequest) (model.ImageCapture, error)
-	Restore(ctx context.Context, req model.ImageRestoreRequest) (model.ImageRestore, error)
+	CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error)
+	CaptureImage(ctx context.Context, req model.ImageCaptureRequest) (model.Image, error)
+	RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
 }
 
-// containerRebuilder recreates one built container from another image — the
-// per-replica half compose's one image per service cannot express.
+// containerRebuilder recreates one built container from another image as the replica a
+// savepoint recorded, which compose's one image per service cannot express.
 type containerRebuilder interface {
-	RecreateWithImage(ctx context.Context, containerID, imageRef string) (string, error)
+	RecreateWithImage(ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string) (string, error)
+}
+
+// imageLookup tells whether the daemon holds an image under a reference.
+type imageLookup interface {
+	ImageRefExists(ctx context.Context, ref string) (bool, error)
+}
+
+// sessionLookup finds a session's record; core re-checks it under the lock.
+type sessionLookup interface {
+	LoadSession(ctx context.Context, id model.SessionID) (model.Session, bool, error)
 }
 
 // inflightMarkers is the intent marker's seam: written before a rollback's first
@@ -95,14 +110,27 @@ type Deps struct {
 	ProjectLocker      projectLocker
 	ComposeInspector   composeIntrospector
 	ProjectAssembler   projectAssembler
+	SpecCodec          specCodec
 	ComposeRunner      composeRunner
 	VolumeRemover      volumeRemover
 	ImageBackend       imageBackend
 	ContainerRebuilder containerRebuilder
+	ImageLookup        imageLookup
 	BackendRegistry    model.SnapshotBackendRegistry
 	Inflight           inflightMarkers
 	Store              storages.Storager
-	DefaultBackend     model.SnapshotBackendKind
+	// CaptureDefaults are the backends a unit no arcave.* label names is captured by.
+	CaptureDefaults capturepolicy.CaptureDefaults
+	// Session is the session Store belongs to; zero means model.DefaultSession.
+	Session model.SessionID
+	// ComposeProject is the compose project Store belongs to.
+	ComposeProject model.DockerComposeProjectName
+	// Sessions checks, under the lock, that Session still exists.
+	Sessions sessionLookup
+	// MinDaemonMajor is the oldest Docker major a workflow runs on; 0 requires none.
+	MinDaemonMajor int
+	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
+	Concurrency int
 }
 
 // Service orchestrates arcave's savepoint workflows over one store root.
@@ -115,33 +143,60 @@ type Service struct {
 	projectLocker           projectLocker
 	composeInspector        composeIntrospector
 	projectAssembler        projectAssembler
+	specCodec               specCodec
 	composeRunner           composeRunner
 	volumeRemover           volumeRemover
 	imageBackend            imageBackend
 	containerRebuilder      containerRebuilder
+	imageLookup             imageLookup
 	snapshotBackendRegistry model.SnapshotBackendRegistry
 	inflightMarker          inflightMarkers
 	store                   storages.Storager
-	defaultBackend          model.SnapshotBackendKind
+	captureDefaults         capturepolicy.CaptureDefaults
+	session                 model.SessionID
+	composeProject          model.DockerComposeProjectName
+	sessions                sessionLookup
+	minDaemonMajor          int
 	maxConcurrentOperations int
 }
 
-func New(d Deps) *Service {
-	return &Service{
-		savepointRepo:           d.SavepointRepo,
-		projectLocker:           d.ProjectLocker,
-		composeInspector:        d.ComposeInspector,
-		projectAssembler:        d.ProjectAssembler,
-		composeRunner:           d.ComposeRunner,
-		volumeRemover:           d.VolumeRemover,
-		imageBackend:            d.ImageBackend,
-		containerRebuilder:      d.ContainerRebuilder,
-		snapshotBackendRegistry: d.BackendRegistry,
-		inflightMarker:          d.Inflight,
-		store:                   d.Store,
-		defaultBackend:          d.DefaultBackend,
-		maxConcurrentOperations: maxConcurrentOperations,
+func New(deps Deps) *Service {
+	if deps.Session.IsNil() {
+		deps.Session = model.DefaultSession
 	}
+	return &Service{
+		savepointRepo:           deps.SavepointRepo,
+		projectLocker:           deps.ProjectLocker,
+		composeInspector:        deps.ComposeInspector,
+		projectAssembler:        deps.ProjectAssembler,
+		specCodec:               deps.SpecCodec,
+		composeRunner:           deps.ComposeRunner,
+		volumeRemover:           deps.VolumeRemover,
+		imageBackend:            deps.ImageBackend,
+		containerRebuilder:      deps.ContainerRebuilder,
+		imageLookup:             deps.ImageLookup,
+		snapshotBackendRegistry: deps.BackendRegistry,
+		inflightMarker:          deps.Inflight,
+		store:                   deps.Store,
+		captureDefaults:         deps.CaptureDefaults,
+		session:                 deps.Session,
+		composeProject:          deps.ComposeProject,
+		sessions:                deps.Sessions,
+		minDaemonMajor:          deps.MinDaemonMajor,
+		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
+	}
+}
+
+// locked runs a workflow with the project lock held, once its session is known to still
+// exist: one deleted since the command resolved it must not be written into again.
+func locked[T any](ctx context.Context, s *Service, fn func() (T, error)) (T, error) {
+	return withUnlock(ctx, s.projectLocker, func() (T, error) {
+		if err := s.requireSession(ctx); err != nil {
+			var zero T
+			return zero, err
+		}
+		return fn()
+	})
 }
 
 // withUnlock runs fn with the project lock held, and releases it however fn ends.
@@ -149,8 +204,8 @@ func New(d Deps) *Service {
 //
 // A function rather than a method, because Go has no generic methods: every
 // workflow returns its own result type, and the lock must not decide it.
-func withUnlock[T any](ctx context.Context, s *Service, fn func() (T, error)) (T, error) {
-	release, err := s.projectLocker.Acquire(ctx)
+func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, error)) (T, error) {
+	release, err := locker.Acquire(ctx)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -161,4 +216,28 @@ func withUnlock[T any](ctx context.Context, s *Service, fn func() (T, error)) (T
 		}
 	}()
 	return fn()
+}
+
+// requireSession refuses a session other than the default that has no record.
+func (s *Service) requireSession(ctx context.Context) error {
+	if s.session == model.DefaultSession {
+		return nil
+	}
+	_, found, err := s.sessions.LoadSession(ctx, s.session)
+	if err != nil {
+		return fmt.Errorf("checking session %s: %w", s.session, err)
+	}
+	if !found {
+		return fmt.Errorf("%w: %s", model.ErrSessionNotFound, s.session)
+	}
+	return nil
+}
+
+// fanOutLimit turns a configured concurrency into an errgroup limit, where a
+// negative one is unbounded and zero would admit no goroutine at all.
+func fanOutLimit(concurrency int) int {
+	if concurrency < 1 {
+		return -1
+	}
+	return concurrency
 }

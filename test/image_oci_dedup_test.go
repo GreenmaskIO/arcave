@@ -26,12 +26,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -46,7 +44,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -59,19 +56,19 @@ import (
 // service's own command rewrites that one on every start.
 const epochMarker = "/epoch-marker"
 
-// sharedBlobPrefix is where the shared blob store sits under one stack root.
-const sharedBlobPrefix = "shared/oci/blobs"
+// sharedBlobPrefix is where the shared blob store sits under one compose project root.
+const sharedBlobPrefix = dedupcopy.BlobPrefix
 
-// ociDedupEnv is the stack for OCI blob-store deduplication tests.
+// ociDedupEnv is the compose project for OCI blob-store deduplication tests.
 type ociDedupEnv struct {
-	ctx         context.Context
-	svc         *core.Service
-	compose     *composeclient.Client
-	daemon      *client.Client
-	stackStore  storages.Storager
-	blobStore   storages.Storager
-	projectRoot string
-	project     string
+	ctx                 context.Context
+	svc                 *core.Service
+	compose             *composeclient.Client
+	daemon              *client.Client
+	composeProjectStore storages.Storager
+	blobStore           storages.Storager
+	projectRoot         string
+	project             string
 }
 
 func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
@@ -88,51 +85,49 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	progress.Mode = progress.ModeQuiet
-
 	engine := dockerclient.NewEngine(daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
 
 	projectRoot := t.TempDir()
-	stackStore, err := storefactory.New(config.Storage{
+	composeProjectStore, err := storefactory.New(t.Context(), config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: filepath.Join(".arcave", "storage")},
-	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.StackName(project))
+	}, projectRoot, "arcave-oci-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	blobStore, err := stackStore.SubStorage(sharedBlobPrefix, true)
+	blobStore, err := composeProjectStore.SubStorage(sharedBlobPrefix, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
-		SavepointRepo:      sprepo.New(stackStore),
+		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.StackName(project)),
+		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
 		ProjectAssembler:   composespec.NewAssembler(),
+		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       imagecopy.NewCopier(stackStore, engine, dedupcopy.New(blobStore)),
+		ImageBackend:       newImageCopier(composeProjectStore, engine, blobStore),
 		ContainerRebuilder: engine,
+		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),
 		Inflight:           inflightrepo.New(projectRoot),
-		Store:              stackStore,
-		DefaultBackend:     model.SnapshotBackendCopy,
+		Store:              composeProjectStore,
+		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &ociDedupEnv{
-		ctx:         zerolog.New(io.Discard).WithContext(context.Background()),
-		svc:         svc,
-		compose:     runner,
-		daemon:      daemonAPI,
-		stackStore:  stackStore,
-		blobStore:   blobStore,
-		projectRoot: projectRoot,
-		project:     project,
+		ctx:                 zerolog.New(io.Discard).WithContext(context.Background()),
+		svc:                 svc,
+		compose:             runner,
+		daemon:              daemonAPI,
+		composeProjectStore: composeProjectStore,
+		blobStore:           blobStore,
+		projectRoot:         projectRoot,
+		project:             project,
 	}
-	t.Cleanup(func() {
-		assert.NoError(t, env.compose.Down(env.ctx, &types.Project{Name: env.project}))
-	})
+	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
 }
 
@@ -140,7 +135,7 @@ func (e *ociDedupEnv) up(t *testing.T) {
 	t.Helper()
 
 	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
-	project, err := composespec.NewAssembler().Parse(e.ctx, []byte(document))
+	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
 	require.NoError(t, e.compose.Create(e.ctx, project))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
@@ -162,6 +157,8 @@ func blobStoreKeys(t *testing.T, store storages.Storager) []string {
 // TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs pins that a second
 // savepoint reuses the first one's blobs instead of writing them again.
 func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newOCIDedupEnv(t)
 	env.up(t)
@@ -169,7 +166,7 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 	// Act: first savepoint
 	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
 	require.NoError(t, err)
-	require.Len(t, first.Images, 1)
+	require.Len(t, first.WritableLayers, 1)
 
 	firstBlobKeys := blobStoreKeys(t, env.blobStore)
 	firstBlobCount := len(blobOnlyKeys(firstBlobKeys))
@@ -180,30 +177,32 @@ func TestSavepoint_TwoConsecutiveSavepoints_DeduplicatesBlobs(t *testing.T) {
 	// Act: second savepoint
 	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
-	require.Len(t, second.Images, 1)
+	require.Len(t, second.WritableLayers, 1)
 
 	secondBlobCount := len(blobOnlyKeys(blobStoreKeys(t, env.blobStore)))
 	t.Logf("second savepoint: %d blobs, %d of them new", secondBlobCount, secondBlobCount-firstBlobCount)
 
 	// Assert: bytes, not blob count — how many metadata blobs a save archive carries
 	// is the daemon's business; the classic image store adds a legacy json per layer.
-	capture := second.Images[0]
+	capture := second.WritableLayers[0]
 	assert.Less(t, capture.StoredBytes, capture.SizeBytes/10,
 		"the second savepoint stored %d of the archive's %d bytes: the base layer went in again",
 		capture.StoredBytes, capture.SizeBytes)
 
-	assert.NotEmpty(t, first.Images[0].ImageID, "first savepoint image ID")
-	assert.NotEmpty(t, second.Images[0].ImageID, "second savepoint image ID")
+	assert.NotEmpty(t, first.WritableLayers[0].CommittedImageID, "first savepoint image ID")
+	assert.NotEmpty(t, second.WritableLayers[0].CommittedImageID, "second savepoint image ID")
 
-	_, err = env.daemon.ImageInspect(env.ctx, first.Images[0].ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, first.WritableLayers[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "first image should be gone from daemon: %v", err)
-	_, err = env.daemon.ImageInspect(env.ctx, second.Images[0].ImageID.String())
+	_, err = env.daemon.ImageInspect(env.ctx, second.WritableLayers[0].CommittedImageID.String())
 	assert.True(t, dockerIsNotFound(err), "second image should be gone from daemon: %v", err)
 }
 
 // TestSavepoint_TwoSavepoints_BothRestore rolls back to a savepoint whose blobs a
 // later one shares, so the layer has to come back out of the blob store.
 func TestSavepoint_TwoSavepoints_BothRestore(t *testing.T) {
+	t.Parallel()
+
 	// Arrange
 	env := newOCIDedupEnv(t)
 	env.up(t)
@@ -211,15 +210,15 @@ func TestSavepoint_TwoSavepoints_BothRestore(t *testing.T) {
 
 	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
 	require.NoError(t, err)
-	require.Len(t, first.Images, 1)
+	require.Len(t, first.WritableLayers, 1)
 
 	env.mutateContainer(t, "second-epoch")
 	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
-	require.Len(t, second.Images, 1)
-	require.NotEqual(t, first.Images[0].ImageID, second.Images[0].ImageID,
+	require.Len(t, second.WritableLayers, 1)
+	require.NotEqual(t, first.WritableLayers[0].CommittedImageID, second.WritableLayers[0].CommittedImageID,
 		"the two savepoints must differ, or deduplication is trivially true")
-	assert.Less(t, second.Images[0].StoredBytes, second.Images[0].SizeBytes,
+	assert.Less(t, second.WritableLayers[0].StoredBytes, second.WritableLayers[0].SizeBytes,
 		"the second savepoint reuses the first one's base layers")
 
 	// Act
@@ -254,11 +253,11 @@ func (e *ociDedupEnv) mutateContainer(t *testing.T, content string) {
 	e.exec(t, e.containerID(t), "sh", "-c", fmt.Sprintf("printf %%s %s > %s", content, epochMarker))
 }
 
-// containerID is the stack's one container.
+// containerID is the compose project's one container.
 func (e *ociDedupEnv) containerID(t *testing.T) string {
 	t.Helper()
 
-	res, err := introspect.NewInspector(e.daemon, model.StackName(e.project)).Introspect(e.ctx)
+	res, err := introspect.NewInspector(e.daemon, model.DockerComposeProjectName(e.project)).Introspect(e.ctx)
 	require.NoError(t, err)
 	require.Len(t, res.Project.Services, 1)
 	require.Len(t, res.Project.Services[0].Containers, 1)

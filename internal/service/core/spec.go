@@ -23,24 +23,24 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// loadSavepointSpec reads the stack a savepoint was taken of. Every failure here
+// loadSavepointSpec reads the compose project a savepoint was taken of. Every failure here
 // happens before anything is stopped.
-func (s *Service) loadSavepointSpec(ctx context.Context, record model.Savepoint) (*types.Project, error) {
-	if record.Spec == nil {
-		return nil, fmt.Errorf("%w: %s", model.ErrSavepointNoSpec, record.ID)
+func (s *Service) loadSavepointSpec(ctx context.Context, savepoint model.Savepoint) (*types.Project, error) {
+	if savepoint.Spec == nil {
+		return nil, fmt.Errorf("%w: %s", model.ErrSavepointNoSpec, savepoint.ID)
 	}
-	if record.Spec.Format != model.SpecFormatComposeYAML {
-		return nil, fmt.Errorf("savepoint %s carries a compose spec in unknown format %q", record.ID, record.Spec.Format)
+	if savepoint.Spec.Format != model.SpecFormatComposeYAML {
+		return nil, fmt.Errorf("savepoint %s carries a compose spec in unknown format %q", savepoint.ID, savepoint.Spec.Format)
 	}
 
-	spec, err := s.savepointRepo.LoadSpec(ctx, record.ID)
+	spec, err := s.savepointRepo.LoadSpec(ctx, savepoint.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	project, err := s.projectAssembler.Parse(ctx, spec)
+	project, err := s.specCodec.Parse(ctx, spec)
 	if err != nil {
-		return nil, fmt.Errorf("parsing the compose spec of savepoint %s: %w", record.ID, err)
+		return nil, fmt.Errorf("parsing the compose spec of savepoint %s: %w", savepoint.ID, err)
 	}
 	return project, nil
 }

@@ -39,22 +39,32 @@ docker compose exec -T redis redis-cli MSET \
 arcave savepoint create clean --description "seeded baseline — do not delete"
 ```
 
-```json title="stdout"
+```json title="stdout (trimmed)"
 {
-  "id": "1780331000",
+  "id": "019e83ff-30c0-7000-8000-000000000000",
   "name": "clean",
   "description": "seeded baseline — do not delete",
   "created_at": "2026-06-01T18:36:40.002114Z",
   "stats": [
-    { "volume": { "object_id": "volume-named-arcave-demo_pgdata",    "type": "named", "backend": "copy" }, "type": "copy" },
-    { "volume": { "object_id": "volume-named-arcave-demo_miniodata", "type": "named", "backend": "copy" }, "type": "copy" },
-    { "volume": { "object_id": "volume-service-redis-data",         "type": "anon",  "backend": "copy" }, "type": "copy" }
+    { "volume": { "object_id": "volume-named-arcave-demo_pgdata",    "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
+    { "volume": { "object_id": "volume-named-arcave-demo_miniodata", "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
+    { "volume": { "object_id": "volume-anon-redis-1-data",          "type": "anon",  "backend": "fullcopy" }, "type": "fullcopy" }
+  ],
+  "writable_layers": [
+    { "service": "minio",    "replica": 1, "container_name": "arcave-demo-minio-1",    "upstream_image_ref": "minio/minio:latest" },
+    { "service": "postgres", "replica": 1, "container_name": "arcave-demo-postgres-1", "upstream_image_ref": "postgres:16" },
+    { "service": "redis",    "replica": 1, "container_name": "arcave-demo-redis-1",    "upstream_image_ref": "redis:7" }
+  ],
+  "images": [
+    { "id": "sha256:…", "refs": ["minio/minio:latest"], "stored": true },
+    { "id": "sha256:…", "refs": ["postgres:16"],        "stored": true },
+    { "id": "sha256:…", "refs": ["redis:7"],            "stored": true }
   ],
   "spec": { "format": "compose-yaml" }
 }
 ```
 
-Three volumes, three services, one savepoint.
+Trimmed to the fields that identify each entry; [Roll back a failed migration](migration_rollback.md#2-take-the-savepoint) shows one of each in full. Three volumes, three writable layers, three images, one savepoint.
 
 ## 3. Let a test suite make a mess
 
@@ -122,10 +132,10 @@ Resetting before rather than after has two advantages: a crashed suite cannot sk
 arcave savepoint list
 ```
 
-```json title="stdout"
+```json title="stdout (trimmed)"
 [
-  { "id": "1780339981", "name": "after-refactor", "description": "", "created_at": "2026-06-01T21:13:01.114872Z" },
-  { "id": "1780331000", "name": "clean", "description": "seeded baseline — do not delete", "created_at": "2026-06-01T18:36:40.002114Z" }
+  { "id": "019e8488-3ac8-7000-8000-000000000000", "name": "after-refactor", "description": "", "created_at": "2026-06-01T21:13:01.114872Z" },
+  { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean", "description": "seeded baseline — do not delete", "created_at": "2026-06-01T18:36:40.002114Z" }
 ]
 ```
 
@@ -136,14 +146,22 @@ arcave savepoint list
 Prune by id instead:
 
 ```shell
-arcave savepoint remove 1780339981
+arcave savepoint remove 019e8488-3ac8-7000-8000-000000000000
 ```
 
-Or give the baseline a store of its own, so no retention sweep in the working store can reach it:
+Or keep the baseline in a [session](../sessions.md) of its own. Retention works within one session, so no sweep in the session you work in can reach it:
 
 ```shell
-arcave init --override --savepoint-dir /var/lib/arcave-baselines
+arcave session create --name fixtures
+arcave --session fixtures savepoint create clean --description "seeded baseline — do not delete"
 ```
+
+```shell title="run-tests.sh, resetting from the fixtures session"
+arcave --session fixtures rollback clean
+./integration-tests.sh
+```
+
+Take the savepoint right after seeding, as in step 2. The commands that name no session keep working in yours, and `arcave savepoint remove --retain-recent 5` there never sees `clean`.
 
 ## Related docs
 
