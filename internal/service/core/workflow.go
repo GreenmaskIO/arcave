@@ -29,11 +29,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
-// errComposeProjectAbsent refuses a capture of a compose project the daemon holds no
-// container of: there is nothing to rebuild it from.
-var errComposeProjectAbsent = errors.New(
-	"no containers found: bring the compose project up once, or name another project with -p")
-
 // workingSet is what a mutating workflow operates on: the introspection taken once
 // before the stop, its rendered spec and the project parsed from it, the request's
 // bound, and one backend per volume.
@@ -135,8 +130,8 @@ func (s *Service) introspect(ctx context.Context) (model.IntrospectionResult, er
 func (s *Service) newWorkingSet(
 	ctx context.Context, introspection model.IntrospectionResult, waitTimeout time.Duration, capturePolicy model.CapturePolicy,
 ) (workingSet, error) {
-	if composeProjectAbsent(introspection) {
-		return workingSet{}, fmt.Errorf("compose project %q: %w", introspection.Project.Name, errComposeProjectAbsent)
+	if err := requireComposeProject(introspection); err != nil {
+		return workingSet{}, err
 	}
 
 	containers := newContainerRefs(ctx, introspection)

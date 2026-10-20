@@ -46,7 +46,7 @@ func (h *SavepointCreateHandler) SavepointCreate(ctx context.Context, cfg config
 		WaitTimeout: cfg.Compose.WaitTimeout,
 	})
 	if err != nil {
-		return err
+		return composeProjectAbsentError(err, "-p")
 	}
 	return h.printer.Print(savepoint)
 }

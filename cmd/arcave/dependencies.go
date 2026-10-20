@@ -328,6 +328,36 @@ func newInitDependencies(projectPath string) (*core.InitService, *json.Printer) 
 	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), json.New(os.Stdout)
 }
 
+// toolsDependencies is what the tools commands run on: one daemon connection, no store.
+type toolsDependencies struct {
+	dockerClient client.APIClient
+	service      *core.ComposeFileService
+	printer      *json.Printer
+}
+
+// newToolsDependencies wires the tools commands for composeProject over the daemon docker.* names.
+func newToolsDependencies(cfg config.Config, composeProject model.DockerComposeProjectName) (*toolsDependencies, error) {
+	// The gate newDependencies applies through storefactory, though no store is opened here.
+	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
+		return nil, err
+	}
+	// Nothing here runs compose, so the CLI's progress channel goes nowhere.
+	_, dockerClientAPI, err := newDockerClient(cfg.Docker, io.Discard)
+	if err != nil {
+		return nil, fmt.Errorf("initialise docker client: %w", err)
+	}
+	svc := core.NewComposeFileService(core.ComposeFileDeps{
+		ComposeInspector: introspect.NewInspector(dockerClientAPI, composeProject),
+		ProjectAssembler: composespec.NewAssembler(),
+		SpecCodec:        composespec.NewComposeFileCodec(),
+	})
+	return &toolsDependencies{dockerClient: dockerClientAPI, service: svc, printer: json.New(os.Stdout)}, nil
+}
+
+func (d *toolsDependencies) Close() error {
+	return d.dockerClient.Close()
+}
+
 // sessionDependencies is what the session commands run on: the arcave project's store
 // and nothing that reaches the daemon.
 type sessionDependencies struct {

@@ -47,8 +47,8 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
-	return cli.NewMCPHandler(mcpServiceFactory, mcpSessionServiceFactory, pinnedSession, projectCfg.Rollback.Policy()).
-		MCPRun(cmd.Context())
+	return cli.NewMCPHandler(mcpServiceFactory, mcpSessionServiceFactory, mcpToolsServiceFactory,
+		pinnedSession, projectCfg.Rollback.Policy()).MCPRun(cmd.Context())
 }
 
 // mcpServiceFactory wires the savepoint workflows for the compose project and session a tool
@@ -74,6 +74,19 @@ func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(
 	return deps.service, func() {
 		if err := deps.Close(); err != nil {
 			log.Ctx(ctx).Error().Err(err).Msg("close session dependencies")
+		}
+	}, nil
+}
+
+// mcpToolsServiceFactory wires the tools commands for the compose project a tool call named.
+func mcpToolsServiceFactory(ctx context.Context, project string) (cli.MCPToolsService, func(), error) {
+	deps, err := newToolsDependencies(projectCfg, model.DockerComposeProjectName(project))
+	if err != nil {
+		return nil, nil, fmt.Errorf("init tools dependencies: %w", err)
+	}
+	return deps.service, func() {
+		if err := deps.Close(); err != nil {
+			log.Ctx(ctx).Error().Err(err).Msg("close tools dependencies")
 		}
 	}, nil
 }

@@ -623,7 +623,7 @@ func TestService_CreateSavepoint_ComposeProjectAbsent(t *testing.T) {
 	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
 
 	// Assert
-	require.ErrorIs(t, err, errComposeProjectAbsent)
+	require.ErrorIs(t, err, model.ErrComposeProjectAbsent)
 	assert.Contains(t, err.Error(), `compose project "demo"`)
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)

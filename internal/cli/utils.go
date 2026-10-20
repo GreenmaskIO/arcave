@@ -16,6 +16,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -39,4 +40,13 @@ func removeUsageError(err error) error {
 	default:
 		return err
 	}
+}
+
+// composeProjectAbsentError adds the fix to a compose project the daemon holds no container of,
+// naming the selector as the adapter spells it.
+func composeProjectAbsentError(err error, selector string) error {
+	if errors.Is(err, model.ErrComposeProjectAbsent) {
+		return fmt.Errorf("%w: bring the compose project up once, or name another project with %s", err, selector)
+	}
+	return err
 }

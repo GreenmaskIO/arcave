@@ -167,6 +167,25 @@ func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) 
 	return fn(ctx, deps)
 }
 
+// withToolsDeps runs fn on the tools dependencies of the compose project -p names.
+func withToolsDeps(cmd *cobra.Command, fn func(ctx context.Context, d *toolsDependencies) error) error {
+	if err := requireProjectName(); err != nil {
+		return err
+	}
+
+	ctx := cmd.Context()
+	deps, err := newToolsDependencies(projectCfg, model.DockerComposeProjectName(projectName))
+	if err != nil {
+		return fmt.Errorf("init tools dependencies: %w", err)
+	}
+	defer func() {
+		if err := deps.Close(); err != nil {
+			log.Ctx(ctx).Error().Err(err).Msg("close tools dependencies")
+		}
+	}()
+	return fn(ctx, deps)
+}
+
 // resolveSession turns a --session value into the id of a session that exists, for a command that
 // opens no compose project's dependencies; "" is the current session, else the default.
 func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
