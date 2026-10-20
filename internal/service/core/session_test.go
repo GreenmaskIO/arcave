@@ -690,7 +690,7 @@ func TestSessionService_CreateSession_BlankNameTakesNoLock(t *testing.T) {
 	locker.AssertExpectations(t)
 }
 
-func TestSessionService_DeleteSession(t *testing.T) {
+func TestSessionService_RemoveSession(t *testing.T) {
 	// Arrange: a marker of another session does not stand in the way.
 	locker := &mockLocker{}
 	acquire := locker.On("Acquire", mock.Anything).Return(nil).Once()
@@ -709,18 +709,18 @@ func TestSessionService_DeleteSession(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	got, err := svc.DeleteSession(ctx, model.DeleteSessionRequest{Session: demoSession.String()})
+	got, err := svc.RemoveSession(ctx, model.RemoveSessionRequest{Session: demoSession.String()})
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.DeleteSessionResponse{Session: demoSession, Deleted: true, FreedBytes: 4096}, got)
+	assert.Equal(t, model.RemoveSessionResponse{Session: demoSession, Removed: true, FreedBytes: 4096}, got)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
 }
 
 var errSessionSize = errors.New("list failed")
 
-func TestSessionService_DeleteSession_Refused(t *testing.T) {
+func TestSessionService_RemoveSession_Refused(t *testing.T) {
 	tests := []struct {
 		name   string
 		ref    string
@@ -778,7 +778,7 @@ func TestSessionService_DeleteSession_Refused(t *testing.T) {
 			svc := NewSessionService(SessionDeps{Current: &fakePointer{}, Sessions: repo, Locker: locker, Inflight: inflight})
 
 			// Act
-			_, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: tt.ref})
+			_, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: tt.ref})
 
 			// Assert
 			tt.check(t, err)
@@ -788,7 +788,7 @@ func TestSessionService_DeleteSession_Refused(t *testing.T) {
 	}
 }
 
-func TestSessionService_DeleteSession_Uncommitted(t *testing.T) {
+func TestSessionService_RemoveSession_Uncommitted(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  heartbeat.Status // the heartbeat's; empty is none
@@ -828,15 +828,15 @@ func TestSessionService_DeleteSession_Uncommitted(t *testing.T) {
 			svc.heartbeatReader = readBeats(beats, map[model.SessionID]error{demoSession: tt.readErr})
 
 			// Act
-			got, err := svc.DeleteSession(context.Background(),
-				model.DeleteSessionRequest{Session: demoSession.String(), Force: tt.force})
+			got, err := svc.RemoveSession(context.Background(),
+				model.RemoveSessionRequest{Session: demoSession.String(), Force: tt.force})
 
 			// Assert
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, model.DeleteSessionResponse{Session: demoSession, Deleted: true, FreedBytes: 10}, got)
+				assert.Equal(t, model.RemoveSessionResponse{Session: demoSession, Removed: true, FreedBytes: 10}, got)
 			}
 			repo.AssertExpectations(t)
 			locker.AssertExpectations(t)
@@ -844,7 +844,7 @@ func TestSessionService_DeleteSession_Uncommitted(t *testing.T) {
 	}
 }
 
-func TestSessionService_DeleteSession_NotFound(t *testing.T) {
+func TestSessionService_RemoveSession_NotFound(t *testing.T) {
 	tests := []struct {
 		name  string
 		ref   string
@@ -869,7 +869,7 @@ func TestSessionService_DeleteSession_NotFound(t *testing.T) {
 			svc := NewSessionService(SessionDeps{Current: &fakePointer{}, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
 
 			// Act
-			_, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: tt.ref})
+			_, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: tt.ref})
 
 			// Assert
 			require.ErrorIs(t, err, model.ErrSessionNotFound)
@@ -1010,7 +1010,7 @@ func TestSessionService_UnsetSession(t *testing.T) {
 	locker.AssertExpectations(t)
 }
 
-func TestSessionService_DeleteSession_Current(t *testing.T) {
+func TestSessionService_RemoveSession_Current(t *testing.T) {
 	tests := []struct {
 		name        string
 		force       bool
@@ -1036,14 +1036,14 @@ func TestSessionService_DeleteSession_Current(t *testing.T) {
 			svc := NewSessionService(SessionDeps{Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
 
 			// Act
-			got, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: "exp", Force: tt.force})
+			got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp", Force: tt.force})
 
 			// Assert
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, model.DeleteSessionResponse{Session: demoSession, Deleted: true, FreedBytes: 10}, got)
+				assert.Equal(t, model.RemoveSessionResponse{Session: demoSession, Removed: true, FreedBytes: 10}, got)
 			}
 			assert.Equal(t, tt.wantPointer, pointer.id)
 			repo.AssertExpectations(t)
@@ -1052,7 +1052,7 @@ func TestSessionService_DeleteSession_Current(t *testing.T) {
 	}
 }
 
-func TestSessionService_DeleteSession_NotCurrentKeepsThePointer(t *testing.T) {
+func TestSessionService_RemoveSession_NotCurrentKeepsThePointer(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
 	expectLock(locker)
@@ -1065,7 +1065,7 @@ func TestSessionService_DeleteSession_NotCurrentKeepsThePointer(t *testing.T) {
 	svc := NewSessionService(SessionDeps{Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
 
 	// Act
-	_, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: "exp"})
+	_, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp"})
 
 	// Assert
 	require.NoError(t, err)
@@ -1102,7 +1102,7 @@ func TestSessionService_EmptyRefIsRefused(t *testing.T) {
 
 	// Act
 	_, setErr := svc.SetSession(ctx, "")
-	_, deleteErr := svc.DeleteSession(ctx, model.DeleteSessionRequest{Session: "", Force: true})
+	_, deleteErr := svc.RemoveSession(ctx, model.RemoveSessionRequest{Session: "", Force: true})
 
 	// Assert: an empty ref never stands for the current session where it would change something.
 	require.ErrorIs(t, setErr, model.ErrNoSessionRef)
@@ -1143,7 +1143,7 @@ func TestSessionService_ListSessions_UnreadablePointerMarksNone(t *testing.T) {
 	repo.AssertExpectations(t)
 }
 
-func TestSessionService_DeleteSession_UnreadablePointerNamesNoSession(t *testing.T) {
+func TestSessionService_RemoveSession_UnreadablePointerNamesNoSession(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
 	expectLock(locker)
@@ -1156,7 +1156,7 @@ func TestSessionService_DeleteSession_UnreadablePointerNamesNoSession(t *testing
 		Locker: locker, Inflight: &fakeInflight{}})
 
 	// Act
-	got, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: "exp"})
+	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp"})
 
 	// Assert
 	require.NoError(t, err)
@@ -1205,7 +1205,7 @@ func TestSessionService_ListSessions_Ref(t *testing.T) {
 	}
 }
 
-func TestSessionService_DeleteSession_Pinned(t *testing.T) {
+func TestSessionService_RemoveSession_Pinned(t *testing.T) {
 	tests := []struct {
 		name    string
 		pinned  model.SessionID
@@ -1232,8 +1232,8 @@ func TestSessionService_DeleteSession_Pinned(t *testing.T) {
 			svc := NewSessionService(SessionDeps{Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
 
 			// Act
-			_, err := svc.DeleteSession(context.Background(),
-				model.DeleteSessionRequest{Session: "exp", Force: tt.force, Pinned: tt.pinned})
+			_, err := svc.RemoveSession(context.Background(),
+				model.RemoveSessionRequest{Session: "exp", Force: tt.force, Pinned: tt.pinned})
 
 			// Assert
 			if tt.wantErr != nil {
@@ -1250,7 +1250,7 @@ func TestSessionService_DeleteSession_Pinned(t *testing.T) {
 	}
 }
 
-func TestSessionService_DeleteSession_PointerClearFailureKeepsTheResult(t *testing.T) {
+func TestSessionService_RemoveSession_PointerClearFailureKeepsTheResult(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
 	expectLock(locker)
@@ -1264,11 +1264,11 @@ func TestSessionService_DeleteSession_PointerClearFailureKeepsTheResult(t *testi
 	svc := NewSessionService(SessionDeps{Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
 
 	// Act
-	got, err := svc.DeleteSession(context.Background(), model.DeleteSessionRequest{Session: "exp", Force: true})
+	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: "exp", Force: true})
 
 	// Assert: the delete happened, so it is reported; the dangling pointer is the next command's to name.
 	require.NoError(t, err)
-	assert.Equal(t, model.DeleteSessionResponse{Session: demoSession, Deleted: true, FreedBytes: 10}, got)
+	assert.Equal(t, model.RemoveSessionResponse{Session: demoSession, Removed: true, FreedBytes: 10}, got)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
 }

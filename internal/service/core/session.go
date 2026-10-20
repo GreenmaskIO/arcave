@@ -275,47 +275,47 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 	})
 }
 
-// DeleteSession drops a session and everything it holds, and reports the bytes freed. It refuses
+// RemoveSession drops a session and everything it holds, and reports the bytes freed. It refuses
 // the default session and one an inflight marker names; the current or pinned session, and a tree
 // still cloning or unknown, only unless forced. Forcing the current one clears the pointer.
-func (s *SessionService) DeleteSession(
-	ctx context.Context, req model.DeleteSessionRequest,
-) (model.DeleteSessionResponse, error) {
+func (s *SessionService) RemoveSession(
+	ctx context.Context, req model.RemoveSessionRequest,
+) (model.RemoveSessionResponse, error) {
 	if req.Session == "" {
-		return model.DeleteSessionResponse{}, model.ErrNoSessionRef
+		return model.RemoveSessionResponse{}, model.ErrNoSessionRef
 	}
-	return withUnlock(ctx, s.locker, func() (model.DeleteSessionResponse, error) {
-		id, err := s.findDeletable(ctx, req)
+	return withUnlock(ctx, s.locker, func() (model.RemoveSessionResponse, error) {
+		id, err := s.findRemovable(ctx, req)
 		if err != nil {
-			return model.DeleteSessionResponse{}, err
+			return model.RemoveSessionResponse{}, err
 		}
 		zerolog.Ctx(ctx).Debug().Str("ref", req.Session).Str("session", id.String()).Bool("force", req.Force).
 			Msg("session to delete found")
 		if id == model.DefaultSession {
-			return model.DeleteSessionResponse{}, model.ErrDefaultSessionDelete
+			return model.RemoveSessionResponse{}, model.ErrDefaultSessionDelete
 		}
 		marker, found, err := s.inflight.Get(ctx)
 		if err != nil {
-			return model.DeleteSessionResponse{}, fmt.Errorf("reading the inflight marker: %w", err)
+			return model.RemoveSessionResponse{}, fmt.Errorf("reading the inflight marker: %w", err)
 		}
 		if found && marker.Session == id {
 			err := &model.InterruptedRollbackError{Marker: marker}
 			zerolog.Ctx(ctx).Error().Err(err).Str("session", id.String()).
 				Str("compose_project", marker.ComposeProject.String()).Msg(recoveryHint(marker))
-			return model.DeleteSessionResponse{}, err
+			return model.RemoveSessionResponse{}, err
 		}
 		current, err := s.requireNotInUse(ctx, id, req)
 		if err != nil {
-			return model.DeleteSessionResponse{}, err
+			return model.RemoveSessionResponse{}, err
 		}
 		size, err := s.sessions.SessionSize(ctx, id)
 		if err != nil {
-			return model.DeleteSessionResponse{}, err
+			return model.RemoveSessionResponse{}, err
 		}
 		zerolog.Ctx(ctx).Debug().Str("session", id.String()).Int64("size_bytes", size).Msg("deleting session")
 		if err := s.sessions.DeleteSession(ctx, id); err != nil {
-			logInterrupt(ctx, "session delete interrupted: run it again with the session id to remove the rest")
-			return model.DeleteSessionResponse{}, fmt.Errorf("deleting session %s: %w", id, err)
+			logInterrupt(ctx, "session remove interrupted: run it again with the session id to remove the rest")
+			return model.RemoveSessionResponse{}, fmt.Errorf("deleting session %s: %w", id, err)
 		}
 		zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
 			Msg("session deleted; any compose project running from it is left as it is")
@@ -328,17 +328,17 @@ func (s *SessionService) DeleteSession(
 					Msg("the deleted session was the current one; commands now work in the default session")
 			}
 		}
-		return model.DeleteSessionResponse{
+		return model.RemoveSessionResponse{
 			Session:    id,
-			Deleted:    true,
+			Removed:    true,
 			FreedBytes: size,
 		}, nil
 	})
 }
 
-// findDeletable resolves req.Session to a session, or by id to a tree without a record; a tree
+// findRemovable resolves req.Session to a session, or by id to a tree without a record; a tree
 // still cloning or of unknown status is refused unless req.Force.
-func (s *SessionService) findDeletable(ctx context.Context, req model.DeleteSessionRequest) (model.SessionID, error) {
+func (s *SessionService) findRemovable(ctx context.Context, req model.RemoveSessionRequest) (model.SessionID, error) {
 	session, err := s.ResolveSession(ctx, req.Session)
 	if !errors.Is(err, model.ErrSessionNotFound) {
 		return session.ID, err
@@ -374,7 +374,7 @@ func (s *SessionService) findDeletable(ctx context.Context, req model.DeleteSess
 // requireNotInUse refuses id when it is the current or the pinned session, unless req.Force; it
 // reports whether id is the current one. An unreadable pointer names no session.
 func (s *SessionService) requireNotInUse(
-	ctx context.Context, id model.SessionID, req model.DeleteSessionRequest,
+	ctx context.Context, id model.SessionID, req model.RemoveSessionRequest,
 ) (bool, error) {
 	pointer, found := s.readCurrentOrNone(ctx)
 	current := found && pointer == id

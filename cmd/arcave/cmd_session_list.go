@@ -26,8 +26,9 @@ var (
 	sessionListSort = string(model.SortDesc)
 
 	sessionListCmd = &cobra.Command{
-		Use:   "list",
-		Short: "List the sessions of the arcave project",
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List the sessions of the arcave project",
 		Long: `List the sessions of the arcave project, each with its status. --all adds the trees
 without a record: a fork still cloning, one that failed, or one left incomplete.`,
 		Args: cobra.NoArgs,

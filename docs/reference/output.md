@@ -52,7 +52,7 @@ Steps still in flight — `Waiting`, `Starting`, `Creating`, image-pull progress
 | [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ]}` |
 | [`session create`](cli/session.md#session-create), [`session set`](cli/session.md#session-set), [`session unset`](cli/session.md#session-unset), [`session current`](cli/session.md#session-current) | one session record: `{"id": …, "name": …, "created_at": …, "from": {"session": …}}` |
 | [`session list`](cli/session.md#session-list) | an array of session entries — the record plus `status`, `current`, `savepoint_count`, `compose_projects`, `size_bytes` — newest first unless `--sort asc` |
-| [`session delete`](cli/session.md#session-delete) | `{"session": …, "deleted": true, "freed_bytes": …}` |
+| [`session remove`](cli/session.md#session-remove) | `{"session": …, "removed": true, "freed_bytes": …}` |
 | [`tools generate-compose`](cli/tools_generate_compose.md) | `{"compose_project": …, "services": [ … ], "path": …}` — the compose file itself goes to `-o` |
 | [`mcp`](cli/mcp.md) | nothing — the stream is the protocol |
 | [`status`](cli/status.md) | nothing; the command returns `not implemented` |

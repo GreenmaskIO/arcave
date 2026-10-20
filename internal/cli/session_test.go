@@ -78,19 +78,19 @@ func TestSessionCreateHandler_SessionCreate(t *testing.T) {
 	svc.AssertExpectations(t)
 }
 
-func TestSessionDeleteHandler_SessionDelete(t *testing.T) {
+func TestSessionRemoveHandler_SessionRemove(t *testing.T) {
 	refused := model.ErrDefaultSessionDelete
 	tests := []struct {
 		name        string
-		req         model.DeleteSessionRequest
-		res         model.DeleteSessionResponse
+		req         model.RemoveSessionRequest
+		res         model.RemoveSessionResponse
 		deleteErr   error
 		wantPrinted []any
 	}{
-		{name: "prints the response as is", req: model.DeleteSessionRequest{Session: "exp", Force: true},
-			res:         model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 4096},
-			wantPrinted: []any{model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 4096}}},
-		{name: "a refusal skips printing", req: model.DeleteSessionRequest{Session: "baseline"}, deleteErr: refused},
+		{name: "prints the response as is", req: model.RemoveSessionRequest{Session: "exp", Force: true},
+			res:         model.RemoveSessionResponse{Session: handlerSession, Removed: true, FreedBytes: 4096},
+			wantPrinted: []any{model.RemoveSessionResponse{Session: handlerSession, Removed: true, FreedBytes: 4096}}},
+		{name: "a refusal skips printing", req: model.RemoveSessionRequest{Session: "baseline"}, deleteErr: refused},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -98,10 +98,10 @@ func TestSessionDeleteHandler_SessionDelete(t *testing.T) {
 			p := &capturePrinter{}
 			p.On("Print", mock.Anything).Return(nil).Maybe()
 			svc := &mockService{}
-			svc.On("DeleteSession", mock.Anything, tt.req).Return(tt.res, tt.deleteErr).Once()
+			svc.On("RemoveSession", mock.Anything, tt.req).Return(tt.res, tt.deleteErr).Once()
 
 			// Act
-			err := NewSessionDeleteHandler(svc, p).SessionDelete(context.Background(), tt.req)
+			err := NewSessionRemoveHandler(svc, p).SessionRemove(context.Background(), tt.req)
 
 			// Assert
 			assert.ErrorIs(t, err, tt.deleteErr)

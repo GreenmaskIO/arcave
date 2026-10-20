@@ -61,7 +61,7 @@ trust.
 - Restrict the storage path to your user (`chmod 700`).
 - Keep secrets out of the compose file's `environment:`, or treat every savepoint as a
   secret.
-- `arcave session delete` and `arcave savepoint remove` delete records, but image blobs
+- `arcave session remove` and `arcave savepoint remove` delete records, but image blobs
   shared between savepoints are not garbage-collected yet. Delete the storage path to
   remove all data.
 

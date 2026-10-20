@@ -82,11 +82,11 @@ Branches accumulate. Delete a session once its git branch is merged:
 
 ```shell
 arcave session list                          # every session, with size_bytes
-arcave session set baseline                  # the current session needs --force to delete
-arcave session delete feature/new-billing
+arcave session set baseline                  # the current session needs --force to remove
+arcave session remove feature/new-billing
 ```
 
-`session delete` removes the session's savepoints and the data they name, prints the `freed_bytes`, and leaves the running project alone. `baseline` cannot be deleted.
+`session remove` removes the session's savepoints and the data they name, prints the `freed_bytes`, and leaves the running project alone. `baseline` cannot be removed.
 
 Within a session, prune savepoints the way you prune merged branches:
 

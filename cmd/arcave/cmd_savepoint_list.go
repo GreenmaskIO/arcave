@@ -28,10 +28,11 @@ var (
 	savepointListSort          = string(model.SortDesc)
 
 	savepointListCmd = &cobra.Command{
-		Use:   "list",
-		Short: "List available savepoints",
-		Args:  cobra.NoArgs,
-		RunE:  runSavepointList,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List available savepoints",
+		Args:    cobra.NoArgs,
+		RunE:    runSavepointList,
 	}
 )
 
