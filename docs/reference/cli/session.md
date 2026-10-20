@@ -1,6 +1,6 @@
 ---
 title: arcave session
-description: Create, list, delete and switch sessions — the independent lines of savepoints inside a project, and the way arcave expresses a branch.
+description: Create, list, remove and switch sessions — the independent lines of savepoints inside a project, and the way arcave expresses a branch.
 keywords: [arcave session, session create, fork, branch, docker compose, savepoint]
 ---
 
@@ -13,7 +13,7 @@ None of the `session` commands touches the Docker daemon, and none of them takes
 ```text title="Synopsis"
 arcave session create [--name <name>] [--from <session>]
 arcave session list [--all] [--sort desc|asc]
-arcave session delete [--force] <id|name>
+arcave session remove [--force] <id|name>
 arcave session set <id|name>
 arcave session unset
 arcave session current
@@ -57,7 +57,7 @@ Four things to know before you run it.
 
 **A fork costs the size of the session it copies.** The two lines share nothing, so nothing one of them writes can reach the other. Check the source's `size_bytes` in `session list` before you copy a large one.
 
-**The copy holds the project's lock until it is done.** Meanwhile every arcave command in the project directory that changes something — `savepoint create`, `rollback`, `savepoint remove`, the other `session` commands that write — is refused with `another arcave command is already running in this project`, in any session. `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` take no lock and keep working. Nothing is printed while it copies; one line goes to stderr when the copy is done. A fork that fails or is interrupted creates no session and leaves what it copied in the store: `session list --all` shows it as `failed`, and `session delete <id>` gives the space back.
+**The copy holds the project's lock until it is done.** Meanwhile every arcave command in the project directory that changes something — `savepoint create`, `rollback`, `savepoint remove`, the other `session` commands that write — is refused with `another arcave command is already running in this project`, in any session. `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` take no lock and keep working. Nothing is printed while it copies; one line goes to stderr when the copy is done. A fork that fails or is interrupted creates no session and leaves what it copied in the store: `session list --all` shows it as `failed`, and `session remove <id>` gives the space back.
 
 ## `session list`
 
@@ -69,11 +69,11 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 |---|---|
 | `ready` | A session you can work in. |
 | `cloning` | A fork is copying it, or died within the last 30 minutes without saying so. |
-| `failed` | A fork that failed, with its `error`, or one silent for 30 minutes. `session delete <id>` removes it. |
-| `incomplete` | Neither: an interrupted `session delete`, or a directory arcave did not write. `session delete <id>` removes it. |
+| `failed` | A fork that failed, with its `error`, or one silent for 30 minutes. `session remove <id>` removes it. |
+| `incomplete` | Neither: an interrupted `session remove`, or a directory arcave did not write. `session remove <id>` removes it. |
 | `unknown` | Its heartbeat could not be read, or reports an operation other than a fork still running; `error` says which. |
 
-`size_bytes` is measured from the store, not added up from the savepoints: it counts everything under the session's directory — volume data, container layers, the image blobs its savepoints share, and data a removed savepoint left behind. That is exactly what `session delete` frees.
+`size_bytes` is measured from the store, not added up from the savepoints: it counts everything under the session's directory — volume data, container layers, the image blobs its savepoints share, and data a removed savepoint left behind. That is exactly what `session remove` frees.
 
 ```json title="Output"
 [
@@ -85,9 +85,9 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 ]
 ```
 
-## `session delete`
+## `session remove`
 
-Deletes a session and everything under it — its savepoints, and the backend data they name. A session is the lifetime everything below it dies with. It prints `{"session": "<id>", "deleted": true, "freed_bytes": <n>}` — the session's `size_bytes`, measured just before it went.
+Removes a session and everything under it — its savepoints, and the backend data they name. A session is the lifetime everything below it dies with. It prints `{"session": "<id>", "removed": true, "freed_bytes": <n>}` — the session's `size_bytes`, measured just before it went.
 
 **The running compose project is left alone.** Deleting the session a compose project was rolled back from does not stop it or touch its volumes; only the savepoints go.
 
@@ -95,7 +95,7 @@ Deletes a session and everything under it — its savepoints, and the backend da
 
 The current session is refused unless `--force` is given; with it, the session is deleted and `.arcave/current_session` is cleared, so commands that name no session work in `baseline` again.
 
-A session directory without a record — `failed`, `incomplete`, `cloning` or `unknown` in `session list --all` — is deleted by its id. A `cloning` one is refused unless `--force` is given: no fork can be running in this project directory while `session delete` holds the lock, so a `cloning` tree there is one whose fork was killed; `--force` deletes it without waiting the 30 minutes for it to turn `failed`. An `unknown` one is refused unless `--force` too: arcave cannot tell that nothing is writing it.
+A session directory without a record — `failed`, `incomplete`, `cloning` or `unknown` in `session list --all` — is removed by its id. A `cloning` one is refused unless `--force` is given: no fork can be running in this project directory while `session remove` holds the lock, so a `cloning` tree there is one whose fork was killed; `--force` deletes it without waiting the 30 minutes for it to turn `failed`. An `unknown` one is refused unless `--force` too: arcave cannot tell that nothing is writing it.
 
 ## `session set`
 
@@ -130,13 +130,13 @@ arcave session current
 | `--from` names a name two sessions carry | Refused, listing their ids; name the source by id. |
 | The name is already taken in this project | Refused: a name is what you address a session by, so two sessions cannot share one. |
 | The name is another session's id | Refused: names are looked up first, so it would hide that session's id. |
-| `--session`, `session set` or `session delete` names no session | `session not found`, naming what was given. |
+| `--session`, `session set` or `session remove` names no session | `session not found`, naming what was given. |
 | The current session has been deleted | `the current session no longer exists`, with how to get out: `arcave session unset` or `arcave session set <session>`. |
-| `session delete baseline` | Refused: the default session always exists. |
-| `session delete` of a `cloning` directory without `--force` | `session is still being cloned`; nothing is deleted. |
-| `session delete` of an `unknown` directory without `--force` | `session tree status is unknown`, with why; nothing is deleted. |
-| `session delete` of the current session without `--force` | `session is the current session`, naming it; switch away first or force it. |
-| `session delete` of a session an interrupted rollback names | Refused, with the interrupted rollback's recovery hint. |
+| `session remove baseline` | Refused: the default session always exists. |
+| `session remove` of a `cloning` directory without `--force` | `session is still being cloned`; nothing is deleted. |
+| `session remove` of an `unknown` directory without `--force` | `session tree status is unknown`, with why; nothing is deleted. |
+| `session remove` of the current session without `--force` | `session is the current session`, naming it; switch away first or force it. |
+| `session remove` of a session an interrupted rollback names | Refused, with the interrupted rollback's recovery hint. |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 
 ## Examples
@@ -153,7 +153,7 @@ arcave savepoint create -p shop step-1
 
 ```shell title="Drop the line when the work is merged"
 arcave session unset
-arcave session delete feat/add-new-table
+arcave session remove feat/add-new-table
 ```
 
 ## Next step

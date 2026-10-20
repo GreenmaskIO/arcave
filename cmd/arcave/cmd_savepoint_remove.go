@@ -30,10 +30,11 @@ var (
 	savepointRemoveDryRun       bool
 
 	savepointRemoveCmd = &cobra.Command{
-		Use:   "remove [id...]",
-		Short: "Remove savepoints by ID, or by retention rules",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  runSavepointRemove,
+		Use:     "remove [id...]",
+		Aliases: []string{"rm"},
+		Short:   "Remove savepoints by ID, or by retention rules",
+		Args:    cobra.ArbitraryArgs,
+		RunE:    runSavepointRemove,
 	}
 )
 

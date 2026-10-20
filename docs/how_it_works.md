@@ -221,7 +221,7 @@ arcave does not finish a rollback it died in the middle of. Recovery is explicit
 
 ## One project at a time
 
-Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, and `session create`, `delete`, `set` and `unset` — holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second such run against the same project fails immediately rather than queuing behind the first: two workflows interleaving stop, capture and start on one compose project has no correct outcome. Commands that only read — `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` — take no lock and are never refused.
+Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, and `session create`, `remove`, `set` and `unset` — holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second such run against the same project fails immediately rather than queuing behind the first: two workflows interleaving stop, capture and start on one compose project has no correct outcome. Commands that only read — `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` — take no lock and are never refused.
 
 ## Related docs
 

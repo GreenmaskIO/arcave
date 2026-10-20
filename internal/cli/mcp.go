@@ -50,7 +50,7 @@ type MCPSessionService interface {
 	ResolveSession(ctx context.Context, ref string) (model.Session, error)
 	ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error)
 	CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error)
-	DeleteSession(ctx context.Context, req model.DeleteSessionRequest) (model.DeleteSessionResponse, error)
+	RemoveSession(ctx context.Context, req model.RemoveSessionRequest) (model.RemoveSessionResponse, error)
 	SetSession(ctx context.Context, ref string) (model.Session, error)
 	UnsetSession(ctx context.Context) (model.Session, error)
 }
@@ -146,10 +146,10 @@ const (
 		"size_bytes in time and space, and it touches no container: to run the forked state, call " +
 		"session_set (or pass session) and then rollback to one of its savepoints. A fork holds the project " +
 		"lock for its whole copy, so every other tool fails with a lock error until it finishes."
-	descSessionDelete = "Delete a session and every savepoint it holds, permanently. A compose project " +
-		"running from it is left as it is. The default session (baseline) cannot be deleted. The current " +
+	descSessionRemove = "Remove a session and every savepoint it holds, permanently. A compose project " +
+		"running from it is left as it is. The default session (baseline) cannot be removed. The current " +
 		"session, and the one this server is pinned to, are refused unless force is set, which also resets the current session to baseline; force " +
-		"likewise deletes a tree whose fork still looks alive — only when no fork is running."
+		"likewise removes a tree whose fork still looks alive — only when no fork is running."
 	descSessionSet = "Make a session the current one, by name or id: every later tool call that is given " +
 		"no session works in it — and so do the user's own arcave commands in this project directory, " +
 		"which share the pointer. session_unset goes back to the default session. Refused when the server " +
@@ -397,23 +397,23 @@ func (h *MCPHandler) createSessionMCP(ctx context.Context, _ *mcpsdk.CallToolReq
 	return nil, session, nil
 }
 
-// sessionDeleteInput is session_delete's input schema.
-type sessionDeleteInput struct {
-	Session string `json:"session" jsonschema:"the session to delete, by name or id; a tree without a record by id only"`
-	Force   bool   `json:"force,omitempty" jsonschema:"also delete the current session, resetting the current session to baseline, or a tree whose fork still looks alive"`
+// sessionRemoveInput is session_remove's input schema.
+type sessionRemoveInput struct {
+	Session string `json:"session" jsonschema:"the session to remove, by name or id; a tree without a record by id only"`
+	Force   bool   `json:"force,omitempty" jsonschema:"also remove the current session, resetting the current session to baseline, or a tree whose fork still looks alive"`
 }
 
-// deleteSessionMCP deletes a session and reports the bytes it freed.
-func (h *MCPHandler) deleteSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionDeleteInput) (*mcpsdk.CallToolResult, model.DeleteSessionResponse, error) {
+// removeSessionMCP removes a session and reports the bytes it freed.
+func (h *MCPHandler) removeSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionRemoveInput) (*mcpsdk.CallToolResult, model.RemoveSessionResponse, error) {
 	svc, release, err := h.openSessionService(ctx)
 	if err != nil {
-		return nil, model.DeleteSessionResponse{}, err
+		return nil, model.RemoveSessionResponse{}, err
 	}
 	defer release()
 
-	res, err := svc.DeleteSession(ctx, model.DeleteSessionRequest{Session: in.Session, Force: in.Force, Pinned: h.pinnedSession})
+	res, err := svc.RemoveSession(ctx, model.RemoveSessionRequest{Session: in.Session, Force: in.Force, Pinned: h.pinnedSession})
 	if err != nil {
-		return nil, model.DeleteSessionResponse{}, mcpError(err)
+		return nil, model.RemoveSessionResponse{}, mcpError(err)
 	}
 	return nil, res, nil
 }
@@ -541,8 +541,8 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 		OutputSchema: newOutputSchema[sessionListOutput]()}, h.listSessionsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_create", Description: descSessionCreate,
 		OutputSchema: newOutputSchema[model.Session]()}, h.createSessionMCP)
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_delete", Description: descSessionDelete,
-		OutputSchema: newOutputSchema[model.DeleteSessionResponse]()}, h.deleteSessionMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_remove", Description: descSessionRemove,
+		OutputSchema: newOutputSchema[model.RemoveSessionResponse]()}, h.removeSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_current", Description: descSessionCurrent,
 		OutputSchema: newOutputSchema[model.Session]()}, h.currentSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_set", Description: descSessionSet,

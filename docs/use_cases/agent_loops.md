@@ -61,7 +61,7 @@ It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child proc
 
 Every savepoint tool takes `project` explicitly: one server serves many compose projects, and the agent names the one it means per call. `session` picks the [session](../sessions.md) for that call only; without it the tool works in the current one.
 
-The other six manage sessions: `session_list`, `session_create`, `session_delete`, `session_current`, `session_set` and `session_unset`. An agent can fork its own session from `baseline` with `session_create` and keep its checkpoints there, apart from yours. `arcave mcp --session <name>` pins the server to one session instead; a pinned server refuses `session_set` and `session_unset`.
+The other six manage sessions: `session_list`, `session_create`, `session_remove`, `session_current`, `session_set` and `session_unset`. An agent can fork its own session from `baseline` with `session_create` and keep its checkpoints there, apart from yours. `arcave mcp --session <name>` pins the server to one session instead; a pinned server refuses `session_set` and `session_unset`.
 
 ```json title=".mcp.json / claude_desktop_config.json"
 {

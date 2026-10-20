@@ -94,7 +94,7 @@ func TestSessionFork_RollbackInTheForkDeploys(t *testing.T) {
 	require.NoError(t, err)
 	clone, err := env.sessions.CreateSession(env.ctx, model.CreateSessionRequest{Name: "feat", From: "src"})
 	require.NoError(t, err)
-	_, err = env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "src"})
+	_, err = env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "src"})
 	require.NoError(t, err)
 	require.NoDirExists(t, env.sessionDir(src.ID))
 	source.write(t, source.replicas(t)[0], "drifted")
@@ -181,7 +181,7 @@ func TestSessionFork_FailedTreeIsListedAndDeleted(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 	failed := all[1]
-	deleted, deleteErr := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: failed.ID.String()})
+	deleted, deleteErr := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: failed.ID.String()})
 
 	// Assert
 	assert.Len(t, ready, 1, "without --all only ready sessions are listed")

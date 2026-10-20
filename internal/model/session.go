@@ -87,8 +87,8 @@ type ListSessionsRequest struct {
 	Sort SortOrder
 }
 
-// DeleteSessionRequest carries what DeleteSession needs.
-type DeleteSessionRequest struct {
+// RemoveSessionRequest carries what RemoveSession needs.
+type RemoveSessionRequest struct {
 	// Session names the session by name or id; a tree without a record only by id.
 	Session string
 	// Force deletes a tree still cloning or of unknown status, the current session, or Pinned.
@@ -112,11 +112,11 @@ func (m CreateSessionRequest) Validate() error {
 	return nil
 }
 
-// DeleteSessionResponse reports a deleted session.
-type DeleteSessionResponse struct {
+// RemoveSessionResponse reports a removed session.
+type RemoveSessionResponse struct {
 	Session SessionID `json:"session"`
-	Deleted bool      `json:"deleted"`
-	// FreedBytes is the session's size, measured just before it was deleted.
+	Removed bool      `json:"removed"`
+	// FreedBytes is the session's size, measured just before it was removed.
 	FreedBytes int64 `json:"freed_bytes"`
 }
 

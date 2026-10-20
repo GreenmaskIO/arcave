@@ -261,16 +261,16 @@ func TestMCPHandler_createSessionMCP(t *testing.T) {
 	svc.AssertExpectations(t)
 }
 
-func TestMCPHandler_deleteSessionMCP(t *testing.T) {
+func TestMCPHandler_removeSessionMCP(t *testing.T) {
 	// Arrange
-	res := model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}
+	res := model.RemoveSessionResponse{Session: handlerSession, Removed: true, FreedBytes: 42}
 	svc := &mockService{}
-	svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "exp", Force: true}).Return(res, nil).Once()
+	svc.On("RemoveSession", mock.Anything, model.RemoveSessionRequest{Session: "exp", Force: true}).Return(res, nil).Once()
 	released := false
 	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
-	_, out, err := h.deleteSessionMCP(context.Background(), nil, sessionDeleteInput{Session: "exp", Force: true})
+	_, out, err := h.removeSessionMCP(context.Background(), nil, sessionRemoveInput{Session: "exp", Force: true})
 
 	// Assert
 	require.NoError(t, err)
@@ -324,8 +324,8 @@ func TestNewOutputSchema_ValidatesWhatASessionToolReturns(t *testing.T) {
 		{name: "a record", schema: newOutputSchema[model.Session](), value: record},
 		{name: "a listing", schema: newOutputSchema[sessionListOutput](),
 			value: sessionListOutput{Sessions: []model.SessionSummary{{Session: record, Current: true}}}},
-		{name: "a delete", schema: newOutputSchema[model.DeleteSessionResponse](),
-			value: model.DeleteSessionResponse{Session: handlerSession, Deleted: true}},
+		{name: "a delete", schema: newOutputSchema[model.RemoveSessionResponse](),
+			value: model.RemoveSessionResponse{Session: handlerSession, Removed: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -413,14 +413,14 @@ func TestMCPHandler_PinnedSessionTools(t *testing.T) {
 	svc := &mockService{}
 	svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{Ref: handlerSession.String(), Sort: model.SortDesc}).
 		Return([]model.SessionSummary(nil), nil).Once()
-	svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "feat", Pinned: handlerSession}).
-		Return(model.DeleteSessionResponse{}, model.ErrCurrentSessionDelete).Once()
+	svc.On("RemoveSession", mock.Anything, model.RemoveSessionRequest{Session: "feat", Pinned: handlerSession}).
+		Return(model.RemoveSessionResponse{}, model.ErrCurrentSessionDelete).Once()
 	released := false
 	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, handlerSession, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, _, listErr := h.listSessionsMCP(context.Background(), nil, sessionListInput{})
-	_, _, deleteErr := h.deleteSessionMCP(context.Background(), nil, sessionDeleteInput{Session: "feat"})
+	_, _, deleteErr := h.removeSessionMCP(context.Background(), nil, sessionRemoveInput{Session: "feat"})
 
 	// Assert: the listing marks the pin, and the pin is protected like the current session.
 	require.NoError(t, listErr)
@@ -466,11 +466,11 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			setup: func(svc *mockService) {
 				svc.On("CreateSession", mock.Anything, model.CreateSessionRequest{Name: "feat", From: "baseline"}).Return(record, nil).Once()
 			}, want: record},
-		{tool: "session_delete", args: map[string]any{"session": "feat", "force": true},
+		{tool: "session_remove", args: map[string]any{"session": "feat", "force": true},
 			setup: func(svc *mockService) {
-				svc.On("DeleteSession", mock.Anything, model.DeleteSessionRequest{Session: "feat", Force: true}).
-					Return(model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}, nil).Once()
-			}, want: model.DeleteSessionResponse{Session: handlerSession, Deleted: true, FreedBytes: 42}},
+				svc.On("RemoveSession", mock.Anything, model.RemoveSessionRequest{Session: "feat", Force: true}).
+					Return(model.RemoveSessionResponse{Session: handlerSession, Removed: true, FreedBytes: 42}, nil).Once()
+			}, want: model.RemoveSessionResponse{Session: handlerSession, Removed: true, FreedBytes: 42}},
 		{tool: "session_current", args: map[string]any{},
 			setup: func(svc *mockService) {
 				svc.On("ResolveSession", mock.Anything, "").Return(record, nil).Once()

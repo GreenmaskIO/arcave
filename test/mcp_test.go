@@ -206,14 +206,14 @@ func TestMCP_SessionLifecycle(t *testing.T) {
 	assert.Equal(t, feat.ID, callTool[model.Session](t, cs, "session_current", nil).ID)
 	assert.Equal(t, []string{"feat"}, currentNames(callTool[sessionListResult](t, cs, "session_list", nil)))
 
-	assert.Contains(t, callToolErr(t, cs, "session_delete", map[string]any{"session": "feat"}),
+	assert.Contains(t, callToolErr(t, cs, "session_remove", map[string]any{"session": "feat"}),
 		model.ErrCurrentSessionDelete.Error())
-	assert.Contains(t, callToolErr(t, cs, "session_delete", map[string]any{"session": "", "force": true}),
+	assert.Contains(t, callToolErr(t, cs, "session_remove", map[string]any{"session": "", "force": true}),
 		model.ErrNoSessionRef.Error(), "an empty ref never means the current session")
 	assert.Contains(t, callToolErr(t, cs, "session_set", map[string]any{"session": ""}),
 		model.ErrNoSessionRef.Error())
 
-	deleted := callTool[model.DeleteSessionResponse](t, cs, "session_delete", map[string]any{"session": "feat", "force": true})
+	deleted := callTool[model.RemoveSessionResponse](t, cs, "session_remove", map[string]any{"session": "feat", "force": true})
 	assert.Equal(t, feat.ID, deleted.Session)
 	assert.Empty(t, env.readPointer(t), "deleting the current session clears the pointer")
 	assert.Equal(t, model.DefaultSession, callTool[model.Session](t, cs, "session_current", nil).ID)
@@ -235,10 +235,10 @@ func TestMCP_PinnedServer(t *testing.T) {
 		"the listing marks what the tools use")
 	assert.Contains(t, callToolErr(t, cs, "session_set", map[string]any{"session": "baseline"}), "pinned")
 	assert.Contains(t, callToolErr(t, cs, "session_unset", nil), "pinned")
-	assert.Contains(t, callToolErr(t, cs, "session_delete", map[string]any{"session": "feat"}), "pinned")
+	assert.Contains(t, callToolErr(t, cs, "session_remove", map[string]any{"session": "feat"}), "pinned")
 
 	// The pin is the session, not its name: a new "feat" is not the pinned one.
-	_, err := env.sessions.DeleteSession(env.ctx, model.DeleteSessionRequest{Session: "feat"})
+	_, err := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
 	require.NoError(t, err)
 	env.create(t, "feat")
 	assert.Contains(t, callToolErr(t, cs, "session_current", nil), feat.ID.String())

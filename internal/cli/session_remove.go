@@ -20,23 +20,23 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-type sessionDeleteService interface {
-	DeleteSession(ctx context.Context, req model.DeleteSessionRequest) (model.DeleteSessionResponse, error)
+type sessionRemoveService interface {
+	RemoveSession(ctx context.Context, req model.RemoveSessionRequest) (model.RemoveSessionResponse, error)
 }
 
-type SessionDeleteHandler struct {
-	svc     sessionDeleteService
+type SessionRemoveHandler struct {
+	svc     sessionRemoveService
 	printer printer
 }
 
-func NewSessionDeleteHandler(svc sessionDeleteService, printer printer) *SessionDeleteHandler {
-	return &SessionDeleteHandler{svc: svc, printer: printer}
+func NewSessionRemoveHandler(svc sessionRemoveService, printer printer) *SessionRemoveHandler {
+	return &SessionRemoveHandler{svc: svc, printer: printer}
 }
 
-// SessionDelete deletes a session by id or name, or a recordless tree by id, and prints which
+// SessionRemove removes a session by id or name, or a recordless tree by id, and prints which
 // one went and the bytes it freed.
-func (h *SessionDeleteHandler) SessionDelete(ctx context.Context, req model.DeleteSessionRequest) error {
-	res, err := h.svc.DeleteSession(ctx, req)
+func (h *SessionRemoveHandler) SessionRemove(ctx context.Context, req model.RemoveSessionRequest) error {
+	res, err := h.svc.RemoveSession(ctx, req)
 	if err != nil {
 		return err
 	}

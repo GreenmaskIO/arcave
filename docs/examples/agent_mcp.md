@@ -48,7 +48,7 @@ Ten tools:
 | `rollback` | Restore |
 | `session_list` | List the [sessions](../sessions.md) |
 | `session_create` | Create a session, empty or a copy of another (`from`) |
-| `session_delete` | Delete a session and its savepoints |
+| `session_remove` | Remove a session and its savepoints |
 | `session_current` | Show the session calls work in |
 | `session_set` | Make a session the current one |
 | `session_unset` | Go back to `baseline` |

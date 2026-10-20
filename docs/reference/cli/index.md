@@ -21,11 +21,13 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`savepoint list`](savepoint_list.md) | Prints the project's committed savepoints. |
 | [`savepoint remove`](savepoint_remove.md) | Deletes savepoints by id, or by retention rules. |
 | [`rollback`](rollback.md) | Returns the environment to a savepoint, selected by id, by name, or by `latest`. |
-| [`session`](session.md) | Creates, lists, deletes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `delete`, `set`, `unset`, `current`. |
+| [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `remove`, `set`, `unset`, `current`. |
 | [`tools generate-compose`](tools_generate_compose.md) | Writes a docker compose file for a running compose project, from what the daemon reports. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |
 | [`status`](status.md) | Planned. Registered, and returns `not implemented`. |
 | `completion` | Cobra's shell-completion script generator, for bash, zsh, fish and PowerShell. |
+
+Short aliases: `savepoint` also answers to `save` and `sp`, every `list` to `ls`, and every `remove` to `rm` — `arcave sp ls` is `arcave savepoint list`.
 
 ## Global flags
 
@@ -89,7 +91,7 @@ compose project "myapp": no containers found: bring the compose project up once,
 
 `rollback` does not: a compose project with no containers — never started, or taken down — is built from the savepoint's own spec. See [Rolling back a project that is not running](rollback.md#rolling-back-a-project-that-is-not-running).
 
-Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `session delete`, `session set`, `session unset` — claims a non-blocking lock on `.arcave/lock`. A second one against the same project fails at once rather than queuing:
+Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `session remove`, `session set`, `session unset` — claims a non-blocking lock on `.arcave/lock`. A second one against the same project fails at once rather than queuing:
 
 ```text
 another arcave command is already running in this project

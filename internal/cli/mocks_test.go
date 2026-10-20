@@ -95,11 +95,11 @@ func (m *mockService) CreateSession(ctx context.Context, req model.CreateSession
 	return args.Get(0).(model.Session), args.Error(1)
 }
 
-func (m *mockService) DeleteSession(
-	ctx context.Context, req model.DeleteSessionRequest,
-) (model.DeleteSessionResponse, error) {
+func (m *mockService) RemoveSession(
+	ctx context.Context, req model.RemoveSessionRequest,
+) (model.RemoveSessionResponse, error) {
 	args := m.Called(ctx, req)
-	return args.Get(0).(model.DeleteSessionResponse), args.Error(1)
+	return args.Get(0).(model.RemoveSessionResponse), args.Error(1)
 }
 
 func (m *mockService) SetSession(ctx context.Context, ref string) (model.Session, error) {

@@ -79,7 +79,7 @@ A scanning selector cannot delete the last copy of a pre-rollback state by accid
 
 A selection that matches nothing is not an error: `removed` is `null`, and the exit code is `0`.
 
-Deletion is permanent. It frees the savepoint's own directory; the [deduplicated image blobs](../storage_layout.md#shared-blobs) and images it shared with other savepoints, and a `cdc` repository's data, stay where they are. Deleting the whole session gives everything back — see [`session delete`](session.md#session-delete).
+Deletion is permanent. It frees the savepoint's own directory; the [deduplicated image blobs](../storage_layout.md#shared-blobs) and images it shared with other savepoints, and a `cdc` repository's data, stay where they are. Deleting the whole session gives everything back — see [`session remove`](session.md#session-remove).
 
 ## Errors
 

@@ -30,7 +30,7 @@ A rollback replaces the project's state rather than starting a second copy besid
 
 ## One writer per project
 
-Only one command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `delete`, `set` or `unset` — runs in a project at a time. A second one fails right away rather than waiting:
+Only one command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `remove`, `set` or `unset` — runs in a project at a time. A second one fails right away rather than waiting:
 
 ```text
 another arcave command is already running in this project
@@ -73,7 +73,7 @@ There is no garbage collector in this alpha, so you reclaim space by hand.
 
 ### Nothing collects the shared blobs
 
-Removing a savepoint deletes its own data. Container files shared between savepoints, `cdc` chunks, and what a failed savepoint or fork wrote all stay in the store. `arcave session delete` frees everything a session holds. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, delete its directory in the store by hand. [Storage layout](storage_layout.md) shows where that is.
+Removing a savepoint deletes its own data. Container files shared between savepoints, `cdc` chunks, and what a failed savepoint or fork wrote all stay in the store. `arcave session remove` frees everything a session holds. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, delete its directory in the store by hand. [Storage layout](storage_layout.md) shows where that is.
 
 ### Nothing collects what a rollback leaves in the Docker daemon
 

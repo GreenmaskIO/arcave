@@ -34,7 +34,7 @@ arcave rollback masked-2026-10
 ```
 
 Keep the `baseline` session for masked baselines only — one savepoint per dump — and do the work in sessions forked
-from it. Pruning inside a work session never reaches a baseline, and `arcave session delete` drops a finished line in
+from it. Pruning inside a work session never reaches a baseline, and `arcave session remove` drops a finished line in
 one command. See [Sessions and branching](../sessions.md).
 
 The full walkthrough — pointing the restore at the project, refreshing the baseline when a new dump arrives, and
