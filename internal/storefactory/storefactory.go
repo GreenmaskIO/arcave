@@ -76,7 +76,7 @@ func New(
 	if err := session.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session id: %w", err)
 	}
-	if err := validateComposeProjectName(composeProject); err != nil {
+	if err := ValidateComposeProjectName(composeProject); err != nil {
 		return nil, fmt.Errorf("validate compose project name: %w", err)
 	}
 
@@ -242,7 +242,7 @@ func Session(arcaveProjectStore storages.Navigator, id model.SessionID) (storage
 
 // ComposeProject descends from a session store to compose/<name>.
 func ComposeProject(sessionStore storages.Navigator, name model.DockerComposeProjectName) (storages.Storager, error) {
-	if err := validateComposeProjectName(name); err != nil {
+	if err := ValidateComposeProjectName(name); err != nil {
 		return nil, fmt.Errorf("validate compose project name: %w", err)
 	}
 	return joinKind(sessionStore, composeNamespace, name.String())
@@ -263,7 +263,7 @@ func ComposeProjects(ctx context.Context, sessionStore storages.Navigator) ([]mo
 	names := make([]model.DockerComposeProjectName, 0, len(dirs))
 	for _, dir := range dirs {
 		name := model.DockerComposeProjectName(dir.Dirname())
-		if err := validateComposeProjectName(name); err != nil {
+		if err := ValidateComposeProjectName(name); err != nil {
 			log.Ctx(ctx).Debug().Str("entry", name.String()).Msg("ignoring directory that is not a compose project")
 			continue
 		}
@@ -283,10 +283,10 @@ func joinKind(store storages.Navigator, kind, name string) (storages.Storager, e
 	return sub, nil
 }
 
-// validateComposeProjectName accepts a name compose itself would produce — one its own
+// ValidateComposeProjectName accepts a name compose itself would produce — one its own
 // normalization leaves unchanged — rendering as a single path segment. The charset is
 // compose's to own; the segment rule is the store's.
-func validateComposeProjectName(name model.DockerComposeProjectName) error {
+func ValidateComposeProjectName(name model.DockerComposeProjectName) error {
 	raw := name.String()
 	if raw == "" {
 		return fmt.Errorf("invalid compose project name: must not be empty")

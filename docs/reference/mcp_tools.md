@@ -196,6 +196,15 @@ Takes no arguments. Clears the current session, so calls given no `session` work
 this server is pinned to session "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31" by --session or ARCAVE_SESSION, which outranks the current session: pass session on each call, or restart the server without the pin
 ```
 
+## `compose_generate`
+
+| Argument | Required | Description |
+|---|---|---|
+| `project` | yes | The compose project to generate the file of. |
+| `absolute_paths` | no | Keep every bind source absolute instead of relative to the compose project's working directory. |
+
+Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose file, as YAML>"}`. Read-only, and works in no session: see [`arcave tools generate-compose`](cli/tools_generate_compose.md). The file carries every environment value the containers run with, secrets included.
+
 ## Where the tools differ from the CLI
 
 * **Lists come wrapped in an object.** `savepoint_list` answers `{"savepoints": […]}` and `session_list` `{"sessions": […]}`, where the CLI prints the bare array.

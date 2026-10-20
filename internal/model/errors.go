@@ -117,6 +117,9 @@ var (
 	// ErrInvalidCapturePolicy reports an arcave.* label arcave cannot act on.
 	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
 
+	// ErrComposeProjectAbsent reports a compose project the daemon holds no container of.
+	ErrComposeProjectAbsent = errors.New("no containers found")
+
 	// ErrInvalidSortOrder reports a listing order other than asc or desc.
 	ErrInvalidSortOrder = errors.New("invalid sort order")
 )

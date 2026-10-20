@@ -44,3 +44,12 @@ func (s *Service) loadSavepointSpec(ctx context.Context, savepoint model.Savepoi
 	}
 	return project, nil
 }
+
+// requireComposeProject refuses a compose project the daemon holds no container of: there is
+// nothing to assemble a spec from.
+func requireComposeProject(introspection model.IntrospectionResult) error {
+	if composeProjectAbsent(introspection) {
+		return fmt.Errorf("compose project %q: %w", introspection.Project.Name, model.ErrComposeProjectAbsent)
+	}
+	return nil
+}

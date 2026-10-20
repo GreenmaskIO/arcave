@@ -15,24 +15,12 @@
 package test
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/flags"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/client"
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/service/composespec"
 )
 
 // gracefulSpec is a service that takes 3s to shut down on TERM and declares the time
@@ -94,51 +82,9 @@ func TestClient_Stop_WarnsOfAKilledContainer(t *testing.T) {
 	assert.Contains(t, env.logs.String(), fmt.Sprintf("container %s-db-1 did not exit within 1s and was killed", env.project))
 }
 
-type stopEnv struct {
-	ctx     context.Context
-	compose *composeclient.Client
-	engine  *dockerclient.Engine
-	daemon  *client.Client
-	logs    *syncBuffer
-	project string
-}
-
 // newStopEnv is a compose client whose configured grace period is 1s, logging into a buffer.
-func newStopEnv(t *testing.T) *stopEnv {
+func newStopEnv(t *testing.T) *composeEnv {
 	t.Helper()
 
-	daemonAPI := newDaemonClient(t)
-	project := "arcave-stop-grace-it-" + randomSuffix(t)
-
-	cli, err := command.NewDockerCli(
-		command.WithInputStream(nil),
-		command.WithOutputStream(io.Discard),
-		command.WithErrorStream(io.Discard),
-	)
-	require.NoError(t, err)
-	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	logs := &syncBuffer{}
-	env := &stopEnv{
-		ctx: zerolog.New(logs).WithContext(context.Background()),
-		compose: composeclient.NewClient(dockercompose.NewComposeService(cli), composeclient.Options{
-			WaitTimeout: 90 * time.Second, StopTimeout: time.Second,
-		}),
-		engine:  dockerclient.NewEngine(daemonAPI),
-		daemon:  daemonAPI,
-		logs:    logs,
-		project: project,
-	}
-	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
-	return env
-}
-
-// up creates and starts the compose project document describes, named after the test.
-func (e *stopEnv) up(t *testing.T, document string) *types.Project {
-	t.Helper()
-
-	project, err := composespec.NewCodec().Parse(e.ctx, fmt.Appendf(nil, document, e.project))
-	require.NoError(t, err)
-	require.NoError(t, e.compose.Create(e.ctx, project))
-	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
-	return project
+	return newComposeEnv(t, "stop-grace", time.Second)
 }

@@ -58,11 +58,21 @@ type MCPSessionService interface {
 // MCPSessionServiceFactory builds the session commands, plus the release the tool call invokes on return.
 type MCPSessionServiceFactory func(ctx context.Context) (svc MCPSessionService, release func(), err error)
 
+// MCPToolsService is the MCP adapter's view of the tools commands.
+type MCPToolsService interface {
+	GenerateCompose(ctx context.Context, req model.GenerateComposeRequest) (model.GenerateComposeResponse, error)
+}
+
+// MCPToolsServiceFactory builds the tools commands for one compose project, plus the release the
+// tool call invokes on return; they open no store and resolve no session.
+type MCPToolsServiceFactory func(ctx context.Context, project string) (svc MCPToolsService, release func(), err error)
+
 // MCPHandler serves arcave's savepoint and session workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
 	serviceFactory        MCPServiceFactory
 	sessionFactory        MCPSessionServiceFactory
+	toolsFactory          MCPToolsServiceFactory
 	pinnedSession         model.SessionID
 	leftoverVolumesPolicy model.LeftoverVolumesPolicy
 }
@@ -70,12 +80,13 @@ type MCPHandler struct {
 // NewMCPHandler builds the MCP adapter; pinnedSession is the session the server was started in, zero to
 // follow the current one, and leftoverVolumes is the project's rollback.leftover_volumes.
 func NewMCPHandler(
-	serviceFactory MCPServiceFactory, sessionFactory MCPSessionServiceFactory,
+	serviceFactory MCPServiceFactory, sessionFactory MCPSessionServiceFactory, toolsFactory MCPToolsServiceFactory,
 	pinnedSession model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
 ) *MCPHandler {
 	return &MCPHandler{
 		serviceFactory:        serviceFactory,
 		sessionFactory:        sessionFactory,
+		toolsFactory:          toolsFactory,
 		pinnedSession:         pinnedSession,
 		leftoverVolumesPolicy: leftoverVolumes,
 	}
@@ -146,6 +157,11 @@ const (
 	descSessionCurrent = "Show the session tool calls work in when they are given no session: the one the " +
 		"server was started with --session, else the current session, else the default (baseline). Read-only. " +
 		"Fails when the current session no longer exists; session_unset or session_set repairs it."
+	descComposeGenerate = "Generate a docker compose file for a running compose project, from what the Docker " +
+		"daemon reports about its containers, volumes and networks — for a project whose compose file is lost, " +
+		"or was never written. Read-only: nothing is stopped or written, and the file is returned as spec. " +
+		"Bind sources under the project's working directory are relative (./…) unless absolute_paths is set. " +
+		"The file carries every environment value the containers run with, secrets included."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +
@@ -179,7 +195,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 		WaitTimeout: waitTimeout,
 	})
 	if err != nil {
-		return nil, model.Savepoint{}, mcpError(err)
+		return nil, model.Savepoint{}, mcpError(composeProjectAbsentError(err, "the project argument"))
 	}
 	return nil, savepoint, nil
 }
@@ -297,6 +313,34 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 		return nil, model.RollbackResponse{}, mcpError(err)
 	}
 	return nil, newRollbackResponse(res), nil
+}
+
+// composeGenerateInput is compose_generate's input schema.
+type composeGenerateInput struct {
+	Project       string `json:"project" jsonschema:"the docker compose project to generate the file of, as docker compose ls names it"`
+	AbsolutePaths bool   `json:"absolute_paths,omitempty" jsonschema:"keep every bind source absolute instead of relative to the project's working directory"`
+}
+
+// composeGenerateOutput is the compose file and what it declares.
+type composeGenerateOutput struct {
+	ComposeProject model.DockerComposeProjectName `json:"compose_project" jsonschema:"the compose project the file describes"`
+	Services       []string                       `json:"services" jsonschema:"the services the file declares, sorted"`
+	Spec           string                         `json:"spec" jsonschema:"the compose file, as YAML"`
+}
+
+// generateComposeMCP returns the compose file of a running compose project.
+func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in composeGenerateInput) (*mcpsdk.CallToolResult, composeGenerateOutput, error) {
+	svc, release, err := h.openToolsService(ctx, in.Project)
+	if err != nil {
+		return nil, composeGenerateOutput{}, err
+	}
+	defer release()
+
+	generated, err := svc.GenerateCompose(ctx, model.GenerateComposeRequest{AbsolutePaths: in.AbsolutePaths})
+	if err != nil {
+		return nil, composeGenerateOutput{}, composeProjectAbsentError(err, "the project argument")
+	}
+	return nil, composeGenerateOutput{ComposeProject: generated.ComposeProject, Services: generated.Services, Spec: string(generated.Spec)}, nil
 }
 
 // sessionListInput is session_list's input schema.
@@ -457,6 +501,15 @@ func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService,
 	return svc, release, nil
 }
 
+// openToolsService builds the tools commands for project, for one tool call.
+func (h *MCPHandler) openToolsService(ctx context.Context, project string) (MCPToolsService, func(), error) {
+	svc, release, err := h.toolsFactory(ctx, project)
+	if err != nil {
+		return nil, nil, mcpError(err)
+	}
+	return svc, release, nil
+}
+
 // mcpError names what holds the project lock, so an agent waits instead of retrying blind.
 func mcpError(err error) error {
 	if errors.Is(err, model.ErrProjectLocked) {
@@ -496,6 +549,7 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 		OutputSchema: newOutputSchema[model.Session]()}, h.setSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_unset", Description: descSessionUnset,
 		OutputSchema: newOutputSchema[model.Session]()}, h.unsetSessionMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "compose_generate", Description: descComposeGenerate}, h.generateComposeMCP)
 
 	return srv
 }
