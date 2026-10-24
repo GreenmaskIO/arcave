@@ -32,7 +32,10 @@ sessions/<session>/
   session.json                                 the session's record — written last, deleted first
   heartbeat.json                               the state of the fork that wrote the tree
   compose/<compose-project>/                   one store root per compose project
+sessions/<session>.lock.json                   the session's lock, while a command holds it
 ```
+
+The lock lies beside the session's directory, not in it, and exists only while a command works in the session; see [One session at a time across hosts](../how_it_works.md#one-session-at-a-time-across-hosts).
 
 A session directory without `session.json` is not a session: no `--session` finds it, and only `session list --all` shows it, with the status its `heartbeat.json` gives. The default session `baseline` has no record; it always exists. See [Sessions](../sessions.md).
 

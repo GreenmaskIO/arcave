@@ -44,6 +44,47 @@ func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 	return func() error { return m.MethodCalled("Release").Error(0) }, nil
 }
 
+// mockSessionLocker doubles model.SessionLocker; Lock hands out the *mockGrantedSessionLock it
+// returns, with the caller's context.
+type mockSessionLocker struct{ mock.Mock }
+
+func (m *mockSessionLocker) Lock(
+	ctx context.Context, operation model.SessionLockOperation,
+) (context.Context, model.GrantedSessionLock, error) {
+	args := m.Called(ctx, operation)
+	if err := args.Error(1); err != nil {
+		return nil, nil, err
+	}
+	return ctx, args.Get(0).(*mockGrantedSessionLock), nil
+}
+
+// mockGrantedSessionLock doubles model.GrantedSessionLock.
+type mockGrantedSessionLock struct{ mock.Mock }
+
+func (m *mockGrantedSessionLock) Verify(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
+func (m *mockGrantedSessionLock) Unlock(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
+// fakeSessionLocker always grants the session's lock, so tests that are not about it carry no
+// expectations.
+type fakeSessionLocker struct{}
+
+func (fakeSessionLocker) Lock(
+	ctx context.Context, _ model.SessionLockOperation,
+) (context.Context, model.GrantedSessionLock, error) {
+	return ctx, fakeGrantedSessionLock{}, nil
+}
+
+// fakeGrantedSessionLock is a session lock that always holds.
+type fakeGrantedSessionLock struct{}
+
+func (fakeGrantedSessionLock) Verify(context.Context) error { return nil }
+func (fakeGrantedSessionLock) Unlock(context.Context) error { return nil }
+
 type mockInflight struct{ mock.Mock }
 
 func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, error) {

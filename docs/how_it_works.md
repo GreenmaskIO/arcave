@@ -125,7 +125,7 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
 ## The savepoint flow
 
 ```text title="arcave savepoint create before-migration"
- 1.  Claim the project lock
+ 1.  Claim the project lock, then the session's lock in the store
  2.  Refuse a name another savepoint already carries
  3.  Read the running project from the daemon, check the Docker version
  4.  Resolve the capture labels and render the compose spec
@@ -135,7 +135,8 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
  8.  Store each image
  9.  Commit each container's writable layer
 10.  Write project.yaml — the project's compose spec
-11.  Write savepoint.json — the commit marker, then mark heartbeat.json done
+11.  Check the session's lock is still this run's, write savepoint.json — the commit
+     marker, then mark heartbeat.json done
 12.  Start the services and wait for health checks
 ```
 
@@ -148,7 +149,7 @@ Steps 2 through 4 run **while the project is still up**: a taken name, a Docker 
 A rollback restores **the project the savepoint recorded**, not the one that is running. A service added since is gone. One removed comes back. A changed image, port, environment variable or healthcheck goes back to what it was. That is why `project.yaml` is committed beside the record: it is what the project is rebuilt from. Replicas come back under the numbers they had, gaps included. A few compose settings do not survive this — see [Limitations](reference/limitations.md#some-compose-settings-do-not-survive-a-rollback).
 
 ```text title="arcave rollback before-migration"
- 1.  Claim the project lock
+ 1.  Claim the project lock, then the session's lock in the store
  2.  Resolve the savepoint record
  3.  Refuse if an interrupted rollback is marked
  4.  Read the running project from the daemon, check the Docker version
@@ -225,6 +226,16 @@ arcave does not finish a rollback it died in the middle of. Recovery is explicit
 ## One project at a time
 
 Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, and `session create`, `remove`, `set` and `unset` — holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second such run against the same project fails immediately rather than queuing behind the first: two workflows interleaving stop, capture and start on one compose project has no correct outcome. Commands that only read — `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` — take no lock and are never refused.
+
+## One session at a time across hosts
+
+`.arcave/lock` is visible only on its own machine, while a store on s3, Azure or SFTP can be shared by several. So `savepoint create`, `rollback`, `savepoint remove`, `session create --from` (on the source session), `session remove` and `arcave gc` also hold the session's lock in the store, `sessions/<session>.lock.json`, for as long as they run:
+
+* A command that finds the lock held **waits up to 60 seconds** for it to be freed, then fails naming the holder: its operation, host and pid.
+* The holder renews the lock every few seconds. A lock nobody renews for 15 seconds — its holder crashed or lost the store — is taken over; the holder itself stops before then.
+* Before it commits — `savepoint.json`, `session.json` — or removes anything, a command checks the lock is still its own, and fails if it is not.
+
+A command that only reads takes no session lock.
 
 ## Related docs
 

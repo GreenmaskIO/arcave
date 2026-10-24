@@ -20,4 +20,7 @@ type RollbackResult struct {
 	Savepoint      Savepoint
 	Restored       []Volume                     // the units restored, as the savepoint recorded them
 	WritableLayers []WritableLayerRestoreResult // the writable layers loaded back into the daemon
+	// SafetySnapshotKept is the safety snapshot a rollback that succeeded could not drop, still a
+	// committed savepoint; empty when it was dropped, or there was none.
+	SafetySnapshotKept SavepointID
 }

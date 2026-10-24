@@ -49,7 +49,7 @@ Steps still in flight — `Waiting`, `Starting`, `Creating`, image-pull progress
 | [`savepoint create`](cli/savepoint_create.md) | one savepoint record |
 | [`savepoint list`](cli/savepoint_list.md) | an array of savepoint records, newest first unless `--sort asc`; `[]` when there are none |
 | [`savepoint remove`](cli/savepoint_remove.md) | `{"dry_run": …, "removed": [ … ]}` |
-| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ]}` |
+| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "safety_snapshot_kept": "<id>"}` |
 | [`session create`](cli/session.md#session-create), [`session set`](cli/session.md#session-set), [`session unset`](cli/session.md#session-unset), [`session current`](cli/session.md#session-current) | one session record: `{"id": …, "name": …, "created_at": …, "from": {"session": …}}` |
 | [`session list`](cli/session.md#session-list) | an array of session entries — the record plus `status`, `current`, `savepoint_count`, `compose_projects`, `size_bytes` — newest first unless `--sort asc` |
 | [`session remove`](cli/session.md#session-remove) | `{"session": …, "removed": true, "freed_bytes": …}` |
@@ -207,6 +207,8 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 ```
 
 `writable_layers` names each container layer put back, and is omitted when the savepoint held none. `tag` is the reference the restored layer answers to in your local Docker daemon: after a rollback the container runs on it, not on the image its compose file names.
+
+`safety_snapshot_kept` appears only when the rollback succeeded but could not drop its safety snapshot — the inflight marker could not be cleared, the session lock was no longer the rollback's, or the record could not be removed. It is still an ordinary savepoint: `arcave savepoint remove <id>` drops it.
 
 ## Reading it
 

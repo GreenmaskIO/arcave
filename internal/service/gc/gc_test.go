@@ -77,12 +77,13 @@ func newDeps(
 	session model.SessionID, store storages.Navigator, sessions *mockSessions, locker *mockLocker, inflight *mockInflight,
 ) Deps {
 	return Deps{
-		Store:    store,
-		Session:  session,
-		Sessions: sessions,
-		Locker:   locker,
-		Inflight: inflight,
-		Now:      func() time.Time { return gcNow },
+		Store:         store,
+		Session:       session,
+		Sessions:      sessions,
+		Locker:        locker,
+		SessionLocker: fakeSessionLocker{},
+		Inflight:      inflight,
+		Now:           func() time.Time { return gcNow },
 	}
 }
 
@@ -175,6 +176,57 @@ func TestGarbageCollector_GarbageCollect_RefusedWhileLocked(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrProjectLocked)
 	blobs.AssertNotCalled(t, "Find", mock.Anything, mock.Anything)
 	locker.AssertExpectations(t)
+}
+
+func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
+	// Arrange: the session is checked under the session's lock: it may have gone while the gc waited.
+	locker := &mockLocker{}
+	sessionLocker := &mockSessionLocker{}
+	sessions := &mockSessions{}
+	grantedLock := &mockGrantedSessionLock{}
+	acquire := locker.On("Acquire", mock.Anything).Return(nil).Once()
+	lock := sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).Return(grantedLock, nil).Once()
+	under := sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
+	free := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
+	release := locker.On("Release").Return(nil).Once()
+	mock.InOrder(acquire, lock, under, free, release)
+	deps := newDeps(gcSession, newGCStore(t, gcSession), sessions, locker, newNoMarker())
+	deps.SessionLocker = sessionLocker
+	svc := New(deps)
+
+	// Act
+	_, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true})
+
+	// Assert
+	require.NoError(t, err)
+	locker.AssertExpectations(t)
+	sessionLocker.AssertExpectations(t)
+	grantedLock.AssertExpectations(t)
+	sessions.AssertExpectations(t)
+}
+
+func TestGarbageCollector_GarbageCollect_RefusedWhileSessionLocked(t *testing.T) {
+	// Arrange
+	sessionLocker := &mockSessionLocker{}
+	sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).
+		Return(nil, model.ErrSessionLocked).Once()
+	locker := newHeldLocker()
+	sessions := &mockSessions{}
+	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, locker, &mockInflight{})
+	deps.SessionLocker = sessionLocker
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
+	svc := New(deps)
+
+	// Act
+	_, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true})
+
+	// Assert: another host's operation may be writing what the gc would judge.
+	require.ErrorIs(t, err, model.ErrSessionLocked)
+	blobs.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	sessionLocker.AssertExpectations(t)
+	sessions.AssertExpectations(t)
 }
 
 func TestGarbageCollector_GarbageCollect(t *testing.T) {

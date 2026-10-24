@@ -116,6 +116,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 	stop.NotBefore(newPg, newCfg, nameCheck)
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -203,6 +204,7 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -273,6 +275,7 @@ func TestService_CreateSavepoint_AnonymousVolumePerReplica(t *testing.T) {
 	}
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -328,6 +331,7 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 	})).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -369,6 +373,7 @@ func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheComposeProjectRunnin
 	runner := &mockComposeRunner{}
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    emptySavepointRepo(),
 		ProjectLocker:    locker,
@@ -407,6 +412,7 @@ func TestService_CreateSavepoint_UnknownBackend(t *testing.T) {
 	registry.On("New", matchSpec(nil, "volume-named-demo_db")).Return(nil, ErrUnknownBackend)
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -456,6 +462,7 @@ func TestService_CreateSavepoint_UncommittedOnFailure(t *testing.T) {
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -522,6 +529,7 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -576,6 +584,7 @@ func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
 	registry := &mockRegistry{}
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    emptySavepointRepo(),
 		ProjectLocker:    locker,
@@ -615,6 +624,7 @@ func TestService_CreateSavepoint_ComposeProjectAbsent(t *testing.T) {
 	runner := &mockComposeRunner{}
 	registry := &mockRegistry{}
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    emptySavepointRepo(),
 		ProjectLocker:    locker,
@@ -672,6 +682,7 @@ func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
 			inspector := &mockInspector{}
 			runner := &mockComposeRunner{}
 			svc := New(Deps{
+				SessionLocker:    fakeSessionLocker{},
 				SavepointRepo:    repo,
 				ProjectLocker:    locker,
 				ComposeInspector: inspector,
@@ -748,7 +759,7 @@ func TestService_requireEmptyTree(t *testing.T) {
 				require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader("stale")))
 				want = append(want, key)
 			}
-			svc := New(Deps{Store: store})
+			svc := New(Deps{SessionLocker: fakeSessionLocker{}, Store: store})
 
 			// Act
 			err := svc.requireEmptyTree(zerolog.Nop().WithContext(context.Background()), id)
@@ -803,6 +814,7 @@ func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	}
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -855,6 +867,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -930,6 +943,7 @@ func TestService_CreateSavepoint_CommittedWhenStartFails(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -994,6 +1008,7 @@ func TestService_ListSavepoints(t *testing.T) {
 			repo := &mockSavepointRepo{}
 			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{demoRecord(), demoSafetySnapshot()}, nil).Once()
 			svc := New(Deps{
+				SessionLocker: fakeSessionLocker{},
 				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
 				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
@@ -1049,6 +1064,7 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 			repo := &mockSavepointRepo{}
 			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record, backup}, nil).Once()
 			svc := New(Deps{
+				SessionLocker: fakeSessionLocker{},
 				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
 				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
@@ -1093,6 +1109,7 @@ func TestService_RemoveSavepoints(t *testing.T) {
 		record.ID.String()+"/volume-named-orphan/data.tar", strings.NewReader("orphan")))
 
 	svc := New(Deps{
+		SessionLocker: fakeSessionLocker{},
 		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
@@ -1133,6 +1150,7 @@ func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker: fakeSessionLocker{},
 		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
@@ -1164,6 +1182,7 @@ func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	registry := &mockRegistry{}
 
 	svc := New(Deps{
+		SessionLocker: fakeSessionLocker{},
 		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
@@ -1269,6 +1288,7 @@ func TestService_parseRetentionCutoffs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			svc := New(Deps{
+				SessionLocker: fakeSessionLocker{},
 				VolumeRemover: &mockVolumeRemover{},
 				SavepointRepo: nil, ProjectLocker: nil, ComposeInspector: nil,
 				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
@@ -1607,6 +1627,7 @@ func TestService_CreateSavepoint_RestartsAfterAnInterrupt(t *testing.T) {
 			registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 			svc := New(Deps{
+				SessionLocker:    fakeSessionLocker{},
 				VolumeRemover:    &mockVolumeRemover{},
 				SavepointRepo:    emptySavepointRepo(),
 				ProjectLocker:    locker,

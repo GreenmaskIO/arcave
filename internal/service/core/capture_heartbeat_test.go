@@ -53,11 +53,11 @@ func TestService_performSavepoint_HeartbeatFramesTheCapture(t *testing.T) {
 		Return(nil).Once()
 	mock.InOrder(snapshot, spec, commit)
 	runner := heartbeat.RunnerInfo{Host: "laptop", PID: 42, ArcaveVersion: "v1"}
-	svc := New(Deps{SavepointRepo: repo, Store: store, RunnerInfo: runner})
+	svc := New(Deps{SessionLocker: fakeSessionLocker{}, SavepointRepo: repo, Store: store, RunnerInfo: runner})
 	working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
 
 	// Act
-	savepoint, err := svc.performSavepoint(ctx, working, nil, "sp", "", nil)
+	savepoint, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -83,13 +83,14 @@ func TestService_performSavepoint_HeartbeatLostCommitsNothing(t *testing.T) {
 	// Every beat but the first fails, so the deadline passes on a tick.
 	repo := &mockSavepointRepo{}
 	svc := New(Deps{
+		SessionLocker: fakeSessionLocker{},
 		SavepointRepo: repo, Store: &failingAfterFirstPutStore{Storager: store},
 		HeartbeatInterval: 10 * time.Millisecond, HeartbeatStaleAfter: 30 * time.Millisecond,
 	})
 	working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
 
 	// Act
-	savepoint, err := svc.performSavepoint(ctx, working, nil, "sp", "", nil)
+	savepoint, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil)
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrHeartbeatLost)
@@ -106,11 +107,11 @@ func TestService_performSavepoint_RefusesAnOccupiedTreeBeforeTheHeartbeat(t *tes
 	store := &occupiedStore{Storager: newDirStore(t)}
 	backend := &mockBackend{volume: demoVolume()}
 	repo := &mockSavepointRepo{}
-	svc := New(Deps{SavepointRepo: repo, Store: store})
+	svc := New(Deps{SessionLocker: fakeSessionLocker{}, SavepointRepo: repo, Store: store})
 	working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
 
 	// Act
-	_, err := svc.performSavepoint(ctx, working, nil, "sp", "", nil)
+	_, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil)
 
 	// Assert
 	require.ErrorIs(t, err, errCaptureDirectoryNotEmpty)

@@ -220,11 +220,12 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	sourceRepo := objectNames(t, env.composeProjectStore, cdc.NamespaceRepos)
 	arcaveProjectStore := env.arcaveProjectStore(t)
 	sessions := core.NewSessionService(core.SessionDeps{
-		Sessions:      sessionrepo.New(arcaveProjectStore),
-		Locker:        lock.New(env.projectRoot),
-		Inflight:      inflightrepo.New(env.projectRoot),
-		Store:         arcaveProjectStore,
-		NewSavepoints: newSavepointReader,
+		Sessions:         sessionrepo.New(arcaveProjectStore),
+		Locker:           lock.New(env.projectRoot),
+		Inflight:         inflightrepo.New(env.projectRoot),
+		Store:            arcaveProjectStore,
+		NewSavepoints:    newSavepointReader,
+		NewSessionLocker: newSessionLockerFactory(arcaveProjectStore),
 	})
 	clone, err := sessions.CreateSession(env.ctx, model.CreateSessionRequest{Name: "feat", From: "baseline"})
 	require.NoError(t, err)
@@ -349,6 +350,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 
 	spec := stubAssembler{project: &types.Project{Name: cdcProject}}
 	svc := core.New(core.Deps{
+		SessionLocker:    newSessionLocker(t, e.arcaveProjectStore(t), session),
 		SavepointRepo:    sprepo.New(composeProjectStore),
 		ProjectLocker:    lock.New(e.projectRoot),
 		ComposeInspector: stubInspector{result: introspectionOf(e.volumes)},

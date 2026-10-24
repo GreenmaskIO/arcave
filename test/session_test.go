@@ -85,12 +85,13 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 		projectRoot: projectRoot,
 		storage:     storage,
 		sessions: core.NewSessionService(core.SessionDeps{
-			Sessions:      sessionrepo.New(arcaveProjectStore),
-			Locker:        lock.New(projectRoot),
-			Inflight:      inflight,
-			Current:       currentsession.New(projectRoot),
-			Store:         arcaveProjectStore,
-			NewSavepoints: newSavepointReader,
+			Sessions:         sessionrepo.New(arcaveProjectStore),
+			Locker:           lock.New(projectRoot),
+			Inflight:         inflight,
+			Current:          currentsession.New(projectRoot),
+			Store:            arcaveProjectStore,
+			NewSavepoints:    newSavepointReader,
+			NewSessionLocker: newSessionLockerFactory(arcaveProjectStore),
 		}),
 		inflight: inflight,
 	}
@@ -353,6 +354,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
+		SessionLocker:      newSessionLocker(t, arcaveProjectStore, session),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(e.projectRoot),
 		ComposeInspector:   inspector,

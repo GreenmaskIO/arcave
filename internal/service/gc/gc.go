@@ -58,6 +58,8 @@ type Deps struct {
 	// NewSavepoints opens the savepoints of a compose project's store.
 	NewSavepoints func(store storages.Storager) SavepointReader
 	Locker        projectLocker
+	// SessionLocker holds Session's lock in the store for the whole run.
+	SessionLocker model.SessionLocker
 	Inflight      inflightMarkers
 	// DaemonCollectors and ComposeProjectCollectors are one per kind, in the order they run.
 	DaemonCollectors         []DaemonCollector
@@ -83,6 +85,7 @@ type GarbageCollector struct {
 	sessions                 sessionLookup
 	newSavepoints            func(store storages.Storager) SavepointReader
 	locker                   projectLocker
+	sessionLocker            model.SessionLocker
 	inflight                 inflightMarkers
 	daemonCollectors         []DaemonCollector
 	composeProjectCollectors []ComposeProjectCollector
@@ -105,6 +108,7 @@ func New(deps Deps) *GarbageCollector {
 		sessions:                 deps.Sessions,
 		newSavepoints:            deps.NewSavepoints,
 		locker:                   deps.Locker,
+		sessionLocker:            deps.SessionLocker,
 		inflight:                 deps.Inflight,
 		daemonCollectors:         deps.DaemonCollectors,
 		composeProjectCollectors: deps.ComposeProjectCollectors,
@@ -117,8 +121,8 @@ func New(deps Deps) *GarbageCollector {
 }
 
 // GarbageCollect reports what every collector req selects finds in the session; only a dry
-// run exists.
-// The project lock keeps a blob a local capture reuses from reading as garbage.
+// run exists. The project lock and the session's lock keep a blob a capture reuses from
+// reading as garbage.
 func (s *GarbageCollector) GarbageCollect(
 	ctx context.Context, req model.GarbageCollectRequest,
 ) (model.GarbageCollectResult, error) {
@@ -130,11 +134,13 @@ func (s *GarbageCollector) GarbageCollect(
 	}
 	collectors := s.readCollectorSet(ctx, req.DataKinds)
 	return withUnlock(ctx, s.locker, func() (model.GarbageCollectResult, error) {
-		// Resolved outside the lock: a session removed since has no garbage, only a wrong answer.
-		if err := requireSession(ctx, s.sessions, s.session); err != nil {
-			return model.GarbageCollectResult{}, err
-		}
-		return s.findGarbage(ctx, req, collectors)
+		return withSessionLock(ctx, s.sessionLocker, func(ctx context.Context) (model.GarbageCollectResult, error) {
+			// Resolved outside the lock: a session removed since has no garbage, only a wrong answer.
+			if err := requireSession(ctx, s.sessions, s.session); err != nil {
+				return model.GarbageCollectResult{}, err
+			}
+			return s.findGarbage(ctx, req, collectors)
+		})
 	})
 }
 
@@ -151,6 +157,25 @@ func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, 
 		}
 	}()
 	return fn()
+}
+
+// withSessionLock runs fn holding the session's lock in the store, and unlocks it however fn
+// ends; a failed unlock is logged. fn runs on the lock's context: a lost lock cancels it with
+// model.ErrSessionLockLost as its cause.
+func withSessionLock[T any](
+	ctx context.Context, locker model.SessionLocker, fn func(ctx context.Context) (T, error),
+) (T, error) {
+	lockCtx, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationGarbageCollect)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("lock session: %w", err)
+	}
+	defer func() {
+		if err := grantedLock.Unlock(ctx); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
+		}
+	}()
+	return fn(lockCtx)
 }
 
 // requireSession refuses a session other than the default that has no record: one removed
