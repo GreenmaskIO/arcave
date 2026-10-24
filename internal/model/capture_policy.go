@@ -20,54 +20,6 @@ import (
 	"strings"
 )
 
-// LabelPrefix opens every label arcave reads as policy. io.arcave.* is not one:
-// those are stamps arcave writes itself, the capture stamps among them.
-const LabelPrefix = "arcave."
-
-// The labels a compose project sets its capture policy with.
-const (
-	// LabelCapture is "true" or "false": on a service, everything of it; on a
-	// named or anonymous volume, that volume.
-	LabelCapture = "arcave.capture"
-	// LabelBackend is a volume's backend token, on a named or anonymous volume.
-	LabelBackend = "arcave.backend"
-	// LabelVolumeBackend is a service's default backend token for its binds and
-	// anonymous volumes.
-	LabelVolumeBackend = "arcave.volume.backend"
-	// LabelMountsExclude lists, comma-separated, the mount targets of a service no
-	// savepoint captures; a named volume's target leaves the volume out.
-	LabelMountsExclude = "arcave.mounts.exclude"
-	// LabelMountsInclude lists the mount targets of a service a savepoint captures
-	// whatever the config says of their kind.
-	LabelMountsInclude = "arcave.mounts.include"
-	// LabelMountsFullCopy and LabelMountsCDC list the mount targets captured by that backend.
-	LabelMountsFullCopy = "arcave.mounts.fullcopy"
-	LabelMountsCDC      = "arcave.mounts.cdc"
-	// LabelWritableLayerCapture is "true" or "false": a service's containers' writable layers.
-	LabelWritableLayerCapture = "arcave.writable-layer.capture"
-	// LabelWritableLayerBackend is the layout a service's writable layers are stored in.
-	LabelWritableLayerBackend = "arcave.writable-layer.backend"
-	// LabelImageCapture is "true" or "false": the bytes of the image a service's image: names.
-	LabelImageCapture = "arcave.image.capture"
-)
-
-// The stamps a savepoint's spec carries, one per unit: what arcave decided and why. They
-// are arcave's statement, never read as policy, and reach the daemon on every container a
-// rollback builds.
-const (
-	// CaptureStampPrefix opens every capture stamp.
-	CaptureStampPrefix = "io.arcave.capture."
-	// StampWritableLayer is a service's writable layers.
-	StampWritableLayer = "io.arcave.capture.writable-layer"
-	// StampImage is the image a service's image: names.
-	StampImage = "io.arcave.capture.image"
-)
-
-// MountStamp is the stamp of the volume or bind a service mounts at target.
-func MountStamp(target string) string {
-	return fmt.Sprintf("io.arcave.capture.mount.%s", target)
-}
-
 // The parts of a stamp label's value: fields after its leading true or false, each
 // "<key>=<value>", joined by stampLabelSeparator.
 const (

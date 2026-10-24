@@ -37,6 +37,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -152,7 +153,7 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, err
 		}
 		record, found, err := r.load(ctx, id)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("load savepoint %s: %w", id, err)
 		}
 		if !found {
 			log.Ctx(ctx).Debug().Str("savepoint", id.String()).Msg("skipping incomplete savepoint: no record")
@@ -164,6 +165,41 @@ func (r *Repository) ListSavepoints(ctx context.Context) ([]model.Savepoint, err
 	return records, nil
 }
 
+// LoadSavepoints reads the record of every savepoint of ids, oldest first: one request per
+// record, and no listing of its own. One with no record, never committed or removed since,
+// is skipped.
+func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error) {
+	var records []model.Savepoint
+	for _, id := range ids {
+		if err := id.Validate(); err != nil {
+			return nil, fmt.Errorf("load savepoints: %w", err)
+		}
+		record, err := r.read(ctx, id)
+		if errors.Is(err, storages.ErrFileNotFound) {
+			log.Ctx(ctx).Debug().Str("savepoint", id.String()).Msg("skipping savepoint without a record")
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load savepoint %s: %w", id, err)
+		}
+		records = append(records, record)
+	}
+	slices.SortFunc(records, func(a, b model.Savepoint) int { return strings.Compare(a.ID.String(), b.ID.String()) })
+	return records, nil
+}
+
+// IsSavepointCommitted reports whether id's record stands now, read past any listing.
+func (r *Repository) IsSavepointCommitted(ctx context.Context, id model.SavepointID) (bool, error) {
+	if err := id.Validate(); err != nil {
+		return false, err
+	}
+	exists, err := r.storage.Exists(ctx, recordKey(id))
+	if err != nil {
+		return false, fmt.Errorf("stat savepoint record %s: %w", id, err)
+	}
+	return exists, nil
+}
+
 // load reads one savepoint's record. found is false when the namespace holds no
 // record, which means the savepoint never committed.
 func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {
@@ -172,15 +208,23 @@ func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Save
 	// missing key differently.
 	exists, err := r.storage.Exists(ctx, recordKey(id))
 	if err != nil {
-		return model.Savepoint{}, false, fmt.Errorf("stat savepoint record %s: %w", id, err)
+		return model.Savepoint{}, false, fmt.Errorf("stat record: %w", err)
 	}
 	if !exists {
 		return model.Savepoint{}, false, nil
 	}
+	record, err := r.read(ctx, id)
+	if err != nil {
+		return model.Savepoint{}, false, err
+	}
+	return record, true, nil
+}
 
+// read reads and decodes one savepoint's record, which must exist.
+func (r *Repository) read(ctx context.Context, id model.SavepointID) (model.Savepoint, error) {
 	obj, err := r.storage.GetObject(ctx, recordKey(id))
 	if err != nil {
-		return model.Savepoint{}, false, fmt.Errorf("read savepoint record %s: %w", id, err)
+		return model.Savepoint{}, fmt.Errorf("read record: %w", err)
 	}
 	defer func() {
 		if err := obj.Close(); err != nil {
@@ -190,9 +234,9 @@ func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Save
 
 	var record model.Savepoint
 	if err := json.NewDecoder(obj).Decode(&record); err != nil {
-		return model.Savepoint{}, false, fmt.Errorf("parse savepoint record %s: %w", id, err)
+		return model.Savepoint{}, fmt.Errorf("parse record: %w", err)
 	}
-	return record, true, nil
+	return record, nil
 }
 
 // DeleteSavepoint removes one savepoint's record. It is the uncommit: the caller must run

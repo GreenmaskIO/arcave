@@ -67,12 +67,22 @@ type MCPToolsService interface {
 // tool call invokes on return; they open no store and resolve no session.
 type MCPToolsServiceFactory func(ctx context.Context, project string) (svc MCPToolsService, release func(), err error)
 
+// MCPGCService is the MCP adapter's view of gc.
+type MCPGCService interface {
+	GarbageCollect(ctx context.Context, req model.GarbageCollectRequest) (model.GarbageCollectResult, error)
+}
+
+// MCPGCServiceFactory builds a gc for one tool call's session ref ("" is the current one),
+// plus the release the tool call invokes on return.
+type MCPGCServiceFactory func(ctx context.Context, session string) (svc MCPGCService, release func(), err error)
+
 // MCPHandler serves arcave's savepoint and session workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
 	serviceFactory        MCPServiceFactory
 	sessionFactory        MCPSessionServiceFactory
 	toolsFactory          MCPToolsServiceFactory
+	gcFactory             MCPGCServiceFactory
 	pinnedSession         model.SessionID
 	leftoverVolumesPolicy model.LeftoverVolumesPolicy
 }
@@ -81,12 +91,13 @@ type MCPHandler struct {
 // follow the current one, and leftoverVolumes is the project's rollback.leftover_volumes.
 func NewMCPHandler(
 	serviceFactory MCPServiceFactory, sessionFactory MCPSessionServiceFactory, toolsFactory MCPToolsServiceFactory,
-	pinnedSession model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
+	gcFactory MCPGCServiceFactory, pinnedSession model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
 ) *MCPHandler {
 	return &MCPHandler{
 		serviceFactory:        serviceFactory,
 		sessionFactory:        sessionFactory,
 		toolsFactory:          toolsFactory,
+		gcFactory:             gcFactory,
 		pinnedSession:         pinnedSession,
 		leftoverVolumesPolicy: leftoverVolumes,
 	}
@@ -162,6 +173,14 @@ const (
 		"or was never written. Read-only: nothing is stopped or written, and the file is returned as spec. " +
 		"Bind sources under the project's working directory are relative (./…) unless absolute_paths is set. " +
 		"The file carries every environment value the containers run with, secrets included."
+	descGC = "Report the garbage arcave left in one session's store and in the Docker daemon: savepoint " +
+		"data no record commits (failed or interrupted runs), deduplicated volumes no savepoint names, " +
+		"image layers no stored manifest lists, upstream images no savepoint names, and restored layers " +
+		"no container runs on. kinds narrows a run. Read-only: it deletes nothing and stops " +
+		"nothing, but holds the project lock while it reads, so a busy project is refused: retry when its " +
+		"command finishes. Each report lists the ops a real gc would run, with their bytes where known. " +
+		"The grace period defaults to the project's gc config. A session tree no record commits " +
+		"(a failed fork) is session_list's, with all set, not gc's."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +
@@ -179,7 +198,7 @@ type createInput struct {
 
 // createSavepoint snapshots every stateful mount in the project.
 func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in createInput) (*mcpsdk.CallToolResult, model.Savepoint, error) {
-	waitTimeout, err := parseWaitTimeout(in.WaitTimeout)
+	waitTimeout, err := parseToolDuration("wait_timeout", in.WaitTimeout)
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
@@ -200,17 +219,15 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	return nil, savepoint, nil
 }
 
-// parseWaitTimeout reads the bound a tool call named, in the same unit-bearing
-// form the config file uses ("2m", "90s") and retain_for already asks for. An
-// omitted field is the zero duration, which the service reads as "the project's
-// bound" — so an agent that does not care never has to name one.
-func parseWaitTimeout(s string) (time.Duration, error) {
+// parseToolDuration reads field's duration in the config's form ("2m", "90s"); an omitted
+// field is zero, which the service reads as the project's default.
+func parseToolDuration(field, s string) (time.Duration, error) {
 	if s == "" {
 		return 0, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("wait_timeout %q: want a unit-bearing value like 2m, 90s or 1h30m", s)
+		return 0, fmt.Errorf("%s %q: want a unit-bearing value like 2m, 90s or 1h30m", field, s)
 	}
 	return d, nil
 }
@@ -298,7 +315,7 @@ type rollbackInput struct {
 
 // rollback restores the environment to the referenced savepoint.
 func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in rollbackInput) (*mcpsdk.CallToolResult, model.RollbackResponse, error) {
-	waitTimeout, err := parseWaitTimeout(in.WaitTimeout)
+	waitTimeout, err := parseToolDuration("wait_timeout", in.WaitTimeout)
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
@@ -341,6 +358,47 @@ func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolR
 		return nil, composeGenerateOutput{}, composeProjectAbsentError(err, "the project argument")
 	}
 	return nil, composeGenerateOutput{ComposeProject: generated.ComposeProject, Services: generated.Services, Spec: string(generated.Spec)}, nil
+}
+
+// gcInput is gc's input schema; a grace left out keeps gc.restored_layer_grace, kinds every one.
+type gcInput struct {
+	Session            string                  `json:"session,omitempty" jsonschema:"the session to look in, by name or id; default the pinned or current session"`
+	RestoredLayerGrace string                  `json:"restored_layer_grace,omitempty" jsonschema:"how old an unused layer tag must be to count as garbage, as a Go duration such as 1h"`
+	Kinds              []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
+}
+
+// garbageCollectMCP reports the garbage in scope; it never deletes.
+func (h *MCPHandler) garbageCollectMCP(
+	ctx context.Context, _ *mcpsdk.CallToolRequest, in gcInput,
+) (*mcpsdk.CallToolResult, model.GarbageCollectResult, error) {
+	var grace *time.Duration
+	if in.RestoredLayerGrace != "" {
+		parsed, err := parseToolDuration("restored_layer_grace", in.RestoredLayerGrace)
+		if err != nil {
+			return nil, model.GarbageCollectResult{}, err
+		}
+		grace = &parsed
+	}
+	req := model.GarbageCollectRequest{
+		DryRun:             true,
+		DataKinds:          in.Kinds,
+		RestoredLayerGrace: grace,
+	}
+	if err := req.Validate(); err != nil {
+		return nil, model.GarbageCollectResult{}, err
+	}
+	svc, release, err := h.gcFactory(ctx, cmp.Or(in.Session, h.pinRef()))
+	if err != nil {
+		return nil, model.GarbageCollectResult{}, mcpError(err)
+	}
+	defer release()
+
+	result, err := svc.GarbageCollect(ctx, req)
+	if err != nil && !errors.Is(err, model.ErrGarbageCollectPartial) {
+		return nil, model.GarbageCollectResult{}, mcpError(err)
+	}
+	// A partial gc is still a report: what could not be judged is in it, aborted or failed.
+	return nil, result, nil
 }
 
 // sessionListInput is session_list's input schema.
@@ -550,6 +608,11 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_unset", Description: descSessionUnset,
 		OutputSchema: newOutputSchema[model.Session]()}, h.unsetSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "compose_generate", Description: descComposeGenerate}, h.generateComposeMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:         "gc",
+		Description:  descGC,
+		OutputSchema: newOutputSchema[model.GarbageCollectResult](),
+	}, h.garbageCollectMCP)
 
 	return srv
 }

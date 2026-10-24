@@ -54,6 +54,7 @@ Steps still in flight — `Waiting`, `Starting`, `Creating`, image-pull progress
 | [`session list`](cli/session.md#session-list) | an array of session entries — the record plus `status`, `current`, `savepoint_count`, `compose_projects`, `size_bytes` — newest first unless `--sort asc` |
 | [`session remove`](cli/session.md#session-remove) | `{"session": …, "removed": true, "freed_bytes": …}` |
 | [`tools generate-compose`](cli/tools_generate_compose.md) | `{"compose_project": …, "services": [ … ], "path": …}` — the compose file itself goes to `-o` |
+| [`gc`](cli/gc.md) | `{"dry_run": true, "session": …, "reports": [ … ], "savepoints": [ … ], "total": { … }}` — one report per kind and compose project of the session, and what each dead savepoint frees |
 | [`mcp`](cli/mcp.md) | nothing — the stream is the protocol |
 | [`status`](cli/status.md) | nothing; the command returns `not implemented` |
 

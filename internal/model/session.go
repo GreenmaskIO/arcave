@@ -120,9 +120,6 @@ type RemoveSessionResponse struct {
 	FreedBytes int64 `json:"freed_bytes"`
 }
 
-// HeartbeatOperationFork is session create --from in a heartbeat; its data is ForkHeartbeatData.
-const HeartbeatOperationFork = "fork"
-
 // ForkHeartbeatData is a fork heartbeat's data.
 type ForkHeartbeatData struct {
 	From SessionID `json:"from"`

@@ -122,6 +122,15 @@ var (
 
 	// ErrInvalidSortOrder reports a listing order other than asc or desc.
 	ErrInvalidSortOrder = errors.New("invalid sort order")
+
+	// ErrGarbageCollectNotImplemented refuses a gc that would delete: only a dry run exists yet.
+	ErrGarbageCollectNotImplemented = errors.New("garbage collection deletes nothing yet: only a dry run is supported")
+	// ErrInvalidGarbageCollectRequest reports a gc request arcave cannot act on: an unknown
+	// kind, no kind at all, or a negative grace period.
+	ErrInvalidGarbageCollectRequest = errors.New("invalid garbage collect request")
+	// ErrGarbageCollectPartial reports a gc in which some collector failed, could not judge
+	// its scope, or left objects unjudged; the result still carries every report.
+	ErrGarbageCollectPartial = errors.New("garbage collection was partial")
 )
 
 // AmbiguousSavepointNameError reports a name more than one savepoint carries;

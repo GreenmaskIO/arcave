@@ -101,8 +101,8 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	restored, err := env.daemon.ImageInspect(env.ctx, res.WritableLayers[0].Tag)
 	require.NoError(t, err)
 	require.NotNil(t, restored.Config)
-	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID.String(), restored.Config.Labels[model.BaseImageIDLabel])
-	assert.Equal(t, "busybox", restored.Config.Labels[model.BaseImageRefLabel])
+	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID.String(), restored.Config.Labels[string(model.SystemLabelBaseImageID)])
+	assert.Equal(t, "busybox", restored.Config.Labels[string(model.SystemLabelBaseImageRef)])
 
 	next, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "on-the-layer"})
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 
 	// The blob store is a sibling of the savepoints inside the compose project root, so it
 	// dies with the session the way everything else there does.
-	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
+	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
@@ -201,7 +201,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-rollback-tenant", project), engine, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),

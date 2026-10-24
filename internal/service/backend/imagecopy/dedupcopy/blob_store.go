@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -120,4 +122,33 @@ func (b *blobStore) lock(digest string) func() {
 			delete(b.locks, digest)
 		}
 	}
+}
+
+// StoredBlob is one blob in the shared blob store.
+type StoredBlob struct {
+	Digest string
+	// Key is the blob's key relative to the compose project store.
+	Key          string
+	Bytes        int64
+	LastModified time.Time
+}
+
+// NewStoredBlobs picks the blobs out of a listing of a compose project store; a key under the
+// blob store that is not a digest is not one of its blobs and is left out.
+func NewStoredBlobs(objects []storages.ObjectStat) []StoredBlob {
+	var blobs []StoredBlob
+	for _, object := range objects {
+		rest, inStore := strings.CutPrefix(object.Name, NamespaceBlobs+"/")
+		algorithm, digest, ok := strings.Cut(rest, "/")
+		if !inStore || !ok || algorithm != digestAlgorithm || !validDigest(digest) {
+			continue
+		}
+		blobs = append(blobs, StoredBlob{
+			Digest:       digest,
+			Key:          object.Name,
+			Bytes:        object.Size,
+			LastModified: object.LastModified,
+		})
+	}
+	return blobs
 }

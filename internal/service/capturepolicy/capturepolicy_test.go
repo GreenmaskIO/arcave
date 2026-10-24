@@ -104,8 +104,8 @@ func TestResolve(t *testing.T) {
 		},
 		{
 			name: "a service left out takes its layer, upstream and own mounts, and a volume only it mounts",
-			app:  map[string]string{model.LabelCapture: "false"},
-			db:   map[string]string{model.LabelCapture: "false"},
+			app:  map[string]string{string(model.CaptureLabelCapture): "false"},
+			db:   map[string]string{string(model.CaptureLabelCapture): "false"},
 			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
 			wantAnon: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
@@ -126,13 +126,13 @@ func TestResolve(t *testing.T) {
 		{
 			name: "the most specific label wins over the service's",
 			app: map[string]string{
-				model.LabelCapture:              "false",
-				model.LabelWritableLayerCapture: "true",
-				model.LabelWritableLayerBackend: "fullcopy",
-				model.LabelVolumeBackend:        "cdc",
+				string(model.CaptureLabelCapture):              "false",
+				string(model.CaptureLabelWritableLayerCapture): "true",
+				string(model.CaptureLabelWritableLayerBackend): "fullcopy",
+				string(model.CaptureLabelVolumeBackend):        "cdc",
 			},
-			anon:   map[string]string{model.LabelCapture: "true", model.LabelBackend: "fullcopy"},
-			pgdata: map[string]string{model.LabelBackend: "cdc"},
+			anon:   map[string]string{string(model.CaptureLabelCapture): "true", string(model.CaptureLabelBackend): "fullcopy"},
+			pgdata: map[string]string{string(model.CaptureLabelBackend): "cdc"},
 			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
 			wantAnon: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
@@ -149,9 +149,9 @@ func TestResolve(t *testing.T) {
 		{
 			name: "target lists exclude a mount and pick another's backend",
 			app: map[string]string{
-				model.LabelMountsExclude: "/app",
-				model.LabelMountsCDC:     " /cache ,",
-				model.LabelImageCapture:  "false",
+				string(model.CaptureLabelMountsExclude): "/app",
+				string(model.CaptureLabelMountsCDC):     " /cache ,",
+				string(model.CaptureLabelImageCapture):  "false",
 			},
 			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/app on service app")},
@@ -167,8 +167,8 @@ func TestResolve(t *testing.T) {
 		{
 			name: "a target is read as a clean path",
 			app: map[string]string{
-				model.LabelMountsExclude: "/app/",
-				model.LabelMountsCDC:     "/cache/.",
+				string(model.CaptureLabelMountsExclude): "/app/",
+				string(model.CaptureLabelMountsCDC):     "/cache/.",
 			},
 			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/app/ on service app")},
@@ -180,7 +180,7 @@ func TestResolve(t *testing.T) {
 		},
 		{
 			name:     "a named volume's own label leaves it out whatever its services say",
-			pgdata:   map[string]string{model.LabelCapture: "false"},
+			pgdata:   map[string]string{string(model.CaptureLabelCapture): "false"},
 			wantBind: byConfig(model.SnapshotBackendFullCopy),
 			wantAnon: byConfig(model.SnapshotBackendFullCopy),
 			wantData: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
@@ -211,7 +211,7 @@ func TestResolve(t *testing.T) {
 // A named volume one excluded service and one captured service share is captured.
 func TestResolve_SharedNamedVolumeStaysWhileOneServiceIsCaptured(t *testing.T) {
 	// Arrange
-	introspection := demoProject(map[string]string{model.LabelCapture: "false"}, nil, nil, nil)
+	introspection := demoProject(map[string]string{string(model.CaptureLabelCapture): "false"}, nil, nil, nil)
 	introspection.Project.Volumes[0].UsedBy = append(introspection.Project.Volumes[0].UsedBy,
 		model.ServiceReference{Service: "app", Target: "/shared"})
 
@@ -230,19 +230,19 @@ func TestResolve_Refuses(t *testing.T) {
 		wantMsg       string
 	}{
 		{name: "an unknown key", app: map[string]string{"arcave.captur": "false"}, wantMsg: `arcave.captur="false" on service app`},
-		{name: "a value not a bool", app: map[string]string{model.LabelCapture: "no"}, wantMsg: "want true or false"},
-		{name: "an unknown volume backend", app: map[string]string{model.LabelVolumeBackend: "rsync"}, wantMsg: "want fullcopy or cdc"},
-		{name: "an unknown image backend", app: map[string]string{model.LabelWritableLayerBackend: "copy"}, wantMsg: "want dedupcopy or fullcopy"},
-		{name: "a service label on a volume", pg: map[string]string{model.LabelWritableLayerCapture: "false"}, wantMsg: "on volume demo_pgdata"},
-		{name: "a volume label on a service", app: map[string]string{model.LabelBackend: "cdc"}, wantMsg: "not a label arcave reads here"},
+		{name: "a value not a bool", app: map[string]string{string(model.CaptureLabelCapture): "no"}, wantMsg: "want true or false"},
+		{name: "an unknown volume backend", app: map[string]string{string(model.CaptureLabelVolumeBackend): "rsync"}, wantMsg: "want fullcopy or cdc"},
+		{name: "an unknown image backend", app: map[string]string{string(model.CaptureLabelWritableLayerBackend): "copy"}, wantMsg: "want dedupcopy or fullcopy"},
+		{name: "a service label on a volume", pg: map[string]string{string(model.CaptureLabelWritableLayerCapture): "false"}, wantMsg: "on volume demo_pgdata"},
+		{name: "a volume label on a service", app: map[string]string{string(model.CaptureLabelBackend): "cdc"}, wantMsg: "not a label arcave reads here"},
 		{name: "a per-mount label", app: map[string]string{"arcave.mount./app.capture": "false"}, wantMsg: "not a label arcave reads here"},
-		{name: "a bad anonymous volume label", anon: map[string]string{model.LabelBackend: "x"}, wantMsg: "anonymous volume at /cache"},
-		{name: "a target mounting nothing", app: map[string]string{model.LabelMountsExclude: "/nope"}, wantMsg: "mounts nothing at /nope"},
-		{name: "a target of a tmpfs", app: map[string]string{model.LabelMountsExclude: "/tmp"}, wantMsg: "not a volume or bind of the service's own"},
+		{name: "a bad anonymous volume label", anon: map[string]string{string(model.CaptureLabelBackend): "x"}, wantMsg: "anonymous volume at /cache"},
+		{name: "a target mounting nothing", app: map[string]string{string(model.CaptureLabelMountsExclude): "/nope"}, wantMsg: "mounts nothing at /nope"},
+		{name: "a target of a tmpfs", app: map[string]string{string(model.CaptureLabelMountsExclude): "/tmp"}, wantMsg: "not a volume or bind of the service's own"},
 		{name: "a target in both backend lists", app: map[string]string{
-			model.LabelMountsCDC: "/app", model.LabelMountsFullCopy: "/app"}, wantMsg: "listed for both"},
+			string(model.CaptureLabelMountsCDC): "/app", string(model.CaptureLabelMountsFullCopy): "/app"}, wantMsg: "listed for both"},
 		{name: "a target both included and excluded", app: map[string]string{
-			model.LabelMountsInclude: "/app", model.LabelMountsExclude: "/app"}, wantMsg: "also in arcave.mounts.exclude"},
+			string(model.CaptureLabelMountsInclude): "/app", string(model.CaptureLabelMountsExclude): "/app"}, wantMsg: "also in arcave.mounts.exclude"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -272,34 +272,34 @@ func TestResolve_ServiceLabelsReachANamedVolume(t *testing.T) {
 	}{
 		{
 			name: "excluded",
-			db:   map[string]string{model.LabelMountsExclude: "/var/lib/postgresql/data"},
+			db:   map[string]string{string(model.CaptureLabelMountsExclude): "/var/lib/postgresql/data"},
 			want: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/var/lib/postgresql/data on service db")},
 		},
 		{
 			name:   "one service's exclusion wins over another's inclusion",
-			db:     map[string]string{model.LabelMountsInclude: "/var/lib/postgresql/data"},
-			shares: map[string]string{model.LabelMountsExclude: "/shared"},
+			db:     map[string]string{string(model.CaptureLabelMountsInclude): "/var/lib/postgresql/data"},
+			shares: map[string]string{string(model.CaptureLabelMountsExclude): "/shared"},
 			want: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(false, "arcave.mounts.exclude=/shared on service app")},
 		},
 		{
 			name: "its backend picked",
-			db:   map[string]string{model.LabelMountsCDC: "/var/lib/postgresql/data"},
+			db:   map[string]string{string(model.CaptureLabelMountsCDC): "/var/lib/postgresql/data"},
 			want: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
 				CaptureDecision: model.NewConfigDecision(true, "")},
 		},
 		{
 			name:     "a service's arcave.capture=true takes it back from the config",
-			db:       map[string]string{model.LabelCapture: "true"},
+			db:       map[string]string{string(model.CaptureLabelCapture): "true"},
 			namedOff: true,
 			want: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
 				CaptureDecision: byLabel(true, "arcave.capture=true on service db")},
 		},
 		{
 			name:    "two services naming different backends are refused",
-			db:      map[string]string{model.LabelMountsCDC: "/var/lib/postgresql/data"},
-			shares:  map[string]string{model.LabelMountsFullCopy: "/shared"},
+			db:      map[string]string{string(model.CaptureLabelMountsCDC): "/var/lib/postgresql/data"},
+			shares:  map[string]string{string(model.CaptureLabelMountsFullCopy): "/shared"},
 			wantErr: "services app and db name different backends for volume demo_pgdata",
 		},
 	}
@@ -335,7 +335,7 @@ func TestResolve_ConfigKinds(t *testing.T) {
 	captureNothing := defaults
 	captureNothing.SavepointCapture = SavepointCaptureSettings{}
 	introspection := demoProject(
-		map[string]string{model.LabelMountsInclude: "/app", model.LabelWritableLayerCapture: "true"},
+		map[string]string{string(model.CaptureLabelMountsInclude): "/app", string(model.CaptureLabelWritableLayerCapture): "true"},
 		nil, nil, nil)
 
 	// Act
@@ -357,10 +357,10 @@ func TestResolve_ConfigKinds(t *testing.T) {
 func TestResolve_IgnoresOtherLabels(t *testing.T) {
 	// Arrange
 	labels := map[string]string{
-		"com.docker.compose.project": "demo",
-		model.BaseImageIDLabel:       "sha256:x",
-		"org.opencontainers.title":   "app",
-		"arcave.version":             "1",
+		"com.docker.compose.project":         "demo",
+		string(model.SystemLabelBaseImageID): "sha256:x",
+		"org.opencontainers.title":           "app",
+		"arcave.version":                     "1",
 	}
 	introspection := demoProject(labels, nil, nil, map[string]string{"com.docker.compose.project": "demo"})
 	imageID := model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -383,7 +383,7 @@ func TestResolveWithoutLabels(t *testing.T) {
 	// Arrange
 	noBinds := defaults
 	noBinds.SavepointCapture.BindVolumes = false
-	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{model.LabelBackend: "x"}, nil)
+	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{string(model.CaptureLabelBackend): "x"}, nil)
 
 	// Act
 	policy, err := ResolveWithoutLabels(nopCtx(), introspection, noBinds)
@@ -400,7 +400,7 @@ func TestStamps(t *testing.T) {
 	// Arrange
 	noBinds := defaults
 	noBinds.SavepointCapture.BindVolumes = false
-	introspection := demoProject(map[string]string{model.LabelMountsCDC: "/cache"}, nil, nil, nil)
+	introspection := demoProject(map[string]string{string(model.CaptureLabelMountsCDC): "/cache"}, nil, nil, nil)
 	policy, err := Resolve(nopCtx(), introspection, noBinds)
 	require.NoError(t, err)
 
@@ -414,14 +414,14 @@ func TestStamps(t *testing.T) {
 		"io.arcave.capture.mount./app":     "false; origin=config; source=capture.volumes.bind=false in the config",
 		"io.arcave.capture.mount./cache":   "true; backend=cdc; origin=config",
 	}, got["app"])
-	assert.Equal(t, "true; backend=fullcopy; origin=config", got["db"][model.MountStamp("/var/lib/postgresql/data")])
+	assert.Equal(t, "true; backend=fullcopy; origin=config", got["db"][string(model.NewMountStampLabel("/var/lib/postgresql/data"))])
 }
 
 // A container a rollback builds carries the stamps beside the user's labels; the
 // stamps are never read, so the user's labels alone decide again.
 func TestStamps_AreNotReadBack(t *testing.T) {
 	// Arrange
-	user := map[string]string{model.LabelMountsExclude: "/app", model.LabelWritableLayerBackend: "fullcopy"}
+	user := map[string]string{string(model.CaptureLabelMountsExclude): "/app", string(model.CaptureLabelWritableLayerBackend): "fullcopy"}
 	introspection := demoProject(user, nil, nil, nil)
 	policy, err := Resolve(nopCtx(), introspection, defaults)
 	require.NoError(t, err)

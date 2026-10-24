@@ -273,14 +273,14 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, replicas []recor
 // repository carries the identity and the tag the savepoint, so `docker images`
 // reads as one row per savepoint under a row per replica.
 func restoredLayerTag(composeProject string, snapshotID model.SavepointID, capture model.WritableLayer) string {
-	return restoredImageRepository(composeProject, capture) + ":" + model.LayerTagPrefix + snapshotID.String()
+	return restoredImageRepository(composeProject, capture) + ":" + model.RestoredLayerTagPrefix + snapshotID.String()
 }
 
 // restoredImageRepository builds the repository half and keeps it addressable: the
 // base image is the one segment carrying no identity, so it is what gets cut when
 // the name would pass docker's cap, and the replica is still named without it.
 func restoredImageRepository(composeProject string, capture model.WritableLayer) string {
-	identity := model.LayerImageNamespace + "/" +
+	identity := model.RestoredLayerTagNamespace + "/" +
 		joinSegments(refSegment(composeProject), refSegment(capture.Service), strconv.Itoa(capture.Replica))
 
 	base := refSegment(capture.UpstreamImageRef)

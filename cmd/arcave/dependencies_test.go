@@ -15,18 +15,23 @@
 package main
 
 import (
+	"context"
 	"io"
+	"net"
 	"os"
 	"testing"
 
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
+	"github.com/greenmaskio/storages"
+	"github.com/greenmaskio/storages/directory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
+	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
@@ -532,4 +537,129 @@ func TestNewCaptureDefaults(t *testing.T) {
 			AnonymousVolumes: true,
 		},
 	}, got)
+}
+
+// A gc connects to a daemon that does not answer, and the restored-layer collector's probe says so:
+// the gc decides whether to leave the kind out or abort it.
+func TestNewDaemonCollectors_DaemonDoesNotAnswer(t *testing.T) {
+	// Arrange
+	_, dockerClientAPI, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
+	require.NoError(t, err)
+	engine := docker.NewEngine(dockerClientAPI)
+	t.Cleanup(func() { _ = engine.Close() })
+	collectors := newDaemonCollectors(config.Config{}, engine)
+
+	// Act
+	var probeErr error
+	for _, collector := range collectors {
+		if probe, ok := collector.(interface{ Probe(context.Context) error }); ok {
+			probeErr = probe.Probe(t.Context())
+		}
+	}
+
+	// Assert
+	require.Error(t, probeErr)
+}
+
+// Every data kind is resolved by exactly one collector, at the level its report names.
+func TestNewObjectCollectors(t *testing.T) {
+	// Arrange
+	_, dockerClientAPI, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
+	require.NoError(t, err)
+	engine := docker.NewEngine(dockerClientAPI)
+	t.Cleanup(func() { _ = engine.Close() })
+	type resolution struct {
+		collector model.GarbageCollectorKind
+		daemon    bool
+	}
+	want := map[model.GarbageDataKind]resolution{
+		model.GarbageDataKindRestoredLayers:      {collector: model.GarbageCollectorKindDockerLayerTags, daemon: true},
+		model.GarbageDataKindSavepointData:       {collector: model.GarbageCollectorKindSavepointDirectory},
+		model.GarbageDataKindUpstreamImages:      {collector: model.GarbageCollectorKindOCIImages},
+		model.GarbageDataKindImageLayers:         {collector: model.GarbageCollectorKindOCIBlobs},
+		model.GarbageDataKindDeduplicatedVolumes: {collector: model.GarbageCollectorKindResticRepositories},
+	}
+
+	// Act
+	got := map[model.GarbageDataKind][]resolution{}
+	for _, collector := range newDaemonCollectors(config.Config{}, engine) {
+		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind(), daemon: true})
+	}
+	for _, collector := range newComposeProjectCollectors(config.Config{}, engine) {
+		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind()})
+	}
+
+	// Assert
+	require.Len(t, want, len(model.GarbageDataKinds()), "the table names every data kind")
+	for dataKind, resolved := range want {
+		assert.Equal(t, []resolution{resolved}, got[dataKind], dataKind)
+	}
+	assert.Len(t, got, len(want), "no collector resolves a data kind arcave does not know")
+	var collectorKinds []model.GarbageCollectorKind
+	for _, resolved := range got {
+		for _, resolution := range resolved {
+			collectorKinds = append(collectorKinds, resolution.collector)
+		}
+	}
+	assert.ElementsMatch(t, model.GarbageCollectorKinds(), collectorKinds, "every collector kind is built once")
+}
+
+// newTestResticInspectorOpener is an opener over a fresh directory store, its containers on the
+// host network so that no daemon is asked.
+func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages.Storager) {
+	t.Helper()
+	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+	require.NoError(t, err)
+	return resticInspectorOpener{cfg: config.CDCWithDefaults(&config.CDCBackend{NetworkMode: config.NetworkModeHost})}, store
+}
+
+// The opener serves the compose project's repositories while the inspector is open.
+func TestResticInspectorOpener_Open(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	opener, store := newTestResticInspectorOpener(t)
+
+	// Act
+	inspector, err := opener.Open(ctx, store)
+
+	// Assert
+	require.NoError(t, err)
+	t.Cleanup(func() { inspector.Close(ctx) })
+	conn, err := net.Dial("tcp", inspector.(resticInspector).server.Listener.Addr().String())
+	require.NoError(t, err, "the server listens")
+	assert.NoError(t, conn.Close())
+}
+
+// An address the server cannot bind fails the open.
+func TestResticInspectorOpener_Open_AddressTaken(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	opener, store := newTestResticInspectorOpener(t)
+	opener.cfg.ServerAddress = listener.Addr().String()
+
+	// Act
+	_, err = opener.Open(ctx, store)
+
+	// Assert
+	assert.ErrorContains(t, err, "start the restic server")
+}
+
+// Close stops the server the open started.
+func TestResticInspector_Close(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	opener, store := newTestResticInspectorOpener(t)
+	inspector, err := opener.Open(ctx, store)
+	require.NoError(t, err)
+	address := inspector.(resticInspector).server.Listener.Addr().String()
+
+	// Act
+	inspector.Close(ctx)
+
+	// Assert
+	_, err = net.Dial("tcp", address)
+	assert.Error(t, err, "nothing listens once closed")
 }

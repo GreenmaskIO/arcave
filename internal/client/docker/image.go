@@ -21,9 +21,11 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
@@ -134,4 +136,61 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 		return false, fmt.Errorf("inspect image %s: %w", imageID, err)
 	}
 	return true, nil
+}
+
+// ListLayerImages lists every arcave/…:sp-<id> tag the daemon holds, with the image it names
+// and the origin that image's labels name.
+func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
+	summaries, err := e.api.ImageList(ctx, image.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("reference", model.RestoredLayerTagNamespace+"/*")),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list arcave images: %w", err)
+	}
+	var tagged []model.TaggedImage
+	for _, summary := range summaries {
+		refs := slices.DeleteFunc(slices.Clone(summary.RepoTags), func(ref string) bool {
+			return !model.ImageRef(ref).IsRestoredLayerTag()
+		})
+		if len(refs) == 0 {
+			continue
+		}
+		// The list leaves out when the image was tagged, which is what a gc's grace reads.
+		inspect, err := e.api.ImageInspect(ctx, summary.ID)
+		if cerrdefs.IsNotFound(err) {
+			continue // removed since the list
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect arcave image %s: %w", summary.ID, err)
+		}
+		origin, _ := model.ParseLayerOrigin(summary.Labels)
+		for _, ref := range refs {
+			tagged = append(tagged, model.TaggedImage{
+				Ref:      model.ImageRef(ref),
+				ImageID:  model.ImageDigestID(summary.ID),
+				Origin:   origin,
+				TaggedAt: inspect.Metadata.LastTagTime,
+			})
+		}
+	}
+	slices.SortFunc(tagged, func(a, b model.TaggedImage) int { return strings.Compare(string(a.Ref), string(b.Ref)) })
+	return tagged, nil
+}
+
+// ListContainerImages lists what every container, running or not, was created from: the
+// reference it names and the image that resolved to.
+func (e *Engine) ListContainerImages(ctx context.Context) ([]model.ContainerImage, error) {
+	containers, err := e.api.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers: %w", err)
+	}
+	images := make([]model.ContainerImage, 0, len(containers))
+	for _, summary := range containers {
+		images = append(images, model.ContainerImage{
+			ContainerID: summary.ID,
+			Ref:         model.ImageRef(summary.Image),
+			ImageID:     model.ImageDigestID(summary.ImageID),
+		})
+	}
+	return images, nil
 }

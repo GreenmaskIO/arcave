@@ -78,7 +78,7 @@ func findCapturePolicyDrift(previousProject, currentProject *types.Project) []ca
 		}
 		currentLabels := currentProject.Services[serviceName].Labels
 		for _, key := range slices.Sorted(maps.Keys(currentLabels)) {
-			if !strings.HasPrefix(key, model.CaptureStampPrefix) {
+			if !strings.HasPrefix(key, model.CaptureStampLabelPrefix) {
 				continue
 			}
 			previousStamp, ok := previousService.Labels[key]

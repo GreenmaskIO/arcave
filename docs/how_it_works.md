@@ -130,13 +130,16 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
  3.  Read the running project from the daemon, check the Docker version
  4.  Resolve the capture labels and render the compose spec
  5.  Stop the services
- 6.  Capture every volume
- 7.  Store each image
- 8.  Commit each container's writable layer
- 9.  Write project.yaml — the project's compose spec
-10.  Write savepoint.json — the commit marker
-11.  Start the services and wait for health checks
+ 6.  Write heartbeat.json — in progress, kept fresh until the record
+ 7.  Capture every volume
+ 8.  Store each image
+ 9.  Commit each container's writable layer
+10.  Write project.yaml — the project's compose spec
+11.  Write savepoint.json — the commit marker, then mark heartbeat.json done
+12.  Start the services and wait for health checks
 ```
+
+The heartbeat is what [`arcave gc`](reference/cli/gc.md) reads a savepoint directory without a record by: a fresh one is a capture still running, and a failed, stale or missing one is a capture that died. A failed capture marks it failed.
 
 Steps 2 through 4 run **while the project is still up**: a taken name, a Docker older than 25, a bad label or a spec arcave cannot render fails without stopping anything. A project with no containers — never started, or taken down with `docker compose down` — has nothing to capture, and `savepoint create` refuses it.
 

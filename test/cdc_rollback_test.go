@@ -128,9 +128,9 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 				require.NoError(t, err)
 				assert.True(t, exists, "%s has no repository under the compose project root", stat.Volume.ObjectID)
 			}
-			// The savepoint's own directory holds the record and the spec only: a cdc
-			// capture's bytes live in the repository, never under the savepoint.
-			assert.Equal(t, []string{"project.yaml", "savepoint.json"},
+			// The savepoint's own directory holds the record, the spec and the capture's
+			// heartbeat only: a cdc capture's bytes live in the repository, never under the savepoint.
+			assert.Equal(t, []string{"heartbeat.json", "project.yaml", "savepoint.json"},
 				objectNames(t, env.composeProjectStore, first.ID.String()))
 
 			// A capture after a small change must ship an increment rather than the
@@ -195,11 +195,11 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, committed, 1)
 	assert.Equal(t, savepoint.ID, committed[0].ID)
-	assert.Equal(t, []string{"project.yaml", "savepoint.json"},
+	assert.Equal(t, []string{"heartbeat.json", "project.yaml", "savepoint.json"},
 		objectNames(t, env.composeProjectStore, savepoint.ID.String()))
 	// Nothing of the backup is left beside the savepoint either: the compose project root
 	// holds that one savepoint directory and the repositories, and nothing else.
-	assert.Equal(t, []string{savepoint.ID.String(), cdc.RepoNamespace}, dirNames(t, env.composeProjectStore),
+	assert.Equal(t, []string{savepoint.ID.String(), cdc.NamespaceRepos}, dirNames(t, env.composeProjectStore),
 		"the backup's own directory is swept with it")
 }
 
@@ -217,13 +217,14 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	before := env.hashAll(t)
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
 	require.NoError(t, err)
-	sourceRepo := objectNames(t, env.composeProjectStore, cdc.RepoNamespace)
+	sourceRepo := objectNames(t, env.composeProjectStore, cdc.NamespaceRepos)
 	arcaveProjectStore := env.arcaveProjectStore(t)
 	sessions := core.NewSessionService(core.SessionDeps{
-		Sessions: sessionrepo.New(arcaveProjectStore),
-		Locker:   lock.New(env.projectRoot),
-		Inflight: inflightrepo.New(env.projectRoot),
-		Store:    arcaveProjectStore,
+		Sessions:      sessionrepo.New(arcaveProjectStore),
+		Locker:        lock.New(env.projectRoot),
+		Inflight:      inflightrepo.New(env.projectRoot),
+		Store:         arcaveProjectStore,
+		NewSavepoints: newSavepointReader,
 	})
 	clone, err := sessions.CreateSession(env.ctx, model.CreateSessionRequest{Name: "feat", From: "baseline"})
 	require.NoError(t, err)
@@ -237,12 +238,12 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before, env.hashAll(t), "the clone restores the savepoint's data")
 	for _, stat := range savepoint.Stats {
-		snapshot := cdc.RepoNamespace + "/" + stat.Volume.ObjectID + "/snapshots/" + resticPayload(t, stat).SnapshotObjectID
+		snapshot := cdc.NamespaceRepos + "/" + stat.Volume.ObjectID + "/snapshots/" + resticPayload(t, stat).SnapshotObjectID
 		exists, err := cloneStore.Exists(env.ctx, snapshot)
 		require.NoError(t, err)
 		assert.True(t, exists, "the clone holds %s", snapshot)
 	}
-	assert.Equal(t, sourceRepo, objectNames(t, env.composeProjectStore, cdc.RepoNamespace),
+	assert.Equal(t, sourceRepo, objectNames(t, env.composeProjectStore, cdc.NamespaceRepos),
 		"the rollback wrote into the clone's repository, never the source's")
 }
 
@@ -326,7 +327,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, composeProjectStore.Close()) })
 
-	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := composeProjectStore.SubStorage(cdc.NamespaceRepos, true)
 	require.NoError(t, err)
 	resticServer := rest.NewEcho(e.ctx, repo.NewResolver(resticRoot))
 	resticPort, err := rest.Serve(resticServer, "")

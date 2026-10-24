@@ -320,7 +320,7 @@ func matchRetargetedImage(service, ref string) any {
 func matchSafetySnapshot() any {
 	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
 		return req.SnapshotID.Validate() == nil &&
-			req.Labels[model.SafetySnapshotLabel] == model.SafetySnapshotLabelValue
+			req.Labels[model.SavepointLabelSafetySnapshot] == model.SavepointLabelSafetySnapshotValue
 	})
 }
 
@@ -348,4 +348,11 @@ type mockImageLookup struct{ mock.Mock }
 func (m *mockImageLookup) ImageRefExists(ctx context.Context, ref string) (bool, error) {
 	args := m.Called(ctx, ref)
 	return args.Bool(0), args.Error(1)
+}
+
+type mockSavepointReader struct{ mock.Mock }
+
+func (m *mockSavepointReader) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
+	args := m.Called(ctx)
+	return args.Get(0).([]model.Savepoint), args.Error(1)
 }

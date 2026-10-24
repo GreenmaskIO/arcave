@@ -50,13 +50,13 @@ func TestResolveUpstream(t *testing.T) {
 		{
 			name:  "a layer naming its upstream by label",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{BaseImageIDLabel: upstreamID.String(), BaseImageRefLabel: upstreamRef},
+			labels: map[string]string{string(SystemLabelBaseImageID): upstreamID.String(), string(SystemLabelBaseImageRef): upstreamRef},
 			wantID: upstreamID, want: upstreamRef, wantOK: true,
 		},
 		{
 			name:  "a layer whose label is no digest",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{BaseImageIDLabel: "postgres:16"},
+			labels: map[string]string{string(SystemLabelBaseImageID): "postgres:16"},
 		},
 		{
 			name:  "a layer carrying no labels",
@@ -92,30 +92,6 @@ func TestResolveUpstream(t *testing.T) {
 			assert.Equal(t, tt.wantID, id)
 			assert.Equal(t, tt.want, ref)
 			assert.Equal(t, tt.wantOK, ok)
-		})
-	}
-}
-
-func TestIsLayerRef(t *testing.T) {
-	tests := []struct {
-		ref  string
-		want bool
-	}{
-		{ref: layerRef, want: true},
-		{ref: "arcave/demo-db-1:sp-019e7044-8be8-7000-8000-000000000000", want: true},
-		{ref: "postgres:16"},
-		{ref: "arcave/demo-db-1:latest"},
-		{ref: "arcave/demo-db-1:sp-abc"},
-		{ref: "registry:5000/arcave/x:sp-019e7044-8be8-7000-8000-000000000000"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.ref, func(t *testing.T) {
-			// Act
-			got := IsLayerRef(tt.ref)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
 		})
 	}
 }

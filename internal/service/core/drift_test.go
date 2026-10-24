@@ -39,29 +39,29 @@ func stampedProject(labels types.Labels) *types.Project {
 }
 
 func TestFindCapturePolicyDrift(t *testing.T) {
-	cache := model.MountStamp("/cache")
+	cache := model.NewMountStampLabel("/cache")
 	tests := []struct {
 		name          string
 		previous, now types.Labels
 		want          []capturePolicyChange
 	}{
 		{name: "the same decision is no drift",
-			previous: types.Labels{cache: keptStamp}, now: types.Labels{cache: keptStamp}},
+			previous: types.Labels{string(cache): keptStamp}, now: types.Labels{string(cache): keptStamp}},
 		{name: "a unit left out since",
-			previous: types.Labels{cache: keptStamp}, now: types.Labels{cache: excludedStamp},
-			want: []capturePolicyChange{{service: "app", stampKey: cache, previous: keptStamp, current: excludedStamp}}},
+			previous: types.Labels{string(cache): keptStamp}, now: types.Labels{string(cache): excludedStamp},
+			want: []capturePolicyChange{{service: "app", stampKey: string(cache), previous: keptStamp, current: excludedStamp}}},
 		{name: "a backend changed since",
-			previous: types.Labels{cache: keptStamp}, now: types.Labels{cache: "true; backend=cdc; origin=label"},
-			want: []capturePolicyChange{{service: "app", stampKey: cache, previous: keptStamp, current: "true; backend=cdc; origin=label"}}},
+			previous: types.Labels{string(cache): keptStamp}, now: types.Labels{string(cache): "true; backend=cdc; origin=label"},
+			want: []capturePolicyChange{{service: "app", stampKey: string(cache), previous: keptStamp, current: "true; backend=cdc; origin=label"}}},
 		{name: "only the reason changed is no drift",
-			previous: types.Labels{cache: "false; origin=config; source=capture.volumes.anonymous=false in the config"},
-			now:      types.Labels{cache: excludedStamp}},
+			previous: types.Labels{string(cache): "false; origin=config; source=capture.volumes.anonymous=false in the config"},
+			now:      types.Labels{string(cache): excludedStamp}},
 		{name: "a unit only one spec has is topology",
-			previous: types.Labels{}, now: types.Labels{cache: excludedStamp}},
+			previous: types.Labels{}, now: types.Labels{string(cache): excludedStamp}},
 		{name: "a stamp that cannot be read claims nothing",
-			previous: types.Labels{cache: "yes"}, now: types.Labels{cache: excludedStamp}},
+			previous: types.Labels{string(cache): "yes"}, now: types.Labels{string(cache): excludedStamp}},
 		{name: "the user's own labels are not compared",
-			previous: types.Labels{model.LabelMountsExclude: "/cache"}, now: types.Labels{}},
+			previous: types.Labels{string(model.CaptureLabelMountsExclude): "/cache"}, now: types.Labels{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 		want     string
 	}{
 		{name: "a drift is warned of, naming the savepoint",
-			previous: stampedProject(types.Labels{model.MountStamp("/cache"): keptStamp}),
+			previous: stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): keptStamp}),
 			want:     `"message":"captured otherwise than in the latest savepoint"`},
 		{name: "a spec that cannot be read is only logged",
 			parseErr: errors.New("broken"),
@@ -117,7 +117,7 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 
 			// Act
 			svc.warnCapturePolicyDrift(ctx, []model.Savepoint{record},
-				stampedProject(types.Labels{model.MountStamp("/cache"): excludedStamp}))
+				stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): excludedStamp}))
 
 			// Assert
 			assert.Contains(t, logs.String(), tt.want)

@@ -131,7 +131,7 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 	}
 	assert.Subset(t, refs, []string{"busybox", "alpine:3.22"})
 	for _, ref := range refs {
-		assert.False(t, model.IsLayerRef(ref), "%s is an upstream, not arcave's tag", ref)
+		assert.False(t, model.ImageRef(ref).IsRestoredLayerTag(), "%s is an upstream, not arcave's tag", ref)
 	}
 	assert.ElementsMatch(t, upstreamIDs(first), env.storedUpstreams(t), "each upstream is stored once")
 

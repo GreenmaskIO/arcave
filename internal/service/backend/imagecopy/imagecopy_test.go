@@ -50,10 +50,14 @@ func demoRequest() model.WritableLayerCaptureRequest {
 	}
 }
 
+var demoOwner = model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}
+
 func demoUpstreamLabels() map[string]string {
 	return map[string]string{
-		model.BaseImageIDLabel:  upstreamID.String(),
-		model.BaseImageRefLabel: "postgres:16",
+		string(model.SystemLabelArcaveProject):  "app",
+		string(model.SystemLabelComposeProject): "demo",
+		string(model.SystemLabelBaseImageID):    upstreamID.String(),
+		string(model.SystemLabelBaseImageRef):   "postgres:16",
 	}
 }
 
@@ -241,7 +245,7 @@ func TestCopier_CaptureWritableLayer_StoresByTheRequestedBackend(t *testing.T) {
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
 	engine.On("RemoveImage", mock.Anything, imageID).Return(nil).Once()
 	dedup, full := &stubArchiver{}, &stubArchiver{}
-	copier := NewCopier(newStore(t), engine, map[model.ImageBackendKind]ImageArchiver{
+	copier := NewCopier(newStore(t), demoOwner, engine, map[model.ImageBackendKind]ImageArchiver{
 		model.ImageBackendDedupCopy: dedup,
 		model.ImageBackendFullCopy:  full,
 	}, dedup)
@@ -265,7 +269,7 @@ func TestCopier_RefusesAnUnknownBackend(t *testing.T) {
 	// Arrange: the imager carries no expectation, so any call fails the test.
 	ctx := zerolog.Nop().WithContext(context.Background())
 	engine := &mockImageEngine{}
-	copier := NewCopier(newStore(t), engine, map[model.ImageBackendKind]ImageArchiver{}, &stubArchiver{})
+	copier := NewCopier(newStore(t), demoOwner, engine, map[model.ImageBackendKind]ImageArchiver{}, &stubArchiver{})
 	restore := demoRestoreRequest()
 	restore.Layer.ImageBackend = ""
 
@@ -299,10 +303,10 @@ func TestCopier_CaptureWritableLayer_KeepsTheImageWhenTheArchiverFails(t *testin
 }
 
 func TestCopier_CaptureWritableLayer_StampsNoUpstreamItWasNotTold(t *testing.T) {
-	// Arrange: a broken chain leaves the upstream unknown.
+	// Arrange: a broken chain leaves the upstream unknown; the origin is always known.
 	ctx := zerolog.Nop().WithContext(context.Background())
 	engine := &mockImageEngine{}
-	engine.On("CommitContainer", mock.Anything, containerID, commitNote, map[string]string(nil)).
+	engine.On("CommitContainer", mock.Anything, containerID, commitNote, demoOwner.Labels()).
 		Return(imageID, nil).Once()
 	engine.On("SaveImage", mock.Anything, imageID).
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()
@@ -536,7 +540,7 @@ func demoRestoreRequest() model.WritableLayerRestoreRequest {
 
 // newCopier builds a copier whose every archiver, the images' included, is archiver.
 func newCopier(store storages.Navigator, engine dockerImageEngine, archiver ImageArchiver) *Copier {
-	return NewCopier(store, engine, map[model.ImageBackendKind]ImageArchiver{
+	return NewCopier(store, demoOwner, engine, map[model.ImageBackendKind]ImageArchiver{
 		model.ImageBackendDedupCopy: archiver,
 		model.ImageBackendFullCopy:  archiver,
 	}, archiver)

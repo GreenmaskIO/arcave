@@ -32,7 +32,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 )
 
 var (
@@ -510,38 +509,6 @@ func (s *recordingStorage) Delete(ctx context.Context, filePaths ...string) erro
 func (s *recordingStorage) DeleteAll(ctx context.Context, pathPrefix string) error {
 	s.calls = append(s.calls, "DeleteAll "+pathPrefix)
 	return s.Storager.DeleteAll(ctx, pathPrefix)
-}
-
-func TestRepository_ListSessionSavepoints(t *testing.T) {
-	// Arrange: one name in two compose projects is two savepoints, not a conflict.
-	ctx := context.Background()
-	store, root := newStore(t)
-	saveSavepoint := func(composeProject string, sp model.Savepoint) {
-		sub, err := store.SubStorage("sessions/"+sessionA.String()+"/compose/"+composeProject, true)
-		require.NoError(t, err)
-		require.NoError(t, sprepo.New(sub).SaveSavepoint(ctx, sp))
-	}
-	shop := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000100", Name: "v1"}
-	blog := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000200", Name: "v1"}
-	saveSavepoint("shop", shop)
-	saveSavepoint("blog", blog)
-	// A compose project whose only savepoint never committed.
-	writeObject(t, root, "sessions/"+sessionA.String()+"/compose/cache/019e843e-1650-7000-8000-000000000300/project.yaml",
-		"services: {}")
-	repo := New(store)
-
-	// Act
-	got, err := repo.ListSessionSavepoints(ctx, sessionA)
-	empty, emptyErr := repo.ListSessionSavepoints(ctx, model.DefaultSession)
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, []model.ComposeProjectSavepoints{
-		{ComposeProject: "blog", Savepoints: []model.Savepoint{blog}},
-		{ComposeProject: "shop", Savepoints: []model.Savepoint{shop}},
-	}, got)
-	require.NoError(t, emptyErr)
-	assert.Empty(t, empty)
 }
 
 // treeOf maps every file under dir, by its slash-separated path relative to dir, to its body.

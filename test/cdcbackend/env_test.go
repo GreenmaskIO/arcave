@@ -120,7 +120,7 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 	t.Cleanup(func() { assert.NoError(t, composeProjectStore.Close()) })
 
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := composeProjectStore.SubStorage(cdc.NamespaceRepos, true)
 	require.NoError(t, err)
 	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
 	port, err := rest.Serve(server, "")

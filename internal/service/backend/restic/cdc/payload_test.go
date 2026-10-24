@@ -55,7 +55,7 @@ func TestDecodePayload(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := decodePayload(tt.in)
+			got, err := DecodePayload(tt.in)
 
 			// Assert
 			if tt.wantErr {

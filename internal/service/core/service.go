@@ -15,6 +15,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 )
@@ -33,6 +35,12 @@ type savepointRepository interface {
 	SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error
 	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
 	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
+}
+
+// SavepointReader reads the savepoints of one compose project's store, for a service that
+// reads across compose projects; the DI root opens one per store.
+type SavepointReader interface {
+	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
 }
 
 type projectLocker interface {
@@ -131,13 +139,19 @@ type Deps struct {
 	MinDaemonMajor int
 	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
 	Concurrency int
+	// RunnerInfo identifies this process in a capture's heartbeat.
+	RunnerInfo heartbeat.RunnerInfo
+	// HeartbeatInterval and HeartbeatStaleAfter time a capture's heartbeat; zero keeps
+	// heartbeat.DefaultInterval and heartbeat.DefaultStaleAfter.
+	HeartbeatInterval   time.Duration
+	HeartbeatStaleAfter time.Duration
 }
 
 // Service orchestrates arcave's savepoint workflows over one store root.
 //
 // Every record travels with its data, in a repository over that one store. A
 // rollback's safety snapshot is an ordinary savepoint there, marked
-// model.SafetySnapshotLabel: hidden from a scanning selector, findable by id.
+// model.SavepointLabelSafetySnapshot: hidden from a scanning selector, findable by id.
 type Service struct {
 	savepointRepo           savepointRepository
 	projectLocker           projectLocker
@@ -158,6 +172,9 @@ type Service struct {
 	sessions                sessionLookup
 	minDaemonMajor          int
 	maxConcurrentOperations int
+	runnerInfo              heartbeat.RunnerInfo
+	heartbeatInterval       time.Duration
+	heartbeatStaleAfter     time.Duration
 }
 
 func New(deps Deps) *Service {
@@ -184,6 +201,9 @@ func New(deps Deps) *Service {
 		sessions:                deps.Sessions,
 		minDaemonMajor:          deps.MinDaemonMajor,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
+		runnerInfo:              deps.RunnerInfo,
+		heartbeatInterval:       cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
+		heartbeatStaleAfter:     cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 	}
 }
 
@@ -191,7 +211,7 @@ func New(deps Deps) *Service {
 // exist: one deleted since the command resolved it must not be written into again.
 func locked[T any](ctx context.Context, s *Service, fn func() (T, error)) (T, error) {
 	return withUnlock(ctx, s.projectLocker, func() (T, error) {
-		if err := s.requireSession(ctx); err != nil {
+		if err := requireSession(ctx, s.sessions, s.session); err != nil {
 			var zero T
 			return zero, err
 		}
@@ -218,17 +238,18 @@ func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, 
 	return fn()
 }
 
-// requireSession refuses a session other than the default that has no record.
-func (s *Service) requireSession(ctx context.Context) error {
-	if s.session == model.DefaultSession {
+// requireSession refuses a session other than the default that has no record: one resolved
+// outside the lock may have been removed since.
+func requireSession(ctx context.Context, sessions sessionLookup, id model.SessionID) error {
+	if id == model.DefaultSession {
 		return nil
 	}
-	_, found, err := s.sessions.LoadSession(ctx, s.session)
+	_, found, err := sessions.LoadSession(ctx, id)
 	if err != nil {
-		return fmt.Errorf("checking session %s: %w", s.session, err)
+		return fmt.Errorf("checking session %s: %w", id, err)
 	}
 	if !found {
-		return fmt.Errorf("%w: %s", model.ErrSessionNotFound, s.session)
+		return fmt.Errorf("%w: %s", model.ErrSessionNotFound, id)
 	}
 	return nil
 }

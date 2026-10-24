@@ -121,3 +121,10 @@ func (m *mockService) GenerateCompose(ctx context.Context, req model.GenerateCom
 	args := m.Called(ctx, req)
 	return args.Get(0).(model.GenerateComposeResponse), args.Error(1)
 }
+
+func (m *mockService) GarbageCollect(
+	ctx context.Context, req model.GarbageCollectRequest,
+) (model.GarbageCollectResult, error) {
+	args := m.Called(ctx, req)
+	return args.Get(0).(model.GarbageCollectResult), args.Error(1)
+}

@@ -185,7 +185,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 
 	// The blob store is a sibling of the savepoints inside the compose project root, so it
 	// dies with the session the way everything else there does.
-	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
+	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
@@ -196,7 +196,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		SpecCodec:          codec,
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), engine, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),

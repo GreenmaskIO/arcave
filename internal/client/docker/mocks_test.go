@@ -92,6 +92,11 @@ func (m *mockAPI) ImageInspect(ctx context.Context, imageID string, opts ...clie
 	return args.Get(0).(image.InspectResponse), args.Error(1)
 }
 
+func (m *mockAPI) ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+	args := m.Called(ctx, options)
+	return args.Get(0).([]image.Summary), args.Error(1)
+}
+
 func (m *mockAPI) ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
 	args := m.Called(ctx, ref, options)
 	return args.Get(0).(io.ReadCloser), args.Error(1)
@@ -121,6 +126,11 @@ func (m *mockAPI) ImageRemove(ctx context.Context, imageID string, options image
 func (m *mockAPI) Info(ctx context.Context) (system.Info, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(system.Info), args.Error(1)
+}
+
+func (m *mockAPI) Ping(ctx context.Context) (dockertypes.Ping, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(dockertypes.Ping), args.Error(1)
 }
 
 func (m *mockAPI) VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error) {

@@ -409,7 +409,7 @@ func TestNewServiceConfig_Image(t *testing.T) {
 			running: layerID, ref: layerRef,
 			images: map[model.ImageDigestID]image.InspectResponse{
 				layerID: labelled(map[string]string{
-					model.BaseImageIDLabel: upstreamID.String(), model.BaseImageRefLabel: "postgres:16",
+					string(model.SystemLabelBaseImageID): upstreamID.String(), string(model.SystemLabelBaseImageRef): "postgres:16",
 				}),
 				upstreamID: pulled,
 			},

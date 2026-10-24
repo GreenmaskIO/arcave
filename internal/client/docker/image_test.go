@@ -20,6 +20,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -47,8 +48,8 @@ func TestEngine_CommitContainer(t *testing.T) {
 
 	// Act
 	id, err := e.CommitContainer(context.Background(), "c0ffee", "arcave savepoint 019e7044-8800-7000-8000-000000000000", map[string]string{
-		model.BaseImageRefLabel: "postgres:16",
-		model.BaseImageIDLabel:  "sha256:bbbb",
+		string(model.SystemLabelBaseImageRef): "postgres:16",
+		string(model.SystemLabelBaseImageID):  "sha256:bbbb",
 	})
 
 	// Assert
@@ -248,4 +249,40 @@ func (b *trackedBody) Read(p []byte) (int, error) {
 func (b *trackedBody) Close() error {
 	b.closed = true
 	return b.ReadCloser.Close()
+}
+
+func TestEngine_ListLayerImages(t *testing.T) {
+	// Arrange
+	const layerRef = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000001"
+	api := &mockAPI{}
+	api.On("ImageList", mock.Anything, mock.Anything).Return([]image.Summary{
+		{
+			ID: "sha256:aaaa", RepoTags: []string{layerRef, "postgres:16"},
+			Labels: map[string]string{string(model.SystemLabelArcaveProject): "app", string(model.SystemLabelComposeProject): "demo"},
+		},
+		{ID: "sha256:bbbb", RepoTags: []string{"arcave/demo-db-2:sp-019e843e-1650-7000-8000-000000000001"}},
+		{ID: "sha256:cccc", RepoTags: []string{"arcave/demo-db-3:sp-019e843e-1650-7000-8000-000000000001"}},
+		{ID: "sha256:dddd", RepoTags: []string{"busybox:latest"}},
+	}, nil).Once()
+	taggedAt := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	api.On("ImageInspect", mock.Anything, "sha256:aaaa").
+		Return(image.InspectResponse{Metadata: image.Metadata{LastTagTime: taggedAt}}, nil).Once()
+	api.On("ImageInspect", mock.Anything, "sha256:bbbb").Return(image.InspectResponse{}, nil).Once()
+	api.On("ImageInspect", mock.Anything, "sha256:cccc").
+		Return(image.InspectResponse{}, cerrdefs.ErrNotFound).Once()
+	e := &Engine{api: api}
+
+	// Act
+	tagged, err := e.ListLayerImages(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []model.TaggedImage{
+		{
+			Ref: layerRef, ImageID: "sha256:aaaa", Origin: model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"},
+			TaggedAt: taggedAt,
+		},
+		{Ref: "arcave/demo-db-2:sp-019e843e-1650-7000-8000-000000000001", ImageID: "sha256:bbbb"},
+	}, tagged)
+	api.AssertExpectations(t)
 }

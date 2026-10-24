@@ -34,30 +34,26 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// "images" is a reserved key beside savepoint.json — no volume collides with it, every
+// volume ObjectID opens "volume-"; "replicas" names what follows it.
+const (
+	namespaceImages   = "images"
+	namespaceReplicas = "replicas"
+)
+
+// namespaceUpstream is where every image is kept, by content, under a compose project store.
+const namespaceUpstream = "shared/oci/images"
+
 // writableLayerStorage narrows a store root to the one writable layer a savepoint holds
 // for one replica. Both directions address it through here — the capture that writes
 // it and the restore that reads it back — so the gates stand here.
 func writableLayerStorage(
 	store storages.Navigator, snapshotID model.SavepointID, service string, replica int,
 ) (storages.Storager, error) {
-	// "images" is a reserved key beside savepoint.json — no volume collides with it,
-	// every volume ObjectID opens "volume-"; "replicas" names what follows it.
-	const (
-		imagesNamespace   = "images"
-		replicasNamespace = "replicas"
-	)
-
-	if err := snapshotID.Validate(); err != nil {
+	key, err := WritableLayerKey(snapshotID, service, replica)
+	if err != nil {
 		return nil, err
 	}
-	if service == "" {
-		return nil, fmt.Errorf("cannot address the image of an unnamed service")
-	}
-	if replica < 1 {
-		return nil, fmt.Errorf("service %s: replica number %d is not a replica", service, replica)
-	}
-
-	key := path.Join(snapshotID.String(), imagesNamespace, service, replicasNamespace, strconv.Itoa(replica))
 	imageStore, err := store.SubStorage(key, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at image %s: %w", key, err)
@@ -69,18 +65,38 @@ func writableLayerStorage(
 // content and belongs to no savepoint, so every savepoint naming the image shares
 // one copy; its blobs go to the shared blob store like any capture's.
 func imageStorage(store storages.Navigator, imageID model.ImageDigestID) (storages.Storager, error) {
-	const upstreamNamespace = "shared/oci/images"
-
-	if _, err := model.ParseImageDigestID(imageID.String()); err != nil {
+	key, err := ImageKey(imageID)
+	if err != nil {
 		return nil, err
 	}
-	algorithm, hex, _ := strings.Cut(imageID.String(), ":")
-	key := path.Join(upstreamNamespace, algorithm, hex)
 	imageStore, err := store.SubStorage(key, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at image %s: %w", key, err)
 	}
 	return imageStore, nil
+}
+
+// WritableLayerKey is where one replica's writable layer lives under a compose project store.
+func WritableLayerKey(snapshotID model.SavepointID, service string, replica int) (string, error) {
+	if err := snapshotID.Validate(); err != nil {
+		return "", err
+	}
+	if service == "" {
+		return "", fmt.Errorf("cannot address the image of an unnamed service")
+	}
+	if replica < 1 {
+		return "", fmt.Errorf("service %s: replica number %d is not a replica", service, replica)
+	}
+	return path.Join(snapshotID.String(), namespaceImages, service, namespaceReplicas, strconv.Itoa(replica)), nil
+}
+
+// ImageKey is where one image lives under a compose project store.
+func ImageKey(imageID model.ImageDigestID) (string, error) {
+	if _, err := model.ParseImageDigestID(imageID.String()); err != nil {
+		return "", err
+	}
+	algorithm, hex, _ := strings.Cut(imageID.String(), ":")
+	return path.Join(namespaceUpstream, algorithm, hex), nil
 }
 
 // dockerImageEngine is the Docker engine's image half, as the copier needs it: commit a
@@ -109,12 +125,15 @@ type Copier struct {
 	dockerImageEngine      dockerImageEngine
 	writableLayerArchivers map[model.ImageBackendKind]ImageArchiver
 	imageArchiver          ImageArchiver
+	origin                 model.LayerOrigin
 }
 
-// NewCopier binds a copier to the compose project store it works under, the archiver of
-// each backend a writable layer may name, and the one archiver every image is kept by.
+// NewCopier binds a copier to the compose project store it works under and the origin every
+// commit is stamped with, the archiver of each backend a writable layer may name, and the one
+// archiver every image is kept by.
 func NewCopier(
 	store storages.Navigator,
+	origin model.LayerOrigin,
 	dockerImageEngine dockerImageEngine,
 	writableLayerArchivers map[model.ImageBackendKind]ImageArchiver,
 	imageArchiver ImageArchiver,
@@ -124,6 +143,7 @@ func NewCopier(
 		dockerImageEngine:      dockerImageEngine,
 		writableLayerArchivers: writableLayerArchivers,
 		imageArchiver:          imageArchiver,
+		origin:                 origin,
 	}
 }
 
@@ -139,7 +159,8 @@ func (s *Copier) writableLayerArchiver(kind model.ImageBackendKind) (ImageArchiv
 
 // CaptureWritableLayer commits one stopped container, stores the committed image and
 // drops it from the daemon. The commit is stamped with the container's upstream, so a
-// container later rebuilt on this layer still names it.
+// container later rebuilt on this layer still names it, and with the copier's origin, so a
+// gc knows whose tag names it.
 func (s *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error) {
 	archiver, err := s.writableLayerArchiver(req.Backend)
 	if err != nil {
@@ -150,7 +171,7 @@ func (s *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLay
 		return model.WritableLayer{}, err
 	}
 	comment := "arcave savepoint " + req.SnapshotID.String()
-	imageID, err := s.dockerImageEngine.CommitContainer(ctx, req.Container.ID, comment, newUpstreamLabels(req.Container))
+	imageID, err := s.dockerImageEngine.CommitContainer(ctx, req.Container.ID, comment, s.newLayerLabels(req.Container))
 	if err != nil {
 		return model.WritableLayer{}, err
 	}
@@ -180,18 +201,15 @@ func (s *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLay
 	}, nil
 }
 
-// newUpstreamLabels are the labels a commit carries forward; none for what is
-// unknown, so a layer never names an upstream it was not told.
-func newUpstreamLabels(container model.ContainerRef) map[string]string {
-	var labels map[string]string
+// newLayerLabels are the labels a commit carries: the origin, and the upstream; none for an
+// upstream that is unknown, so a layer never names one it was not told.
+func (s *Copier) newLayerLabels(container model.ContainerRef) map[string]string {
+	labels := s.origin.Labels()
 	if container.UpstreamImageID != "" {
-		labels = map[string]string{model.BaseImageIDLabel: container.UpstreamImageID.String()}
+		labels[string(model.SystemLabelBaseImageID)] = container.UpstreamImageID.String()
 	}
 	if container.UpstreamImageRef != "" {
-		if labels == nil {
-			labels = map[string]string{}
-		}
-		labels[model.BaseImageRefLabel] = container.UpstreamImageRef
+		labels[string(model.SystemLabelBaseImageRef)] = container.UpstreamImageRef
 	}
 	return labels
 }

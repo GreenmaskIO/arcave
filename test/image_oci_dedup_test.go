@@ -57,7 +57,7 @@ import (
 const epochMarker = "/epoch-marker"
 
 // sharedBlobPrefix is where the shared blob store sits under one compose project root.
-const sharedBlobPrefix = dedupcopy.BlobPrefix
+const sharedBlobPrefix = dedupcopy.NamespaceBlobs
 
 // ociDedupEnv is the compose project for OCI blob-store deduplication tests.
 type ociDedupEnv struct {
@@ -108,7 +108,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(composeProjectStore, engine, blobStore),
+		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), engine, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),

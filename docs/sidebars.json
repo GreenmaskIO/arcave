@@ -148,6 +148,11 @@
                 },
                 {
                   "type": "doc",
+                  "id": "reference/cli/gc",
+                  "label": "gc"
+                },
+                {
+                  "type": "doc",
                   "id": "reference/cli/mcp",
                   "label": "mcp"
                 },

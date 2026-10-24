@@ -358,6 +358,13 @@ compose project is not running but its volumes survive: myapp_pgdata
 unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)
 ```
 
+## `gc`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `gc.restored_layer_grace` | duration | `0` | How long ago an unused layer tag must have been tagged before [`arcave gc`](cli/gc.md) counts it as garbage. No other kind has a grace: gc judges by the savepoints' status, never by age. |
+`--restored-layer-grace` overrides it for one run. What gc looks at is not configured: it looks at every kind of data, and `--kind` narrows one run.
+
 ## `backends`
 
 One optional subsection per backend. A project that never uses a backend does not configure it, and an absent section is not an error — arcave resolves the defaults either way, because a rollback restores through the backend its record names.

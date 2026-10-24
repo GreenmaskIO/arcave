@@ -55,6 +55,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/gc"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/layertag"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociblob"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
@@ -151,7 +157,7 @@ func newDependencies(
 	// its ObjectID, beside the compose project's savepoint directories. Resolved once and
 	// handed to both sides, so "the server serves exactly the tree cdc writes
 	// into" is visible in one place rather than kept by two call sites agreeing.
-	resticRoot, err := composeProjectStore.SubStorage(cdc.RepoNamespace, true)
+	resticRoot, err := composeProjectStore.SubStorage(cdc.NamespaceRepos, true)
 	if err != nil {
 		return nil, fmt.Errorf("initialise restic repository root: %w", err)
 	}
@@ -188,7 +194,11 @@ func newDependencies(
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	imageBackend, err := newImageBackend(composeProjectStore, engine)
+	origin := model.LayerOrigin{
+		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
+		ComposeProject: composeProject,
+	}
+	imageBackend, err := newImageBackend(composeProjectStore, origin, engine)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +228,8 @@ func newDependencies(
 		Session:         session.ID,
 		ComposeProject:  composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
-		Sessions: sessions,
+		Sessions:   sessions,
+		RunnerInfo: newRunnerInfo(),
 	})
 	opened.keep()
 	return &dependencies{
@@ -380,12 +391,13 @@ func newSessionService(
 	projectPath string, arcaveProjectStore storages.Storager, sessions *sessionrepo.Repository,
 ) *core.SessionService {
 	return core.NewSessionService(core.SessionDeps{
-		Sessions:   sessions,
-		Locker:     lock.New(projectPath),
-		Inflight:   inflightrepo.New(projectPath),
-		Current:    currentsession.New(projectPath),
-		Store:      arcaveProjectStore,
-		RunnerInfo: newRunnerInfo(),
+		Sessions:      sessions,
+		Locker:        lock.New(projectPath),
+		Inflight:      inflightrepo.New(projectPath),
+		Current:       currentsession.New(projectPath),
+		Store:         arcaveProjectStore,
+		NewSavepoints: newSavepointReader,
+		RunnerInfo:    newRunnerInfo(),
 	})
 }
 
@@ -585,13 +597,15 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerC
 
 // newImageBackend builds the image backend over both archivers a writable layer may name;
 // images are always deduplicated, which needs a daemon of Docker 25 or newer.
-func newImageBackend(composeProjectStore storages.Navigator, engine *docker.Engine) (*imagecopy.Copier, error) {
-	blobStore, err := composeProjectStore.SubStorage(dedupcopy.BlobPrefix, true)
+func newImageBackend(
+	composeProjectStore storages.Navigator, origin model.LayerOrigin, engine *docker.Engine,
+) (*imagecopy.Copier, error) {
+	blobStore, err := composeProjectStore.SubStorage(dedupcopy.NamespaceBlobs, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}
 	dedup := dedupcopy.New(blobStore)
-	return imagecopy.NewCopier(composeProjectStore, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
+	return imagecopy.NewCopier(composeProjectStore, origin, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
 		model.ImageBackendDedupCopy: dedup,
 		model.ImageBackendFullCopy:  imagefullcopy.New(),
 	}, dedup), nil
@@ -612,3 +626,134 @@ func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 		},
 	}
 }
+
+// gcDependencies is what gc runs on: the arcave project's store and the daemon. It holds no
+// printer, since arcave mcp builds one too.
+type gcDependencies struct {
+	store   storages.Storager
+	engine  *docker.Engine
+	service *gc.GarbageCollector
+}
+
+// newGCDependencies wires a gc over the session's compose projects, one collector per kind. The
+// daemon is only connected to here; whether it answers is the restored-layer collector's probe.
+func newGCDependencies(
+	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
+) (*gcDependencies, error) {
+	var opened partial
+	defer func() { opened.releaseOnFailure(ctx) }()
+
+	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	if err != nil {
+		return nil, err
+	}
+	opened.add("store root", root)
+
+	sessions := sessionrepo.New(arcaveProjectStore)
+	session, err := newSessionService(projectPath, arcaveProjectStore, sessions).ResolveSession(ctx, sessionRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve session: %w", err)
+	}
+	// A docker.* the config gets wrong fails every command alike.
+	_, dockerClientAPI, err := newDockerClient(cfg.Docker, io.Discard)
+	if err != nil {
+		return nil, err
+	}
+	engine := docker.NewEngine(dockerClientAPI)
+	opened.add("docker engine", engine)
+
+	deps := &gcDependencies{
+		store:  root,
+		engine: engine,
+	}
+	deps.service = gc.New(gc.Deps{
+		Store:                    arcaveProjectStore,
+		Session:                  session.ID,
+		Sessions:                 sessions,
+		NewSavepoints:            newGCSavepointReader,
+		Locker:                   lock.New(projectPath),
+		Inflight:                 inflightrepo.New(projectPath),
+		DaemonCollectors:         newDaemonCollectors(cfg, engine),
+		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
+		// resticrepo reads the repositories through restic, not the listing.
+		UnlistedNamespaces: []string{cdc.NamespaceRepos},
+		RestoredLayerGrace: cfg.GC.RestoredLayerGrace,
+		Concurrency:        cfg.Common.Concurrency,
+	})
+	opened.keep()
+	return deps, nil
+}
+
+func (d *gcDependencies) Close(ctx context.Context) error {
+	closeQuietly(ctx, "docker engine", d.engine)
+	return d.store.Close()
+}
+
+// newSavepointReader is the savepoint repository of a compose project's store, as a service
+// reading across compose projects sees it.
+func newSavepointReader(store storages.Storager) core.SavepointReader {
+	return sprepo.New(store)
+}
+
+// newGCSavepointReader is the savepoint repository of a compose project's store, as gc reads it.
+func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
+	return sprepo.New(store)
+}
+
+// newDaemonCollectors builds the collectors judging the daemon.
+func newDaemonCollectors(cfg config.Config, engine *docker.Engine) []gc.DaemonCollector {
+	return []gc.DaemonCollector{
+		layertag.New(engine, model.ArcaveProjectName(cfg.Project.Name)),
+	}
+}
+
+// newComposeProjectCollectors builds the collectors judging a compose project's store.
+func newComposeProjectCollectors(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectCollector {
+	return []gc.ComposeProjectCollector{
+		savepointdir.New(),
+		ociimage.New(),
+		ociblob.New(cfg.Common.Concurrency),
+		resticrepo.New(engine, resticInspectorOpener{
+			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
+			engine: engine,
+		}),
+	}
+}
+
+// resticInspectorOpener serves one compose project's restic repositories to a cdc.Inspector, as
+// newDependencies serves them to the cdc backend.
+type resticInspectorOpener struct {
+	cfg    config.CDCBackend
+	engine *docker.Engine
+}
+
+// Open starts the restic server over store's repositories; the inspector's Close stops it.
+func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
+	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
+	if err != nil {
+		return nil, fmt.Errorf("open restic repository root: %w", err)
+	}
+	hostNetwork, containerHost, err := resolveCDCTransport(ctx, o.cfg, o.engine)
+	if err != nil {
+		return nil, err
+	}
+	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
+	port, err := rest.Serve(server, o.cfg.ServerAddress)
+	if err != nil {
+		return nil, fmt.Errorf("start the restic server: %w", err)
+	}
+	return resticInspector{
+		Inspector: cdc.NewInspector(
+			o.engine, rest.RepositoryURLBase(o.cfg.ServerScheme, containerHost, port), newCDCOptions(o.cfg, hostNetwork),
+		),
+		server: server,
+	}, nil
+}
+
+// resticInspector is a cdc.Inspector with the server it reads through.
+type resticInspector struct {
+	*cdc.Inspector
+	server *echo.Echo
+}
+
+func (i resticInspector) Close(ctx context.Context) { shutdownResticServer(ctx, i.server) }

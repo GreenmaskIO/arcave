@@ -30,12 +30,12 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 const (
-	sessionsNamespace = "sessions"
+	namespaceSessions = "sessions"
 	recordName        = "session.json"
 	// copyConcurrency bounds the objects CopyAll copies at once.
 	copyConcurrency = 5
@@ -128,36 +128,6 @@ func (r *Repository) ListUncommittedSessions(ctx context.Context) ([]model.Sessi
 	return uncommitted, nil
 }
 
-// ListSessionSavepoints returns every committed savepoint of a session, grouped by compose
-// project and ordered by its name. A compose project holding none is left out.
-func (r *Repository) ListSessionSavepoints(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error) {
-	sessionStore, err := storefactory.Session(r.storage, id)
-	if err != nil {
-		return nil, fmt.Errorf("open session %s: %w", id, err)
-	}
-	names, err := storefactory.ComposeProjects(ctx, sessionStore)
-	if err != nil {
-		return nil, fmt.Errorf("list compose projects of session %s: %w", id, err)
-	}
-
-	groups := make([]model.ComposeProjectSavepoints, 0, len(names))
-	for _, name := range names {
-		composeProjectStore, err := storefactory.ComposeProject(sessionStore, name)
-		if err != nil {
-			return nil, fmt.Errorf("open compose project %s: %w", name, err)
-		}
-		savepoints, err := sprepo.New(composeProjectStore).ListSavepoints(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list savepoints of compose project %s: %w", name, err)
-		}
-		if len(savepoints) == 0 {
-			continue
-		}
-		groups = append(groups, model.ComposeProjectSavepoints{ComposeProject: name, Savepoints: savepoints})
-	}
-	return groups, nil
-}
-
 // SessionSize sums the size of every object under sessions/<id> — exactly what DeleteSession
 // frees, orphans and uncollected blobs included. An absent session measures 0.
 func (r *Repository) SessionSize(ctx context.Context, id model.SessionID) (int64, error) {
@@ -169,10 +139,7 @@ func (r *Repository) SessionSize(ctx context.Context, id model.SessionID) (int64
 	if err != nil {
 		return 0, fmt.Errorf("measure session %s: %w", id, err)
 	}
-	var size int64
-	for _, object := range objects {
-		size += object.Size
-	}
+	size, _ := utils.MeasureObjects(objects)
 	return size, nil
 }
 
@@ -238,9 +205,9 @@ func (r *Repository) DeleteSession(ctx context.Context, id model.SessionID) erro
 
 // sessionIDs returns the ids of the directories under sessions/, skipping any that is not one.
 func (r *Repository) sessionIDs(ctx context.Context) ([]model.SessionID, error) {
-	sessionsStore, err := r.storage.SubStorage(sessionsNamespace, true)
+	sessionsStore, err := r.storage.SubStorage(namespaceSessions, true)
 	if err != nil {
-		return nil, fmt.Errorf("re-root storage at %s: %w", sessionsNamespace, err)
+		return nil, fmt.Errorf("re-root storage at %s: %w", namespaceSessions, err)
 	}
 	_, dirs, err := sessionsStore.ListDir(ctx)
 	if err != nil {
@@ -298,7 +265,7 @@ func (r *Repository) load(ctx context.Context, id model.SessionID) (model.Sessio
 
 // sessionKey is the session's directory relative to the arcave project store.
 func sessionKey(id model.SessionID) string {
-	return path.Join(sessionsNamespace, id.String())
+	return path.Join(namespaceSessions, id.String())
 }
 
 // recordKey is the record's key relative to the arcave project store.

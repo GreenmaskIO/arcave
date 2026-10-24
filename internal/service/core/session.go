@@ -38,7 +38,6 @@ type sessionRepository interface {
 	ListSessions(ctx context.Context) ([]model.Session, error)
 	ListUncommittedSessions(ctx context.Context) ([]model.SessionID, error)
 	DeleteSession(ctx context.Context, id model.SessionID) error
-	ListSessionSavepoints(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error)
 	SessionSize(ctx context.Context, id model.SessionID) (int64, error)
 }
 
@@ -65,8 +64,11 @@ type SessionDeps struct {
 	Inflight inflightMarkers
 	// Current is the current-session pointer.
 	Current currentSessionPointer
-	// Store is the arcave project store a fork's heartbeat is written into and read from.
+	// Store is the arcave project store a fork's heartbeat is written into and read from, and a
+	// session's savepoints are listed off.
 	Store storages.Navigator
+	// NewSavepoints opens the savepoints of a compose project's store.
+	NewSavepoints func(store storages.Storager) SavepointReader
 	// RunnerInfo identifies this process in a fork's heartbeat.
 	RunnerInfo heartbeat.RunnerInfo
 	// HeartbeatInterval and HeartbeatStaleAfter time a fork's heartbeat; zero keeps
@@ -89,6 +91,8 @@ type SessionService struct {
 	// heartbeatWriter and heartbeatReader open the heartbeat of one session's tree.
 	heartbeatWriter func(id model.SessionID) (heartbeatWriter, error)
 	heartbeatReader func(id model.SessionID) (heartbeatReader, error)
+	// sessionSavepoints lists one session's committed savepoints by compose project.
+	sessionSavepoints func(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error)
 }
 
 func NewSessionService(deps SessionDeps) *SessionService {
@@ -114,6 +118,9 @@ func NewSessionService(deps SessionDeps) *SessionService {
 				return nil, err
 			}
 			return heartbeat.NewReader(sessionStore).SetStaleAfter(staleAfter), nil
+		},
+		sessionSavepoints: func(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error) {
+			return readSessionSavepoints(ctx, deps.Store, deps.NewSavepoints, id)
 		},
 	}
 }
@@ -485,7 +492,7 @@ func findSessionByID(sessions []model.Session, ref string) (model.Session, bool)
 
 // summarize counts what the session holds, safety snapshots excluded, and measures its tree.
 func (s *SessionService) summarize(ctx context.Context, session model.Session) (model.SessionSummary, error) {
-	groups, err := s.sessions.ListSessionSavepoints(ctx, session.ID)
+	groups, err := s.sessionSavepoints(ctx, session.ID)
 	if err != nil {
 		return model.SessionSummary{}, fmt.Errorf("session %s: %w", session.ID, err)
 	}
@@ -493,18 +500,61 @@ func (s *SessionService) summarize(ctx context.Context, session model.Session) (
 	if err != nil {
 		return model.SessionSummary{}, err
 	}
-	summary := model.SessionSummary{Session: session, ComposeProjects: []model.DockerComposeProjectName{}, SizeBytes: size}
+	var (
+		composeProjects = []model.DockerComposeProjectName{}
+		savepointCount  int
+	)
 	for _, group := range groups {
-		summary.ComposeProjects = append(summary.ComposeProjects, group.ComposeProject)
+		composeProjects = append(composeProjects, group.ComposeProject)
 		for _, savepoint := range group.Savepoints {
 			if !savepoint.IsSafetySnapshot() {
-				summary.SavepointCount++
+				savepointCount++
 			}
 		}
 	}
 	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Int("compose_projects", len(groups)).
-		Int("savepoints", summary.SavepointCount).Int64("size_bytes", size).Msg("session summarized")
-	return summary, nil
+		Int("savepoints", savepointCount).Int64("size_bytes", size).Msg("session summarized")
+	return model.SessionSummary{
+		Session:         session,
+		ComposeProjects: composeProjects,
+		SavepointCount:  savepointCount,
+		SizeBytes:       size,
+	}, nil
+}
+
+// readSessionSavepoints lists every committed savepoint of session id, grouped by compose
+// project and ordered by its name; a compose project holding none is left out.
+func readSessionSavepoints(
+	ctx context.Context, store storages.Navigator, newSavepoints func(storages.Storager) SavepointReader,
+	id model.SessionID,
+) ([]model.ComposeProjectSavepoints, error) {
+	sessionStore, err := storefactory.Session(store, id)
+	if err != nil {
+		return nil, fmt.Errorf("open session %s: %w", id, err)
+	}
+	names, err := storefactory.ComposeProjects(ctx, sessionStore)
+	if err != nil {
+		return nil, fmt.Errorf("list compose projects of session %s: %w", id, err)
+	}
+	groups := make([]model.ComposeProjectSavepoints, 0, len(names))
+	for _, name := range names {
+		composeProjectStore, err := storefactory.ComposeProject(sessionStore, name)
+		if err != nil {
+			return nil, fmt.Errorf("open compose project %s: %w", name, err)
+		}
+		savepoints, err := newSavepoints(composeProjectStore).ListSavepoints(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list savepoints of compose project %s: %w", name, err)
+		}
+		if len(savepoints) == 0 {
+			continue
+		}
+		groups = append(groups, model.ComposeProjectSavepoints{
+			ComposeProject: name,
+			Savepoints:     savepoints,
+		})
+	}
+	return groups, nil
 }
 
 // listUncommitted summarizes every tree without a record, with what its heartbeat says of it.

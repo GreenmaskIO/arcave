@@ -10,6 +10,18 @@ import ArcaveLockup from './assets/arcave-lockup-brand-on-light.svg';
 
 <ArcaveLockup width={320} style={{display: 'block', marginBottom: '2rem'}} />
 
+<p>
+  <a href="https://github.com/GreenmaskIO/arcave">
+    <img alt="GitHub repository" src="https://img.shields.io/badge/GitHub-GreenmaskIO%2Farcave-181717?logo=github&logoColor=white" />
+  </a>{' '}
+  <a href="https://github.com/GreenmaskIO/arcave/releases/latest">
+    <img alt="Latest release" src="https://img.shields.io/github/v/release/GreenmaskIO/arcave" />
+  </a>{' '}
+  <a href="https://github.com/GreenmaskIO/arcave/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/GreenmaskIO/arcave" />
+  </a>
+</p>
+
 # About
 
 **Ephemeral environments and branching for your Docker Compose project.**

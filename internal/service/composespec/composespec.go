@@ -371,15 +371,13 @@ func userLabels(labels map[string]string) types.Labels {
 		// desktopLabelPrefix marks what Docker Desktop stamps on every container it creates;
 		// it is the daemon's, not the user's, and means nothing outside Desktop.
 		desktopLabelPrefix = "desktop.docker.io/"
-		// arcaveLabelPrefix marks what arcave stamps on a committed layer; it is the image's
-		// statement about its upstream, not the service's.
-		arcaveLabelPrefix = "io.arcave."
 	)
 
 	kept := types.Labels{}
 	for key, value := range labels {
 		if !strings.HasPrefix(key, composeLabelPrefix) && !strings.HasPrefix(key, desktopLabelPrefix) &&
-			!strings.HasPrefix(key, arcaveLabelPrefix) {
+			// arcave's own labels: a committed layer's statement about its upstream, or a stamp.
+			!strings.HasPrefix(key, model.SystemLabelPrefix) {
 			kept[key] = value
 		}
 	}

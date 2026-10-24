@@ -176,7 +176,7 @@ func TestRepository_List(t *testing.T) {
 			plant: func(t *testing.T, root string) {
 				writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json", "{not json")
 			},
-			wantMsg: "parse savepoint record 019e844b-7818-7000-8000-000000000000",
+			wantMsg: "load savepoint 019e844b-7818-7000-8000-000000000000: parse record",
 		},
 	}
 
@@ -291,4 +291,87 @@ func TestRepository_LoadSpec_Missing(t *testing.T) {
 
 	// Assert
 	require.Error(t, err)
+}
+
+// LoadSavepoints reads the record of every id, oldest first, skipping a tree without one.
+func TestRepository_LoadSavepoints(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	store, root := newStore(t)
+	repo := New(store)
+	require.NoError(t, repo.SaveSavepoint(ctx, record("019e844b-7818-7000-8000-000000000000")))
+	require.NoError(t, repo.SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000000")))
+	writeObject(t, root, "019e8450-0000-7000-8000-000000000000/db/data/data.tar", "payload")
+
+	// Act
+	got, err := repo.LoadSavepoints(ctx, []model.SavepointID{
+		"019e844b-7818-7000-8000-000000000000", "019e843e-1650-7000-8000-000000000000", "019e8450-0000-7000-8000-000000000000",
+	})
+
+	// Assert
+	require.NoError(t, err)
+	ids := make([]string, 0, len(got))
+	for _, savepoint := range got {
+		ids = append(ids, savepoint.ID.String())
+	}
+	assert.Equal(t, []string{"019e843e-1650-7000-8000-000000000000", "019e844b-7818-7000-8000-000000000000"}, ids)
+}
+
+func TestRepository_LoadSavepoints_InvalidID(t *testing.T) {
+	// Arrange
+	store, _ := newStore(t)
+
+	// Act
+	_, err := New(store).LoadSavepoints(context.Background(), []model.SavepointID{"../etc"})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrInvalidSavepointID)
+}
+
+func TestRepository_LoadSavepoints_CorruptRecord(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	store, root := newStore(t)
+	writeObject(t, root, "019e844b-7818-7000-8000-000000000000/savepoint.json", "{not json")
+
+	// Act
+	_, err := New(store).LoadSavepoints(ctx, []model.SavepointID{"019e844b-7818-7000-8000-000000000000"})
+
+	// Assert
+	require.ErrorContains(t, err, "load savepoint 019e844b-7818-7000-8000-000000000000: parse record")
+}
+
+// IsSavepointCommitted reads the record itself: a tree without one is not committed.
+func TestRepository_IsSavepointCommitted(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      model.SavepointID
+		want    bool
+		wantErr error
+	}{
+		{name: "a stored record is committed", id: "019e843e-1650-7000-8000-000000000000", want: true},
+		{name: "a tree without a record is not", id: "019e844b-7818-7000-8000-000000000000"},
+		{name: "an invalid id is refused", id: "../escape", wantErr: model.ErrInvalidSavepointID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := context.Background()
+			store, root := newStore(t)
+			repo := New(store)
+			require.NoError(t, repo.SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000000")))
+			writeObject(t, root, "019e844b-7818-7000-8000-000000000000/heartbeat.json", "{}")
+
+			// Act
+			got, err := repo.IsSavepointCommitted(ctx, tt.id)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

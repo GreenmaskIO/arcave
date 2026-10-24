@@ -20,8 +20,8 @@ import "time"
 // it from an ordinary savepoint, and named by the service, the backends and both
 // adapters alike.
 const (
-	SafetySnapshotLabel      = "arcave-safety-snapshot"
-	SafetySnapshotLabelValue = "true"
+	SavepointLabelSafetySnapshot      = "arcave-safety-snapshot"
+	SavepointLabelSafetySnapshotValue = "true"
 )
 
 // SpecFormatComposeYAML is the format of a savepoint's spec artifact: a compose
@@ -60,5 +60,5 @@ type SpecRef struct {
 // IsSafetySnapshot reports whether this record is a rollback's undo rather than
 // a savepoint a user asked for.
 func (m Savepoint) IsSafetySnapshot() bool {
-	return m.Labels[SafetySnapshotLabel] == SafetySnapshotLabelValue
+	return m.Labels[SavepointLabelSafetySnapshot] == SavepointLabelSafetySnapshotValue
 }
