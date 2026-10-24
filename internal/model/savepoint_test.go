@@ -28,17 +28,17 @@ func TestSavepoint_IsSafetySnapshot(t *testing.T) {
 		labels map[string]string
 		want   bool
 	}{
-		{name: "the label a rollback stamps", labels: map[string]string{SafetySnapshotLabel: SafetySnapshotLabelValue}, want: true},
+		{name: "the label a rollback stamps", labels: map[string]string{SavepointLabelSafetySnapshot: SavepointLabelSafetySnapshotValue}, want: true},
 		{
 			name:   "beside labels of the user's own",
-			labels: map[string]string{"team": "payments", SafetySnapshotLabel: SafetySnapshotLabelValue},
+			labels: map[string]string{"team": "payments", SavepointLabelSafetySnapshot: SavepointLabelSafetySnapshotValue},
 			want:   true,
 		},
 		{name: "no labels at all", labels: nil},
 		{name: "other labels only", labels: map[string]string{"team": "payments"}},
 		// A key match is not enough: only the value arcave writes counts, so a user
 		// label that happens to share the key never hides a savepoint.
-		{name: "the key with another value", labels: map[string]string{SafetySnapshotLabel: "false"}},
+		{name: "the key with another value", labels: map[string]string{SavepointLabelSafetySnapshot: "false"}},
 	}
 
 	for _, tt := range tests {

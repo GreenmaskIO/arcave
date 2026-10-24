@@ -842,7 +842,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 				daemon.expectVolumes()
 				daemon.expectInspect("c-db-1")
 				daemon.expectNetworks()
-				daemon.expectImage(testImageID, map[string]string{model.BaseImageIDLabel: testBaseImageID.String()})
+				daemon.expectImage(testImageID, map[string]string{string(model.SystemLabelBaseImageID): testBaseImageID.String()})
 				daemon.On("ImageInspect", mock.Anything, testBaseImageID.String()).
 					Return(image.InspectResponse{}, daemonErr).Once()
 			},
@@ -883,7 +883,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 }
 
 func TestInspector_Introspect_Images(t *testing.T) {
-	labelledBase := map[string]string{model.BaseImageIDLabel: testBaseImageID.String()}
+	labelledBase := map[string]string{string(model.SystemLabelBaseImageID): testBaseImageID.String()}
 
 	tests := []struct {
 		name     string
@@ -928,7 +928,7 @@ func TestInspector_Introspect_Images(t *testing.T) {
 			name:     "a label that is no id is not followed",
 			replicas: []replica{{id: "c-web-1", service: "web", image: testImageID.String()}},
 			images: map[model.ImageDigestID]map[string]string{
-				testImageID: {model.BaseImageIDLabel: "postgres:16"},
+				testImageID: {string(model.SystemLabelBaseImageID): "postgres:16"},
 			},
 			want: []model.ImageDigestID{testImageID},
 		},

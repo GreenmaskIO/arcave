@@ -61,7 +61,7 @@ func safetySnapshotName(restoring model.SavepointID) string {
 // hides the record from every scanning selector, and a backend with somewhere to
 // put it renders it into its own store (cdc into a restic tag).
 func newSafetySnapshotLabels() map[string]string {
-	return map[string]string{model.SafetySnapshotLabel: model.SafetySnapshotLabelValue}
+	return map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
 }
 
 // Rollback restores the compose project to the referenced savepoint, putting the safety snapshot

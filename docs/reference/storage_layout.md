@@ -43,6 +43,7 @@ A session directory without `session.json` is not a session: no `--session` find
   019e843e-1650-7000-8000-000000000000/                                  a savepoint, named by its id
     savepoint.json                             the record — written last, and it is the commit
     project.yaml                               the compose spec the project was captured under
+    heartbeat.json                             the state of the capture that wrote the tree
     volume-named-myapp_pgdata/
       data.tar                                 a fullcopy capture of one volume
     images/app/replicas/1/                     one container's writable layer, dedupcopy
@@ -61,7 +62,7 @@ A session directory without `session.json` is not a session: no `--session` find
 
 A savepoint id is a canonical UUID, so a directory that is not one is never mistaken for a savepoint, and `shared/` and `restic/` cannot collide with a savepoint of any age.
 
-**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
+**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. Its `heartbeat.json` says whether that capture is still running or died, which is how [`arcave gc`](cli/gc.md) tells the two apart. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
 
 ## Object ids
 

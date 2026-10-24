@@ -28,8 +28,8 @@ func Stamps(introspection model.IntrospectionResult, capturePolicy model.Capture
 		stamps := map[string]string{}
 		serviceDecision := capturePolicy.DecideService(svc.Name)
 		writableLayer := serviceDecision.WritableLayer
-		stamps[model.StampWritableLayer] = stamp(writableLayer.CaptureDecision, string(writableLayer.Backend))
-		stamps[model.StampImage] = stamp(serviceDecision.Image, "")
+		stamps[string(model.SystemLabelWritableLayerStamp)] = stamp(writableLayer.CaptureDecision, string(writableLayer.Backend))
+		stamps[string(model.SystemLabelImageStamp)] = stamp(serviceDecision.Image, "")
 
 		for _, mount := range svc.Volumes {
 			var decision model.VolumeDecision
@@ -41,7 +41,7 @@ func Stamps(introspection model.IntrospectionResult, capturePolicy model.Capture
 			default:
 				continue
 			}
-			stamps[model.MountStamp(mount.Target)] = stamp(decision.CaptureDecision, string(decision.Backend))
+			stamps[string(model.NewMountStampLabel(mount.Target))] = stamp(decision.CaptureDecision, string(decision.Backend))
 		}
 		stampsByService[svc.Name] = stamps
 	}

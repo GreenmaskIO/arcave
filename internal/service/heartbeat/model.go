@@ -18,10 +18,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-)
 
-// Operation names the operation a heartbeat reports, and the shape of its Data.
-type Operation string
+	"github.com/greenmaskio/arcave/internal/model"
+)
 
 // RunnerInfo identifies the process an operation runs in.
 type RunnerInfo struct {
@@ -33,14 +32,14 @@ type RunnerInfo struct {
 // Heartbeat is what an operation writing a tree reports about itself. The tree's record, when
 // there is one, outranks it. Nothing may be decided from Data, which only the operation can read.
 type Heartbeat struct {
-	Operation  Operation       `json:"operation"`
-	Status     Status          `json:"status"`
-	RunnerInfo RunnerInfo      `json:"runner_info"`
-	StartedAt  time.Time       `json:"started_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
-	FinishedAt time.Time       `json:"finished_at,omitzero"`
-	Error      string          `json:"error,omitempty"`
-	Data       json.RawMessage `json:"data,omitempty"`
+	Operation  model.HeartbeatOperation `json:"operation"`
+	Status     Status                   `json:"status"`
+	RunnerInfo RunnerInfo               `json:"runner_info"`
+	StartedAt  time.Time                `json:"started_at"`
+	UpdatedAt  time.Time                `json:"updated_at"`
+	FinishedAt time.Time                `json:"finished_at,omitzero"`
+	Error      string                   `json:"error,omitempty"`
+	Data       json.RawMessage          `json:"data,omitempty"`
 }
 
 // StatusAt is the status the heartbeat stands for at now: an in-progress one is failed once

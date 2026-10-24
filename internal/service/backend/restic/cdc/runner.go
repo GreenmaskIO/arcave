@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -36,6 +37,9 @@ const (
 	messageTypeError     = "error"
 	messageTypeExitError = "exit_error"
 )
+
+// fatalPrefix opens the last line of a run without --json that failed.
+const fatalPrefix = "Fatal: "
 
 // resticCmd is one restic invocation: the arguments after "restic", and the
 // binds the container needs. Built before any container starts, so the execution
@@ -68,16 +72,16 @@ type resticProblem struct {
 	Message string `json:"message"`
 }
 
-// containerRunner is all this file needs of the engine: one throwaway container
+// ContainerRunner is all this file needs of the engine: one throwaway container
 // per restic command. The volume half of VolumeRunner is the snapshotter's.
-type containerRunner interface {
+type ContainerRunner interface {
 	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
 }
 
 // runner executes restic commands in one-shot containers of the stock image,
 // against one repository URL.
 type runner struct {
-	containers  containerRunner
+	containers  ContainerRunner
 	image       string
 	repoURL     string
 	hostNetwork bool
@@ -92,8 +96,31 @@ func (r runner) run(ctx context.Context, cmd resticCmd) (resticSummary, error) {
 	log := zerolog.Ctx(ctx)
 
 	var summary resticSummary
-	var fatal string
 	stdout := &lineWriter{emit: func(line string) { readResticStdout(log, line, &summary) }}
+	err := r.exec(ctx, cmd, stdout)
+	stdout.flush()
+	if err != nil {
+		return resticSummary{}, err
+	}
+	return summary, nil
+}
+
+// output executes one command and returns its stdout whole, for a command whose
+// output is one document rather than ndjson lines.
+func (r runner) output(ctx context.Context, cmd resticCmd) ([]byte, error) {
+	var stdout bytes.Buffer
+	if err := r.exec(ctx, cmd, &stdout); err != nil {
+		return nil, err
+	}
+	return stdout.Bytes(), nil
+}
+
+// exec runs one command in a one-shot container, its stdout to stdout; stderr is
+// logged, and its fatal line fronts the error of a failed run.
+func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error {
+	log := zerolog.Ctx(ctx)
+
+	var fatal string
 	stderr := &lineWriter{emit: func(line string) { readResticStderr(log, line, &fatal) }}
 
 	log.Debug().Strs("args", cmd.args).Msg("running restic")
@@ -111,15 +138,14 @@ func (r runner) run(ctx context.Context, cmd resticCmd) (resticSummary, error) {
 	})
 	// Flushed whatever the outcome: the last line of a failing run is the one
 	// worth having.
-	stdout.flush()
 	stderr.flush()
 	if err != nil {
 		if fatal != "" {
-			return resticSummary{}, fmt.Errorf("restic %s: %s: %w", strings.Join(cmd.args, " "), fatal, err)
+			return fmt.Errorf("restic %s: %s: %w", strings.Join(cmd.args, " "), fatal, err)
 		}
-		return resticSummary{}, fmt.Errorf("restic %s: %w", strings.Join(cmd.args, " "), err)
+		return fmt.Errorf("restic %s: %w", strings.Join(cmd.args, " "), err)
 	}
-	return summary, nil
+	return nil
 }
 
 // readResticStdout routes one line of restic's ndjson. A line that is not JSON
@@ -148,8 +174,11 @@ func readResticStdout(log *zerolog.Logger, line string, summary *resticSummary) 
 func readResticStderr(log *zerolog.Logger, line string, fatal *string) {
 	var msg resticProblem
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		// Not every failure is structured: a repository restic cannot open is
-		// reported before --json takes effect.
+		// An unopenable repository fails before --json takes effect, and a run
+		// without --json ends on a plain "Fatal: " line.
+		if message, isFatal := strings.CutPrefix(line, fatalPrefix); isFatal {
+			*fatal = message
+		}
 		log.Warn().Str("restic", line).Msg("restic stderr")
 		return
 	}

@@ -506,20 +506,20 @@ func TestUserLabels(t *testing.T) {
 		{
 			name: "compose, Docker Desktop and arcave labels are dropped",
 			labels: map[string]string{
-				api.ServiceLabel:                 "db",
-				"desktop.docker.io/ports.scheme": "v2",
-				model.BaseImageIDLabel:           "sha256:cc",
-				model.BaseImageRefLabel:          "postgres:16",
-				"tier":                           "data",
+				api.ServiceLabel:                      "db",
+				"desktop.docker.io/ports.scheme":      "v2",
+				string(model.SystemLabelBaseImageID):  "sha256:cc",
+				string(model.SystemLabelBaseImageRef): "postgres:16",
+				"tier":                                "data",
 			},
 			want: types.Labels{"tier": "data"},
 		},
-		{name: "nothing left renders as nil", labels: map[string]string{model.BaseImageRefLabel: "postgres:16"}, want: nil},
+		{name: "nothing left renders as nil", labels: map[string]string{string(model.SystemLabelBaseImageRef): "postgres:16"}, want: nil},
 		{
 			// The capture policy travels in the spec, so a rollback restores it with the topology.
 			name:   "the capture policy is kept",
-			labels: map[string]string{model.LabelCapture: "false", model.LabelMountsExclude: "/app"},
-			want:   types.Labels{model.LabelCapture: "false", model.LabelMountsExclude: "/app"},
+			labels: map[string]string{string(model.CaptureLabelCapture): "false", string(model.CaptureLabelMountsExclude): "/app"},
+			want:   types.Labels{string(model.CaptureLabelCapture): "false", string(model.CaptureLabelMountsExclude): "/app"},
 		},
 	}
 

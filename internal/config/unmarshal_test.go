@@ -91,6 +91,40 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
+			name: "gc defaults to no restored layer grace",
+			yaml: "project:\n  name: myapp\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Zero(t, cfg.GC.RestoredLayerGrace)
+			},
+		},
+		{
+			name: "the gc section is read",
+			yaml: "gc:\n  restored_layer_grace: 2h\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, 2*time.Hour, cfg.GC.RestoredLayerGrace)
+			},
+		},
+		{
+			name:       "gc names no kinds: the invocation narrows a run",
+			yaml:       "gc:\n  collect:\n    images: false\n",
+			wantErrMsg: "collect",
+		},
+		{
+			name:       "gc has no grace period: liveness is the savepoints' status",
+			yaml:       "gc:\n  grace_period: 24h\n",
+			wantErrMsg: "grace_period",
+		},
+		{
+			name:       "gc has no scope: it works on one session",
+			yaml:       "gc:\n  scope: project\n",
+			wantErrMsg: "scope",
+		},
+		{
+			name:       "a negative restored layer grace is rejected",
+			yaml:       "gc:\n  restored_layer_grace: -1h\n",
+			wantErrMsg: "gc.restored_layer_grace -1h0m0s is negative",
+		},
+		{
 			name: "the compose section is read",
 			yaml: "compose:\n  wait_timeout: 5m\n  stop_timeout: 1m30s\n  progress: tty\n",
 			verify: func(t *testing.T, cfg Config) {

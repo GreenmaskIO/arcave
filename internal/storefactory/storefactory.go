@@ -41,11 +41,11 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// storeNamespace is the static segment every arm must root its store under,
+// namespaceStore is the static segment every arm must root its store under,
 // appended to whatever the config names. It is not configurable: it guarantees
 // everything under the store root is arcave's own data, bounding every delete
 // to it — point the path at /etc and arcave operates in /etc/arcave.
-const storeNamespace = "arcave"
+const namespaceStore = "arcave"
 
 // warnHostKeyOnce keeps the ssh arm's host-key warning to one per process.
 var warnHostKeyOnce sync.Once
@@ -55,9 +55,9 @@ var warnHostKeyOnce sync.Once
 // points at it and a reader of the tree can tell a tenant from a lifetime
 // without knowing arcave's vocabulary.
 const (
-	projectsNamespace = "projects"
-	sessionsNamespace = "sessions"
-	composeNamespace  = "compose"
+	namespaceProjects = "projects"
+	namespaceSessions = "sessions"
+	namespaceCompose  = "compose"
 )
 
 // New opens the store at <path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>,
@@ -134,9 +134,9 @@ func openRoot(ctx context.Context, cfg config.Storage, projectRoot string) (stor
 }
 
 func openDirectory(cfg config.DirectoryStorage, projectRoot string) (storages.Storager, error) {
-	rootPath, prefix := projectRoot, path.Join(filepath.ToSlash(cfg.Path), storeNamespace)
+	rootPath, prefix := projectRoot, path.Join(filepath.ToSlash(cfg.Path), namespaceStore)
 	if filepath.IsAbs(cfg.Path) {
-		rootPath, prefix = cfg.Path, storeNamespace
+		rootPath, prefix = cfg.Path, namespaceStore
 	}
 	return directory.NewStorage(directory.Config{
 		RootPath: rootPath,
@@ -148,7 +148,7 @@ func openS3(ctx context.Context, cfg config.S3Storage) (storages.Storager, error
 	s3Cfg := s3.DefaultConfig()
 	s3Cfg.Endpoint = cfg.Endpoint
 	s3Cfg.Bucket = cfg.Bucket
-	s3Cfg.Prefix = path.Join(cfg.Prefix, storeNamespace)
+	s3Cfg.Prefix = path.Join(cfg.Prefix, namespaceStore)
 	s3Cfg.Region = cfg.Region
 	if cfg.StorageClass != "" {
 		s3Cfg.StorageClass = cfg.StorageClass
@@ -181,7 +181,7 @@ func openAzure(ctx context.Context, cfg config.AzureStorage) (storages.Storager,
 	azureCfg := azure.DefaultConfig()
 	azureCfg.Container = cfg.Container
 	azureCfg.StorageAccount = cfg.StorageAccount
-	azureCfg.Prefix = path.Join(cfg.Prefix, storeNamespace)
+	azureCfg.Prefix = path.Join(cfg.Prefix, namespaceStore)
 	azureCfg.AccessKey = cfg.AccessKey
 	azureCfg.SASToken = cfg.SASToken
 	azureCfg.Endpoint = cfg.Endpoint
@@ -209,7 +209,7 @@ func openSSH(ctx context.Context, cfg config.SSHStorage) (storages.Storager, err
 	sshCfg.Password = cfg.Password
 	sshCfg.PrivateKeyPath = cfg.PrivateKeyPath
 	sshCfg.PrivateKeyPassphrase = cfg.PrivateKeyPassphrase
-	sshCfg.Prefix = path.Join(cfg.Prefix, storeNamespace)
+	sshCfg.Prefix = path.Join(cfg.Prefix, namespaceStore)
 	if cfg.ConnectTimeout != 0 {
 		sshCfg.ConnectTimeout = cfg.ConnectTimeout
 	}
@@ -229,7 +229,7 @@ func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (stora
 	if err := name.Validate(); err != nil {
 		return nil, fmt.Errorf("validate arcave project name: %w", err)
 	}
-	return joinKind(root, projectsNamespace, name.String())
+	return joinKind(root, namespaceProjects, name.String())
 }
 
 // Session descends from an arcave project store to sessions/<id>.
@@ -237,7 +237,7 @@ func Session(arcaveProjectStore storages.Navigator, id model.SessionID) (storage
 	if err := id.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session id: %w", err)
 	}
-	return joinKind(arcaveProjectStore, sessionsNamespace, id.String())
+	return joinKind(arcaveProjectStore, namespaceSessions, id.String())
 }
 
 // ComposeProject descends from a session store to compose/<name>.
@@ -245,15 +245,15 @@ func ComposeProject(sessionStore storages.Navigator, name model.DockerComposePro
 	if err := ValidateComposeProjectName(name); err != nil {
 		return nil, fmt.Errorf("validate compose project name: %w", err)
 	}
-	return joinKind(sessionStore, composeNamespace, name.String())
+	return joinKind(sessionStore, namespaceCompose, name.String())
 }
 
 // ComposeProjects lists the compose projects a session holds, sorted by name. A
 // directory whose name the compose gate refuses is not one and is skipped.
 func ComposeProjects(ctx context.Context, sessionStore storages.Navigator) ([]model.DockerComposeProjectName, error) {
-	composeStore, err := sessionStore.SubStorage(composeNamespace, true)
+	composeStore, err := sessionStore.SubStorage(namespaceCompose, true)
 	if err != nil {
-		return nil, fmt.Errorf("re-root storage at %s: %w", composeNamespace, err)
+		return nil, fmt.Errorf("re-root storage at %s: %w", namespaceCompose, err)
 	}
 	_, dirs, err := composeStore.ListDir(ctx)
 	if err != nil {

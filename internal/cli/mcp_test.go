@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 func TestMCPHandler_createSavepointMCP(t *testing.T) {
@@ -47,7 +48,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	released := false
 	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 		return svc, func() { released = true }, nil
-	}, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	res, out, err := h.createSavepointMCP(context.Background(), nil, createInput{Project: "demo", Name: "before-migration"})
@@ -107,7 +108,7 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 				gotProject = project
 				return svc, func() { released = true }, nil
 			}
-			h := NewMCPHandler(factory, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+			h := NewMCPHandler(factory, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 			// Act
 			res, out, err := h.listSavepointsMCP(context.Background(), nil, tt.in)
@@ -128,7 +129,7 @@ func TestMCPHandler_listSavepointsMCP_ABadSortIsRefused(t *testing.T) {
 	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 		t.Fatal("a bad sort must not open the store")
 		return nil, nil, nil
-	}, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "demo", Sort: "newest"})
@@ -143,7 +144,7 @@ func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
 	svc := &mockService{}
 	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 		return nil, nil, wireErr
-	}, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, out, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "nope"})
@@ -176,7 +177,7 @@ func TestMCPHandler_openService_SessionPrecedence(t *testing.T) {
 				gotSession = session
 				return svc, func() {}, nil
 			}
-			h := NewMCPHandler(factory, nil, nil, tt.pin, model.LeftoverVolumesOverwrite)
+			h := NewMCPHandler(factory, nil, nil, nil, tt.pin, model.LeftoverVolumesOverwrite)
 
 			// Act
 			_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "demo", Session: tt.session})
@@ -195,7 +196,7 @@ func TestMCPHandler_ALockedProjectIsNamed(t *testing.T) {
 	svc.On("Rollback", mock.Anything, mock.Anything).Return(model.RollbackResult{}, model.ErrProjectLocked).Once()
 	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 		return svc, func() {}, nil
-	}, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, _, err := h.rollbackMCP(context.Background(), nil, rollbackInput{Project: "demo", Ref: "latest"})
@@ -229,7 +230,7 @@ func TestMCPHandler_listSessionsMCP(t *testing.T) {
 			svc := &mockService{}
 			svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true, Sort: model.SortDesc}).Return(tt.svc, nil).Once()
 			released := false
-			h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+			h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 			// Act
 			_, out, err := h.listSessionsMCP(context.Background(), nil, sessionListInput{All: true})
@@ -249,7 +250,7 @@ func TestMCPHandler_createSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("CreateSession", mock.Anything, model.CreateSessionRequest{Name: "exp", From: "baseline"}).Return(record, nil).Once()
 	released := false
-	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, out, err := h.createSessionMCP(context.Background(), nil, sessionCreateInput{Name: "exp", From: "baseline"})
@@ -267,7 +268,7 @@ func TestMCPHandler_removeSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("RemoveSession", mock.Anything, model.RemoveSessionRequest{Session: "exp", Force: true}).Return(res, nil).Once()
 	released := false
-	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, out, err := h.removeSessionMCP(context.Background(), nil, sessionRemoveInput{Session: "exp", Force: true})
@@ -285,7 +286,7 @@ func TestMCPHandler_setSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("SetSession", mock.Anything, "exp").Return(record, nil).Once()
 	released := false
-	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, out, err := h.setSessionMCP(context.Background(), nil, sessionSetInput{Session: "exp"})
@@ -301,7 +302,7 @@ func TestMCPHandler_setSessionMCP_RefusedWhenPinned(t *testing.T) {
 	// Arrange: strict mock, so a pinned server that writes the pointer fails the test.
 	svc := &mockService{}
 	released := false
-	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, handlerSession, model.LeftoverVolumesOverwrite)
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, handlerSession, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, _, err := h.setSessionMCP(context.Background(), nil, sessionSetInput{Session: "exp"})
@@ -350,7 +351,7 @@ func TestMCPHandler_unsetSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("UnsetSession", mock.Anything).Return(model.DefaultSessionRecord, nil).Once()
 	released := false
-	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, out, err := h.unsetSessionMCP(context.Background(), nil, struct{}{})
@@ -366,7 +367,7 @@ func TestMCPHandler_unsetSessionMCP_RefusedWhenPinned(t *testing.T) {
 	// Arrange: strict mock, so a pinned server that clears the pointer fails the test.
 	svc := &mockService{}
 	released := false
-	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, handlerSession, model.LeftoverVolumesOverwrite)
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, handlerSession, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, _, err := h.unsetSessionMCP(context.Background(), nil, struct{}{})
@@ -394,7 +395,7 @@ func TestMCPHandler_currentSessionMCP(t *testing.T) {
 			svc := &mockService{}
 			svc.On("ResolveSession", mock.Anything, tt.ref).Return(record, nil).Once()
 			released := false
-			h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, tt.pin, model.LeftoverVolumesOverwrite)
+			h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, tt.pin, model.LeftoverVolumesOverwrite)
 
 			// Act
 			_, out, err := h.currentSessionMCP(context.Background(), nil, struct{}{})
@@ -416,7 +417,7 @@ func TestMCPHandler_PinnedSessionTools(t *testing.T) {
 	svc.On("RemoveSession", mock.Anything, model.RemoveSessionRequest{Session: "feat", Pinned: handlerSession}).
 		Return(model.RemoveSessionResponse{}, model.ErrCurrentSessionDelete).Once()
 	released := false
-	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, handlerSession, model.LeftoverVolumesOverwrite)
+	h := NewMCPHandler(nil, sessionFactoryOf(svc, &released), nil, nil, handlerSession, model.LeftoverVolumesOverwrite)
 
 	// Act
 	_, _, listErr := h.listSessionsMCP(context.Background(), nil, sessionListInput{})
@@ -431,6 +432,11 @@ func TestMCPHandler_PinnedSessionTools(t *testing.T) {
 func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	savepoint := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "v1"}
 	record := model.Session{ID: handlerSession, Name: "feat", From: &model.SessionOrigin{Session: model.DefaultSession}}
+	// A partial gc is still a report; its session marshals as the string the schema says.
+	gcResult := model.GarbageCollectResult{DryRun: true, Session: handlerSession, Reports: []model.GarbageReport{{
+		DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo",
+		Summary: model.GarbageSummary{Aborted: "1 manifests of committed savepoints cannot be read"},
+	}}, Total: model.GarbageTotal{Aborted: 1}}
 	layers := []model.WritableLayerRestoreResult{{Service: "db", Replica: 1, ContainerName: "demo-db-1",
 		ImageID: model.ImageDigestID("sha256:" + strings.Repeat("a", 64)), Tag: "arcave/demo-db-1-postgres-16:sp-v1"}}
 	tests := []struct {
@@ -488,6 +494,13 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				svc.On("GenerateCompose", mock.Anything, model.GenerateComposeRequest{AbsolutePaths: true}).
 					Return(model.GenerateComposeResponse{ComposeProject: "demo", Services: []string{"db"}, Spec: []byte("name: demo\n")}, nil).Once()
 			}, want: composeGenerateOutput{ComposeProject: "demo", Services: []string{"db"}, Spec: "name: demo\n"}},
+		{tool: "gc", args: map[string]any{"restored_layer_grace": "1h", "kinds": []string{"upstream-images"}},
+			setup: func(svc *mockService) {
+				svc.On("GarbageCollect", mock.Anything, model.GarbageCollectRequest{
+					DryRun: true, RestoredLayerGrace: utils.New(time.Hour), DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages},
+				}).
+					Return(gcResult, model.ErrGarbageCollectPartial).Once()
+			}, want: gcResult},
 	}
 
 	// Arrange: one server for every case, over the SDK's own transport, so its schema checks run.
@@ -500,6 +513,8 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	}, func(context.Context) (MCPSessionService, func(), error) {
 		return svc, func() {}, nil
 	}, func(context.Context, string) (MCPToolsService, func(), error) {
+		return svc, func() {}, nil
+	}, func(context.Context, string) (MCPGCService, func(), error) {
 		return svc, func() {}, nil
 	}, model.SessionID{}, model.LeftoverVolumesOverwrite)
 	ctx := context.Background()
@@ -590,7 +605,7 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 			}
 			h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
 				return svc, func() {}, nil
-			}, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+			}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
 			// Pipes rather than the in-memory pair: an agent host that dies closes the server's
 			// stdin under a call in flight, which the SDK client's own Close never does.

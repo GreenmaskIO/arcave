@@ -210,6 +210,19 @@ type Container struct {
 	Inspect container.InspectResponse
 }
 
+// ImageID is the id of the image the container runs on; empty when the daemon
+// reported none or one that is no digest.
+func (m Container) ImageID() ImageDigestID {
+	if m.Inspect.ContainerJSONBase == nil {
+		return ""
+	}
+	id, err := ParseImageDigestID(m.Inspect.Image)
+	if err != nil {
+		return ""
+	}
+	return id
+}
+
 // Network is one network of the project. Nothing arcave captures lives in one;
 // it is reported because a compose project cannot be started again without it.
 type Network struct {
@@ -293,7 +306,7 @@ type IntrospectionResult struct {
 	// Daemon is what `docker info` reports.
 	Daemon system.Info
 	// Images are the images the compose project's containers run on and the base images those name
-	// by BaseImageIDLabel, keyed by id, verbatim.
+	// by SystemLabelBaseImageID, keyed by id, verbatim.
 	Images map[ImageDigestID]image.InspectResponse
 	// Volumes are the volumes the project owns and every other volume a container mounts,
 	// keyed by docker name, verbatim.

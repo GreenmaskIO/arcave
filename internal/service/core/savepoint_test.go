@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -34,6 +35,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	savepointrepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
 func TestService_CreateSavepoint(t *testing.T) {
@@ -540,8 +542,15 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	// Assert
 	require.Error(t, err)
 	names := objectNames(t, store)
-	require.Len(t, names, 1, "the archive the surviving volume wrote is kept for a gc")
-	assert.True(t, strings.HasSuffix(names[0], "/volume-named-demo_db/data.tar"), "kept = %v", names)
+	require.Len(t, names, 2, "the archive the surviving volume wrote is kept for a gc, beside its heartbeat")
+	assert.True(t, strings.HasSuffix(names[0], "/"+heartbeat.FileName), "kept = %v", names)
+	assert.True(t, strings.HasSuffix(names[1], "/volume-named-demo_db/data.tar"), "kept = %v", names)
+	tree, err := store.SubStorage(path.Dir(names[0]), true)
+	require.NoError(t, err)
+	beat, err := heartbeat.NewReader(tree).Read(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, heartbeat.StatusFailed, beat.Status, "a gc reads the tree as dead")
+	assert.Equal(t, model.HeartbeatOperationSavepoint, beat.Operation)
 	// And it lists as nothing: no record names the directory, so it is invisible.
 	committed, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
@@ -871,6 +880,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 		[]string{
 			savepoint.ID.String() + "/savepoint.json",
 			savepoint.ID.String() + "/project.yaml",
+			savepoint.ID.String() + "/" + heartbeat.FileName,
 			savepoint.ID.String() + "/volume-named-demo_db/data.tar",
 		},
 		objectNames(t, store),
@@ -1566,6 +1576,7 @@ func TestService_CreateSavepoint_RestartsAfterAnInterrupt(t *testing.T) {
 			wantErr: "interrupted: context canceled",
 		},
 		{
+			// The capture stops at its first beat, before any volume is read.
 			name:    "capture interrupted",
 			wantErr: "capturing volumes",
 		},
@@ -1594,10 +1605,6 @@ func TestService_CreateSavepoint_RestartsAfterAnInterrupt(t *testing.T) {
 			backend := &mockBackend{volume: model.Volume{ObjectID: "volume-named-demo_db"}}
 			registry := &mockRegistry{}
 			registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
-			if tt.stopErr == nil {
-				backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
-					Return(model.SnapshotStat{}, context.Canceled).Once()
-			}
 
 			svc := New(Deps{
 				VolumeRemover:    &mockVolumeRemover{},

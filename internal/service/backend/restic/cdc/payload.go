@@ -37,10 +37,10 @@ type Payload struct {
 	TotalBytesProcessed int64  `json:"total_bytes_processed"`
 }
 
-// decodePayload reads back what a capture reported. A record that has been
+// DecodePayload reads back what a capture reported. A record that has been
 // through the store arrives as a map[string]any, so the JSON round trip is the
 // normal path, not a fallback.
-func decodePayload(stored any) (Payload, error) {
+func DecodePayload(stored any) (Payload, error) {
 	if payload, ok := stored.(Payload); ok {
 		return payload, nil
 	}

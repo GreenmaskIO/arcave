@@ -14,14 +14,31 @@
 
 package model
 
-// BaseImageIDLabel names, on an image arcave committed, the id of the image the user's
-// compose file named: after a rollback the container runs on an arcave/…:sp-<id> tag, and
-// this label is what still points past it to the true base.
-const BaseImageIDLabel = "io.arcave.base-image-id"
+// LayerOrigin is the arcave project and compose project a writable layer was committed under.
+type LayerOrigin struct {
+	ArcaveProject  ArcaveProjectName
+	ComposeProject DockerComposeProjectName
+}
 
-// BaseImageRefLabel names, beside BaseImageIDLabel, the reference the user's compose
-// file named that image by.
-const BaseImageRefLabel = "io.arcave.base-image-ref"
+// Labels spells the origin out as the labels a commit stamps.
+func (m LayerOrigin) Labels() map[string]string {
+	return map[string]string{
+		string(SystemLabelArcaveProject):  m.ArcaveProject.String(),
+		string(SystemLabelComposeProject): m.ComposeProject.String(),
+	}
+}
+
+// ParseLayerOrigin reads the origin an image's labels name; ok is false unless both are set.
+func ParseLayerOrigin(labels map[string]string) (LayerOrigin, bool) {
+	origin := LayerOrigin{
+		ArcaveProject:  ArcaveProjectName(labels[string(SystemLabelArcaveProject)]),
+		ComposeProject: DockerComposeProjectName(labels[string(SystemLabelComposeProject)]),
+	}
+	if origin.ArcaveProject == "" || origin.ComposeProject == "" {
+		return LayerOrigin{}, false
+	}
+	return origin, true
+}
 
 // ContainerRef names one replica of one service. Replica is
 // com.docker.compose.container-number, counted from 1.

@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/greenmaskio/storages"
+	"github.com/greenmaskio/storages/inmemory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -227,7 +229,7 @@ func TestSessionService_ListSessions(t *testing.T) {
 	newer := sessionRecord(demoSession, "new", sessionNow)
 	repo := &mockSessionRepo{}
 	repo.On("ListSessions", mock.Anything).Return([]model.Session{newer, model.DefaultSessionRecord, older}, nil).Once()
-	safety := model.Savepoint{Labels: map[string]string{model.SafetySnapshotLabel: model.SafetySnapshotLabelValue}}
+	safety := model.Savepoint{Labels: map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}}
 	repo.On("ListSessionSavepoints", mock.Anything, model.DefaultSession).Return([]model.ComposeProjectSavepoints{
 		{ComposeProject: "blog", Savepoints: []model.Savepoint{{}, safety}},
 		{ComposeProject: "shop", Savepoints: []model.Savepoint{{}}},
@@ -240,6 +242,7 @@ func TestSessionService_ListSessions(t *testing.T) {
 	repo.On("SessionSize", mock.Anything, otherSession).Return(int64(0), nil).Once()
 	repo.On("SessionSize", mock.Anything, demoSession).Return(int64(512), nil).Once()
 	svc := NewSessionService(SessionDeps{Current: &fakePointer{}, Sessions: repo})
+	svc.sessionSavepoints = repo.ListSessionSavepoints
 
 	// Act
 	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Sort: model.SortAsc})
@@ -276,6 +279,7 @@ func TestSessionService_ListSessions_Sort(t *testing.T) {
 			repo.On("ListSessionSavepoints", mock.Anything, mock.Anything).Return([]model.ComposeProjectSavepoints(nil), nil)
 			repo.On("SessionSize", mock.Anything, mock.Anything).Return(int64(0), nil)
 			svc := NewSessionService(SessionDeps{Current: &fakePointer{}, Sessions: repo})
+			svc.sessionSavepoints = repo.ListSessionSavepoints
 
 			// Act
 			got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Sort: tt.sort})
@@ -319,6 +323,7 @@ func TestSessionService_ListSessions_All(t *testing.T) {
 	repo.On("ListSessionSavepoints", mock.Anything, mock.Anything).Return([]model.ComposeProjectSavepoints(nil), nil)
 	repo.On("SessionSize", mock.Anything, mock.Anything).Return(int64(0), nil)
 	svc := NewSessionService(SessionDeps{Current: &fakePointer{}, Sessions: repo})
+	svc.sessionSavepoints = repo.ListSessionSavepoints
 	svc.heartbeatReader = readBeats(beats, map[model.SessionID]error{unreadable: errRead})
 	origin := &model.SessionOrigin{Session: model.DefaultSession}
 	row := func(id model.SessionID, at time.Time, from *model.SessionOrigin, status model.SessionStatus,
@@ -792,7 +797,7 @@ func TestSessionService_RemoveSession_Uncommitted(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  heartbeat.Status // the heartbeat's; empty is none
-		op      heartbeat.Operation
+		op      model.HeartbeatOperation
 		readErr error
 		force   bool
 		wantErr error
@@ -1082,6 +1087,7 @@ func TestSessionService_ListSessions_MarksTheCurrentSession(t *testing.T) {
 	repo.On("ListSessionSavepoints", mock.Anything, mock.Anything).Return([]model.ComposeProjectSavepoints(nil), nil)
 	repo.On("SessionSize", mock.Anything, mock.Anything).Return(int64(0), nil)
 	svc := NewSessionService(SessionDeps{Current: pointerAt(demoSession), Sessions: repo})
+	svc.sessionSavepoints = repo.ListSessionSavepoints
 
 	// Act
 	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Sort: model.SortAsc})
@@ -1132,6 +1138,7 @@ func TestSessionService_ListSessions_UnreadablePointerMarksNone(t *testing.T) {
 	repo.On("ListSessionSavepoints", mock.Anything, model.DefaultSession).Return([]model.ComposeProjectSavepoints(nil), nil).Once()
 	repo.On("SessionSize", mock.Anything, model.DefaultSession).Return(int64(0), nil).Once()
 	svc := NewSessionService(SessionDeps{Current: &fakePointer{err: errPointerUnreadable}, Sessions: repo})
+	svc.sessionSavepoints = repo.ListSessionSavepoints
 
 	// Act
 	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{})
@@ -1189,6 +1196,7 @@ func TestSessionService_ListSessions_Ref(t *testing.T) {
 			repo.On("ListSessionSavepoints", mock.Anything, mock.Anything).Return([]model.ComposeProjectSavepoints(nil), nil)
 			repo.On("SessionSize", mock.Anything, mock.Anything).Return(int64(0), nil)
 			svc := NewSessionService(SessionDeps{Current: tt.pointer, Sessions: repo})
+			svc.sessionSavepoints = repo.ListSessionSavepoints
 
 			// Act
 			got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Ref: tt.ref, Sort: model.SortAsc})
@@ -1271,4 +1279,49 @@ func TestSessionService_RemoveSession_PointerClearFailureKeepsTheResult(t *testi
 	assert.Equal(t, model.RemoveSessionResponse{Session: demoSession, Removed: true, FreedBytes: 10}, got)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
+}
+
+// A session's savepoints are read compose project by compose project, in name order: one name in
+// two compose projects is two savepoints, and one holding none is left out.
+func TestReadSessionSavepoints(t *testing.T) {
+	// Arrange
+	ctx := context.Background()
+	store := inmemory.New("")
+	for _, composeProject := range []string{"shop", "blog", "cache"} {
+		key := "sessions/" + demoSession.String() + "/compose/" + composeProject + "/019e843e-1650-7000-8000-000000000300/project.yaml"
+		require.NoError(t, store.PutObject(ctx, key, strings.NewReader("services: {}")))
+	}
+	shop := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000100", Name: "v1"}
+	blog := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000200", Name: "v1"}
+	blogSavepoints, cacheSavepoints, shopSavepoints := &mockSavepointReader{}, &mockSavepointReader{}, &mockSavepointReader{}
+	blogSavepoints.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{blog}, nil).Once()
+	cacheSavepoints.On("ListSavepoints", mock.Anything).Return([]model.Savepoint(nil), nil).Once()
+	shopSavepoints.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{shop}, nil).Once()
+
+	// Act
+	got, err := readSessionSavepoints(ctx, store, newSavepointsInOrder(t, blogSavepoints, cacheSavepoints, shopSavepoints), demoSession)
+	empty, emptyErr := readSessionSavepoints(ctx, store, newSavepointsInOrder(t), model.DefaultSession)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []model.ComposeProjectSavepoints{
+		{ComposeProject: "blog", Savepoints: []model.Savepoint{blog}},
+		{ComposeProject: "shop", Savepoints: []model.Savepoint{shop}},
+	}, got)
+	require.NoError(t, emptyErr)
+	assert.Empty(t, empty)
+	blogSavepoints.AssertExpectations(t)
+	cacheSavepoints.AssertExpectations(t)
+	shopSavepoints.AssertExpectations(t)
+}
+
+// newSavepointsInOrder opens repos in turn, one per compose project read.
+func newSavepointsInOrder(t *testing.T, repos ...*mockSavepointReader) func(storages.Storager) SavepointReader {
+	next := 0
+	return func(storages.Storager) SavepointReader {
+		require.Less(t, next, len(repos), "a compose project read past the repositories given")
+		repo := repos[next]
+		next++
+		return repo
+	}
 }

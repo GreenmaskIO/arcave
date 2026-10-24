@@ -33,12 +33,12 @@ import (
 // serviceLabelKeys are the labels a service may carry; volumeLabelKeys those a named or
 // anonymous volume may.
 var (
-	serviceLabelKeys = []string{
-		model.LabelCapture, model.LabelVolumeBackend, model.LabelMountsExclude,
-		model.LabelMountsInclude, model.LabelMountsFullCopy, model.LabelMountsCDC,
-		model.LabelWritableLayerCapture, model.LabelWritableLayerBackend, model.LabelImageCapture,
+	serviceLabelKeys = []model.CaptureLabel{
+		model.CaptureLabelCapture, model.CaptureLabelVolumeBackend, model.CaptureLabelMountsExclude,
+		model.CaptureLabelMountsInclude, model.CaptureLabelMountsFullCopy, model.CaptureLabelMountsCDC,
+		model.CaptureLabelWritableLayerCapture, model.CaptureLabelWritableLayerBackend, model.CaptureLabelImageCapture,
 	}
-	volumeLabelKeys = []string{model.LabelCapture, model.LabelBackend}
+	volumeLabelKeys = []model.CaptureLabel{model.CaptureLabelCapture, model.CaptureLabelBackend}
 )
 
 // CaptureDefaults are what the config says of a resource no label names: its backend,
@@ -188,45 +188,45 @@ func parseServiceLabels(
 
 	labels := serviceLabels{name: service.Name, rawLabels: raw, backendByTarget: map[string]model.SnapshotBackendKind{}}
 	var err error
-	if labels.capture, err = parseCaptureLabel(raw, model.LabelCapture, where); err != nil {
+	if labels.capture, err = parseCaptureLabel(raw, model.CaptureLabelCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.writableLayerCapture, err = parseCaptureLabel(raw, model.LabelWritableLayerCapture, where); err != nil {
+	if labels.writableLayerCapture, err = parseCaptureLabel(raw, model.CaptureLabelWritableLayerCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.imageCapture, err = parseCaptureLabel(raw, model.LabelImageCapture, where); err != nil {
+	if labels.imageCapture, err = parseCaptureLabel(raw, model.CaptureLabelImageCapture, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.volumeBackend, err = parseVolumeBackend(raw, model.LabelVolumeBackend, where); err != nil {
+	if labels.volumeBackend, err = parseVolumeBackend(raw, model.CaptureLabelVolumeBackend, where); err != nil {
 		return serviceLabels{}, err
 	}
-	if value, ok := raw[model.LabelWritableLayerBackend]; ok {
+	if value, ok := raw[string(model.CaptureLabelWritableLayerBackend)]; ok {
 		backend, ok := model.ParseImageBackend(value)
 		if !ok {
 			return serviceLabels{}, newInvalidLabelError(
-				where, model.LabelWritableLayerBackend, value, "want dedupcopy or fullcopy")
+				where, model.CaptureLabelWritableLayerBackend, value, "want dedupcopy or fullcopy")
 		}
 		labels.writableLayerBackend = &backend
 	}
 
-	if labels.excludedTargets, err = parseTargets(service, raw, model.LabelMountsExclude); err != nil {
+	if labels.excludedTargets, err = parseTargets(service, raw, model.CaptureLabelMountsExclude); err != nil {
 		return serviceLabels{}, err
 	}
-	if labels.includedTargets, err = parseTargets(service, raw, model.LabelMountsInclude); err != nil {
+	if labels.includedTargets, err = parseTargets(service, raw, model.CaptureLabelMountsInclude); err != nil {
 		return serviceLabels{}, err
 	}
 	for _, target := range labels.includedTargets {
 		if slices.Contains(labels.excludedTargets, target) {
-			return serviceLabels{}, newInvalidLabelError(where, model.LabelMountsInclude, raw[model.LabelMountsInclude],
-				fmt.Sprintf("target %s is also in %s", target, model.LabelMountsExclude))
+			return serviceLabels{}, newInvalidLabelError(where, model.CaptureLabelMountsInclude, raw[string(model.CaptureLabelMountsInclude)],
+				fmt.Sprintf("target %s is also in %s", target, model.CaptureLabelMountsExclude))
 		}
 	}
 	for _, targetList := range []struct {
-		key     string
+		key     model.CaptureLabel
 		backend model.SnapshotBackendKind
 	}{
-		{model.LabelMountsFullCopy, model.SnapshotBackendFullCopy},
-		{model.LabelMountsCDC, model.SnapshotBackendCDC},
+		{model.CaptureLabelMountsFullCopy, model.SnapshotBackendFullCopy},
+		{model.CaptureLabelMountsCDC, model.SnapshotBackendCDC},
 	} {
 		targets, err := parseTargets(service, raw, targetList.key)
 		if err != nil {
@@ -234,9 +234,9 @@ func parseServiceLabels(
 		}
 		for _, target := range targets {
 			if _, taken := labels.backendByTarget[target]; taken {
-				return serviceLabels{}, newInvalidLabelError(where, targetList.key, raw[targetList.key],
+				return serviceLabels{}, newInvalidLabelError(where, targetList.key, raw[string(targetList.key)],
 					fmt.Sprintf("target %s is listed for both %s and %s",
-						target, model.LabelMountsFullCopy, model.LabelMountsCDC))
+						target, model.CaptureLabelMountsFullCopy, model.CaptureLabelMountsCDC))
 			}
 			labels.backendByTarget[target] = targetList.backend
 		}
@@ -302,9 +302,9 @@ func (sl serviceLabels) decideMount(
 func (sl serviceLabels) decideByTargetLists(target string) (model.CaptureDecision, bool) {
 	switch {
 	case slices.Contains(sl.excludedTargets, target):
-		return newLabelDecision(false, sl.formatListSource(model.LabelMountsExclude)), true
+		return newLabelDecision(false, sl.formatListSource(model.CaptureLabelMountsExclude)), true
 	case slices.Contains(sl.includedTargets, target):
-		return newLabelDecision(true, sl.formatListSource(model.LabelMountsInclude)), true
+		return newLabelDecision(true, sl.formatListSource(model.CaptureLabelMountsInclude)), true
 	default:
 		return model.CaptureDecision{}, false
 	}
@@ -317,8 +317,8 @@ func (sl serviceLabels) findListedBackend(target string) (model.SnapshotBackendK
 }
 
 // formatListSource names a target list label of the service as a decision's source.
-func (sl serviceLabels) formatListSource(key string) string {
-	return formatLabelSource(key, sl.rawLabels[key], "service "+sl.name)
+func (sl serviceLabels) formatListSource(key model.CaptureLabel) string {
+	return formatLabelSource(key, sl.rawLabels[string(key)], "service "+sl.name)
 }
 
 // decideWithFallback is decision when set, else the service's arcave.capture, else configDecision.
@@ -417,7 +417,7 @@ func decideByServicesCapture(
 		}
 	}
 	if excluded {
-		return newLabelDecision(false, formatLabelSource(model.LabelCapture, "false", "every service mounting it")), true
+		return newLabelDecision(false, formatLabelSource(model.CaptureLabelCapture, "false", "every service mounting it")), true
 	}
 	return model.CaptureDecision{}, false
 }
@@ -437,7 +437,7 @@ func newLabelDecision(capture bool, source string) model.CaptureDecision {
 }
 
 // formatLabelSource is how every decision a label made names it: "<key>=<value> on <where>".
-func formatLabelSource(key, value, where string) string {
+func formatLabelSource(key model.CaptureLabel, value, where string) string {
 	return fmt.Sprintf("%s=%s on %s", key, value, where)
 }
 
@@ -446,11 +446,11 @@ func parseVolumeLabels(ctx context.Context, labels map[string]string, where stri
 	if err := refuseUnknownLabels(ctx, labels, volumeLabelKeys, nil, where); err != nil {
 		return volumeLabels{}, err
 	}
-	capture, err := parseCaptureLabel(labels, model.LabelCapture, where)
+	capture, err := parseCaptureLabel(labels, model.CaptureLabelCapture, where)
 	if err != nil {
 		return volumeLabels{}, err
 	}
-	backend, err := parseVolumeBackend(labels, model.LabelBackend, where)
+	backend, err := parseVolumeBackend(labels, model.CaptureLabelBackend, where)
 	if err != nil {
 		return volumeLabels{}, err
 	}
@@ -460,11 +460,11 @@ func parseVolumeLabels(ctx context.Context, labels map[string]string, where stri
 // refuseUnknownLabels refuses an arcave.* label not among allowed. One the image carries
 // with the same value is the image's, not the user's: it is skipped with a warning.
 func refuseUnknownLabels(
-	ctx context.Context, labels map[string]string, allowed []string, imageLabels map[string]string, where string,
+	ctx context.Context, labels map[string]string, allowed []model.CaptureLabel, imageLabels map[string]string, where string,
 ) error {
 	// Sorted, so of several unknown keys the same one is named every run.
 	for _, key := range slices.Sorted(maps.Keys(labels)) {
-		if !strings.HasPrefix(key, model.LabelPrefix) || slices.Contains(allowed, key) {
+		if !strings.HasPrefix(key, model.CaptureLabelPrefix) || slices.Contains(allowed, model.CaptureLabel(key)) {
 			continue
 		}
 		if value, ok := imageLabels[key]; ok && value == labels[key] {
@@ -472,15 +472,24 @@ func refuseUnknownLabels(
 				Msg("the image carries a label arcave does not read; it is ignored")
 			continue
 		}
-		return newInvalidLabelError(where, key, labels[key],
-			"not a label arcave reads here; it reads "+strings.Join(allowed, ", "))
+		return newInvalidLabelError(where, model.CaptureLabel(key), labels[key],
+			fmt.Sprintf("not a label arcave reads here; it reads %s", joinLabels(allowed)))
 	}
 	return nil
 }
 
+// joinLabels lists labels comma-separated, as an error names them.
+func joinLabels(labels []model.CaptureLabel) string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		names = append(names, label.String())
+	}
+	return strings.Join(names, ", ")
+}
+
 // parseCaptureLabel reads a "true"/"false" label into a decision naming it.
-func parseCaptureLabel(labels map[string]string, key, where string) (*model.CaptureDecision, error) {
-	value, ok := labels[key]
+func parseCaptureLabel(labels map[string]string, key model.CaptureLabel, where string) (*model.CaptureDecision, error) {
+	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
 	}
@@ -497,8 +506,8 @@ func parseCaptureLabel(labels map[string]string, key, where string) (*model.Capt
 }
 
 // parseVolumeBackend reads a volume backend token label.
-func parseVolumeBackend(labels map[string]string, key, where string) (*model.SnapshotBackendKind, error) {
-	value, ok := labels[key]
+func parseVolumeBackend(labels map[string]string, key model.CaptureLabel, where string) (*model.SnapshotBackendKind, error) {
+	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
 	}
@@ -510,8 +519,8 @@ func parseVolumeBackend(labels map[string]string, key, where string) (*model.Sna
 }
 
 // parseTargets reads a comma-separated target list.
-func parseTargets(service model.Service, labels map[string]string, key string) ([]string, error) {
-	value, ok := labels[key]
+func parseTargets(service model.Service, labels map[string]string, key model.CaptureLabel) ([]string, error) {
+	value, ok := labels[string(key)]
 	if !ok {
 		return nil, nil
 	}
@@ -532,7 +541,7 @@ func parseTargets(service model.Service, labels map[string]string, key string) (
 
 // requireMountedTarget refuses a target that is not one of the service's binds,
 // anonymous volumes or named volume mounts.
-func requireMountedTarget(service model.Service, key, value, target string) error {
+func requireMountedTarget(service model.Service, key model.CaptureLabel, value, target string) error {
 	where := "service " + service.Name
 	volumeIdx := slices.IndexFunc(service.Volumes, func(mount model.ServiceVolume) bool {
 		return mount.Target == target
@@ -547,6 +556,6 @@ func requireMountedTarget(service model.Service, key, value, target string) erro
 }
 
 // newInvalidLabelError is model.ErrInvalidCapturePolicy naming the label and why.
-func newInvalidLabelError(where, key, value, why string) error {
+func newInvalidLabelError(where string, key model.CaptureLabel, value, why string) error {
 	return fmt.Errorf("%w: %s=%q on %s: %s", model.ErrInvalidCapturePolicy, key, value, where, why)
 }

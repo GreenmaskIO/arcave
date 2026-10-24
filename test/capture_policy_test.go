@@ -132,9 +132,9 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 
 	// The daemon says what the rollback put back: the stamps beside the user's labels.
 	labels := env.labels(t, "app")
-	assert.Equal(t, "/src", labels[model.LabelMountsExclude])
+	assert.Equal(t, "/src", labels[string(model.CaptureLabelMountsExclude)])
 	assert.Equal(t, "false; origin=label; source=arcave.mounts.exclude=/src on service app",
-		labels[model.MountStamp("/src")])
+		labels[string(model.NewMountStampLabel("/src"))])
 }
 
 // labels are the labels of service's first replica, as the daemon holds them.

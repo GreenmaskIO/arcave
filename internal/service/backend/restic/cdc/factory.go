@@ -31,9 +31,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// RepoNamespace is the segment every volume's repository lives under, inside the
+// NamespaceRepos is the segment every volume's repository lives under, inside the
 // shared store.
-const RepoNamespace = "restic"
+const NamespaceRepos = "restic"
 
 // resticPassword opens every repository arcave creates. A constant, not a
 // secret: whoever can read the store can read .arcave too, and a lost password
@@ -56,7 +56,7 @@ const mountRoot = "/m"
 // runner.go uses only the embedded half, which is why that half is an interface
 // of its own.
 type VolumeRunner interface {
-	containerRunner
+	ContainerRunner
 	ResolveMountSource(ctx context.Context, v model.Volume) (model.MountSource, error)
 	WipeVolume(ctx context.Context, src model.MountSource) error
 }

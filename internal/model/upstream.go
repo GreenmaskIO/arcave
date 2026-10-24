@@ -14,41 +14,6 @@
 
 package model
 
-import "strings"
-
-// LayerImageNamespace opens every tag a rollback puts on a restored layer.
-const LayerImageNamespace = "arcave"
-
-// LayerTagPrefix opens the tag half of a restored layer's reference; the savepoint id follows.
-const LayerTagPrefix = "sp-"
-
-// ImageID is the id of the image the container runs on; empty when the daemon
-// reported none or one that is no digest.
-func (m Container) ImageID() ImageDigestID {
-	if m.Inspect.ContainerJSONBase == nil {
-		return ""
-	}
-	id, err := ParseImageDigestID(m.Inspect.Image)
-	if err != nil {
-		return ""
-	}
-	return id
-}
-
-// IsLayerRef reports whether ref is a tag a rollback put on a restored layer:
-// arcave/…:sp-<savepoint id>.
-func IsLayerRef(ref string) bool {
-	if !strings.HasPrefix(ref, LayerImageNamespace+"/") {
-		return false
-	}
-	idx := strings.LastIndex(ref, ":")
-	if idx < 0 {
-		return false
-	}
-	id, ok := strings.CutPrefix(ref[idx+1:], LayerTagPrefix)
-	return ok && SavepointID(id).Validate() == nil
-}
-
 // ResolveUpstream is the image c's compose file named: its own image, or its layer's labels
 // on an arcave tag. ok is false for a layer carrying no labels or a container with no config.
 func ResolveUpstream(res IntrospectionResult, c Container) (id ImageDigestID, ref string, ok bool) {
@@ -56,7 +21,7 @@ func ResolveUpstream(res IntrospectionResult, c Container) (id ImageDigestID, re
 		return "", "", false
 	}
 	name := c.Inspect.Config.Image
-	if !IsLayerRef(name) {
+	if !ImageRef(name).IsRestoredLayerTag() {
 		return c.ImageID(), name, true
 	}
 	return labelledUpstream(res, c.ImageID())
@@ -70,9 +35,9 @@ func labelledUpstream(res IntrospectionResult, layerID ImageDigestID) (ImageDige
 		return "", "", false
 	}
 	labels := inspect.Config.Labels
-	id, err := ParseImageDigestID(labels[BaseImageIDLabel])
+	id, err := ParseImageDigestID(labels[string(SystemLabelBaseImageID)])
 	if err != nil {
 		return "", "", false
 	}
-	return id, labels[BaseImageRefLabel], true
+	return id, labels[string(SystemLabelBaseImageRef)], true
 }

@@ -51,13 +51,13 @@ func TestNewContainerRefs(t *testing.T) {
 		{
 			name:  "a layer naming its upstream by label",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{model.BaseImageIDLabel: demoUpstreamID.String(), model.BaseImageRefLabel: demoBaseImage},
+			labels: map[string]string{string(model.SystemLabelBaseImageID): demoUpstreamID.String(), string(model.SystemLabelBaseImageRef): demoBaseImage},
 			wantID: demoUpstreamID, want: demoBaseImage,
 		},
 		{
 			name:  "a layer whose label is no digest",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{model.BaseImageIDLabel: "postgres:16"},
+			labels: map[string]string{string(model.SystemLabelBaseImageID): "postgres:16"},
 		},
 		{
 			name:  "a layer carrying no labels",

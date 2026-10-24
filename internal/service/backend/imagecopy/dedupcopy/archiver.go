@@ -28,9 +28,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 )
 
-// BlobPrefix is the blob store's key under the compose project store, beside the savepoints;
+// NamespaceBlobs is the blob store's key under the compose project store, beside the savepoints;
 // a savepoint id is a canonical UUID, so it cannot collide with one.
-const BlobPrefix = "shared/oci/blobs"
+const NamespaceBlobs = "shared/oci/blobs"
 
 // MinDaemonMajor is the first Docker whose `docker save` writes the OCI layout this
 // archiver splits by digest.

@@ -1,0 +1,20 @@
+Would have removed the following snapshots:
+{028a1131 367e2c1a}
+
+2 snapshots would be removed, running prune dry run
+loading all snapshots...
+finding data that is still in use for 1 snapshots
+[0:00] 100.00%  1 / 1 snapshots
+searching used packs...
+collecting packs for deletion and repacking
+[0:00] 100.00%  5 / 5 packs processed
+
+Would have made the following changes:
+
+to repack:             0 blobs / 0 B
+this removes:          0 blobs / 0 B
+to delete:             5 blobs / 294.108 KiB
+total prune:           5 blobs / 294.108 KiB
+remaining:             5 blobs / 196.192 KiB
+unused size after prune: 0 B (0.00% of remaining size)
+

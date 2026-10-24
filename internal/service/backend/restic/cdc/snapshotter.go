@@ -131,7 +131,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	if err := req.SnapshotID.Validate(); err != nil {
 		return err
 	}
-	payload, err := decodePayload(req.Payload)
+	payload, err := DecodePayload(req.Payload)
 	if err != nil {
 		return fmt.Errorf("decode payload: %w", err)
 	}
@@ -179,7 +179,7 @@ func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest
 	if err := req.SnapshotID.Validate(); err != nil {
 		return err
 	}
-	payload, err := decodePayload(req.Payload)
+	payload, err := DecodePayload(req.Payload)
 	if err != nil {
 		zerolog.Ctx(ctx).Debug().Err(err).Msg("nothing to remove: the capture reported no snapshot")
 		return nil
@@ -211,13 +211,15 @@ func (s *Snapshotter) openResticRunner(ctx context.Context) (runner, error) {
 	}, nil
 }
 
-// repositoryURL addresses this instance's repository on the data plane: the base
-// the DI root resolved, plus the volume's ObjectID — which is the name of the
-// repository's own directory under the root the server resolves against, so
-// there is nothing to register. The trailing slash is the restic protocol's, and
-// losing it fails quietly — restic keeps talking, to the wrong path.
+// repositoryURL addresses this instance's repository on the data plane.
 func (s *Snapshotter) repositoryURL() string {
-	return s.deps.RepoURLBase + "/" + s.volume.ObjectID + "/"
+	return newRepositoryURL(s.deps.RepoURLBase, s.volume.ObjectID)
+}
+
+// newRepositoryURL is base plus the repository's directory, objectID. The trailing
+// slash is the restic protocol's: without it restic talks to the wrong path.
+func newRepositoryURL(base, objectID string) string {
+	return base + "/" + objectID + "/"
 }
 
 // mountSource resolves what the restic container mounts to see the volume.

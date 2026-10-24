@@ -87,12 +87,14 @@ type dockerAPI interface {
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error
 	ContainerCommit(ctx context.Context, containerID string, options container.CommitOptions) (container.CommitResponse, error)
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
+	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
 	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
 	ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (io.ReadCloser, error)
 	ImageLoad(ctx context.Context, input io.Reader, opts ...client.ImageLoadOption) (image.LoadResponse, error)
 	ImageTag(ctx context.Context, source, target string) error
 	ImageRemove(ctx context.Context, imageID string, options image.RemoveOptions) ([]image.DeleteResponse, error)
 	Info(ctx context.Context) (system.Info, error)
+	Ping(ctx context.Context) (types.Ping, error)
 	VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error)
 	VolumeRemove(ctx context.Context, volumeID string, force bool) error
 	Close() error
@@ -128,6 +130,14 @@ func NewEngine(api dockerAPI) *Engine {
 
 // Close releases the daemon connection.
 func (e *Engine) Close() error { return e.api.Close() }
+
+// Ping checks that the daemon answers.
+func (e *Engine) Ping(ctx context.Context) error {
+	if _, err := e.api.Ping(ctx); err != nil {
+		return fmt.Errorf("ping docker daemon: %w", err)
+	}
+	return nil
+}
 
 // RunOneShot drives one throwaway container to completion; a non-zero exit is a
 // model.ContainerExitError carrying the container's own output. It is the

@@ -604,7 +604,7 @@ func (s *Inspector) readNetworks(ctx context.Context) ([]model.Network, error) {
 }
 
 // readImages inspects each distinct image the containers run on, then the base readImages those name
-// by model.BaseImageIDLabel — the true base of a container a rollback rebuilt on an arcave tag.
+// by model.SystemLabelBaseImageID — the true base of a container a rollback rebuilt on an arcave tag.
 func (s *Inspector) readImages(
 	ctx context.Context, services []model.Service,
 ) (map[model.ImageDigestID]image.InspectResponse, error) {
@@ -682,13 +682,13 @@ func (s *Inspector) baseImage(
 	return nil
 }
 
-// baseImageID is the id an image's model.BaseImageIDLabel names; false when it carries none
+// baseImageID is the id an image's model.SystemLabelBaseImageID names; false when it carries none
 // or the value is no id.
 func baseImageID(inspect image.InspectResponse) (model.ImageDigestID, bool) {
 	if inspect.Config == nil {
 		return "", false
 	}
-	id, err := model.ParseImageDigestID(inspect.Config.Labels[model.BaseImageIDLabel])
+	id, err := model.ParseImageDigestID(inspect.Config.Labels[string(model.SystemLabelBaseImageID)])
 	if err != nil {
 		return "", false
 	}

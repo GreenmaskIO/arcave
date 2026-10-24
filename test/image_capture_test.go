@@ -160,7 +160,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
+	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
@@ -171,7 +171,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-tenant", project), engine, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),
@@ -215,11 +215,21 @@ func storeKeys(t *testing.T, store storages.Storager) []string {
 	return keys
 }
 
+// newLayerOwner is the origin the DI root stamps layers with.
+func newLayerOwner(arcaveProject, composeProject string) model.LayerOrigin {
+	return model.LayerOrigin{
+		ArcaveProject:  model.ArcaveProjectName(arcaveProject),
+		ComposeProject: model.DockerComposeProjectName(composeProject),
+	}
+}
+
 // newImageCopier is the image backend the DI root builds: both writable layer archivers, and
 // images deduplicated.
-func newImageCopier(store storages.Navigator, engine *dockerclient.Engine, blobStore storages.Storager) *imagecopy.Copier {
+func newImageCopier(
+	store storages.Navigator, origin model.LayerOrigin, engine *dockerclient.Engine, blobStore storages.Storager,
+) *imagecopy.Copier {
 	dedup := dedupcopy.New(blobStore)
-	return imagecopy.NewCopier(store, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
+	return imagecopy.NewCopier(store, origin, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
 		model.ImageBackendDedupCopy: dedup,
 		model.ImageBackendFullCopy:  imagefullcopy.New(),
 	}, dedup)

@@ -151,7 +151,7 @@ func TestSessionFork_FailureLeavesTheTreeMarkedFailed(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(tree, "session.json"))
 	hb := readHeartbeat(t, tree)
 	assert.Equal(t, heartbeat.StatusFailed, hb.Status)
-	assert.Equal(t, heartbeat.Operation(model.HeartbeatOperationFork), hb.Operation)
+	assert.Equal(t, model.HeartbeatOperationFork, hb.Operation)
 	assert.Equal(t, createErr.Error(), hb.Error)
 	assert.False(t, hb.FinishedAt.IsZero())
 }

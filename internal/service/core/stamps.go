@@ -40,7 +40,7 @@ func checkCaptureStamps(ctx context.Context, savepoint model.Savepoint, project 
 			return err
 		}
 		for _, mount := range svc.Volumes {
-			stamp, ok, err := readStamp(svc, model.MountStamp(mount.Target))
+			stamp, ok, err := readStamp(svc, model.NewMountStampLabel(mount.Target))
 			if err != nil {
 				return err
 			}
@@ -64,7 +64,7 @@ func checkCaptureStamps(ctx context.Context, savepoint model.Savepoint, project 
 // checkLayerStamp logs what the rollback puts back of a service's writable layers, and
 // refuses a layer its stamp names and the record does not hold.
 func checkLayerStamp(ctx context.Context, savepoint model.Savepoint, name string, svc types.ServiceConfig) error {
-	stamp, ok, err := readStamp(svc, model.StampWritableLayer)
+	stamp, ok, err := readStamp(svc, model.SystemLabelWritableLayerStamp)
 	if err != nil || !ok {
 		return err
 	}
@@ -81,8 +81,8 @@ func checkLayerStamp(ctx context.Context, savepoint model.Savepoint, name string
 }
 
 // readStamp reads one capture stamp of a service; ok is false when it carries none.
-func readStamp(svc types.ServiceConfig, key string) (model.CaptureStamp, bool, error) {
-	value, ok := svc.Labels[key]
+func readStamp(svc types.ServiceConfig, key model.SystemLabel) (model.CaptureStamp, bool, error) {
+	value, ok := svc.Labels[string(key)]
 	if !ok {
 		return model.CaptureStamp{}, false, nil
 	}

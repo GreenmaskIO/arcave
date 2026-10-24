@@ -494,7 +494,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	assert.True(t, backup.IsSafetySnapshot())
 	assert.Equal(t, "safety-snapshot-019e843e-1650-7000-8000-000000000000", backup.Name,
 		"the name says what the killed rollback was undoing")
-	assert.Equal(t, map[string]string{model.SafetySnapshotLabel: model.SafetySnapshotLabelValue}, backup.Labels)
+	assert.Equal(t, map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}, backup.Labels)
 	assert.Equal(t, []model.Volume{vol}, volumesOf(backup),
 		"and carries the stats a manual rollback to it would restore through")
 

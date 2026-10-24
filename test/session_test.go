@@ -28,6 +28,7 @@ import (
 	"github.com/docker/cli/cli/flags"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/docker/client"
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -83,11 +85,12 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 		projectRoot: projectRoot,
 		storage:     storage,
 		sessions: core.NewSessionService(core.SessionDeps{
-			Sessions: sessionrepo.New(arcaveProjectStore),
-			Locker:   lock.New(projectRoot),
-			Inflight: inflight,
-			Current:  currentsession.New(projectRoot),
-			Store:    arcaveProjectStore,
+			Sessions:      sessionrepo.New(arcaveProjectStore),
+			Locker:        lock.New(projectRoot),
+			Inflight:      inflight,
+			Current:       currentsession.New(projectRoot),
+			Store:         arcaveProjectStore,
+			NewSavepoints: newSavepointReader,
 		}),
 		inflight: inflight,
 	}
@@ -346,7 +349,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	store, err := storefactory.New(t.Context(), e.storage, e.projectRoot, sessionArcaveProject, session,
 		model.DockerComposeProjectName(e.project))
 	require.NoError(t, err)
-	blobStore, err := store.SubStorage(dedupcopy.BlobPrefix, true)
+	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
@@ -357,7 +360,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), engine, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
 		BackendRegistry:    mustRegistry(t, engine),
@@ -590,4 +593,14 @@ func fileSizes(t *testing.T, dir string) map[string]int64 {
 	})
 	require.NoError(t, err)
 	return sizes
+}
+
+// newSavepointReader opens a compose project's savepoints the way the DI root does.
+func newSavepointReader(store storages.Storager) core.SavepointReader {
+	return sprepo.New(store)
+}
+
+// newGCSavepointReader opens a compose project's savepoints the way the DI root does for gc.
+func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
+	return sprepo.New(store)
 }

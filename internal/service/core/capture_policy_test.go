@@ -38,8 +38,8 @@ func labelledIntrospection(labels map[string]string) model.IntrospectionResult {
 func TestService_prepare_LabelsDecideTheImages(t *testing.T) {
 	// Arrange
 	introspection := labelledIntrospection(map[string]string{
-		model.LabelWritableLayerBackend: "fullcopy",
-		model.LabelImageCapture:         "false",
+		string(model.CaptureLabelWritableLayerBackend): "fullcopy",
+		string(model.CaptureLabelImageCapture):         "false",
 	})
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
@@ -77,7 +77,7 @@ func TestService_prepare_LabelsDecideTheImages(t *testing.T) {
 // An old daemon is refused even when no layer is captured.
 func TestService_prepare_OldDaemonIsRefusedWithoutALayer(t *testing.T) {
 	// Arrange
-	introspection := labelledIntrospection(map[string]string{model.LabelWritableLayerCapture: "false"})
+	introspection := labelledIntrospection(map[string]string{string(model.CaptureLabelWritableLayerCapture): "false"})
 	introspection.Daemon.ServerVersion = "24.0.7"
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
@@ -108,7 +108,7 @@ func TestService_newSafetySnapshotPolicy(t *testing.T) {
 		name   string
 		labels map[string]string
 	}{
-		{name: "it keeps what the rollback restores into", labels: map[string]string{model.LabelCapture: "false"}},
+		{name: "it keeps what the rollback restores into", labels: map[string]string{string(model.CaptureLabelCapture): "false"}},
 		{name: "it follows the config past a bad label", labels: map[string]string{"arcave.captur": "false"}},
 	}
 	for _, tt := range tests {

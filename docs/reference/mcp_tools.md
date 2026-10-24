@@ -205,6 +205,16 @@ this server is pinned to session "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31" by --ses
 
 Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose file, as YAML>"}`. Read-only, and works in no session: see [`arcave tools generate-compose`](cli/tools_generate_compose.md). The file carries every environment value the containers run with, secrets included.
 
+## `gc`
+
+| Argument | Required | Description |
+|---|---|---|
+| `session` | no | The session to look in, by name or by id. The default is the pinned session, or the current one. |
+| `restored_layer_grace` | no | How long ago an unused layer tag must have been tagged before it counts as garbage, written as a duration such as `1h`. The default is `gc.restored_layer_grace`. |
+| `kinds` | no | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. The default is every kind. |
+
+Returns the report [`arcave gc --dry-run`](cli/gc.md) prints. The tool always runs as a dry run and deletes nothing. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`. What a capture in progress may name is skipped as `capture-in-progress`, which is not partial: call again once it finishes.
+
 ## Where the tools differ from the CLI
 
 * **Lists come wrapped in an object.** `savepoint_list` answers `{"savepoints": […]}` and `session_list` `{"sessions": […]}`, where the CLI prints the bare array.

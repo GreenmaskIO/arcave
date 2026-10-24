@@ -52,20 +52,20 @@ func TestCheckCaptureStamps(t *testing.T) {
 	}{
 		{name: "a spec with no capture stamps checks nothing"},
 		{name: "every mount the spec captures is held", labels: types.Labels{
-			model.MountStamp("/data"):  "true; backend=fullcopy; origin=config",
-			model.MountStamp("/cache"): "false; origin=label; source=arcave.mounts.exclude=/cache on service db",
+			string(model.NewMountStampLabel("/data")):  "true; backend=fullcopy; origin=config",
+			string(model.NewMountStampLabel("/cache")): "false; origin=label; source=arcave.mounts.exclude=/cache on service db",
 		}},
 		{name: "a mount the spec captures and the record lacks is refused", labels: types.Labels{
-			model.MountStamp("/cache"): "true; backend=fullcopy; origin=config",
+			string(model.NewMountStampLabel("/cache")): "true; backend=fullcopy; origin=config",
 		}, wantErr: "the mount at /cache of service db", wantErrIs: errSpecRecordMismatch},
 		{name: "a layer the spec leaves out needs nothing of the record", labels: types.Labels{
-			model.StampWritableLayer: "false; origin=config; source=capture.writable_layers=false in the config",
+			string(model.SystemLabelWritableLayerStamp): "false; origin=config; source=capture.writable_layers=false in the config",
 		}},
 		{name: "a layer the spec captures and the record lacks is refused", labels: types.Labels{
-			model.StampWritableLayer: "true; backend=dedupcopy; origin=config",
+			string(model.SystemLabelWritableLayerStamp): "true; backend=dedupcopy; origin=config",
 		}, wantErr: "the writable layer of service db", wantErrIs: errSpecRecordMismatch},
 		{name: "a stamp arcave cannot read is refused", labels: types.Labels{
-			model.StampWritableLayer: "yes",
+			string(model.SystemLabelWritableLayerStamp): "yes",
 		}, wantErr: "want true or false first"},
 	}
 	for _, tt := range tests {
@@ -94,11 +94,11 @@ func TestStampServices(t *testing.T) {
 
 	// Act
 	stampServices(project, map[string]map[string]string{
-		"db":   {model.StampWritableLayer: "true; origin=config"},
-		"gone": {model.StampWritableLayer: "false; origin=config"},
+		"db":   {string(model.SystemLabelWritableLayerStamp): "true; origin=config"},
+		"gone": {string(model.SystemLabelWritableLayerStamp): "false; origin=config"},
 	})
 
 	// Assert
-	assert.Equal(t, types.Labels{"tier": "data", model.StampWritableLayer: "true; origin=config"}, project.Services["db"].Labels)
+	assert.Equal(t, types.Labels{"tier": "data", string(model.SystemLabelWritableLayerStamp): "true; origin=config"}, project.Services["db"].Labels)
 	assert.NotContains(t, project.Services, "gone")
 }

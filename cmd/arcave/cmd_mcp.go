@@ -47,7 +47,7 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
-	return cli.NewMCPHandler(mcpServiceFactory, mcpSessionServiceFactory, mcpToolsServiceFactory,
+	return cli.NewMCPHandler(mcpServiceFactory, mcpSessionServiceFactory, mcpToolsServiceFactory, mcpGCServiceFactory,
 		pinnedSession, projectCfg.Rollback.Policy()).MCPRun(cmd.Context())
 }
 
@@ -87,6 +87,19 @@ func mcpToolsServiceFactory(ctx context.Context, project string) (cli.MCPToolsSe
 	return deps.service, func() {
 		if err := deps.Close(); err != nil {
 			log.Ctx(ctx).Error().Err(err).Msg("close tools dependencies")
+		}
+	}, nil
+}
+
+// mcpGCServiceFactory wires the gc for the session a tool call named.
+func mcpGCServiceFactory(ctx context.Context, sessionRef string) (cli.MCPGCService, func(), error) {
+	deps, err := newGCDependencies(ctx, projectRoot, projectCfg, sessionRef)
+	if err != nil {
+		return nil, nil, fmt.Errorf("init gc dependencies: %w", err)
+	}
+	return deps.service, func() {
+		if err := deps.Close(ctx); err != nil {
+			log.Ctx(ctx).Error().Err(err).Msg("close gc dependencies")
 		}
 	}, nil
 }
