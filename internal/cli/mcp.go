@@ -568,11 +568,15 @@ func (h *MCPHandler) openToolsService(ctx context.Context, project string) (MCPT
 	return svc, release, nil
 }
 
-// mcpError names what holds the project lock, so an agent waits instead of retrying blind.
+// mcpError names what holds the project or session lock, so an agent waits instead of retrying blind.
 func mcpError(err error) error {
-	if errors.Is(err, model.ErrProjectLocked) {
+	switch {
+	case errors.Is(err, model.ErrProjectLocked):
 		return fmt.Errorf("%w: a session fork holds the lock for its whole copy, as does a savepoint or "+
 			"rollback for its run; retry when it finishes", err)
+	case errors.Is(err, model.ErrSessionLocked):
+		return fmt.Errorf("%w: another arcave command, possibly on another machine sharing the store, works in "+
+			"this session; retry when it finishes", err)
 	}
 	return err
 }

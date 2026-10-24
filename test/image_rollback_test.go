@@ -194,6 +194,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
+		SessionLocker:      newStoreLocker(store, model.DefaultSession),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,

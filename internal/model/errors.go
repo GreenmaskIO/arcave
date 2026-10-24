@@ -123,6 +123,14 @@ var (
 	// ErrInvalidSortOrder reports a listing order other than asc or desc.
 	ErrInvalidSortOrder = errors.New("invalid sort order")
 
+	// ErrSessionLocked reports a session whose lock another operation holds past the wait;
+	// SessionLockedError names the holder.
+	ErrSessionLocked = errors.New("session is locked")
+	// ErrSessionLockLost cancels an operation that can no longer show it holds its session lock.
+	ErrSessionLockLost = errors.New("session lock lost")
+	// ErrSessionLockNotHeld refuses to free a session lock the operation does not hold.
+	ErrSessionLockNotHeld = errors.New("session lock not held")
+
 	// ErrGarbageCollectNotImplemented refuses a gc that would delete: only a dry run exists yet.
 	ErrGarbageCollectNotImplemented = errors.New("garbage collection deletes nothing yet: only a dry run is supported")
 	// ErrInvalidGarbageCollectRequest reports a gc request arcave cannot act on: an unknown

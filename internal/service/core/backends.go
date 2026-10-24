@@ -69,10 +69,15 @@ func (s *Service) captureVolumes(
 	return stats, nil
 }
 
-// performSavepoint captures a fresh savepoint under a heartbeat and commits its record last;
-// on failure it returns a zero savepoint. killed are the containers the stop killed.
+// errStillCommitted is a drop that failed before it uncommitted the record: the savepoint stands.
+var errStillCommitted = errors.New("savepoint still committed")
+
+// performSavepoint captures a fresh savepoint under a heartbeat and commits its record last,
+// once grantedLock still holds the lock; on failure it returns a zero savepoint. killed are the
+// containers the stop killed.
 func (s *Service) performSavepoint(
 	ctx context.Context,
+	grantedLock model.GrantedSessionLock,
 	working workingSet,
 	killed []string,
 	name string,
@@ -116,6 +121,11 @@ func (s *Service) performSavepoint(
 		return model.Savepoint{}, err
 	}
 	if err = worker.Alive(); err != nil {
+		err = fmt.Errorf("commit savepoint %s: %w", id, err)
+		abandonCapture(ctx, worker, id, err)
+		return model.Savepoint{}, err
+	}
+	if err = grantedLock.Verify(ctx); err != nil {
 		err = fmt.Errorf("commit savepoint %s: %w", id, err)
 		abandonCapture(ctx, worker, id, err)
 		return model.Savepoint{}, err
@@ -227,7 +237,7 @@ func (s *Service) dropSavepoint(
 	backends []model.VolumeSnapshotBackend,
 ) error {
 	if err := s.savepointRepo.DeleteSavepoint(ctx, savepoint.ID); err != nil {
-		return fmt.Errorf("uncommit savepoint %s: %w", savepoint.ID, err)
+		return fmt.Errorf("%w: uncommit savepoint %s: %w", errStillCommitted, savepoint.ID, err)
 	}
 
 	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, "remove",

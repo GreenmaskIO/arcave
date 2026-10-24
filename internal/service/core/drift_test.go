@@ -111,7 +111,7 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 			repo.On("LoadSpec", mock.Anything, record.ID).Return(demoSpecBytes, nil).Once()
 			codec := &mockCodec{}
 			codec.On("Parse", mock.Anything, demoSpecBytes).Return(tt.previous, tt.parseErr).Once()
-			svc := New(Deps{SavepointRepo: repo, SpecCodec: codec})
+			svc := New(Deps{SessionLocker: fakeSessionLocker{}, SavepointRepo: repo, SpecCodec: codec})
 			logs := &syncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 

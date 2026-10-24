@@ -106,6 +106,19 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			wantPrinted: nil,
 		},
 		{
+			name: "a safety snapshot the rollback could not drop is named",
+			res: model.RollbackResult{
+				Savepoint:          savepoint,
+				Restored:           []model.Volume{},
+				SafetySnapshotKept: "019e843e-1650-7000-8000-0000000000bb",
+			},
+			wantPrinted: []any{model.RollbackResponse{
+				RolledBackTo:       savepoint,
+				Restored:           []model.Volume{},
+				SafetySnapshotKept: "019e843e-1650-7000-8000-0000000000bb",
+			}},
+		},
+		{
 			name:       "printer error surfaces",
 			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,

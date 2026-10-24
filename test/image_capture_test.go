@@ -164,6 +164,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
+		SessionLocker:      newStoreLocker(store, model.DefaultSession),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),

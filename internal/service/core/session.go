@@ -69,6 +69,8 @@ type SessionDeps struct {
 	Store storages.Navigator
 	// NewSavepoints opens the savepoints of a compose project's store.
 	NewSavepoints func(store storages.Storager) SavepointReader
+	// NewSessionLocker opens the lock of one session.
+	NewSessionLocker func(id model.SessionID) (model.SessionLocker, error)
 	// RunnerInfo identifies this process in a fork's heartbeat.
 	RunnerInfo heartbeat.RunnerInfo
 	// HeartbeatInterval and HeartbeatStaleAfter time a fork's heartbeat; zero keeps
@@ -85,6 +87,8 @@ type SessionService struct {
 	inflight   inflightMarkers
 	current    currentSessionPointer
 	runnerInfo heartbeat.RunnerInfo
+	// newLocker opens one session's lock in the store.
+	newLocker func(id model.SessionID) (model.SessionLocker, error)
 	// heartbeatInterval and heartbeatStaleAfter time a fork's heartbeat.
 	heartbeatInterval   time.Duration
 	heartbeatStaleAfter time.Duration
@@ -103,6 +107,7 @@ func NewSessionService(deps SessionDeps) *SessionService {
 		inflight:            deps.Inflight,
 		current:             deps.Current,
 		runnerInfo:          deps.RunnerInfo,
+		newLocker:           deps.NewSessionLocker,
 		heartbeatInterval:   cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
 		heartbeatStaleAfter: staleAfter,
 		heartbeatWriter: func(id model.SessionID) (heartbeatWriter, error) {
@@ -275,7 +280,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 		session.From = &model.SessionOrigin{Session: source.ID}
 		zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Str("name", session.Name).
 			Str("from", source.ID.String()).Str("from_name", source.Name).Msg("forking session")
-		if err := s.forkSession(ctx, session); err != nil {
+		if err := s.forkUnderSourceLock(ctx, session); err != nil {
 			return model.Session{}, err
 		}
 		return session, nil
@@ -315,17 +320,17 @@ func (s *SessionService) RemoveSession(
 		if err != nil {
 			return model.RemoveSessionResponse{}, err
 		}
-		size, err := s.sessions.SessionSize(ctx, id)
+		locker, err := s.newLocker(id)
+		if err != nil {
+			return model.RemoveSessionResponse{}, fmt.Errorf("open the lock of session %s: %w", id, err)
+		}
+		size, err := withSessionLock(ctx, locker, model.SessionLockOperationSessionRemove,
+			func(ctx context.Context, grantedLock model.GrantedSessionLock) (int64, error) {
+				return s.deleteSession(ctx, grantedLock, id)
+			})
 		if err != nil {
 			return model.RemoveSessionResponse{}, err
 		}
-		zerolog.Ctx(ctx).Debug().Str("session", id.String()).Int64("size_bytes", size).Msg("deleting session")
-		if err := s.sessions.DeleteSession(ctx, id); err != nil {
-			logInterrupt(ctx, "session remove interrupted: run it again with the session id to remove the rest")
-			return model.RemoveSessionResponse{}, fmt.Errorf("deleting session %s: %w", id, err)
-		}
-		zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
-			Msg("session deleted; any compose project running from it is left as it is")
 		if current {
 			if err := s.current.Clear(ctx); err != nil {
 				zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).
@@ -341,6 +346,25 @@ func (s *SessionService) RemoveSession(
 			FreedBytes: size,
 		}, nil
 	})
+}
+
+// deleteSession measures and deletes the session id, once its lock is still held.
+func (s *SessionService) deleteSession(ctx context.Context, grantedLock model.GrantedSessionLock, id model.SessionID) (int64, error) {
+	size, err := s.sessions.SessionSize(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if err := grantedLock.Verify(ctx); err != nil {
+		return 0, fmt.Errorf("deleting session %s: %w", id, err)
+	}
+	zerolog.Ctx(ctx).Debug().Str("session", id.String()).Int64("size_bytes", size).Msg("deleting session")
+	if err := s.sessions.DeleteSession(ctx, id); err != nil {
+		logInterrupt(ctx, "session remove interrupted: run it again with the session id to remove the rest")
+		return 0, fmt.Errorf("deleting session %s: %w", id, err)
+	}
+	zerolog.Ctx(ctx).Info().Str("session", id.String()).Int64("freed_bytes", size).
+		Msg("session deleted; any compose project running from it is left as it is")
+	return size, nil
 }
 
 // findRemovable resolves req.Session to a session, or by id to a tree without a record; a tree
@@ -645,9 +669,29 @@ func requireFreeName(sessions []model.Session, name string) error {
 	return nil
 }
 
-// forkSession copies session.From's tree under session.ID and commits session, a heartbeat kept
-// beside the tree throughout. A failure leaves the tree to a gc, its heartbeat marked failed.
-func (s *SessionService) forkSession(ctx context.Context, session model.Session) error {
+// forkUnderSourceLock forks session from its source under the source's lock: a gc there must not
+// delete what the copy reads. The new session is no one's to touch until its record lands.
+func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.Session) error {
+	source := session.From.Session
+	locker, err := s.newLocker(source)
+	if err != nil {
+		return fmt.Errorf("open the lock of session %s: %w", source, err)
+	}
+	_, err = withSessionLock(ctx, locker, model.SessionLockOperationSessionFork,
+		func(ctx context.Context, grantedLock model.GrantedSessionLock) (struct{}, error) {
+			// The source may have been removed while the fork waited for its lock.
+			if err := requireSession(ctx, s.sessions, source); err != nil {
+				return struct{}{}, err
+			}
+			return struct{}{}, s.forkSession(ctx, grantedLock, session)
+		})
+	return err
+}
+
+// forkSession copies session.From's tree under session.ID and commits session once the source's
+// lock is still held, a heartbeat kept beside the tree throughout. A failure leaves the tree to a
+// gc, its heartbeat marked failed.
+func (s *SessionService) forkSession(ctx context.Context, grantedLock model.GrantedSessionLock, session model.Session) error {
 	source := session.From.Session
 	if err := s.requireEmptyForkTree(ctx, session.ID); err != nil {
 		return fmt.Errorf("cloning session %s: %w", source, err)
@@ -686,6 +730,11 @@ func (s *SessionService) forkSession(ctx context.Context, session model.Session)
 		Int64("copied_bytes", copied).Msg("session cloned")
 
 	if err := worker.Alive(); err != nil {
+		err = fmt.Errorf("committing session %s: %w", session.ID, err)
+		abandonFork(ctx, worker, session.ID, err)
+		return err
+	}
+	if err := grantedLock.Verify(ctx); err != nil {
 		err = fmt.Errorf("committing session %s: %w", session.ID, err)
 		abandonFork(ctx, worker, session.ID, err)
 		return err

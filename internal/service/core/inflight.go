@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -92,17 +93,30 @@ func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPha
 }
 
 // releaseSafetySnapshot ends a consistent rollback: marker first, snapshot second,
-// so a failed clear never leaves a marker pointing at a safety snapshot that is gone.
+// so a failed clear never leaves a marker pointing at a safety snapshot that is gone. It
+// returns the snapshot when it is still committed, so the result can name it; "" otherwise.
 func (s *Service) releaseSafetySnapshot(
-	ctx context.Context, safetySnapshot model.Savepoint, backends []model.VolumeSnapshotBackend,
-) {
-	log := zerolog.Ctx(ctx)
+	ctx context.Context, grantedLock model.GrantedSessionLock, safetySnapshot model.Savepoint, backends []model.VolumeSnapshotBackend,
+) model.SavepointID {
+	log := zerolog.Ctx(ctx).With().Str("safety_snapshot_id", safetySnapshot.ID.String()).Logger()
 	if err := s.inflightMarker.Clear(ctx); err != nil {
-		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).
-			Msg("failed to clear the inflight marker; the safety snapshot it points at is kept")
-		return
+		log.Warn().Err(err).Msg("failed to clear the inflight marker; the safety snapshot it points at is kept")
+		return safetySnapshot.ID
 	}
-	if err := s.dropSavepoint(ctx, safetySnapshot, backends); err != nil {
-		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).Msg("failed to remove safety snapshot")
+	// Dropping it uncommits a record: only while the session's lock is still this run's.
+	if err := grantedLock.Verify(ctx); err != nil {
+		log.Warn().Err(err).Msg("the safety snapshot is kept: the session lock is no longer this rollback's")
+		return safetySnapshot.ID
 	}
+	err := s.dropSavepoint(ctx, safetySnapshot, backends)
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, errStillCommitted) {
+		log.Warn().Err(err).Msg("failed to remove the safety snapshot; it is kept")
+		return safetySnapshot.ID
+	}
+	// Uncommitted, its remains are a later gc's.
+	log.Warn().Err(err).Msg("the safety snapshot is uncommitted, but not all of it was removed")
+	return ""
 }

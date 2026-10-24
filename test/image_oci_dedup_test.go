@@ -101,6 +101,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
+		SessionLocker:      newStoreLocker(composeProjectStore, model.DefaultSession),
 		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),

@@ -88,7 +88,7 @@ func readBlobReferences(
 	}
 	wg.Wait()
 	// A read cancelled midway reports unreadable: the references of a cancelled run are no verdict.
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return blobReferences{}, err
 	}
 	return newBlobReferences(refs, listed, unreadable), nil

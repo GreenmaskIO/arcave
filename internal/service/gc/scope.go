@@ -154,7 +154,7 @@ func (s *GarbageCollector) readCaptureStatuses(
 	}
 	wg.Wait()
 	// A read cancelled midway reports unknown: the statuses of a cancelled run are no verdict.
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return captureStatuses{}, err
 	}
 	for i, id := range ids {

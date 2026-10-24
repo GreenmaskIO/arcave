@@ -346,12 +346,12 @@ func logInterrupt(ctx context.Context, action string) {
 // preferInterrupt returns the interrupt that cancelled ctx in place of err, the symptom
 // it caused somewhere downstream, and logs err.
 func preferInterrupt(ctx context.Context, err error) error {
-	ctxErr := ctx.Err()
-	if ctxErr == nil {
+	if ctx.Err() == nil {
 		return err
 	}
 	zerolog.Ctx(ctx).Debug().Err(err).Msg("failure the interrupt caused")
-	return fmt.Errorf("interrupted: %w", ctxErr)
+	// The cause, not ctx.Err: a lost session lock interrupts too, and says so.
+	return fmt.Errorf("interrupted: %w", context.Cause(ctx))
 }
 
 // newReplicaGaps warns of and returns each service missing a replica below its highest one.

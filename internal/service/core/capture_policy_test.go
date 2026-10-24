@@ -47,6 +47,7 @@ func TestService_prepare_LabelsDecideTheImages(t *testing.T) {
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(&mockBackend{volume: demoVolume()}, nil).Once()
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		ComposeInspector: inspector,
 		ProjectAssembler: assemblerFor(introspection),
 		SpecCodec:        demoCodec(),
@@ -84,6 +85,7 @@ func TestService_prepare_OldDaemonIsRefusedWithoutALayer(t *testing.T) {
 	// No expectation on the registry: the refusal comes before any backend is built.
 	registry := &mockRegistry{}
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		ComposeInspector: inspector,
 		BackendRegistry:  registry,
 		Store:            newDirStore(t),
@@ -116,7 +118,7 @@ func TestService_newSafetySnapshotPolicy(t *testing.T) {
 			// Arrange
 			introspection := labelledIntrospection(tt.labels)
 			introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{{Service: demoService, Target: "/data"}}
-			svc := New(Deps{CaptureDefaults: demoCaptureDefaults})
+			svc := New(Deps{SessionLocker: fakeSessionLocker{}, CaptureDefaults: demoCaptureDefaults})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -193,6 +195,7 @@ func TestService_prepare_InvalidLabelStopsNothing(t *testing.T) {
 	// No expectation on the assembler: the refusal comes first.
 	assembler := &mockAssembler{}
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,
 		SpecCodec:        &mockCodec{},
@@ -244,7 +247,7 @@ func TestService_newSafetySnapshotPolicy_FallbackKeepsTheConfig(t *testing.T) {
 	// Arrange
 	defaults := demoCaptureDefaults
 	defaults.SavepointCapture.WritableLayers = false
-	svc := New(Deps{CaptureDefaults: defaults})
+	svc := New(Deps{SessionLocker: fakeSessionLocker{}, CaptureDefaults: defaults})
 	introspection := labelledIntrospection(map[string]string{"arcave.captur": "false"})
 	ctx := zerolog.Nop().WithContext(context.Background())
 

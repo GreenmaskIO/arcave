@@ -324,3 +324,35 @@ func TestComposeProjects(t *testing.T) {
 		assert.Empty(t, names)
 	})
 }
+
+func TestSessionLock(t *testing.T) {
+	t.Run("the lock lies beside the session's tree", func(t *testing.T) {
+		// Arrange
+		root := t.TempDir()
+		rootStore, err := Root(t.Context(), directoryStorage("snaps"), root)
+		require.NoError(t, err)
+		arcaveProjectStore, err := ArcaveProject(rootStore, testArcaveProject)
+		require.NoError(t, err)
+
+		// Act
+		store, key, err := SessionLock(arcaveProjectStore, model.DefaultSession)
+
+		// Assert
+		require.NoError(t, err)
+		base := filepath.Join(root, "snaps", "arcave", "projects", testArcaveProject.String(), "sessions")
+		assert.Equal(t, base, store.GetCwd())
+		assert.Equal(t, model.DefaultSession.String()+".lock.json", key)
+	})
+
+	t.Run("the nil session is refused", func(t *testing.T) {
+		// Arrange
+		rootStore, err := Root(t.Context(), directoryStorage("snaps"), t.TempDir())
+		require.NoError(t, err)
+
+		// Act
+		_, _, err = SessionLock(rootStore, model.SessionID{})
+
+		// Assert
+		require.ErrorIs(t, err, model.ErrInvalidSessionID)
+	})
+}

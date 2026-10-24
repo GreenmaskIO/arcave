@@ -49,6 +49,7 @@ func TestService_prepare(t *testing.T) {
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(&mockBackend{volume: demoVolume()}, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,
 		SpecCodec:        codec,

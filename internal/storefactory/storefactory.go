@@ -57,6 +57,8 @@ var warnHostKeyOnce sync.Once
 const (
 	namespaceProjects = "projects"
 	namespaceSessions = "sessions"
+	// sessionLockSuffix names a session's lock beside its tree.
+	sessionLockSuffix = ".lock.json"
 	namespaceCompose  = "compose"
 )
 
@@ -238,6 +240,20 @@ func Session(arcaveProjectStore storages.Navigator, id model.SessionID) (storage
 		return nil, fmt.Errorf("validate session id: %w", err)
 	}
 	return joinKind(arcaveProjectStore, namespaceSessions, id.String())
+}
+
+// SessionLock is the store and key session id's lock lives at: sessions/<id>.lock.json, beside
+// the session's tree rather than in it, so taking the lock never recreates a removed session and
+// removing one never has to spare it.
+func SessionLock(arcaveProjectStore storages.Navigator, id model.SessionID) (storages.Storager, string, error) {
+	if err := id.Validate(); err != nil {
+		return nil, "", fmt.Errorf("validate session id: %w", err)
+	}
+	sessions, err := arcaveProjectStore.SubStorage(namespaceSessions, true)
+	if err != nil {
+		return nil, "", fmt.Errorf("re-root storage at %s: %w", namespaceSessions, err)
+	}
+	return sessions, id.String() + sessionLockSuffix, nil
 }
 
 // ComposeProject descends from a session store to compose/<name>.

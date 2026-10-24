@@ -114,8 +114,10 @@ type inflightMarkers interface {
 // Deps are Service's collaborators. A struct rather than a parameter list: the
 // seams have no natural order, so a new one could silently swap with an existing one.
 type Deps struct {
-	SavepointRepo      savepointRepository
-	ProjectLocker      projectLocker
+	SavepointRepo savepointRepository
+	ProjectLocker projectLocker
+	// SessionLocker holds Session's lock in the store for the whole of a workflow.
+	SessionLocker      model.SessionLocker
 	ComposeInspector   composeIntrospector
 	ProjectAssembler   projectAssembler
 	SpecCodec          specCodec
@@ -155,6 +157,7 @@ type Deps struct {
 type Service struct {
 	savepointRepo           savepointRepository
 	projectLocker           projectLocker
+	sessionLocker           model.SessionLocker
 	composeInspector        composeIntrospector
 	projectAssembler        projectAssembler
 	specCodec               specCodec
@@ -184,6 +187,7 @@ func New(deps Deps) *Service {
 	return &Service{
 		savepointRepo:           deps.SavepointRepo,
 		projectLocker:           deps.ProjectLocker,
+		sessionLocker:           deps.SessionLocker,
 		composeInspector:        deps.ComposeInspector,
 		projectAssembler:        deps.ProjectAssembler,
 		specCodec:               deps.SpecCodec,
@@ -207,16 +211,44 @@ func New(deps Deps) *Service {
 	}
 }
 
-// locked runs a workflow with the project lock held, once its session is known to still
-// exist: one deleted since the command resolved it must not be written into again.
-func locked[T any](ctx context.Context, s *Service, fn func() (T, error)) (T, error) {
+// locked runs a workflow with the project lock and the session's lock held, once its session is
+// known to still exist: one deleted since the command resolved it must not be written into again.
+// fn gets the session lock and its context.
+func locked[T any](
+	ctx context.Context, s *Service, operation model.SessionLockOperation,
+	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
+) (T, error) {
 	return withUnlock(ctx, s.projectLocker, func() (T, error) {
-		if err := requireSession(ctx, s.sessions, s.session); err != nil {
-			var zero T
-			return zero, err
-		}
-		return fn()
+		return withSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
+			if err := requireSession(ctx, s.sessions, s.session); err != nil {
+				var zero T
+				return zero, err
+			}
+			return fn(ctx, grantedLock)
+		})
 	})
+}
+
+// withSessionLock runs fn holding the session's lock in the store, and unlocks it however fn
+// ends; a failed unlock is logged. fn runs on the lock's context: a lost lock cancels it with
+// model.ErrSessionLockLost as its cause, which fn reports as any interrupt.
+func withSessionLock[T any](
+	ctx context.Context,
+	locker model.SessionLocker,
+	operation model.SessionLockOperation,
+	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
+) (T, error) {
+	lockCtx, grantedLock, err := locker.Lock(ctx, operation)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("lock session: %w", err)
+	}
+	defer func() {
+		if err := grantedLock.Unlock(ctx); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
+		}
+	}()
+	return fn(lockCtx, grantedLock)
 }
 
 // withUnlock runs fn with the project lock held, and releases it however fn ends.

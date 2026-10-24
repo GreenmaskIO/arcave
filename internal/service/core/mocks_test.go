@@ -105,6 +105,62 @@ func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 	return func() error { return m.MethodCalled("Release").Error(0) }, nil
 }
 
+// fakeSessionLocker always grants the session's lock, and the lock always holds, so tests that
+// are not about it carry no expectations.
+type fakeSessionLocker struct{}
+
+func (fakeSessionLocker) Lock(
+	ctx context.Context, _ model.SessionLockOperation,
+) (context.Context, model.GrantedSessionLock, error) {
+	return ctx, fakeGrantedSessionLock{}, nil
+}
+
+// newFakeSessionLocker opens a fakeSessionLocker for any session.
+func newFakeSessionLocker(model.SessionID) (model.SessionLocker, error) {
+	return fakeSessionLocker{}, nil
+}
+
+// fakeGrantedSessionLock is a session lock that always holds.
+type fakeGrantedSessionLock struct{}
+
+func (fakeGrantedSessionLock) Verify(context.Context) error { return nil }
+func (fakeGrantedSessionLock) Unlock(context.Context) error { return nil }
+
+// mockSessionLocker doubles model.SessionLocker; Lock hands out the *mockGrantedSessionLock it
+// returns, with the caller's context, cancelled with the lock's lostCause when the test sets one.
+type mockSessionLocker struct{ mock.Mock }
+
+func (m *mockSessionLocker) Lock(
+	ctx context.Context, operation model.SessionLockOperation,
+) (context.Context, model.GrantedSessionLock, error) {
+	args := m.Called(ctx, operation)
+	if err := args.Error(1); err != nil {
+		return nil, nil, err
+	}
+	grantedLock := args.Get(0).(*mockGrantedSessionLock)
+	if grantedLock.lostCause == nil {
+		return ctx, grantedLock, nil
+	}
+	lockCtx, cancel := context.WithCancelCause(ctx)
+	cancel(grantedLock.lostCause)
+	return lockCtx, grantedLock, nil
+}
+
+// mockGrantedSessionLock doubles model.GrantedSessionLock; lostCause, when set, is the cause the
+// context Lock returned with it is cancelled with.
+type mockGrantedSessionLock struct {
+	mock.Mock
+	lostCause error
+}
+
+func (m *mockGrantedSessionLock) Verify(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
+func (m *mockGrantedSessionLock) Unlock(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
 // fakeInflight is a stateful stand-in for the marker file, so tests that are not
 // about the gate carry no expectations. Lifecycle tests use mockInflight instead.
 type fakeInflight struct {

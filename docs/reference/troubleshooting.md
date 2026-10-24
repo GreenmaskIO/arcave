@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Recovering from an interrupted rollback, a held project lock, a torn-down project, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
+description: Recovering from an interrupted rollback, a held project or session lock, a torn-down project, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
@@ -82,6 +82,16 @@ ps aux | grep '[a]rcave'
 ```
 
 Usual causes: a background `arcave mcp` server serving an agent, a CI job that has not finished, a fork (`session create --from`) still copying, a second terminal. The lock is released when the holding process exits, a crash included — it is an operating-system lock, not a file arcave has to clean up. If nothing is running, retry.
+
+## `session … is locked by …`
+
+Another arcave command — possibly on another machine sharing the store — holds the session's lock, `sessions/<session>.lock.json`, and did not free it within 60 seconds. The message names its operation, host and pid. Wait for it to finish and retry.
+
+A crashed holder stops renewing its lock, and the lock is taken over 15 seconds later: nothing needs to be deleted by hand.
+
+## `session lock lost`
+
+The command could not renew its session lock for too long — the store stopped answering, or the machine slept — and stopped before another command could take the lock over. What it was writing is not committed; run it again.
 
 ## `config is not found: run 'arcave init' if not yet initialized`
 

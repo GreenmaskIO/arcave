@@ -48,13 +48,16 @@ var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 // On error the record is zero, whatever the store holds: a savepoint committed
 // before a failed restart is named by the error and found by `savepoint list`.
 func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
-	return locked(ctx, s, func() (model.Savepoint, error) {
-		return s.createSavepoint(ctx, req)
-	})
+	return locked(ctx, s, model.SessionLockOperationSavepointCreate,
+		func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.Savepoint, error) {
+			return s.createSavepoint(ctx, grantedLock, req)
+		})
 }
 
-// createSavepoint is the workflow itself, run with the project lock held.
-func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
+// createSavepoint is the workflow itself, run with the project lock and the session lock held.
+func (s *Service) createSavepoint(
+	ctx context.Context, grantedLock model.GrantedSessionLock, req model.CreateSavepointRequest,
+) (model.Savepoint, error) {
 	log := zerolog.Ctx(ctx)
 
 	if err := req.Validate(); err != nil {
@@ -90,7 +93,7 @@ func (s *Service) createSavepoint(ctx context.Context, req model.CreateSavepoint
 
 	// Capture while the services are stopped. The capture error is what the caller
 	// gets; the restart on top of it is best-effort and only logged.
-	savepoint, err := s.performSavepoint(ctx, working, killed, req.Name, req.Description, req.Labels)
+	savepoint, err := s.performSavepoint(ctx, grantedLock, working, killed, req.Name, req.Description, req.Labels)
 	if err != nil {
 		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
 		err = preferInterrupt(ctx, err)
@@ -170,43 +173,58 @@ func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest)
 	}
 
 	if req.DryRun {
-		return s.removeSavepoints(ctx, req)
-	}
-
-	return locked(ctx, s, func() (model.RemoveResult, error) {
-		// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
-		// that snapshot is the way back, and no selector may delete it.
-		if _, err := s.requireNoInflight(ctx, ""); err != nil {
+		removed, err := s.selectRemoval(ctx, req)
+		if err != nil {
 			return model.RemoveResult{}, err
 		}
-		return s.removeSavepoints(ctx, req)
-	})
+		return model.RemoveResult{
+			DryRun:  true,
+			Removed: removed,
+		}, nil
+	}
+
+	return locked(ctx, s, model.SessionLockOperationSavepointRemove,
+		func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.RemoveResult, error) {
+			// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
+			// that snapshot is the way back, and no selector may delete it.
+			if _, err := s.requireNoInflight(ctx, ""); err != nil {
+				return model.RemoveResult{}, err
+			}
+			return s.removeSavepoints(ctx, grantedLock, req)
+		})
 }
 
-// removeSavepoints selects what req names and deletes it; a dry run stops at the
-// selection.
-func (s *Service) removeSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error) {
-	// Everything, safety snapshots included: which of them this request may see is
-	// selectSavepointsToRemove's call, and it differs by selector.
-	savepoints, err := s.listSavepoints(ctx, true)
+// removeSavepoints selects what req names and deletes each one while grantedLock still holds.
+func (s *Service) removeSavepoints(
+	ctx context.Context, grantedLock model.GrantedSessionLock, req model.RemoveRequest,
+) (model.RemoveResult, error) {
+	removed, err := s.selectRemoval(ctx, req)
 	if err != nil {
 		return model.RemoveResult{}, err
 	}
-
-	_, removed, err := s.selectSavepointsToRemove(savepoints, req)
-	if err != nil {
-		return model.RemoveResult{}, err
-	}
-
-	if !req.DryRun && len(removed) > 0 {
-		if err := s.applyRemoval(ctx, removed); err != nil {
+	if len(removed) > 0 {
+		if err := s.applyRemoval(ctx, grantedLock, removed); err != nil {
 			logInterrupt(ctx, "removal interrupted: the savepoints not yet removed are kept, "+
 				"a partly removed one is left as an orphan directory")
 			return model.RemoveResult{}, err
 		}
 	}
+	return model.RemoveResult{Removed: removed}, nil
+}
 
-	return model.RemoveResult{DryRun: req.DryRun, Removed: removed}, nil
+// selectRemoval lists the savepoints req names.
+func (s *Service) selectRemoval(ctx context.Context, req model.RemoveRequest) ([]model.Savepoint, error) {
+	// Everything, safety snapshots included: which of them this request may see is
+	// selectSavepointsToRemove's call, and it differs by selector.
+	savepoints, err := s.listSavepoints(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	_, removed, err := s.selectSavepointsToRemove(savepoints, req)
+	if err != nil {
+		return nil, err
+	}
+	return removed, nil
 }
 
 // validateRemoveRequest rejects contradictory or incomplete requests — ids and
@@ -343,7 +361,9 @@ func partitionSavepoints(
 // applyRemoval deletes uncommit-first, so the only observable states are "fully
 // present" and "gone". The cost is an orphaned directory when the data delete
 // fails, reported here and reclaimed by a future `arcave savepoint gc`.
-func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) error {
+func (s *Service) applyRemoval(
+	ctx context.Context, grantedLock model.GrantedSessionLock, removed []model.Savepoint,
+) error {
 	// A plain errgroup.Group, not WithContext: a cancelled sibling would abort
 	// mid-delete. Wait reports only the first failure, so each goroutine records
 	// its own — that is what names the savepoints whose data survived.
@@ -352,7 +372,7 @@ func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) e
 	eg.SetLimit(maxParallelRemovals)
 	for i, savepoint := range removed {
 		eg.Go(func() error {
-			errs[i] = s.removeSavepoint(ctx, savepoint)
+			errs[i] = s.removeSavepoint(ctx, grantedLock, savepoint)
 			return errs[i]
 		})
 	}
@@ -364,10 +384,16 @@ func (s *Service) applyRemoval(ctx context.Context, removed []model.Savepoint) e
 
 // removeSavepoint drops one savepoint from the savepoint store. The backends are
 // built first: one that cannot be built leaves the savepoint whole.
-func (s *Service) removeSavepoint(ctx context.Context, savepoint model.Savepoint) error {
+func (s *Service) removeSavepoint(
+	ctx context.Context, grantedLock model.GrantedSessionLock, savepoint model.Savepoint,
+) error {
 	backends, err := s.newBackends(volumesOf(savepoint))
 	if err != nil {
 		return err
+	}
+	// Dropping it uncommits a record: only while the session's lock is still this run's.
+	if err := grantedLock.Verify(ctx); err != nil {
+		return fmt.Errorf("remove savepoint %s: %w", savepoint.ID, err)
 	}
 	if err := s.dropSavepoint(ctx, savepoint, backends); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", savepoint.ID.String()).

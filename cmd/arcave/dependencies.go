@@ -65,6 +65,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/printer/json"
+	"github.com/greenmaskio/arcave/internal/service/sessionlock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -203,11 +204,18 @@ func newDependencies(
 		return nil, err
 	}
 
+	sessionLocker, err := newSessionLocker(arcaveProjectStore, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("open the session lock: %w", err)
+	}
+
 	// One repository over the one store, so every record travels with its data. The
 	// locker is bound to the project root here, so the service never names a path.
 	svc := core.New(core.Deps{
-		SavepointRepo:    sprepo.New(composeProjectStore),
-		ProjectLocker:    lock.New(projectPath),
+		SavepointRepo: sprepo.New(composeProjectStore),
+		ProjectLocker: lock.New(projectPath),
+		// The session's lock in the store, which the flock beside it cannot be across hosts.
+		SessionLocker:    sessionLocker,
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,
 		SpecCodec:        codec,
@@ -397,12 +405,24 @@ func newSessionService(
 		Current:       currentsession.New(projectPath),
 		Store:         arcaveProjectStore,
 		NewSavepoints: newSavepointReader,
-		RunnerInfo:    newRunnerInfo(),
+		NewSessionLocker: func(id model.SessionID) (model.SessionLocker, error) {
+			return newSessionLocker(arcaveProjectStore, id)
+		},
+		RunnerInfo: newRunnerInfo(),
 	})
 }
 
 func (d *sessionDependencies) Close() error {
 	return d.store.Close()
+}
+
+// newSessionLocker opens the lock of session id in the arcave project's store.
+func newSessionLocker(arcaveProjectStore storages.Navigator, id model.SessionID) (*sessionlock.Locker, error) {
+	store, key, err := storefactory.SessionLock(arcaveProjectStore, id)
+	if err != nil {
+		return nil, err
+	}
+	return sessionlock.New(sessionlock.NewFischerSessionLockStore(store, key), id, newRunnerInfo()), nil
 }
 
 // newRunnerInfo identifies this process in a heartbeat; an unknown host stays blank.
@@ -654,6 +674,10 @@ func newGCDependencies(
 	if err != nil {
 		return nil, fmt.Errorf("resolve session: %w", err)
 	}
+	sessionLocker, err := newSessionLocker(arcaveProjectStore, session.ID)
+	if err != nil {
+		return nil, fmt.Errorf("open the session lock: %w", err)
+	}
 	// A docker.* the config gets wrong fails every command alike.
 	_, dockerClientAPI, err := newDockerClient(cfg.Docker, io.Discard)
 	if err != nil {
@@ -672,6 +696,7 @@ func newGCDependencies(
 		Sessions:                 sessions,
 		NewSavepoints:            newGCSavepointReader,
 		Locker:                   lock.New(projectPath),
+		SessionLocker:            sessionLocker,
 		Inflight:                 inflightrepo.New(projectPath),
 		DaemonCollectors:         newDaemonCollectors(cfg, engine),
 		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),

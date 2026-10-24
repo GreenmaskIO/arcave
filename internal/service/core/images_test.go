@@ -70,6 +70,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -130,6 +131,7 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -215,6 +217,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -285,6 +288,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -371,6 +375,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:      fakeSessionLocker{},
 		VolumeRemover:      &mockVolumeRemover{},
 		SavepointRepo:      repo,
 		ProjectLocker:      locker,
@@ -435,6 +440,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		SessionLocker:      fakeSessionLocker{},
 		VolumeRemover:      &mockVolumeRemover{},
 		SavepointRepo:      repo,
 		ProjectLocker:      locker,
@@ -481,6 +487,7 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 	registry.On("New", matchSpec(store, demoVolume().ObjectID)).Return(&mockBackend{volume: demoVolume()}, nil).Twice()
 
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -523,6 +530,7 @@ func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
 	runner := &mockComposeRunner{}
 	repo := emptySavepointRepo()
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -570,6 +578,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 	runner := &mockComposeRunner{}
 	inflight := &fakeInflight{}
 	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -827,7 +836,7 @@ func TestService_rebuildDivergentReplicas(t *testing.T) {
 			}
 			// A name is claimed only once the container holding it has been rebuilt away.
 			mock.InOrder(calls...)
-			s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
+			s := New(Deps{SessionLocker: fakeSessionLocker{}, ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -851,7 +860,7 @@ func TestService_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 	// Arrange
 	inspector := &mockInspector{}
 	rebuilder := &mockContainerRebuilder{}
-	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
+	s := New(Deps{SessionLocker: fakeSessionLocker{}, ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	replicas := []recordedReplica{
 		{service: demoService, number: 2, image: demoRestoredTag(1)},
 		{service: demoService, number: 1, image: demoRestoredTag(1)},
@@ -877,7 +886,7 @@ func TestService_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T
 	rebuilder := &mockContainerRebuilder{}
 	rebuilder.On("RecreateWithImage", mock.Anything, createdID(2),
 		model.ReplicaIdentity{Name: demoContainerName(3), Number: 3}, demoRestoredTag(3)).Return("rebuilt", nil).Once()
-	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
+	s := New(Deps{SessionLocker: fakeSessionLocker{}, ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -930,7 +939,7 @@ func TestService_requireImages(t *testing.T) {
 			if tt.present != nil {
 				lookup.On("ImageRefExists", mock.Anything, "local:1").Return(*tt.present, nil).Once()
 			}
-			svc := New(Deps{ImageLookup: lookup})
+			svc := New(Deps{SessionLocker: fakeSessionLocker{}, ImageLookup: lookup})
 
 			// Act
 			err := svc.requireImages(context.Background(), project, tt.restored)

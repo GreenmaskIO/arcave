@@ -73,8 +73,9 @@ func newRollbackRequest(
 // newRollbackResponse builds the response both adapters return, so neither drops a field.
 func newRollbackResponse(res model.RollbackResult) model.RollbackResponse {
 	return model.RollbackResponse{
-		RolledBackTo:   res.Savepoint,
-		Restored:       res.Restored,
-		WritableLayers: res.WritableLayers,
+		RolledBackTo:       res.Savepoint,
+		Restored:           res.Restored,
+		WritableLayers:     res.WritableLayers,
+		SafetySnapshotKept: res.SafetySnapshotKept,
 	}
 }
