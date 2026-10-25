@@ -31,13 +31,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-const (
-	// absentAlive, absentDead and absentUnknown are savepoints the scope's listing did not hold:
-	// one whose capture has started since, one that never had a tree, one whose status cannot be read.
-	absentAlive   = model.SavepointID("019e843e-1650-7000-8000-000000000006")
-	absentDead    = model.SavepointID("019e843e-1650-7000-8000-000000000007")
-	absentUnknown = model.SavepointID("019e843e-1650-7000-8000-000000000008")
-)
+// absentSavepoint is a savepoint the scope's listing did not hold: its tree is gone.
+const absentSavepoint = model.SavepointID("019e843e-1650-7000-8000-000000000007")
 
 // snapshotOf is a snapshot of id taken by savepoint's capture, at gctest.Old.
 func snapshotOf(id string, savepoint model.SavepointID) cdc.Snapshot {
@@ -49,41 +44,29 @@ func snapshotOf(id string, savepoint model.SavepointID) cdc.Snapshot {
 }
 
 // newRepoScope is the scope of a store holding the repositories named, with gctest.LiveSavepoint
-// committed and captures answering for the savepoints its listing did not hold.
-func newRepoScope(t *testing.T, captures *mockCaptures, repos ...string) gc.ComposeProjectScope {
+// committed and gctest.DeadSavepoint's tree dead.
+func newRepoScope(t *testing.T, repos ...string) gc.ComposeProjectScope {
 	t.Helper()
 	store, root := gctest.NewStore(t)
 	for _, repo := range repos {
 		gctest.WriteObject(t, root, "restic/"+repo+"/config", "c", gctest.Old)
 	}
-	scope := gctest.CaptureStatuses{
-		InProgress: []model.SavepointID{gctest.FreshSavepoint},
-		Dead:       []model.SavepointID{gctest.DeadSavepoint},
-		Unknown:    []gc.UnknownCapture{{ID: gctest.UnknownSavepoint, Error: "decode heartbeat: torn"}},
-	}.Apply(gctest.NewScope(t, store, model.Savepoint{ID: gctest.LiveSavepoint}))
-	scope.ReadCaptureStatus = captures.ReadCaptureStatus
+	scope := gctest.NewScope(t, store, model.Savepoint{ID: gctest.LiveSavepoint})
+	scope.Dead = []model.SavepointID{gctest.DeadSavepoint}
 	return scope
 }
 
-// Every snapshot is judged by its savepoint; a savepoint the listing did not hold is read now,
-// and a repository restic cannot list leaves the others judged.
+// Every snapshot is judged by its savepoint: one no record commits is dead, its tree listed or
+// not; a repository restic cannot list leaves the others judged.
 func TestCollector_Find(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	captures := &mockCaptures{}
-	captures.On("ReadCaptureStatus", mock.Anything, absentAlive).Return(true, nil).Once()
-	captures.On("ReadCaptureStatus", mock.Anything, absentDead).Return(false, nil).Once()
-	captures.On("ReadCaptureStatus", mock.Anything, absentUnknown).Return(false, errors.New("stat savepoint record: timeout")).Once()
-	scope := newRepoScope(t, captures, "volume-named-db", "volume-named-cache")
+	scope := newRepoScope(t, "volume-named-db", "volume-named-cache")
 	snapshots := []cdc.Snapshot{
 		snapshotOf("1", gctest.LiveSavepoint),
 		snapshotOf("2", gctest.DeadSavepoint),
-		snapshotOf("3", gctest.FreshSavepoint),
-		snapshotOf("4", gctest.UnknownSavepoint),
-		snapshotOf("5", absentAlive),
-		snapshotOf("6", absentDead),
+		snapshotOf("6", absentSavepoint),
 		snapshotOf("7", ""),
-		snapshotOf("8", absentUnknown),
 	}
 	inspector := &mockInspector{}
 	opener := &mockOpener{}
@@ -115,33 +98,15 @@ func TestCollector_Find(t *testing.T) {
 			Target:       "restic/volume-named-db/snapshots/" + dead[1],
 			Reason:       model.GarbageReasonDeadCapture,
 			LastModified: gctest.Old,
-			Savepoint:    absentDead,
+			Savepoint:    absentSavepoint,
 		},
 	}, got.Ops)
-	assert.Equal(t, []string{
-		"restic/volume-named-db/snapshots/" + strings.Repeat("3", 64),
-		"restic/volume-named-db/snapshots/" + strings.Repeat("5", 64),
-	}, gctest.SkippedTargets(got.Skipped))
-	assert.Equal(t, []model.GarbageReason{
-		model.GarbageReasonCaptureInProgress, model.GarbageReasonCaptureInProgress,
-	}, gctest.Reasons(got.Skipped))
+	assert.Empty(t, got.Skipped)
 	assert.Equal(t, []model.GarbageSkip{
 		{
 			Target: "restic/volume-named-cache",
 			Reason: model.GarbageReasonBackendUnreadable,
 			Error:  "restic snapshots: wrong password",
-		},
-		{
-			Target:       "restic/volume-named-db/snapshots/" + strings.Repeat("4", 64),
-			Reason:       model.GarbageReasonStatusUnknown,
-			LastModified: gctest.Old,
-			Error:        "decode heartbeat: torn",
-		},
-		{
-			Target:       "restic/volume-named-db/snapshots/" + strings.Repeat("8", 64),
-			Reason:       model.GarbageReasonStatusUnknown,
-			LastModified: gctest.Old,
-			Error:        "stat savepoint record: timeout",
 		},
 	}, got.Unjudged)
 	assert.Equal(t, 1, got.LiveRepos)
@@ -158,7 +123,6 @@ func TestCollector_Find(t *testing.T) {
 	for _, op := range got.Ops {
 		assert.Nil(t, op.Bytes, "a snapshot alone frees nothing a prune can name")
 	}
-	captures.AssertExpectations(t)
 	inspector.AssertExpectations(t)
 	opener.AssertExpectations(t)
 }
@@ -181,7 +145,7 @@ func TestCollector_Find_Estimate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			scope := newRepoScope(t, &mockCaptures{}, "volume-named-db")
+			scope := newRepoScope(t, "volume-named-db")
 			inspector := &mockInspector{}
 			inspector.On("ReadSnapshots", mock.Anything, "volume-named-db").
 				Return([]cdc.Snapshot{snapshotOf("2", gctest.DeadSavepoint)}, nil).Once()
@@ -211,7 +175,7 @@ func TestCollector_Find_Estimate(t *testing.T) {
 // A compose project without repositories starts no restic server.
 func TestCollector_Find_NoRepositories(t *testing.T) {
 	// Arrange
-	scope := newRepoScope(t, &mockCaptures{})
+	scope := newRepoScope(t)
 	opener := &mockOpener{}
 
 	// Act
@@ -219,7 +183,7 @@ func TestCollector_Find_NoRepositories(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, model.ResticRepositoryStat{GarbageFindings: gc.NewFindings()}, stat)
+	assert.Equal(t, model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, stat)
 	assert.Equal(t, utils.New(int64(0)), stat.Summary().Bytes)
 	opener.AssertExpectations(t)
 }
@@ -227,7 +191,7 @@ func TestCollector_Find_NoRepositories(t *testing.T) {
 // The repositories cannot be read at all when the server does not start.
 func TestCollector_Find_OpenFails(t *testing.T) {
 	// Arrange
-	scope := newRepoScope(t, &mockCaptures{}, "volume-named-db")
+	scope := newRepoScope(t, "volume-named-db")
 	opener := &mockOpener{}
 	opener.On("Open", mock.Anything, scope.Store).Return(nil, errors.New("address already in use")).Once()
 

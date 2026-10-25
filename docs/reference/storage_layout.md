@@ -65,7 +65,7 @@ A session directory without `session.json` is not a session: no `--session` find
 
 A savepoint id is a canonical UUID, so a directory that is not one is never mistaken for a savepoint, and `shared/` and `restic/` cannot collide with a savepoint of any age.
 
-**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. Its `heartbeat.json` says whether that capture is still running or died, which is how [`arcave gc`](cli/gc.md) tells the two apart. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
+**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. Its `heartbeat.json` says how that capture ended; [`arcave gc`](cli/gc.md) names the directory whatever it says, since no capture runs while gc holds the session's lock. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
 
 ## Object ids
 

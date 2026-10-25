@@ -213,7 +213,7 @@ Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose fil
 | `restored_layer_grace` | no | How long ago an unused layer tag must have been tagged before it counts as garbage, written as a duration such as `1h`. The default is `gc.restored_layer_grace`. |
 | `kinds` | no | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. The default is every kind. |
 
-Returns the report [`arcave gc --dry-run`](cli/gc.md) prints. The tool always runs as a dry run and deletes nothing. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`. What a capture in progress may name is skipped as `capture-in-progress`, which is not partial: call again once it finishes.
+Returns the report [`arcave gc --dry-run`](cli/gc.md) prints. The tool always runs as a dry run and deletes nothing. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`.
 
 ## Where the tools differ from the CLI
 

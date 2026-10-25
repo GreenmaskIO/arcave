@@ -20,7 +20,6 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 )
 
@@ -51,10 +50,3 @@ func (m *mockInspector) EstimateForget(ctx context.Context, objectID string, ids
 }
 
 func (m *mockInspector) Close(ctx context.Context) { m.Called(ctx) }
-
-type mockCaptures struct{ mock.Mock }
-
-func (m *mockCaptures) ReadCaptureStatus(ctx context.Context, id model.SavepointID) (bool, error) {
-	args := m.Called(ctx, id)
-	return args.Bool(0), args.Error(1)
-}

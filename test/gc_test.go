@@ -72,39 +72,30 @@ func TestGC_DryRun_NamesOnlyTheDead(t *testing.T) {
 	require.NoError(t, err)
 
 	composeDir := filepath.Join(env.sessionDir(model.DefaultSession), "compose", env.project)
-	// A run that died before its first beat, and one still capturing: written a moment ago, both.
-	deadTree, liveTree := model.NewSavepointID(), model.NewSavepointID()
+	// A fresh tree with no heartbeat and one whose heartbeat reads in progress: both are dead.
+	deadTree, staleTree := model.NewSavepointID(), model.NewSavepointID()
 	plant(t, filepath.Join(composeDir, deadTree.String(), "volume-named-x", "data.tar"), "partial capture")
-	plant(t, filepath.Join(composeDir, liveTree.String(), "volume-named-x", "data.tar"), "capture under way")
-	plantHeartbeat(t, filepath.Join(composeDir, liveTree.String()), heartbeat.StatusInProgress)
+	plant(t, filepath.Join(composeDir, staleTree.String(), "volume-named-x", "data.tar"), "capture cut off")
+	plantHeartbeat(t, filepath.Join(composeDir, staleTree.String()), heartbeat.StatusInProgress)
 
 	svc := env.newGarbageCollector(t, model.DefaultSession, baseline.engine(), model.GarbageDataKinds()...)
+	before := fileSizes(t, env.storeDir())
 
 	// Act
-	held, heldErr := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
-	plantHeartbeat(t, filepath.Join(composeDir, liveTree.String()), heartbeat.StatusFailed)
-	before := fileSizes(t, env.storeDir())
 	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
 
 	// Assert
-	require.NoError(t, heldErr)
-	heldOps := opsByKind(held)
-	assert.Equal(t, []string{deadTree.String()}, targetsOf(heldOps[model.GarbageDataKindSavepointData]),
-		"a dead tree goes however young; a live capture's is held")
-	assert.Empty(t, heldOps[model.GarbageDataKindImageLayers], "a live capture's edges are not known: no blob is judged")
-	assert.Empty(t, heldOps[model.GarbageDataKindUpstreamImages])
-	assert.Positive(t, held.Total.Skipped)
-
 	require.NoError(t, err)
 	assert.Equal(t, before, fileSizes(t, env.storeDir()), "a dry run changes nothing")
 	ops := opsByKind(result)
-	assert.ElementsMatch(t, []string{deadTree.String(), liveTree.String()}, targetsOf(ops[model.GarbageDataKindSavepointData]))
+	assert.ElementsMatch(t, []string{deadTree.String(), staleTree.String()}, targetsOf(ops[model.GarbageDataKindSavepointData]),
+		"a dead tree goes however young, whatever its heartbeat says")
 	assert.NotEmpty(t, ops[model.GarbageDataKindImageLayers], "the removed savepoint and the safety snapshots held blobs of their own")
 	var freedBy []model.SavepointID
 	for _, dead := range result.Savepoints {
 		freedBy = append(freedBy, dead.Savepoint)
 	}
-	assert.ElementsMatch(t, []model.SavepointID{deadTree, liveTree}, freedBy, "each dead savepoint says what it frees")
+	assert.ElementsMatch(t, []model.SavepointID{deadTree, staleTree}, freedBy, "each dead savepoint says what it frees")
 	tags := targetsOf(ops[model.GarbageDataKindRestoredLayers])
 	assert.Contains(t, strings.Join(tags, ","), ":sp-"+first.ID.String(), "the first rollback's tag is unused")
 	assert.NotContains(t, strings.Join(tags, ","), ":sp-"+second.ID.String(), "the running container's tag is in use")
@@ -203,7 +194,6 @@ func (e *sessionEnv) newGarbageCollector(
 		DaemonCollectors:         daemonCollectors,
 		ComposeProjectCollectors: composeProjectCollectors,
 		UnlistedNamespaces:       []string{cdc.NamespaceRepos},
-		Concurrency:              2,
 	})
 }
 

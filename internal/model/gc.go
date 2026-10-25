@@ -63,8 +63,7 @@ func (m GarbageDataKind) Validate() error {
 type GarbageCollectorKind string
 
 const (
-	// GarbageCollectorKindSavepointDirectory reads savepoint directories by their record and
-	// heartbeat.
+	// GarbageCollectorKindSavepointDirectory reads savepoint directories by their record.
 	GarbageCollectorKindSavepointDirectory GarbageCollectorKind = "savepoint-directory"
 	// GarbageCollectorKindResticRepositories reads the cdc backend's restic repositories.
 	GarbageCollectorKindResticRepositories GarbageCollectorKind = "restic-repositories"
@@ -99,16 +98,10 @@ const (
 type GarbageReason string
 
 const (
-	// GarbageReasonDeadCapture is a savepoint tree whose capture failed, went stale or left
-	// no heartbeat, and no record commits.
+	// GarbageReasonDeadCapture is a savepoint tree no record commits.
 	GarbageReasonDeadCapture  GarbageReason = "dead-capture"
 	GarbageReasonUnreferenced GarbageReason = "unreferenced"
 	GarbageReasonUnusedTag    GarbageReason = "unused-tag"
-	// GarbageReasonCaptureInProgress holds back what a live capture may name before its record.
-	GarbageReasonCaptureInProgress GarbageReason = "capture-in-progress"
-	// GarbageReasonStatusUnknown leaves unjudged what a capture whose heartbeat cannot be
-	// read may name.
-	GarbageReasonStatusUnknown GarbageReason = "status-unknown"
 	// GarbageReasonBackendUnreadable leaves unjudged what the backend holding it cannot list.
 	GarbageReasonBackendUnreadable GarbageReason = "backend-unreadable"
 	// GarbageReasonListedByUnreferenced holds back a blob only a manifest no record names
@@ -212,6 +205,7 @@ type GarbageSkip struct {
 // GarbageFindings is the part of a stat every kind shares: what it would do, what it held
 // back, what it could not judge, and why it refused, if it did. A kind's stat embeds it.
 type GarbageFindings struct {
+	// Ops is never nil, so a kind that found nothing reports [] rather than null.
 	Ops     []GarbageOp   `json:"ops"`
 	Skipped []GarbageSkip `json:"skipped,omitempty"`
 	// Unjudged are objects held back because what decides them cannot be read.

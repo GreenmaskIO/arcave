@@ -87,7 +87,7 @@ Usual causes: a background `arcave mcp` server serving an agent, a CI job that h
 
 Another arcave command — possibly on another machine sharing the store — holds the session's lock, `sessions/<session>.lock.json`, and did not free it within 60 seconds. The message names its operation, host and pid. Wait for it to finish and retry.
 
-A crashed holder stops renewing its lock, and the lock is taken over 15 seconds later: nothing needs to be deleted by hand.
+A crashed holder stops renewing its lock, and the lock is taken over 30 seconds later: nothing needs to be deleted by hand.
 
 ## `session lock lost`
 
@@ -164,7 +164,7 @@ An earlier run was interrupted after it started writing and before it committed 
 <storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/019e843e-1650-7000-8000-000000000000/
 ```
 
-If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back. Its `heartbeat.json` says whether the run that wrote it failed, and [`arcave gc --dry-run`](cli/gc.md) names such a directory once its run is dead.
+If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back. Its `heartbeat.json` says whether the run that wrote it failed, and [`arcave gc --dry-run`](cli/gc.md) names such a directory.
 
 ## `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start`
 

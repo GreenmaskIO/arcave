@@ -12,7 +12,7 @@ Reports what no live savepoint of a session keeps alive. The report covers the s
 arcave gc --dry-run [--session <session>] [--kind <kind>…] [--restored-layer-grace <duration>] [flags]
 ```
 
-gc reads and nothing else, and stops nothing. It holds the project lock while it reads, so it refuses to run while another arcave command in the project is working, and waits for nothing. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
+gc reads and nothing else, and stops nothing. It holds the project lock while it reads, so it refuses to run while another arcave command in the project is working. It also holds the session's lock in the store, which it waits for as every command does. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
 
 ## Flags
 
@@ -30,12 +30,10 @@ A savepoint's status decides what it keeps alive. Whatever only a dead savepoint
 
 | Status | How gc tells | What it keeps alive |
 |---|---|---|
-| committed | The savepoint has its `savepoint.json`. The record outranks the heartbeat. | Everything it names. Safety snapshots count. |
-| in progress | No record. Its `heartbeat.json` reads `in-progress` and was written in the last 30 minutes, by the store's clock. | Its own tree, and every shared object of its compose project, because what the capture names isn't known until its record. |
-| dead | No record. Its heartbeat reads `failed`, has gone stale, or is missing. A capture writes its heartbeat before its first object, so a missing one means it never got far. | Nothing. |
-| unknown | No record, and the heartbeat can't be read. | Its own tree, and every shared object of its compose project, all left unjudged. |
+| committed | The savepoint has its `savepoint.json`. | Everything it names. Safety snapshots count. |
+| dead | No record. | Nothing. |
 
-`savepoint create` keeps its heartbeat fresh while it captures, and so does the safety snapshot a rollback takes. A capture that can't write its heartbeat for 25 minutes cancels itself and commits nothing, so a gc on another host never takes a live capture's tree for dead.
+gc holds the session's lock for its whole run, and so does every command that writes a savepoint: `savepoint create`, the safety snapshot a rollback takes and `savepoint remove`. No capture runs while gc reads, so a directory with no record was left by a run that died, however young it is and whatever its `heartbeat.json` says.
 
 ## What gc looks at
 
@@ -43,15 +41,13 @@ gc looks for five kinds of data. A savepoint's record is the root that keeps dat
 
 | Kind | What it is | Garbage when |
 |---|---|---|
-| `savepoint-data` | A savepoint's own directory: its record, its compose spec, the volumes the `fullcopy` backend streamed, and its writable layers' archives and manifests. No other savepoint shares it. | The directory has no `savepoint.json` and its capture is dead. A live one is skipped as `capture-in-progress`; one of unknown status is left unjudged as `status-unknown`. A failed or interrupted create leaves one, and so does a remove. |
-| `deduplicated-volumes` | A snapshot in a `cdc` backend's restic repository, which shares its data across savepoints. | The savepoint the snapshot's `arcave-savepoint` tag names is dead. A capture in progress is skipped as `capture-in-progress`; one of unknown status is left unjudged as `status-unknown`. |
-| `image-layers` | The layers and configs of stored images, shared by writable layers and upstream images alike. | No manifest still stored lists it, and no capture in its compose project is in progress or of unknown status. |
-| `upstream-images` | An image a service's `image:` names, stored once for every savepoint; its layers are `image-layers`. | No savepoint names it, and no capture in its compose project is in progress or of unknown status. |
+| `savepoint-data` | A savepoint's own directory: its record, its compose spec, the volumes the `fullcopy` backend streamed, and its writable layers' archives and manifests. No other savepoint shares it. | The directory has no `savepoint.json`. A failed or interrupted create leaves one, and so does a remove. |
+| `deduplicated-volumes` | A snapshot in a `cdc` backend's restic repository, which shares its data across savepoints. | The savepoint the snapshot's `arcave-savepoint` tag names has no record. |
+| `image-layers` | The layers and configs of stored images, shared by writable layers and upstream images alike. | No manifest still stored lists it. |
+| `upstream-images` | An image a service's `image:` names, stored once for every savepoint; its layers are `image-layers`. | No savepoint names it. |
 | `restored-layers` | A writable layer a rollback restored into the Docker daemon, tagged `arcave/…:sp-<id>`. | No container uses it, by reference or by image, running or stopped, and it was tagged longer ago than `--restored-layer-grace` (`0` by default). Only layers this arcave project committed for a compose project of the session are judged. |
 
 Each report names its `data_kind` and the `collector` that found it: how arcave looks for that kind of data in its store, such as `restic-repositories` for `deduplicated-volumes`.
-
-While a capture in a compose project is in progress, the `image-layers` and `upstream-images` kinds judge nothing there: each object is skipped as `capture-in-progress`. This doesn't make the run partial. Nothing failed: run gc again once the capture finishes. While a capture's status is unknown, the same objects are left unjudged as `status-unknown` instead, and the run is partial.
 
 A dead savepoint's manifests hold no layer, so the layers only it lists are garbage in the same run. Every other manifest still in the store keeps its layers, including the manifest of an upstream image no savepoint names. Such a layer is skipped as `listed-by-unreferenced` and becomes garbage only once that image is gone. A manifest no savepoint names holds nothing when a capture would write it again: one that is missing, lists nothing, is torn, or names another image. Any other manifest that can't be read makes `image-layers` refuse to judge that compose project, because it might list any layer. The report lists it under `unreadable`, with the savepoint that names it when one does.
 
@@ -59,13 +55,11 @@ A dead savepoint's manifests hold no layer, so the layers only it lists are garb
 An unused upstream image and its layers are not freed in the same run. The first run finds the image under `upstream-images` and holds its layers back as `listed-by-unreferenced`; the run after the image is removed finds the layers under `image-layers`. This is on purpose: a capture that finds an image's manifest intact reuses its layers without writing them, so a layer may only go once no manifest lists it.
 :::
 
-`deduplicated-volumes` asks restic, not the store's files: it lists each repository's snapshots and judges each by the savepoint its tag names, so a capture in progress holds back only its own snapshots. It takes no restic lock, so it doesn't stop a backup running on another host. A savepoint gc hadn't seen when it read the store is looked up again, so a capture that started since is skipped. A snapshot with no `arcave-savepoint` tag wasn't taken by arcave. It's counted under `unattributed` and never judged. A repository restic can't list is left unjudged as `backend-unreadable`, with restic's error. The other repositories are still judged. Any unjudged object makes the run partial.
+`deduplicated-volumes` asks restic, not the store's files: it lists each repository's snapshots and judges each by the savepoint its tag names. A snapshot whose savepoint has no record is dead, whether its directory is still in the store or gone. It takes no restic lock. A snapshot with no `arcave-savepoint` tag wasn't taken by arcave. It's counted under `unattributed` and never judged. A repository restic can't list is left unjudged as `backend-unreadable`, with restic's error. The other repositories are still judged. Any unjudged object makes the run partial.
 
 A layer tag is matched by the labels its image carries: the arcave project and compose project the layer was committed under. A tag whose image carries neither, such as one committed by an earlier arcave version, is counted under `unattributed` and never judged. A tag of another compose project of the arcave project is counted under `other_compose_projects`: a gc of the session holding that compose project judges it. Remove a tag no session holds any more by hand.
 
-The project lock stops gc from running while a capture in the same project directory writes. A gc running on another host, against the same store, doesn't see that lock, and reads the capture's heartbeat instead. A capture that starts after such a gc has read the store may reuse a blob that gc names. This matters only once gc deletes.
-
-A layer tag has no heartbeat. A rollback tags the layers it loads before it creates the containers that use them, and takes its safety snapshot in between, so for that time the new tags are unused. A gc in the same project directory waits for the rollback's lock. A gc in another directory of the same arcave project doesn't: two checkouts sharing `project.name` and a daemon each have their own lock. Pass `--restored-layer-grace`, or set `gc.restored_layer_grace`, to hold back the tags such a rollback has just loaded. A layer tag the daemon reports no tag time for is left unjudged as `tag-time-unknown` while a grace is set.
+The project lock keeps out a capture in the same project directory, and the session's lock one on any host sharing the store. Neither covers the Docker daemon, which every session and store on the machine shares. A rollback tags the layers it loads before it creates the containers that use them, and takes its safety snapshot in between, so for that time the new tags are unused. A gc in the same project directory waits for the rollback's lock. A gc in another directory of the same arcave project doesn't: two checkouts sharing `project.name` and a daemon each have their own lock. Pass `--restored-layer-grace`, or set `gc.restored_layer_grace`, to hold back the tags such a rollback has just loaded. A layer tag the daemon reports no tag time for is left unjudged as `tag-time-unknown` while a grace is set.
 
 A session directory without `session.json`, which a failed fork leaves, belongs to no session, so gc doesn't report it. `arcave session list --all` lists it with its status, and `arcave session remove <id>` deletes it.
 
@@ -129,6 +123,7 @@ A target is relative to the compose project's directory in the store. A `restore
 | A `docker.*` setting is wrong | The command fails as every command does, whichever kinds run. |
 | `-p/--project-name` is passed | `gc works on a session, every compose project in it: drop -p/--project-name` |
 | The session was removed after gc resolved it | The command fails with `session not found`, and reads nothing. |
+| gc loses the session's lock midway | The command fails with `session lock lost` and prints no report: what it read past the loss is no verdict. Run it again. |
 
 ## Examples
 

@@ -25,13 +25,11 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
 // SavepointReader reads the committed savepoints of one compose project's store.
 type SavepointReader interface {
 	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
-	IsSavepointCommitted(ctx context.Context, id model.SavepointID) (bool, error)
 }
 
 // sessionLookup reads a session's record; the default session always has one.
@@ -69,11 +67,6 @@ type Deps struct {
 	// UnlistedNamespaces are the top-level directories of a compose project store its scope's
 	// listing leaves out: a backend's own, which its collector reads through the backend.
 	UnlistedNamespaces []string
-	// Concurrency caps how many capture heartbeats are read at once; 0 reads one at a time.
-	Concurrency int
-	// HeartbeatStaleAfter is the age at which an in-progress capture heartbeat reads as dead;
-	// zero keeps heartbeat.DefaultStaleAfter.
-	HeartbeatStaleAfter time.Duration
 	// Now is the clock a scope is stamped with; nil is the wall clock.
 	Now func() time.Time
 }
@@ -91,8 +84,6 @@ type GarbageCollector struct {
 	composeProjectCollectors []ComposeProjectCollector
 	unlisted                 []string
 	grace                    time.Duration
-	concurrency              int
-	staleAfter               time.Duration
 	now                      func() time.Time
 }
 
@@ -114,15 +105,12 @@ func New(deps Deps) *GarbageCollector {
 		composeProjectCollectors: deps.ComposeProjectCollectors,
 		unlisted:                 deps.UnlistedNamespaces,
 		grace:                    deps.RestoredLayerGrace,
-		concurrency:              max(deps.Concurrency, 1),
-		staleAfter:               cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 		now:                      now,
 	}
 }
 
 // GarbageCollect reports what every collector req selects finds in the session; only a dry
-// run exists. The project lock and the session's lock keep a blob a capture reuses from
-// reading as garbage.
+// run exists. It holds the project and session locks throughout, so no capture runs meanwhile.
 func (s *GarbageCollector) GarbageCollect(
 	ctx context.Context, req model.GarbageCollectRequest,
 ) (model.GarbageCollectResult, error) {
@@ -161,7 +149,7 @@ func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, 
 
 // withSessionLock runs fn holding the session's lock in the store, and unlocks it however fn
 // ends; a failed unlock is logged. fn runs on the lock's context: a lost lock cancels it with
-// model.ErrSessionLockLost as its cause.
+// model.ErrSessionLockLost as its cause, and a run so cancelled returns that cause, not its result.
 func withSessionLock[T any](
 	ctx context.Context, locker model.SessionLocker, fn func(ctx context.Context) (T, error),
 ) (T, error) {
@@ -175,7 +163,13 @@ func withSessionLock[T any](
 			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
 		}
 	}()
-	return fn(lockCtx)
+	result, err := fn(lockCtx)
+	// What a run judged past a lost lock or an interrupt is no verdict.
+	if cause := context.Cause(lockCtx); cause != nil {
+		var zero T
+		return zero, cause
+	}
+	return result, err
 }
 
 // requireSession refuses a session other than the default that has no record: one removed

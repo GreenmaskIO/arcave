@@ -15,43 +15,8 @@
 package gc
 
 import (
-	"time"
-
 	"github.com/greenmaskio/arcave/internal/model"
 )
-
-// NewFindings starts a stat's findings with an empty op list, so a kind that found nothing
-// reports [] rather than null.
-func NewFindings() model.GarbageFindings {
-	return model.GarbageFindings{Ops: []model.GarbageOp{}}
-}
-
-// HoldForCaptures holds target back while a capture of the scope is in progress or of unknown
-// status, and reports whether it did.
-func HoldForCaptures(findings *model.GarbageFindings, scope ComposeProjectScope, target string, lastModified time.Time) bool {
-	switch {
-	case len(scope.InProgress) > 0:
-		findings.Skipped = append(findings.Skipped, model.GarbageSkip{
-			Target:       target,
-			Reason:       model.GarbageReasonCaptureInProgress,
-			LastModified: lastModified,
-		})
-	case len(scope.Unknown) > 0:
-		findings.Unjudged = append(findings.Unjudged, model.GarbageSkip{
-			Target:       target,
-			Reason:       model.GarbageReasonStatusUnknown,
-			LastModified: lastModified,
-		})
-	default:
-		return false
-	}
-	return true
-}
-
-// CapturesHeld reports whether HoldForCaptures holds every shared object of scope.
-func CapturesHeld(scope ComposeProjectScope) bool {
-	return len(scope.InProgress) > 0 || len(scope.Unknown) > 0
-}
 
 // NewLiveImages maps every image the savepoints hold the bytes of to the first savepoint naming it.
 func NewLiveImages(savepoints []model.Savepoint) map[model.ImageDigestID]model.SavepointID {

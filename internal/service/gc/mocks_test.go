@@ -100,11 +100,6 @@ func (m *mockSavepointReader) LoadSavepoints(ctx context.Context, ids []model.Sa
 	return args.Get(0).([]model.Savepoint), args.Error(1)
 }
 
-func (m *mockSavepointReader) IsSavepointCommitted(ctx context.Context, id model.SavepointID) (bool, error) {
-	args := m.Called(ctx, id)
-	return args.Bool(0), args.Error(1)
-}
-
 type mockCollector struct{ mock.Mock }
 
 func (m *mockCollector) Kind() model.GarbageCollectorKind {

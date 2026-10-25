@@ -31,6 +31,7 @@ import (
 // short settle, so a test pays little for every workflow's lock.
 var testSessionLockTiming = sessionlock.Timing{
 	TTL:   sessionlock.DefaultTiming.TTL,
+	Stale: sessionlock.DefaultTiming.Stale,
 	Renew: sessionlock.DefaultTiming.Renew,
 	Wait:  sessionlock.DefaultTiming.Wait,
 	Poll:  100 * time.Millisecond,

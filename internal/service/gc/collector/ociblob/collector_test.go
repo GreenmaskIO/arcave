@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/utils/gctest"
 )
 
@@ -49,14 +48,13 @@ func TestCollector_Find(t *testing.T) {
 	freshBlob := strings.Repeat("d", 64)
 
 	tests := []struct {
-		name     string
-		plant    func(t *testing.T, root string)
-		statuses gctest.CaptureStatuses
-		wantOps  []string
+		name    string
+		plant   func(t *testing.T, root string)
+		dead    []model.SavepointID
+		wantOps []string
 		// wantFreedBy is the dead savepoint each op names, "" for none.
 		wantFreedBy    []model.SavepointID
 		wantSkipped    []string
-		wantUnjudged   []string
 		wantAborted    bool
 		wantLive       int
 		wantUnreadable []string
@@ -98,31 +96,11 @@ func TestCollector_Find(t *testing.T) {
 				gctest.WriteObject(t, root, "shared/oci/blobs/sha256/"+gctest.DeadBlob, "dead!", gctest.Recent)
 				gctest.WriteObject(t, root, "shared/oci/blobs/sha256/"+freshBlob, "new", gctest.Recent)
 			},
-			statuses:    gctest.CaptureStatuses{Dead: []model.SavepointID{gctest.DeadSavepoint, gctest.OtherDeadSavepoint}},
+			dead:        []model.SavepointID{gctest.DeadSavepoint, gctest.OtherDeadSavepoint},
 			wantOps:     []string{"shared/oci/blobs/sha256/" + gctest.DeadBlob, "shared/oci/blobs/sha256/" + freshBlob},
 			wantFreedBy: []model.SavepointID{gctest.DeadSavepoint, ""},
 			wantSkipped: []string{},
 			wantLive:    2,
-		},
-		{
-			name: "a capture in progress holds every blob, and no manifest is read",
-			plant: func(t *testing.T, root string) {
-				gctest.WriteObject(t, root, gctest.LiveSavepoint.String()+"/images/db/replicas/1/image.json", "{torn", gctest.Old)
-				gctest.WriteObject(t, root, "shared/oci/blobs/sha256/"+gctest.DeadBlob, "dead!", gctest.Old)
-			},
-			statuses:    gctest.CaptureStatuses{InProgress: []model.SavepointID{gctest.FreshSavepoint}},
-			wantOps:     []string{},
-			wantSkipped: []string{"shared/oci/blobs/sha256/" + gctest.DeadBlob},
-		},
-		{
-			name: "a capture of unknown status leaves every blob unjudged",
-			plant: func(t *testing.T, root string) {
-				gctest.WriteObject(t, root, "shared/oci/blobs/sha256/"+gctest.DeadBlob, "dead!", gctest.Old)
-			},
-			statuses:     gctest.CaptureStatuses{Unknown: []gc.UnknownCapture{{ID: gctest.UnknownSavepoint, Error: "boom"}}},
-			wantOps:      []string{},
-			wantSkipped:  []string{},
-			wantUnjudged: []string{"shared/oci/blobs/sha256/" + gctest.DeadBlob},
 		},
 		{
 			name: "a missing manifest references everything",
@@ -191,7 +169,9 @@ func TestCollector_Find(t *testing.T) {
 			}
 
 			// Act
-			stat, err := New(2).Find(ctx, tt.statuses.Apply(gctest.NewScope(t, store, savepoint)))
+			scope := gctest.NewScope(t, store, savepoint)
+			scope.Dead = tt.dead
+			stat, err := New(2).Find(ctx, scope)
 
 			// Assert
 			require.NoError(t, err)
@@ -203,7 +183,7 @@ func TestCollector_Find(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantFreedBy, freedBy)
 			assert.Equal(t, tt.wantSkipped, gctest.SkippedTargets(got.Skipped))
-			assert.Equal(t, gctest.NilIfEmpty(tt.wantUnjudged), gctest.NilIfEmpty(gctest.SkippedTargets(got.Unjudged)))
+			assert.Empty(t, got.Unjudged)
 			assert.Equal(t, tt.wantAborted, got.Aborted != "")
 			assert.Equal(t, tt.wantLive, got.Live)
 			var unreadable []string

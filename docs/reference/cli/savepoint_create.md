@@ -128,6 +128,7 @@ Full shapes for every command are in [Output](../output.md).
 | A daemon whose version could not be read exports an old archive shape | `capturing volumes: … unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape`. See [Requirements](../requirements.md). |
 | An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
+| The capture can't write its `heartbeat.json` for 25 minutes | `heartbeat lost` — the capture cancels itself and commits nothing; its directory is left for [`arcave gc`](gc.md). Check that the store is reachable and writable. |
 | The services do not become healthy in `--wait-timeout` | `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the project. |
 
 An error raised during the capture itself — after the services are stopped — is prefixed `capturing volumes: `, and the services are started again.

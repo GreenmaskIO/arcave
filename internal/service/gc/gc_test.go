@@ -179,19 +179,25 @@ func TestGarbageCollector_GarbageCollect_RefusedWhileLocked(t *testing.T) {
 }
 
 func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
-	// Arrange: the session is checked under the session's lock: it may have gone while the gc waited.
+	// Arrange: the session is checked, and the records read, under the session's lock: a tree no
+	// record commits is dead only while no capture can run.
 	locker := &mockLocker{}
 	sessionLocker := &mockSessionLocker{}
 	sessions := &mockSessions{}
 	grantedLock := &mockGrantedSessionLock{}
+	demoSavepoints := &mockSavepointReader{}
 	acquire := locker.On("Acquire", mock.Anything).Return(nil).Once()
 	lock := sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).Return(grantedLock, nil).Once()
 	under := sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
+	records := demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint{}, nil).Once()
 	free := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	release := locker.On("Release").Return(nil).Once()
-	mock.InOrder(acquire, lock, under, free, release)
-	deps := newDeps(gcSession, newGCStore(t, gcSession), sessions, locker, newNoMarker())
+	mock.InOrder(acquire, lock, under, records, free, release)
+	trees := newEmptyCollector(model.GarbageDataKindSavepointData, model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}})
+	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, locker, newNoMarker())
 	deps.SessionLocker = sessionLocker
+	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 	svc := New(deps)
 
 	// Act
@@ -203,6 +209,44 @@ func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
 	sessionLocker.AssertExpectations(t)
 	grantedLock.AssertExpectations(t)
 	sessions.AssertExpectations(t)
+	demoSavepoints.AssertExpectations(t)
+	trees.AssertExpectations(t)
+}
+
+// A run that loses the session's lock midway returns the loss, not what it judged past it.
+func TestGarbageCollector_GarbageCollect_LockLostMidway(t *testing.T) {
+	// Arrange: the mock locker hands the caller's context back as the lock's.
+	ctx, loseLock := context.WithCancelCause(context.Background())
+	defer loseLock(nil)
+	sessionLocker := &mockSessionLocker{}
+	grantedLock := &mockGrantedSessionLock{}
+	sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).Return(grantedLock, nil).Once()
+	grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
+	sessions := &mockSessions{}
+	sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
+	demoSavepoints := &mockSavepointReader{}
+	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint{}, nil).Once()
+	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	trees.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool { return scope.ComposeProject == "demo" })).
+		Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
+		Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
+	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, newHeldLocker(), newNoMarker())
+	deps.SessionLocker = sessionLocker
+	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
+	svc := New(deps)
+
+	// Act
+	result, err := svc.GarbageCollect(ctx, model.GarbageCollectRequest{DryRun: true})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionLockLost)
+	assert.Zero(t, result)
+	sessionLocker.AssertExpectations(t)
+	grantedLock.AssertExpectations(t)
+	sessions.AssertExpectations(t)
+	demoSavepoints.AssertExpectations(t)
+	trees.AssertExpectations(t)
 }
 
 func TestGarbageCollector_GarbageCollect_RefusedWhileSessionLocked(t *testing.T) {
@@ -242,8 +286,8 @@ func TestGarbageCollector_GarbageCollect(t *testing.T) {
 
 	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
 	blobs.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool {
-		opened := scope.Store != nil && scope.ReadCaptureStatus != nil
-		scope.Store, scope.Objects, scope.ReadCaptureStatus = nil, nil, nil
+		opened := scope.Store != nil
+		scope.Store, scope.Objects = nil, nil
 		return opened && assert.ObjectsAreEqual(ComposeProjectScope{
 			ComposeProject: "demo", Savepoints: savepoints,
 		}, scope)
@@ -442,86 +486,36 @@ func TestGarbageCollector_GarbageCollect_NoFinding(t *testing.T) {
 	tags.AssertExpectations(t)
 }
 
-// Every tree no record commits is sorted by its heartbeat, read off the store: a record beside
-// one outranks it, none means dead.
-func TestGarbageCollector_GarbageCollect_ReadsCaptureStatuses(t *testing.T) {
+// Every tree no record commits is dead whatever its heartbeat says.
+func TestGarbageCollector_GarbageCollect_UncommittedTreesAreDead(t *testing.T) {
 	const tree = model.SavepointID("019e843e-1650-7000-8000-000000000003")
-	beat := func(operation model.HeartbeatOperation, status heartbeat.Status) *heartbeat.Heartbeat {
-		return &heartbeat.Heartbeat{Operation: operation, Status: status}
-	}
 
 	tests := []struct {
 		name string
-		// heartbeat is written into the tree when set; raw instead when not empty.
-		heartbeat  *heartbeat.Heartbeat
-		raw        string
-		committed  bool
-		staleAfter time.Duration
-		// recordNow is what the record check past the listing answers; nil expects no check.
-		recordNow *bool
-		recordErr error
-		want      ComposeProjectScope
+		// raw is written into the tree as its heartbeat when not empty.
+		raw       string
+		committed bool
+		wantDead  []model.SavepointID
 	}{
 		{
-			name:      "a fresh in-progress heartbeat is a live capture",
-			heartbeat: beat(model.HeartbeatOperationSavepoint, heartbeat.StatusInProgress),
-			want:      ComposeProjectScope{InProgress: []model.SavepointID{tree}},
+			name:     "a tree without a heartbeat is dead",
+			wantDead: []model.SavepointID{tree},
 		},
 		{
-			name:       "a stale in-progress heartbeat is dead",
-			heartbeat:  beat(model.HeartbeatOperationSavepoint, heartbeat.StatusInProgress),
-			staleAfter: time.Nanosecond,
-			recordNow:  utils.New(false),
-			want:       ComposeProjectScope{Dead: []model.SavepointID{tree}},
+			name:     "a fresh in-progress heartbeat is dead",
+			raw:      `{"operation":"savepoint","status":"in-progress"}`,
+			wantDead: []model.SavepointID{tree},
 		},
 		{
-			name:      "a failed heartbeat is dead",
-			heartbeat: beat(model.HeartbeatOperationSavepoint, heartbeat.StatusFailed),
-			recordNow: utils.New(false),
-			want:      ComposeProjectScope{Dead: []model.SavepointID{tree}},
+			name:     "an unreadable heartbeat is dead",
+			raw:      "{torn",
+			wantDead: []model.SavepointID{tree},
 		},
 		{
-			name:      "a done heartbeat with no record is a removal's remains",
-			heartbeat: beat(model.HeartbeatOperationSavepoint, heartbeat.StatusDone),
-			recordNow: utils.New(false),
-			want:      ComposeProjectScope{Dead: []model.SavepointID{tree}},
-		},
-		{
-			name:      "a done heartbeat whose record committed since the listing is a live capture",
-			heartbeat: beat(model.HeartbeatOperationSavepoint, heartbeat.StatusDone),
-			recordNow: utils.New(true),
-			want:      ComposeProjectScope{InProgress: []model.SavepointID{tree}},
-		},
-		{
-			name:      "a record that cannot be checked is unknown",
-			heartbeat: beat(model.HeartbeatOperationSavepoint, heartbeat.StatusDone),
-			recordNow: utils.New(false),
-			recordErr: errors.New("stat savepoint record: timeout"),
-			want: ComposeProjectScope{Unknown: []UnknownCapture{
-				{ID: tree, Error: "stat savepoint record: timeout"},
-			}},
-		},
-		{
-			name: "no heartbeat is dead: a capture writes it before its first object",
-			want: ComposeProjectScope{Dead: []model.SavepointID{tree}},
-		},
-		{
-			name: "an unreadable heartbeat is unknown",
-			raw:  "{torn",
-			want: ComposeProjectScope{Unknown: []UnknownCapture{{ID: tree, Error: "decode heartbeat: invalid character 't' looking for beginning of object key string"}}},
-		},
-		{
-			name:      "another operation's heartbeat is unknown",
-			heartbeat: beat(model.HeartbeatOperationFork, heartbeat.StatusInProgress),
-			want: ComposeProjectScope{Unknown: []UnknownCapture{
-				{ID: tree, Error: `heartbeat of operation "fork", not a capture's`},
-			}},
-		},
-		{
-			name:      "a record beside an in-progress heartbeat is committed",
-			heartbeat: beat(model.HeartbeatOperationSavepoint, heartbeat.StatusInProgress),
+			name:      "a record commits its tree",
+			raw:       `{"operation":"savepoint","status":"in-progress"}`,
 			committed: true,
-			want:      ComposeProjectScope{},
+			wantDead:  []model.SavepointID{},
 		},
 	}
 	for _, tt := range tests {
@@ -532,13 +526,8 @@ func TestGarbageCollector_GarbageCollect_ReadsCaptureStatuses(t *testing.T) {
 			composeProjectStore, err := store.SubStorage("sessions/"+model.DefaultSession.String()+"/compose/demo", true)
 			require.NoError(t, err)
 			require.NoError(t, composeProjectStore.PutObject(ctx, tree.String()+"/volume-named-db/data.tar", strings.NewReader("x")))
-			treeStore, err := composeProjectStore.SubStorage(tree.String(), true)
-			require.NoError(t, err)
-			switch {
-			case tt.raw != "":
-				require.NoError(t, treeStore.PutObject(ctx, heartbeat.FileName, strings.NewReader(tt.raw)))
-			case tt.heartbeat != nil:
-				require.NoError(t, heartbeat.NewWriter(treeStore).Write(ctx, *tt.heartbeat))
+			if tt.raw != "" {
+				require.NoError(t, composeProjectStore.PutObject(ctx, tree.String()+"/"+heartbeat.FileName, strings.NewReader(tt.raw)))
 			}
 			var savepoints []model.Savepoint
 			if tt.committed {
@@ -546,19 +535,13 @@ func TestGarbageCollector_GarbageCollect_ReadsCaptureStatuses(t *testing.T) {
 			}
 			demoSavepoints := &mockSavepointReader{}
 			demoSavepoints.On("LoadSavepoints", mock.Anything, []model.SavepointID{tree}).Return(savepoints, nil).Once()
-			if tt.recordNow != nil {
-				demoSavepoints.On("IsSavepointCommitted", mock.Anything, tree).Return(*tt.recordNow, tt.recordErr).Once()
-			}
-			var got ComposeProjectScope
 			trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
-			trees.On("Find", mock.Anything, mock.Anything).
-				Run(func(args mock.Arguments) { got = args.Get(1).(ComposeProjectScope) }).
-				Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
+			trees.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool {
+				return scope.ComposeProject == "demo" && assert.ObjectsAreEqual(tt.wantDead, scope.Dead)
+			})).Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 			deps := newDeps(model.DefaultSession, store, &mockSessions{}, newHeldLocker(), newNoMarker())
 			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
-			deps.Concurrency = 2
-			deps.HeartbeatStaleAfter = tt.staleAfter
 			svc := New(deps)
 
 			// Act
@@ -566,9 +549,6 @@ func TestGarbageCollector_GarbageCollect_ReadsCaptureStatuses(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			assert.Equal(t, tt.want.InProgress, got.InProgress)
-			assert.Equal(t, tt.want.Dead, got.Dead)
-			assert.Equal(t, tt.want.Unknown, got.Unknown)
 			demoSavepoints.AssertExpectations(t)
 			trees.AssertExpectations(t)
 		})
@@ -828,101 +808,6 @@ func TestGarbageCollector_GarbageCollect_ListsAllButTheUnlistedNamespaces(t *tes
 	require.NoError(t, err)
 	demoSavepoints.AssertExpectations(t)
 	trees.AssertExpectations(t)
-}
-
-// A scope reads, past its listing, the status of a savepoint whose tree appeared since, by the
-// rule the listing's trees were sorted by.
-func TestGarbageCollector_GarbageCollect_ReadsCaptureStatusPastTheListing(t *testing.T) {
-	const tree = model.SavepointID("019e843e-1650-7000-8000-000000000009")
-
-	tests := []struct {
-		name string
-		// status is the heartbeat written once the scope is read; empty writes none.
-		status heartbeat.Status
-		// recordNow is what the record check answers; nil expects no check.
-		recordNow *bool
-		recordErr error
-		wantAlive bool
-		wantErr   string
-	}{
-		{
-			name:      "a capture started since is alive",
-			status:    heartbeat.StatusInProgress,
-			wantAlive: true,
-		},
-		{
-			name:      "a capture committed since is alive",
-			status:    heartbeat.StatusDone,
-			recordNow: utils.New(true),
-			wantAlive: true,
-		},
-		{
-			name:      "a done capture with no record is dead",
-			status:    heartbeat.StatusDone,
-			recordNow: utils.New(false),
-		},
-		{
-			name:      "a record that cannot be checked is an error",
-			status:    heartbeat.StatusDone,
-			recordNow: utils.New(false),
-			recordErr: errors.New("stat savepoint record: timeout"),
-			wantErr:   "stat savepoint record: timeout",
-		},
-		{
-			name: "no tree at all is dead",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			ctx := context.Background()
-			store := newDirStore(t)
-			composeProjectStore, err := store.SubStorage("sessions/"+model.DefaultSession.String()+"/compose/demo", true)
-			require.NoError(t, err)
-			require.NoError(t, composeProjectStore.PutObject(ctx, ".keep", strings.NewReader("")))
-			demoSavepoints := &mockSavepointReader{}
-			demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
-			if tt.recordNow != nil {
-				demoSavepoints.On("IsSavepointCommitted", mock.Anything, tree).Return(*tt.recordNow, tt.recordErr).Once()
-			}
-			var (
-				alive   bool
-				readErr error
-			)
-			trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
-			trees.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool { return scope.ComposeProject == "demo" })).
-				Run(func(args mock.Arguments) {
-					if tt.status != "" {
-						treeStore, err := composeProjectStore.SubStorage(tree.String(), true)
-						require.NoError(t, err)
-						require.NoError(t, heartbeat.NewWriter(treeStore).Write(ctx, heartbeat.Heartbeat{
-							Operation: model.HeartbeatOperationSavepoint,
-							Status:    tt.status,
-						}))
-					}
-					alive, readErr = args.Get(1).(ComposeProjectScope).ReadCaptureStatus(ctx, tree)
-				}).
-				Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
-			deps := newDeps(model.DefaultSession, store, &mockSessions{}, newHeldLocker(), newNoMarker())
-			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
-			deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
-			svc := New(deps)
-
-			// Act
-			_, err = svc.GarbageCollect(ctx, model.GarbageCollectRequest{DryRun: true})
-
-			// Assert
-			require.NoError(t, err)
-			if tt.wantErr != "" {
-				assert.EqualError(t, readErr, tt.wantErr)
-			} else {
-				assert.NoError(t, readErr)
-			}
-			assert.Equal(t, tt.wantAlive, alive)
-			demoSavepoints.AssertExpectations(t)
-			trees.AssertExpectations(t)
-		})
-	}
 }
 
 // Every report is logged with what it found, and the total after them.
