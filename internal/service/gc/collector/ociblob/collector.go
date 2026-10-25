@@ -43,30 +43,25 @@ func (s *Collector) DataKind() model.GarbageDataKind { return model.GarbageDataK
 
 // Find names every blob no live manifest lists. One an unreferenced manifest lists is held back,
 // and freed by the run after the one that removes that manifest: a capture reuses an intact
-// manifest's blobs without writing them. An unreadable manifest aborts the kind; a live or
-// unknown capture holds every blob.
+// manifest's blobs without writing them. An unreadable manifest aborts the kind.
 func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
-		blobs    = dedupcopy.NewStoredBlobs(scope.Objects)
-		findings = gc.NewFindings()
-		live     int
+		blobs   = dedupcopy.NewStoredBlobs(scope.Objects)
+		ops     = []model.GarbageOp{}
+		skipped []model.GarbageSkip
+		live    int
 	)
-	if gc.CapturesHeld(scope) {
-		for _, blob := range blobs {
-			gc.HoldForCaptures(&findings, scope, blob.Key, blob.LastModified)
-		}
-		return model.OCIBlobStat{GarbageFindings: findings}, nil
-	}
-
 	references, err := readBlobReferences(ctx, scope, s.concurrency)
 	if err != nil {
 		return nil, err
 	}
 	if len(references.unreadable) > 0 {
-		findings.Aborted = fmt.Sprintf("%d image manifests cannot be read", len(references.unreadable))
 		return model.OCIBlobStat{
-			GarbageFindings: findings,
-			Unreadable:      references.unreadable,
+			GarbageFindings: model.GarbageFindings{
+				Ops:     ops,
+				Aborted: fmt.Sprintf("%d image manifests cannot be read", len(references.unreadable)),
+			},
+			Unreadable: references.unreadable,
 		}, nil
 	}
 
@@ -75,13 +70,13 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 		case references.bySavepoints[blob.Digest]:
 			live++
 		case references.byUnnamed[blob.Digest]:
-			findings.Skipped = append(findings.Skipped, model.GarbageSkip{
+			skipped = append(skipped, model.GarbageSkip{
 				Target:       blob.Key,
 				Reason:       model.GarbageReasonListedByUnreferenced,
 				LastModified: blob.LastModified,
 			})
 		default:
-			findings.Ops = append(findings.Ops, model.GarbageOp{
+			ops = append(ops, model.GarbageOp{
 				Action:       model.GarbageActionDeleteObject,
 				Target:       blob.Key,
 				Bytes:        utils.New(blob.Bytes),
@@ -92,8 +87,11 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 		}
 	}
 	return model.OCIBlobStat{
-		GarbageFindings: findings,
-		Live:            live,
+		GarbageFindings: model.GarbageFindings{
+			Ops:     ops,
+			Skipped: skipped,
+		},
+		Live: live,
 	}, nil
 }
 

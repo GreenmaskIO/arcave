@@ -40,7 +40,7 @@ var (
 		Long: `Report what no live savepoint of the session keeps alive, in every compose project it
 holds: savepoint data no record commits, deduplicated volumes no savepoint names, image blobs
 no stored manifest lists, upstream images no savepoint names, and restored layers no container
-runs on. --kind narrows a run. A capture still in progress holds back what it may name.
+runs on. --kind narrows a run. It holds the session's lock, so no capture runs meanwhile.
 Nothing is deleted yet: --dry-run is required. The restored layer grace defaults to
 gc.restored_layer_grace. A session tree no record commits is 'session list --all''s.`,
 		Args: cobra.NoArgs,

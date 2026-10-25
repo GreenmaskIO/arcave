@@ -73,7 +73,7 @@ func (s *Collector) Find(ctx context.Context, scope gc.DaemonScope) (model.Garba
 		containers           []model.ContainerImage
 		usedRefs             = map[model.ImageRef]bool{}
 		usedImages           = map[model.ImageDigestID]bool{}
-		findings             = gc.NewFindings()
+		findings             = model.GarbageFindings{Ops: []model.GarbageOp{}}
 		inUse                int
 		unattributed         int
 		otherComposeProjects int

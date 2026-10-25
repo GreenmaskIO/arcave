@@ -29,10 +29,12 @@ import (
 
 // Timing is how a Locker waits for and keeps a lock.
 type Timing struct {
-	// TTL is how long a lock nobody renews stays held, as each waiter measures it on its own clock;
-	// its holder stops once its last renewal is TTL less twice the I/O bound old, so TTL must
-	// exceed Renew plus twice that bound (6s), or no renewal ever vouches for the lock.
+	// TTL is how long a lock nobody renews stays held, as each waiter measures it on its own clock.
 	TTL time.Duration
+	// Stale is how old its last renewal may be before the holder stops vouching for its lock. It
+	// must exceed Renew and stay at most TTL less twice the I/O bound (6s): the gap to TTL is how
+	// long work started after a fresh check is sure to run before another host may take over.
+	Stale time.Duration
 	// Renew is how often the holder renews.
 	Renew time.Duration
 	// Wait is how long Lock waits for a held lock to go before it refuses.
@@ -43,7 +45,10 @@ type Timing struct {
 
 // DefaultTiming is the timing every command runs with.
 var DefaultTiming = Timing{
-	TTL:   15 * time.Second,
+	// Half the TTL for Stale leaves 15s between the holder giving up and a takeover: room for the
+	// store call a holder starts on a fresh check to land, and for a host that just woke to notice.
+	TTL:   30 * time.Second,
+	Stale: 15 * time.Second,
 	Renew: 3 * time.Second,
 	Wait:  60 * time.Second,
 	Poll:  time.Second,
@@ -331,13 +336,13 @@ func (s *Locker) renew(ctx context.Context, grantedLock *GrantedLock) error {
 	return nil
 }
 
-// requireFresh refuses a lock whose last renewal began TTL less twice the I/O bound ago or
-// earlier: a read and a write it starts now still land before a waiter may take it over.
+// requireFresh refuses a lock whose last renewal began Timing.Stale ago or earlier: a read and a
+// write it starts now still land before a waiter may take it over.
 func (s *Locker) requireFresh(grantedLock *GrantedLock) error {
 	grantedLock.mu.Lock()
 	defer grantedLock.mu.Unlock()
 	age := max(s.now().Sub(grantedLock.renewedAt.wall), s.elapsed().Sub(grantedLock.renewedAt.elapsed))
-	if age >= s.timing.TTL-2*ioTimeout {
+	if age >= s.timing.Stale {
 		return fmt.Errorf("%w: session %s not renewed for %s", model.ErrSessionLockLost, s.session,
 			age.Round(time.Second))
 	}

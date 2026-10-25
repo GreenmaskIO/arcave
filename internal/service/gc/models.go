@@ -15,7 +15,6 @@
 package gc
 
 import (
-	"context"
 	"time"
 
 	"github.com/greenmaskio/storages"
@@ -43,18 +42,6 @@ type ComposeProjectScope struct {
 	Objects []storages.ObjectStat
 	// Savepoints are the compose project's committed records, safety snapshots included: the mark.
 	Savepoints []model.Savepoint
-	// InProgress, Dead and Unknown are the savepoint trees no record commits, by what their
-	// heartbeat says of the capture that wrote them: alive, gone, or unreadable.
-	InProgress []model.SavepointID
-	Dead       []model.SavepointID
-	Unknown    []UnknownCapture
-	// ReadCaptureStatus reads, now, whether the capture of a savepoint the listing did not hold is
-	// alive: in progress, or committed since; an error when its status cannot be read.
-	ReadCaptureStatus func(ctx context.Context, id model.SavepointID) (alive bool, err error)
-}
-
-// UnknownCapture is a savepoint tree no record commits whose heartbeat cannot be read.
-type UnknownCapture struct {
-	ID    model.SavepointID
-	Error string
+	// Dead are the savepoint trees no record commits, each left by a run that died.
+	Dead []model.SavepointID
 }

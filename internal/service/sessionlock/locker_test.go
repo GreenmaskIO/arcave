@@ -31,13 +31,14 @@ import (
 // testTiming never renews on its own: a test renews by hand, or sets Renew to watch keep.
 var testTiming = Timing{
 	TTL:   DefaultTiming.TTL,
+	Stale: DefaultTiming.Stale,
 	Renew: time.Hour,
 	Wait:  DefaultTiming.Wait,
 	Poll:  DefaultTiming.Poll,
 }
 
 // holdFor is how long after its last renewal a holder still vouches for its lock.
-var holdFor = DefaultTiming.TTL - 2*ioTimeout
+var holdFor = DefaultTiming.Stale
 
 // fakeSessionLockStore is a SessionLockStore that keeps the lock in memory and wins every claim its holder rule
 // allows, unless told otherwise.

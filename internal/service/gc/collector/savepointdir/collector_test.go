@@ -22,30 +22,24 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/utils/gctest"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// A tree goes by its capture's status, never by its age: dead goes whatever it was written,
-// a live capture's is held back, an unreadable heartbeat's unjudged.
+// Every dead tree goes, however young.
 func TestCollector_Find(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
 	store, root := gctest.NewStore(t)
 	gctest.WriteObject(t, root, gctest.LiveSavepoint.String()+"/savepoint.json", "{}", gctest.Old)
 	gctest.WriteObject(t, root, gctest.DeadSavepoint.String()+"/volume-named-db/data.tar", "12345", gctest.Recent)
-	gctest.WriteObject(t, root, gctest.FreshSavepoint.String()+"/volume-named-db/data.tar", "1", gctest.Recent)
-	gctest.WriteObject(t, root, gctest.UnknownSavepoint.String()+"/heartbeat.json", "{torn", gctest.Recent)
+	gctest.WriteObject(t, root, gctest.OtherDeadSavepoint.String()+"/heartbeat.json", "{}", gctest.Recent)
 	gctest.WriteObject(t, root, "shared/oci/blobs/sha256/"+gctest.DeadBlob, "x", gctest.Old)
-	statuses := gctest.CaptureStatuses{
-		InProgress: []model.SavepointID{gctest.FreshSavepoint},
-		Dead:       []model.SavepointID{gctest.DeadSavepoint},
-		Unknown:    []gc.UnknownCapture{{ID: gctest.UnknownSavepoint, Error: "decode heartbeat"}},
-	}
+	scope := gctest.NewScope(t, store, model.Savepoint{ID: gctest.LiveSavepoint})
+	scope.Dead = []model.SavepointID{gctest.DeadSavepoint, gctest.OtherDeadSavepoint}
 
 	// Act
-	stat, err := New().Find(ctx, statuses.Apply(gctest.NewScope(t, store, model.Savepoint{ID: gctest.LiveSavepoint})))
+	stat, err := New().Find(ctx, scope)
 
 	// Assert
 	require.NoError(t, err)
@@ -54,21 +48,17 @@ func TestCollector_Find(t *testing.T) {
 	for i := range got.Ops {
 		got.Ops[i].LastModified = got.Ops[i].LastModified.UTC()
 	}
-	for _, skips := range [][]model.GarbageSkip{got.Skipped, got.Unjudged} {
-		for i := range skips {
-			skips[i].LastModified = skips[i].LastModified.UTC()
-		}
-	}
-	assert.Equal(t, []model.GarbageOp{{
-		Action: model.GarbageActionDeleteTree, Target: gctest.DeadSavepoint.String(), Bytes: utils.New(int64(5)),
-		Reason: model.GarbageReasonDeadCapture, LastModified: gctest.Recent, Savepoint: gctest.DeadSavepoint,
-	}}, got.Ops)
-	assert.Equal(t, []model.GarbageSkip{
-		{Target: gctest.FreshSavepoint.String(), Reason: model.GarbageReasonCaptureInProgress, LastModified: gctest.Recent},
-	}, got.Skipped)
-	assert.Equal(t, []model.GarbageSkip{
-		{Target: gctest.UnknownSavepoint.String(), Reason: model.GarbageReasonStatusUnknown, LastModified: gctest.Recent,
-			Error: "decode heartbeat"},
-	}, got.Unjudged)
+	assert.Equal(t, []model.GarbageOp{
+		{
+			Action: model.GarbageActionDeleteTree, Target: gctest.DeadSavepoint.String(), Bytes: utils.New(int64(5)),
+			Reason: model.GarbageReasonDeadCapture, LastModified: gctest.Recent, Savepoint: gctest.DeadSavepoint,
+		},
+		{
+			Action: model.GarbageActionDeleteTree, Target: gctest.OtherDeadSavepoint.String(), Bytes: utils.New(int64(2)),
+			Reason: model.GarbageReasonDeadCapture, LastModified: gctest.Recent, Savepoint: gctest.OtherDeadSavepoint,
+		},
+	}, got.Ops)
+	assert.Empty(t, got.Skipped)
+	assert.Empty(t, got.Unjudged)
 	assert.Equal(t, 1, got.Committed)
 }

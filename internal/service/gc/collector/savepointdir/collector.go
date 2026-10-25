@@ -26,8 +26,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
-// Collector finds the savepoint trees no record commits whose capture is dead:
-// what a create or a remove left behind when it died between its data and its record.
+// Collector finds the savepoint trees no record commits: what a create or a remove left behind
+// when it died between its data and its record.
 type Collector struct{}
 
 func New() *Collector { return &Collector{} }
@@ -40,12 +40,11 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 	return model.GarbageDataKindSavepointData
 }
 
-// Find names every dead tree, holds back a live capture's and leaves unjudged one whose
-// heartbeat cannot be read.
+// Find names every dead tree.
 func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
-		trees    = map[model.SavepointID][]storages.ObjectStat{}
-		findings = gc.NewFindings()
+		trees = map[model.SavepointID][]storages.ObjectStat{}
+		ops   = []model.GarbageOp{}
 	)
 	for _, object := range scope.Objects {
 		dir, _, _ := strings.Cut(object.Name, "/")
@@ -54,7 +53,7 @@ func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model
 
 	for _, id := range scope.Dead {
 		bytes, lastModified := utils.MeasureObjects(trees[id])
-		findings.Ops = append(findings.Ops, model.GarbageOp{
+		ops = append(ops, model.GarbageOp{
 			Action:       model.GarbageActionDeleteTree,
 			Target:       id.String(),
 			Bytes:        utils.New(bytes),
@@ -63,25 +62,8 @@ func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model
 			Savepoint:    id,
 		})
 	}
-	for _, id := range scope.InProgress {
-		_, lastModified := utils.MeasureObjects(trees[id])
-		findings.Skipped = append(findings.Skipped, model.GarbageSkip{
-			Target:       id.String(),
-			Reason:       model.GarbageReasonCaptureInProgress,
-			LastModified: lastModified,
-		})
-	}
-	for _, unknown := range scope.Unknown {
-		_, lastModified := utils.MeasureObjects(trees[unknown.ID])
-		findings.Unjudged = append(findings.Unjudged, model.GarbageSkip{
-			Target:       unknown.ID.String(),
-			Reason:       model.GarbageReasonStatusUnknown,
-			LastModified: lastModified,
-			Error:        unknown.Error,
-		})
-	}
 	return model.SavepointDirectoryStat{
-		GarbageFindings: findings,
+		GarbageFindings: model.GarbageFindings{Ops: ops},
 		Committed:       len(scope.Savepoints),
 	}, nil
 }

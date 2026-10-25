@@ -188,18 +188,6 @@ func (r *Repository) LoadSavepoints(ctx context.Context, ids []model.SavepointID
 	return records, nil
 }
 
-// IsSavepointCommitted reports whether id's record stands now, read past any listing.
-func (r *Repository) IsSavepointCommitted(ctx context.Context, id model.SavepointID) (bool, error) {
-	if err := id.Validate(); err != nil {
-		return false, err
-	}
-	exists, err := r.storage.Exists(ctx, recordKey(id))
-	if err != nil {
-		return false, fmt.Errorf("stat savepoint record %s: %w", id, err)
-	}
-	return exists, nil
-}
-
 // load reads one savepoint's record. found is false when the namespace holds no
 // record, which means the savepoint never committed.
 func (r *Repository) load(ctx context.Context, id model.SavepointID) (model.Savepoint, bool, error) {

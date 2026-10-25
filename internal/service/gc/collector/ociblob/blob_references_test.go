@@ -62,10 +62,9 @@ func TestReadBlobReferences(t *testing.T) {
 			want: blobReferences{bySavepoints: map[string]bool{gctest.LiveBlob: true, gctest.NewBlob: true}},
 		},
 		{
-			name: "an image no record names holds its blobs until it goes; a tree that is not dead is not read",
+			name: "an image no record names holds its blobs until it goes",
 			plant: func(t *testing.T, root string) {
 				gctest.WriteJSON(t, root, imageKeyOf(gctest.DeadImage), layerManifest(gctest.DeadImage, gctest.DeadBlob), gctest.Old)
-				gctest.WriteJSON(t, root, layerKey(gctest.FreshSavepoint), layerManifest(gctest.Digest("9"), gctest.NewBlob), gctest.Recent)
 			},
 			want: blobReferences{byUnnamed: map[string]bool{gctest.DeadBlob: true}},
 		},
@@ -110,7 +109,8 @@ func TestReadBlobReferences(t *testing.T) {
 			// Arrange
 			store, root := gctest.NewStore(t)
 			tt.plant(t, root)
-			scope := gctest.CaptureStatuses{Dead: tt.dead}.Apply(gctest.NewScope(t, store, tt.savepoints...))
+			scope := gctest.NewScope(t, store, tt.savepoints...)
+			scope.Dead = tt.dead
 
 			// Act
 			got, err := readBlobReferences(context.Background(), scope, 2)

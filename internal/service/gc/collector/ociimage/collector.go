@@ -37,31 +37,29 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 	return model.GarbageDataKindUpstreamImages
 }
 
-// Find names every stored image no record names, held back while a capture is live or unknown.
+// Find names every stored image no record names.
 func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
 		stored    = imagecopy.NewStoredImages(scope.Objects)
 		live      = gc.NewLiveImages(scope.Savepoints)
-		findings  = gc.NewFindings()
+		ops       = []model.GarbageOp{}
 		liveCount int
 	)
 	for _, image := range stored {
-		switch _, isLive := live[image.ID]; {
-		case isLive:
+		if _, isLive := live[image.ID]; isLive {
 			liveCount++
-		case gc.HoldForCaptures(&findings, scope, image.Key, image.LastModified):
-		default:
-			findings.Ops = append(findings.Ops, model.GarbageOp{
-				Action:       model.GarbageActionDeleteTree,
-				Target:       image.Key,
-				Bytes:        utils.New(image.Bytes),
-				Reason:       model.GarbageReasonUnreferenced,
-				LastModified: image.LastModified,
-			})
+			continue
 		}
+		ops = append(ops, model.GarbageOp{
+			Action:       model.GarbageActionDeleteTree,
+			Target:       image.Key,
+			Bytes:        utils.New(image.Bytes),
+			Reason:       model.GarbageReasonUnreferenced,
+			LastModified: image.LastModified,
+		})
 	}
 	return model.OCIImageStat{
-		GarbageFindings: findings,
+		GarbageFindings: model.GarbageFindings{Ops: ops},
 		Live:            liveCount,
 	}, nil
 }

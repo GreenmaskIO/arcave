@@ -34,12 +34,10 @@ import (
 )
 
 const (
-	LiveSavepoint  = model.SavepointID("019e843e-1650-7000-8000-000000000001")
-	DeadSavepoint  = model.SavepointID("019e843e-1650-7000-8000-000000000002")
-	FreshSavepoint = model.SavepointID("019e843e-1650-7000-8000-000000000003")
-	// OtherDeadSavepoint and UnknownSavepoint are two more recordless trees.
+	LiveSavepoint = model.SavepointID("019e843e-1650-7000-8000-000000000001")
+	DeadSavepoint = model.SavepointID("019e843e-1650-7000-8000-000000000002")
+	// OtherDeadSavepoint is another recordless tree.
 	OtherDeadSavepoint = model.SavepointID("019e843e-1650-7000-8000-000000000004")
-	UnknownSavepoint   = model.SavepointID("019e843e-1650-7000-8000-000000000005")
 )
 
 var (
@@ -91,19 +89,6 @@ func NewScope(t *testing.T, store storages.Storager, savepoints ...model.Savepoi
 		Objects:    objects,
 		Savepoints: savepoints,
 	}
-}
-
-// CaptureStatuses are the recordless trees of a scope, as gc sorts them by heartbeat.
-type CaptureStatuses struct {
-	InProgress []model.SavepointID
-	Dead       []model.SavepointID
-	Unknown    []gc.UnknownCapture
-}
-
-// Apply sets the statuses on scope.
-func (c CaptureStatuses) Apply(scope gc.ComposeProjectScope) gc.ComposeProjectScope {
-	scope.InProgress, scope.Dead, scope.Unknown = c.InProgress, c.Dead, c.Unknown
-	return scope
 }
 
 // Reasons lists each skip's reason.

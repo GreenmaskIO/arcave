@@ -703,7 +703,6 @@ func newGCDependencies(
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
 		RestoredLayerGrace: cfg.GC.RestoredLayerGrace,
-		Concurrency:        cfg.Common.Concurrency,
 	})
 	opened.keep()
 	return deps, nil

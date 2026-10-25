@@ -32,16 +32,6 @@ import (
 // probeTimeout bounds the check that the daemon answers.
 const probeTimeout = 10 * time.Second
 
-// captureStatus is what a snapshot's savepoint is.
-type captureStatus int
-
-const (
-	statusDead captureStatus = iota
-	statusCommitted
-	statusInProgress
-	statusUnknown
-)
-
 // Pinger is the daemon restic runs in.
 type Pinger interface {
 	Ping(ctx context.Context) error
@@ -98,7 +88,7 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 		return nil, err
 	}
 	if len(repos) == 0 {
-		return model.ResticRepositoryStat{GarbageFindings: gc.NewFindings()}, nil
+		return model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil
 	}
 	inspector, err := s.opener.Open(ctx, scope.Store)
 	if err != nil {
@@ -107,9 +97,9 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 	defer inspector.Close(ctx)
 
 	var (
-		judge                    = newSnapshotJudge(scope)
+		committed                = newCommittedSavepoints(scope)
 		ops                      = []model.GarbageOp{}
-		skipped, unjudged        []model.GarbageSkip
+		unjudged                 []model.GarbageSkip
 		estimates                []model.ResticForgetEstimate
 		liveRepos, liveSnapshots int
 		unattributed             int
@@ -125,10 +115,8 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 			})
 			continue
 		}
-		verdict := judge.judgeSnapshots(ctx, key, snapshots)
+		verdict := judgeSnapshots(committed, key, snapshots)
 		ops = append(ops, verdict.ops...)
-		skipped = append(skipped, verdict.skipped...)
-		unjudged = append(unjudged, verdict.unjudged...)
 		liveSnapshots += verdict.live
 		unattributed += verdict.unattributed
 		if verdict.live > 0 {
@@ -145,7 +133,6 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 	return model.ResticRepositoryStat{
 		GarbageFindings: model.GarbageFindings{
 			Ops:      ops,
-			Skipped:  skipped,
 			Unjudged: unjudged,
 		},
 		LiveRepos:     liveRepos,
@@ -155,81 +142,41 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 	}, nil
 }
 
-// snapshotJudge sorts snapshots by the scope's savepoints.
-type snapshotJudge struct {
-	scope      gc.ComposeProjectScope
-	committed  map[model.SavepointID]bool
-	inProgress map[model.SavepointID]bool
-	dead       map[model.SavepointID]bool
-	unknown    map[model.SavepointID]string
-}
-
-func newSnapshotJudge(scope gc.ComposeProjectScope) snapshotJudge {
-	judge := snapshotJudge{
-		scope:      scope,
-		committed:  map[model.SavepointID]bool{},
-		inProgress: map[model.SavepointID]bool{},
-		dead:       map[model.SavepointID]bool{},
-		unknown:    map[model.SavepointID]string{},
-	}
+// newCommittedSavepoints is the set of savepoints the scope's records commit: a snapshot of any
+// other is dead.
+func newCommittedSavepoints(scope gc.ComposeProjectScope) map[model.SavepointID]bool {
+	committed := map[model.SavepointID]bool{}
 	for _, savepoint := range scope.Savepoints {
-		judge.committed[savepoint.ID] = true
+		committed[savepoint.ID] = true
 	}
-	for _, id := range scope.InProgress {
-		judge.inProgress[id] = true
-	}
-	for _, id := range scope.Dead {
-		judge.dead[id] = true
-	}
-	for _, capture := range scope.Unknown {
-		judge.unknown[capture.ID] = capture.Error
-	}
-	return judge
+	return committed
 }
 
 // repoVerdict is what judging one repository's snapshots found; dead are the ids of ops.
 type repoVerdict struct {
 	live, unattributed int
 	ops                []model.GarbageOp
-	skipped, unjudged  []model.GarbageSkip
 	dead               []string
 }
 
 // judgeSnapshots judges every snapshot of the repository at key by its savepoint.
-func (j snapshotJudge) judgeSnapshots(ctx context.Context, key string, snapshots []cdc.Snapshot) repoVerdict {
+func judgeSnapshots(committed map[model.SavepointID]bool, key string, snapshots []cdc.Snapshot) repoVerdict {
 	var (
 		live, unattributed int
 		ops                []model.GarbageOp
-		skipped, unjudged  []model.GarbageSkip
 		dead               []string
 	)
 	for _, snapshot := range snapshots {
-		if snapshot.Savepoint == "" {
+		switch {
+		case snapshot.Savepoint == "":
 			unattributed++
-			continue
-		}
-		target := path.Join(key, "snapshots", snapshot.ID)
-		switch status, statusErr := j.readStatus(ctx, snapshot.Savepoint); status {
-		case statusCommitted:
+		case committed[snapshot.Savepoint]:
 			live++
-		case statusInProgress:
-			skipped = append(skipped, model.GarbageSkip{
-				Target:       target,
-				Reason:       model.GarbageReasonCaptureInProgress,
-				LastModified: snapshot.Time,
-			})
-		case statusUnknown:
-			unjudged = append(unjudged, model.GarbageSkip{
-				Target:       target,
-				Reason:       model.GarbageReasonStatusUnknown,
-				LastModified: snapshot.Time,
-				Error:        statusErr,
-			})
 		default:
 			dead = append(dead, snapshot.ID)
 			ops = append(ops, model.GarbageOp{
 				Action:       model.GarbageActionForget,
-				Target:       target,
+				Target:       path.Join(key, "snapshots", snapshot.ID),
 				Reason:       model.GarbageReasonDeadCapture,
 				LastModified: snapshot.Time,
 				Savepoint:    snapshot.Savepoint,
@@ -240,34 +187,7 @@ func (j snapshotJudge) judgeSnapshots(ctx context.Context, key string, snapshots
 		live:         live,
 		unattributed: unattributed,
 		ops:          ops,
-		skipped:      skipped,
-		unjudged:     unjudged,
 		dead:         dead,
-	}
-}
-
-// readStatus is id's status in the scope; one the scope's listing did not hold is read now, since
-// its capture may have started since.
-func (j snapshotJudge) readStatus(ctx context.Context, id model.SavepointID) (captureStatus, string) {
-	switch {
-	case j.committed[id]:
-		return statusCommitted, ""
-	case j.inProgress[id]:
-		return statusInProgress, ""
-	case j.dead[id]:
-		return statusDead, ""
-	}
-	if reason, unknown := j.unknown[id]; unknown {
-		return statusUnknown, reason
-	}
-	alive, err := j.scope.ReadCaptureStatus(ctx, id)
-	switch {
-	case err != nil:
-		return statusUnknown, err.Error()
-	case alive:
-		return statusInProgress, ""
-	default:
-		return statusDead, ""
 	}
 }
 

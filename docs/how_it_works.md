@@ -140,7 +140,7 @@ If a new savepoint's directory is not empty, arcave **refuses** the create rathe
 12.  Start the services and wait for health checks
 ```
 
-The heartbeat is what [`arcave gc`](reference/cli/gc.md) reads a savepoint directory without a record by: a fresh one is a capture still running, and a failed, stale or missing one is a capture that died. A failed capture marks it failed.
+The heartbeat says how the run that wrote a savepoint directory ended; a failed capture marks it failed. [`arcave gc`](reference/cli/gc.md) does not read it: gc holds the session's lock, so a directory without a record is dead whatever its heartbeat says.
 
 Steps 2 through 4 run **while the project is still up**: a taken name, a Docker older than 25, a bad label or a spec arcave cannot render fails without stopping anything. A project with no containers — never started, or taken down with `docker compose down` — has nothing to capture, and `savepoint create` refuses it.
 
@@ -232,7 +232,7 @@ Every command that changes something — `savepoint create`, `rollback`, `savepo
 `.arcave/lock` is visible only on its own machine, while a store on s3, Azure or SFTP can be shared by several. So `savepoint create`, `rollback`, `savepoint remove`, `session create --from` (on the source session), `session remove` and `arcave gc` also hold the session's lock in the store, `sessions/<session>.lock.json`, for as long as they run:
 
 * A command that finds the lock held **waits up to 60 seconds** for it to be freed, then fails naming the holder: its operation, host and pid.
-* The holder renews the lock every few seconds. A lock nobody renews for 15 seconds — its holder crashed or lost the store — is taken over; the holder itself stops before then.
+* The holder renews the lock every few seconds. A lock nobody renews for 30 seconds — its holder crashed or lost the store — is taken over; the holder itself stops before then.
 * Before it commits — `savepoint.json`, `session.json` — or removes anything, a command checks the lock is still its own, and fails if it is not.
 
 A command that only reads takes no session lock.
