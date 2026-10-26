@@ -44,10 +44,11 @@ func (s *GarbageCollector) readComposeProjects(
 }
 
 // readComposeProjectScope opens one compose project's store, lists it once and reads the records
-// that mark it off that listing; every tree none commits is dead.
+// that mark it off that listing; every tree none commits is dead. The store is returned beside the
+// scope, whose collectors only read it.
 func (s *GarbageCollector) readComposeProjectScope(
 	ctx context.Context, sessionStore storages.Navigator, name model.DockerComposeProjectName,
-) (ComposeProjectScope, error) {
+) (ComposeProjectScope, storages.Storager, error) {
 	var (
 		store      storages.Storager
 		objects    []storages.ObjectStat
@@ -56,14 +57,14 @@ func (s *GarbageCollector) readComposeProjectScope(
 		err        error
 	)
 	if store, err = storefactory.ComposeProject(sessionStore, name); err != nil {
-		return ComposeProjectScope{}, fmt.Errorf("open compose project %s: %w", name, err)
+		return ComposeProjectScope{}, nil, fmt.Errorf("open compose project %s: %w", name, err)
 	}
 	if objects, err = s.listComposeProject(ctx, store); err != nil {
-		return ComposeProjectScope{}, fmt.Errorf("list compose project %s: %w", name, err)
+		return ComposeProjectScope{}, nil, fmt.Errorf("list compose project %s: %w", name, err)
 	}
 	trees = newSavepointTrees(objects)
 	if savepoints, err = s.newSavepoints(store).LoadSavepoints(ctx, trees); err != nil {
-		return ComposeProjectScope{}, fmt.Errorf("read savepoints of compose project %s: %w", name, err)
+		return ComposeProjectScope{}, nil, fmt.Errorf("read savepoints of compose project %s: %w", name, err)
 	}
 	return ComposeProjectScope{
 		ComposeProject: name,
@@ -71,7 +72,7 @@ func (s *GarbageCollector) readComposeProjectScope(
 		Objects:        objects,
 		Savepoints:     savepoints,
 		Dead:           newUncommittedTrees(savepoints, trees),
-	}, nil
+	}, store, nil
 }
 
 // listComposeProject lists store recursively, sorted, leaving out its top-level directories of

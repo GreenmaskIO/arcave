@@ -858,6 +858,11 @@ func inComposeProject(name model.DockerComposeProjectName) any {
 	return mock.MatchedBy(func(scope ComposeProjectScope) bool { return scope.ComposeProject == name })
 }
 
+// storeOf matches the store of compose project name.
+func storeOf(name model.DockerComposeProjectName) any {
+	return mock.MatchedBy(func(store storages.Navigator) bool { return store.Dirname() == string(name) })
+}
+
 // newGrantingSessionLocker is a session locker granting grantedLock once.
 func newGrantingSessionLocker(grantedLock *mockGrantedSessionLock) *mockSessionLocker {
 	sessionLocker := &mockSessionLocker{}
@@ -956,9 +961,9 @@ func TestGarbageCollector_GarbageCollect_Deletes(t *testing.T) {
 	for _, name := range composeProjects {
 		chain = append(chain,
 			grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
-			treeEraser.On("Erase", mock.Anything, inComposeProject(name), []model.GarbageOp{deadTreeOp}).Return(newDeletedOps(deadTreeOp)).Once(),
+			treeEraser.On("Erase", mock.Anything, storeOf(name), []model.GarbageOp{deadTreeOp}).Return(newDeletedOps(deadTreeOp)).Once(),
 			grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
-			imageEraser.On("Erase", mock.Anything, inComposeProject(name), []model.GarbageOp{deadImageOp}).Return(newDeletedOps(deadImageOp)).Once(),
+			imageEraser.On("Erase", mock.Anything, storeOf(name), []model.GarbageOp{deadImageOp}).Return(newDeletedOps(deadImageOp)).Once(),
 		)
 	}
 	chain = append(chain, grantedLock.On("Unlock", mock.Anything).Return(nil).Once())
@@ -1034,7 +1039,7 @@ func TestGarbageCollector_GarbageCollect_VerifyRefuses(t *testing.T) {
 		images.On("Find", mock.Anything, inComposeProject("other")).Return(deadImageStat, nil).Once(),
 		blobs.On("Find", mock.Anything, inComposeProject("other")).Return(deadBlobStat, nil).Once(),
 		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
-		treeEraser.On("Erase", mock.Anything, inComposeProject("demo"), []model.GarbageOp{deadTreeOp}).Return(newDeletedOps(deadTreeOp)).Once(),
+		treeEraser.On("Erase", mock.Anything, storeOf("demo"), []model.GarbageOp{deadTreeOp}).Return(newDeletedOps(deadTreeOp)).Once(),
 		grantedLock.On("Verify", mock.Anything).Return(model.ErrSessionLockNotHeld).Once(),
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 	)
@@ -1167,7 +1172,7 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 			if tt.deletion != nil {
 				chain = append(chain,
 					grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
-					objectEraser.On("Erase", mock.Anything, inComposeProject("demo"), tt.stat.Findings().Ops).Return(*tt.deletion).Once(),
+					objectEraser.On("Erase", mock.Anything, storeOf("demo"), tt.stat.Findings().Ops).Return(*tt.deletion).Once(),
 				)
 			}
 			chain = append(chain, grantedLock.On("Unlock", mock.Anything).Return(nil).Once())
@@ -1266,7 +1271,7 @@ func TestGarbageCollector_GarbageCollect_LockLostAfterTheLastDeletion(t *testing
 	mock.InOrder(
 		trees.On("Find", mock.Anything, inComposeProject("demo")).Return(deadTreeStat, nil).Once(),
 		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
-		treeEraser.On("Erase", mock.Anything, inComposeProject("demo"), []model.GarbageOp{deadTreeOp}).
+		treeEraser.On("Erase", mock.Anything, storeOf("demo"), []model.GarbageOp{deadTreeOp}).
 			Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
 			Return(newDeletedOps(deadTreeOp)).Once(),
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
@@ -1313,7 +1318,7 @@ func TestGarbageCollector_GarbageCollect_LockLostWhileDeleting(t *testing.T) {
 		trees.On("Find", mock.Anything, inComposeProject("demo")).Return(deadTreeStat, nil).Once(),
 		images.On("Find", mock.Anything, inComposeProject("demo")).Return(deadImageStat, nil).Once(),
 		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
-		treeEraser.On("Erase", mock.Anything, inComposeProject("demo"), []model.GarbageOp{deadTreeOp}).
+		treeEraser.On("Erase", mock.Anything, storeOf("demo"), []model.GarbageOp{deadTreeOp}).
 			Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
 			Return(newDeletedOps(deadTreeOp)).Once(),
 		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),

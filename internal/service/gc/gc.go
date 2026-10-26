@@ -311,11 +311,12 @@ func (s *GarbageCollector) findComposeProjectGarbage(
 	}
 	garbage := make([]composeProjectGarbage, 0, len(names))
 	for _, name := range names {
-		scope, err := s.readComposeProjectScope(ctx, sessionStore, name)
+		scope, store, err := s.readComposeProjectScope(ctx, sessionStore, name)
 		reports := collectors.runComposeProjectCollectors(ctx, name, scope, err)
 		logGarbageFound(ctx, reports)
 		garbage = append(garbage, composeProjectGarbage{
 			scope:   scope,
+			store:   store,
 			reports: reports,
 		})
 	}

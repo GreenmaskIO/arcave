@@ -18,6 +18,8 @@ package eraser
 import (
 	"context"
 
+	"github.com/greenmaskio/storages"
+
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/gc"
@@ -33,10 +35,10 @@ func (s ObjectEraser) Action() model.GarbageAction { return model.GarbageActionD
 // Erase deletes every object ops names, one at a time, since a batch Delete is refused whole for
 // one object already gone and fails whole for one that cannot be removed.
 func (s ObjectEraser) Erase(
-	ctx context.Context, scope gc.ComposeProjectScope, ops []model.GarbageOp,
+	ctx context.Context, store storages.Deleter, ops []model.GarbageOp,
 ) model.GarbageDeletion {
 	return gc.DeleteOps(ctx, ops, func(ctx context.Context, op model.GarbageOp) error {
-		return scope.Store.Delete(ctx, op.Target)
+		return store.Delete(ctx, op.Target)
 	})
 }
 
@@ -49,10 +51,10 @@ func (s TreeEraser) Action() model.GarbageAction { return model.GarbageActionDel
 
 // Erase deletes every directory ops names, whole.
 func (s TreeEraser) Erase(
-	ctx context.Context, scope gc.ComposeProjectScope, ops []model.GarbageOp,
+	ctx context.Context, store storages.Deleter, ops []model.GarbageOp,
 ) model.GarbageDeletion {
 	return gc.DeleteOps(ctx, ops, func(ctx context.Context, op model.GarbageOp) error {
-		return scope.Store.DeleteAll(ctx, op.Target)
+		return store.DeleteAll(ctx, op.Target)
 	})
 }
 
@@ -65,9 +67,9 @@ func (s ImageEraser) Action() model.GarbageAction { return model.GarbageActionDe
 
 // Erase deletes every image directory ops names, each one's manifest first.
 func (s ImageEraser) Erase(
-	ctx context.Context, scope gc.ComposeProjectScope, ops []model.GarbageOp,
+	ctx context.Context, store storages.Deleter, ops []model.GarbageOp,
 ) model.GarbageDeletion {
 	return gc.DeleteOps(ctx, ops, func(ctx context.Context, op model.GarbageOp) error {
-		return imagecopy.DeleteStoredImage(ctx, scope.Store, op.Target)
+		return imagecopy.DeleteStoredImage(ctx, store, op.Target)
 	})
 }

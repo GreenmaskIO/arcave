@@ -28,8 +28,8 @@ import (
 // GarbageEraser carries out one GarbageAction on a compose project's garbage.
 type GarbageEraser interface {
 	Action() model.GarbageAction
-	// Erase carries out ops, every one of its action, in scope, through DeleteOps where it can.
-	Erase(ctx context.Context, scope ComposeProjectScope, ops []model.GarbageOp) model.GarbageDeletion
+	// Erase carries out ops, every one of its action, in store, through DeleteOps where it can.
+	Erase(ctx context.Context, store storages.Deleter, ops []model.GarbageOp) model.GarbageDeletion
 }
 
 // eraserSet finds the eraser of an action; an action none carries out is only reported.
@@ -58,7 +58,7 @@ func (e eraserSet) deleteGarbage(
 	for _, garbage := range found.composeProjects {
 		reports := make([]model.GarbageReport, 0, len(garbage.reports))
 		for _, report := range garbage.reports {
-			deletion, err := e.deleteReport(ctx, grantedLock, garbage.scope, report)
+			deletion, err := e.deleteReport(ctx, grantedLock, garbage, report)
 			if err != nil {
 				stop(err)
 			}
@@ -67,6 +67,7 @@ func (e eraserSet) deleteGarbage(
 		}
 		composeProjects = append(composeProjects, composeProjectGarbage{
 			scope:   garbage.scope,
+			store:   garbage.store,
 			reports: reports,
 		})
 	}
@@ -85,7 +86,9 @@ func (e eraserSet) deleteGarbage(
 // the report was aborted or failed, every op not run once ctx is done. A Verify that refuses is
 // returned.
 func (e eraserSet) deleteReport(
-	ctx context.Context, grantedLock model.GrantedSessionLock, scope ComposeProjectScope,
+	ctx context.Context,
+	grantedLock model.GrantedSessionLock,
+	garbage composeProjectGarbage,
 	report model.GarbageReport,
 ) (*model.GarbageDeletion, error) {
 	if report.Detail == nil || report.Summary.Aborted != "" {
@@ -107,9 +110,9 @@ func (e eraserSet) deleteReport(
 			Msg("session lock no longer vouches for the gc: nothing more is deleted")
 		return &model.GarbageDeletion{NotRun: len(ops)}, fmt.Errorf("verify session lock: %w", err)
 	}
-	deletion := eraser.Erase(ctx, scope, ops)
+	deletion := eraser.Erase(ctx, garbage.store, ops)
 	zerolog.Ctx(ctx).Info().Str("data_kind", string(report.DataKind)).
-		Str("compose_project", scope.ComposeProject.String()).
+		Str("compose_project", garbage.scope.ComposeProject.String()).
 		Int("deleted", len(deletion.Deleted)).Int("failed", len(deletion.Failed)).Int("not_run", deletion.NotRun).
 		Msg("garbage deleted")
 	return &deletion, nil
@@ -127,28 +130,6 @@ func (e eraserSet) findEraser(ops []model.GarbageOp) (GarbageEraser, bool) {
 	}
 	eraser, ok := e[ops[0].Action]
 	return eraser, ok
-}
-
-func withDeletion(report model.GarbageReport, deletion *model.GarbageDeletion) model.GarbageReport {
-	report.Deletion = deletion
-	return report
-}
-
-// newUndeletedWarnings names, once each, the data kinds found with garbage but no deletion yet.
-func newUndeletedWarnings(reports []model.GarbageReport) []string {
-	var (
-		named    = map[model.GarbageDataKind]bool{}
-		warnings []string
-	)
-	for _, report := range reports {
-		undeleted := report.Deletion == nil && report.Summary.Aborted == "" && report.Summary.Found > 0
-		if !undeleted || named[report.DataKind] {
-			continue
-		}
-		named[report.DataKind] = true
-		warnings = append(warnings, fmt.Sprintf("%s is reported, not deleted, yet", report.DataKind))
-	}
-	return warnings
 }
 
 // DeleteOps runs del on each op in order until ctx is done; a target already gone counts as
@@ -190,4 +171,26 @@ func DeleteOps(
 		Failed:  failed,
 		NotRun:  notRun,
 	}
+}
+
+func withDeletion(report model.GarbageReport, deletion *model.GarbageDeletion) model.GarbageReport {
+	report.Deletion = deletion
+	return report
+}
+
+// newUndeletedWarnings names, once each, the data kinds found with garbage but no deletion yet.
+func newUndeletedWarnings(reports []model.GarbageReport) []string {
+	var (
+		named    = map[model.GarbageDataKind]bool{}
+		warnings []string
+	)
+	for _, report := range reports {
+		undeleted := report.Deletion == nil && report.Summary.Aborted == "" && report.Summary.Found > 0
+		if !undeleted || named[report.DataKind] {
+			continue
+		}
+		named[report.DataKind] = true
+		warnings = append(warnings, fmt.Sprintf("%s is reported, not deleted, yet", report.DataKind))
+	}
+	return warnings
 }

@@ -25,7 +25,6 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/utils/gctest"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -95,7 +94,7 @@ func TestTreeEraser_Erase(t *testing.T) {
 			}
 
 			// Act
-			got := NewTreeEraser().Erase(ctx, gc.ComposeProjectScope{Store: store}, ops)
+			got := NewTreeEraser().Erase(ctx, store, ops)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -187,7 +186,7 @@ func TestImageEraser_Erase(t *testing.T) {
 			}
 
 			// Act
-			got := NewImageEraser().Erase(ctx, gc.ComposeProjectScope{Store: store}, ops)
+			got := NewImageEraser().Erase(ctx, store, ops)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -261,7 +260,7 @@ func TestObjectEraser_Erase(t *testing.T) {
 			}
 
 			// Act
-			got := NewObjectEraser().Erase(ctx, gc.ComposeProjectScope{Store: store}, ops)
+			got := NewObjectEraser().Erase(ctx, store, ops)
 
 			// Assert
 			assert.Equal(t, tt.want, got)

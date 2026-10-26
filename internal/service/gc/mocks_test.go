@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 
+	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -145,6 +146,6 @@ func (m *mockEraser) Action() model.GarbageAction {
 	return m.Called().Get(0).(model.GarbageAction)
 }
 
-func (m *mockEraser) Erase(ctx context.Context, scope ComposeProjectScope, ops []model.GarbageOp) model.GarbageDeletion {
-	return m.Called(ctx, scope, ops).Get(0).(model.GarbageDeletion)
+func (m *mockEraser) Erase(ctx context.Context, store storages.Deleter, ops []model.GarbageOp) model.GarbageDeletion {
+	return m.Called(ctx, store, ops).Get(0).(model.GarbageDeletion)
 }
