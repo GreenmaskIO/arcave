@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -147,19 +148,6 @@ func newNoMarker() *mockInflight {
 	return inflight
 }
 
-func TestGarbageCollector_GarbageCollect_RefusesToDelete(t *testing.T) {
-	// Arrange
-	locker := &mockLocker{}
-	svc := New(newDeps(model.DefaultSession, inmemory.New(""), &mockSessions{}, locker, &mockInflight{}))
-
-	// Act
-	_, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{})
-
-	// Assert
-	require.ErrorIs(t, err, model.ErrGarbageCollectNotImplemented)
-	locker.AssertNotCalled(t, "Acquire", mock.Anything)
-}
-
 func TestGarbageCollector_GarbageCollect_RefusedWhileLocked(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
@@ -213,40 +201,49 @@ func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
 	trees.AssertExpectations(t)
 }
 
-// A run that loses the session's lock midway returns the loss, not what it judged past it.
+// A run that loses the session's lock while finding returns the loss, not what it judged past it,
+// and a run that deletes deletes nothing: no Verify, no Erase.
 func TestGarbageCollector_GarbageCollect_LockLostMidway(t *testing.T) {
-	// Arrange: the mock locker hands the caller's context back as the lock's.
-	ctx, loseLock := context.WithCancelCause(context.Background())
-	defer loseLock(nil)
-	sessionLocker := &mockSessionLocker{}
-	grantedLock := &mockGrantedSessionLock{}
-	sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).Return(grantedLock, nil).Once()
-	grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
-	sessions := &mockSessions{}
-	sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
-	demoSavepoints := &mockSavepointReader{}
-	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint{}, nil).Once()
-	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
-	trees.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool { return scope.ComposeProject == "demo" })).
-		Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
-		Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
-	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, newHeldLocker(), newNoMarker())
-	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
-	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
-	svc := New(deps)
+	for _, dryRun := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dry run %t", dryRun), func(t *testing.T) {
+			// Arrange: the mock locker hands the caller's context back as the lock's.
+			ctx, loseLock := context.WithCancelCause(context.Background())
+			defer loseLock(nil)
+			sessionLocker := &mockSessionLocker{}
+			grantedLock := &mockGrantedSessionLock{}
+			sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).Return(grantedLock, nil).Once()
+			grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
+			sessions := &mockSessions{}
+			sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
+			demoSavepoints := &mockSavepointReader{}
+			demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint{}, nil).Once()
+			trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+			trees.On("Find", mock.Anything, inComposeProject("demo")).
+				Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
+				Return(deadTreeStat, nil).Once()
+			treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+			deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, newHeldLocker(), newNoMarker())
+			deps.SessionLocker = sessionLocker
+			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
+			deps.Erasers = []GarbageEraser{treeEraser}
+			svc := New(deps)
 
-	// Act
-	result, err := svc.GarbageCollect(ctx, model.GarbageCollectRequest{DryRun: true})
+			// Act
+			result, err := svc.GarbageCollect(ctx, model.GarbageCollectRequest{DryRun: dryRun})
 
-	// Assert
-	require.ErrorIs(t, err, model.ErrSessionLockLost)
-	assert.Zero(t, result)
-	sessionLocker.AssertExpectations(t)
-	grantedLock.AssertExpectations(t)
-	sessions.AssertExpectations(t)
-	demoSavepoints.AssertExpectations(t)
-	trees.AssertExpectations(t)
+			// Assert
+			require.ErrorIs(t, err, model.ErrSessionLockLost)
+			assert.NotErrorAs(t, err, new(*model.GarbageCollectInterruptedError))
+			assert.Zero(t, result)
+			sessionLocker.AssertExpectations(t)
+			grantedLock.AssertExpectations(t)
+			sessions.AssertExpectations(t)
+			demoSavepoints.AssertExpectations(t)
+			trees.AssertExpectations(t)
+			treeEraser.AssertExpectations(t)
+		})
+	}
 }
 
 func TestGarbageCollector_GarbageCollect_RefusedWhileSessionLocked(t *testing.T) {
@@ -810,29 +807,26 @@ func TestGarbageCollector_GarbageCollect_ListsAllButTheUnlistedNamespaces(t *tes
 	trees.AssertExpectations(t)
 }
 
-// Every report is logged with what it found, and the total after them.
-func TestLogGarbageTotal(t *testing.T) {
+// Every report is logged with what it found, and their sum after them.
+func TestLogGarbageFound(t *testing.T) {
 	// Arrange
 	logs := &strings.Builder{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
-	result := model.GarbageCollectResult{
-		Reports: []model.GarbageReport{
-			{
-				DataKind:       model.GarbageDataKindDeduplicatedVolumes,
-				ComposeProject: "demo",
-				Summary:        model.GarbageSummary{Found: 2},
-			},
-			{
-				DataKind:       model.GarbageDataKindSavepointData,
-				ComposeProject: "demo",
-				Summary:        model.GarbageSummary{Found: 1, Bytes: utils.New(int64(10))},
-			},
+	reports := []model.GarbageReport{
+		{
+			DataKind:       model.GarbageDataKindDeduplicatedVolumes,
+			ComposeProject: "demo",
+			Summary:        model.GarbageSummary{Found: 2},
 		},
-		Total: model.GarbageTotal{Found: 3, Bytes: 10},
+		{
+			DataKind:       model.GarbageDataKindSavepointData,
+			ComposeProject: "demo",
+			Summary:        model.GarbageSummary{Found: 1, Bytes: utils.New(int64(10))},
+		},
 	}
 
 	// Act
-	logGarbageTotal(ctx, result)
+	logGarbageFound(ctx, reports)
 
 	// Assert
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
@@ -840,5 +834,569 @@ func TestLogGarbageTotal(t *testing.T) {
 	assert.Contains(t, lines[0], `"data_kind":"deduplicated-volumes","compose_project":"demo","found":2,"bytes_complete":false`)
 	assert.NotContains(t, lines[0], `"bytes":`)
 	assert.Contains(t, lines[1], `"found":1,"bytes_complete":true,"bytes":10`)
-	assert.Contains(t, lines[2], `"found":3,"bytes":10,"bytes_complete":false,"message":"garbage found in total"`)
+	assert.Contains(t, lines[2], `"found":3,"bytes":10,"bytes_complete":false,"message":"garbage found in the scope"`)
+}
+
+// newMockEraser is an eraser carrying out action.
+func newMockEraser(action model.GarbageAction) *mockEraser {
+	eraser := &mockEraser{}
+	eraser.On("Action").Return(action).Maybe()
+	return eraser
+}
+
+// newDeletedOps is a deletion of every op of ops.
+func newDeletedOps(ops ...model.GarbageOp) model.GarbageDeletion {
+	var deleted []model.GarbageDeleted
+	for _, op := range ops {
+		deleted = append(deleted, model.GarbageDeleted{Target: op.Target, Bytes: op.Bytes})
+	}
+	return model.GarbageDeletion{Deleted: deleted}
+}
+
+// inComposeProject matches the scope of compose project name.
+func inComposeProject(name model.DockerComposeProjectName) any {
+	return mock.MatchedBy(func(scope ComposeProjectScope) bool { return scope.ComposeProject == name })
+}
+
+// newGrantingSessionLocker is a session locker granting grantedLock once.
+func newGrantingSessionLocker(grantedLock *mockGrantedSessionLock) *mockSessionLocker {
+	sessionLocker := &mockSessionLocker{}
+	sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).Return(grantedLock, nil).Once()
+	return sessionLocker
+}
+
+var (
+	deadTreeOp = model.GarbageOp{
+		Action: model.GarbageActionDeleteTree, Target: gcDeadSavepoint.String(), Bytes: utils.New(int64(10)),
+		Savepoint: gcDeadSavepoint,
+	}
+	deadImageOp = model.GarbageOp{
+		Action: model.GarbageActionDeleteImage, Target: "shared/oci/images/sha256/" + strings.Repeat("2", 64),
+		Bytes: utils.New(int64(4)),
+	}
+	deadBlobOp = model.GarbageOp{
+		Action: model.GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/" + strings.Repeat("b", 64),
+		Bytes: utils.New(int64(3)),
+	}
+	deadSnapshotOp = model.GarbageOp{Action: model.GarbageActionForget, Target: "restic/volume-named-db:abc"}
+	deadTreeStat   = model.GarbageStat(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadTreeOp}}})
+	deadImageStat  = model.GarbageStat(model.OCIImageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadImageOp}}})
+	deadBlobStat   = model.GarbageStat(model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp}}})
+	deadSnapStat   = model.GarbageStat(model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadSnapshotOp}}})
+	notRunOne      = &model.GarbageDeletion{NotRun: 1}
+)
+
+// A dry run deletes nothing, and warns of no kind it would not delete.
+func TestGarbageCollector_GarbageCollect_DryRunDeletesNothing(t *testing.T) {
+	// Arrange: no Erase is expected, so one would fail the mock.
+	treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+	demoSavepoints := &mockSavepointReader{}
+	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	trees.On("Find", mock.Anything, inComposeProject("demo")).Return(deadTreeStat, nil).Once()
+	restic := newMockComposeProjectCollector(model.GarbageDataKindDeduplicatedVolumes)
+	restic.On("Find", mock.Anything, inComposeProject("demo")).Return(deadSnapStat, nil).Once()
+	locker, inflight := newHeldLocker(), newNoMarker()
+	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
+	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, restic}
+	deps.Erasers = []GarbageEraser{treeEraser}
+	svc := New(deps)
+
+	// Act
+	result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true})
+
+	// Assert
+	require.NoError(t, err)
+	assert.True(t, result.DryRun)
+	for _, report := range result.Reports {
+		assert.Nil(t, report.Deletion, report.DataKind)
+	}
+	assert.Empty(t, result.Warnings)
+	assert.Nil(t, result.Total.FreedBytes)
+	treeEraser.AssertExpectations(t)
+	trees.AssertExpectations(t)
+	restic.AssertExpectations(t)
+	demoSavepoints.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	inflight.AssertExpectations(t)
+}
+
+// A run that deletes looks with every collector of every compose project first, then verifies its
+// lock before each deletion, in the collectors' order, one compose project after the other; a kind
+// with no deletion yet is warned of once, however many reports found it, and does not make the run
+// partial.
+func TestGarbageCollector_GarbageCollect_Deletes(t *testing.T) {
+	// Arrange
+	grantedLock := &mockGrantedSessionLock{}
+	sessionLocker := newGrantingSessionLocker(grantedLock)
+	demoSavepoints := &mockSavepointReader{}
+	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	otherSavepoints := &mockSavepointReader{}
+	otherSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	images := newMockComposeProjectCollector(model.GarbageDataKindUpstreamImages)
+	restic := newMockComposeProjectCollector(model.GarbageDataKindDeduplicatedVolumes)
+	treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+	imageEraser := newMockEraser(model.GarbageActionDeleteImage)
+	tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
+	tags.On("Find", mock.Anything, mock.MatchedBy(func(scope DaemonScope) bool { return len(scope.ComposeProjects) == 2 })).
+		Return(model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{
+			Ops: []model.GarbageOp{{Action: model.GarbageActionUntag, Target: "arcave/demo-db-1:sp-x"}},
+		}}, nil).Once()
+	var chain []*mock.Call
+	composeProjects := []model.DockerComposeProjectName{"demo", "other"}
+	for _, name := range composeProjects {
+		chain = append(chain,
+			trees.On("Find", mock.Anything, inComposeProject(name)).Return(deadTreeStat, nil).Once(),
+			images.On("Find", mock.Anything, inComposeProject(name)).Return(deadImageStat, nil).Once(),
+			restic.On("Find", mock.Anything, inComposeProject(name)).Return(deadSnapStat, nil).Once(),
+		)
+	}
+	for _, name := range composeProjects {
+		chain = append(chain,
+			grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
+			treeEraser.On("Erase", mock.Anything, inComposeProject(name), []model.GarbageOp{deadTreeOp}).Return(newDeletedOps(deadTreeOp)).Once(),
+			grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
+			imageEraser.On("Erase", mock.Anything, inComposeProject(name), []model.GarbageOp{deadImageOp}).Return(newDeletedOps(deadImageOp)).Once(),
+		)
+	}
+	chain = append(chain, grantedLock.On("Unlock", mock.Anything).Return(nil).Once())
+	mock.InOrder(chain...)
+	locker, inflight := newHeldLocker(), newNoMarker()
+	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo", "other"), &mockSessions{}, locker, inflight)
+	deps.SessionLocker = sessionLocker
+	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints, otherSavepoints)
+	deps.DaemonCollectors = []DaemonCollector{tags}
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, images, restic}
+	deps.Erasers = []GarbageEraser{treeEraser, imageEraser}
+	svc := New(deps)
+
+	// Act
+	result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	assert.False(t, result.DryRun)
+	var deletions []*model.GarbageDeletion
+	for _, report := range result.Reports {
+		deletions = append(deletions, report.Deletion)
+	}
+	treeDeleted, imageDeleted := utils.New(newDeletedOps(deadTreeOp)), utils.New(newDeletedOps(deadImageOp))
+	assert.Equal(t, []*model.GarbageDeletion{
+		nil, // a daemon collector only reports
+		treeDeleted, imageDeleted, nil,
+		treeDeleted, imageDeleted, nil,
+	}, deletions)
+	assert.Equal(t, model.GarbageTotal{
+		Found: 7, Bytes: 28, BytesComplete: false, Deleted: 4, FreedBytes: utils.New(int64(28)),
+	}, result.Total)
+	assert.Equal(t, []string{
+		"restored-layers is reported, not deleted, yet",
+		"deduplicated-volumes is reported, not deleted, yet",
+	}, result.Warnings)
+	sessionLocker.AssertExpectations(t)
+	grantedLock.AssertExpectations(t)
+	trees.AssertExpectations(t)
+	images.AssertExpectations(t)
+	restic.AssertExpectations(t)
+	tags.AssertExpectations(t)
+	treeEraser.AssertExpectations(t)
+	imageEraser.AssertExpectations(t)
+	demoSavepoints.AssertExpectations(t)
+	otherSavepoints.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	inflight.AssertExpectations(t)
+}
+
+// A Verify that refuses stops its deletion and every one after it, in later compose projects too:
+// their ops are not run, and the refusal stops the run beside what was deleted before it.
+func TestGarbageCollector_GarbageCollect_VerifyRefuses(t *testing.T) {
+	// Arrange
+	grantedLock := &mockGrantedSessionLock{}
+	sessionLocker := newGrantingSessionLocker(grantedLock)
+	demoSavepoints := &mockSavepointReader{}
+	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	otherSavepoints := &mockSavepointReader{}
+	otherSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	images := newMockComposeProjectCollector(model.GarbageDataKindUpstreamImages)
+	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+	treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+	erasers := []GarbageEraser{
+		treeEraser, newMockEraser(model.GarbageActionDeleteImage), newMockEraser(model.GarbageActionDeleteObject),
+	}
+	mock.InOrder(
+		trees.On("Find", mock.Anything, inComposeProject("demo")).Return(deadTreeStat, nil).Once(),
+		images.On("Find", mock.Anything, inComposeProject("demo")).Return(deadImageStat, nil).Once(),
+		blobs.On("Find", mock.Anything, inComposeProject("demo")).Return(deadBlobStat, nil).Once(),
+		trees.On("Find", mock.Anything, inComposeProject("other")).Return(deadTreeStat, nil).Once(),
+		images.On("Find", mock.Anything, inComposeProject("other")).Return(deadImageStat, nil).Once(),
+		blobs.On("Find", mock.Anything, inComposeProject("other")).Return(deadBlobStat, nil).Once(),
+		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
+		treeEraser.On("Erase", mock.Anything, inComposeProject("demo"), []model.GarbageOp{deadTreeOp}).Return(newDeletedOps(deadTreeOp)).Once(),
+		grantedLock.On("Verify", mock.Anything).Return(model.ErrSessionLockNotHeld).Once(),
+		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
+	)
+	locker, inflight := newHeldLocker(), newNoMarker()
+	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo", "other"), &mockSessions{}, locker, inflight)
+	deps.SessionLocker = sessionLocker
+	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints, otherSavepoints)
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, images, blobs}
+	deps.Erasers = erasers
+	svc := New(deps)
+
+	// Act
+	result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionLockNotHeld)
+	var interrupted *model.GarbageCollectInterruptedError
+	require.ErrorAs(t, err, &interrupted)
+	require.ErrorIs(t, err, model.ErrGarbageCollectPartial)
+	var deletions []*model.GarbageDeletion
+	for _, report := range result.Reports {
+		deletions = append(deletions, report.Deletion)
+	}
+	assert.Equal(t, []*model.GarbageDeletion{
+		utils.New(newDeletedOps(deadTreeOp)), notRunOne, notRunOne,
+		notRunOne, notRunOne, notRunOne,
+	}, deletions)
+	assert.Equal(t, 1, result.Total.Deleted)
+	assert.Equal(t, 5, result.Total.NotRun)
+	sessionLocker.AssertExpectations(t)
+	grantedLock.AssertExpectations(t)
+	trees.AssertExpectations(t)
+	images.AssertExpectations(t)
+	blobs.AssertExpectations(t)
+	for _, eraser := range erasers {
+		eraser.(*mockEraser).AssertExpectations(t)
+	}
+	demoSavepoints.AssertExpectations(t)
+	otherSavepoints.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	inflight.AssertExpectations(t)
+}
+
+// What one report's deletion does to the result: a failed or aborted report deletes nothing, an
+// unjudged object holds none of its kind's ops back, a report with no ops verifies nothing, and a
+// failed or unstarted deletion makes the run partial.
+func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
+	unknownSizeOp := model.GarbageOp{Action: model.GarbageActionDeleteObject, Target: deadBlobOp.Target}
+
+	tests := []struct {
+		name    string
+		stat    model.GarbageStat
+		findErr error
+		// deletion is what Erase returns; nil expects no Verify and no Erase.
+		deletion     *model.GarbageDeletion
+		wantDeletion *model.GarbageDeletion
+		wantTotal    model.GarbageTotal
+		wantPartial  bool
+	}{
+		{
+			name:        "a failed report",
+			findErr:     errors.New("listing failed"),
+			wantTotal:   model.GarbageTotal{Failed: 1},
+			wantPartial: true,
+		},
+		{
+			name: "an aborted report",
+			stat: model.OCIBlobStat{GarbageFindings: model.GarbageFindings{
+				Ops: []model.GarbageOp{}, Aborted: "1 image manifests cannot be read",
+			}},
+			wantTotal:   model.GarbageTotal{Aborted: 1},
+			wantPartial: true,
+		},
+		{
+			name: "a report with an unjudged object",
+			stat: model.OCIBlobStat{GarbageFindings: model.GarbageFindings{
+				Ops: []model.GarbageOp{deadBlobOp}, Unjudged: []model.GarbageSkip{{Target: "shared/oci/blobs/sha256/x"}},
+			}},
+			deletion:     utils.New(newDeletedOps(deadBlobOp)),
+			wantDeletion: utils.New(newDeletedOps(deadBlobOp)),
+			wantTotal: model.GarbageTotal{
+				Found: 1, Bytes: 3, BytesComplete: true, Unjudged: 1, Deleted: 1, FreedBytes: utils.New(int64(3)),
+			},
+			wantPartial: true,
+		},
+		{
+			name:         "a report with no ops",
+			stat:         model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}},
+			wantDeletion: &model.GarbageDeletion{},
+			wantTotal:    model.GarbageTotal{BytesComplete: true, FreedBytes: utils.New(int64(0))},
+		},
+		{
+			name:         "a deleted op of unknown size",
+			stat:         model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{unknownSizeOp}}},
+			deletion:     utils.New(newDeletedOps(unknownSizeOp)),
+			wantDeletion: utils.New(newDeletedOps(unknownSizeOp)),
+			wantTotal:    model.GarbageTotal{Found: 1, Deleted: 1},
+		},
+		{
+			name: "an op failed",
+			stat: deadBlobStat,
+			deletion: &model.GarbageDeletion{
+				Failed: []model.GarbageDeleteFailure{{Target: deadBlobOp.Target, Error: "access denied"}},
+			},
+			wantDeletion: &model.GarbageDeletion{
+				Failed: []model.GarbageDeleteFailure{{Target: deadBlobOp.Target, Error: "access denied"}},
+			},
+			wantTotal:   model.GarbageTotal{Found: 1, Bytes: 3, BytesComplete: true, DeleteFailed: 1, FreedBytes: utils.New(int64(0))},
+			wantPartial: true,
+		},
+		{
+			name:         "an op not run",
+			stat:         deadBlobStat,
+			deletion:     notRunOne,
+			wantDeletion: notRunOne,
+			wantTotal:    model.GarbageTotal{Found: 1, Bytes: 3, BytesComplete: true, NotRun: 1, FreedBytes: utils.New(int64(0))},
+			wantPartial:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			grantedLock := &mockGrantedSessionLock{}
+			sessionLocker := newGrantingSessionLocker(grantedLock)
+			demoSavepoints := &mockSavepointReader{}
+			demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+			blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+			objectEraser := newMockEraser(model.GarbageActionDeleteObject)
+			chain := []*mock.Call{blobs.On("Find", mock.Anything, inComposeProject("demo")).Return(tt.stat, tt.findErr).Once()}
+			if tt.deletion != nil {
+				chain = append(chain,
+					grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
+					objectEraser.On("Erase", mock.Anything, inComposeProject("demo"), tt.stat.Findings().Ops).Return(*tt.deletion).Once(),
+				)
+			}
+			chain = append(chain, grantedLock.On("Unlock", mock.Anything).Return(nil).Once())
+			mock.InOrder(chain...)
+			locker, inflight := newHeldLocker(), newNoMarker()
+			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
+			deps.SessionLocker = sessionLocker
+			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
+			deps.Erasers = []GarbageEraser{objectEraser}
+			svc := New(deps)
+
+			// Act
+			result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{})
+
+			// Assert
+			if tt.wantPartial {
+				require.ErrorIs(t, err, model.ErrGarbageCollectPartial)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Len(t, result.Reports, 1)
+			assert.Equal(t, tt.wantDeletion, result.Reports[0].Deletion)
+			assert.Equal(t, tt.wantTotal, result.Total)
+			assert.Empty(t, result.Warnings)
+			sessionLocker.AssertExpectations(t)
+			grantedLock.AssertExpectations(t)
+			blobs.AssertExpectations(t)
+			objectEraser.AssertExpectations(t)
+			demoSavepoints.AssertExpectations(t)
+			locker.AssertExpectations(t)
+			inflight.AssertExpectations(t)
+		})
+	}
+}
+
+// A standing marker, or one that cannot be read, refuses a run that deletes before anything is
+// looked at.
+func TestGarbageCollector_GarbageCollect_InterruptedRollbackRefusesToDelete(t *testing.T) {
+	marker := model.InflightMarker{
+		Session: model.DefaultSession, ComposeProject: "demo", Target: "019e843e-1650-7000-8000-000000000001",
+	}
+	readErr := errors.New("permission denied")
+
+	tests := []struct {
+		name       string
+		marker     model.InflightMarker
+		found      bool
+		readErr    error
+		wantMarker bool
+	}{
+		{name: "a standing marker", marker: marker, found: true, wantMarker: true},
+		{name: "a marker that cannot be read", readErr: readErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: blobs expects no Find, so one would fail the mock.
+			inflight := &mockInflight{}
+			inflight.On("Get", mock.Anything).Return(tt.marker, tt.found, tt.readErr).Once()
+			blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+			locker := newHeldLocker()
+			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
+			deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
+			svc := New(deps)
+
+			// Act
+			result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{})
+
+			// Assert
+			if tt.wantMarker {
+				var interrupted *model.InterruptedRollbackError
+				require.ErrorAs(t, err, &interrupted)
+				assert.Equal(t, marker, interrupted.Marker)
+			} else {
+				require.ErrorIs(t, err, readErr)
+			}
+			assert.Zero(t, result)
+			blobs.AssertExpectations(t)
+			inflight.AssertExpectations(t)
+			locker.AssertExpectations(t)
+		})
+	}
+}
+
+// A run whose lock is lost once its last deletion is done cut nothing short: it is not interrupted.
+func TestGarbageCollector_GarbageCollect_LockLostAfterTheLastDeletion(t *testing.T) {
+	// Arrange: the mock locker hands the caller's context back as the lock's.
+	ctx, loseLock := context.WithCancelCause(context.Background())
+	defer loseLock(nil)
+	grantedLock := &mockGrantedSessionLock{}
+	sessionLocker := newGrantingSessionLocker(grantedLock)
+	demoSavepoints := &mockSavepointReader{}
+	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+	mock.InOrder(
+		trees.On("Find", mock.Anything, inComposeProject("demo")).Return(deadTreeStat, nil).Once(),
+		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
+		treeEraser.On("Erase", mock.Anything, inComposeProject("demo"), []model.GarbageOp{deadTreeOp}).
+			Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
+			Return(newDeletedOps(deadTreeOp)).Once(),
+		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
+	)
+	locker, inflight := newHeldLocker(), newNoMarker()
+	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
+	deps.SessionLocker = sessionLocker
+	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
+	deps.Erasers = []GarbageEraser{treeEraser, newMockEraser(model.GarbageActionDeleteImage)}
+	svc := New(deps)
+
+	// Act
+	result, err := svc.GarbageCollect(ctx, model.GarbageCollectRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, result.Reports, 1)
+	assert.Equal(t, utils.New(newDeletedOps(deadTreeOp)), result.Reports[0].Deletion)
+	assert.Equal(t, 1, result.Total.Deleted)
+	sessionLocker.AssertExpectations(t)
+	grantedLock.AssertExpectations(t)
+	trees.AssertExpectations(t)
+	treeEraser.AssertExpectations(t)
+	demoSavepoints.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	inflight.AssertExpectations(t)
+}
+
+// A run that loses its lock after a deletion returns the loss beside what it had deleted, and starts
+// no deletion past the loss.
+func TestGarbageCollector_GarbageCollect_LockLostWhileDeleting(t *testing.T) {
+	// Arrange: the mock locker hands the caller's context back as the lock's.
+	ctx, loseLock := context.WithCancelCause(context.Background())
+	defer loseLock(nil)
+	grantedLock := &mockGrantedSessionLock{}
+	sessionLocker := newGrantingSessionLocker(grantedLock)
+	demoSavepoints := &mockSavepointReader{}
+	demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+	trees := newMockComposeProjectCollector(model.GarbageDataKindSavepointData)
+	images := newMockComposeProjectCollector(model.GarbageDataKindUpstreamImages)
+	treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+	mock.InOrder(
+		trees.On("Find", mock.Anything, inComposeProject("demo")).Return(deadTreeStat, nil).Once(),
+		images.On("Find", mock.Anything, inComposeProject("demo")).Return(deadImageStat, nil).Once(),
+		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
+		treeEraser.On("Erase", mock.Anything, inComposeProject("demo"), []model.GarbageOp{deadTreeOp}).
+			Run(func(mock.Arguments) { loseLock(model.ErrSessionLockLost) }).
+			Return(newDeletedOps(deadTreeOp)).Once(),
+		grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
+	)
+	locker, inflight := newHeldLocker(), newNoMarker()
+	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
+	deps.SessionLocker = sessionLocker
+	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, images}
+	deps.Erasers = []GarbageEraser{treeEraser, newMockEraser(model.GarbageActionDeleteImage)}
+	svc := New(deps)
+
+	// Act
+	result, err := svc.GarbageCollect(ctx, model.GarbageCollectRequest{})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionLockLost)
+	var interrupted *model.GarbageCollectInterruptedError
+	require.ErrorAs(t, err, &interrupted)
+	require.Len(t, result.Reports, 2)
+	assert.Equal(t, utils.New(newDeletedOps(deadTreeOp)), result.Reports[0].Deletion)
+	assert.Equal(t, notRunOne, result.Reports[1].Deletion)
+	assert.Equal(t, 1, result.Total.Deleted)
+	assert.Equal(t, 1, result.Total.NotRun)
+	sessionLocker.AssertExpectations(t)
+	grantedLock.AssertExpectations(t)
+	trees.AssertExpectations(t)
+	treeEraser.AssertExpectations(t)
+	images.AssertExpectations(t)
+	demoSavepoints.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	inflight.AssertExpectations(t)
+}
+
+// A report whose ops no one eraser carries out — an action none has, or several actions — is only
+// reported: no Verify, no Erase, and its kind is warned of.
+func TestGarbageCollector_GarbageCollect_OnlyReportsWhatNoEraserCarriesOut(t *testing.T) {
+	tests := []struct {
+		name string
+		stat model.GarbageStat
+	}{
+		{name: "an action no eraser carries out", stat: deadSnapStat},
+		{
+			name: "ops of several actions",
+			stat: model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{deadBlobOp, deadTreeOp}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: neither eraser expects Erase, so one would fail the mock.
+			grantedLock := &mockGrantedSessionLock{}
+			sessionLocker := newGrantingSessionLocker(grantedLock)
+			grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
+			demoSavepoints := &mockSavepointReader{}
+			demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
+			collector := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+			collector.On("Find", mock.Anything, inComposeProject("demo")).Return(tt.stat, nil).Once()
+			objectEraser := newMockEraser(model.GarbageActionDeleteObject)
+			treeEraser := newMockEraser(model.GarbageActionDeleteTree)
+			locker, inflight := newHeldLocker(), newNoMarker()
+			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
+			deps.SessionLocker = sessionLocker
+			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.ComposeProjectCollectors = []ComposeProjectCollector{collector}
+			deps.Erasers = []GarbageEraser{objectEraser, treeEraser}
+			svc := New(deps)
+
+			// Act
+			result, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{})
+
+			// Assert
+			require.NoError(t, err)
+			require.Len(t, result.Reports, 1)
+			assert.Nil(t, result.Reports[0].Deletion)
+			assert.Equal(t, []string{"image-layers is reported, not deleted, yet"}, result.Warnings)
+			sessionLocker.AssertExpectations(t)
+			grantedLock.AssertExpectations(t)
+			collector.AssertExpectations(t)
+			objectEraser.AssertExpectations(t)
+			treeEraser.AssertExpectations(t)
+			demoSavepoints.AssertExpectations(t)
+			locker.AssertExpectations(t)
+			inflight.AssertExpectations(t)
+		})
+	}
 }

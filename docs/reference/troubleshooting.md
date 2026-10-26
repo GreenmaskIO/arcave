@@ -164,7 +164,7 @@ An earlier run was interrupted after it started writing and before it committed 
 <storage.directory.path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>/019e843e-1650-7000-8000-000000000000/
 ```
 
-If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back. Its `heartbeat.json` says whether the run that wrote it failed, and [`arcave gc --dry-run`](cli/gc.md) names such a directory.
+If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back. Its `heartbeat.json` says whether the run that wrote it failed, and [`arcave gc`](cli/gc.md) deletes such a directory — `--dry-run` only names it.
 
 ## `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start`
 

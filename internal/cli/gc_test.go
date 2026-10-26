@@ -31,10 +31,15 @@ import (
 func TestGCHandler_GarbageCollect(t *testing.T) {
 	req := model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages}}
 	res := model.GarbageCollectResult{DryRun: true, Session: model.DefaultSession}
+	deleted := model.GarbageCollectResult{Session: model.DefaultSession, Reports: []model.GarbageReport{{
+		DataKind: model.GarbageDataKindSavepointData,
+		Deletion: &model.GarbageDeletion{NotRun: 1},
+	}}}
 	svcErr := errors.New("store unreachable")
 
 	tests := []struct {
 		name        string
+		res         *model.GarbageCollectResult
 		svcErr      error
 		wantErr     error
 		wantPrinted []any
@@ -46,8 +51,8 @@ func TestGCHandler_GarbageCollect(t *testing.T) {
 		},
 		{name: "any other error prints nothing", svcErr: svcErr, wantErr: svcErr},
 		{
-			name: "a gc that would delete says how to run one", svcErr: model.ErrGarbageCollectNotImplemented,
-			wantErr: model.ErrGarbageCollectNotImplemented,
+			name: "a lock lost midway through deleting prints what was deleted and still fails",
+			res:  &deleted, svcErr: &model.GarbageCollectInterruptedError{Cause: model.ErrSessionLockLost}, wantErr: model.ErrSessionLockLost, wantPrinted: []any{deleted},
 		},
 	}
 	for _, tt := range tests {
@@ -56,7 +61,11 @@ func TestGCHandler_GarbageCollect(t *testing.T) {
 			printer := &capturePrinter{}
 			printer.On("Print", mock.Anything).Return(nil).Maybe()
 			svc := &mockService{}
-			svc.On("GarbageCollect", mock.Anything, req).Return(res, tt.svcErr).Once()
+			result := res
+			if tt.res != nil {
+				result = *tt.res
+			}
+			svc.On("GarbageCollect", mock.Anything, req).Return(result, tt.svcErr).Once()
 
 			// Act
 			err := NewGCHandler(svc, printer).GarbageCollect(context.Background(), req)
@@ -73,20 +82,24 @@ func TestGCHandler_GarbageCollect(t *testing.T) {
 	}
 }
 
-// The gc tool's output schema must accept every kind's detail: it is an interface, and the SDK
-// validates each result against the schema inferred for it.
+// The gc tool's output schema must accept every kind's detail — it is an interface, and the SDK
+// validates each result against the schema inferred for it — and a deletion.
 func TestGCOutputSchema_AcceptsADetail(t *testing.T) {
 	// Arrange
 	resolved, err := newOutputSchema[model.GarbageCollectResult]().Resolve(nil)
 	require.NoError(t, err)
 	size := int64(3)
-	result := model.GarbageCollectResult{DryRun: true, Session: model.DefaultSession, Reports: []model.GarbageReport{{
+	result := model.GarbageCollectResult{Session: model.DefaultSession, Reports: []model.GarbageReport{{
 		DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo", Summary: model.GarbageSummary{Found: 1, Bytes: &size},
 		Detail: model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{{
 			Action: model.GarbageActionDeleteObject, Target: "shared/oci/blobs/sha256/ab", Bytes: &size,
 			Reason: model.GarbageReasonUnreferenced, LastModified: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
 		}}}},
-	}}}
+		Deletion: &model.GarbageDeletion{
+			Deleted: []model.GarbageDeleted{{Target: "shared/oci/blobs/sha256/ab", Bytes: &size}},
+			Failed:  []model.GarbageDeleteFailure{{Target: "shared/oci/blobs/sha256/cd", Error: "access denied"}},
+		},
+	}}, Total: model.GarbageTotal{Found: 1, Deleted: 1, DeleteFailed: 1, FreedBytes: &size}}
 	data, err := json.Marshal(result)
 	require.NoError(t, err)
 	var instance map[string]any
@@ -110,10 +123,7 @@ func TestValidateGarbageCollectRequest(t *testing.T) {
 		wantMsg string
 	}{
 		{name: "a dry run", req: model.GarbageCollectRequest{DryRun: true}},
-		{
-			name: "one that would delete says how to run one", req: model.GarbageCollectRequest{},
-			wantErr: model.ErrGarbageCollectNotImplemented, wantMsg: "pass --dry-run",
-		},
+		{name: "one that deletes", req: model.GarbageCollectRequest{}},
 		{
 			name:    "an unknown kind",
 			req:     model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}},

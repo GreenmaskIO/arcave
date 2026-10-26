@@ -23,7 +23,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`rollback`](rollback.md) | Returns the environment to a savepoint, selected by id, by name, or by `latest`. |
 | [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `remove`, `set`, `unset`, `current`. |
 | [`tools generate-compose`](tools_generate_compose.md) | Writes a docker compose file for a running compose project, from what the daemon reports. |
-| [`gc`](gc.md) | Reports the garbage arcave left in a session and in the Docker daemon. It deletes nothing yet. |
+| [`gc`](gc.md) | Finds and deletes the garbage arcave left in a session's store, and reports what it left in the Docker daemon. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |
 | [`status`](status.md) | Planned. Registered, and returns `not implemented`. |
 | `completion` | Cobra's shell-completion script generator, for bash, zsh, fish and PowerShell. |

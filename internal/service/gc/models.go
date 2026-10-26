@@ -15,6 +15,7 @@
 package gc
 
 import (
+	"slices"
 	"time"
 
 	"github.com/greenmaskio/storages"
@@ -36,7 +37,7 @@ type DaemonScope struct {
 // store and the records that keep its objects alive.
 type ComposeProjectScope struct {
 	ComposeProject model.DockerComposeProjectName
-	Store          storages.Navigator
+	Store          storages.Storager
 	// Objects lists Store once, recursively, for every collector of the scope; a namespace of
 	// Deps.UnlistedNamespaces is left out.
 	Objects []storages.ObjectStat
@@ -44,4 +45,25 @@ type ComposeProjectScope struct {
 	Savepoints []model.Savepoint
 	// Dead are the savepoint trees no record commits, each left by a run that died.
 	Dead []model.SavepointID
+}
+
+// garbageFound is what a run's collectors found: the daemon's reports and each compose project's.
+type garbageFound struct {
+	daemon          []model.GarbageReport
+	composeProjects []composeProjectGarbage
+}
+
+// reports are every report, the daemon's first.
+func (m garbageFound) reports() []model.GarbageReport {
+	reports := slices.Clone(m.daemon)
+	for _, garbage := range m.composeProjects {
+		reports = append(reports, garbage.reports...)
+	}
+	return reports
+}
+
+// composeProjectGarbage is one compose project's scope and its collectors' reports, in their order.
+type composeProjectGarbage struct {
+	scope   ComposeProjectScope
+	reports []model.GarbageReport
 }

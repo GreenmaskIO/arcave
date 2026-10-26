@@ -1,24 +1,26 @@
 ---
 title: arcave gc
-description: Report the garbage arcave leaves in the store and the Docker daemon, without deleting it.
-keywords: [arcave gc, garbage collection, dry run, savepoint data, deduplicated volumes, image blobs, restored layers]
+description: Find and delete the garbage arcave leaves in the store, and report what it leaves in the Docker daemon.
+keywords: [arcave gc, garbage collection, dry run, delete, savepoint data, deduplicated volumes, image blobs, restored layers]
 ---
 
 # arcave gc
 
-Reports what no live savepoint of a session keeps alive. The report covers the session's store, every compose project in it, and the Docker daemon. In this release gc only reports, and `--dry-run` is required.
+Finds what no live savepoint of a session keeps alive, and deletes it. The report covers the session's store, every compose project in it, and the Docker daemon. `--dry-run` reports without deleting anything.
 
 ```text title="Synopsis"
-arcave gc --dry-run [--session <session>] [--kind <kind>…] [--restored-layer-grace <duration>] [flags]
+arcave gc [--dry-run] [--session <session>] [--kind <kind>…] [--restored-layer-grace <duration>] [flags]
 ```
 
-gc reads and nothing else, and stops nothing. It holds the project lock while it reads, so it refuses to run while another arcave command in the project is working. It also holds the session's lock in the store, which it waits for as every command does. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
+gc deletes from the store three kinds of data: `savepoint-data`, `upstream-images` and `image-layers`. In this release `deduplicated-volumes` (`cdc` snapshots) and `restored-layers` (layer tags in Docker) are only reported, never deleted, and each one found is named in `warnings`. gc asks nothing before it deletes: run `arcave gc --dry-run` first to see what will go.
+
+gc stops nothing. It holds the project lock for its whole run, so it refuses to run while another arcave command in the project is working. It also holds the session's lock in the store, which it waits for as every command does. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
 
 ## Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--dry-run` | `false` | Report the garbage without deleting it. Required for now. |
+| `--dry-run` | `false` | Report the garbage without deleting it. |
 | `--kind` | every kind | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. Repeat the flag, or separate kinds with commas. |
 | `--restored-layer-grace` | `gc.restored_layer_grace` | How long ago a layer tag must have been tagged before it counts as garbage. `0` counts every unused tag. |
 
@@ -63,13 +65,31 @@ The project lock keeps out a capture in the same project directory, and the sess
 
 A session directory without `session.json`, which a failed fork leaves, belongs to no session, so gc doesn't report it. `arcave session list --all` lists it with its status, and `arcave session remove <id>` deletes it.
 
+## How gc deletes
+
+gc first looks with every collector at every compose project, then deletes what they found, one compose project after the other. Every finding is made before anything is deleted: the `image-layers` finding is read off the very manifests deleting a tree or an image removes. Deletion runs in a fixed order:
+
+1. `savepoint-data`: each dead savepoint's directory, whole.
+2. `upstream-images`: each unused image's directory, its manifest first. A deletion cut short then leaves no manifest that a capture would take for the image stored; the next gc deletes what is left of the directory.
+3. `image-layers`: each blob, one at a time.
+
+gc deletes exactly the ops the report lists, by their `target`. A target already gone counts as deleted. A target it fails to delete is listed under the report's `deletion.failed`, and gc goes on with the next one. Before each kind it checks that it still holds the session's lock. A check that fails stops every deletion after it, which is counted under `not_run`. A report whose kind was aborted or failed deletes nothing. An object left unjudged doesn't keep the kind's ops from being deleted.
+
+Because a layer an image lists is held back as `listed-by-unreferenced` until the image is gone, the layers of an image gc deletes go on the next run. Run `arcave gc` twice to free an unused image whole.
+
+:::caution[Don't delete on a store another machine writes to]
+On a store several machines share, the session's lock can, rarely, let a capture on another machine run while gc deletes: the lock is taken by writing and reading back, with no write-if-absent. gc could then delete a blob that capture has just reused. Run `arcave gc` without `--dry-run` only while no other machine works in the session. See [Limitations](../limitations.md#gc-on-a-shared-store).
+:::
+
+gc refuses to delete while an interrupted rollback is marked in `.arcave/inflight.json`: what that rollback was writing isn't settled. Recover or finish the rollback first. `--dry-run` still runs, and warns of the marker.
+
 ## Output
 
-stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions a real gc would take.
+stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions gc takes, or under `--dry-run` would take. An op's `action` is what deleting its target takes: `delete-tree` (a savepoint's directory), `delete-image` (a stored image, its manifest first), `delete-object` (a blob), `forget` (a `cdc` snapshot) or `untag` (a restored layer's tag). gc carries out the first three; `forget` and `untag` are only reported for now. A run that deletes adds each report's `deletion`: what deleting those ops did. A dry run, a report of ops gc does not carry out yet and a report that was aborted or failed carry none; a report that found nothing carries an empty one.
 
 ```json title="stdout"
 {
-  "dry_run": true,
+  "dry_run": false,
   "session": "00000000-0000-0000-0000-000000000001",
   "reports": [
     {
@@ -87,15 +107,30 @@ stdout carries one report per collector for each compose project of the session,
           "savepoint": "019e843e-1650-7000-8000-000000000002"
         }],
         "live": 12
+      },
+      "deletion": {
+        "deleted": [{"target": "shared/oci/blobs/sha256/4f…", "bytes": 52428800}],
+        "not_run": 0
       }
     }
   ],
   "savepoints": [
     {"compose_project": "demo", "savepoint": "019e843e-1650-7000-8000-000000000002", "found": 2, "bytes": 52430912}
   ],
-  "total": {"found": 1, "bytes": 52428800, "bytes_complete": true, "skipped": 0, "unjudged": 0, "aborted": 0, "failed": 0}
+  "total": {
+    "found": 1, "bytes": 52428800, "bytes_complete": true, "skipped": 0, "unjudged": 0, "aborted": 0, "failed": 0,
+    "deleted": 1, "freed_bytes": 52428800
+  }
 }
 ```
+
+| Field | Meaning |
+|---|---|
+| `deletion.deleted` | Each op deleted, or found already gone, with the `bytes` deleting it freed: `0` for one already gone. Left out when there is none. |
+| `deletion.failed` | Each op gc failed to delete, with the error. Left out when there is none. |
+| `deletion.not_run` | How many ops gc started no deletion for: it was interrupted, or no longer held the session's lock. |
+| `total.deleted`, `total.delete_failed`, `total.not_run` | The reports' deletions added up. Left out when zero, and always in a dry run. |
+| `total.freed_bytes` | What the deletions freed. Left out in a dry run, and when a deleted op's size is unknown. |
 
 An op's `savepoint` names the dead savepoint whose removal alone frees the target: its tree, each blob that only its manifests list, and each `cdc` snapshot its capture took. `savepoints` adds up those ops per dead savepoint, across kinds. A stored image is never attributed: what a capture meant to reference with it is lost with the capture.
 
@@ -114,8 +149,8 @@ A target is relative to the compose project's directory in the store. A `restore
 
 | Condition | What happens |
 |---|---|
-| `--dry-run` is not passed | `garbage collection deletes nothing yet: only a dry run is supported: pass --dry-run`. Nothing is opened first. |
-| A kind could not be judged, an object was left unjudged, or a collector failed | The full report is printed, then the command exits `1` with `garbage collection was partial`. |
+| A kind could not be judged, an object was left unjudged, a collector failed, or an op failed to delete or was not run | The full report is printed, then the command exits `1` with `garbage collection was partial`. |
+| An interrupted rollback is marked, and `--dry-run` is not passed | `rollback to savepoint 019e843e-… was interrupted (restoring)`. Nothing is read or deleted. |
 | `--restored-layer-grace` is negative | `invalid garbage collect request: negative restored layer grace -1h0m0s`. Nothing is opened first. |
 | `--kind` names a kind arcave does not know | `invalid garbage collect request: unknown kind "restic"`. Nothing is opened first. |
 | Another arcave command holds the project lock | The command fails at once, without reading anything. |
@@ -123,7 +158,8 @@ A target is relative to the compose project's directory in the store. A `restore
 | A `docker.*` setting is wrong | The command fails as every command does, whichever kinds run. |
 | `-p/--project-name` is passed | `gc works on a session, every compose project in it: drop -p/--project-name` |
 | The session was removed after gc resolved it | The command fails with `session not found`, and reads nothing. |
-| gc loses the session's lock midway | The command fails with `session lock lost` and prints no report: what it read past the loss is no verdict. Run it again. |
+| gc loses the session's lock midway through `--dry-run` | The command fails with `session lock lost` and prints no report: what it read past the loss is no verdict. Run it again. |
+| gc loses the session's lock midway through deleting | The report is printed with what was deleted — nothing deleted comes back — and the ops not started counted under `not_run`. Then the command exits `1` with `garbage collection stopped deleting: session lock lost`. Run it again. |
 
 ## Examples
 
@@ -131,8 +167,13 @@ A target is relative to the compose project's directory in the store. A `restore
 arcave gc --dry-run
 ```
 
+```shell title="Delete it, then free the layers of the images that went"
+arcave gc
+arcave gc
+```
+
 ```shell title="Another session, stored images only"
-arcave gc --dry-run --session feat --kind upstream-images,image-layers
+arcave gc --session feat --kind upstream-images,image-layers
 ```
 
 ```shell title="Layer tags, holding back any tagged in the last hour"

@@ -61,6 +61,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
+	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
@@ -700,6 +701,7 @@ func newGCDependencies(
 		Inflight:                 inflightrepo.New(projectPath),
 		DaemonCollectors:         newDaemonCollectors(cfg, engine),
 		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
+		Erasers:                  newGarbageErasers(),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
 		RestoredLayerGrace: cfg.GC.RestoredLayerGrace,
@@ -741,6 +743,15 @@ func newComposeProjectCollectors(cfg config.Config, engine *docker.Engine) []gc.
 			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
 			engine: engine,
 		}),
+	}
+}
+
+// newGarbageErasers builds the erasers carrying out the gc's actions; forget and untag have none yet.
+func newGarbageErasers() []gc.GarbageEraser {
+	return []gc.GarbageEraser{
+		eraser.NewTreeEraser(),
+		eraser.NewImageEraser(),
+		eraser.NewObjectEraser(),
 	}
 }
 

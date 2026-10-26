@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // newDeadSavepoints groups every op that names a dead savepoint by compose project and
@@ -63,15 +64,29 @@ func newDeadSavepoints(reports []model.GarbageReport) []model.DeadSavepoint {
 	return dead
 }
 
-// newGarbageTotal adds up reports; bytes stay complete only while every report knew its own.
+// newGarbageTotal adds up reports; bytes stay complete only while every report knew its own, and
+// freed bytes are known only once a report carries a deletion and every deleted size is.
 func newGarbageTotal(reports []model.GarbageReport) model.GarbageTotal {
 	var (
-		found, skipped, unjudged int
-		aborted, failed          int
-		bytes                    int64
-		bytesComplete            = true
+		found, skipped, unjudged      int
+		aborted, failed               int
+		deleted, deleteFailed, notRun int
+		bytes                         int64
+		bytesComplete                 = true
+		freedBytes                    *int64
+		freedUnknown                  bool
 	)
 	for _, report := range reports {
+		if deletion := report.Deletion; deletion != nil {
+			deleted += len(deletion.Deleted)
+			deleteFailed += len(deletion.Failed)
+			notRun += deletion.NotRun
+			if freed := deletion.FreedBytes(); freed != nil {
+				freedBytes = utils.New(utils.Value(freedBytes) + *freed)
+			} else {
+				freedUnknown = true
+			}
+		}
 		switch {
 		case report.Error != "":
 			failed++
@@ -90,6 +105,9 @@ func newGarbageTotal(reports []model.GarbageReport) model.GarbageTotal {
 		}
 		bytes += *report.Summary.Bytes
 	}
+	if freedUnknown {
+		freedBytes = nil
+	}
 	return model.GarbageTotal{
 		Found:         found,
 		Bytes:         bytes,
@@ -98,14 +116,17 @@ func newGarbageTotal(reports []model.GarbageReport) model.GarbageTotal {
 		Unjudged:      unjudged,
 		Aborted:       aborted,
 		Failed:        failed,
+		Deleted:       deleted,
+		DeleteFailed:  deleteFailed,
+		NotRun:        notRun,
+		FreedBytes:    freedBytes,
 	}
 }
 
-// logGarbageTotal logs what result found, per report and in total: what a run that deletes
-// reports before it does.
-func logGarbageTotal(ctx context.Context, result model.GarbageCollectResult) {
+// logGarbageFound logs what reports found, each and summed, before any deletion.
+func logGarbageFound(ctx context.Context, reports []model.GarbageReport) {
 	log := zerolog.Ctx(ctx)
-	for _, report := range result.Reports {
+	for _, report := range reports {
 		event := log.Info().
 			Str("data_kind", string(report.DataKind)).
 			Str("compose_project", report.ComposeProject.String()).
@@ -116,9 +137,10 @@ func logGarbageTotal(ctx context.Context, result model.GarbageCollectResult) {
 		}
 		event.Msg("garbage found")
 	}
+	total := newGarbageTotal(reports)
 	log.Info().
-		Int("found", result.Total.Found).
-		Int64("bytes", result.Total.Bytes).
-		Bool("bytes_complete", result.Total.BytesComplete).
-		Msg("garbage found in total")
+		Int("found", total.Found).
+		Int64("bytes", total.Bytes).
+		Bool("bytes_complete", total.BytesComplete).
+		Msg("garbage found in the scope")
 }

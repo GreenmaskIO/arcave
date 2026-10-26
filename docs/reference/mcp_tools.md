@@ -209,11 +209,12 @@ Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose fil
 
 | Argument | Required | Description |
 |---|---|---|
+| `dry_run` | no | `true`, the default, only reports; `false` deletes, as `arcave gc` without `--dry-run` does. |
 | `session` | no | The session to look in, by name or by id. The default is the pinned session, or the current one. |
 | `restored_layer_grace` | no | How long ago an unused layer tag must have been tagged before it counts as garbage, written as a duration such as `1h`. The default is `gc.restored_layer_grace`. |
 | `kinds` | no | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. The default is every kind. |
 
-Returns the report [`arcave gc --dry-run`](cli/gc.md) prints. The tool always runs as a dry run and deletes nothing. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`.
+Returns the report [`arcave gc`](cli/gc.md) prints. Unless `dry_run` is `false` the tool deletes nothing; it is marked destructive either way. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`, and what failed to delete is under `deletion.failed`. A gc that lost its session lock midway through deleting is returned as a tool error that still carries the report, with what was deleted before the loss.
 
 ## Where the tools differ from the CLI
 

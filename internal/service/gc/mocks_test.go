@@ -137,3 +137,14 @@ type mockComposeProjectProbeCollector struct{ mockComposeProjectCollector }
 func (m *mockComposeProjectProbeCollector) Probe(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
+
+// mockEraser doubles GarbageEraser.
+type mockEraser struct{ mock.Mock }
+
+func (m *mockEraser) Action() model.GarbageAction {
+	return m.Called().Get(0).(model.GarbageAction)
+}
+
+func (m *mockEraser) Erase(ctx context.Context, scope ComposeProjectScope, ops []model.GarbageOp) model.GarbageDeletion {
+	return m.Called(ctx, scope, ops).Get(0).(model.GarbageDeletion)
+}

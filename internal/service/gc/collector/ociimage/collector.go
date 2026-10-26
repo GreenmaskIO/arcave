@@ -38,7 +38,7 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 }
 
 // Find names every stored image no record names.
-func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
+func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
 		stored    = imagecopy.NewStoredImages(scope.Objects)
 		live      = gc.NewLiveImages(scope.Savepoints)
@@ -51,7 +51,7 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 			continue
 		}
 		ops = append(ops, model.GarbageOp{
-			Action:       model.GarbageActionDeleteTree,
+			Action:       model.GarbageActionDeleteImage,
 			Target:       image.Key,
 			Bytes:        utils.New(image.Bytes),
 			Reason:       model.GarbageReasonUnreferenced,

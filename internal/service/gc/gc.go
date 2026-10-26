@@ -62,6 +62,8 @@ type Deps struct {
 	// DaemonCollectors and ComposeProjectCollectors are one per kind, in the order they run.
 	DaemonCollectors         []DaemonCollector
 	ComposeProjectCollectors []ComposeProjectCollector
+	// Erasers are one per action a gc carries out; an action none carries out is only reported.
+	Erasers []GarbageEraser
 	// RestoredLayerGrace is the restored layer grace of a request naming none.
 	RestoredLayerGrace time.Duration
 	// UnlistedNamespaces are the top-level directories of a compose project store its scope's
@@ -71,7 +73,7 @@ type Deps struct {
 	Now func() time.Time
 }
 
-// GarbageCollector finds one session's garbage. It deletes nothing yet.
+// GarbageCollector finds one session's garbage, and deletes what its erasers can.
 type GarbageCollector struct {
 	store                    storages.Navigator
 	session                  model.SessionID
@@ -82,6 +84,7 @@ type GarbageCollector struct {
 	inflight                 inflightMarkers
 	daemonCollectors         []DaemonCollector
 	composeProjectCollectors []ComposeProjectCollector
+	erasers                  eraserSet
 	unlisted                 []string
 	grace                    time.Duration
 	now                      func() time.Time
@@ -103,31 +106,31 @@ func New(deps Deps) *GarbageCollector {
 		inflight:                 deps.Inflight,
 		daemonCollectors:         deps.DaemonCollectors,
 		composeProjectCollectors: deps.ComposeProjectCollectors,
+		erasers:                  newEraserSet(deps.Erasers),
 		unlisted:                 deps.UnlistedNamespaces,
 		grace:                    deps.RestoredLayerGrace,
 		now:                      now,
 	}
 }
 
-// GarbageCollect reports what every collector req selects finds in the session; only a dry
-// run exists. It holds the project and session locks throughout, so no capture runs meanwhile.
+// GarbageCollect finds what every collector req selects finds in the session and, past a dry run,
+// deletes it. It holds the project and session locks throughout, so no capture runs meanwhile.
 func (s *GarbageCollector) GarbageCollect(
 	ctx context.Context, req model.GarbageCollectRequest,
 ) (model.GarbageCollectResult, error) {
-	if !req.DryRun {
-		return model.GarbageCollectResult{}, model.ErrGarbageCollectNotImplemented
-	}
 	if err := req.Validate(); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
 	collectors := s.readCollectorSet(ctx, req.DataKinds)
 	return withUnlock(ctx, s.locker, func() (model.GarbageCollectResult, error) {
-		return withSessionLock(ctx, s.sessionLocker, func(ctx context.Context) (model.GarbageCollectResult, error) {
+		return withSessionLock(ctx, s.sessionLocker, func(ctx context.Context, grantedLock model.GrantedSessionLock) (
+			model.GarbageCollectResult, error,
+		) {
 			// Resolved outside the lock: a session removed since has no garbage, only a wrong answer.
 			if err := requireSession(ctx, s.sessions, s.session); err != nil {
 				return model.GarbageCollectResult{}, err
 			}
-			return s.findGarbage(ctx, req, collectors)
+			return s.collectGarbage(ctx, req, collectors, grantedLock)
 		})
 	})
 }
@@ -147,11 +150,11 @@ func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, 
 	return fn()
 }
 
-// withSessionLock runs fn holding the session's lock in the store, and unlocks it however fn
-// ends; a failed unlock is logged. fn runs on the lock's context: a lost lock cancels it with
-// model.ErrSessionLockLost as its cause, and a run so cancelled returns that cause, not its result.
+// withSessionLock runs fn on the session lock's context, cancelled once the lock is lost, and
+// unlocks however fn ends.
 func withSessionLock[T any](
-	ctx context.Context, locker model.SessionLocker, fn func(ctx context.Context) (T, error),
+	ctx context.Context, locker model.SessionLocker,
+	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
 ) (T, error) {
 	lockCtx, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationGarbageCollect)
 	if err != nil {
@@ -163,13 +166,7 @@ func withSessionLock[T any](
 			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
 		}
 	}()
-	result, err := fn(lockCtx)
-	// What a run judged past a lost lock or an interrupt is no verdict.
-	if cause := context.Cause(lockCtx); cause != nil {
-		var zero T
-		return zero, cause
-	}
-	return result, err
+	return fn(lockCtx, grantedLock)
 }
 
 // requireSession refuses a session other than the default that has no record: one removed
@@ -188,41 +185,76 @@ func requireSession(ctx context.Context, sessions sessionLookup, id model.Sessio
 	return nil
 }
 
-// findGarbage runs the daemon collectors of the set, then its compose-project collectors over
-// every compose project of the session.
-func (s *GarbageCollector) findGarbage(
+// collectGarbage reports what the collectors find or, past a dry run, deletes it.
+func (s *GarbageCollector) collectGarbage(
+	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
+	grantedLock model.GrantedSessionLock,
+) (model.GarbageCollectResult, error) {
+	if req.DryRun {
+		return s.reportGarbage(ctx, req, collectors)
+	}
+	return s.deleteGarbage(ctx, req, collectors, grantedLock)
+}
+
+// reportGarbage finds the garbage and deletes nothing. Past a lost lock or an interrupt, what it
+// judged is no verdict: it returns the cause alone.
+func (s *GarbageCollector) reportGarbage(
 	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
 ) (model.GarbageCollectResult, error) {
-	var (
-		warnings = append(slices.Clone(collectors.warnings), s.readInflightWarnings(ctx)...)
-		grace    = s.grace
-		reports  = []model.GarbageReport{}
-	)
-	if req.RestoredLayerGrace != nil {
-		grace = *req.RestoredLayerGrace
+	inflightWarnings := s.readInflightWarnings(ctx)
+	found := s.findGarbage(ctx, req, collectors)
+	if cause := context.Cause(ctx); cause != nil {
+		return model.GarbageCollectResult{}, cause
 	}
-	sessionStore, composeProjects, listErr := s.readComposeProjects(ctx)
-	daemonScope := DaemonScope{
-		ComposeProjects:    composeProjects,
-		Now:                s.now(),
-		RestoredLayerGrace: grace,
-	}
-	// The daemon's objects are judged against the compose projects: none read is no verdict.
-	reports = append(reports, collectors.runDaemonCollectors(ctx, daemonScope, listErr)...)
-	reports = append(reports, s.runComposeProjects(ctx, collectors, sessionStore, composeProjects, listErr)...)
-
-	result := model.GarbageCollectResult{
-		DryRun:     true,
-		Session:    s.session,
-		Reports:    reports,
-		Savepoints: newDeadSavepoints(reports),
-		Total:      newGarbageTotal(reports),
-		Warnings:   warnings,
-	}
-	if result.Total.Failed > 0 || result.Total.Aborted > 0 || result.Total.Unjudged > 0 {
+	result := s.newGarbageCollectResult(req, found, slices.Concat(collectors.warnings, inflightWarnings))
+	if result.IsPartial() {
 		return result, model.ErrGarbageCollectPartial
 	}
 	return result, nil
+}
+
+// deleteGarbage finds the garbage, then deletes it. A run stopped while finding returns the cause
+// alone, as a dry run does; what it deleted cannot come back, so one stopped partway through
+// deleting returns its result beside a *model.GarbageCollectInterruptedError.
+func (s *GarbageCollector) deleteGarbage(
+	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
+	grantedLock model.GrantedSessionLock,
+) (model.GarbageCollectResult, error) {
+	if err := s.requireNoInflight(ctx); err != nil {
+		return model.GarbageCollectResult{}, err
+	}
+	found := s.findGarbage(ctx, req, collectors)
+	if cause := context.Cause(ctx); cause != nil {
+		return model.GarbageCollectResult{}, cause
+	}
+	deleted, err := s.erasers.deleteGarbage(ctx, grantedLock, found)
+	warnings := slices.Concat(collectors.warnings, newUndeletedWarnings(deleted.reports()))
+	result := s.newGarbageCollectResult(req, deleted, warnings)
+	if err != nil {
+		return result, &model.GarbageCollectInterruptedError{Cause: err}
+	}
+	if result.IsPartial() {
+		return result, model.ErrGarbageCollectPartial
+	}
+	return result, nil
+}
+
+// requireNoInflight refuses a run that deletes while an interrupted rollback stands: what it was
+// writing is not settled.
+func (s *GarbageCollector) requireNoInflight(ctx context.Context) error {
+	marker, found, err := s.inflight.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the inflight marker: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	err = &model.InterruptedRollbackError{Marker: marker}
+	zerolog.Ctx(ctx).Error().Err(err).
+		Str("session", marker.Session.String()).
+		Str("compose_project", marker.ComposeProject.String()).
+		Msg("finish or recover the interrupted rollback first; arcave gc --dry-run still reports")
+	return err
 }
 
 // readInflightWarnings says when an interrupted rollback stands: its savepoints are committed,
@@ -240,23 +272,67 @@ func (s *GarbageCollector) readInflightWarnings(ctx context.Context) []string {
 		marker.ComposeProject, marker.Session, marker.Target)}
 }
 
-// runComposeProjects runs the compose-project collectors over every compose project of the
-// session; a listing that failed with listErr aborts them.
-func (s *GarbageCollector) runComposeProjects(
-	ctx context.Context, collectors collectorSet, sessionStore storages.Navigator, names []model.DockerComposeProjectName,
-	listErr error,
-) []model.GarbageReport {
+// findGarbage runs the daemon collectors, then each compose project's.
+func (s *GarbageCollector) findGarbage(
+	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
+) garbageFound {
+	grace := s.grace
+	if req.RestoredLayerGrace != nil {
+		grace = *req.RestoredLayerGrace
+	}
+	sessionStore, composeProjects, listErr := s.readComposeProjects(ctx)
+	daemonScope := DaemonScope{
+		ComposeProjects:    composeProjects,
+		Now:                s.now(),
+		RestoredLayerGrace: grace,
+	}
+	// The daemon's objects are judged against the compose projects: none read is no verdict.
+	daemonReports := collectors.runDaemonCollectors(ctx, daemonScope, listErr)
+	logGarbageFound(ctx, daemonReports)
+	return garbageFound{
+		daemon:          daemonReports,
+		composeProjects: s.findComposeProjectGarbage(ctx, collectors, sessionStore, composeProjects, listErr),
+	}
+}
+
+// findComposeProjectGarbage runs the compose-project collectors over every compose project.
+func (s *GarbageCollector) findComposeProjectGarbage(
+	ctx context.Context, collectors collectorSet, sessionStore storages.Navigator,
+	names []model.DockerComposeProjectName, listErr error,
+) []composeProjectGarbage {
 	if len(collectors.composeProject) == 0 {
 		// No compose-project collector runs: reading the scopes would only hold the lock longer.
 		return nil
 	}
 	if listErr != nil {
-		return collectors.runComposeProjectCollectors(ctx, "", ComposeProjectScope{}, listErr)
+		return []composeProjectGarbage{{
+			reports: collectors.runComposeProjectCollectors(ctx, "", ComposeProjectScope{}, listErr),
+		}}
 	}
-	var reports []model.GarbageReport
+	garbage := make([]composeProjectGarbage, 0, len(names))
 	for _, name := range names {
 		scope, err := s.readComposeProjectScope(ctx, sessionStore, name)
-		reports = append(reports, collectors.runComposeProjectCollectors(ctx, name, scope, err)...)
+		reports := collectors.runComposeProjectCollectors(ctx, name, scope, err)
+		logGarbageFound(ctx, reports)
+		garbage = append(garbage, composeProjectGarbage{
+			scope:   scope,
+			reports: reports,
+		})
 	}
-	return reports
+	return garbage
+}
+
+// newGarbageCollectResult is the result over found.
+func (s *GarbageCollector) newGarbageCollectResult(
+	req model.GarbageCollectRequest, found garbageFound, warnings []string,
+) model.GarbageCollectResult {
+	reports := found.reports()
+	return model.GarbageCollectResult{
+		DryRun:     req.DryRun,
+		Session:    s.session,
+		Reports:    reports,
+		Savepoints: newDeadSavepoints(reports),
+		Total:      newGarbageTotal(reports),
+		Warnings:   warnings,
+	}
 }

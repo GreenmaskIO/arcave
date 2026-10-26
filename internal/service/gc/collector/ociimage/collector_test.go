@@ -54,6 +54,9 @@ func TestCollector_Find(t *testing.T) {
 	got := stat.(model.OCIImageStat)
 	require.Len(t, got.Ops, 2)
 	assert.Equal(t, []string{image2, image3}, gctest.Targets(got.Ops))
+	for _, op := range got.Ops {
+		assert.Equal(t, model.GarbageActionDeleteImage, op.Action, op.Target)
+	}
 	assert.Equal(t, utils.New(int64(4)), got.Ops[0].Bytes)
 	assert.Empty(t, got.Skipped)
 	assert.Empty(t, got.Unjudged)

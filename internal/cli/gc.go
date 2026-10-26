@@ -17,7 +17,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -27,11 +26,8 @@ type gcService interface {
 }
 
 // ValidateGarbageCollectRequest refuses, before anything is opened, a request the service
-// would refuse: one that would delete, or one Validate refuses.
+// would refuse.
 func ValidateGarbageCollectRequest(req model.GarbageCollectRequest) error {
-	if !req.DryRun {
-		return dryRunRequiredError(model.ErrGarbageCollectNotImplemented, "--dry-run")
-	}
 	return req.Validate()
 }
 
@@ -47,23 +43,15 @@ func NewGCHandler(svc gcService, printer printer) *GCHandler {
 	}
 }
 
-// GarbageCollect runs req and prints the report; a partial gc prints it and still fails.
+// GarbageCollect runs req and prints the report; a partial gc, one stopped midway through deleting
+// included, prints it and still fails.
 func (h *GCHandler) GarbageCollect(ctx context.Context, req model.GarbageCollectRequest) error {
 	result, err := h.svc.GarbageCollect(ctx, req)
 	if err != nil && !errors.Is(err, model.ErrGarbageCollectPartial) {
-		return dryRunRequiredError(err, "--dry-run")
+		return err
 	}
 	if printErr := h.printer.Print(result); printErr != nil {
 		return printErr
-	}
-	return err
-}
-
-// dryRunRequiredError adds the fix to a gc that would delete, naming the selector as the
-// adapter spells it.
-func dryRunRequiredError(err error, selector string) error {
-	if errors.Is(err, model.ErrGarbageCollectNotImplemented) {
-		return fmt.Errorf("%w: pass %s", err, selector)
 	}
 	return err
 }

@@ -557,6 +557,63 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	svc.AssertExpectations(t)
 }
 
+// dry_run left out reports only; false reaches the request and deletes. A gc that fails past a
+// deletion still hands back what it deleted, as a tool error.
+func TestMCPHandler_garbageCollectMCP(t *testing.T) {
+	deleted := model.GarbageCollectResult{Session: handlerSession, Reports: []model.GarbageReport{{
+		DataKind: model.GarbageDataKindSavepointData,
+		Deletion: &model.GarbageDeletion{NotRun: 1},
+	}}}
+
+	tests := []struct {
+		name        string
+		in          gcInput
+		res         model.GarbageCollectResult
+		svcErr      error
+		wantDryRun  bool
+		wantErr     error
+		wantIsError bool
+		want        model.GarbageCollectResult
+	}{
+		{name: "dry_run left out is a dry run", wantDryRun: true},
+		{name: "dry_run true is a dry run", in: gcInput{DryRun: utils.New(true)}, wantDryRun: true},
+		{name: "dry_run false deletes", in: gcInput{DryRun: utils.New(false)}, res: deleted, want: deleted},
+		{
+			name: "a lock lost midway through deleting is a tool error carrying the result",
+			in:   gcInput{DryRun: utils.New(false)}, res: deleted, svcErr: &model.GarbageCollectInterruptedError{Cause: model.ErrSessionLockLost},
+			wantIsError: true, want: deleted,
+		},
+		{
+			name: "a failure before any report is the call's error",
+			in:   gcInput{DryRun: utils.New(false)}, svcErr: model.ErrSessionLocked, wantErr: model.ErrSessionLocked,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("GarbageCollect", mock.Anything, model.GarbageCollectRequest{DryRun: tt.wantDryRun}).
+				Return(tt.res, tt.svcErr).Once()
+			h := NewMCPHandler(nil, nil, nil, func(context.Context, string) (MCPGCService, func(), error) {
+				return svc, func() {}, nil
+			}, model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+			// Act
+			res, got, err := h.garbageCollectMCP(context.Background(), nil, tt.in)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantIsError, res != nil && res.IsError)
+			assert.Equal(t, tt.want, got)
+			svc.AssertExpectations(t)
+		})
+	}
+}
+
 // How a rollback tool call ends decides whether its context is cancelled — and so whether
 // core reverts — but never lets the server exit while the call is still unwinding.
 func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {

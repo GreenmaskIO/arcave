@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package gc finds a session's garbage: GarbageCollector reads every compose project's scope
-// once and runs the collectors over it. The collectors, one per kind of garbage, live under
-// collector/ and are handed in by the composition root; each judges liveness by savepoint status,
-// never by an object's age, and only reports.
+// Package gc finds a session's garbage and deletes it: GarbageCollector reads every compose
+// project's scope once and runs the collectors over it. The collectors, one per kind of garbage,
+// live under collector/ and are handed in by the composition root; each judges liveness by
+// savepoint status, never by an object's age, and one with a Delete removes what it found.
 package gc
