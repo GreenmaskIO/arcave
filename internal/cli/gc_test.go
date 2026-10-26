@@ -33,7 +33,7 @@ func TestGCHandler_GarbageCollect(t *testing.T) {
 	res := model.GarbageCollectResult{DryRun: true, Session: model.DefaultSession}
 	deleted := model.GarbageCollectResult{Session: model.DefaultSession, Reports: []model.GarbageReport{{
 		DataKind: model.GarbageDataKindSavepointData,
-		Deletion: &model.GarbageDeletion{Deleted: []model.GarbageDeleted{}, NotRun: 1},
+		Deletion: &model.GarbageDeletion{NotRun: 1},
 	}}}
 	svcErr := errors.New("store unreachable")
 

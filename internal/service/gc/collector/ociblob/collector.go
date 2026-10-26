@@ -95,20 +95,6 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 	}, nil
 }
 
-// Delete removes every blob stat names, one at a time: a batch is refused whole for one blob
-// already gone, and fails whole for one that cannot be removed.
-func (s *Collector) Delete(
-	ctx context.Context, scope gc.ComposeProjectScope, stat model.GarbageStat,
-) (model.GarbageDeletion, error) {
-	found, ok := stat.(model.OCIBlobStat)
-	if !ok {
-		return model.GarbageDeletion{}, fmt.Errorf("%s cannot delete a %T", s.Kind(), stat)
-	}
-	return gc.DeleteOps(ctx, found.Ops, func(ctx context.Context, op model.GarbageOp) error {
-		return scope.Store.Delete(ctx, op.Target)
-	}), nil
-}
-
 // newSoleDeadSavepoint is the dead savepoint a blob's removal is attributed to: the one tree of
 // trees, or none when several list it.
 func newSoleDeadSavepoint(trees []model.SavepointID) model.SavepointID {

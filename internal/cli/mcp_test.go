@@ -562,7 +562,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 func TestMCPHandler_garbageCollectMCP(t *testing.T) {
 	deleted := model.GarbageCollectResult{Session: handlerSession, Reports: []model.GarbageReport{{
 		DataKind: model.GarbageDataKindSavepointData,
-		Deletion: &model.GarbageDeletion{Deleted: []model.GarbageDeleted{}, NotRun: 1},
+		Deletion: &model.GarbageDeletion{NotRun: 1},
 	}}}
 
 	tests := []struct {

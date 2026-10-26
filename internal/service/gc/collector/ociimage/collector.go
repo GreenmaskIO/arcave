@@ -17,7 +17,6 @@ package ociimage
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
@@ -39,7 +38,7 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 }
 
 // Find names every stored image no record names.
-func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
+func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
 		stored    = imagecopy.NewStoredImages(scope.Objects)
 		live      = gc.NewLiveImages(scope.Savepoints)
@@ -52,7 +51,7 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 			continue
 		}
 		ops = append(ops, model.GarbageOp{
-			Action:       model.GarbageActionDeleteTree,
+			Action:       model.GarbageActionDeleteImage,
 			Target:       image.Key,
 			Bytes:        utils.New(image.Bytes),
 			Reason:       model.GarbageReasonUnreferenced,
@@ -63,17 +62,4 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 		GarbageFindings: model.GarbageFindings{Ops: ops},
 		Live:            liveCount,
 	}, nil
-}
-
-// Delete removes every image directory stat names, each one's manifest first.
-func (s *Collector) Delete(
-	ctx context.Context, scope gc.ComposeProjectScope, stat model.GarbageStat,
-) (model.GarbageDeletion, error) {
-	found, ok := stat.(model.OCIImageStat)
-	if !ok {
-		return model.GarbageDeletion{}, fmt.Errorf("%s cannot delete a %T", s.Kind(), stat)
-	}
-	return gc.DeleteOps(ctx, found.Ops, func(ctx context.Context, op model.GarbageOp) error {
-		return imagecopy.DeleteStoredImage(ctx, scope.Store, op.Target)
-	}), nil
 }

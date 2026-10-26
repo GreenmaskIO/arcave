@@ -89,6 +89,8 @@ type GarbageAction string
 const (
 	GarbageActionDeleteObject GarbageAction = "delete-object"
 	GarbageActionDeleteTree   GarbageAction = "delete-tree"
+	// GarbageActionDeleteImage deletes one stored image, its manifest first.
+	GarbageActionDeleteImage GarbageAction = "delete-image"
 	// GarbageActionForget is a restic forget of one snapshot, its data freed by the prune after.
 	GarbageActionForget GarbageAction = "forget"
 	GarbageActionUntag  GarbageAction = "untag"
@@ -333,10 +335,9 @@ type GarbageReport struct {
 	Deletion *GarbageDeletion `json:"deletion,omitempty"`
 }
 
-// GarbageDeletion is what one collector's deletion did to the ops of its finding.
+// GarbageDeletion is what deleting one report's ops did.
 type GarbageDeletion struct {
-	// Deleted is never nil, so an empty deletion encodes as [].
-	Deleted []GarbageDeleted       `json:"deleted"`
+	Deleted []GarbageDeleted       `json:"deleted,omitempty"`
 	Failed  []GarbageDeleteFailure `json:"failed,omitempty"`
 	// NotRun counts the ops no deletion was started for: the run was cancelled or lost its lock.
 	NotRun int `json:"not_run"`
@@ -357,7 +358,7 @@ func (m GarbageDeletion) FreedBytes() *int64 {
 // GarbageDeleted is one op's target, deleted or found already gone.
 type GarbageDeleted struct {
 	Target string `json:"target"`
-	// Bytes is the op's, nil when the size is not known.
+	// Bytes is what deleting it freed: the op's, 0 for one already gone, nil when not known.
 	Bytes *int64 `json:"bytes"`
 }
 

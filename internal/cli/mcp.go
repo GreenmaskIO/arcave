@@ -392,14 +392,14 @@ func (h *MCPHandler) garbageCollectMCP(
 
 	result, err := svc.GarbageCollect(ctx, req)
 	var interrupted *model.GarbageCollectInterruptedError
-	switch {
-	case errors.As(err, &interrupted):
+	if errors.As(err, &interrupted) {
 		// A gc stopped midway through deleting fails, but what it had deleted must still be seen.
 		return &mcpsdk.CallToolResult{
 			IsError: true,
 			Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: mcpError(err).Error()}},
 		}, result, nil
-	case err == nil, errors.Is(err, model.ErrGarbageCollectPartial):
+	}
+	if err == nil || errors.Is(err, model.ErrGarbageCollectPartial) {
 		// A partial gc is still a report: what could not be judged is in it, aborted or failed.
 		return nil, result, nil
 	}

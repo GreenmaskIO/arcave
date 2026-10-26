@@ -138,12 +138,13 @@ func (m *mockComposeProjectProbeCollector) Probe(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
 
-// mockDeletingCollector is a compose-project collector that deletes what it found.
-type mockDeletingCollector struct{ mockComposeProjectCollector }
+// mockEraser doubles GarbageEraser.
+type mockEraser struct{ mock.Mock }
 
-func (m *mockDeletingCollector) Delete(
-	ctx context.Context, scope ComposeProjectScope, stat model.GarbageStat,
-) (model.GarbageDeletion, error) {
-	args := m.Called(ctx, scope, stat)
-	return args.Get(0).(model.GarbageDeletion), args.Error(1)
+func (m *mockEraser) Action() model.GarbageAction {
+	return m.Called().Get(0).(model.GarbageAction)
+}
+
+func (m *mockEraser) Erase(ctx context.Context, scope ComposeProjectScope, ops []model.GarbageOp) model.GarbageDeletion {
+	return m.Called(ctx, scope, ops).Get(0).(model.GarbageDeletion)
 }

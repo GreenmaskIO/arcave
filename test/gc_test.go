@@ -44,6 +44,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
+	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -116,8 +117,11 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	var deleted []string
 	for _, report := range result.Reports {
 		switch report.DataKind {
-		case model.GarbageDataKindRestoredLayers, model.GarbageDataKindDeduplicatedVolumes:
+		case model.GarbageDataKindRestoredLayers:
 			assert.Nil(t, report.Deletion, "%s is only reported", report.DataKind)
+		case model.GarbageDataKindDeduplicatedVolumes:
+			require.Empty(t, report.Detail.Findings().Ops, "no savepoint here is cdc's")
+			assert.Equal(t, &model.GarbageDeletion{}, report.Deletion, "a report that found nothing has nothing left to delete")
 		default:
 			require.NotNil(t, report.Deletion, report.DataKind)
 			assert.Empty(t, report.Deletion.Failed, report.DataKind)
@@ -271,7 +275,10 @@ func (e *sessionEnv) newGarbageCollector(
 		Inflight:                 inflightrepo.New(e.projectRoot),
 		DaemonCollectors:         daemonCollectors,
 		ComposeProjectCollectors: composeProjectCollectors,
-		UnlistedNamespaces:       []string{cdc.NamespaceRepos},
+		Erasers: []gc.GarbageEraser{
+			eraser.NewTreeEraser(), eraser.NewImageEraser(), eraser.NewObjectEraser(),
+		},
+		UnlistedNamespaces: []string{cdc.NamespaceRepos},
 	})
 }
 

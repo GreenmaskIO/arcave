@@ -604,6 +604,23 @@ func TestNewObjectCollectors(t *testing.T) {
 	assert.ElementsMatch(t, model.GarbageCollectorKinds(), collectorKinds, "every collector kind is built once")
 }
 
+// Every action a gc deletes in a compose project's store has one eraser; forget and untag have none yet.
+func TestNewGarbageErasers(t *testing.T) {
+	// Arrange
+	want := []model.GarbageAction{
+		model.GarbageActionDeleteTree, model.GarbageActionDeleteImage, model.GarbageActionDeleteObject,
+	}
+
+	// Act
+	var got []model.GarbageAction
+	for _, eraser := range newGarbageErasers() {
+		got = append(got, eraser.Action())
+	}
+
+	// Assert
+	assert.Equal(t, want, got)
+}
+
 // newTestResticInspectorOpener is an opener over a fresh directory store, its containers on the
 // host network so that no daemon is asked.
 func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages.Storager) {

@@ -62,6 +62,8 @@ type Deps struct {
 	// DaemonCollectors and ComposeProjectCollectors are one per kind, in the order they run.
 	DaemonCollectors         []DaemonCollector
 	ComposeProjectCollectors []ComposeProjectCollector
+	// Erasers are one per action a gc carries out; an action none carries out is only reported.
+	Erasers []GarbageEraser
 	// RestoredLayerGrace is the restored layer grace of a request naming none.
 	RestoredLayerGrace time.Duration
 	// UnlistedNamespaces are the top-level directories of a compose project store its scope's
@@ -71,7 +73,7 @@ type Deps struct {
 	Now func() time.Time
 }
 
-// GarbageCollector finds one session's garbage, and deletes what its collectors can.
+// GarbageCollector finds one session's garbage, and deletes what its erasers can.
 type GarbageCollector struct {
 	store                    storages.Navigator
 	session                  model.SessionID
@@ -82,6 +84,7 @@ type GarbageCollector struct {
 	inflight                 inflightMarkers
 	daemonCollectors         []DaemonCollector
 	composeProjectCollectors []ComposeProjectCollector
+	erasers                  eraserSet
 	unlisted                 []string
 	grace                    time.Duration
 	now                      func() time.Time
@@ -103,6 +106,7 @@ func New(deps Deps) *GarbageCollector {
 		inflight:                 deps.Inflight,
 		daemonCollectors:         deps.DaemonCollectors,
 		composeProjectCollectors: deps.ComposeProjectCollectors,
+		erasers:                  newEraserSet(deps.Erasers),
 		unlisted:                 deps.UnlistedNamespaces,
 		grace:                    deps.RestoredLayerGrace,
 		now:                      now,
@@ -119,9 +123,9 @@ func (s *GarbageCollector) GarbageCollect(
 	}
 	collectors := s.readCollectorSet(ctx, req.DataKinds)
 	return withUnlock(ctx, s.locker, func() (model.GarbageCollectResult, error) {
-		return withSessionLock(ctx, s.sessionLocker, func(
-			ctx context.Context, grantedLock model.GrantedSessionLock,
-		) (model.GarbageCollectResult, error) {
+		return withSessionLock(ctx, s.sessionLocker, func(ctx context.Context, grantedLock model.GrantedSessionLock) (
+			model.GarbageCollectResult, error,
+		) {
 			// Resolved outside the lock: a session removed since has no garbage, only a wrong answer.
 			if err := requireSession(ctx, s.sessions, s.session); err != nil {
 				return model.GarbageCollectResult{}, err
@@ -209,8 +213,9 @@ func (s *GarbageCollector) reportGarbage(
 	return result, nil
 }
 
-// deleteGarbage finds the garbage, then deletes it. What it deleted cannot come back, so a run
-// stopped partway returns its result beside a *model.GarbageCollectInterruptedError.
+// deleteGarbage finds the garbage, then deletes it. A run stopped while finding returns the cause
+// alone, as a dry run does; what it deleted cannot come back, so one stopped partway through
+// deleting returns its result beside a *model.GarbageCollectInterruptedError.
 func (s *GarbageCollector) deleteGarbage(
 	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
 	grantedLock model.GrantedSessionLock,
@@ -219,7 +224,10 @@ func (s *GarbageCollector) deleteGarbage(
 		return model.GarbageCollectResult{}, err
 	}
 	found := s.findGarbage(ctx, req, collectors)
-	deleted, err := collectors.deleteGarbage(ctx, grantedLock, found)
+	if cause := context.Cause(ctx); cause != nil {
+		return model.GarbageCollectResult{}, cause
+	}
+	deleted, err := s.erasers.deleteGarbage(ctx, grantedLock, found)
 	warnings := slices.Concat(collectors.warnings, newUndeletedWarnings(deleted.reports()))
 	result := s.newGarbageCollectResult(req, deleted, warnings)
 	if err != nil {

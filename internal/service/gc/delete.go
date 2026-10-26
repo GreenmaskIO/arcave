@@ -15,7 +15,6 @@
 package gc
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,63 +25,45 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// DeleteOps runs del on each op in order until ctx is done; a target already gone counts as deleted.
-func DeleteOps(
-	ctx context.Context, ops []model.GarbageOp, del func(ctx context.Context, op model.GarbageOp) error,
-) model.GarbageDeletion {
-	var (
-		deleted []model.GarbageDeleted
-		failed  []model.GarbageDeleteFailure
-		notRun  int
-	)
-	for i, op := range ops {
-		if ctx.Err() != nil {
-			notRun = len(ops) - i
-			break
-		}
-		if err := del(ctx, op); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
-			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
-			failed = append(failed, model.GarbageDeleteFailure{
-				Target: op.Target,
-				Error:  err.Error(),
-			})
-			continue
-		}
-		deleted = append(deleted, model.GarbageDeleted{
-			Target: op.Target,
-			Bytes:  op.Bytes,
-		})
-	}
-	return model.GarbageDeletion{
-		Deleted: deleted,
-		Failed:  failed,
-		NotRun:  notRun,
-	}
+// GarbageEraser carries out one GarbageAction on a compose project's garbage.
+type GarbageEraser interface {
+	Action() model.GarbageAction
+	// Erase carries out ops, every one of its action, in scope, through DeleteOps where it can.
+	Erase(ctx context.Context, scope ComposeProjectScope, ops []model.GarbageOp) model.GarbageDeletion
 }
 
-// deleteGarbage deletes what found's compose-project collectors found, collector by collector, until
-// a Verify refuses or ctx is done; it returns why it stopped, with every later op not run.
-func (c *collectorSet) deleteGarbage(
+// eraserSet finds the eraser of an action; an action none carries out is only reported.
+type eraserSet map[model.GarbageAction]GarbageEraser
+
+// newEraserSet is erasers by their action.
+func newEraserSet(erasers []GarbageEraser) eraserSet {
+	set := make(eraserSet, len(erasers))
+	for _, eraser := range erasers {
+		set[eraser.Action()] = eraser
+	}
+	return set
+}
+
+// deleteGarbage deletes what found's compose-project collectors found, report by report, until a
+// Verify refuses or ctx is done; when that left an op not run, it returns why.
+func (e eraserSet) deleteGarbage(
 	ctx context.Context, grantedLock model.GrantedSessionLock, found garbageFound,
 ) (garbageFound, error) {
+	ctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
 	var (
 		composeProjects = make([]composeProjectGarbage, 0, len(found.composeProjects))
-		verifyErr       error
+		stopped         bool
 	)
 	for _, garbage := range found.composeProjects {
 		reports := make([]model.GarbageReport, 0, len(garbage.reports))
-		for i, collector := range c.composeProject {
-			var deletion *model.GarbageDeletion
-			switch deleter, ops, ok := toDeleter(collector, garbage.reports[i]); {
-			case !ok:
-			case len(ops) == 0:
-				deletion = &model.GarbageDeletion{Deleted: []model.GarbageDeleted{}}
-			case verifyErr != nil, ctx.Err() != nil:
-				deletion = newNotRunDeletion(ops)
-			default:
-				deletion, verifyErr = runDelete(ctx, deleter, garbage.scope, garbage.reports[i], grantedLock)
+		for _, report := range garbage.reports {
+			deletion, err := e.deleteReport(ctx, grantedLock, garbage.scope, report)
+			if err != nil {
+				stop(err)
 			}
-			reports = append(reports, withDeletion(garbage.reports[i], deletion))
+			stopped = stopped || deletion != nil && deletion.NotRun > 0
+			reports = append(reports, withDeletion(report, deletion))
 		}
 		composeProjects = append(composeProjects, composeProjectGarbage{
 			scope:   garbage.scope,
@@ -93,47 +74,40 @@ func (c *collectorSet) deleteGarbage(
 		daemon:          found.daemon,
 		composeProjects: composeProjects,
 	}
-	return deleted, cmp.Or(verifyErr, context.Cause(ctx))
-}
-
-// toDeleter is collector as a deleter of report's ops; false for a collector that only reports,
-// or a report that failed or was aborted.
-func toDeleter(
-	collector ComposeProjectCollector, report model.GarbageReport,
-) (composeProjectDeleter, []model.GarbageOp, bool) {
-	deleter, ok := collector.(composeProjectDeleter)
-	if !ok || report.Detail == nil || report.Error != "" || report.Summary.Aborted != "" {
-		return nil, nil, false
+	if !stopped {
+		// An interrupt past the last deletion cut nothing short.
+		return deleted, nil
 	}
-	return deleter, report.Detail.Findings().Ops, true
+	return deleted, context.Cause(ctx)
 }
 
-// newNotRunDeletion is a deletion that started on none of ops.
-func newNotRunDeletion(ops []model.GarbageOp) *model.GarbageDeletion {
-	return &model.GarbageDeletion{
-		Deleted: []model.GarbageDeleted{},
-		NotRun:  len(ops),
-	}
-}
-
-// runDelete deletes report's ops while the lock still vouches; a refused Verify runs none of them
-// and is returned.
-func runDelete(
-	ctx context.Context, deleter composeProjectDeleter, scope ComposeProjectScope, report model.GarbageReport,
-	grantedLock model.GrantedSessionLock,
+// deleteReport is what deleting report's ops did: nil when no eraser carries out their action or
+// the report was aborted or failed, every op not run once ctx is done. A Verify that refuses is
+// returned.
+func (e eraserSet) deleteReport(
+	ctx context.Context, grantedLock model.GrantedSessionLock, scope ComposeProjectScope,
+	report model.GarbageReport,
 ) (*model.GarbageDeletion, error) {
+	if report.Detail == nil || report.Summary.Aborted != "" {
+		return nil, nil
+	}
 	ops := report.Detail.Findings().Ops
+	if len(ops) == 0 {
+		return &model.GarbageDeletion{}, nil
+	}
+	eraser, ok := e.findEraser(ops)
+	switch {
+	case !ok:
+		return nil, nil
+	case ctx.Err() != nil:
+		return &model.GarbageDeletion{NotRun: len(ops)}, nil
+	}
 	if err := grantedLock.Verify(ctx); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("data_kind", string(report.DataKind)).
 			Msg("session lock no longer vouches for the gc: nothing more is deleted")
-		return newNotRunDeletion(ops), fmt.Errorf("verify session lock: %w", err)
+		return &model.GarbageDeletion{NotRun: len(ops)}, fmt.Errorf("verify session lock: %w", err)
 	}
-	deletion, err := deleter.Delete(ctx, scope, report.Detail)
-	if err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("data_kind", string(report.DataKind)).
-			Str("compose_project", scope.ComposeProject.String()).Msg("garbage deletion failed")
-		return newFailedDeletion(ops, err), nil
-	}
+	deletion := eraser.Erase(ctx, scope, ops)
 	zerolog.Ctx(ctx).Info().Str("data_kind", string(report.DataKind)).
 		Str("compose_project", scope.ComposeProject.String()).
 		Int("deleted", len(deletion.Deleted)).Int("failed", len(deletion.Failed)).Int("not_run", deletion.NotRun).
@@ -141,19 +115,18 @@ func runDelete(
 	return &deletion, nil
 }
 
-// newFailedDeletion is a deletion that failed on every one of ops, with err.
-func newFailedDeletion(ops []model.GarbageOp, err error) *model.GarbageDeletion {
-	failed := make([]model.GarbageDeleteFailure, 0, len(ops))
-	for _, op := range ops {
-		failed = append(failed, model.GarbageDeleteFailure{
-			Target: op.Target,
-			Error:  err.Error(),
-		})
+// findEraser is the eraser carrying out ops, every one of one action; none when ops is empty.
+func (e eraserSet) findEraser(ops []model.GarbageOp) (GarbageEraser, bool) {
+	if len(ops) == 0 {
+		return nil, false
 	}
-	return &model.GarbageDeletion{
-		Deleted: []model.GarbageDeleted{},
-		Failed:  failed,
+	for _, op := range ops[1:] {
+		if op.Action != ops[0].Action {
+			return nil, false
+		}
 	}
+	eraser, ok := e[ops[0].Action]
+	return eraser, ok
 }
 
 func withDeletion(report model.GarbageReport, deletion *model.GarbageDeletion) model.GarbageReport {
@@ -168,7 +141,7 @@ func newUndeletedWarnings(reports []model.GarbageReport) []string {
 		warnings []string
 	)
 	for _, report := range reports {
-		undeleted := report.Deletion == nil && report.Error == "" && report.Summary.Aborted == "" && report.Summary.Found > 0
+		undeleted := report.Deletion == nil && report.Summary.Aborted == "" && report.Summary.Found > 0
 		if !undeleted || named[report.DataKind] {
 			continue
 		}
@@ -176,4 +149,45 @@ func newUndeletedWarnings(reports []model.GarbageReport) []string {
 		warnings = append(warnings, fmt.Sprintf("%s is reported, not deleted, yet", report.DataKind))
 	}
 	return warnings
+}
+
+// DeleteOps runs del on each op in order until ctx is done; a target already gone counts as
+// deleted, freeing nothing.
+func DeleteOps(
+	ctx context.Context, ops []model.GarbageOp, del func(ctx context.Context, op model.GarbageOp) error,
+) model.GarbageDeletion {
+	var (
+		deleted []model.GarbageDeleted
+		failed  []model.GarbageDeleteFailure
+		notRun  int
+	)
+	for i, op := range ops {
+		if ctx.Err() != nil {
+			notRun = len(ops) - i
+			break
+		}
+		switch err := del(ctx, op); {
+		case errors.Is(err, storages.ErrFileNotFound):
+			deleted = append(deleted, model.GarbageDeleted{
+				Target: op.Target,
+				Bytes:  new(int64),
+			})
+		case err != nil:
+			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
+			failed = append(failed, model.GarbageDeleteFailure{
+				Target: op.Target,
+				Error:  err.Error(),
+			})
+		default:
+			deleted = append(deleted, model.GarbageDeleted{
+				Target: op.Target,
+				Bytes:  op.Bytes,
+			})
+		}
+	}
+	return model.GarbageDeletion{
+		Deleted: deleted,
+		Failed:  failed,
+		NotRun:  notRun,
+	}
 }

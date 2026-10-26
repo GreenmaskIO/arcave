@@ -85,7 +85,7 @@ gc refuses to delete while an interrupted rollback is marked in `.arcave/infligh
 
 ## Output
 
-stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions gc takes, or under `--dry-run` would take. A run that deletes adds each report's `deletion`: what deleting those ops did. A dry run, a kind gc only reports and a report that was aborted or failed carry none.
+stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions gc takes, or under `--dry-run` would take. An op's `action` is what deleting its target takes: `delete-tree` (a savepoint's directory), `delete-image` (a stored image, its manifest first), `delete-object` (a blob), `forget` (a `cdc` snapshot) or `untag` (a restored layer's tag). gc carries out the first three; `forget` and `untag` are only reported for now. A run that deletes adds each report's `deletion`: what deleting those ops did. A dry run, a report of ops gc does not carry out yet and a report that was aborted or failed carry none; a report that found nothing carries an empty one.
 
 ```json title="stdout"
 {
@@ -126,7 +126,7 @@ stdout carries one report per collector for each compose project of the session,
 
 | Field | Meaning |
 |---|---|
-| `deletion.deleted` | Each op deleted, or found already gone, with its `bytes`. |
+| `deletion.deleted` | Each op deleted, or found already gone, with the `bytes` deleting it freed: `0` for one already gone. Left out when there is none. |
 | `deletion.failed` | Each op gc failed to delete, with the error. Left out when there is none. |
 | `deletion.not_run` | How many ops gc started no deletion for: it was interrupted, or no longer held the session's lock. |
 | `total.deleted`, `total.delete_failed`, `total.not_run` | The reports' deletions added up. Left out when zero, and always in a dry run. |

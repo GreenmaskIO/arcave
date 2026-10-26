@@ -185,7 +185,7 @@ func TestGarbageDeletion_FreedBytes(t *testing.T) {
 		deletion GarbageDeletion
 		want     *int64
 	}{
-		{name: "nothing deleted frees nothing", deletion: GarbageDeletion{Deleted: []GarbageDeleted{}}, want: size(0)},
+		{name: "nothing deleted frees nothing", deletion: GarbageDeletion{}, want: size(0)},
 		{
 			name: "every size known",
 			deletion: GarbageDeletion{Deleted: []GarbageDeleted{

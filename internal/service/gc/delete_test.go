@@ -41,7 +41,7 @@ func TestDeleteOps(t *testing.T) {
 		{Target: "c"},
 	}
 	deleted := func(n ...int) []model.GarbageDeleted {
-		out := []model.GarbageDeleted{}
+		var out []model.GarbageDeleted
 		for _, i := range n {
 			out = append(out, model.GarbageDeleted{Target: ops[i].Target, Bytes: ops[i].Bytes})
 		}
@@ -64,10 +64,12 @@ func TestDeleteOps(t *testing.T) {
 			want:     model.GarbageDeletion{Deleted: deleted(0, 1, 2)},
 		},
 		{
-			name:     "a target already gone counts as deleted",
+			name:     "a target already gone counts as deleted, freeing nothing",
 			errs:     []error{nil, &storages.MissingObjectsError{Paths: []string{"b"}}, nil},
 			cancelAt: -1,
-			want:     model.GarbageDeletion{Deleted: deleted(0, 1, 2)},
+			want: model.GarbageDeletion{Deleted: []model.GarbageDeleted{
+				{Target: "a", Bytes: utils.New(int64(1))}, {Target: "b", Bytes: utils.New(int64(0))}, {Target: "c"},
+			}},
 		},
 		{
 			name:     "a failure is recorded and the rest still go",
@@ -82,7 +84,7 @@ func TestDeleteOps(t *testing.T) {
 			name:      "a run cancelled before the first starts none",
 			cancelAt:  -1,
 			cancelled: true,
-			want:      model.GarbageDeletion{Deleted: []model.GarbageDeleted{}, NotRun: 3},
+			want:      model.GarbageDeletion{NotRun: 3},
 		},
 		{
 			name:     "a run cancelled midway starts no further deletion",
