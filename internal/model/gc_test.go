@@ -177,3 +177,60 @@ func TestGarbageReport_JSON(t *testing.T) {
 		}
 	}`, string(got))
 }
+
+func TestGarbageDeletion_FreedBytes(t *testing.T) {
+	size := func(n int64) *int64 { return &n }
+	tests := []struct {
+		name     string
+		deletion GarbageDeletion
+		want     *int64
+	}{
+		{name: "nothing deleted frees nothing", deletion: GarbageDeletion{Deleted: []GarbageDeleted{}}, want: size(0)},
+		{
+			name: "every size known",
+			deletion: GarbageDeletion{Deleted: []GarbageDeleted{
+				{Target: "a", Bytes: size(1)}, {Target: "b", Bytes: size(2)},
+			}},
+			want: size(3),
+		},
+		{
+			name: "a size unknown",
+			deletion: GarbageDeletion{Deleted: []GarbageDeleted{
+				{Target: "a", Bytes: size(1)}, {Target: "b"},
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := tt.deletion.FreedBytes()
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGarbageCollectResult_IsPartial(t *testing.T) {
+	tests := []struct {
+		name  string
+		total GarbageTotal
+		want  bool
+	}{
+		{name: "everything judged and deleted", total: GarbageTotal{Found: 2, Skipped: 1, Deleted: 2}},
+		{name: "a report failed", total: GarbageTotal{Failed: 1}, want: true},
+		{name: "a report aborted", total: GarbageTotal{Aborted: 1}, want: true},
+		{name: "an object unjudged", total: GarbageTotal{Unjudged: 1}, want: true},
+		{name: "a deletion failed", total: GarbageTotal{DeleteFailed: 1}, want: true},
+		{name: "a deletion not run", total: GarbageTotal{NotRun: 1}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := GarbageCollectResult{Total: tt.total}.IsPartial()
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

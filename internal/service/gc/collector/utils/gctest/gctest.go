@@ -27,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -121,6 +122,20 @@ func SkippedTargets(skips []model.GarbageSkip) []string {
 		out = append(out, skip.Target)
 	}
 	return out
+}
+
+// MockStore doubles a compose project store's deletions; every other method panics.
+type MockStore struct {
+	storages.Storager
+	mock.Mock
+}
+
+func (m *MockStore) Delete(ctx context.Context, filePaths ...string) error {
+	return m.Called(ctx, filePaths).Error(0)
+}
+
+func (m *MockStore) DeleteAll(ctx context.Context, pathPrefix string) error {
+	return m.Called(ctx, pathPrefix).Error(0)
 }
 
 // NilIfEmpty is values, or nil when empty.

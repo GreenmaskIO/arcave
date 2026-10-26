@@ -131,15 +131,27 @@ var (
 	// ErrSessionLockNotHeld refuses to free a session lock the operation does not hold.
 	ErrSessionLockNotHeld = errors.New("session lock not held")
 
-	// ErrGarbageCollectNotImplemented refuses a gc that would delete: only a dry run exists yet.
-	ErrGarbageCollectNotImplemented = errors.New("garbage collection deletes nothing yet: only a dry run is supported")
 	// ErrInvalidGarbageCollectRequest reports a gc request arcave cannot act on: an unknown
 	// kind, no kind at all, or a negative grace period.
 	ErrInvalidGarbageCollectRequest = errors.New("invalid garbage collect request")
-	// ErrGarbageCollectPartial reports a gc in which some collector failed, could not judge
-	// its scope, or left objects unjudged; the result still carries every report.
+	// ErrGarbageCollectPartial reports a gc in which a collector failed or left objects unjudged,
+	// or a deletion failed or never ran; the result still carries every report.
 	ErrGarbageCollectPartial = errors.New("garbage collection was partial")
 )
+
+// GarbageCollectInterruptedError reports a gc that stopped deleting partway: it lost its session
+// lock, or was interrupted. It is ErrGarbageCollectPartial: the result beside it says what went.
+type GarbageCollectInterruptedError struct {
+	Cause error
+}
+
+func (m *GarbageCollectInterruptedError) Error() string {
+	return fmt.Sprintf("garbage collection stopped deleting: %v", m.Cause)
+}
+
+func (m *GarbageCollectInterruptedError) Unwrap() []error {
+	return []error{ErrGarbageCollectPartial, m.Cause}
+}
 
 // AmbiguousSavepointNameError reports a name more than one savepoint carries;
 // IDs lists those savepoints.

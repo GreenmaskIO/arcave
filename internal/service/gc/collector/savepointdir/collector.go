@@ -17,6 +17,7 @@ package savepointdir
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/greenmaskio/storages"
@@ -66,4 +67,17 @@ func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model
 		GarbageFindings: model.GarbageFindings{Ops: ops},
 		Committed:       len(scope.Savepoints),
 	}, nil
+}
+
+// Delete removes every tree stat names, whole.
+func (s *Collector) Delete(
+	ctx context.Context, scope gc.ComposeProjectScope, stat model.GarbageStat,
+) (model.GarbageDeletion, error) {
+	found, ok := stat.(model.SavepointDirectoryStat)
+	if !ok {
+		return model.GarbageDeletion{}, fmt.Errorf("%s cannot delete a %T", s.Kind(), stat)
+	}
+	return gc.DeleteOps(ctx, found.Ops, func(ctx context.Context, op model.GarbageOp) error {
+		return scope.Store.DeleteAll(ctx, op.Target)
+	}), nil
 }

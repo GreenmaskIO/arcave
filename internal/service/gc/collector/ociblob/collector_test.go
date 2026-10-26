@@ -16,14 +16,19 @@ package ociblob
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/utils/gctest"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 func TestCollector_Find(t *testing.T) {
@@ -242,4 +247,93 @@ func TestCollector_Find_ShortRead(t *testing.T) {
 	require.Len(t, got.Unreadable, 1)
 	assert.Equal(t, manifestKey, got.Unreadable[0].Key)
 	assert.Empty(t, got.Unreadable[0].Savepoint)
+}
+
+// Delete removes each blob its finding names, one at a time, in order.
+func TestCollector_Delete(t *testing.T) {
+	var (
+		dead    = "shared/oci/blobs/sha256/" + gctest.DeadBlob
+		newDead = "shared/oci/blobs/sha256/" + gctest.NewBlob
+		ops     = []model.GarbageOp{
+			{Action: model.GarbageActionDeleteObject, Target: dead, Bytes: utils.New(int64(1))},
+			{Action: model.GarbageActionDeleteObject, Target: newDead, Bytes: utils.New(int64(1))},
+		}
+		bothDeleted = []model.GarbageDeleted{
+			{Target: dead, Bytes: utils.New(int64(1))}, {Target: newDead, Bytes: utils.New(int64(1))},
+		}
+		stat = model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: ops}}
+	)
+
+	tests := []struct {
+		name string
+		stat model.GarbageStat
+		// errs is what deleting each blob returns, one per blob in order; nil expects no deletion.
+		errs      []error
+		cancelled bool
+		want      model.GarbageDeletion
+		wantErr   bool
+	}{
+		{
+			name: "every dead blob goes",
+			stat: stat,
+			errs: []error{nil, nil},
+			want: model.GarbageDeletion{Deleted: bothDeleted},
+		},
+		{
+			name: "a blob already gone counts as deleted",
+			stat: stat,
+			errs: []error{&storages.MissingObjectsError{Paths: []string{dead}}, nil},
+			want: model.GarbageDeletion{Deleted: bothDeleted},
+		},
+		{
+			name: "a blob that cannot go fails alone",
+			stat: stat,
+			errs: []error{errors.New("access denied"), nil},
+			want: model.GarbageDeletion{
+				Deleted: []model.GarbageDeleted{{Target: newDead, Bytes: utils.New(int64(1))}},
+				Failed:  []model.GarbageDeleteFailure{{Target: dead, Error: "access denied"}},
+			},
+		},
+		{
+			name:      "a cancelled run deletes nothing",
+			stat:      stat,
+			cancelled: true,
+			want:      model.GarbageDeletion{Deleted: []model.GarbageDeleted{}, NotRun: 2},
+		},
+		{
+			name:    "another kind's finding is refused",
+			stat:    model.OCIImageStat{GarbageFindings: model.GarbageFindings{Ops: ops}},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancelled {
+				cancel()
+			}
+			store := &gctest.MockStore{}
+			var calls []*mock.Call
+			for i, err := range tt.errs {
+				calls = append(calls, store.On("Delete", mock.Anything, []string{ops[i].Target}).Return(err).Once())
+			}
+			if len(calls) > 1 {
+				mock.InOrder(calls...)
+			}
+
+			// Act
+			got, err := New(1).Delete(ctx, gc.ComposeProjectScope{Store: store}, tt.stat)
+
+			// Assert
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+			store.AssertExpectations(t)
+		})
+	}
 }

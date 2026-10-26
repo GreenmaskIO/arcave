@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
+	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
@@ -47,9 +49,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
-// A dry run names what removed savepoints, rollbacks and dead runs left behind, changes nothing,
-// and names nothing live.
-func TestGC_DryRun_NamesOnlyTheDead(t *testing.T) {
+// A gc deletes what removed savepoints, rollbacks and dead runs left in the store, and nothing a
+// live savepoint needs; the blobs of an image it removes go on the run after.
+func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
@@ -77,53 +79,129 @@ func TestGC_DryRun_NamesOnlyTheDead(t *testing.T) {
 	plant(t, filepath.Join(composeDir, deadTree.String(), "volume-named-x", "data.tar"), "partial capture")
 	plant(t, filepath.Join(composeDir, staleTree.String(), "volume-named-x", "data.tar"), "capture cut off")
 	plantHeartbeat(t, filepath.Join(composeDir, staleTree.String()), heartbeat.StatusInProgress)
+	// An upstream image no record names, whose manifest alone lists a blob.
+	orphanImage, orphanBlob := plantUnreferencedImage(t, composeDir)
 
 	svc := env.newGarbageCollector(t, model.DefaultSession, baseline.engine(), model.GarbageDataKinds()...)
-	before := fileSizes(t, env.storeDir())
-
-	// Act
-	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
-
-	// Assert
+	// Each image and blob op names a file the store holds, at its size.
+	preview, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
 	require.NoError(t, err)
-	assert.Equal(t, before, fileSizes(t, env.storeDir()), "a dry run changes nothing")
-	ops := opsByKind(result)
-	assert.ElementsMatch(t, []string{deadTree.String(), staleTree.String()}, targetsOf(ops[model.GarbageDataKindSavepointData]),
-		"a dead tree goes however young, whatever its heartbeat says")
-	assert.NotEmpty(t, ops[model.GarbageDataKindImageLayers], "the removed savepoint and the safety snapshots held blobs of their own")
-	var freedBy []model.SavepointID
-	for _, dead := range result.Savepoints {
-		freedBy = append(freedBy, dead.Savepoint)
-	}
-	assert.ElementsMatch(t, []model.SavepointID{deadTree, staleTree}, freedBy, "each dead savepoint says what it frees")
-	tags := targetsOf(ops[model.GarbageDataKindRestoredLayers])
-	assert.Contains(t, strings.Join(tags, ","), ":sp-"+first.ID.String(), "the first rollback's tag is unused")
-	assert.NotContains(t, strings.Join(tags, ","), ":sp-"+second.ID.String(), "the running container's tag is in use")
-
-	var reported int64
 	for _, kind := range []model.GarbageDataKind{model.GarbageDataKindImageLayers, model.GarbageDataKindUpstreamImages} {
-		for _, op := range ops[kind] {
+		for _, op := range opsByKind(preview)[kind] {
 			info, err := os.Stat(filepath.Join(composeDir, filepath.FromSlash(op.Target)))
 			require.NoError(t, err, "%s names an object the store holds", op.Target)
 			if !info.IsDir() {
 				assert.Equal(t, info.Size(), *op.Bytes, op.Target)
 			}
-			reported += *op.Bytes
 		}
 	}
-	assert.Positive(t, reported)
+	before := fileSizes(t, env.storeDir())
 
-	// Deleting what was named leaves the surviving savepoint whole.
-	for _, kind := range []model.GarbageDataKind{model.GarbageDataKindSavepointData, model.GarbageDataKindUpstreamImages, model.GarbageDataKindImageLayers} {
-		for _, op := range ops[kind] {
-			require.NoError(t, os.RemoveAll(filepath.Join(composeDir, filepath.FromSlash(op.Target))))
+	// Act
+	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	assert.False(t, result.DryRun)
+	ops := opsByKind(result)
+	assert.ElementsMatch(t, []string{deadTree.String(), staleTree.String()}, targetsOf(ops[model.GarbageDataKindSavepointData]),
+		"a dead tree goes however young, whatever its heartbeat says")
+	assert.Contains(t, targetsOf(ops[model.GarbageDataKindUpstreamImages]), orphanImage)
+	assert.NotEmpty(t, ops[model.GarbageDataKindImageLayers], "the removed savepoint and the safety snapshots held blobs of their own")
+	assert.NotContains(t, targetsOf(ops[model.GarbageDataKindImageLayers]), orphanBlob, "an unreferenced image's blob waits for its manifest to go")
+	tags := targetsOf(ops[model.GarbageDataKindRestoredLayers])
+	assert.Contains(t, strings.Join(tags, ","), ":sp-"+first.ID.String(), "the first rollback's tag is unused")
+	assert.NotContains(t, strings.Join(tags, ","), ":sp-"+second.ID.String(), "the running container's tag is in use")
+
+	var deleted []string
+	for _, report := range result.Reports {
+		switch report.DataKind {
+		case model.GarbageDataKindRestoredLayers, model.GarbageDataKindDeduplicatedVolumes:
+			assert.Nil(t, report.Deletion, "%s is only reported", report.DataKind)
+		default:
+			require.NotNil(t, report.Deletion, report.DataKind)
+			assert.Empty(t, report.Deletion.Failed, report.DataKind)
+			assert.Zero(t, report.Deletion.NotRun, report.DataKind)
+			assert.Len(t, report.Deletion.Deleted, report.Summary.Found, report.DataKind)
+			for _, op := range report.Detail.Findings().Ops {
+				deleted = append(deleted, op.Target)
+			}
 		}
 	}
+	assert.Contains(t, result.Warnings, "restored-layers is reported, not deleted, yet")
+	after := fileSizes(t, env.storeDir())
+	assert.Equal(t, newWithoutTargets(before, composeDir, deleted), after, "exactly what was named is gone")
+	require.NotNil(t, result.Total.FreedBytes)
+	assert.Equal(t, sumSizes(before)-sumSizes(after), *result.Total.FreedBytes)
+	assert.Equal(t, len(deleted), result.Total.Deleted)
+
+	// The run after frees the blob only the removed image listed.
+	secondRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
+	require.NoError(t, err)
+	secondOps := opsByKind(secondRun)
+	assert.Equal(t, []string{orphanBlob}, targetsOf(secondOps[model.GarbageDataKindImageLayers]))
+	assert.Empty(t, secondOps[model.GarbageDataKindSavepointData])
+	assert.Empty(t, secondOps[model.GarbageDataKindUpstreamImages])
+	assert.NoFileExists(t, filepath.Join(composeDir, filepath.FromSlash(orphanBlob)))
+
+	// And the one after that finds nothing left in the store, and changes nothing.
+	beforeThird := fileSizes(t, env.storeDir())
+	thirdRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, beforeThird, fileSizes(t, env.storeDir()), "a dry run changes nothing")
+	thirdOps := opsByKind(thirdRun)
+	for _, kind := range []model.GarbageDataKind{
+		model.GarbageDataKindSavepointData, model.GarbageDataKindUpstreamImages, model.GarbageDataKindImageLayers,
+	} {
+		assert.Empty(t, thirdOps[kind], kind)
+	}
+
+	// The surviving savepoint is whole.
 	baseline.write(t, baseline.replicas(t)[0], "drifted")
 	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
-	require.NoError(t, err, "nothing a live savepoint needs was named")
+	require.NoError(t, err, "nothing a live savepoint needs was deleted")
 	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], volumeMarker))
 	assert.Equal(t, "second", baseline.read(t, baseline.replicas(t)[0], layerMarker))
+}
+
+// plantUnreferencedImage stores, under composeDir, an upstream image no record names whose intact
+// manifest lists one blob of its own; it returns both keys.
+func plantUnreferencedImage(t *testing.T, composeDir string) (image, blob string) {
+	t.Helper()
+	imageHex, blobHex := strings.Repeat("e", 64), strings.Repeat("f", 64)
+	image, blob = "shared/oci/images/sha256/"+imageHex, "shared/oci/blobs/sha256/"+blobHex
+	manifest, err := json.Marshal(imagecopy.Manifest{
+		ImageID: model.ImageDigestID("sha256:" + imageHex),
+		Format:  imagecopy.FormatBlobs,
+		Members: []imagecopy.Member{{Name: "blobs/sha256/" + blobHex, Kind: imagecopy.KindBlob, Digest: blobHex}},
+	})
+	require.NoError(t, err)
+	plant(t, filepath.Join(composeDir, filepath.FromSlash(image), "image.json"), string(manifest))
+	plant(t, filepath.Join(composeDir, filepath.FromSlash(blob)), "orphan layer")
+	return image, blob
+}
+
+// newWithoutTargets is sizes without the files under dir at each of targets, or under them.
+func newWithoutTargets(sizes map[string]int64, dir string, targets []string) map[string]int64 {
+	kept := map[string]int64{}
+	for name, size := range sizes {
+		gone := slices.ContainsFunc(targets, func(target string) bool {
+			key := filepath.Join(dir, filepath.FromSlash(target))
+			return name == key || strings.HasPrefix(name, key+string(filepath.Separator))
+		})
+		if !gone {
+			kept[name] = size
+		}
+	}
+	return kept
+}
+
+func sumSizes(sizes map[string]int64) int64 {
+	var total int64
+	for _, size := range sizes {
+		total += size
+	}
+	return total
 }
 
 // A gc looks only at its own session's compose projects.

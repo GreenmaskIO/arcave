@@ -116,7 +116,7 @@ Each savepoint has a directory of its own, and the record inside it — `savepoi
 * A removal killed after the record is deleted leaves data that no record names — the same harmless state.
 * There is **no** window in which a savepoint lists without its data behind it.
 
-The consequence worth internalising: **on any failure the record is zero**. A half-finished capture is garbage no caller may address, so arcave does not repair it, does not resume it, and does not delete it either. It is logged, named, and left for you — a failure path is the worst possible moment to start deleting data.
+The consequence worth internalising: **on any failure the record is zero**. A half-finished capture is garbage no caller may address, so arcave does not repair it, does not resume it, and does not delete it either. It is logged, named, and left for [`arcave gc`](reference/cli/gc.md) — a failure path is the worst possible moment to start deleting data.
 
 :::note
 If a new savepoint's directory is not empty, arcave **refuses** the create rather than sweeping it. Only an interrupted run can have left objects there, and those objects are the last copy of whatever that run captured. They get named, not deleted.

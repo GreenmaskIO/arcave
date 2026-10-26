@@ -36,13 +36,10 @@ var (
 
 	gcCmd = &cobra.Command{
 		Use:   "gc",
-		Short: "Report the garbage arcave leaves behind",
-		Long: `Report what no live savepoint of the session keeps alive, in every compose project it
-holds: savepoint data no record commits, deduplicated volumes no savepoint names, image blobs
-no stored manifest lists, upstream images no savepoint names, and restored layers no container
-runs on. --kind narrows a run. It holds the session's lock, so no capture runs meanwhile.
-Nothing is deleted yet: --dry-run is required. The restored layer grace defaults to
-gc.restored_layer_grace. A session tree no record commits is 'session list --all''s.`,
+		Short: "Find and delete the garbage arcave leaves behind",
+		Long: `Find and delete what no live savepoint of the session keeps alive, in every compose project
+it holds. The layers of an image a run deletes go on the next run. Deduplicated volumes and
+restored layers are only reported for now.`,
 		Args: cobra.NoArgs,
 		RunE: runGC,
 	}
@@ -95,7 +92,7 @@ func withGCDeps(ctx context.Context, fn func(ctx context.Context, d *gcDependenc
 
 func init() {
 	flags := gcCmd.Flags()
-	flags.BoolVar(&gcDryRun, "dry-run", false, "Report the garbage without deleting it (required for now)")
+	flags.BoolVar(&gcDryRun, "dry-run", false, "Report the garbage without deleting it")
 	flags.DurationVar(&gcRestoredLayerGrace, "restored-layer-grace", 0,
 		"How old an unused layer tag must be to count as garbage; default gc.restored_layer_grace")
 	flags.StringSliceVar(&gcDataKinds, "kind", nil,

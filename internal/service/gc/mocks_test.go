@@ -137,3 +137,13 @@ type mockComposeProjectProbeCollector struct{ mockComposeProjectCollector }
 func (m *mockComposeProjectProbeCollector) Probe(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
+
+// mockDeletingCollector is a compose-project collector that deletes what it found.
+type mockDeletingCollector struct{ mockComposeProjectCollector }
+
+func (m *mockDeletingCollector) Delete(
+	ctx context.Context, scope ComposeProjectScope, stat model.GarbageStat,
+) (model.GarbageDeletion, error) {
+	args := m.Called(ctx, scope, stat)
+	return args.Get(0).(model.GarbageDeletion), args.Error(1)
+}

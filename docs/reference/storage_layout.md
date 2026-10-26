@@ -65,7 +65,7 @@ A session directory without `session.json` is not a session: no `--session` find
 
 A savepoint id is a canonical UUID, so a directory that is not one is never mistaken for a savepoint, and `shared/` and `restic/` cannot collide with a savepoint of any age.
 
-**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. Its `heartbeat.json` says how that capture ended; [`arcave gc`](cli/gc.md) names the directory whatever it says, since no capture runs while gc holds the session's lock. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
+**The record is the commit.** `savepoint.json` is written after everything it names; a capture that died before it leaves a directory nothing lists and nothing puts back. Its `heartbeat.json` says how that capture ended; [`arcave gc`](cli/gc.md) deletes the directory whatever it says, since no capture runs while gc holds the session's lock. That rule and its consequences are [the savepoint flow](../how_it_works.md#the-savepoint-flow).
 
 ## Object ids
 
@@ -87,7 +87,7 @@ The images services run on — `postgres:16`, say — are kept the same way, alw
 
 The blob store is shared by every savepoint of one **compose project**, inside the session root. That keeps a session self-contained and dying whole, at the price of no sharing across sessions or compose projects.
 
-Nothing collects those blobs. `savepoint remove` frees the savepoint's own directory and leaves the shared store alone, so removing every savepoint of a compose project frees no image bytes — see [Limitations](limitations.md#nothing-collects-the-shared-blobs).
+`savepoint remove` frees the savepoint's own directory and leaves the shared store alone, so removing every savepoint of a compose project frees no image bytes by itself. [`arcave gc`](cli/gc.md) deletes the blobs and images no savepoint uses any more; an unused image's blobs go on the run after the image itself — see [Limitations](limitations.md#gc-deletes-only-from-the-store).
 
 ## cdc repositories
 

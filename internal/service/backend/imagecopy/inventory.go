@@ -87,6 +87,19 @@ func NewStoredImages(objects []storages.ObjectStat) []StoredImage {
 	return images
 }
 
+// DeleteStoredImage removes the image directory at key, its manifest first, so a removal cut
+// short never leaves an intact manifest a capture would take for the image stored.
+func DeleteStoredImage(ctx context.Context, store storages.Deleter, key string) error {
+	manifestKey := ManifestKey(key)
+	if err := store.Delete(ctx, manifestKey); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+		return fmt.Errorf("delete %s: %w", manifestKey, err)
+	}
+	if err := store.DeleteAll(ctx, key); err != nil {
+		return fmt.Errorf("delete %s: %w", key, err)
+	}
+	return nil
+}
+
 // LayerManifest is one writable layer's manifest in a listing of a compose project store.
 type LayerManifest struct {
 	// Savepoint is the tree the layer lies in, read off the key; it may fail the gate.

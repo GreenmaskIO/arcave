@@ -58,7 +58,7 @@ func (m GarbageDataKind) Validate() error {
 	return nil
 }
 
-// GarbageCollectorKind names one collector: how one implementation finds, and will delete,
+// GarbageCollectorKind names one collector: how one implementation finds, and deletes,
 // the garbage of its data kind.
 type GarbageCollectorKind string
 
@@ -83,7 +83,7 @@ func GarbageCollectorKinds() []GarbageCollectorKind {
 	}
 }
 
-// GarbageAction is what a real gc would do to one object.
+// GarbageAction is what a gc that deletes does to one object.
 type GarbageAction string
 
 const (
@@ -180,7 +180,7 @@ func (m GarbageSummary) withBytes(bytes *int64) GarbageSummary {
 	return m
 }
 
-// GarbageOp is one action a real gc would run.
+// GarbageOp is one action a gc that deletes runs.
 type GarbageOp struct {
 	Action GarbageAction `json:"action"`
 	// Target is a key relative to the scope's store, or a daemon reference.
@@ -328,9 +328,46 @@ type GarbageReport struct {
 	// Detail is the kind's own stat; nil when the collector failed.
 	Detail GarbageStat `json:"detail"`
 	Error  string      `json:"error,omitempty"`
+	// Deletion is what deleting Detail's ops did; nil in a dry run, for a collector that only
+	// reports, and for a report that failed or was aborted.
+	Deletion *GarbageDeletion `json:"deletion,omitempty"`
 }
 
-// GarbageTotal adds up every report. BytesComplete is false when some kind could not say.
+// GarbageDeletion is what one collector's deletion did to the ops of its finding.
+type GarbageDeletion struct {
+	// Deleted is never nil, so an empty deletion encodes as [].
+	Deleted []GarbageDeleted       `json:"deleted"`
+	Failed  []GarbageDeleteFailure `json:"failed,omitempty"`
+	// NotRun counts the ops no deletion was started for: the run was cancelled or lost its lock.
+	NotRun int `json:"not_run"`
+}
+
+// FreedBytes sums the deleted ops' sizes; nil when any is unknown.
+func (m GarbageDeletion) FreedBytes() *int64 {
+	var bytes int64
+	for _, deleted := range m.Deleted {
+		if deleted.Bytes == nil {
+			return nil
+		}
+		bytes += *deleted.Bytes
+	}
+	return &bytes
+}
+
+// GarbageDeleted is one op's target, deleted or found already gone.
+type GarbageDeleted struct {
+	Target string `json:"target"`
+	// Bytes is the op's, nil when the size is not known.
+	Bytes *int64 `json:"bytes"`
+}
+
+// GarbageDeleteFailure is one op's target the deletion failed on.
+type GarbageDeleteFailure struct {
+	Target string `json:"target"`
+	Error  string `json:"error"`
+}
+
+// GarbageTotal adds up every report; its deletion counts stay zero in a dry run.
 type GarbageTotal struct {
 	Found         int   `json:"found"`
 	Bytes         int64 `json:"bytes"`
@@ -339,6 +376,11 @@ type GarbageTotal struct {
 	Unjudged      int   `json:"unjudged"`
 	Aborted       int   `json:"aborted"`
 	Failed        int   `json:"failed"`
+	Deleted       int   `json:"deleted,omitempty"`
+	DeleteFailed  int   `json:"delete_failed,omitempty"`
+	NotRun        int   `json:"not_run,omitempty"`
+	// FreedBytes is what the deletions freed; nil in a dry run, or when any deleted size is unknown.
+	FreedBytes *int64 `json:"freed_bytes,omitempty"`
 }
 
 // DeadSavepoint is what one dead savepoint alone frees: every op naming it, its tree and the blobs
@@ -360,4 +402,10 @@ type GarbageCollectResult struct {
 	Savepoints []DeadSavepoint `json:"savepoints,omitempty"`
 	Total      GarbageTotal    `json:"total"`
 	Warnings   []string        `json:"warnings,omitempty"`
+}
+
+// IsPartial reports whether anything was left unjudged, aborted, failed or not deleted.
+func (m GarbageCollectResult) IsPartial() bool {
+	total := m.Total
+	return total.Failed > 0 || total.Aborted > 0 || total.Unjudged > 0 || total.DeleteFailed > 0 || total.NotRun > 0
 }

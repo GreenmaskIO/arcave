@@ -173,14 +173,9 @@ const (
 		"or was never written. Read-only: nothing is stopped or written, and the file is returned as spec. " +
 		"Bind sources under the project's working directory are relative (./…) unless absolute_paths is set. " +
 		"The file carries every environment value the containers run with, secrets included."
-	descGC = "Report the garbage arcave left in one session's store and in the Docker daemon: savepoint " +
-		"data no record commits (failed or interrupted runs), deduplicated volumes no savepoint names, " +
-		"image layers no stored manifest lists, upstream images no savepoint names, and restored layers " +
-		"no container runs on. kinds narrows a run. Read-only: it deletes nothing and stops " +
-		"nothing, but holds the project lock while it reads, so a busy project is refused: retry when its " +
-		"command finishes. Each report lists the ops a real gc would run, with their bytes where known. " +
-		"The grace period defaults to the project's gc config. A session tree no record commits " +
-		"(a failed fork) is session_list's, with all set, not gc's."
+	descGC = "Report the garbage arcave left in one session's store and in the Docker daemon; with dry_run " +
+		"false, delete it. A deleted image's layers go on the next run; deduplicated volumes and restored " +
+		"layers are only reported for now. A busy project is refused: retry when its command finishes."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +
@@ -360,14 +355,16 @@ func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	return nil, composeGenerateOutput{ComposeProject: generated.ComposeProject, Services: generated.Services, Spec: string(generated.Spec)}, nil
 }
 
-// gcInput is gc's input schema; a grace left out keeps gc.restored_layer_grace, kinds every one.
+// gcInput is gc's input schema; dry_run left out is true, a grace left out keeps
+// gc.restored_layer_grace, kinds every one.
 type gcInput struct {
+	DryRun             *bool                   `json:"dry_run,omitempty" jsonschema:"default true: report only; false deletes"`
 	Session            string                  `json:"session,omitempty" jsonschema:"the session to look in, by name or id; default the pinned or current session"`
 	RestoredLayerGrace string                  `json:"restored_layer_grace,omitempty" jsonschema:"how old an unused layer tag must be to count as garbage, as a Go duration such as 1h"`
 	Kinds              []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
 }
 
-// garbageCollectMCP reports the garbage in scope; it never deletes.
+// garbageCollectMCP finds the garbage in scope and, when dry_run is false, deletes it.
 func (h *MCPHandler) garbageCollectMCP(
 	ctx context.Context, _ *mcpsdk.CallToolRequest, in gcInput,
 ) (*mcpsdk.CallToolResult, model.GarbageCollectResult, error) {
@@ -380,7 +377,7 @@ func (h *MCPHandler) garbageCollectMCP(
 		grace = &parsed
 	}
 	req := model.GarbageCollectRequest{
-		DryRun:             true,
+		DryRun:             in.DryRun == nil || *in.DryRun,
 		DataKinds:          in.Kinds,
 		RestoredLayerGrace: grace,
 	}
@@ -394,11 +391,19 @@ func (h *MCPHandler) garbageCollectMCP(
 	defer release()
 
 	result, err := svc.GarbageCollect(ctx, req)
-	if err != nil && !errors.Is(err, model.ErrGarbageCollectPartial) {
-		return nil, model.GarbageCollectResult{}, mcpError(err)
+	var interrupted *model.GarbageCollectInterruptedError
+	switch {
+	case errors.As(err, &interrupted):
+		// A gc stopped midway through deleting fails, but what it had deleted must still be seen.
+		return &mcpsdk.CallToolResult{
+			IsError: true,
+			Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: mcpError(err).Error()}},
+		}, result, nil
+	case err == nil, errors.Is(err, model.ErrGarbageCollectPartial):
+		// A partial gc is still a report: what could not be judged is in it, aborted or failed.
+		return nil, result, nil
 	}
-	// A partial gc is still a report: what could not be judged is in it, aborted or failed.
-	return nil, result, nil
+	return nil, model.GarbageCollectResult{}, mcpError(err)
 }
 
 // sessionListInput is session_list's input schema.
@@ -615,6 +620,7 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:         "gc",
 		Description:  descGC,
+		Annotations:  &mcpsdk.ToolAnnotations{DestructiveHint: utils.New(true)},
 		OutputSchema: newOutputSchema[model.GarbageCollectResult](),
 	}, h.garbageCollectMCP)
 

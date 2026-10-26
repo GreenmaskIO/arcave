@@ -46,6 +46,12 @@ type ComposeProjectCollector interface {
 	Find(ctx context.Context, scope ComposeProjectScope) (model.GarbageStat, error)
 }
 
+// composeProjectDeleter is a collector that deletes what its Find reported; one without it only reports.
+type composeProjectDeleter interface {
+	// Delete runs exactly stat's ops over scope; a stat of another kind is an error.
+	Delete(ctx context.Context, scope ComposeProjectScope, stat model.GarbageStat) (model.GarbageDeletion, error)
+}
+
 // collectorProbe is a collector reading something besides the store, which may not answer.
 type collectorProbe interface {
 	Probe(ctx context.Context) error
