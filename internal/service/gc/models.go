@@ -37,7 +37,7 @@ type DaemonScope struct {
 // store and the records that keep its objects alive.
 type ComposeProjectScope struct {
 	ComposeProject model.DockerComposeProjectName
-	Store          storages.Storager
+	Store          storages.Navigator
 	// Objects lists Store once, recursively, for every collector of the scope; a namespace of
 	// Deps.UnlistedNamespaces is left out.
 	Objects []storages.ObjectStat
@@ -62,8 +62,10 @@ func (m garbageFound) reports() []model.GarbageReport {
 	return reports
 }
 
-// composeProjectGarbage is one compose project's scope and its collectors' reports, in their order.
+// composeProjectGarbage is one compose project's scope, the store its erasers delete from and its
+// collectors' reports, in their order.
 type composeProjectGarbage struct {
 	scope   ComposeProjectScope
+	store   storages.Storager
 	reports []model.GarbageReport
 }

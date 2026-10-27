@@ -24,6 +24,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -139,6 +140,84 @@ func TestEngine_RemoveImage_ReportsTheDaemonsRefusal(t *testing.T) {
 	// Assert
 	require.ErrorIs(t, err, wantErr)
 	api.AssertExpectations(t)
+}
+
+func TestEngine_RemoveImageRef(t *testing.T) {
+	const (
+		ref     = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
+		imageID = "sha256:aaaa"
+	)
+	refused := errors.New("image is being used by stopped container")
+	tests := []struct {
+		name       string
+		inspectErr error
+		containers []container.Summary
+		// wantRemove is whether the reference is asked to go.
+		wantRemove bool
+		removeErr  error
+		wantErr    error
+		wantErrMsg string
+	}{
+		{name: "the reference goes", wantRemove: true},
+		{
+			name:       "one gone before the inspect",
+			inspectErr: cerrdefs.ErrNotFound,
+			wantErr:    model.ErrImageRefNotFound,
+		},
+		{
+			name:       "one gone before the removal",
+			wantRemove: true,
+			removeErr:  cerrdefs.ErrNotFound,
+			wantErr:    model.ErrImageRefNotFound,
+		},
+		{
+			name:       "an image a container uses is refused, though another reference names it",
+			containers: []container.Summary{{ID: "c1"}},
+			wantErrMsg: "image sha256:aaaa is used by container c1",
+		},
+		{
+			name:       "a reference the daemon refuses",
+			wantRemove: true,
+			removeErr:  refused,
+			wantErr:    refused,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			api := &mockAPI{}
+			calls := []*mock.Call{
+				api.On("ImageInspect", mock.Anything, ref).Return(image.InspectResponse{ID: imageID}, tt.inspectErr).Once(),
+			}
+			if tt.inspectErr == nil {
+				calls = append(calls, api.On("ContainerList", mock.Anything, container.ListOptions{
+					All:     true,
+					Filters: filters.NewArgs(filters.Arg("ancestor", imageID)),
+				}).Return(tt.containers, nil).Once())
+			}
+			if tt.wantRemove {
+				calls = append(calls, api.On("ImageRemove", mock.Anything, ref, image.RemoveOptions{PruneChildren: true}).
+					Return([]image.DeleteResponse{{Untagged: ref}}, tt.removeErr).Once())
+			}
+			mock.InOrder(calls...)
+			e := &Engine{api: api}
+
+			// Act
+			err := e.RemoveImageRef(context.Background(), ref)
+
+			// Assert
+			switch {
+			case tt.wantErr != nil:
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, "remove image reference "+ref)
+			case tt.wantErrMsg != "":
+				assert.ErrorContains(t, err, tt.wantErrMsg)
+			default:
+				assert.NoError(t, err)
+			}
+			api.AssertExpectations(t)
+		})
+	}
 }
 
 func TestEngine_LoadImage(t *testing.T) {

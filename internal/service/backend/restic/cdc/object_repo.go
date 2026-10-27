@@ -52,9 +52,9 @@ func (r *objectRepo) HasConfig(ctx context.Context) (bool, error) {
 // the next container sees a live lock held by a stranger and only the 30-minute
 // age quarantine would clear it.
 //
-// Safe because arcave holds the project flock for the whole workflow and the
-// repository has no other client, so any lock standing at the start of an
-// operation is an orphan. Only at the start — restic refreshes its own lock
+// Safe because arcave holds the project flock and the session's lock for the
+// whole workflow — a gc's forget included — and the repository has no other
+// client, so any lock standing at the start of an operation is an orphan. Only at the start — restic refreshes its own lock
 // while it works.
 func (r *objectRepo) ClearLocks(ctx context.Context) error {
 	// A repository without locks/ has nothing to clear.
@@ -62,29 +62,5 @@ func (r *objectRepo) ClearLocks(ctx context.Context) error {
 		return fmt.Errorf("delete stale repository locks: %w", err)
 	}
 	zerolog.Ctx(ctx).Debug().Msg("cleared stale restic locks")
-	return nil
-}
-
-// DeleteSnapshot drops one snapshot by id — what `restic forget <id>` does on
-// the wire, without the container or its exclusive lock. A snapshot already gone
-// is not an error. It reclaims no space: the chunks it referenced are shared,
-// and only a prune returns bytes.
-//
-// The delete goes through a store rooted at snapshots/ rather than a key joined
-// onto it, and that is what keeps the id safe without arcave judging its shape:
-// "../config" escapes that root and the store's own guard refuses it, where the
-// same id joined onto the repository root would have stayed inside it and
-// deleted the object the repository is.
-func (r *objectRepo) DeleteSnapshot(ctx context.Context, snapshotObjectID string) error {
-	if snapshotObjectID == "" {
-		return errNoSnapshotID
-	}
-	snapshots, err := r.store.SubStorage(snapshotsPath, true)
-	if err != nil {
-		return fmt.Errorf("re-root store at snapshots: %w", err)
-	}
-	if err := snapshots.Delete(ctx, snapshotObjectID); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
-		return fmt.Errorf("delete snapshot %s: %w", snapshotObjectID, err)
-	}
 	return nil
 }

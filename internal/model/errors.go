@@ -41,6 +41,8 @@ var (
 	ErrRemoveNoSelector = errors.New("no savepoint selector provided")
 	// ErrRetainRecentNegative is returned when the retain-recent count is negative.
 	ErrRetainRecentNegative = errors.New("retain-recent count must be zero or positive")
+	// ErrImageRefNotFound reports an image reference the daemon does not hold.
+	ErrImageRefNotFound = errors.New("image reference not found")
 	// ErrProjectLocked is returned when another arcave process is already running a
 	// mutating workflow in this project.
 	ErrProjectLocked = errors.New("another arcave command is already running in this project")

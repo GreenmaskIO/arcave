@@ -18,7 +18,6 @@ package resticrepo
 import (
 	"context"
 	"fmt"
-	"path"
 	"time"
 
 	"github.com/greenmaskio/storages"
@@ -27,6 +26,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/gc"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // probeTimeout bounds the check that the daemon answers.
@@ -51,7 +51,8 @@ type InspectorOpener interface {
 }
 
 // Collector finds the cdc snapshots whose savepoint is dead, by restic's own listing and the
-// arcave-savepoint tag every capture writes; restic estimates what forgetting them frees.
+// arcave-savepoint tag every capture writes, and the repositories only a prune would free data in;
+// restic estimates what forgetting them frees.
 type Collector struct {
 	daemon Pinger
 	opener InspectorOpener
@@ -80,8 +81,9 @@ func (s *Collector) Probe(ctx context.Context) error {
 	return s.daemon.Ping(ctx)
 }
 
-// Find judges every snapshot of every repository of the scope by its savepoint. A repository
-// restic cannot list is unjudged; the others are still judged.
+// Find judges every snapshot of every repository of the scope by its savepoint, and names for a
+// prune alone a repository with no dead snapshot that a prune would still free data in. A
+// repository restic cannot list is unjudged; the others are still judged.
 func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	repos, err := cdc.ListRepositories(ctx, scope.Store)
 	if err != nil {
@@ -105,7 +107,7 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 		unattributed             int
 	)
 	for _, repo := range repos {
-		key := path.Join(cdc.NamespaceRepos, repo)
+		key := cdc.NewRepositoryKey(repo)
 		snapshots, err := inspector.ReadSnapshots(ctx, repo)
 		if err != nil {
 			unjudged = append(unjudged, model.GarbageSkip{
@@ -115,19 +117,16 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 			})
 			continue
 		}
-		verdict := judgeSnapshots(committed, key, snapshots)
-		ops = append(ops, verdict.ops...)
+		verdict := judgeSnapshots(committed, repo, snapshots)
+		repoOps, estimate := readRepoGarbage(ctx, inspector, repo, verdict)
+		ops = append(ops, repoOps...)
 		liveSnapshots += verdict.live
 		unattributed += verdict.unattributed
 		if verdict.live > 0 {
 			liveRepos++
 		}
-		if len(verdict.dead) > 0 {
-			estimates = append(estimates, model.ResticForgetEstimate{
-				Repo:       key,
-				Snapshots:  verdict.dead,
-				FreedBytes: readEstimate(ctx, inspector, repo, verdict.dead),
-			})
+		if estimate != nil {
+			estimates = append(estimates, *estimate)
 		}
 	}
 	return model.ResticRepositoryStat{
@@ -159,8 +158,8 @@ type repoVerdict struct {
 	dead               []string
 }
 
-// judgeSnapshots judges every snapshot of the repository at key by its savepoint.
-func judgeSnapshots(committed map[model.SavepointID]bool, key string, snapshots []cdc.Snapshot) repoVerdict {
+// judgeSnapshots judges every snapshot of repo by its savepoint.
+func judgeSnapshots(committed map[model.SavepointID]bool, repo string, snapshots []cdc.Snapshot) repoVerdict {
 	var (
 		live, unattributed int
 		ops                []model.GarbageOp
@@ -176,7 +175,7 @@ func judgeSnapshots(committed map[model.SavepointID]bool, key string, snapshots 
 			dead = append(dead, snapshot.ID)
 			ops = append(ops, model.GarbageOp{
 				Action:       model.GarbageActionForget,
-				Target:       path.Join(key, "snapshots", snapshot.ID),
+				Target:       cdc.NewSnapshotKey(repo, snapshot.ID),
 				Reason:       model.GarbageReasonDeadCapture,
 				LastModified: snapshot.Time,
 				Savepoint:    snapshot.Savepoint,
@@ -191,7 +190,41 @@ func judgeSnapshots(committed map[model.SavepointID]bool, key string, snapshots 
 	}
 }
 
-// readEstimate is what forgetting ids frees in repo; nil, logged, when restic cannot say.
+// readRepoGarbage is what to do in repo and what doing it frees: forget its dead snapshots, or, with
+// none, prune it alone while a prune would free anything — what a prune cut short after its forget
+// left behind. Neither is no op and no estimate.
+func readRepoGarbage(
+	ctx context.Context, inspector Inspector, repo string, verdict repoVerdict,
+) ([]model.GarbageOp, *model.ResticForgetEstimate) {
+	var (
+		key   = cdc.NewRepositoryKey(repo)
+		freed = readEstimate(ctx, inspector, repo, verdict.dead)
+	)
+	switch {
+	case len(verdict.dead) > 0:
+		return verdict.ops, newForgetEstimate(key, verdict.dead, freed)
+	case utils.Value(freed) > 0:
+		prune := model.GarbageOp{
+			Action: model.GarbageActionForget,
+			Target: key,
+			Reason: model.GarbageReasonUnprunedData,
+		}
+		return []model.GarbageOp{prune}, newForgetEstimate(key, []string{}, freed)
+	}
+	return nil, nil
+}
+
+// newForgetEstimate is what forgetting ids in the repository at key, then pruning it, frees.
+func newForgetEstimate(key string, ids []string, freed *int64) *model.ResticForgetEstimate {
+	return &model.ResticForgetEstimate{
+		Repo:       key,
+		Snapshots:  ids,
+		FreedBytes: freed,
+	}
+}
+
+// readEstimate is what forgetting ids frees in repo, what a prune alone does when ids is empty;
+// nil, logged, when restic cannot say.
 func readEstimate(ctx context.Context, inspector Inspector, repo string, ids []string) *int64 {
 	freed, err := inspector.EstimateForget(ctx, repo, ids)
 	if err != nil {

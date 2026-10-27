@@ -67,19 +67,23 @@ Running `docker compose up` by hand after a rollback recreates the containers fr
 
 A rollback doesn't load the images a savepoint stored back into Docker. A service whose container files were left out is rebuilt from its `image:`, so that image must still be in Docker or in a registry. If it is in neither, the rollback is refused before anything stops.
 
-## gc deletes only from the store
+## gc frees space in more than one run
 
-[`arcave gc`](cli/gc.md) deletes dead savepoint trees, and the images and blobs no savepoint uses. Run it twice to free an unused image whole: its layers go on the run after the image. `arcave gc --dry-run` reports without deleting anything.
+[`arcave gc`](cli/gc.md) deletes dead savepoint trees, the images and blobs no savepoint uses, the `cdc` snapshots of removed savepoints, and the layer tags no container uses. `arcave gc --dry-run` reports without deleting anything. Some space takes more than one run to come back:
 
-`cdc` snapshots of dead savepoints and unused layer tags are only reported, with restic's estimate of what a prune would free. `arcave session remove` frees everything a session holds, `cdc` repositories included; `arcave session list --all` lists the trees a failed fork left, and `session remove <id>` deletes one. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, delete its directory in the store by hand. [Storage layout](storage_layout.md) shows where that is.
+* **An unused image.** Its layers go on the run after the image.
+* **A recent layer tag.** A tag younger than `gc.restored_layer_grace`, an hour by default, waits for a later run.
+* **An interrupted prune.** If a `cdc` repository's `restic forget --prune` is cut short after the snapshots are forgotten, the next gc prunes that repository again.
+
+`arcave session remove` frees everything a session holds, `cdc` repositories included; `arcave session list --all` lists the trees a failed fork left, and `session remove <id>` deletes one. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, delete its directory in the store by hand. [Storage layout](storage_layout.md) shows where that is.
 
 ### gc on a shared store
 
 The session's lock in the store is taken by writing it, waiting a second, and reading it back, because the stores arcave supports offer no write-if-absent. Two machines claiming it at the same moment can, rarely, both believe they hold it. For a capture that only costs a savepoint, but a gc that deletes could then remove a blob a capture on the other machine has just reused, and that savepoint would fail to roll back. Run `arcave gc` without `--dry-run` only while no other machine works in the session. `--dry-run` is safe anywhere.
 
-### Nothing collects what a rollback leaves in the Docker daemon
+### Some layer tags gc never judges
 
-Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in Docker. List the tags with `docker image ls --filter 'reference=arcave/*'` and remove the ones no running container uses.
+Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in Docker, and `arcave gc` removes it once no container uses it. gc only judges the tags of compose projects its session holds: a tag of a compose project no session holds any more, or one committed by an earlier arcave version, stays. List the tags with `docker image ls --filter 'reference=arcave/*'` and remove those by hand.
 
 ## An interrupted rollback is not finished for you
 

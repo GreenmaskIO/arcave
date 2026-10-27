@@ -103,7 +103,7 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
 | `restored` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
 | `writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
 
-Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. Those tags are not collected — see [Limitations](../limitations.md#nothing-collects-what-a-rollback-leaves-in-the-docker-daemon).
+Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
 
 ## Errors
 

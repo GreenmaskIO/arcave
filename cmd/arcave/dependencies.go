@@ -701,10 +701,11 @@ func newGCDependencies(
 		Inflight:                 inflightrepo.New(projectPath),
 		DaemonCollectors:         newDaemonCollectors(cfg, engine),
 		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
-		Erasers:                  newGarbageErasers(),
+		DaemonErasers:            newDaemonErasers(engine),
+		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
-		RestoredLayerGrace: cfg.GC.RestoredLayerGrace,
+		RestoredLayerGrace: utils.Value(cfg.GC.RestoredLayerGrace),
 	})
 	opened.keep()
 	return deps, nil
@@ -746,17 +747,62 @@ func newComposeProjectCollectors(cfg config.Config, engine *docker.Engine) []gc.
 	}
 }
 
-// newGarbageErasers builds the erasers carrying out the gc's actions; forget and untag have none yet.
-func newGarbageErasers() []gc.GarbageEraser {
-	return []gc.GarbageEraser{
-		eraser.NewTreeEraser(),
-		eraser.NewImageEraser(),
-		eraser.NewObjectEraser(),
+// newDaemonErasers builds the erasers carrying out the gc's actions on the daemon.
+func newDaemonErasers(engine *docker.Engine) []gc.DaemonEraser {
+	return []gc.DaemonEraser{
+		eraser.NewTagEraser(engine),
 	}
 }
 
-// resticInspectorOpener serves one compose project's restic repositories to a cdc.Inspector, as
-// newDependencies serves them to the cdc backend.
+// newComposeProjectErasers builds the erasers carrying out the gc's actions in a compose project's store.
+func newComposeProjectErasers(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectEraser {
+	return []gc.ComposeProjectEraser{
+		eraser.NewTreeEraser(),
+		eraser.NewImageEraser(),
+		eraser.NewObjectEraser(),
+		eraser.NewForgetEraser(resticPrunerOpener{
+			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
+			engine: engine,
+		}, cfg.Common.Concurrency),
+	}
+}
+
+// servedRestic is one compose project's restic repositories, served to restic containers.
+type servedRestic struct {
+	// root is the repositories as objects, rooted at cdc.NamespaceRepos.
+	root        storages.Storager
+	repoURLBase string
+	options     cdc.Options
+	server      *echo.Echo
+}
+
+// serveResticRepositories starts the restic server over store's repositories, as newDependencies
+// serves them to the cdc backend; shutdownResticServer stops it.
+func serveResticRepositories(
+	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, store storages.Navigator,
+) (servedRestic, error) {
+	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
+	if err != nil {
+		return servedRestic{}, fmt.Errorf("open restic repository root: %w", err)
+	}
+	hostNetwork, containerHost, err := resolveCDCTransport(ctx, cfg, engine)
+	if err != nil {
+		return servedRestic{}, err
+	}
+	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
+	port, err := rest.Serve(server, cfg.ServerAddress)
+	if err != nil {
+		return servedRestic{}, fmt.Errorf("start the restic server: %w", err)
+	}
+	return servedRestic{
+		root:        resticRoot,
+		repoURLBase: rest.RepositoryURLBase(cfg.ServerScheme, containerHost, port),
+		options:     newCDCOptions(cfg, hostNetwork),
+		server:      server,
+	}, nil
+}
+
+// resticInspectorOpener serves one compose project's restic repositories to a cdc.Inspector.
 type resticInspectorOpener struct {
 	cfg    config.CDCBackend
 	engine *docker.Engine
@@ -764,24 +810,13 @@ type resticInspectorOpener struct {
 
 // Open starts the restic server over store's repositories; the inspector's Close stops it.
 func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
-	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
-	if err != nil {
-		return nil, fmt.Errorf("open restic repository root: %w", err)
-	}
-	hostNetwork, containerHost, err := resolveCDCTransport(ctx, o.cfg, o.engine)
+	served, err := serveResticRepositories(ctx, o.cfg, o.engine, store)
 	if err != nil {
 		return nil, err
 	}
-	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
-	port, err := rest.Serve(server, o.cfg.ServerAddress)
-	if err != nil {
-		return nil, fmt.Errorf("start the restic server: %w", err)
-	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(
-			o.engine, rest.RepositoryURLBase(o.cfg.ServerScheme, containerHost, port), newCDCOptions(o.cfg, hostNetwork),
-		),
-		server: server,
+		Inspector: cdc.NewInspector(o.engine, served.repoURLBase, served.options),
+		server:    served.server,
 	}, nil
 }
 
@@ -792,3 +827,29 @@ type resticInspector struct {
 }
 
 func (i resticInspector) Close(ctx context.Context) { shutdownResticServer(ctx, i.server) }
+
+// resticPrunerOpener serves one compose project's restic repositories to a cdc.Pruner.
+type resticPrunerOpener struct {
+	cfg    config.CDCBackend
+	engine *docker.Engine
+}
+
+// Open starts the restic server over store's repositories; the pruner's Close stops it.
+func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
+	served, err := serveResticRepositories(ctx, o.cfg, o.engine, store)
+	if err != nil {
+		return nil, err
+	}
+	return resticPruner{
+		Pruner: cdc.NewPruner(o.engine, served.root, served.repoURLBase, served.options),
+		server: served.server,
+	}, nil
+}
+
+// resticPruner is a cdc.Pruner with the server it prunes through.
+type resticPruner struct {
+	*cdc.Pruner
+	server *echo.Echo
+}
+
+func (p resticPruner) Close(ctx context.Context) { shutdownResticServer(ctx, p.server) }

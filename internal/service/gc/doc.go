@@ -15,5 +15,6 @@
 // Package gc finds a session's garbage and deletes it: GarbageCollector reads every compose
 // project's scope once and runs the collectors over it. The collectors, one per kind of garbage,
 // live under collector/ and are handed in by the composition root; each judges liveness by
-// savepoint status, never by an object's age, and one with a Delete removes what it found.
+// savepoint status, never by an object's age, and only finds: the GarbageEraser of each op's
+// action deletes it.
 package gc

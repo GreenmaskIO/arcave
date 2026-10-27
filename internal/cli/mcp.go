@@ -174,8 +174,9 @@ const (
 		"Bind sources under the project's working directory are relative (./…) unless absolute_paths is set. " +
 		"The file carries every environment value the containers run with, secrets included."
 	descGC = "Report the garbage arcave left in one session's store and in the Docker daemon; with dry_run " +
-		"false, delete it. A deleted image's layers go on the next run; deduplicated volumes and restored " +
-		"layers are only reported for now. A busy project is refused: retry when its command finishes."
+		"false, delete it. A deleted image's layers go on the next run; a removed savepoint's restic snapshots " +
+		"are forgotten and pruned; a restored layer tag goes once no container uses it and it is older than " +
+		"the grace. A busy project is refused: retry when its command finishes."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +

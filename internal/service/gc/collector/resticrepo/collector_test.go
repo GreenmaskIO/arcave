@@ -172,6 +172,64 @@ func TestCollector_Find_Estimate(t *testing.T) {
 	}
 }
 
+// A repository with no dead snapshot is named for a prune alone only while a prune would free
+// something in it: a prune that failed after its forget is taken up again.
+func TestCollector_Find_Unpruned(t *testing.T) {
+	tests := []struct {
+		name        string
+		freed       *int64
+		estimateErr error
+		wantOps     []model.GarbageOp
+		want        []model.ResticForgetEstimate
+	}{
+		{
+			name:  "data a prune would free",
+			freed: utils.New(int64(4096)),
+			wantOps: []model.GarbageOp{{
+				Action: model.GarbageActionForget,
+				Target: "restic/volume-named-db",
+				Reason: model.GarbageReasonUnprunedData,
+			}},
+			want: []model.ResticForgetEstimate{{
+				Repo:       "restic/volume-named-db",
+				Snapshots:  []string{},
+				FreedBytes: utils.New(int64(4096)),
+			}},
+		},
+		{name: "nothing a prune would free", freed: utils.New(int64(0))},
+		{name: "restic printed no estimate"},
+		{name: "the estimate failed", estimateErr: errors.New("restic prune: connection refused")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			scope := newRepoScope(t, "volume-named-db")
+			inspector := &mockInspector{}
+			opener := &mockOpener{}
+			mock.InOrder(
+				opener.On("Open", mock.Anything, scope.Store).Return(inspector, nil).Once(),
+				inspector.On("ReadSnapshots", mock.Anything, "volume-named-db").
+					Return([]cdc.Snapshot{snapshotOf("1", gctest.LiveSavepoint)}, nil).Once(),
+				inspector.On("EstimateForget", mock.Anything, "volume-named-db", []string(nil)).
+					Return(tt.freed, tt.estimateErr).Once(),
+				inspector.On("Close", mock.Anything).Return().Once(),
+			)
+
+			// Act
+			stat, err := New(&mockPinger{}, opener).Find(context.Background(), scope)
+
+			// Assert
+			require.NoError(t, err)
+			got := stat.(model.ResticRepositoryStat)
+			assert.Equal(t, append([]model.GarbageOp{}, tt.wantOps...), got.Ops)
+			assert.Equal(t, tt.want, got.Estimates)
+			assert.Equal(t, 1, got.LiveSnapshots)
+			inspector.AssertExpectations(t)
+			opener.AssertExpectations(t)
+		})
+	}
+}
+
 // A compose project without repositories starts no restic server.
 func TestCollector_Find_NoRepositories(t *testing.T) {
 	// Arrange

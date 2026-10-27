@@ -23,9 +23,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// D1: a removal drops the one snapshot its payload names, and no bytes — the packs
-// are shared, and space comes back only from a future `arcave savepoint gc`.
-func TestSnapshotter_Remove_DropsOnlyItsOwnSnapshot(t *testing.T) {
+// D1: a removal leaves its snapshot and every pack in the repository: the snapshot stays
+// tagged with a savepoint no record commits, and arcave gc forgets it and prunes.
+func TestSnapshotter_Remove_LeavesTheSnapshotToGC(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
@@ -42,13 +42,12 @@ func TestSnapshotter_Remove_DropsOnlyItsOwnSnapshot(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, []string{second.SnapshotObjectID}, env.snapshotObjectIDs(t, vol))
-	assert.Equal(t, packsBefore, objectNames(t, env.repoStore(t, vol), dataPrefix),
-		"a removal is a snapshot object away, never a prune")
+	assert.ElementsMatch(t, []string{first.SnapshotObjectID, second.SnapshotObjectID}, env.snapshotObjectIDs(t, vol))
+	assert.Equal(t, packsBefore, objectNames(t, env.repoStore(t, vol), dataPrefix))
 }
 
-// D2: a capture that reported no payload has no snapshot to drop, which is the
-// ordinary cleanup of a failed create rather than an error.
+// D2: a capture that reported no payload is the ordinary cleanup of a failed create, not
+// an error.
 func TestSnapshotter_Remove_WithoutAPayload(t *testing.T) {
 	t.Parallel()
 
@@ -74,54 +73,7 @@ func TestSnapshotter_Remove_WithoutAPayload(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, []string{captured.SnapshotObjectID}, env.snapshotObjectIDs(t, vol),
-				"a removal with nothing to remove must not reach for another capture")
+				"a removal never reaches another capture")
 		})
 	}
-}
-
-// The line D2 does not cross: a remove reaches snapshot objects and nothing
-// else. arcave does not judge what a restic id looks like — an id it has never
-// seen is simply a snapshot already gone (D3) — but an id that would address its
-// way out of snapshots/ is refused, and the config object it aims at is the
-// repository itself.
-func TestSnapshotter_Remove_RefusesAnIDThatLeavesSnapshots(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	env := newEnv(t, wipeOptions())
-	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-	backend := env.backend(t, vol)
-	captured := env.snapshot(t, backend, idFirst, nil)
-
-	// Act
-	err := backend.Remove(env.ctx, model.BackendRemoveRequest{
-		SnapshotID: idSecond,
-		Payload:    map[string]any{"restic_snapshot_id": "../" + configKey},
-	})
-
-	// Assert
-	require.Error(t, err)
-	assert.Equal(t, []string{captured.SnapshotObjectID}, env.snapshotObjectIDs(t, vol))
-	exists, err := env.repoStore(t, vol).Exists(env.ctx, configKey)
-	require.NoError(t, err)
-	assert.True(t, exists, "a remove must never reach the object the repository is")
-}
-
-// D3: a snapshot already gone is not an error — an interrupted remove is re-run.
-func TestSnapshotter_Remove_IsIdempotent(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	env := newEnv(t, wipeOptions())
-	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-	backend := env.backend(t, vol)
-	payload := env.snapshot(t, backend, idFirst, nil)
-	require.NoError(t, backend.Remove(env.ctx, model.BackendRemoveRequest{SnapshotID: idFirst, Payload: payload}))
-
-	// Act
-	err := backend.Remove(env.ctx, model.BackendRemoveRequest{SnapshotID: idFirst, Payload: payload})
-
-	// Assert
-	require.NoError(t, err)
-	assert.Empty(t, env.snapshotObjectIDs(t, vol))
 }

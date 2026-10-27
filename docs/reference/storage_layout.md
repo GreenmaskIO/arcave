@@ -87,11 +87,11 @@ The images services run on — `postgres:16`, say — are kept the same way, alw
 
 The blob store is shared by every savepoint of one **compose project**, inside the session root. That keeps a session self-contained and dying whole, at the price of no sharing across sessions or compose projects.
 
-`savepoint remove` frees the savepoint's own directory and leaves the shared store alone, so removing every savepoint of a compose project frees no image bytes by itself. [`arcave gc`](cli/gc.md) deletes the blobs and images no savepoint uses any more; an unused image's blobs go on the run after the image itself — see [Limitations](limitations.md#gc-deletes-only-from-the-store).
+`savepoint remove` frees the savepoint's own directory and leaves the shared store alone, so removing every savepoint of a compose project frees no image bytes by itself. [`arcave gc`](cli/gc.md) deletes the blobs and images no savepoint uses any more; an unused image's blobs go on the run after the image itself — see [Limitations](limitations.md#gc-frees-space-in-more-than-one-run).
 
 ## cdc repositories
 
-The [`cdc` backend](configuration.md#snapshot) keeps one restic repository per volume under `restic/<object-id>/`, beside the savepoint directories rather than inside any one of them: a repository outlives every savepoint that wrote into it, which is what makes the second capture an increment. It dies with the session, and cannot be shared across sessions.
+The [`cdc` backend](configuration.md#snapshot) keeps one restic repository per volume under `restic/<object-id>/`, beside the savepoint directories rather than inside any one of them: a repository outlives every savepoint that wrote into it, which is what makes the second capture an increment. It dies with the session, and cannot be shared across sessions. `savepoint remove` leaves a savepoint's snapshots in it; [`arcave gc`](cli/gc.md) forgets them and prunes the data no other snapshot holds.
 
 ## Moving a savepoint
 

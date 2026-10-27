@@ -78,6 +78,41 @@ type ContainerRunner interface {
 	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
 }
 
+// repositories is what reaching any repository through restic takes.
+type repositories struct {
+	containers  ContainerRunner
+	repoURLBase string
+	options     Options
+}
+
+func newRepositories(containers ContainerRunner, repoURLBase string, options Options) repositories {
+	return repositories{
+		containers:  containers,
+		repoURLBase: repoURLBase,
+		options:     options,
+	}
+}
+
+// newRunner is a runner to objectID's repository, without clearing its locks; an objectID that is
+// no volume's is refused.
+func (r repositories) newRunner(objectID string) (runner, error) {
+	if err := requireRepository(objectID); err != nil {
+		return runner{}, err
+	}
+	return runner{
+		containers:  r.containers,
+		image:       r.options.Image,
+		repoURL:     newRepositoryURL(r.repoURLBase, objectID),
+		hostNetwork: r.options.HostNetwork,
+	}, nil
+}
+
+// newRepositoryURL is base plus the repository's directory, objectID. The trailing
+// slash is the restic protocol's: without it restic talks to the wrong path.
+func newRepositoryURL(base, objectID string) string {
+	return base + "/" + objectID + "/"
+}
+
 // runner executes restic commands in one-shot containers of the stock image,
 // against one repository URL.
 type runner struct {

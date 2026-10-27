@@ -50,8 +50,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
-// A gc deletes what removed savepoints, rollbacks and dead runs left in the store, and nothing a
-// live savepoint needs; the blobs of an image it removes go on the run after.
+// A gc deletes what removed savepoints, rollbacks and dead runs left in the store and the daemon,
+// and nothing a live savepoint needs; the blobs of an image it removes go on the run after.
 func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	t.Parallel()
 
@@ -114,11 +114,21 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	assert.Contains(t, strings.Join(tags, ","), ":sp-"+first.ID.String(), "the first rollback's tag is unused")
 	assert.NotContains(t, strings.Join(tags, ","), ":sp-"+second.ID.String(), "the running container's tag is in use")
 
-	var deleted []string
+	var (
+		deleted []string
+		freed   int64
+	)
 	for _, report := range result.Reports {
 		switch report.DataKind {
 		case model.GarbageDataKindRestoredLayers:
-			assert.Nil(t, report.Deletion, "%s is only reported", report.DataKind)
+			require.NotNil(t, report.Deletion)
+			assert.Empty(t, report.Deletion.Failed)
+			assert.Len(t, report.Deletion.Deleted, report.Summary.Found)
+			for _, tag := range tags {
+				exists, err := baseline.engine().ImageRefExists(env.ctx, tag)
+				require.NoError(t, err)
+				assert.False(t, exists, "%s is untagged", tag)
+			}
 		case model.GarbageDataKindDeduplicatedVolumes:
 			require.Empty(t, report.Detail.Findings().Ops, "no savepoint here is cdc's")
 			assert.Equal(t, &model.GarbageDeletion{}, report.Deletion, "a report that found nothing has nothing left to delete")
@@ -130,14 +140,16 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 			for _, op := range report.Detail.Findings().Ops {
 				deleted = append(deleted, op.Target)
 			}
+			require.NotNil(t, report.Deletion.FreedBytes(), report.DataKind)
+			freed += *report.Deletion.FreedBytes()
 		}
 	}
-	assert.Contains(t, result.Warnings, "restored-layers is reported, not deleted, yet")
+	assert.Empty(t, result.Warnings)
 	after := fileSizes(t, env.storeDir())
 	assert.Equal(t, newWithoutTargets(before, composeDir, deleted), after, "exactly what was named is gone")
-	require.NotNil(t, result.Total.FreedBytes)
-	assert.Equal(t, sumSizes(before)-sumSizes(after), *result.Total.FreedBytes)
-	assert.Equal(t, len(deleted), result.Total.Deleted)
+	assert.Equal(t, sumSizes(before)-sumSizes(after), freed)
+	assert.Nil(t, result.Total.FreedBytes, "what an untag frees in the daemon is not known")
+	assert.Equal(t, len(deleted)+len(tags), result.Total.Deleted)
 
 	// The run after frees the blob only the removed image listed.
 	secondRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
@@ -247,8 +259,18 @@ func (e *sessionEnv) newGarbageCollector(
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
 	require.NoError(t, err)
 
-	var daemonCollectors []gc.DaemonCollector
-	var composeProjectCollectors []gc.ComposeProjectCollector
+	var (
+		daemonCollectors         []gc.DaemonCollector
+		composeProjectCollectors []gc.ComposeProjectCollector
+		daemonErasers            []gc.DaemonEraser
+		composeProjectErasers    = []gc.ComposeProjectEraser{
+			eraser.NewTreeEraser(), eraser.NewImageEraser(), eraser.NewObjectEraser(),
+		}
+	)
+	if engine != nil {
+		daemonErasers = append(daemonErasers, eraser.NewTagEraser(engine))
+		composeProjectErasers = append(composeProjectErasers, newForgetEraser(t, engine))
+	}
 	for _, kind := range kinds {
 		switch kind {
 		case model.GarbageDataKindSavepointData:
@@ -275,10 +297,9 @@ func (e *sessionEnv) newGarbageCollector(
 		Inflight:                 inflightrepo.New(e.projectRoot),
 		DaemonCollectors:         daemonCollectors,
 		ComposeProjectCollectors: composeProjectCollectors,
-		Erasers: []gc.GarbageEraser{
-			eraser.NewTreeEraser(), eraser.NewImageEraser(), eraser.NewObjectEraser(),
-		},
-		UnlistedNamespaces: []string{cdc.NamespaceRepos},
+		DaemonErasers:            daemonErasers,
+		ComposeProjectErasers:    composeProjectErasers,
+		UnlistedNamespaces:       []string{cdc.NamespaceRepos},
 	})
 }
 
@@ -343,6 +364,101 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	assert.Equal(t, before, after, "a dry run changes no repository")
 }
 
+// A removed cdc savepoint leaves its snapshots in their repositories; a gc forgets them and prunes
+// what they alone held, and the savepoint that is left still rolls back.
+func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newCDCEnv(t, config.CDCBackend{
+		RestoreMode: config.RestoreModeWipe,
+		Overwrite:   config.OverwriteIfChanged,
+		Image:       config.DefaultResticImage,
+	})
+	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
+	require.NoError(t, err)
+	env.mutate(t, env.volumes[0])
+	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
+	require.NoError(t, err)
+	kept := env.hashAll(t)
+	_, err = env.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{IDs: []model.SavepointID{first.ID}})
+	require.NoError(t, err)
+	for _, stat := range first.Stats {
+		exists, err := env.composeProjectStore.Exists(env.ctx,
+			cdc.NewSnapshotKey(stat.Volume.ObjectID, resticPayload(t, stat).SnapshotObjectID))
+		require.NoError(t, err)
+		require.True(t, exists, "a remove leaves the snapshot to a gc")
+	}
+	before := repoBytes(t, env)
+	svc := newCDCGarbageCollector(t, env)
+
+	// Act
+	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, result.Reports, 1)
+	report := result.Reports[0]
+	require.NotNil(t, report.Deletion)
+	assert.Len(t, report.Deletion.Deleted, len(env.volumes), "one snapshot of the removed savepoint per volume")
+	assert.Empty(t, report.Deletion.Failed)
+	require.Len(t, report.Deletion.Reclaimed, len(env.volumes), "one prune per repository")
+	freed := report.Deletion.FreedBytes()
+	require.NotNil(t, freed, "restic reports what every prune freed")
+	assert.Positive(t, *freed, "the mutated volume's old chunks were the first savepoint's alone")
+	assert.Less(t, repoBytes(t, env), before, "the prune shrank the repositories")
+	for _, stat := range first.Stats {
+		exists, err := env.composeProjectStore.Exists(env.ctx,
+			cdc.NewSnapshotKey(stat.Volume.ObjectID, resticPayload(t, stat).SnapshotObjectID))
+		require.NoError(t, err)
+		assert.False(t, exists, "the snapshot is forgotten")
+	}
+
+	// The run after finds nothing left to forget.
+	again, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
+	require.NoError(t, err)
+	stat, ok := again.Reports[0].Detail.(model.ResticRepositoryStat)
+	require.True(t, ok)
+	assert.Empty(t, stat.Ops)
+	assert.Equal(t, len(env.volumes), stat.LiveSnapshots)
+
+	// The savepoint left is whole.
+	env.mutate(t, env.volumes[0])
+	_, err = env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
+	require.NoError(t, err)
+	assert.Equal(t, kept, env.hashAll(t), "nothing the live savepoint needs was pruned")
+}
+
+// newCDCGarbageCollector is a gc over env's default session, judging and deleting its restic
+// snapshots only.
+func newCDCGarbageCollector(t *testing.T, env *cdcEnv) *gc.GarbageCollector {
+	t.Helper()
+	arcaveProjectStore := env.arcaveProjectStore(t)
+	return gc.New(gc.Deps{
+		Store:                    arcaveProjectStore,
+		Sessions:                 sessionrepo.New(arcaveProjectStore),
+		NewSavepoints:            newGCSavepointReader,
+		Locker:                   lock.New(env.projectRoot),
+		SessionLocker:            newSessionLocker(t, arcaveProjectStore, model.DefaultSession),
+		Inflight:                 inflightrepo.New(env.projectRoot),
+		ComposeProjectCollectors: []gc.ComposeProjectCollector{newResticCollector(t, env.engine)},
+		ComposeProjectErasers:    []gc.ComposeProjectEraser{newForgetEraser(t, env.engine)},
+		UnlistedNamespaces:       []string{cdc.NamespaceRepos},
+	})
+}
+
+// repoBytes sums the sizes of every object of env's restic repositories.
+func repoBytes(t *testing.T, env *cdcEnv) int64 {
+	t.Helper()
+	objects, err := env.composeProjectStore.List(env.ctx, cdc.NamespaceRepos)
+	require.NoError(t, err)
+	var total int64
+	for _, obj := range objects {
+		total += obj.Size
+	}
+	return total
+}
+
 // newResticCollector is the restic collector over engine, its repositories served the way the
 // DI root serves them.
 func newResticCollector(t *testing.T, engine *dockerclient.Engine) *resticrepo.Collector {
@@ -355,6 +471,18 @@ func newResticCollector(t *testing.T, engine *dockerclient.Engine) *resticrepo.C
 	})
 }
 
+// newForgetEraser is the forget eraser over engine, its repositories served the way the DI root
+// serves them.
+func newForgetEraser(t *testing.T, engine *dockerclient.Engine) eraser.ForgetEraser {
+	t.Helper()
+	hostNetwork, containerHost := cdcTransport(t, engine)
+	return eraser.NewForgetEraser(resticPrunerOpener{resticOpener{
+		engine:        engine,
+		hostNetwork:   hostNetwork,
+		containerHost: containerHost,
+	}}, 1)
+}
+
 // resticOpener starts a restic server over a compose project's repositories, per scope.
 type resticOpener struct {
 	engine        *dockerclient.Engine
@@ -363,22 +491,36 @@ type resticOpener struct {
 }
 
 func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
-	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
-	if err != nil {
-		return nil, err
-	}
-	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
-	port, err := rest.Serve(server, "")
+	_, repoURLBase, server, err := o.serve(ctx, store)
 	if err != nil {
 		return nil, err
 	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(o.engine, rest.RepositoryURLBase("", o.containerHost, port), cdc.Options{
-			Image:       config.DefaultResticImage,
-			HostNetwork: o.hostNetwork,
-		}),
-		server: server,
+		Inspector: cdc.NewInspector(o.engine, repoURLBase, o.options()),
+		server:    server,
 	}, nil
+}
+
+// serve starts the restic server over store's repositories.
+func (o resticOpener) serve(
+	ctx context.Context, store storages.Navigator,
+) (root storages.Storager, repoURLBase string, server *echo.Echo, err error) {
+	if root, err = store.SubStorage(cdc.NamespaceRepos, true); err != nil {
+		return nil, "", nil, err
+	}
+	server = rest.NewEcho(ctx, repo.NewResolver(root))
+	port, err := rest.Serve(server, "")
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return root, rest.RepositoryURLBase("", o.containerHost, port), server, nil
+}
+
+func (o resticOpener) options() cdc.Options {
+	return cdc.Options{
+		Image:       config.DefaultResticImage,
+		HostNetwork: o.hostNetwork,
+	}
 }
 
 // resticInspector is a cdc.Inspector with the server it reads through.
@@ -388,6 +530,28 @@ type resticInspector struct {
 }
 
 func (i resticInspector) Close(context.Context) { _ = i.server.Close() }
+
+// resticPrunerOpener starts a restic server over a compose project's repositories, per erase.
+type resticPrunerOpener struct{ resticOpener }
+
+func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
+	root, repoURLBase, server, err := o.serve(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	return resticPruner{
+		Pruner: cdc.NewPruner(o.engine, root, repoURLBase, o.options()),
+		server: server,
+	}, nil
+}
+
+// resticPruner is a cdc.Pruner with the server it prunes through.
+type resticPruner struct {
+	*cdc.Pruner
+	server *echo.Echo
+}
+
+func (p resticPruner) Close(context.Context) { _ = p.server.Close() }
 
 // plantHeartbeat writes a capture's heartbeat at the root of the tree at dir.
 func plantHeartbeat(t *testing.T, dir string, status heartbeat.Status) {

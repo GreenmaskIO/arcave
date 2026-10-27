@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/greenmaskio/storages"
@@ -85,6 +86,23 @@ func TestDeleteOps(t *testing.T) {
 			cancelAt:  -1,
 			cancelled: true,
 			want:      model.GarbageDeletion{NotRun: 3},
+		},
+		{
+			name:     "an image reference already gone counts as deleted, freeing nothing",
+			errs:     []error{fmt.Errorf("remove: %w", model.ErrImageRefNotFound), nil, nil},
+			cancelAt: -1,
+			want: model.GarbageDeletion{Deleted: []model.GarbageDeleted{
+				{Target: "a", Bytes: utils.New(int64(0))}, {Target: "b", Bytes: utils.New(int64(2))}, {Target: "c"},
+			}},
+		},
+		{
+			name:     "a failure the stop came with is interrupted",
+			errs:     []error{context.Canceled},
+			cancelAt: 0,
+			want: model.GarbageDeletion{
+				Failed: []model.GarbageDeleteFailure{{Target: "a", Error: "context canceled", Interrupted: true}},
+				NotRun: 2,
+			},
 		},
 		{
 			name:     "a run cancelled midway starts no further deletion",

@@ -38,8 +38,9 @@ var (
 		Use:   "gc",
 		Short: "Find and delete the garbage arcave leaves behind",
 		Long: `Find and delete what no live savepoint of the session keeps alive, in every compose project
-it holds. The layers of an image a run deletes go on the next run. Deduplicated volumes and
-restored layers are only reported for now.`,
+it holds, and the restored layer tags no container uses. The layers of an image a run deletes go
+on the next run. A removed savepoint's restic snapshots are forgotten and their repository pruned;
+a tag goes only once it is older than the restored layer grace.`,
 		Args: cobra.NoArgs,
 		RunE: runGC,
 	}

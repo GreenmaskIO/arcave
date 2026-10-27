@@ -18,13 +18,11 @@ import (
 	"context"
 
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/greenmaskio/storages/directory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -189,8 +187,10 @@ func TestInspector_EstimateForget(t *testing.T) {
 		runErr error
 		// wantRun is false when the ids are refused before restic runs.
 		wantRun bool
-		want    *int64
-		wantErr string
+		// wantArgs is forget of ids, then the dry run's flags, when nil.
+		wantArgs []string
+		want     *int64
+		wantErr  string
 	}{
 		{
 			name:    "the total prune line, in KiB as restic rounds it",
@@ -212,6 +212,13 @@ func TestInspector_EstimateForget(t *testing.T) {
 			stdout:  "total prune:           9 blobs / 1.500 MiB\n",
 			wantRun: true,
 			want:    utils.New(int64(1572864)),
+		},
+		{
+			name:     "no id estimates a prune alone",
+			stdout:   "total prune:           1 blobs / 245 B\n",
+			wantRun:  true,
+			wantArgs: []string{"prune", "--dry-run", "--no-lock"},
+			want:     utils.New(int64(245)),
 		},
 		{
 			name:    "no estimate when restic found no snapshot to forget",
@@ -238,7 +245,10 @@ func TestInspector_EstimateForget(t *testing.T) {
 			// Arrange
 			containers := &mockRunner{}
 			if tt.wantRun {
-				args := append(append([]string{"forget"}, tt.ids...), "--prune", "--dry-run", "--no-lock")
+				args := tt.wantArgs
+				if args == nil {
+					args = append(append([]string{"forget"}, tt.ids...), "--prune", "--dry-run", "--no-lock")
+				}
 				containers.On("RunOneShot", mock.Anything, matchInspection(args, false)).
 					Run(respondWithOutput(tt.stdout, tt.stderr)).Return(tt.runErr).Once()
 			}
@@ -255,49 +265,6 @@ func TestInspector_EstimateForget(t *testing.T) {
 			}
 			assert.Equal(t, tt.want, got)
 			containers.AssertExpectations(t)
-		})
-	}
-}
-
-func TestListRepositories(t *testing.T) {
-	tests := []struct {
-		name    string
-		objects []string
-		want    []string
-	}{
-		{
-			name: "one repository per directory under restic/",
-			objects: []string{
-				"restic/volume-named-db/config",
-				"restic/volume-named-cache/snapshots/" + forgottenSnapshot,
-				"019e843e-1650-7000-8000-000000000001/savepoint.json",
-			},
-			want: []string{"volume-named-cache", "volume-named-db"},
-		},
-		{
-			name:    "no restic/ at all",
-			objects: []string{"019e843e-1650-7000-8000-000000000001/savepoint.json"},
-			want:    []string{},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			root := t.TempDir()
-			for _, name := range tt.objects {
-				full := filepath.Join(root, filepath.FromSlash(name))
-				require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
-				require.NoError(t, os.WriteFile(full, []byte("x"), 0o644))
-			}
-			store, err := directory.NewStorage(directory.Config{RootPath: root})
-			require.NoError(t, err)
-
-			// Act
-			got, err := ListRepositories(context.Background(), store)
-
-			// Assert
-			require.NoError(t, err)
-			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
 }
