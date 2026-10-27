@@ -204,7 +204,7 @@ The revert runs on a context that ignores cancellation, with its own 10-minute b
 
 The safety snapshot is deleted when the rollback succeeds, and when a revert succeeds. It is **kept** when the revert itself fails — at that point it is the last copy of your pre-rollback state, and its id is printed.
 
-With the `cdc` backend the safety capture is an increment in the same per-volume repository, on the same host and the same path, which is exactly what restic picks a parent by. The undo therefore costs almost nothing.
+With the `cdc` backend the safety capture is an increment in the same per-volume repository, on the same host and the same path, which is exactly what restic picks a parent by. The undo therefore costs almost nothing. Deleting the safety snapshot leaves its restic snapshots in the repository, as `savepoint remove` does; [`arcave gc`](reference/cli/gc.md) forgets them and prunes what only they held.
 
 ## The interrupted-rollback marker
 

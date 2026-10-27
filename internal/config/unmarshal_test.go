@@ -91,17 +91,24 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
-			name: "gc defaults to no restored layer grace",
+			name: "gc holds back a restored layer tagged within the hour by default",
 			yaml: "project:\n  name: myapp\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Zero(t, cfg.GC.RestoredLayerGrace)
+				assert.Equal(t, utils.New(time.Hour), cfg.GC.RestoredLayerGrace)
+			},
+		},
+		{
+			name: "an explicit zero grace counts every restored layer",
+			yaml: "gc:\n  restored_layer_grace: 0s\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, utils.New(time.Duration(0)), cfg.GC.RestoredLayerGrace)
 			},
 		},
 		{
 			name: "the gc section is read",
 			yaml: "gc:\n  restored_layer_grace: 2h\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, 2*time.Hour, cfg.GC.RestoredLayerGrace)
+				assert.Equal(t, utils.New(2*time.Hour), cfg.GC.RestoredLayerGrace)
 			},
 		},
 		{

@@ -362,7 +362,7 @@ unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `gc.restored_layer_grace` | duration | `0` | How long ago an unused layer tag must have been tagged before [`arcave gc`](cli/gc.md) counts it as garbage. No other kind has a grace: gc judges by the savepoints' status, never by age. |
+| `gc.restored_layer_grace` | duration | `1h` | How long ago an unused layer tag must have been tagged before [`arcave gc`](cli/gc.md) counts it as garbage: a rollback in another checkout sharing `project.name` and the daemon may have just loaded it. `0` counts every unused tag. No other kind has a grace: gc judges by the savepoints' status, never by age. |
 `--restored-layer-grace` overrides it for one run. What gc looks at is not configured: it looks at every kind of data, and `--kind` narrows one run.
 
 ## `backends`

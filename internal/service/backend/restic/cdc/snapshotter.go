@@ -173,21 +173,10 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	return err
 }
 
-// Remove drops the capture's snapshot, server-side. A capture that reported no
-// payload has nothing to drop — the ordinary cleanup path of a failed create.
-func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
-	if err := req.SnapshotID.Validate(); err != nil {
-		return err
-	}
-	payload, err := DecodePayload(req.Payload)
-	if err != nil {
-		zerolog.Ctx(ctx).Debug().Err(err).Msg("nothing to remove: the capture reported no snapshot")
-		return nil
-	}
-	if payload.SnapshotObjectID == "" {
-		return nil
-	}
-	return s.repo.DeleteSnapshot(ctx, payload.SnapshotObjectID)
+// Remove leaves the capture's snapshot in place: tagged with a savepoint no record commits, it is
+// what arcave gc forgets, pruning the data it alone held.
+func (s *Snapshotter) Remove(_ context.Context, req model.BackendRemoveRequest) error {
+	return req.SnapshotID.Validate()
 }
 
 // openResticRunner clears whatever locks an earlier run orphaned and returns the runner
@@ -203,23 +192,12 @@ func (s *Snapshotter) openResticRunner(ctx context.Context) (runner, error) {
 	if err := s.repo.ClearLocks(ctx); err != nil {
 		return runner{}, err
 	}
-	return runner{
-		containers:  s.deps.Runner,
-		image:       s.deps.Options.Image,
-		repoURL:     s.repositoryURL(),
-		hostNetwork: s.deps.Options.HostNetwork,
-	}, nil
+	return s.newRunner()
 }
 
-// repositoryURL addresses this instance's repository on the data plane.
-func (s *Snapshotter) repositoryURL() string {
-	return newRepositoryURL(s.deps.RepoURLBase, s.volume.ObjectID)
-}
-
-// newRepositoryURL is base plus the repository's directory, objectID. The trailing
-// slash is the restic protocol's: without it restic talks to the wrong path.
-func newRepositoryURL(base, objectID string) string {
-	return base + "/" + objectID + "/"
+// newRunner is the runner to this instance's repository, without clearing its locks.
+func (s *Snapshotter) newRunner() (runner, error) {
+	return newRepositories(s.deps.Runner, s.deps.RepoURLBase, s.deps.Options).newRunner(s.volume.ObjectID)
 }
 
 // mountSource resolves what the restic container mounts to see the volume.

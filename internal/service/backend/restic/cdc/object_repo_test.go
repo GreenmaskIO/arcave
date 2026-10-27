@@ -111,56 +111,6 @@ func TestRepoAdmin_ClearLocks(t *testing.T) {
 	}
 }
 
-// Dropping a snapshot object is byte for byte what `restic forget <id>` does on
-// the wire, without the container and without the exclusive lock.
-func TestRepoAdmin_DeleteSnapshot(t *testing.T) {
-	tests := []struct {
-		name    string
-		id      string
-		want    []string
-		wantErr bool
-	}{
-		{name: "the named snapshot goes", id: "3f8a", want: []string{"0011"}},
-		{name: "one already gone is not an error", id: "deadbeef", want: []string{"0011", "3f8a"}},
-		// Nothing here judges the shape of a restic id — that is restic's contract.
-		// The delete is rooted at snapshots/, so an id that climbs out of it is
-		// refused by the store's own guard, config object and all.
-		{
-			name:    "an id that climbs out of snapshots/ is refused",
-			id:      "../config",
-			want:    []string{"0011", "3f8a"},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			store := newStore(t)
-			repo := objectRepo{store: store}
-			plant(t, repo, map[string]string{
-				"snapshots/3f8a": "one",
-				"snapshots/0011": "two",
-				configKey:        "restic-config",
-			})
-
-			// Act
-			err := repo.DeleteSnapshot(context.Background(), tt.id)
-
-			// Assert
-			if tt.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.ElementsMatch(t, tt.want, objectsUnder(t, store, snapshotsPath))
-			exists, err := store.Exists(context.Background(), configKey)
-			require.NoError(t, err)
-			assert.True(t, exists, "no id may reach an object other than a snapshot")
-		})
-	}
-}
-
 // plant writes the objects a repository is supposed to already hold.
 func plant(t *testing.T, repo objectRepo, objects map[string]string) {
 	t.Helper()

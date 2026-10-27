@@ -19,6 +19,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/docker/cli/cli/flags"
@@ -605,15 +607,27 @@ func TestNewObjectCollectors(t *testing.T) {
 }
 
 // Every action a gc deletes in a compose project's store has one eraser; forget and untag have none yet.
-func TestNewGarbageErasers(t *testing.T) {
+func TestNewDaemonErasers(t *testing.T) {
+	// Act
+	var got []model.GarbageAction
+	for _, eraser := range newDaemonErasers(nil) {
+		got = append(got, eraser.Action())
+	}
+
+	// Assert
+	assert.Equal(t, []model.GarbageAction{model.GarbageActionUntag}, got)
+}
+
+func TestNewComposeProjectErasers(t *testing.T) {
 	// Arrange
 	want := []model.GarbageAction{
 		model.GarbageActionDeleteTree, model.GarbageActionDeleteImage, model.GarbageActionDeleteObject,
+		model.GarbageActionForget,
 	}
 
 	// Act
 	var got []model.GarbageAction
-	for _, eraser := range newGarbageErasers() {
+	for _, eraser := range newComposeProjectErasers(config.Config{}, nil) {
 		got = append(got, eraser.Action())
 	}
 
@@ -671,12 +685,68 @@ func TestResticInspector_Close(t *testing.T) {
 	opener, store := newTestResticInspectorOpener(t)
 	inspector, err := opener.Open(ctx, store)
 	require.NoError(t, err)
-	address := inspector.(resticInspector).server.Listener.Addr().String()
+	listener := inspector.(resticInspector).server.Listener
 
 	// Act
 	inspector.Close(ctx)
 
+	// Assert: a dial could reach whatever took the freed port since.
+	_, err = listener.Accept()
+	assert.ErrorIs(t, err, net.ErrClosed, "nothing listens once closed")
+}
+
+// The pruner opener serves the compose project's repositories while the pruner is open.
+func TestResticPrunerOpener_Open(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	inspectorOpener, store := newTestResticInspectorOpener(t)
+	opener := resticPrunerOpener{cfg: inspectorOpener.cfg}
+
+	// Act
+	pruner, err := opener.Open(ctx, store)
+
 	// Assert
-	_, err = net.Dial("tcp", address)
-	assert.Error(t, err, "nothing listens once closed")
+	require.NoError(t, err)
+	t.Cleanup(func() { pruner.Close(ctx) })
+	conn, err := net.Dial("tcp", pruner.(resticPruner).server.Listener.Addr().String())
+	require.NoError(t, err, "the server listens")
+	assert.NoError(t, conn.Close())
+}
+
+// Close stops the server the open started.
+func TestResticPruner_Close(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	inspectorOpener, store := newTestResticInspectorOpener(t)
+	pruner, err := resticPrunerOpener{cfg: inspectorOpener.cfg}.Open(ctx, store)
+	require.NoError(t, err)
+	listener := pruner.(resticPruner).server.Listener
+
+	// Act
+	pruner.Close(ctx)
+
+	// Assert: a dial could reach whatever took the freed port since.
+	_, err = listener.Accept()
+	assert.ErrorIs(t, err, net.ErrClosed, "nothing listens once closed")
+}
+
+// The served repositories are the compose project store's restic/ namespace, as objects too: a
+// pruner clears the locks it finds there.
+func TestServeResticRepositories(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	opener, store := newTestResticInspectorOpener(t)
+	require.NoError(t, store.PutObject(ctx, "restic/volume-named-db/locks/a1", strings.NewReader("orphan")))
+
+	// Act
+	served, err := serveResticRepositories(ctx, opener.cfg, nil, store)
+
+	// Assert
+	require.NoError(t, err)
+	t.Cleanup(func() { shutdownResticServer(ctx, served.server) })
+	objects, err := served.root.List(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, objects, 1)
+	assert.Equal(t, "volume-named-db/locks/a1", objects[0].Name)
+	assert.Contains(t, served.repoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
 }

@@ -84,7 +84,9 @@ func TestFactory_New(t *testing.T) {
 			// One directory per volume, directly under the root — the very tree the
 			// server resolves a name against, so the two halves cannot diverge.
 			assert.Equal(t, root.GetCwd()+"/"+tt.volume.ObjectID, snapshotter.repo.store.GetCwd())
-			assert.Equal(t, demoRepoURLBase+"/"+tt.volume.ObjectID+"/", snapshotter.repositoryURL())
+			resticRunner, err := snapshotter.newRunner()
+			require.NoError(t, err)
+			assert.Equal(t, demoRepoURLBase+"/"+tt.volume.ObjectID+"/", resticRunner.repoURL)
 			assert.Equal(t, tt.wantMounted, snapshotter.mountPath)
 		})
 	}

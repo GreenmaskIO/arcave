@@ -188,9 +188,8 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	assert.Contains(t, env.logs.String(), "reverted to the pre-rollback state")
 
 	// A successful revert uncommits the backup, so nothing of it lists — not even
-	// with the flag — and its captures are gone: for cdc they were snapshots in the
-	// shared repository, dropped once the revert succeeded. The savepoint itself
-	// is untouched.
+	// with the flag. Its cdc snapshots stay in the shared repository for a gc to
+	// forget. The savepoint itself is untouched.
 	committed, err := env.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 	require.NoError(t, err)
 	require.Len(t, committed, 1)

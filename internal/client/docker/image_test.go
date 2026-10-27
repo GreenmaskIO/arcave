@@ -141,6 +141,41 @@ func TestEngine_RemoveImage_ReportsTheDaemonsRefusal(t *testing.T) {
 	api.AssertExpectations(t)
 }
 
+func TestEngine_RemoveImageRef(t *testing.T) {
+	const ref = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
+	refused := errors.New("image is being used by stopped container")
+	tests := []struct {
+		name      string
+		removeErr error
+		wantErr   error
+	}{
+		{name: "the reference goes"},
+		{name: "one already gone is not an error", removeErr: cerrdefs.ErrNotFound},
+		{name: "a reference a container uses is refused", removeErr: refused, wantErr: refused},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			api := &mockAPI{}
+			api.On("ImageRemove", mock.Anything, ref, image.RemoveOptions{PruneChildren: true}).
+				Return([]image.DeleteResponse{{Untagged: ref}}, tt.removeErr).Once()
+			e := &Engine{api: api}
+
+			// Act
+			err := e.RemoveImageRef(context.Background(), ref)
+
+			// Assert
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, "remove image reference "+ref)
+			} else {
+				assert.NoError(t, err)
+			}
+			api.AssertExpectations(t)
+		})
+	}
+}
+
 func TestEngine_LoadImage(t *testing.T) {
 	// Arrange
 	const archive = "save-archive-bytes"

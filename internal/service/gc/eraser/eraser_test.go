@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/utils/gctest"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -265,6 +266,224 @@ func TestObjectEraser_Erase(t *testing.T) {
 			// Assert
 			assert.Equal(t, tt.want, got)
 			store.AssertExpectations(t)
+		})
+	}
+}
+
+// ForgetEraser forgets each repository's snapshots in one run, in the order the repositories first
+// appear; what the prune freed is reclaimed, the snapshots themselves free nothing.
+func TestForgetEraser_Erase(t *testing.T) {
+	var (
+		snapshot      = strings.Repeat("a", 64)
+		otherSnapshot = strings.Repeat("b", 64)
+		cacheSnapshot = strings.Repeat("c", 64)
+		dbOp          = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", snapshot)}
+		cacheOp       = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-cache", cacheSnapshot)}
+		otherDBOp     = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", otherSnapshot)}
+		ops           = []model.GarbageOp{dbOp, cacheOp, otherDBOp}
+		zero          = utils.New(int64(0))
+	)
+	type forget struct {
+		objectID string
+		ids      []string
+		freed    *int64
+		err      error
+		// cancels cancels the run once this forget is done.
+		cancels bool
+	}
+
+	tests := []struct {
+		name    string
+		ops     []model.GarbageOp
+		openErr error
+		// forgets are the runs expected, in order.
+		forgets   []forget
+		cancelled bool
+		want      model.GarbageDeletion
+	}{
+		{
+			name: "one run per repository",
+			ops:  ops,
+			forgets: []forget{
+				{objectID: "volume-named-db", ids: []string{snapshot, otherSnapshot}, freed: utils.New(int64(7))},
+				{objectID: "volume-named-cache", ids: []string{cacheSnapshot}, freed: utils.New(int64(3))},
+			},
+			want: model.GarbageDeletion{
+				Deleted: []model.GarbageDeleted{
+					{Target: dbOp.Target, Bytes: zero}, {Target: otherDBOp.Target, Bytes: zero},
+					{Target: cacheOp.Target, Bytes: zero},
+				},
+				Reclaimed: []model.GarbageReclaimed{
+					{Target: "restic/volume-named-db", Bytes: utils.New(int64(7))},
+					{Target: "restic/volume-named-cache", Bytes: utils.New(int64(3))},
+				},
+			},
+		},
+		{
+			name: "a repository that fails fails its ops alone",
+			ops:  ops,
+			forgets: []forget{
+				{objectID: "volume-named-db", ids: []string{snapshot, otherSnapshot}, err: errors.New("repository is locked")},
+				{objectID: "volume-named-cache", ids: []string{cacheSnapshot}},
+			},
+			want: model.GarbageDeletion{
+				Deleted: []model.GarbageDeleted{{Target: cacheOp.Target, Bytes: zero}},
+				Failed: []model.GarbageDeleteFailure{
+					{Target: dbOp.Target, Error: "repository is locked"},
+					{Target: otherDBOp.Target, Error: "repository is locked"},
+				},
+				Reclaimed: []model.GarbageReclaimed{{Target: "restic/volume-named-cache"}},
+			},
+		},
+		{
+			name: "a target that is no snapshot key fails without a run",
+			ops:  []model.GarbageOp{{Action: model.GarbageActionForget, Target: "restic/volume-named-db/locks/x"}},
+			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{{
+				Target: "restic/volume-named-db/locks/x",
+				Error:  `"restic/volume-named-db/locks/x" is no restic snapshot key`,
+			}}},
+		},
+		{
+			name: "a target that is no snapshot key fails beside the repositories that run",
+			ops:  []model.GarbageOp{{Action: model.GarbageActionForget, Target: "restic/volume-named-db/locks/x"}, dbOp, cacheOp},
+			forgets: []forget{
+				{objectID: "volume-named-db", ids: []string{snapshot}, err: errors.New("repository is locked")},
+				{objectID: "volume-named-cache", ids: []string{cacheSnapshot}, freed: utils.New(int64(3))},
+			},
+			want: model.GarbageDeletion{
+				Deleted: []model.GarbageDeleted{{Target: cacheOp.Target, Bytes: zero}},
+				Failed: []model.GarbageDeleteFailure{
+					{Target: "restic/volume-named-db/locks/x", Error: `"restic/volume-named-db/locks/x" is no restic snapshot key`},
+					{Target: dbOp.Target, Error: "repository is locked"},
+				},
+				Reclaimed: []model.GarbageReclaimed{{Target: "restic/volume-named-cache", Bytes: utils.New(int64(3))}},
+			},
+		},
+		{
+			name: "a run cancelled between repositories leaves the rest not run",
+			ops:  ops,
+			forgets: []forget{
+				{objectID: "volume-named-db", ids: []string{snapshot, otherSnapshot}, freed: utils.New(int64(7)), cancels: true},
+			},
+			want: model.GarbageDeletion{
+				Deleted:   []model.GarbageDeleted{{Target: dbOp.Target, Bytes: zero}, {Target: otherDBOp.Target, Bytes: zero}},
+				NotRun:    1,
+				Reclaimed: []model.GarbageReclaimed{{Target: "restic/volume-named-db", Bytes: utils.New(int64(7))}},
+			},
+		},
+		{
+			name:    "repositories that cannot be opened fail every op",
+			ops:     []model.GarbageOp{cacheOp},
+			openErr: errors.New("port in use"),
+			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{
+				{Target: cacheOp.Target, Error: "open the restic repositories: port in use"},
+			}},
+		},
+		{
+			name:      "a cancelled run forgets nothing",
+			ops:       ops,
+			cancelled: true,
+			want:      model.GarbageDeletion{NotRun: 3},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancelled {
+				cancel()
+			}
+			store := &gctest.MockStore{}
+			pruner := &mockPruner{}
+			opener := &mockPrunerOpener{}
+			if tt.openErr != nil {
+				opener.On("Open", mock.Anything, store).Return(nil, tt.openErr).Once()
+			} else {
+				opener.On("Open", mock.Anything, store).Return(pruner, nil).Once()
+				var calls []*mock.Call
+				for _, forget := range tt.forgets {
+					call := pruner.On("Forget", mock.Anything, forget.objectID, forget.ids).Return(forget.freed, forget.err).Once()
+					if forget.cancels {
+						call.Run(func(mock.Arguments) { cancel() })
+					}
+					calls = append(calls, call)
+				}
+				calls = append(calls, pruner.On("Close", mock.Anything).Once())
+				mock.InOrder(calls...)
+			}
+
+			// Act
+			got := NewForgetEraser(opener).Erase(ctx, store, tt.ops)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+			opener.AssertExpectations(t)
+			pruner.AssertExpectations(t)
+		})
+	}
+}
+
+// TagEraser takes each tag off the daemon unforced; one a container uses fails alone.
+func TestTagEraser_Erase(t *testing.T) {
+	const (
+		ref      = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
+		otherRef = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000001"
+	)
+	ops := []model.GarbageOp{
+		{Action: model.GarbageActionUntag, Target: ref},
+		{Action: model.GarbageActionUntag, Target: otherRef},
+	}
+
+	tests := []struct {
+		name string
+		// errs is what removing each tag returns, one per op in order.
+		errs      []error
+		cancelled bool
+		want      model.GarbageDeletion
+	}{
+		{
+			name: "every tag goes",
+			errs: []error{nil, nil},
+			want: model.GarbageDeletion{Deleted: []model.GarbageDeleted{{Target: ref}, {Target: otherRef}}},
+		},
+		{
+			name: "a tag a container uses fails alone",
+			errs: []error{errors.New("image is being used by stopped container"), nil},
+			want: model.GarbageDeletion{
+				Deleted: []model.GarbageDeleted{{Target: otherRef}},
+				Failed:  []model.GarbageDeleteFailure{{Target: ref, Error: "image is being used by stopped container"}},
+			},
+		},
+		{
+			name:      "a cancelled run untags nothing",
+			cancelled: true,
+			want:      model.GarbageDeletion{NotRun: 2},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancelled {
+				cancel()
+			}
+			daemon := &mockTagRemover{}
+			var calls []*mock.Call
+			for i, err := range tt.errs {
+				calls = append(calls, daemon.On("RemoveImageRef", mock.Anything, model.ImageRef(ops[i].Target)).Return(err).Once())
+			}
+			if len(calls) > 1 {
+				mock.InOrder(calls...)
+			}
+
+			// Act
+			got := NewTagEraser(daemon).Erase(ctx, ops)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+			daemon.AssertExpectations(t)
 		})
 	}
 }

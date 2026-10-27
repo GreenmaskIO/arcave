@@ -139,13 +139,24 @@ func (m *mockComposeProjectProbeCollector) Probe(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
 
-// mockEraser doubles GarbageEraser.
+// mockEraser doubles ComposeProjectEraser.
 type mockEraser struct{ mock.Mock }
 
 func (m *mockEraser) Action() model.GarbageAction {
 	return m.Called().Get(0).(model.GarbageAction)
 }
 
-func (m *mockEraser) Erase(ctx context.Context, store storages.Deleter, ops []model.GarbageOp) model.GarbageDeletion {
+func (m *mockEraser) Erase(ctx context.Context, store storages.Storager, ops []model.GarbageOp) model.GarbageDeletion {
 	return m.Called(ctx, store, ops).Get(0).(model.GarbageDeletion)
+}
+
+// mockDaemonEraser doubles DaemonEraser.
+type mockDaemonEraser struct{ mock.Mock }
+
+func (m *mockDaemonEraser) Action() model.GarbageAction {
+	return m.Called().Get(0).(model.GarbageAction)
+}
+
+func (m *mockDaemonEraser) Erase(ctx context.Context, ops []model.GarbageOp) model.GarbageDeletion {
+	return m.Called(ctx, ops).Get(0).(model.GarbageDeletion)
 }

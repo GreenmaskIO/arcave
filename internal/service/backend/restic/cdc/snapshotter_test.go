@@ -251,7 +251,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 // path and no server object cross the seam. The trailing slash is the restic
 // protocol's, and its loss is the failure this test exists for: nothing would
 // report it, restic would simply talk to the wrong path.
-func TestSnapshotter_repositoryURL(t *testing.T) {
+func TestSnapshotter_newRunner(t *testing.T) {
 	// Arrange
 	backend, err := NewFactory(Dependencies{RepoURLBase: demoRepoURLBase, RepositoryRoot: newStore(t)}).
 		New(model.BackendSpec{Volume: demoVolume()})
@@ -260,9 +260,11 @@ func TestSnapshotter_repositoryURL(t *testing.T) {
 	require.True(t, ok)
 
 	// Act
-	got := snapshotter.repositoryURL()
+	resticRunner, err := snapshotter.newRunner()
 
 	// Assert
+	require.NoError(t, err)
+	got := resticRunner.repoURL
 	assert.Equal(t, demoRepoURL, got)
 	parsed, err := url.Parse(strings.TrimPrefix(got, "rest:"))
 	require.NoError(t, err)
@@ -355,59 +357,23 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	h.runner.AssertExpectations(t)
 }
 
-// Remove is server-side: dropping a snapshot object is byte for byte what
-// `restic forget <id>` does on the wire, so no container and no exclusive lock
-// are involved. A capture that reported nothing has nothing to drop.
+// Remove leaves the snapshot to a gc: nothing in the repository goes, and no container runs.
 func TestSnapshotter_Remove(t *testing.T) {
-	tests := []struct {
-		name        string
-		payload     any
-		wantDeleted bool
-	}{
-		{
-			name:        "a capture's snapshot is dropped",
-			payload:     Payload{SnapshotObjectID: "3f8a1c0d9b"},
-			wantDeleted: true,
-		},
-		{
-			name:    "a snapshot already gone is not an error",
-			payload: Payload{SnapshotObjectID: "deadbeef"},
-		},
-		{
-			name:    "a failed capture reported no payload, so there is nothing to drop",
-			payload: nil,
-		},
-		{
-			name:    "a payload naming no snapshot is likewise a no-op",
-			payload: Payload{},
-		},
-	}
+	// Arrange
+	h := newHarness(t, defaultOptions())
+	ctx := zerolog.Nop().WithContext(context.Background())
+	require.NoError(t, h.repo.PutObject(ctx, "snapshots/3f8a1c0d9b", strings.NewReader("snapshot")))
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			h := newHarness(t, defaultOptions())
-			ctx := zerolog.Nop().WithContext(context.Background())
-			require.NoError(t, h.repo.PutObject(ctx, "snapshots/3f8a1c0d9b", strings.NewReader("snapshot")))
-			require.NoError(t, h.repo.PutObject(ctx, "snapshots/0011", strings.NewReader("another")))
+	// Act
+	err := h.snapshotter.Remove(ctx, model.BackendRemoveRequest{
+		SnapshotID: "019e843e-1650-7000-8000-000000000000",
+		Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
+	})
 
-			// Act
-			err := h.snapshotter.Remove(ctx, model.BackendRemoveRequest{
-				SnapshotID: "019e843e-1650-7000-8000-000000000000",
-				Payload:    tt.payload,
-			})
-
-			// Assert
-			require.NoError(t, err)
-			remaining := objectsUnder(t, h.repo, snapshotsPath)
-			if tt.wantDeleted {
-				assert.Equal(t, []string{"0011"}, remaining, "only the named snapshot goes")
-			} else {
-				assert.ElementsMatch(t, []string{"0011", "3f8a1c0d9b"}, remaining)
-			}
-			h.runner.AssertExpectations(t)
-		})
-	}
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []string{"3f8a1c0d9b"}, objectsUnder(t, h.repo, snapshotsPath))
+	h.runner.AssertExpectations(t)
 }
 
 // A failure of the run reaches the caller with its cause: the operations are

@@ -15,35 +15,15 @@
 package cdc
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/greenmaskio/storages"
-	"github.com/rs/zerolog"
-
 	"github.com/greenmaskio/arcave/internal/model"
 )
-
-// totalPrunePattern is the line of a prune dry run naming what it would remove, as restic
-// 0.19.1 prints it: prune has no --json output, and forget --json suppresses it.
-var totalPrunePattern = regexp.MustCompile(`^total prune:\s+\d+ blobs / ([0-9.]+) (B|KiB|MiB|GiB|TiB)$`)
-
-// pruneUnits are the binary units restic formats a size in.
-var pruneUnits = map[string]float64{
-	"B":   1,
-	"KiB": 1 << 10,
-	"MiB": 1 << 20,
-	"GiB": 1 << 30,
-	"TiB": 1 << 40,
-}
 
 // Snapshot is one restic snapshot of a repository.
 type Snapshot struct {
@@ -63,23 +43,21 @@ type resticSnapshot struct {
 // Inspector reads repositories through restic, read-only: it takes no restic lock and clears none,
 // since a backup on another host may hold one.
 type Inspector struct {
-	runner      ContainerRunner
-	repoURLBase string
-	options     Options
+	repositories repositories
 }
 
 // NewInspector runs restic through runner against the repositories repoURLBase addresses.
 func NewInspector(runner ContainerRunner, repoURLBase string, options Options) *Inspector {
-	return &Inspector{
-		runner:      runner,
-		repoURLBase: repoURLBase,
-		options:     options,
-	}
+	return &Inspector{repositories: newRepositories(runner, repoURLBase, options)}
 }
 
 // ReadSnapshots lists the snapshots of objectID's repository.
 func (s *Inspector) ReadSnapshots(ctx context.Context, objectID string) ([]Snapshot, error) {
-	out, err := s.newRunner(objectID).output(ctx, resticCmd{args: []string{"snapshots", "--json", "--no-lock"}})
+	resticRunner, err := s.repositories.newRunner(objectID)
+	if err != nil {
+		return nil, err
+	}
+	out, err := resticRunner.output(ctx, resticCmd{args: []string{"snapshots", "--json", "--no-lock"}})
 	if err != nil {
 		return nil, err
 	}
@@ -89,54 +67,19 @@ func (s *Inspector) ReadSnapshots(ctx context.Context, objectID string) ([]Snaps
 // EstimateForget is what forgetting ids, then pruning, would free in objectID's repository; nil
 // when restic printed no estimate.
 func (s *Inspector) EstimateForget(ctx context.Context, objectID string, ids []string) (*int64, error) {
-	for _, id := range ids {
-		// An id is an argument: one that is not restic's could read as a flag.
-		if !isSnapshotID(id) {
-			return nil, fmt.Errorf("snapshot id %q is not a full restic id", id)
-		}
-	}
-	args := append([]string{"forget"}, ids...)
-	args = append(args, "--prune", "--dry-run", "--no-lock")
-	out, err := s.newRunner(objectID).output(ctx, resticCmd{args: args})
+	args, err := newForgetArgs(ids, "--prune", "--dry-run", "--no-lock")
 	if err != nil {
 		return nil, err
 	}
-	freed, found, err := parsePruneEstimate(out)
+	resticRunner, err := s.repositories.newRunner(objectID)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		zerolog.Ctx(ctx).Warn().Str("repository", objectID).Msg("restic printed no prune estimate")
-		return nil, nil
-	}
-	return &freed, nil
-}
-
-// ListRepositories names the repositories of a compose project store, one per volume's ObjectID.
-func ListRepositories(ctx context.Context, store storages.Navigator) ([]string, error) {
-	root, err := store.SubStorage(NamespaceRepos, true)
+	out, err := resticRunner.output(ctx, resticCmd{args: args})
 	if err != nil {
-		return nil, fmt.Errorf("re-root store at %s: %w", NamespaceRepos, err)
+		return nil, err
 	}
-	_, dirs, err := root.ListDir(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list %s: %w", NamespaceRepos, err)
-	}
-	repos := make([]string, 0, len(dirs))
-	for _, dir := range dirs {
-		repos = append(repos, dir.Dirname())
-	}
-	return repos, nil
-}
-
-// newRunner is a runner to objectID's repository, without clearing its locks.
-func (s *Inspector) newRunner(objectID string) runner {
-	return runner{
-		containers:  s.runner,
-		image:       s.options.Image,
-		repoURL:     newRepositoryURL(s.repoURLBase, objectID),
-		hostNetwork: s.options.HostNetwork,
-	}
+	return readPruneTotal(ctx, out, objectID)
 }
 
 // parseSnapshots reads snapshots --json, an array, into snapshots.
@@ -165,33 +108,4 @@ func parseSavepointTag(tags []string) model.SavepointID {
 		}
 	}
 	return ""
-}
-
-// isSnapshotID reports whether id is a full restic id: 64 lowercase hex digits.
-func isSnapshotID(id string) bool {
-	if len(id) != 64 {
-		return false
-	}
-	return strings.Trim(id, "0123456789abcdef") == ""
-}
-
-// parsePruneEstimate reads the bytes a prune dry run's total line names, rounded as restic
-// printed them; found is false when out holds no such line.
-func parsePruneEstimate(out []byte) (freed int64, found bool, err error) {
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		match := totalPrunePattern.FindStringSubmatch(strings.TrimSpace(scanner.Text()))
-		if match == nil {
-			continue
-		}
-		size, err := strconv.ParseFloat(match[1], 64)
-		if err != nil {
-			return 0, false, fmt.Errorf("parse prune estimate %q: %w", match[0], err)
-		}
-		return int64(math.Round(size * pruneUnits[match[2]])), true, nil
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, false, fmt.Errorf("read prune output: %w", err)
-	}
-	return 0, false, nil
 }

@@ -18,7 +18,6 @@ package resticrepo
 import (
 	"context"
 	"fmt"
-	"path"
 	"time"
 
 	"github.com/greenmaskio/storages"
@@ -105,7 +104,7 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 		unattributed             int
 	)
 	for _, repo := range repos {
-		key := path.Join(cdc.NamespaceRepos, repo)
+		key := cdc.NewRepositoryKey(repo)
 		snapshots, err := inspector.ReadSnapshots(ctx, repo)
 		if err != nil {
 			unjudged = append(unjudged, model.GarbageSkip{
@@ -115,7 +114,7 @@ func (s *Collector) Find(ctx context.Context, scope gc.ComposeProjectScope) (mod
 			})
 			continue
 		}
-		verdict := judgeSnapshots(committed, key, snapshots)
+		verdict := judgeSnapshots(committed, repo, snapshots)
 		ops = append(ops, verdict.ops...)
 		liveSnapshots += verdict.live
 		unattributed += verdict.unattributed
@@ -159,8 +158,8 @@ type repoVerdict struct {
 	dead               []string
 }
 
-// judgeSnapshots judges every snapshot of the repository at key by its savepoint.
-func judgeSnapshots(committed map[model.SavepointID]bool, key string, snapshots []cdc.Snapshot) repoVerdict {
+// judgeSnapshots judges every snapshot of repo by its savepoint.
+func judgeSnapshots(committed map[model.SavepointID]bool, repo string, snapshots []cdc.Snapshot) repoVerdict {
 	var (
 		live, unattributed int
 		ops                []model.GarbageOp
@@ -176,7 +175,7 @@ func judgeSnapshots(committed map[model.SavepointID]bool, key string, snapshots 
 			dead = append(dead, snapshot.ID)
 			ops = append(ops, model.GarbageOp{
 				Action:       model.GarbageActionForget,
-				Target:       path.Join(key, "snapshots", snapshot.ID),
+				Target:       cdc.NewSnapshotKey(repo, snapshot.ID),
 				Reason:       model.GarbageReasonDeadCapture,
 				LastModified: snapshot.Time,
 				Savepoint:    snapshot.Savepoint,

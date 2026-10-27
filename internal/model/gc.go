@@ -341,9 +341,11 @@ type GarbageDeletion struct {
 	Failed  []GarbageDeleteFailure `json:"failed,omitempty"`
 	// NotRun counts the ops no deletion was started for: the run was cancelled or lost its lock.
 	NotRun int `json:"not_run"`
+	// Reclaimed is what deletions freed beyond their ops' own sizes: a restic prune per repository.
+	Reclaimed []GarbageReclaimed `json:"reclaimed,omitempty"`
 }
 
-// FreedBytes sums the deleted ops' sizes; nil when any is unknown.
+// FreedBytes sums the deleted ops' sizes and what was reclaimed; nil when any is unknown.
 func (m GarbageDeletion) FreedBytes() *int64 {
 	var bytes int64
 	for _, deleted := range m.Deleted {
@@ -352,7 +354,20 @@ func (m GarbageDeletion) FreedBytes() *int64 {
 		}
 		bytes += *deleted.Bytes
 	}
+	for _, reclaimed := range m.Reclaimed {
+		if reclaimed.Bytes == nil {
+			return nil
+		}
+		bytes += *reclaimed.Bytes
+	}
 	return &bytes
+}
+
+// GarbageReclaimed is what one deletion over several ops freed, a restic repository's prune.
+type GarbageReclaimed struct {
+	Target string `json:"target"`
+	// Bytes is nil when not known.
+	Bytes *int64 `json:"bytes"`
 }
 
 // GarbageDeleted is one op's target, deleted or found already gone.

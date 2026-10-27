@@ -66,6 +66,6 @@ func (m garbageFound) reports() []model.GarbageReport {
 // collectors' reports, in their order.
 type composeProjectGarbage struct {
 	scope   ComposeProjectScope
-	store   storages.Deleter
+	store   storages.Storager
 	reports []model.GarbageReport
 }

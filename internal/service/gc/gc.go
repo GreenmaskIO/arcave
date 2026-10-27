@@ -62,8 +62,10 @@ type Deps struct {
 	// DaemonCollectors and ComposeProjectCollectors are one per kind, in the order they run.
 	DaemonCollectors         []DaemonCollector
 	ComposeProjectCollectors []ComposeProjectCollector
-	// Erasers are one per action a gc carries out; an action none carries out is only reported.
-	Erasers []GarbageEraser
+	// DaemonErasers and ComposeProjectErasers are one per action a gc carries out at their level;
+	// an action none carries out is only reported.
+	DaemonErasers         []DaemonEraser
+	ComposeProjectErasers []ComposeProjectEraser
 	// RestoredLayerGrace is the restored layer grace of a request naming none.
 	RestoredLayerGrace time.Duration
 	// UnlistedNamespaces are the top-level directories of a compose project store its scope's
@@ -106,7 +108,7 @@ func New(deps Deps) *GarbageCollector {
 		inflight:                 deps.Inflight,
 		daemonCollectors:         deps.DaemonCollectors,
 		composeProjectCollectors: deps.ComposeProjectCollectors,
-		erasers:                  newEraserSet(deps.Erasers),
+		erasers:                  newEraserSet(deps.DaemonErasers, deps.ComposeProjectErasers),
 		unlisted:                 deps.UnlistedNamespaces,
 		grace:                    deps.RestoredLayerGrace,
 		now:                      now,

@@ -150,6 +150,10 @@ const (
 // moves at once.
 const DefaultConcurrency = 5
 
+// DefaultRestoredLayerGrace holds back a layer tag a rollback in another project directory sharing
+// the arcave project may have just put on, under a lock this one's gc cannot see.
+const DefaultRestoredLayerGrace = time.Hour
+
 // The tokens rollback.leftover_volumes accepts.
 const (
 	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
@@ -369,15 +373,15 @@ func (r Rollback) Policy() model.LeftoverVolumesPolicy {
 // GC configures garbage collection: how long a layer tag no container uses is held back.
 // What a gc looks for is the invocation's to narrow, never the config's.
 type GC struct {
-	// RestoredLayerGrace is how old an unused layer tag must be before it counts as garbage; 0, the
-	// default, counts every one.
-	RestoredLayerGrace time.Duration `yaml:"restored_layer_grace" mapstructure:"restored_layer_grace"`
+	// RestoredLayerGrace is how old an unused layer tag must be before it counts as garbage;
+	// DefaultRestoredLayerGrace when unset, while 0 counts every one.
+	RestoredLayerGrace *time.Duration `yaml:"restored_layer_grace" mapstructure:"restored_layer_grace"`
 }
 
 // Validate rejects a negative restored layer grace.
 func (g GC) Validate() error {
-	if g.RestoredLayerGrace < 0 {
-		return fmt.Errorf("%w: gc.restored_layer_grace %s is negative", ErrInvalid, g.RestoredLayerGrace)
+	if grace := utils.Value(g.RestoredLayerGrace); grace < 0 {
+		return fmt.Errorf("%w: gc.restored_layer_grace %s is negative", ErrInvalid, grace)
 	}
 	return nil
 }
@@ -534,6 +538,9 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	}
 	if c.Rollback.LeftoverVolumes == "" {
 		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
+	}
+	if c.GC.RestoredLayerGrace == nil {
+		c.GC.RestoredLayerGrace = utils.New(DefaultRestoredLayerGrace)
 	}
 	c.applyCDCDefaults()
 }

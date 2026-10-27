@@ -18,13 +18,11 @@ import (
 	"context"
 
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/greenmaskio/storages/directory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -255,49 +253,6 @@ func TestInspector_EstimateForget(t *testing.T) {
 			}
 			assert.Equal(t, tt.want, got)
 			containers.AssertExpectations(t)
-		})
-	}
-}
-
-func TestListRepositories(t *testing.T) {
-	tests := []struct {
-		name    string
-		objects []string
-		want    []string
-	}{
-		{
-			name: "one repository per directory under restic/",
-			objects: []string{
-				"restic/volume-named-db/config",
-				"restic/volume-named-cache/snapshots/" + forgottenSnapshot,
-				"019e843e-1650-7000-8000-000000000001/savepoint.json",
-			},
-			want: []string{"volume-named-cache", "volume-named-db"},
-		},
-		{
-			name:    "no restic/ at all",
-			objects: []string{"019e843e-1650-7000-8000-000000000001/savepoint.json"},
-			want:    []string{},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			root := t.TempDir()
-			for _, name := range tt.objects {
-				full := filepath.Join(root, filepath.FromSlash(name))
-				require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
-				require.NoError(t, os.WriteFile(full, []byte("x"), 0o644))
-			}
-			store, err := directory.NewStorage(directory.Config{RootPath: root})
-			require.NoError(t, err)
-
-			// Act
-			got, err := ListRepositories(context.Background(), store)
-
-			// Assert
-			require.NoError(t, err)
-			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
 }

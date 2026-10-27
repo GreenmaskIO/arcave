@@ -87,6 +87,17 @@ func (e *Engine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) e
 	return nil
 }
 
+// RemoveImageRef takes one reference off the daemon, the image with it once no other names it, as
+// docker rmi does. Not forced, so a reference a container was created from is refused; one already
+// gone is not an error.
+func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
+	_, err := e.api.ImageRemove(ctx, string(ref), image.RemoveOptions{PruneChildren: true})
+	if err != nil && !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("remove image reference %s: %w", ref, err)
+	}
+	return nil
+}
+
 // LoadImage loads one save archive back into the daemon; the response body is read
 // to the end, since an unread one can leave the load unfinished. It reports no id:
 // the archive was saved off a known image, which the caller confirms with ImageExists.
