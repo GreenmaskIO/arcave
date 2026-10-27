@@ -64,10 +64,10 @@ func (s *Inspector) ReadSnapshots(ctx context.Context, objectID string) ([]Snaps
 	return parseSnapshots(out)
 }
 
-// EstimateForget is what forgetting ids, then pruning, would free in objectID's repository; nil
-// when restic printed no estimate.
+// EstimateForget is what forgetting ids, then pruning, would free in objectID's repository, what
+// a prune alone would when ids is empty; nil when restic printed no estimate.
 func (s *Inspector) EstimateForget(ctx context.Context, objectID string, ids []string) (*int64, error) {
-	args, err := newForgetArgs(ids, "--prune", "--dry-run", "--no-lock")
+	args, err := newPruneArgs(ids, "--dry-run", "--no-lock")
 	if err != nil {
 		return nil, err
 	}

@@ -37,10 +37,10 @@ func NewPruner(runner ContainerRunner, store storages.Navigator, repoURLBase str
 	}
 }
 
-// Forget forgets ids in objectID's repository and prunes it; it returns what the prune freed, nil
-// when restic printed no total.
+// Forget forgets ids in objectID's repository and prunes it, or only prunes it when ids is empty;
+// it returns what the prune freed, nil when restic printed no total.
 func (s *Pruner) Forget(ctx context.Context, objectID string, ids []string) (*int64, error) {
-	args, err := newForgetArgs(ids, "--prune")
+	args, err := newPruneArgs(ids)
 	if err != nil {
 		return nil, err
 	}

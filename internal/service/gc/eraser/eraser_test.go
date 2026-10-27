@@ -17,7 +17,9 @@ package eraser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/greenmaskio/storages"
@@ -270,8 +272,9 @@ func TestObjectEraser_Erase(t *testing.T) {
 	}
 }
 
-// ForgetEraser forgets each repository's snapshots in one run, in the order the repositories first
-// appear; what the prune freed is reclaimed, the snapshots themselves free nothing.
+// ForgetEraser forgets each repository's snapshots in one run, one repository at a time in the order
+// each first appears under a concurrency of 1; what the prune freed is reclaimed, the snapshots
+// themselves free nothing.
 func TestForgetEraser_Erase(t *testing.T) {
 	var (
 		snapshot      = strings.Repeat("a", 64)
@@ -280,6 +283,7 @@ func TestForgetEraser_Erase(t *testing.T) {
 		dbOp          = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", snapshot)}
 		cacheOp       = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-cache", cacheSnapshot)}
 		otherDBOp     = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", otherSnapshot)}
+		pruneOp       = model.GarbageOp{Action: model.GarbageActionForget, Target: cdc.NewRepositoryKey("volume-named-logs")}
 		ops           = []model.GarbageOp{dbOp, cacheOp, otherDBOp}
 		zero          = utils.New(int64(0))
 	)
@@ -334,6 +338,25 @@ func TestForgetEraser_Erase(t *testing.T) {
 				},
 				Reclaimed: []model.GarbageReclaimed{{Target: "restic/volume-named-cache"}},
 			},
+		},
+		{
+			name:    "a repository's key prunes it alone",
+			ops:     []model.GarbageOp{pruneOp},
+			forgets: []forget{{objectID: "volume-named-logs", freed: utils.New(int64(5))}},
+			want: model.GarbageDeletion{
+				Deleted:   []model.GarbageDeleted{{Target: pruneOp.Target, Bytes: zero}},
+				Reclaimed: []model.GarbageReclaimed{{Target: "restic/volume-named-logs", Bytes: utils.New(int64(5))}},
+			},
+		},
+		{
+			name: "a repository the stop cuts short fails interrupted",
+			ops:  []model.GarbageOp{cacheOp},
+			forgets: []forget{
+				{objectID: "volume-named-cache", ids: []string{cacheSnapshot}, err: context.Canceled, cancels: true},
+			},
+			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{
+				{Target: cacheOp.Target, Error: "context canceled", Interrupted: true},
+			}},
 		},
 		{
 			name: "a target that is no snapshot key fails without a run",
@@ -414,7 +437,7 @@ func TestForgetEraser_Erase(t *testing.T) {
 			}
 
 			// Act
-			got := NewForgetEraser(opener).Erase(ctx, store, tt.ops)
+			got := NewForgetEraser(opener, 1).Erase(ctx, store, tt.ops)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -422,6 +445,45 @@ func TestForgetEraser_Erase(t *testing.T) {
 			pruner.AssertExpectations(t)
 		})
 	}
+}
+
+// ForgetEraser runs up to its concurrency of repositories at once: each forget here waits for the
+// other to start.
+func TestForgetEraser_Erase_concurrent(t *testing.T) {
+	// Arrange
+	var (
+		dbSnapshot    = strings.Repeat("a", 64)
+		cacheSnapshot = strings.Repeat("c", 64)
+		ops           = []model.GarbageOp{
+			{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", dbSnapshot)},
+			{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-cache", cacheSnapshot)},
+		}
+		started sync.WaitGroup
+	)
+	started.Add(2)
+	store := &gctest.MockStore{}
+	pruner := &mockPruner{}
+	opener := &mockPrunerOpener{}
+	opener.On("Open", mock.Anything, store).Return(pruner, nil).Once()
+	meet := func(mock.Arguments) {
+		started.Done()
+		started.Wait()
+	}
+	pruner.On("Forget", mock.Anything, "volume-named-db", []string{dbSnapshot}).Run(meet).Return(utils.New(int64(1)), nil).Once()
+	pruner.On("Forget", mock.Anything, "volume-named-cache", []string{cacheSnapshot}).Run(meet).Return(utils.New(int64(2)), nil).Once()
+	pruner.On("Close", mock.Anything).Once()
+
+	// Act
+	got := NewForgetEraser(opener, 2).Erase(context.Background(), store, ops)
+
+	// Assert
+	assert.Len(t, got.Deleted, 2)
+	assert.Equal(t, []model.GarbageReclaimed{
+		{Target: "restic/volume-named-db", Bytes: utils.New(int64(1))},
+		{Target: "restic/volume-named-cache", Bytes: utils.New(int64(2))},
+	}, got.Reclaimed, "assembled in the order the repositories first appear")
+	opener.AssertExpectations(t)
+	pruner.AssertExpectations(t)
 }
 
 // TagEraser takes each tag off the daemon unforced; one a container uses fails alone.
@@ -454,6 +516,13 @@ func TestTagEraser_Erase(t *testing.T) {
 				Deleted: []model.GarbageDeleted{{Target: otherRef}},
 				Failed:  []model.GarbageDeleteFailure{{Target: ref, Error: "image is being used by stopped container"}},
 			},
+		},
+		{
+			name: "a tag already gone frees nothing",
+			errs: []error{fmt.Errorf("remove image reference: %w", model.ErrImageRefNotFound), nil},
+			want: model.GarbageDeletion{Deleted: []model.GarbageDeleted{
+				{Target: ref, Bytes: utils.New(int64(0))}, {Target: otherRef},
+			}},
 		},
 		{
 			name:      "a cancelled run untags nothing",

@@ -178,6 +178,34 @@ func TestGarbageReport_JSON(t *testing.T) {
 	}`, string(got))
 }
 
+func TestGarbageDeletion_IsInterrupted(t *testing.T) {
+	tests := []struct {
+		name     string
+		deletion GarbageDeletion
+		want     bool
+	}{
+		{name: "every op deleted", deletion: GarbageDeletion{Deleted: []GarbageDeleted{{Target: "a"}}}},
+		{name: "a failure of its own", deletion: GarbageDeletion{Failed: []GarbageDeleteFailure{{Target: "a"}}}},
+		{name: "an op not run", deletion: GarbageDeletion{NotRun: 1}, want: true},
+		{
+			name: "a failure the stop cut short",
+			deletion: GarbageDeletion{Failed: []GarbageDeleteFailure{
+				{Target: "a"}, {Target: "b", Interrupted: true},
+			}},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := tt.deletion.IsInterrupted()
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestGarbageDeletion_FreedBytes(t *testing.T) {
 	size := func(n int64) *int64 { return &n }
 	tests := []struct {

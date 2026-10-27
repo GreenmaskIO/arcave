@@ -44,8 +44,10 @@ func TestPruner_Forget(t *testing.T) {
 		runErr   error
 		// wantRun is false when the ids are refused before anything is touched.
 		wantRun bool
-		want    *int64
-		wantErr string
+		// wantArgs is forget of ids, then --prune, when nil.
+		wantArgs []string
+		want     *int64
+		wantErr  string
 	}{
 		{
 			name:    "the total line of a real prune",
@@ -59,6 +61,13 @@ func TestPruner_Forget(t *testing.T) {
 			ids:     []string{forgottenSnapshot},
 			stdout:  "done\n",
 			wantRun: true,
+		},
+		{
+			name:     "no id only prunes",
+			stdout:   "total prune:           3 blobs / 2.000 KiB\n",
+			wantRun:  true,
+			wantArgs: []string{"prune"},
+			want:     utils.New(int64(2048)),
 		},
 		{
 			name:    "a failed run, by restic's own diagnosis",
@@ -91,7 +100,10 @@ func TestPruner_Forget(t *testing.T) {
 			require.NoError(t, repo.PutObject(ctx, "locks/a1b2", strings.NewReader("orphan")))
 			containers := &mockRunner{}
 			if tt.wantRun {
-				args := append(append([]string{"forget"}, tt.ids...), "--prune")
+				args := tt.wantArgs
+				if args == nil {
+					args = append(append([]string{"forget"}, tt.ids...), "--prune")
+				}
 				containers.On("RunOneShot", mock.Anything, matchInspection(args, false)).
 					Run(func(args mock.Arguments) {
 						assert.Empty(t, objectsUnder(t, repo, locksPrefix), "the locks go before restic runs")

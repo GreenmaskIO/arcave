@@ -74,6 +74,35 @@ func TestListRepositories(t *testing.T) {
 	}
 }
 
+func TestParseRepositoryKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		want    string
+		wantErr bool
+	}{
+		{name: "a key NewRepositoryKey built", key: NewRepositoryKey(demoObjectID), want: demoObjectID},
+		{name: "another namespace", key: "shared/" + demoObjectID, wantErr: true},
+		{name: "a snapshot key", key: NewSnapshotKey(demoObjectID, forgottenSnapshot), wantErr: true},
+		{name: "the repositories' root itself", key: "restic/", wantErr: true},
+		{name: "a repository climbing out", key: "restic/..", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got, err := ParseRepositoryKey(tt.key)
+
+			// Assert
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestParseSnapshotKey(t *testing.T) {
 	tests := []struct {
 		name         string

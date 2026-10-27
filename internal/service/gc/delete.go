@@ -107,7 +107,7 @@ func (e eraserSet) deleteGarbage(
 }
 
 // deleteFindings deletes what each report found, in order, through erase, stopping the run once a
-// Verify refuses; stopped is whether the stop cut any op short, left not run or failed.
+// Verify refuses; stopped is whether the stop cut any op short, left not run or failed interrupted.
 func deleteFindings[E GarbageEraser](
 	ctx context.Context, stop context.CancelCauseFunc, grantedLock model.GrantedSessionLock,
 	reports []model.GarbageReport, erasers map[model.GarbageAction]E,
@@ -119,8 +119,7 @@ func deleteFindings[E GarbageEraser](
 		if err != nil {
 			stop(err)
 		}
-		// An op cut short by the stop fails rather than goes not run.
-		stopped = stopped || deletion != nil && (deletion.NotRun > 0 || len(deletion.Failed) > 0 && ctx.Err() != nil)
+		stopped = stopped || deletion != nil && deletion.IsInterrupted()
 		deleted = append(deleted, withDeletion(report, deletion))
 	}
 	return deleted, stopped
@@ -177,7 +176,7 @@ func findEraser[E GarbageEraser](erasers map[model.GarbageAction]E, ops []model.
 }
 
 // DeleteOps runs del on each op in order until ctx is done; a target already gone counts as
-// deleted, freeing nothing.
+// deleted, freeing nothing, and a failure ctx's end came with is interrupted.
 func DeleteOps(
 	ctx context.Context, ops []model.GarbageOp, del func(ctx context.Context, op model.GarbageOp) error,
 ) model.GarbageDeletion {
@@ -192,7 +191,7 @@ func DeleteOps(
 			break
 		}
 		switch err := del(ctx, op); {
-		case errors.Is(err, storages.ErrFileNotFound):
+		case errors.Is(err, storages.ErrFileNotFound), errors.Is(err, model.ErrImageRefNotFound):
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  new(int64),
@@ -200,8 +199,9 @@ func DeleteOps(
 		case err != nil:
 			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
 			failed = append(failed, model.GarbageDeleteFailure{
-				Target: op.Target,
-				Error:  err.Error(),
+				Target:      op.Target,
+				Error:       err.Error(),
+				Interrupted: ctx.Err() != nil,
 			})
 		default:
 			deleted = append(deleted, model.GarbageDeleted{

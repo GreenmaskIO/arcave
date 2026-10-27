@@ -763,7 +763,7 @@ func newComposeProjectErasers(cfg config.Config, engine *docker.Engine) []gc.Com
 		eraser.NewForgetEraser(resticPrunerOpener{
 			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
 			engine: engine,
-		}),
+		}, cfg.Common.Concurrency),
 	}
 }
 

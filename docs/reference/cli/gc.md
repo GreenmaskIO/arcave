@@ -44,7 +44,7 @@ gc looks for five kinds of data. A savepoint's record is the root that keeps dat
 | Kind | What it is | Garbage when |
 |---|---|---|
 | `savepoint-data` | A savepoint's own directory: its record, its compose spec, the volumes the `fullcopy` backend streamed, and its writable layers' archives and manifests. No other savepoint shares it. | The directory has no `savepoint.json`. A failed or interrupted create leaves one, and so does a remove. |
-| `deduplicated-volumes` | A snapshot in a `cdc` backend's restic repository, which shares its data across savepoints. | The savepoint the snapshot's `arcave-savepoint` tag names has no record. `savepoint remove` leaves a `cdc` savepoint's snapshots in place for gc to forget. |
+| `deduplicated-volumes` | A snapshot in a `cdc` backend's restic repository, which shares its data across savepoints, or data in a repository that no snapshot uses. | The savepoint the snapshot's `arcave-savepoint` tag names has no record. `savepoint remove` leaves a `cdc` savepoint's snapshots in place for gc to forget. A repository with no dead snapshot is pruned when restic's prune dry run says the prune would free something (`unpruned-data`): the data an earlier prune that was cut short left behind. |
 | `image-layers` | The layers and configs of stored images, shared by writable layers and upstream images alike. | No manifest still stored lists it. |
 | `upstream-images` | An image a service's `image:` names, stored once for every savepoint; its layers are `image-layers`. | No savepoint names it. |
 | `restored-layers` | A writable layer a rollback restored into the Docker daemon, tagged `arcave/…:sp-<id>`. | No container uses it, by reference or by image, running or stopped, and it was tagged longer ago than `--restored-layer-grace` (`1h` by default). Only layers this arcave project committed for a compose project of the session are judged. |
@@ -69,11 +69,11 @@ A session directory without `session.json`, which a failed fork leaves, belongs 
 
 gc first looks with every collector, at the daemon and at every compose project, then deletes what they found: the daemon's layer tags first, then one compose project after the other. Every finding is made before anything is deleted: the `image-layers` finding is read off the very manifests deleting a tree or an image removes. Deletion runs in a fixed order:
 
-1. `restored-layers`: each unused tag, taken off the daemon one at a time, never forced. The image goes with its last tag. A tag a container was created from since gc found it is refused by Docker and listed under `deletion.failed`.
+1. `restored-layers`: each unused tag, taken off the daemon one at a time, never forced. The image goes with its last tag. A tag whose image a container was created from since gc found it is refused, even when another tag names the same image, and listed under `deletion.failed`.
 2. `savepoint-data`: each dead savepoint's directory, whole.
 3. `upstream-images`: each unused image's directory, its manifest first. A deletion cut short then leaves no manifest that a capture would take for the image stored; the next gc deletes what is left of the directory.
 4. `image-layers`: each blob, one at a time.
-5. `deduplicated-volumes`: one restic run per repository. gc clears the repository's stale locks, then runs `restic forget <snapshots> --prune`, which takes restic's own lock. A repository whose run fails fails each of its snapshots.
+5. `deduplicated-volumes`: one restic run per repository, up to `common.concurrency` repositories at once. gc clears the repository's stale locks, then runs `restic forget <snapshots> --prune`, or `restic prune` for a repository with nothing to forget. Either takes restic's own lock. A repository whose run fails fails each of its ops.
 
 gc deletes exactly the ops the report lists, by their `target`. A target already gone counts as deleted. A target it fails to delete is listed under the report's `deletion.failed`, and gc goes on with the next one. Before each kind, in each compose project, it checks that it still holds the session's lock. A check that fails stops every deletion after it, which is counted under `not_run`. A report whose kind was aborted or failed deletes nothing. An object left unjudged doesn't keep the kind's ops from being deleted.
 
@@ -89,7 +89,7 @@ gc refuses to delete while an interrupted rollback is marked in `.arcave/infligh
 
 ## Output
 
-stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions gc takes, or under `--dry-run` would take. An op's `action` is what deleting its target takes: `delete-tree` (a savepoint's directory), `delete-image` (a stored image, its manifest first), `delete-object` (a blob), `forget` (a `cdc` snapshot) or `untag` (a restored layer's tag). A run that deletes adds each report's `deletion`: what deleting those ops did. A dry run and a report that was aborted or failed carry none; a report that found nothing carries an empty one.
+stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions gc takes, or under `--dry-run` would take. An op's `action` is what deleting its target takes: `delete-tree` (a savepoint's directory), `delete-image` (a stored image, its manifest first), `delete-object` (a blob), `forget` (a `cdc` snapshot, or a `cdc` repository to prune) or `untag` (a restored layer's tag). A run that deletes adds each report's `deletion`: what deleting those ops did. A dry run and a report that was aborted or failed carry none; a report that found nothing carries an empty one.
 
 ```json title="stdout"
 {
@@ -131,7 +131,7 @@ stdout carries one report per collector for each compose project of the session,
 | Field | Meaning |
 |---|---|
 | `deletion.deleted` | Each op deleted, or found already gone, with the `bytes` deleting it freed: `0` for one already gone. Left out when there is none. |
-| `deletion.failed` | Each op gc failed to delete, with the error. Left out when there is none. |
+| `deletion.failed` | Each op gc failed to delete, with the error. `interrupted` is `true` when gc was stopping while it deleted the op, which may then be partly deleted. Left out when there is none. |
 | `deletion.not_run` | How many ops gc started no deletion for: it was interrupted, or no longer held the session's lock. |
 | `deletion.reclaimed` | What a deletion freed beyond its ops' own sizes: each `cdc` repository pruned, as `target`, with the `bytes` restic's prune reports, `null` when it printed none. A forgotten snapshot's own `bytes` under `deletion.deleted` is `0`. Left out when there is none. |
 | `total.deleted`, `total.delete_failed`, `total.not_run` | The reports' deletions added up. Left out when zero, and always in a dry run. |
@@ -139,7 +139,7 @@ stdout carries one report per collector for each compose project of the session,
 
 An op's `savepoint` names the dead savepoint whose removal alone frees the target: its tree, each blob that only its manifests list, and each `cdc` snapshot its capture took. `savepoints` adds up those ops per dead savepoint, across kinds. A stored image is never attributed: what a capture meant to reference with it is lost with the capture.
 
-A `deduplicated-volumes` op is a `forget` of one snapshot, and its `bytes` is `null`: a snapshot shares its data, so only a prune of the whole repository can say what forgetting it frees. gc asks restic for that estimate, without changing anything, once per repository that holds dead snapshots. `detail.estimates` lists each repository, the snapshots it would forget, and `freed_bytes`: the total restic's prune dry run reports. It is rounded the way restic prints it, to three decimals of its unit. The report's `summary.bytes` adds up the estimates. A dead savepoint's `bytes` under `savepoints` is `null` when it has `cdc` snapshots, because the estimate is per repository, not per savepoint.
+A `deduplicated-volumes` op is a `forget` of one snapshot, and its `bytes` is `null`: a snapshot shares its data, so only a prune of the whole repository can say what forgetting it frees. gc asks restic for that estimate, without changing anything, once per repository: for the dead snapshots of one that holds any, else for a prune alone, which becomes a `forget` op targeting the repository when it would free anything. `detail.estimates` lists each repository, the snapshots it would forget (none for a prune alone), and `freed_bytes`: the total restic's prune dry run reports. It is rounded the way restic prints it, to three decimals of its unit. The report's `summary.bytes` adds up the estimates. A dead savepoint's `bytes` under `savepoints` is `null` when it has `cdc` snapshots, because the estimate is per repository, not per savepoint.
 
 `bytes` is `null` when gc can't say how much would be freed:
 

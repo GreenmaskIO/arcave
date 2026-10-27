@@ -88,11 +88,32 @@ func (e *Engine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) e
 }
 
 // RemoveImageRef takes one reference off the daemon, the image with it once no other names it, as
-// docker rmi does. Not forced, so a reference a container was created from is refused; one already
-// gone is not an error.
+// docker rmi does, refusing it while any container, running or not, was created from the image or
+// one built on it: the daemon refuses that only for an image's last reference. One already gone is
+// model.ErrImageRefNotFound.
 func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
-	_, err := e.api.ImageRemove(ctx, string(ref), image.RemoveOptions{PruneChildren: true})
-	if err != nil && !cerrdefs.IsNotFound(err) {
+	inspect, err := e.api.ImageInspect(ctx, string(ref))
+	if cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("remove image reference %s: %w", ref, model.ErrImageRefNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect image reference %s: %w", ref, err)
+	}
+	containers, err := e.api.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("ancestor", inspect.ID)),
+	})
+	if err != nil {
+		return fmt.Errorf("list containers of image %s: %w", inspect.ID, err)
+	}
+	if len(containers) > 0 {
+		return fmt.Errorf("remove image reference %s: image %s is used by container %s", ref, inspect.ID, containers[0].ID)
+	}
+	_, err = e.api.ImageRemove(ctx, string(ref), image.RemoveOptions{PruneChildren: true})
+	if cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("remove image reference %s: %w", ref, model.ErrImageRefNotFound)
+	}
+	if err != nil {
 		return fmt.Errorf("remove image reference %s: %w", ref, err)
 	}
 	return nil

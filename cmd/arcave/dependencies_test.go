@@ -606,7 +606,7 @@ func TestNewObjectCollectors(t *testing.T) {
 	assert.ElementsMatch(t, model.GarbageCollectorKinds(), collectorKinds, "every collector kind is built once")
 }
 
-// Every action a gc deletes in a compose project's store has one eraser; forget and untag have none yet.
+// The daemon's one gc action, untag, has its eraser.
 func TestNewDaemonErasers(t *testing.T) {
 	// Act
 	var got []model.GarbageAction
@@ -618,6 +618,7 @@ func TestNewDaemonErasers(t *testing.T) {
 	assert.Equal(t, []model.GarbageAction{model.GarbageActionUntag}, got)
 }
 
+// Every action a gc deletes in a compose project's store has one eraser.
 func TestNewComposeProjectErasers(t *testing.T) {
 	// Arrange
 	want := []model.GarbageAction{

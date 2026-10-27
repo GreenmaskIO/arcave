@@ -73,7 +73,7 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 
 * **An unused image.** Its layers go on the run after the image.
 * **A recent layer tag.** A tag younger than `gc.restored_layer_grace`, an hour by default, waits for a later run.
-* **An interrupted prune.** If a `cdc` repository's `restic forget --prune` is cut short after the snapshots are forgotten, the next gc finds no dead snapshot there and runs no prune: the data stays until a later gc prunes that repository for another removed savepoint.
+* **An interrupted prune.** If a `cdc` repository's `restic forget --prune` is cut short after the snapshots are forgotten, the next gc prunes that repository again.
 
 `arcave session remove` frees everything a session holds, `cdc` repositories included; `arcave session list --all` lists the trees a failed fork left, and `session remove <id>` deletes one. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, delete its directory in the store by hand. [Storage layout](storage_layout.md) shows where that is.
 

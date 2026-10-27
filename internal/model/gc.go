@@ -91,7 +91,8 @@ const (
 	GarbageActionDeleteTree   GarbageAction = "delete-tree"
 	// GarbageActionDeleteImage deletes one stored image, its manifest first.
 	GarbageActionDeleteImage GarbageAction = "delete-image"
-	// GarbageActionForget is a restic forget of one snapshot, its data freed by the prune after.
+	// GarbageActionForget is a restic forget of one snapshot, its data freed by the prune after;
+	// of a repository, its prune alone.
 	GarbageActionForget GarbageAction = "forget"
 	GarbageActionUntag  GarbageAction = "untag"
 )
@@ -104,6 +105,9 @@ const (
 	GarbageReasonDeadCapture  GarbageReason = "dead-capture"
 	GarbageReasonUnreferenced GarbageReason = "unreferenced"
 	GarbageReasonUnusedTag    GarbageReason = "unused-tag"
+	// GarbageReasonUnprunedData is a restic repository holding data no snapshot uses: a prune
+	// that failed after its forget, or a capture cut short.
+	GarbageReasonUnprunedData GarbageReason = "unpruned-data"
 	// GarbageReasonBackendUnreadable leaves unjudged what the backend holding it cannot list.
 	GarbageReasonBackendUnreadable GarbageReason = "backend-unreadable"
 	// GarbageReasonListedByUnreferenced holds back a blob only a manifest no record names
@@ -345,6 +349,13 @@ type GarbageDeletion struct {
 	Reclaimed []GarbageReclaimed `json:"reclaimed,omitempty"`
 }
 
+// IsInterrupted is whether the run's stop cut an op short: left it not run, or failed it midway.
+func (m GarbageDeletion) IsInterrupted() bool {
+	return m.NotRun > 0 || slices.ContainsFunc(m.Failed, func(failure GarbageDeleteFailure) bool {
+		return failure.Interrupted
+	})
+}
+
 // FreedBytes sums the deleted ops' sizes and what was reclaimed; nil when any is unknown.
 func (m GarbageDeletion) FreedBytes() *int64 {
 	var bytes int64
@@ -381,6 +392,8 @@ type GarbageDeleted struct {
 type GarbageDeleteFailure struct {
 	Target string `json:"target"`
 	Error  string `json:"error"`
+	// Interrupted is a deletion the run's stop cut short: it may be partly done.
+	Interrupted bool `json:"interrupted,omitempty"`
 }
 
 // GarbageTotal adds up every report; its deletion counts stay zero in a dry run.

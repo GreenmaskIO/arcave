@@ -187,8 +187,10 @@ func TestInspector_EstimateForget(t *testing.T) {
 		runErr error
 		// wantRun is false when the ids are refused before restic runs.
 		wantRun bool
-		want    *int64
-		wantErr string
+		// wantArgs is forget of ids, then the dry run's flags, when nil.
+		wantArgs []string
+		want     *int64
+		wantErr  string
 	}{
 		{
 			name:    "the total prune line, in KiB as restic rounds it",
@@ -210,6 +212,13 @@ func TestInspector_EstimateForget(t *testing.T) {
 			stdout:  "total prune:           9 blobs / 1.500 MiB\n",
 			wantRun: true,
 			want:    utils.New(int64(1572864)),
+		},
+		{
+			name:     "no id estimates a prune alone",
+			stdout:   "total prune:           1 blobs / 245 B\n",
+			wantRun:  true,
+			wantArgs: []string{"prune", "--dry-run", "--no-lock"},
+			want:     utils.New(int64(245)),
 		},
 		{
 			name:    "no estimate when restic found no snapshot to forget",
@@ -236,7 +245,10 @@ func TestInspector_EstimateForget(t *testing.T) {
 			// Arrange
 			containers := &mockRunner{}
 			if tt.wantRun {
-				args := append(append([]string{"forget"}, tt.ids...), "--prune", "--dry-run", "--no-lock")
+				args := tt.wantArgs
+				if args == nil {
+					args = append(append([]string{"forget"}, tt.ids...), "--prune", "--dry-run", "--no-lock")
+				}
 				containers.On("RunOneShot", mock.Anything, matchInspection(args, false)).
 					Run(respondWithOutput(tt.stdout, tt.stderr)).Return(tt.runErr).Once()
 			}

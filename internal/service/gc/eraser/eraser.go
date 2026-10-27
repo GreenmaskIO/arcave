@@ -18,6 +18,7 @@ package eraser
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -79,7 +80,8 @@ func (s ImageEraser) Erase(
 
 // Pruner forgets snapshots in one compose project's restic repositories.
 type Pruner interface {
-	// Forget forgets ids in objectID's repository and prunes it, returning what the prune freed.
+	// Forget forgets ids in objectID's repository and prunes it, or only prunes it when ids is
+	// empty, returning what the prune freed.
 	Forget(ctx context.Context, objectID string, ids []string) (*int64, error)
 	// Close releases what Open started.
 	Close(ctx context.Context)
@@ -92,54 +94,155 @@ type PrunerOpener interface {
 
 // ForgetEraser forgets restic snapshots, one forget --prune per repository.
 type ForgetEraser struct {
-	opener PrunerOpener
+	opener      PrunerOpener
+	concurrency int
 }
 
-func NewForgetEraser(opener PrunerOpener) ForgetEraser {
-	return ForgetEraser{opener: opener}
+// NewForgetEraser prunes at most concurrency repositories at once.
+func NewForgetEraser(opener PrunerOpener, concurrency int) ForgetEraser {
+	return ForgetEraser{
+		opener:      opener,
+		concurrency: concurrency,
+	}
 }
 
 func (s ForgetEraser) Action() model.GarbageAction { return model.GarbageActionForget }
 
-// Erase forgets the snapshots ops name, repository by repository in the order each first appears,
-// pruning what they alone held; a repository that fails fails each of its ops. A snapshot frees
-// nothing itself: what its repository's prune freed is reclaimed.
+// Erase forgets the snapshots ops name, at most s.concurrency repositories at once, pruning what
+// they alone held; an op naming a repository prunes it alone. A repository that fails fails each
+// of its ops. A snapshot frees nothing itself: what its repository's prune freed is reclaimed.
 func (s ForgetEraser) Erase(
 	ctx context.Context, store storages.Storager, ops []model.GarbageOp,
 ) model.GarbageDeletion {
 	pruner, err := s.opener.Open(ctx, store)
 	if err != nil {
-		return model.GarbageDeletion{Failed: newFailures(ops, fmt.Errorf("open the restic repositories: %w", err))}
+		return model.GarbageDeletion{Failed: newFailures(ops, fmt.Errorf("open the restic repositories: %w", err), ctx.Err() != nil)}
 	}
 	defer pruner.Close(ctx)
 
 	var (
 		repos, failed = newRepoForgets(ops)
-		deleted       []model.GarbageDeleted
-		reclaimed     []model.GarbageReclaimed
-		notRun        int
+		pruned        = make([]repoPrune, len(repos))
+		wg            sync.WaitGroup
+		slots         = make(chan struct{}, max(s.concurrency, 1))
 	)
 	for i, repo := range repos {
-		if ctx.Err() != nil {
-			notRun = countOps(repos[i:])
-			break
-		}
-		freed, err := pruner.Forget(ctx, repo.objectID, repo.ids)
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			pruned[i] = forgetRepo(ctx, pruner, repo)
+		})
+	}
+	wg.Wait()
+	return newForgetDeletion(repos, pruned, failed)
+}
+
+// repoForget is the snapshots of one repository ops name; ids is empty for a prune alone.
+type repoForget struct {
+	objectID string
+	ids      []string
+	ops      []model.GarbageOp
+}
+
+// newRepoForgets groups ops by repository, in the order each first appears; an op whose target is
+// neither a snapshot's key nor a repository's fails.
+func newRepoForgets(ops []model.GarbageOp) ([]repoForget, []model.GarbageDeleteFailure) {
+	var (
+		order   []string
+		ids     = map[string][]string{}
+		repoOps = map[string][]model.GarbageOp{}
+		failed  []model.GarbageDeleteFailure
+	)
+	for _, op := range ops {
+		objectID, id, err := parseForgetTarget(op.Target)
 		if err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Str("repository", repo.objectID).Msg("forget dead snapshots")
-			failed = append(failed, newFailures(repo.ops, err)...)
+			failed = append(failed, model.GarbageDeleteFailure{
+				Target: op.Target,
+				Error:  err.Error(),
+			})
 			continue
 		}
-		for _, op := range repo.ops {
-			deleted = append(deleted, model.GarbageDeleted{
-				Target: op.Target,
-				Bytes:  new(int64),
+		if _, seen := repoOps[objectID]; !seen {
+			order = append(order, objectID)
+		}
+		if id != "" {
+			ids[objectID] = append(ids[objectID], id)
+		}
+		repoOps[objectID] = append(repoOps[objectID], op)
+	}
+	repos := make([]repoForget, 0, len(order))
+	for _, objectID := range order {
+		repos = append(repos, repoForget{
+			objectID: objectID,
+			ids:      ids[objectID],
+			ops:      repoOps[objectID],
+		})
+	}
+	return repos, failed
+}
+
+// parseForgetTarget splits a forget op's target into its repository and snapshot id, the id empty
+// for a target naming the repository alone.
+func parseForgetTarget(target string) (objectID, id string, err error) {
+	if objectID, err := cdc.ParseRepositoryKey(target); err == nil {
+		return objectID, "", nil
+	}
+	return cdc.ParseSnapshotKey(target)
+}
+
+// repoPrune is what forgetting one repository's snapshots did.
+type repoPrune struct {
+	freed *int64
+	err   error
+	// notRun is a repository the run's end came before.
+	notRun bool
+	// interrupted is a failure the run's end came with.
+	interrupted bool
+}
+
+// forgetRepo forgets repo's snapshots, unless ctx is done.
+func forgetRepo(ctx context.Context, pruner Pruner, repo repoForget) repoPrune {
+	if ctx.Err() != nil {
+		return repoPrune{notRun: true}
+	}
+	freed, err := pruner.Forget(ctx, repo.objectID, repo.ids)
+	if err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("repository", repo.objectID).Msg("forget dead snapshots")
+		return repoPrune{
+			err:         err,
+			interrupted: ctx.Err() != nil,
+		}
+	}
+	return repoPrune{freed: freed}
+}
+
+// newForgetDeletion is what pruning repos did, pruned[i] being repos[i]'s, after failed.
+func newForgetDeletion(
+	repos []repoForget, pruned []repoPrune, failed []model.GarbageDeleteFailure,
+) model.GarbageDeletion {
+	var (
+		deleted   []model.GarbageDeleted
+		reclaimed []model.GarbageReclaimed
+		notRun    int
+	)
+	for i, repo := range repos {
+		switch result := pruned[i]; {
+		case result.notRun:
+			notRun += len(repo.ops)
+		case result.err != nil:
+			failed = append(failed, newFailures(repo.ops, result.err, result.interrupted)...)
+		default:
+			for _, op := range repo.ops {
+				deleted = append(deleted, model.GarbageDeleted{
+					Target: op.Target,
+					Bytes:  new(int64),
+				})
+			}
+			reclaimed = append(reclaimed, model.GarbageReclaimed{
+				Target: cdc.NewRepositoryKey(repo.objectID),
+				Bytes:  result.freed,
 			})
 		}
-		reclaimed = append(reclaimed, model.GarbageReclaimed{
-			Target: cdc.NewRepositoryKey(repo.objectID),
-			Bytes:  freed,
-		})
 	}
 	return model.GarbageDeletion{
 		Deleted:   deleted,
@@ -149,58 +252,14 @@ func (s ForgetEraser) Erase(
 	}
 }
 
-// repoForget is the snapshots of one repository ops name.
-type repoForget struct {
-	objectID string
-	ids      []string
-	ops      []model.GarbageOp
-}
-
-// newRepoForgets groups ops by repository, in the order each first appears; an op whose target is
-// no snapshot key fails.
-func newRepoForgets(ops []model.GarbageOp) ([]repoForget, []model.GarbageDeleteFailure) {
-	var (
-		repos  []repoForget
-		failed []model.GarbageDeleteFailure
-		byRepo = map[string]int{}
-	)
-	for _, op := range ops {
-		objectID, id, err := cdc.ParseSnapshotKey(op.Target)
-		if err != nil {
-			failed = append(failed, model.GarbageDeleteFailure{
-				Target: op.Target,
-				Error:  err.Error(),
-			})
-			continue
-		}
-		i, ok := byRepo[objectID]
-		if !ok {
-			i = len(repos)
-			byRepo[objectID] = i
-			repos = append(repos, repoForget{objectID: objectID})
-		}
-		repos[i].ids = append(repos[i].ids, id)
-		repos[i].ops = append(repos[i].ops, op)
-	}
-	return repos, failed
-}
-
-// countOps counts the ops of repos.
-func countOps(repos []repoForget) int {
-	var n int
-	for _, repo := range repos {
-		n += len(repo.ops)
-	}
-	return n
-}
-
-// newFailures fails every op of ops with err.
-func newFailures(ops []model.GarbageOp, err error) []model.GarbageDeleteFailure {
+// newFailures fails every op of ops with err, interrupted when the run's end came with it.
+func newFailures(ops []model.GarbageOp, err error, interrupted bool) []model.GarbageDeleteFailure {
 	failed := make([]model.GarbageDeleteFailure, 0, len(ops))
 	for _, op := range ops {
 		failed = append(failed, model.GarbageDeleteFailure{
-			Target: op.Target,
-			Error:  err.Error(),
+			Target:      op.Target,
+			Error:       err.Error(),
+			Interrupted: interrupted,
 		})
 	}
 	return failed
@@ -222,7 +281,7 @@ func NewTagEraser(daemon tagRemover) TagEraser {
 
 func (s TagEraser) Action() model.GarbageAction { return model.GarbageActionUntag }
 
-// Erase takes every tag ops name off the daemon, unforced: a tag a container was created from
+// Erase takes every tag ops name off the daemon: a tag whose image a container was created from
 // since it was found fails alone.
 func (s TagEraser) Erase(ctx context.Context, ops []model.GarbageOp) model.GarbageDeletion {
 	return gc.DeleteOps(ctx, ops, func(ctx context.Context, op model.GarbageOp) error {

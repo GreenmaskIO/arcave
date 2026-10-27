@@ -60,6 +60,18 @@ func NewRepositoryKey(objectID string) string {
 	return path.Join(NamespaceRepos, objectID)
 }
 
+// ParseRepositoryKey is the repository a key NewRepositoryKey built names.
+func ParseRepositoryKey(key string) (string, error) {
+	objectID, ok := strings.CutPrefix(key, NamespaceRepos+"/")
+	if !ok {
+		return "", fmt.Errorf("%q is no restic repository key", key)
+	}
+	if err := requireRepository(objectID); err != nil {
+		return "", fmt.Errorf("repository key %q: %w", key, err)
+	}
+	return objectID, nil
+}
+
 // NewSnapshotKey is the key of snapshot id of objectID's repository in a compose project store.
 func NewSnapshotKey(objectID, id string) string {
 	return path.Join(NamespaceRepos, objectID, snapshotsPath, id)

@@ -480,7 +480,7 @@ func newForgetEraser(t *testing.T, engine *dockerclient.Engine) eraser.ForgetEra
 		engine:        engine,
 		hostNetwork:   hostNetwork,
 		containerHost: containerHost,
-	}})
+	}}, 1)
 }
 
 // resticOpener starts a restic server over a compose project's repositories, per scope.

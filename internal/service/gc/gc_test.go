@@ -1538,12 +1538,37 @@ func TestGarbageCollector_GarbageCollect_OnlyReportsWhatNoDaemonEraserCarriesOut
 }
 
 // A stop that fails the last report's ops cut that report short: the run is interrupted, not
-// merely partial.
+// merely partial; a failure of its own, the stop coming after, cut nothing short.
 func TestGarbageCollector_GarbageCollect_LockLostFailingTheLastDeletion(t *testing.T) {
+	tests := []struct {
+		name        string
+		failure     model.GarbageDeleteFailure
+		interrupted bool
+	}{
+		{
+			name:        "a failure the stop cut short",
+			failure:     model.GarbageDeleteFailure{Target: deadTreeOp.Target, Error: "context canceled", Interrupted: true},
+			interrupted: true,
+		},
+		{
+			name:    "a failure of its own",
+			failure: model.GarbageDeleteFailure{Target: deadTreeOp.Target, Error: "permission denied"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testGarbageCollectLockLostFailingTheLastDeletion(t, tt.failure, tt.interrupted)
+		})
+	}
+}
+
+func testGarbageCollectLockLostFailingTheLastDeletion(
+	t *testing.T, failure model.GarbageDeleteFailure, wantInterrupted bool,
+) {
 	// Arrange: the mock locker hands the caller's context back as the lock's.
 	ctx, loseLock := context.WithCancelCause(context.Background())
 	defer loseLock(nil)
-	failed := model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{{Target: deadTreeOp.Target, Error: "context canceled"}}}
+	failed := model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{failure}}
 	grantedLock := &mockGrantedSessionLock{}
 	sessionLocker := newGrantingSessionLocker(grantedLock)
 	demoSavepoints := &mockSavepointReader{}
@@ -1571,8 +1596,13 @@ func TestGarbageCollector_GarbageCollect_LockLostFailingTheLastDeletion(t *testi
 
 	// Assert
 	var interrupted *model.GarbageCollectInterruptedError
-	require.ErrorAs(t, err, &interrupted)
-	assert.ErrorIs(t, err, model.ErrSessionLockLost)
+	if wantInterrupted {
+		require.ErrorAs(t, err, &interrupted)
+		assert.ErrorIs(t, err, model.ErrSessionLockLost)
+	} else {
+		require.ErrorIs(t, err, model.ErrGarbageCollectPartial)
+		assert.NotErrorAs(t, err, &interrupted)
+	}
 	require.Len(t, result.Reports, 1)
 	assert.Equal(t, &failed, result.Reports[0].Deletion)
 	sessionLocker.AssertExpectations(t)

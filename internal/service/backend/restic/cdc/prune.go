@@ -51,6 +51,15 @@ func newForgetArgs(ids []string, flags ...string) ([]string, error) {
 	return append(args, flags...), nil
 }
 
+// newPruneArgs is forget of ids then a prune, or a prune alone when ids is empty: a forget of no
+// id forgets nothing.
+func newPruneArgs(ids []string, flags ...string) ([]string, error) {
+	if len(ids) == 0 {
+		return append([]string{"prune"}, flags...), nil
+	}
+	return newForgetArgs(ids, append([]string{"--prune"}, flags...)...)
+}
+
 // readPruneTotal is what the prune whose output is out removes in objectID's repository; nil,
 // warned of, when restic printed no total.
 func readPruneTotal(ctx context.Context, out []byte, objectID string) (*int64, error) {
