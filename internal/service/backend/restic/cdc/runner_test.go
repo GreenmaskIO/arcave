@@ -42,7 +42,7 @@ func TestRunner_run(t *testing.T) {
 		{
 			name:       "the summary is the result, progress is debug noise",
 			stdout:     []string{backupStatusLine, backupSummaryLine},
-			want:       resticSummary{MessageType: "summary", SnapshotID: "3f8a1c0d9b", DataAdded: 1048576, TotalBytesProcessed: 10485760},
+			want:       resticSummary{MessageType: "summary", SnapshotID: "3f8a1c0d9b", DataAddedPacked: 524288, TotalBytesProcessed: 10485760},
 			wantLogged: []string{"restic progress"},
 		},
 		{

@@ -45,12 +45,6 @@ const archiveName = "data.tar"
 // the tree it was handed, so without one there is nowhere to write.
 var errNoStore = errors.New("backend spec carries no store")
 
-// Payload is a capture's SnapshotStat payload. The size_bytes json tag matches
-// the old core's records, so they read back without a migration.
-type Payload struct {
-	SizeBytes int64 `json:"size_bytes"`
-}
-
 // VolumeStreamer is what the backend needs from the Docker engine: the mount
 // source of a volume, a stream of the whole volume out, and the same stream wiped and
 // extracted back in. The concrete *docker.Engine satisfies it.
@@ -121,9 +115,10 @@ func (s *Snapshotter) Snapshot(
 		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
 	return model.SnapshotStat{
-		Volume:  s.volume,
-		Type:    model.SnapshotBackendFullCopy,
-		Payload: Payload{SizeBytes: counted.N()},
+		Volume:      s.volume,
+		Type:        model.SnapshotBackendFullCopy,
+		SizeBytes:   counted.N(),
+		StoredBytes: counted.N(),
 	}, nil
 }
 

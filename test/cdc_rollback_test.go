@@ -120,7 +120,7 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 			for _, stat := range first.Stats {
 				payload := resticPayload(t, stat)
 				assert.NotEmpty(t, payload.SnapshotObjectID, "%s", stat.Volume.ObjectID)
-				assert.Positive(t, payload.TotalBytesProcessed, "%s", stat.Volume.ObjectID)
+				assert.Positive(t, stat.SizeBytes, "%s", stat.Volume.ObjectID)
 				// One repository per volume, beside the savepoint directories under
 				// the compose project root — a real restic repository a user can open with a
 				// plain restic CLI.
@@ -458,7 +458,7 @@ func totalDataAdded(t *testing.T, record model.Savepoint) int64 {
 
 	var total int64
 	for _, stat := range record.Stats {
-		total += resticPayload(t, stat).DataAdded
+		total += stat.StoredBytes
 	}
 	return total
 }

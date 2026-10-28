@@ -253,9 +253,24 @@ func (e *env) snapshot(
 ) cdc.Payload {
 	t.Helper()
 
+	return snapshotPayload(t, e.snapshotStat(t, backend, id, labels))
+}
+
+// snapshotStat captures the volume and returns the stat the backend reported.
+func (e *env) snapshotStat(
+	t *testing.T, backend model.VolumeSnapshotBackend, id model.SavepointID, labels map[string]string,
+) model.SnapshotStat {
+	t.Helper()
+
 	stat, err := backend.Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: id, Labels: labels})
 	require.NoError(t, err)
 	require.Equal(t, model.SnapshotBackendCDC, stat.Type)
+	return stat
+}
+
+// snapshotPayload reads the cdc payload off a stat the backend reported in memory.
+func snapshotPayload(t *testing.T, stat model.SnapshotStat) cdc.Payload {
+	t.Helper()
 
 	payload, ok := stat.Payload.(cdc.Payload)
 	require.Truef(t, ok, "stat for %s carries no cdc payload: %T", stat.Volume.ObjectID, stat.Payload)

@@ -50,11 +50,12 @@ type resticCmd struct {
 }
 
 // resticSummary is the summary line of a --json run. Only backup fills the byte
-// counters; restore leaves them zero.
+// counters; restore leaves them zero. DataAddedPacked is what the repository
+// grew by, after compression.
 type resticSummary struct {
 	MessageType         string `json:"message_type"`
 	SnapshotID          string `json:"snapshot_id"`
-	DataAdded           int64  `json:"data_added"`
+	DataAddedPacked     int64  `json:"data_added_packed"`
 	TotalBytesProcessed int64  `json:"total_bytes_processed"`
 }
 

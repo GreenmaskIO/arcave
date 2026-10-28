@@ -95,9 +95,8 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 			captured := e.hash(t, vol)
 			require.Contains(t, captured, "/data/blob", "the volume must hold a file outside any subpath")
 
-			payload, ok := stat.Payload.(fullcopy.Payload)
-			require.True(t, ok, "the stat carries no fullcopy payload: %T", stat.Payload)
-			assert.Positive(t, payload.SizeBytes, "an archive of a filled volume cannot be empty")
+			assert.Positive(t, stat.SizeBytes, "an archive of a filled volume cannot be empty")
+			assert.Equal(t, stat.SizeBytes, stat.StoredBytes, "a fullcopy capture stores the whole archive")
 
 			e.mutate(t, vol)
 			e.addFile(t, vol, "extra")

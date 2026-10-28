@@ -72,7 +72,8 @@ Trimmed to one image and one writable layer, and to the fields that tell the lin
         }
       },
       "type": "fullcopy",
-      "payload": { "size_bytes": 48273408 }
+      "size_bytes": 48273408,
+      "stored_bytes": 48273408
     },
     {
       "volume": {
@@ -83,7 +84,8 @@ Trimmed to one image and one writable layer, and to the fields that tell the lin
         "anon": { "service": "redis", "replica": 1, "target": "/data" }
       },
       "type": "fullcopy",
-      "payload": { "size_bytes": 10240 }
+      "size_bytes": 10240,
+      "stored_bytes": 10240
     }
   ],
   "writable_layers": [

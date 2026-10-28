@@ -52,7 +52,7 @@ const (
 const (
 	backupStatusLine  = `{"message_type":"status","seconds_elapsed":2,"percent_done":0.5,"total_files":3,"files_done":1}`
 	backupSummaryLine = `{"message_type":"summary","files_new":3,"files_changed":0,"dirs_new":2,` +
-		`"data_added":1048576,"total_files_processed":3,"total_bytes_processed":10485760,` +
+		`"data_added":1048576,"data_added_packed":524288,"total_files_processed":3,"total_bytes_processed":10485760,` +
 		`"total_duration":1.5,"snapshot_id":"3f8a1c0d9b"}`
 	restoreSummaryLine = `{"message_type":"summary","total_files":3,"files_restored":3,` +
 		`"total_bytes":10485760,"bytes_restored":10485760}`

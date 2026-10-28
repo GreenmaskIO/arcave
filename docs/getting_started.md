@@ -122,9 +122,8 @@ It prints the savepoint record:
         }
       },
       "type": "fullcopy",
-      "payload": {
-        "size_bytes": 40805376
-      }
+      "size_bytes": 40805376,
+      "stored_bytes": 40805376
     }
   ],
   "writable_layers": [

@@ -111,7 +111,8 @@ What a savepoint captures follows the `capture` defaults in the config and the `
     }
   },
   "type": "fullcopy",
-  "payload": { "size_bytes": 41172480 }
+  "size_bytes": 41172480,
+  "stored_bytes": 41172480
 }
 ```
 
@@ -123,12 +124,12 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 | `bind` | `bind` | `service`, `target`, `source` (the host path), `read_only` |
 | `anon` | `anon` | `service`, `replica`, `target`, `read_only`, `subpath` |
 
-`read_only` and `subpath` are omitted when unset. `payload` is the capturing backend's own bookkeeping, and only that backend reads it:
+`read_only` and `subpath` are omitted when unset. `size_bytes` is the volume as the backend measured it — the archive for `fullcopy`, the bytes read for `cdc` — and `stored_bytes` what this capture added to the store, omitted when it added nothing: `fullcopy` stores the archive whole, so the two are equal; `cdc` stores only the chunks that changed, compressed. `payload` is the capturing backend's own bookkeeping, and only that backend reads it:
 
 | Backend | `payload` |
 |---|---|
-| `fullcopy` | `{"size_bytes": …}` — the bytes the archive holds |
-| `cdc` | `{"restic_snapshot_id": …, "data_added": …, "total_bytes_processed": …}` — what this capture cost the store, and the volume's logical size |
+| `fullcopy` | omitted — the archive is found by its key |
+| `cdc` | `{"restic_snapshot_id": …}` — the restic snapshot the capture made |
 
 ### `writable_layers[]`
 

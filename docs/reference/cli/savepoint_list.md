@@ -98,7 +98,7 @@ arcave savepoint list --include-safety-snapshots \
 ```
 
 ```shell title="What the last savepoint cost the store"
-arcave savepoint list | jq '[.[0] | (.stats // [])[].payload.size_bytes, (.writable_layers // [])[].stored_bytes, (.images // [])[].stored_bytes] | map(. // 0) | add'
+arcave savepoint list | jq '[.[0] | (.stats // [])[].stored_bytes, (.writable_layers // [])[].stored_bytes, (.images // [])[].stored_bytes] | map(. // 0) | add'
 ```
 
 ## Next step
