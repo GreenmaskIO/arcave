@@ -181,7 +181,7 @@ INF compose kind=Container name=myapp-db-1 status=Started
 INF compose kind=Container name=myapp-db-1 status=Healthy
 ```
 
-That `id` is what `savepoint remove` takes; `rollback` takes the id or the name.
+`rollback` and `savepoint remove` take that `id` or the name.
 
 ## 5. Break something on purpose
 
@@ -264,7 +264,7 @@ Each entry is a full savepoint record, newest first; `--sort asc` lists oldest f
 ## 8. Clean up
 
 ```shell
-arcave savepoint remove 019e843e-1650-7000-8000-000000000000            # by id
+arcave savepoint remove before-migration      # by name, or by id
 arcave savepoint remove --retain-recent 5     # keep the newest five
 arcave savepoint remove --retain-for 7d --dry-run
 ```

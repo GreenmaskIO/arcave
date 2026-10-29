@@ -34,10 +34,10 @@ import (
 // the alternative is restating a contract arcave does not control.
 var (
 	// ErrRemoveSelectorConflict is returned when a remove request combines
-	// explicit savepoint IDs with retention rules; the two modes are exclusive.
-	ErrRemoveSelectorConflict = errors.New("cannot combine explicit savepoint IDs with retention rules")
+	// explicit savepoints with retention rules; the two modes are exclusive.
+	ErrRemoveSelectorConflict = errors.New("cannot combine explicit savepoints with retention rules")
 	// ErrRemoveNoSelector is returned when a remove request provides neither
-	// explicit savepoint IDs nor any retention rule.
+	// explicit savepoints nor any retention rule.
 	ErrRemoveNoSelector = errors.New("no savepoint selector provided")
 	// ErrRetainRecentNegative is returned when the retain-recent count is negative.
 	ErrRetainRecentNegative = errors.New("retain-recent count must be zero or positive")
@@ -167,7 +167,7 @@ func (m *AmbiguousSavepointNameError) Error() string {
 	for i, id := range m.IDs {
 		ids[i] = id.String()
 	}
-	return fmt.Sprintf("%d savepoints are named %q; roll back by id instead: %s",
+	return fmt.Sprintf("%d savepoints are named %q; name one by id instead: %s",
 		len(m.IDs), m.Name, strings.Join(ids, ", "))
 }
 

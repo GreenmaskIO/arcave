@@ -32,7 +32,7 @@ import (
 // are new values rather than wrapped sentinels, the expectation is the message,
 // not errors.Is.
 func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
-	req := model.RemoveRequest{DryRun: true, IDs: []model.SavepointID{"019e843e-1650-7000-8000-000000000000"}}
+	req := model.RemoveRequest{DryRun: true, Refs: []string{"019e843e-1650-7000-8000-000000000000"}}
 	res := model.RemoveResult{DryRun: true, Removed: []model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000000"}}}
 	other := errors.New("disk on fire")
 	printErr := errors.New("stdout closed")
@@ -58,7 +58,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			res:         model.RemoveResult{},
 			svcErr:      model.ErrRemoveSelectorConflict,
 			printerErr:  nil,
-			wantErrMsg:  "cannot combine savepoint ids with retain-recent/retain-for/before-date",
+			wantErrMsg:  "cannot combine savepoint ids or names with retain-recent/retain-for/before-date",
 			wantPrinted: nil,
 		},
 		{
@@ -66,7 +66,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			res:         model.RemoveResult{},
 			svcErr:      model.ErrRemoveNoSelector,
 			printerErr:  nil,
-			wantErrMsg:  "specify savepoint ids, or at least one of retain-recent, retain-for or before-date",
+			wantErrMsg:  "specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date",
 			wantPrinted: nil,
 		},
 		{

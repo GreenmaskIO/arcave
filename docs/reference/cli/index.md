@@ -19,7 +19,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`init`](init.md) | Writes `.arcave/config.yaml`. The one command that runs before arcave is configured. |
 | [`savepoint create`](savepoint_create.md) | Captures every stateful volume, every container's writable layer and the project's compose spec. |
 | [`savepoint list`](savepoint_list.md) | Prints the project's committed savepoints. |
-| [`savepoint remove`](savepoint_remove.md) | Deletes savepoints by id, or by retention rules. |
+| [`savepoint remove`](savepoint_remove.md) | Deletes savepoints by id or name, or by retention rules. |
 | [`rollback`](rollback.md) | Returns the environment to a savepoint, selected by id, by name, or by `latest`. |
 | [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `remove`, `set`, `unset`, `current`. |
 | [`tools generate-compose`](tools_generate_compose.md) | Writes a docker compose file for a running compose project, from what the daemon reports. |

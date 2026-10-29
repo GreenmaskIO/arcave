@@ -52,7 +52,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 		{
 			name: "RemoveSavepoints",
 			call: func(svc *Service, ctx context.Context) error {
-				_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []model.SavepointID{"1"}})
+				_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{"1"}})
 				return err
 			},
 		},
