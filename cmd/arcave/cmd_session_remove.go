@@ -29,7 +29,7 @@ var (
 		Aliases: []string{"rm"},
 		Short:   "Remove a session and every savepoint it holds",
 		Long: "Remove a session and every savepoint it holds. A compose project running from it is " +
-			"left as it is. The default session cannot be removed. A tree without a record — a failed " +
+			"left as it is. The default session is only emptied, and only with --force. A tree without a record — a failed " +
 			"or incomplete fork, as `session list --all` shows it — is removed by its id; one still " +
 			"cloning needs --force. So does the current session, and removing it clears the pointer: " +
 			"commands then work in the default session.",
@@ -49,6 +49,6 @@ func runSessionRemove(cmd *cobra.Command, args []string) error {
 
 func init() {
 	sessionRemoveCmd.Flags().BoolVar(&sessionRemoveForce, "force", false,
-		"Remove the current session, clearing the pointer, or a tree whose fork still looks alive; no fork may be running")
+		"Empty the default session, remove the current session, clearing the pointer, or a tree whose fork still looks alive; no fork may be running")
 	sessionCmd.AddCommand(sessionRemoveCmd)
 }

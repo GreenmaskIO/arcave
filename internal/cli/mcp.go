@@ -158,7 +158,7 @@ const (
 		"session_set (or pass session) and then rollback to one of its savepoints. A fork holds the project " +
 		"lock for its whole copy, so every other tool fails with a lock error until it finishes."
 	descSessionRemove = "Remove a session and every savepoint it holds, permanently. A compose project " +
-		"running from it is left as it is. The default session (baseline) cannot be removed. The current " +
+		"running from it is left as it is. The default session (baseline) is only emptied, and only with force. The current " +
 		"session, and the one this server is pinned to, are refused unless force is set, which also resets the current session to baseline; force " +
 		"likewise removes a tree whose fork still looks alive — only when no fork is running."
 	descSessionSet = "Make a session the current one, by name or id: every later tool call that is given " +
@@ -464,7 +464,7 @@ func (h *MCPHandler) createSessionMCP(ctx context.Context, _ *mcpsdk.CallToolReq
 // sessionRemoveInput is session_remove's input schema.
 type sessionRemoveInput struct {
 	Session string `json:"session" jsonschema:"the session to remove, by name or id; a tree without a record by id only"`
-	Force   bool   `json:"force,omitempty" jsonschema:"also remove the current session, resetting the current session to baseline, or a tree whose fork still looks alive"`
+	Force   bool   `json:"force,omitempty" jsonschema:"also empty the default session, remove the current session, resetting the current session to baseline, or a tree whose fork still looks alive"`
 }
 
 // removeSessionMCP removes a session and reports the bytes it freed.
