@@ -163,12 +163,12 @@ Returns the session record:
 
 ## `session_remove`
 
-Deletes a session and every savepoint it holds, permanently. A compose project running from it is left as it is. `baseline` cannot be deleted.
+Deletes a session and every savepoint it holds, permanently. A compose project running from it is left as it is. `baseline` cannot be deleted; with `force` it is emptied instead.
 
 | Argument | Required | Description |
 |---|---|---|
 | `session` | yes | The session to remove, by name or id; a directory without a record by id only. |
-| `force` | no | Also remove the current session — clearing the pointer, so calls work in `baseline` — the session the server is pinned to, or a directory whose fork still looks alive. |
+| `force` | no | Also empty the default session (baseline), remove the current session — clearing the pointer, so calls work in `baseline` — the session the server is pinned to, or a directory whose fork still looks alive. |
 
 ```json title="structured content"
 { "session": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "removed": true, "freed_bytes": 734003396 }

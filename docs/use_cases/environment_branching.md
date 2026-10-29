@@ -86,7 +86,7 @@ arcave session set baseline                  # the current session needs --force
 arcave session remove feature/new-billing
 ```
 
-`session remove` removes the session's savepoints and the data they name, prints the `freed_bytes`, and leaves the running project alone. `baseline` cannot be removed.
+`session remove` removes the session's savepoints and the data they name, prints the `freed_bytes`, and leaves the running project alone. `baseline` always exists: `session remove baseline --force` only empties it.
 
 Within a session, prune savepoints the way you prune merged branches:
 

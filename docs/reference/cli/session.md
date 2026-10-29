@@ -91,7 +91,7 @@ Removes a session and everything under it — its savepoints, and the backend da
 
 **The running compose project is left alone.** Deleting the session a compose project was rolled back from does not stop it or touch its volumes; only the savepoints go.
 
-`baseline` cannot be deleted, and neither can a session an interrupted rollback left its marker in — recover that rollback first.
+`baseline` cannot be deleted: `--force` only empties it, and it stays the default session. A session an interrupted rollback left its marker in cannot be deleted at all — recover that rollback first.
 
 The current session is refused unless `--force` is given; with it, the session is deleted and `.arcave/current_session` is cleared, so commands that name no session work in `baseline` again.
 
@@ -132,7 +132,7 @@ arcave session current
 | The name is another session's id | Refused: names are looked up first, so it would hide that session's id. |
 | `--session`, `session set` or `session remove` names no session | `session not found`, naming what was given. |
 | The current session has been deleted | `the current session no longer exists`, with how to get out: `arcave session unset` or `arcave session set <session>`. |
-| `session remove baseline` | Refused: the default session always exists. |
+| `session remove baseline` without `--force` | Refused: the default session always exists. `--force` empties it — every savepoint it holds goes — and it stays the default session. |
 | `session remove` of a `cloning` directory without `--force` | `session is still being cloned`; nothing is deleted. |
 | `session remove` of an `unknown` directory without `--force` | `session tree status is unknown`, with why; nothing is deleted. |
 | `session remove` of the current session without `--force` | `session is the current session`, naming it; switch away first or force it. |
