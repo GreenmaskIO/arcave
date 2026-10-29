@@ -132,7 +132,7 @@ func TestResolveConfig(t *testing.T) {
 		{
 			// The flag's own default is the *lowest* precedence source, so an
 			// unchanged --wait-timeout must not overwrite the file's value.
-			name:      "an unchanged --progress leaves the file's mode alone",
+			name:      "an unchanged --compose-progress leaves the file's mode alone",
 			file:      "compose:\n  progress: quiet\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -308,13 +308,13 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs.String("log-format", utils.DefaultLogFormat, "")
 	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
-	fs.String("progress", config.ProgressLog, "")
+	fs.String("compose-progress", config.ProgressLog, "")
 	viperBind(v, fs, map[string]string{
-		"log-level":    "log.level",
-		"log-format":   "log.format",
-		"wait-timeout": "compose.wait_timeout",
-		"stop-timeout": "compose.stop_timeout",
-		"progress":     "compose.progress",
+		"log-level":        "log.level",
+		"log-format":       "log.format",
+		"wait-timeout":     "compose.wait_timeout",
+		"stop-timeout":     "compose.stop_timeout",
+		"compose-progress": "compose.progress",
 	})
 	return fs
 }

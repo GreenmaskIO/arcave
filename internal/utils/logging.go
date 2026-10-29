@@ -40,7 +40,8 @@ var (
 	errUnknownLogFormat = fmt.Errorf("unknown log format")
 )
 
-func NewLogger(levelName string, logFormat string) (zerolog.Logger, error) {
+// NewLogger builds the logger writing to out at levelName in logFormat.
+func NewLogger(levelName string, logFormat string, out io.Writer) (zerolog.Logger, error) {
 
 	var logLevel zerolog.Level
 	switch levelName {
@@ -57,9 +58,9 @@ func NewLogger(levelName string, logFormat string) (zerolog.Logger, error) {
 	var formatWriter io.Writer
 	switch logFormat {
 	case LogFormatJson:
-		formatWriter = os.Stderr
+		formatWriter = out
 	case LogFormatText:
-		formatWriter = zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+		formatWriter = zerolog.ConsoleWriter{Out: out, TimeFormat: time.RFC3339}
 	default:
 		// zerolog discards everything written to a nil writer, so an unknown
 		// format would otherwise silence every log line.
@@ -85,8 +86,8 @@ func NewLogger(levelName string, logFormat string) (zerolog.Logger, error) {
 // for a context that carries none. It returns the logger it installed, because
 // the composition root also has to hand it to collaborators that take one
 // explicitly — the logrus bridge and the compose progress adapter.
-func SetDefaultContextLogger(levelName string, logFormat string) (zerolog.Logger, error) {
-	logger, err := NewLogger(levelName, logFormat)
+func SetDefaultContextLogger(levelName string, logFormat string, out io.Writer) (zerolog.Logger, error) {
+	logger, err := NewLogger(levelName, logFormat, out)
 	if err != nil {
 		return zerolog.Logger{}, fmt.Errorf("get logger: %w", err)
 	}

@@ -1,0 +1,4 @@
+✔ album.publish summer                        0.7s
+└── ✔ album.export                            0.7s
+⠋ album.publish winter                        0.3s
+└── ⠋ queue.pause  Draining                   0.3s

@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -26,6 +28,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 const (
@@ -50,6 +53,11 @@ var (
 	// sessionRef names the session, by id or name, every project-bound command works in;
 	// empty is the current session, else model.DefaultSession.
 	sessionRef string
+	// progressMode is --progress as given; runOutput is the output initRoot opens and main closes.
+	progressMode string
+	runOutput    output
+	// resultFormat is --format as given.
+	resultFormat string
 )
 
 // The build stamps, filled at link time by goreleaser's -X flags (see
@@ -74,19 +82,25 @@ var rootCmd = &cobra.Command{
 	// SilenceUsage keeps a runtime failure from dumping the whole usage text;
 	// cobra still prints usage for genuine flag/arg errors.
 	SilenceUsage: true,
+	// main prints the error, once the output is closed: cobra would write it over a live tree.
+	SilenceErrors: true,
 	// PersistentPreRunE, not PreRunE: cobra runs PreRunE only for the command
 	// that actually executes, so a plain PreRunE here would never fire for a
 	// subcommand and every command would see a zero-valued config.
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-		return initRoot(cmd == configInitCmd)
+		if err := initRoot(cmd); err != nil {
+			return err
+		}
+		// One tracker per run: every workflow the command calls opens its root on it.
+		cmd.SetContext(progress.WithTracker(cmd.Context(), progress.New(runOutput, time.Now)))
+		return nil
 	},
 }
 
-// initRoot is the shared prologue of every command: it locates the project root,
-// points viper at the config file, resolves the effective config (flag > env >
-// file > default), and sets up the context logger from the result. For init it
-// reads no file — init writes a template — and only notes whether one exists.
-func initRoot(isInitCommand bool) error {
+// initRoot resolves the config (flag > env > file > default) and opens the run's output and logger.
+// For init it reads no file and only notes whether one exists.
+func initRoot(cmd *cobra.Command) error {
+	isInitCommand := cmd == configInitCmd
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get current working directory: %w", err)
@@ -106,6 +120,12 @@ func initRoot(isInitCommand bool) error {
 	if sessionRef == "" {
 		sessionRef = os.Getenv(sessionEnv)
 	}
+	if progressMode == "" {
+		progressMode = os.Getenv(progressEnv)
+	}
+	if resultFormat == "" {
+		resultFormat = os.Getenv(formatEnv)
+	}
 
 	if isInitCommand {
 		projectCfg, configFound, err = resolveWithoutFile(cfgViper, projectRoot, configPath)
@@ -115,10 +135,29 @@ func initRoot(isInitCommand bool) error {
 	if err != nil {
 		return fmt.Errorf("resolve config: %w", err)
 	}
-	logger, err := utils.SetDefaultContextLogger(projectCfg.Log.Level, projectCfg.Log.Format)
+	// The server's stdout is its JSON-RPC channel, and its progress goes to its log.
+	mode, format := progressModeLog, formatJSON
+	if cmd != mcpCmd {
+		if mode, err = resolveProgressMode(progressMode, isTerminal(os.Stderr), projectCfg.Log.Format); err != nil {
+			return err
+		}
+		if format, err = resolveFormat(resultFormat, mode, isTerminal(os.Stdout)); err != nil {
+			return err
+		}
+	}
+	result := resultOptions{
+		format:         format,
+		composeProject: projectName,
+		session:        sessionRef,
+		profile:        colorprofile.Detect(os.Stdout, os.Environ()),
+	}
+	// Once per run: the logger writes through the output, so the context logger never changes.
+	out, logger, err := openOutput(mode, projectCfg.Log.Level, cfgViper.IsSet("log.level"), projectCfg.Log.Format, result)
 	if err != nil {
 		return fmt.Errorf("set log level: %w", err)
 	}
+	runOutput = out
+	openedOutput.Store(out)
 
 	// The bridge goes in here, the moment the logger exists and before any
 	// command has had a chance to reach docker or compose: those libraries log
@@ -246,15 +285,24 @@ func init() {
 		"How long to wait for services to become healthy after they are started, e.g. 2m or 90s")
 	persistentFlags.Duration("stop-timeout", config.DefaultStopTimeout,
 		"The least time a container gets to exit on its own before it is killed; a service's stop_grace_period raises it, e.g. 30s")
-	persistentFlags.String("progress", config.ProgressLog,
+	// Unbound, like --session: how one run renders, not what the project is.
+	persistentFlags.StringVar(&progressMode, "progress", "",
+		fmt.Sprintf("How progress is shown: %s (%s on a terminal, else %s), %s (a live tree on stderr), "+
+			"%s (log records) or %s (JSON lines on stdout, the result last; env %s)",
+			progressModeAuto, progressModeTTY, progressModeLog, progressModeTTY, progressModeLog, progressModeJSON, progressEnv))
+	persistentFlags.StringVar(&resultFormat, "format", "",
+		fmt.Sprintf("How the result is printed on stdout: %s (%s while the tree is drawn on a terminal stdout, "+
+			"else %s), %s or %s (env %s)",
+			formatAuto, formatText, formatJSON, formatJSON, formatText, formatEnv))
+	persistentFlags.String("compose-progress", config.ProgressLog,
 		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",
 			config.ProgressLog, config.ProgressTTY, config.ProgressQuiet))
 
 	viperBind(cfgViper, persistentFlags, map[string]string{
-		"log-level":    "log.level",
-		"log-format":   "log.format",
-		"wait-timeout": "compose.wait_timeout",
-		"stop-timeout": "compose.stop_timeout",
-		"progress":     "compose.progress",
+		"log-level":        "log.level",
+		"log-format":       "log.format",
+		"wait-timeout":     "compose.wait_timeout",
+		"stop-timeout":     "compose.stop_timeout",
+		"compose-progress": "compose.progress",
 	})
 }

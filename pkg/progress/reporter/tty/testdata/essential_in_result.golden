@@ -1,0 +1,6 @@
+✔ album.publish summer  0.6s
+├── ✔ queue.pause       0.2s
+│     worker-2  unreachable
+├── ✔ album.export      0.3s
+└── ✔ cdn.upload        0.1s
+      ! edge timeout, retried

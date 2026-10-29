@@ -1,0 +1,19 @@
+INF album.backup[summer] status=started
+INF album.backup[summer]/queue.pause status=started
+INF album.backup[summer]/queue.pause msg=Paused resource=worker:worker-1 status=in_progress
+WRN album.backup[summer]/queue.pause msg=unreachable resource=worker:worker-2 status=warned
+INF album.backup[summer]/queue.pause elapsed=300ms msg=unreachable status=succeeded
+INF album.backup[summer]/cdn.upload items=0/3 status=started
+INF album.backup[summer]/cdn.upload/file[beach.jpg] status=started
+INF album.backup[summer]/cdn.upload/file[beach.jpg] bytes=1.1MB msg=retrying status=in_progress
+INF album.backup[summer]/cdn.upload/file[beach.jpg] bytes=2.5MB elapsed=300ms msg=retrying reused=1.7MB status=succeeded stored=400KB
+INF album.backup[summer]/cdn.upload items=1/3 status=in_progress
+INF album.backup[summer]/cdn.upload/file[raw.dng] status=started
+ERR album.backup[summer]/cdn.upload/file[raw.dng] error="403 forbidden" bytes=200KB/400KB elapsed=100ms msg="unable to upload" status=failed
+INF album.backup[summer]/cdn.upload failed=1 items=1/3 status=in_progress
+INF album.backup[summer]/cdn.upload/file[dunes.jpg] status=started
+WRN album.backup[summer]/cdn.upload/file[dunes.jpg] elapsed=0s status=cancelled
+ERR album.backup[summer]/cdn.upload cancelled=1 elapsed=400ms failed=1 items=1/3 status=failed
+INF album.backup[summer]/cdn.purge items=0 status=started
+INF album.backup[summer]/cdn.purge elapsed=0s items=2 status=succeeded
+ERR album.backup[summer] elapsed=1.234s status=failed

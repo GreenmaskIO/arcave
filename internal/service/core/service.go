@@ -25,6 +25,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/pkg/progress"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 )
@@ -238,7 +239,11 @@ func withSessionLock[T any](
 	operation model.SessionLockOperation,
 	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
 ) (T, error) {
-	lockCtx, grantedLock, err := locker.Lock(ctx, operation)
+	// The wait is a node of its own, shown only once another holds the lock; the workflow goes on
+	// under the node ctx carries.
+	waitCtx, wait := progress.Begin(ctx, progress.Step{Kind: kindSessionLock})
+	lockCtx, grantedLock, err := locker.Lock(waitCtx, operation)
+	wait.End(err)
 	if err != nil {
 		var zero T
 		return zero, fmt.Errorf("lock session: %w", err)
@@ -248,7 +253,7 @@ func withSessionLock[T any](
 			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
 		}
 	}()
-	return fn(lockCtx, grantedLock)
+	return fn(progress.WithNode(lockCtx, progress.Current(ctx)), grantedLock)
 }
 
 // withUnlock runs fn with the project lock held, and releases it however fn ends.

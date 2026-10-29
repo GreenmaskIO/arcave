@@ -46,7 +46,7 @@ INF writable layer capture started service=postgres replica=1 op=commit
 INF writable layer capture finished service=postgres replica=1 op=commit
 INF starting services
 INF waiting for services to become healthy wait_timeout=2m0s
-INF compose kind=Container name=arcave-demo-postgres-1 status=Healthy
+INF savepoint.create[pre-migration]/compose.start msg=Healthy resource=container:arcave-demo-postgres-1 status=in_progress
 ```
 
 Trimmed to one image and one writable layer, and to the fields that tell the lines apart; every line also carries `snapshot_id`, and the image lines `image_id`. The three volumes are captured concurrently, so their lines interleave. Then each distinct image is kept once, and every container's writable layer is committed over it.
@@ -166,7 +166,7 @@ INF volume operation started volume=volume-named-arcave-demo_pgdata backend=full
 INF volume operation finished volume=volume-named-arcave-demo_pgdata backend=fullcopy op=restore
 INF starting services
 INF waiting for services to become healthy wait_timeout=2m0s
-INF compose kind=Container name=arcave-demo-postgres-1 status=Healthy
+INF rollback[pre-migration]/rollback.apply/compose.start msg=Healthy resource=container:arcave-demo-postgres-1 status=in_progress
 INF the containers run on the savepoint's writable layers: `docker compose up` from your compose file recreates them on its images and drops those layers; roll back again to restore them writable_layers=3
 ```
 

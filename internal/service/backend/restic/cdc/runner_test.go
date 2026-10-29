@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // restic prints one ndjson object per line and one of them is the summary; the
@@ -42,7 +44,7 @@ func TestRunner_run(t *testing.T) {
 		{
 			name:       "the summary is the result, progress is debug noise",
 			stdout:     []string{backupStatusLine, backupSummaryLine},
-			want:       resticSummary{MessageType: "summary", SnapshotID: "3f8a1c0d9b", DataAddedPacked: 524288, TotalBytesProcessed: 10485760},
+			want:       resticSummary{MessageType: "summary", SnapshotID: "3f8a1c0d9b", DataAdded: 1048576, DataAddedPacked: 524288, TotalBytesProcessed: 10485760},
 			wantLogged: []string{"restic progress"},
 		},
 		{
@@ -215,5 +217,66 @@ func TestLineWriter_Write(t *testing.T) {
 func writeLines(w interface{ Write([]byte) (int, error) }, lines []string) {
 	for _, line := range lines {
 		_, _ = w.Write([]byte(line + "\n"))
+	}
+}
+
+// restic counts a run's bytes itself, under a field its command names; its numbers go to the
+// node of the run's context.
+func TestRunner_runStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		line string
+		want progress.Bytes
+	}{
+		{
+			name: "backup counts bytes_done",
+			args: []string{"backup", "/m", "--json"},
+			line: `{"message_type":"status","bytes_done":300,"bytes_restored":7,"total_bytes":1000}`,
+			want: progress.Bytes{Done: 300, Total: 1000},
+		},
+		{
+			name: "restore counts bytes_restored",
+			args: []string{"restore", "latest", "--json"},
+			line: `{"message_type":"status","bytes_done":7,"bytes_restored":400,"total_bytes":1000}`,
+			want: progress.Bytes{Done: 400, Total: 1000},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			containers := &mockRunner{}
+			containers.On("RunOneShot", mock.Anything, matchRestic(tt.args[0])).
+				Run(func(args mock.Arguments) {
+					writeLines(args.Get(1).(model.OneShotSpec).Stdout, []string{tt.line})
+				}).Return(nil).Once()
+			events := &eventRecorder{}
+			ctx, root := progress.New(events, func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }).Begin(zerolog.Nop().WithContext(context.Background()),
+				progress.Step{Kind: "test"})
+			ctx, node := progress.Run(ctx, progress.Step{Kind: "volume"}, progress.MeasureBytes)
+			r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+
+			// Act
+			_, err := r.run(ctx, resticCmd{args: tt.args})
+			node.End(err)
+			root.End(err)
+
+			// Assert
+			require.NoError(t, err)
+			require.NotNil(t, events.lastBytes)
+			assert.Equal(t, tt.want, *events.lastBytes)
+			containers.AssertExpectations(t)
+		})
+	}
+}
+
+// eventRecorder keeps the bytes of the last in-progress event.
+type eventRecorder struct {
+	lastBytes *progress.Bytes
+}
+
+func (r *eventRecorder) Report(evt progress.Event) {
+	if evt.Status == progress.StatusInProgress && evt.Sample.Bytes != nil {
+		r.lastBytes = evt.Sample.Bytes
 	}
 }

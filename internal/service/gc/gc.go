@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // SavepointReader reads the committed savepoints of one compose project's store.
@@ -119,7 +120,10 @@ func New(deps Deps) *GarbageCollector {
 // deletes it. It holds the project and session locks throughout, so no capture runs meanwhile.
 func (s *GarbageCollector) GarbageCollect(
 	ctx context.Context, req model.GarbageCollectRequest,
-) (model.GarbageCollectResult, error) {
+) (_ model.GarbageCollectResult, err error) {
+	// Outside the locks: a lost lock cancels the work under it, and the root says why.
+	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindGC})
+	defer func() { node.End(err) }()
 	if err := req.Validate(); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
@@ -158,7 +162,9 @@ func withSessionLock[T any](
 	ctx context.Context, locker model.SessionLocker,
 	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
 ) (T, error) {
-	lockCtx, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationGarbageCollect)
+	waitCtx, wait := progress.Begin(ctx, progress.Step{Kind: kindSessionLock})
+	lockCtx, grantedLock, err := locker.Lock(waitCtx, model.SessionLockOperationGarbageCollect)
+	wait.End(err)
 	if err != nil {
 		var zero T
 		return zero, fmt.Errorf("lock session: %w", err)
@@ -168,7 +174,7 @@ func withSessionLock[T any](
 			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
 		}
 	}()
-	return fn(lockCtx, grantedLock)
+	return fn(progress.WithNode(lockCtx, progress.Current(ctx)), grantedLock)
 }
 
 // requireSession refuses a session other than the default that has no record: one removed
@@ -229,7 +235,9 @@ func (s *GarbageCollector) deleteGarbage(
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
-	deleted, err := s.erasers.deleteGarbage(ctx, grantedLock, found)
+	eraseCtx, erase := progress.Begin(ctx, progress.Step{Kind: kindGCErase})
+	deleted, err := s.erasers.deleteGarbage(eraseCtx, grantedLock, found)
+	erase.End(err)
 	warnings := slices.Concat(collectors.warnings, newUndeletedWarnings(deleted.reports()))
 	result := s.newGarbageCollectResult(req, deleted, warnings)
 	if err != nil {
@@ -278,6 +286,8 @@ func (s *GarbageCollector) readInflightWarnings(ctx context.Context) []string {
 func (s *GarbageCollector) findGarbage(
 	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
 ) garbageFound {
+	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindGCFind})
+	defer func() { node.End(context.Cause(ctx)) }()
 	grace := s.grace
 	if req.RestoredLayerGrace != nil {
 		grace = *req.RestoredLayerGrace
@@ -313,8 +323,13 @@ func (s *GarbageCollector) findComposeProjectGarbage(
 	}
 	garbage := make([]composeProjectGarbage, 0, len(names))
 	for _, name := range names {
-		scope, store, err := s.readComposeProjectScope(ctx, sessionStore, name)
-		reports := collectors.runComposeProjectCollectors(ctx, name, scope, err)
+		projectCtx, node := progress.Begin(ctx, progress.Step{
+			Kind: kindComposeProject,
+			Name: name.String(),
+		})
+		scope, store, err := s.readComposeProjectScope(projectCtx, sessionStore, name)
+		reports := collectors.runComposeProjectCollectors(projectCtx, name, scope, err)
+		node.End(context.Cause(projectCtx))
 		logGarbageFound(ctx, reports)
 		garbage = append(garbage, composeProjectGarbage{
 			scope:   scope,

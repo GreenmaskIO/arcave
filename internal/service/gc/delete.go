@@ -18,11 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // GarbageEraser carries out one GarbageAction.
@@ -83,11 +85,16 @@ func (e eraserSet) deleteGarbage(
 			})
 	)
 	for _, garbage := range found.composeProjects {
-		reports, reportsStopped := deleteFindings(ctx, stop, grantedLock, garbage.reports, e.composeProject,
+		projectCtx, node := progress.Begin(ctx, progress.Step{
+			Kind: kindComposeProject,
+			Name: garbage.scope.ComposeProject.String(),
+		})
+		reports, reportsStopped := deleteFindings(projectCtx, stop, grantedLock, garbage.reports, e.composeProject,
 			func(ctx context.Context, eraser ComposeProjectEraser, ops []model.GarbageOp) model.GarbageDeletion {
 				return eraser.Erase(ctx, garbage.store, ops)
 			},
 		)
+		node.End(newReportsError(projectCtx, reports))
 		stopped = stopped || reportsStopped
 		composeProjects = append(composeProjects, composeProjectGarbage{
 			scope:   garbage.scope,
@@ -152,7 +159,12 @@ func deleteReportFindings[E GarbageEraser](
 			Msg("session lock no longer vouches for the gc: nothing more is deleted")
 		return &model.GarbageDeletion{NotRun: len(ops)}, fmt.Errorf("verify session lock: %w", err)
 	}
-	deletion := erase(ctx, eraser, ops)
+	reportCtx, node := progress.Begin(ctx, progress.Step{
+		Kind: kindCollector,
+		ID:   string(report.Collector),
+	})
+	deletion := erase(reportCtx, eraser, ops)
+	node.End(newDeletionError(reportCtx, &deletion))
 	zerolog.Ctx(ctx).Info().Str("data_kind", string(report.DataKind)).
 		Str("compose_project", report.ComposeProject.String()).
 		Int("deleted", len(deletion.Deleted)).Int("failed", len(deletion.Failed)).Int("not_run", deletion.NotRun).
@@ -185,18 +197,22 @@ func DeleteOps(
 		failed  []model.GarbageDeleteFailure
 		notRun  int
 	)
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindGCDelete}, len(ops))
 	for i, op := range ops {
 		if ctx.Err() != nil {
 			notRun = len(ops) - i
 			break
 		}
-		switch err := del(ctx, op); {
+		opCtx, node := progress.Run(ctx, progress.Step{Kind: kindGarbage, ID: op.Target}, progress.MeasureBytes)
+		switch err := del(opCtx, op); {
 		case errors.Is(err, storages.ErrFileNotFound), errors.Is(err, model.ErrImageRefNotFound):
+			node.Done(progress.Sample{})
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  new(int64),
 			})
 		case err != nil:
+			node.End(err)
 			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
 			failed = append(failed, model.GarbageDeleteFailure{
 				Target:      op.Target,
@@ -204,11 +220,22 @@ func DeleteOps(
 				Interrupted: ctx.Err() != nil,
 			})
 		default:
+			node.Done(newFreedSample(op.Bytes))
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  op.Bytes,
 			})
 		}
+	}
+	// A stop that came past the last op cut nothing short.
+	cutShort := notRun > 0 || slices.ContainsFunc(failed, func(f model.GarbageDeleteFailure) bool { return f.Interrupted })
+	switch {
+	case cutShort:
+		batch.End(context.Cause(ctx))
+	case len(failed) > 0:
+		batch.End(fmt.Errorf("%d deletion(s) failed", len(failed)))
+	default:
+		batch.End(nil)
 	}
 	return model.GarbageDeletion{
 		Deleted: deleted,
@@ -237,4 +264,26 @@ func newUndeletedWarnings(reports []model.GarbageReport) []string {
 		warnings = append(warnings, fmt.Sprintf("%s is reported, not deleted, yet", report.DataKind))
 	}
 	return warnings
+}
+
+// newFreedSample is what deleting an op freed: its size, when known.
+func newFreedSample(bytes *int64) progress.Sample {
+	if bytes == nil {
+		return progress.Sample{}
+	}
+	return progress.Sample{Bytes: &progress.Bytes{
+		Done:  *bytes,
+		Total: *bytes,
+	}}
+}
+
+// newReportsError is what a compose project's deletions, under a node opened on ctx, end with: the
+// first report's that failed.
+func newReportsError(ctx context.Context, reports []model.GarbageReport) error {
+	for _, report := range reports {
+		if err := newDeletionError(ctx, report.Deletion); err != nil {
+			return err
+		}
+	}
+	return nil
 }

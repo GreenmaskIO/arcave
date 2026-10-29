@@ -36,6 +36,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // archiveName is the one object a capture consists of.
@@ -111,7 +112,7 @@ func (s *Snapshotter) Snapshot(
 	// The counter sits in the stream, so the size reported is the size
 	// actually written.
 	counted := utils.NewCountingReader(archive)
-	if err := captureStore.PutObject(ctx, archiveName, counted); err != nil {
+	if err := captureStore.PutObject(ctx, archiveName, progress.NewReader(ctx, counted, 0)); err != nil {
 		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
 	return model.SnapshotStat{
@@ -123,7 +124,8 @@ func (s *Snapshotter) Snapshot(
 }
 
 // Restore hands the stored tar stream to WriteVolume, which wipes the volume
-// and extracts into it. req.Payload is not read: the key is recomputed.
+// and extracts into it. req.Payload is not read: the key is recomputed, and
+// req.SizeBytes is the stream's own length, the capture's counted size.
 func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
 	captureStore, err := s.captureStore(req.SnapshotID)
 	if err != nil {
@@ -145,7 +147,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 		}
 	}()
 
-	if err := s.docker.WriteVolume(ctx, src, archive); err != nil {
+	if err := s.docker.WriteVolume(ctx, src, progress.NewReader(ctx, archive, req.SizeBytes)); err != nil {
 		return fmt.Errorf("write docker volume %s: %w", src.Source, err)
 	}
 	return nil

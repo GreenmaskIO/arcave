@@ -1,0 +1,20 @@
+{"node":1,"status":"started","open":{"step":{"kind":"album.backup","type":"workflow","name":"summer"}},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00Z"}
+{"node":2,"status":"started","open":{"parent":1,"step":{"kind":"queue.pause","type":"activity"},"measures":["resources"]},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00Z"}
+{"node":2,"status":"in_progress","msg":"Paused","resource":{"kind":"worker","id":"worker-1"},"settled":true,"sample":{"elapsed_ns":100000000},"at":"2026-10-29T12:00:00.1Z"}
+{"node":2,"status":"warned","msg":"unreachable","resource":{"kind":"worker","id":"worker-2"},"sample":{"elapsed_ns":200000000},"at":"2026-10-29T12:00:00.2Z"}
+{"node":2,"status":"succeeded","msg":"unreachable","sample":{"elapsed_ns":300000000},"at":"2026-10-29T12:00:00.3Z"}
+{"node":3,"status":"started","open":{"parent":1,"step":{"kind":"cdn.upload","type":"workflow"},"measures":["items"]},"sample":{"elapsed_ns":0,"items":{"done":0,"total":3}},"at":"2026-10-29T12:00:00.3Z"}
+{"node":4,"status":"started","open":{"parent":3,"step":{"kind":"file","type":"activity","id":"beach.jpg"},"measures":["bytes"]},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00.3Z"}
+{"node":4,"status":"in_progress","sample":{"elapsed_ns":100000000,"bytes":{"done":1050000}},"at":"2026-10-29T12:00:00.4Z"}
+{"node":4,"status":"in_progress","msg":"retrying","sample":{"elapsed_ns":200000000,"bytes":{"done":1050000}},"at":"2026-10-29T12:00:00.5Z"}
+{"node":4,"status":"succeeded","msg":"retrying","sample":{"elapsed_ns":300000000,"bytes":{"done":2500000,"total":2100000,"stored":400000,"reused":1700000}},"at":"2026-10-29T12:00:00.6Z"}
+{"node":3,"status":"in_progress","sample":{"elapsed_ns":300000000,"items":{"done":1,"total":3}},"at":"2026-10-29T12:00:00.6Z"}
+{"node":5,"status":"started","open":{"parent":3,"step":{"kind":"file","type":"activity","id":"raw.dng"},"measures":["bytes"]},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00.6Z"}
+{"node":5,"status":"failed","msg":"unable to upload","error":"403 forbidden","sample":{"elapsed_ns":100000000,"bytes":{"done":200000,"total":400000}},"at":"2026-10-29T12:00:00.7Z"}
+{"node":3,"status":"in_progress","sample":{"elapsed_ns":400000000,"items":{"done":1,"failed":1,"total":3}},"at":"2026-10-29T12:00:00.7Z"}
+{"node":6,"status":"started","open":{"parent":3,"step":{"kind":"file","type":"activity","id":"dunes.jpg"}},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00.7Z"}
+{"node":6,"status":"cancelled","sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00.7Z"}
+{"node":3,"status":"failed","sample":{"elapsed_ns":400000000,"items":{"done":1,"failed":1,"cancelled":1,"total":3}},"at":"2026-10-29T12:00:00.7Z"}
+{"node":7,"status":"started","open":{"parent":1,"step":{"kind":"cdn.purge","type":"workflow"},"measures":["items"]},"sample":{"elapsed_ns":0,"items":{"done":0}},"at":"2026-10-29T12:00:00.7Z"}
+{"node":7,"status":"succeeded","sample":{"elapsed_ns":0,"items":{"done":2}},"at":"2026-10-29T12:00:00.7Z"}
+{"node":1,"status":"failed","sample":{"elapsed_ns":1234000000},"at":"2026-10-29T12:00:01.234Z"}

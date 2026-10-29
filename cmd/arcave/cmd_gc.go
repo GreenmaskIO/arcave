@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -26,7 +25,6 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/printer/json"
 )
 
 var (
@@ -73,7 +71,7 @@ func runGC(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return withGCDeps(cmd.Context(), func(ctx context.Context, d *gcDependencies) error {
-		return cli.NewGCHandler(d.service, json.New(os.Stdout)).GarbageCollect(ctx, req)
+		return cli.NewGCHandler(d.service, runOutput).GarbageCollect(ctx, req)
 	})
 }
 

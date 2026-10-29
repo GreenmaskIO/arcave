@@ -1,0 +1,3 @@
+  NAME      ID                                    STATUS  CREATED           SAVEPOINTS  SIZE
+  baseline  00000000-0000-0000-0000-000000000001  ready   -                 3           1.2 GB
+* feature   019a2b3c-4d5e-7000-8000-000000000007  ready   2026-10-29 19:45  1           48.8 MB

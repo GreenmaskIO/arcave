@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // The restic --json message types this backend reads; the rest goes to the debug
@@ -50,13 +51,22 @@ type resticCmd struct {
 }
 
 // resticSummary is the summary line of a --json run. Only backup fills the byte
-// counters; restore leaves them zero. DataAddedPacked is what the repository
-// grew by, after compression.
+// counters; restore leaves them zero. DataAdded is the new data before
+// compression, DataAddedPacked what the repository grew by after it.
 type resticSummary struct {
 	MessageType         string `json:"message_type"`
 	SnapshotID          string `json:"snapshot_id"`
+	DataAdded           int64  `json:"data_added"`
 	DataAddedPacked     int64  `json:"data_added_packed"`
 	TotalBytesProcessed int64  `json:"total_bytes_processed"`
+}
+
+// resticStatus is a status line of a --json run: backup counts bytes_done, restore
+// bytes_restored, and both a total_bytes that is 0 until restic has scanned.
+type resticStatus struct {
+	BytesDone     int64 `json:"bytes_done"`
+	BytesRestored int64 `json:"bytes_restored"`
+	TotalBytes    int64 `json:"total_bytes"`
 }
 
 // resticProblem is a line of restic's stderr: one per item a run could not
@@ -131,8 +141,22 @@ type runner struct {
 func (r runner) run(ctx context.Context, cmd resticCmd) (resticSummary, error) {
 	log := zerolog.Ctx(ctx)
 
-	var summary resticSummary
-	stdout := &lineWriter{emit: func(line string) { readResticStdout(log, line, &summary) }}
+	var (
+		summary resticSummary
+		// restic counts the bytes itself: its numbers replace the node's.
+		sampler  = progress.NewSampler(progress.Current(ctx), progress.Sample{Bytes: &progress.Bytes{}})
+		restores = len(cmd.args) > 0 && cmd.args[0] == "restore"
+	)
+	onStatus := func(status resticStatus) {
+		sampler.Update(func(sample *progress.Sample) {
+			sample.Bytes.Done = status.BytesDone
+			if restores {
+				sample.Bytes.Done = status.BytesRestored
+			}
+			sample.Bytes.Total = status.TotalBytes
+		})
+	}
+	stdout := &lineWriter{emit: func(line string) { readResticStdout(log, line, &summary, onStatus) }}
 	err := r.exec(ctx, cmd, stdout)
 	stdout.flush()
 	if err != nil {
@@ -184,10 +208,9 @@ func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error
 	return nil
 }
 
-// readResticStdout routes one line of restic's ndjson. A line that is not JSON
-// is logged rather than dropped: restic prints warnings that way, and so does
-// anything the image writes that is not restic.
-func readResticStdout(log *zerolog.Logger, line string, summary *resticSummary) {
+// readResticStdout routes one line of restic's ndjson, a status line to onStatus.
+// A non-JSON line is logged, not dropped: restic prints its warnings that way.
+func readResticStdout(log *zerolog.Logger, line string, summary *resticSummary, onStatus func(resticStatus)) {
 	var msg resticSummary
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
 		log.Debug().Str("restic", line).Msg("restic stdout")
@@ -197,6 +220,10 @@ func readResticStdout(log *zerolog.Logger, line string, summary *resticSummary) 
 	case messageTypeSummary:
 		*summary = msg
 	case messageTypeStatus:
+		var status resticStatus
+		if err := json.Unmarshal([]byte(line), &status); err == nil {
+			onStatus(status)
+		}
 		log.Debug().Str("restic", line).Msg("restic progress")
 	default:
 		// init's "initialized" lands here, as does anything a newer restic adds.

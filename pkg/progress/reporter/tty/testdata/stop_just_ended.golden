@@ -1,0 +1,5 @@
+⠋ queue.restart              1.2s
+├── ✔ queue.stop             0.4s
+│     worker-1  Stopped
+│     worker-2  Stopped
+└── ⠋ queue.start  Starting  0.8s

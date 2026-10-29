@@ -167,7 +167,7 @@ Progress goes to **stderr**, so it never contaminates the JSON (timestamps trimm
 ```text title="stderr"
 INF stopping services
 INF stopping compose services stop_timeout=10s
-INF compose kind=Container name=myapp-db-1 status=Stopped
+INF savepoint.create[before-migration]/compose.stop msg=Stopped resource=container:myapp-db-1 status=in_progress
 INF volume operation started backend=fullcopy op=snapshot snapshot_id=019e843e-1650-7000-8000-000000000000 volume=volume-named-myapp_pgdata
 INF volume operation finished backend=fullcopy duration=672.240958 op=snapshot snapshot_id=019e843e-1650-7000-8000-000000000000 volume=volume-named-myapp_pgdata
 INF image capture started image=["postgres:16"] image_id=sha256:1a6ab3f5… op=save snapshot_id=019e843e-1650-7000-8000-000000000000
@@ -176,8 +176,8 @@ INF writable layer capture started container=b6477db82dd0… op=commit replica=1
 INF writable layer capture finished container=b6477db82dd0… duration=2224.044625 op=commit replica=1 service=db size_bytes=158913306 snapshot_id=019e843e-1650-7000-8000-000000000000
 INF starting services
 INF waiting for services to become healthy wait_timeout=2m0s
-INF compose kind=Container name=myapp-db-1 status=Started
-INF compose kind=Container name=myapp-db-1 status=Healthy
+INF savepoint.create[before-migration]/compose.start msg=Started resource=container:myapp-db-1 status=in_progress
+INF savepoint.create[before-migration]/compose.start msg=Healthy resource=container:myapp-db-1 status=in_progress
 ```
 
 That `id` is what `savepoint remove` takes; `rollback` takes the id or the name.

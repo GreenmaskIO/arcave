@@ -6,7 +6,7 @@ keywords: [arcave output, JSON, stdout, stderr, exit codes, jq, docker compose]
 
 # Output and exit codes
 
-**All results are JSON on stdout. All logs are on stderr.** That split is the contract: a script or an agent parses stdout and never has to pick data out of prose.
+**Results are JSON on stdout. All logs are on stderr.** That split is the contract: a script or an agent parses stdout and never has to pick data out of prose. `--progress json` is the one mode that puts more on stdout, and it says so line by line — see [Progress](#progress). A person at a terminal gets the result as text instead, in two cases only — see [Result format](#result-format).
 
 ```shell title="stdout carries the result, and nothing else"
 ID=$(arcave savepoint create nightly | jq -r .id)
@@ -14,34 +14,92 @@ ID=$(arcave savepoint create nightly | jq -r .id)
 
 Three exceptions: `arcave --version` prints a plain version line, [`arcave mcp`](cli/mcp.md) writes nothing at all to stdout — that stream is its JSON-RPC channel — and [`arcave init`](cli/init.md) prints nothing either; it reports the file it wrote through the log stream.
 
+## Result format
+
+`--format` (or `ARCAVE_FORMAT`) decides how the result is printed:
+
+| Case | stdout |
+|---|---|
+| `--format text` | text |
+| `--format json` | JSON |
+| `--format auto`, the default, with the live tree drawn and stdout a terminal | text |
+| `--format auto`, anything else | JSON |
+| `--progress json` | the JSON stream; `--format text` beside it is refused |
+
+The tree is drawn on stderr and the result goes to stdout, so `ID=$(arcave savepoint create)` captures JSON even on a terminal: `auto` checks both. Text is for reading, not parsing — its shape may change; a type of result the text printer does not know is printed as JSON.
+
+```text title="savepoint create, as text"
+✔ savepoint.create nightly         15.4s
+├── ✔ project.introspect            0.2s
+├── ✔ compose.stop                  0.4s
+├── ✔ savepoint.capture            12.1s
+└── ✔ compose.start                 2.7s
+
+Savepoint nightly · 01a188c4 · 19:45:35 · stored 48.9 MB
+            count     size   stored
+  volumes       3  48.8 MB  48.8 MB
+  layers        4   275 MB  44.1 KB
+  images        4   1.1 GB        0
+
+Warnings (1)
+  ! worker has no volumes: only its writable layer is held
+
+  roll back:  arcave -p myapp rollback nightly
+```
+
+`stored` is what this savepoint added to the store, by kind and, in the title, in all; `size` is what it holds. The kinds are not added up: a layer's archive carries its image's layers, so only the title's total is what the savepoint wrote. The volumes by name are in the JSON result. `Warnings (N)` lists what puts the data at risk first — a container killed at the stop deadline, a replica gone, an image not stored — then what only informs, each hint after a `→`. On a terminal the title is bold and the warnings yellow; written to a file, or under `NO_COLOR`, the text carries no color.
+
+Beside a text result the final tree keeps every stage of the run as a line with its time, and below the stages only what the result does not say: a step that failed, or warned of something the result leaves out, with its path from the root. A failed run that prints no result leaves the whole tree, and its error once, as the `Error:` line below it; a partial `gc` prints its result and keeps only what that result does not say. The final tree writes five warnings per step at most and counts the rest; `--progress log` shows all of them.
+
 ## Exit codes
 
 ```text
 0    success
-1    failure — the error is reported on stderr
+1    failure — the error is reported on stderr, or as the last line under --progress json
 130  interrupted by Ctrl-C or SIGTERM
 ```
 
 The first Ctrl-C lets the command unwind through its own cleanup and then exits `130`; a second one exits `130` at once. A savepoint that committed but whose services would not start exits `1` with the id in the message; the savepoint is complete either way.
 
-## The log stream
+## Progress
 
-Compose's own per-container events arrive on stderr as ordinary arcave log records, in whatever `--log-format` says:
+`--progress` decides how a run shows what it is doing; the result stays the result whatever it says.
 
-```text title="--log-format text"
-INF starting services
-INF waiting for services to become healthy wait_timeout=2m0s
-INF compose kind=Container name=myapp-db-1 status=Started
-INF compose kind=Container name=myapp-db-1 status=Healthy
+- **`tty`** draws the workflow as a live tree on stderr — every step, the bytes of every volume and layer — a bar where the total is known exactly, when a volume or layer is restored and for every `cdc` volume, and the bytes with their rate while a capture runs — a warning under the step it concerns — and leaves the final tree in the scrollback before the result goes to stdout. Only warnings print above the tree unless the `--log-level` flag is given; `log.level` in the config does not lift it. `auto`, the default, picks it when stderr is a terminal and `log.format` is `text`.
+- **`log`** writes one log record per step event, named by its path in the tree:
+
+  ```text
+  INF rollback[sp1]/rollback.apply/volume.restore/volume[volume-named-myapp_pgdata] bytes=1.2GB/1.2GB elapsed=8.1s status=succeeded
+  ```
+
+- **`json`** puts the whole run on stdout as JSON lines, one per event, and the result last:
+
+  ```json
+  {"type":"progress","event":{"node":3,"status":"started","open":{"parent":1,"step":{"kind":"compose.stop","type":"activity"}},"sample":{"elapsed_ns":0},"at":"…"}}
+  {"type":"progress","event":{"node":3,"status":"succeeded","sample":{"elapsed_ns":2100000000},"at":"…"}}
+  {"type":"result","result":{ … }}
+  ```
+
+  A failure ends the stream with `{"type":"error","error":"…"}` instead, and a partial `gc` with its result and its `error` on one line. A failure before the output exists — an unreadable config, a bad flag — is still plain text on stderr. Rebuild the tree by `open.parent`; each later event of a node replaces its state whole.
+
+[`arcave mcp`](cli/mcp.md) always logs its progress: a tool's answer is its result alone.
+
+## Compose's events
+
+Compose's own per-object events — a container `Stopping`, `Stopped`, `Healthy` — land on the step that caused them: `compose.stop`, `compose.down`, `compose.create`, `compose.start`. The tree shows one line per container under that step. Under `--progress log` each is a record of the step, at debug level while the object is under way and at info once it has settled:
+
+```text
+DBG rollback[sp1]/rollback.apply/compose.start msg=Starting resource=container:myapp-db-1 status=in_progress
+INF rollback[sp1]/rollback.apply/compose.start msg=Healthy resource=container:myapp-db-1 status=in_progress
 ```
 
-```json title="--log-format json"
-{"level":"info","kind":"Container","name":"myapp-db-1","status":"Healthy","message":"compose"}
-```
+so `--log-level debug` is how you watch a slow start unfold. In the `--progress json` stream an event about an object carries `resource`, and `"settled": true` once the object has reached its outcome while the step goes on. A `warned` event carries `"in_result": true` when the result repeats the warning — what a savepoint leaves out, a safety snapshot kept, what a gc could not judge or held back.
 
-Steps still in flight — `Waiting`, `Starting`, `Creating`, image-pull progress — are logged at debug level, so `--log-level debug` is how you watch a slow start unfold. `--progress tty` hands the terminal to compose's own renderer instead; `--progress quiet` drops those events altogether.
+`--compose-progress tty` hands the terminal to compose's own renderer instead — under `--progress log` only, since two renderers cannot share one terminal; `--compose-progress quiet` drops those events altogether.
 
 ## What each command prints
+
+The JSON each command prints; [as text](#result-format), each is a summary, a table or a line.
 
 | Command | stdout |
 |---|---|
@@ -124,7 +182,7 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 | `bind` | `bind` | `service`, `target`, `source` (the host path), `read_only` |
 | `anon` | `anon` | `service`, `replica`, `target`, `read_only`, `subpath` |
 
-`read_only` and `subpath` are omitted when unset. `size_bytes` is the volume as the backend measured it — the archive for `fullcopy`, the bytes read for `cdc` — and `stored_bytes` what this capture added to the store, omitted when it added nothing: `fullcopy` stores the archive whole, so the two are equal; `cdc` stores only the chunks that changed, compressed. `payload` is the capturing backend's own bookkeeping, and only that backend reads it:
+`read_only` and `subpath` are omitted when unset. `size_bytes` is the volume as the backend measured it — the archive for `fullcopy`, the bytes read for `cdc` — and `stored_bytes` what this capture added to the store, omitted when it added nothing: `fullcopy` stores the archive whole, so the two are equal; `cdc` stores only the chunks that changed, compressed. `reused_bytes` is what of `size_bytes` the backend found already stored, omitted when none was: `cdc`'s unchanged chunks, counted before compression, so `stored_bytes` and `reused_bytes` need not add up to `size_bytes`. `payload` is the capturing backend's own bookkeeping, and only that backend reads it:
 
 | Backend | `payload` |
 |---|---|

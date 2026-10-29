@@ -81,6 +81,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			assert.Equal(t, Payload{SnapshotObjectID: "3f8a1c0d9b"}, stat.Payload)
 			assert.Equal(t, int64(10485760), stat.SizeBytes, "the volume's logical size")
 			assert.Equal(t, int64(524288), stat.StoredBytes, "what the repository grew by, packed")
+			assert.Equal(t, int64(10485760-1048576), stat.ReusedBytes, "what was read but not added, before compression")
 
 			// Whatever the state, the locks are gone and nothing else was touched.
 			assert.Empty(t, objectsUnder(t, h.repo, locksPrefix), "every standing lock is an orphan by construction")

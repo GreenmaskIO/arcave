@@ -27,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // workingSet is what a mutating workflow operates on: the introspection taken once
@@ -117,7 +118,9 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 
 // introspect reads the compose project as the daemon holds it now.
 func (s *Service) introspect(ctx context.Context) (model.IntrospectionResult, error) {
+	ctx, node := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
 	introspection, err := s.composeInspector.Introspect(ctx)
+	node.End(err)
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
 	}
@@ -282,10 +285,15 @@ func composeProjectAbsent(introspection model.IntrospectionResult) bool {
 }
 
 // stopServices puts the services down and returns the containers the stop deadline
-// killed.
-func (s *Service) stopServices(ctx context.Context, working workingSet) ([]string, error) {
+// killed, warned of as in the result when inResult is set.
+func (s *Service) stopServices(ctx context.Context, working workingSet, inResult bool) ([]string, error) {
 	zerolog.Ctx(ctx).Info().Msg("stopping services")
+	ctx, node := progress.Run(ctx, progress.Step{Kind: kindComposeStop}, progress.MeasureResources)
 	killed, err := s.composeRunner.Stop(ctx, working.project)
+	if len(killed) > 0 {
+		warn(node, fmt.Sprintf("%d container(s) killed at the stop deadline", len(killed)), inResult)
+	}
+	node.End(err)
 	if err != nil {
 		return nil, fmt.Errorf("stopping services: %w", err)
 	}
@@ -296,7 +304,9 @@ func (s *Service) stopServices(ctx context.Context, working workingSet) ([]strin
 // name, so it also takes down what a failed rebuild left standing.
 func (s *Service) composeDown(ctx context.Context, project *types.Project) error {
 	zerolog.Ctx(ctx).Info().Msg("removing the compose project")
-	if err := s.composeRunner.Down(ctx, project); err != nil {
+	if err := runComposeActivity(ctx, kindComposeDown, func(ctx context.Context) error {
+		return s.composeRunner.Down(ctx, project)
+	}); err != nil {
 		return fmt.Errorf("removing the compose project: %w", err)
 	}
 	return nil
@@ -306,7 +316,9 @@ func (s *Service) composeDown(ctx context.Context, project *types.Project) error
 // restored into them first.
 func (s *Service) composeCreate(ctx context.Context, project *types.Project) error {
 	zerolog.Ctx(ctx).Info().Msg("creating the compose project from the spec")
-	if err := s.composeRunner.Create(ctx, project); err != nil {
+	if err := runComposeActivity(ctx, kindComposeCreate, func(ctx context.Context) error {
+		return s.composeRunner.Create(ctx, project)
+	}); err != nil {
 		return fmt.Errorf("creating the compose project: %w", err)
 	}
 	return nil
@@ -314,11 +326,18 @@ func (s *Service) composeCreate(ctx context.Context, project *types.Project) err
 
 // startServices brings the services back and waits on their health checks.
 func (s *Service) startServices(ctx context.Context, working workingSet) error {
-	zerolog.Ctx(ctx).Info().Msg("starting services")
-	if err := s.composeRunner.Start(ctx, working.project, working.waitTimeout); err != nil {
+	if err := s.composeStart(ctx, working.project, working.waitTimeout); err != nil {
 		return fmt.Errorf("starting services: %w", err)
 	}
 	return nil
+}
+
+// composeStart starts the containers of project and waits on their health checks.
+func (s *Service) composeStart(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
+	zerolog.Ctx(ctx).Info().Msg("starting services")
+	return runComposeActivity(ctx, kindComposeStart, func(ctx context.Context) error {
+		return s.composeRunner.Start(ctx, project, waitTimeout)
+	})
 }
 
 // restartServices brings back the services a workflow stopped, on a revertContext:

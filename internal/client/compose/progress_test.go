@@ -234,3 +234,39 @@ func TestProgressLogger_Write_HonoursTheLoggerLevel(t *testing.T) {
 	require.Len(t, records, 1)
 	assert.Equal(t, "Started", records[0]["status"])
 }
+
+// sinkRecorder keeps every event it is handed.
+type sinkRecorder struct {
+	events []Event
+}
+
+func (r *sinkRecorder) Event(evt Event) {
+	r.events = append(r.events, evt)
+}
+
+func TestProgressLogger_Write_ToTheSink(t *testing.T) {
+	// Arrange
+	var buf bytes.Buffer
+	adapter := NewProgressLogger(zerolog.New(&buf))
+	sink := &sinkRecorder{}
+	adapter.SetSink(sink)
+
+	// Act
+	_, err := adapter.Write([]byte(`{"id":"Container arcave-demo-db-1","status":"Stopping"}` + "\n" +
+		`{"id":"Container arcave-demo-db-1","status":"Stopped"}` + "\n" +
+		`{"id":"Network arcave-demo_default","status":"Error","text":"in use"}` + "\n"))
+	require.NoError(t, err)
+	adapter.SetSink(nil)
+	_, err = adapter.Write([]byte(`{"id":"Container arcave-demo-db-1","status":"Removed"}` + "\n"))
+	require.NoError(t, err)
+
+	// Assert
+	assert.Equal(t, []Event{
+		{Kind: "Container", Name: "arcave-demo-db-1", Status: "Stopping", State: EventWorking},
+		{Kind: "Container", Name: "arcave-demo-db-1", Status: "Stopped", State: EventDone},
+		{Kind: "Network", Name: "arcave-demo_default", Status: "Error", Text: "in use", State: EventError},
+	}, sink.events)
+	records := logRecords(t, &buf)
+	require.Len(t, records, 1, "only what came after the sink was taken back is logged")
+	assert.Equal(t, "Removed", records[0]["status"])
+}

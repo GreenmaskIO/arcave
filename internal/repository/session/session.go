@@ -32,6 +32,13 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
+)
+
+// The kinds of the nodes a fork's copy reports: the copy, and each top-level key it copies.
+const (
+	kindSessionCopy progress.Kind = "session.copy"
+	kindKey         progress.Kind = "key"
 )
 
 const (
@@ -301,13 +308,18 @@ func copySessionTree(
 	ctx context.Context, st storages.Storager, from, to model.SessionID, keys, dirs []string,
 ) (int64, error) {
 	var written int64
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindSessionCopy}, len(dirs)+len(keys))
 	for _, dir := range dirs {
 		if err := ctx.Err(); err != nil {
+			batch.End(err)
 			return written, err
 		}
-		stat, err := copyPrefix(ctx, st, path.Join(sessionKey(from), dir), path.Join(sessionKey(to), dir))
+		stat, err := copyKey(ctx, dir, func(ctx context.Context) (storages.CopyStat, error) {
+			return copyPrefix(ctx, st, path.Join(sessionKey(from), dir), path.Join(sessionKey(to), dir))
+		})
 		written += stat.Bytes
 		if err != nil {
+			batch.End(err)
 			return written, fmt.Errorf("copy %s: %w", dir, err)
 		}
 		log.Ctx(ctx).Info().Str("session", to.String()).Str("tree", dir).Int64("bytes", stat.Bytes).
@@ -315,16 +327,32 @@ func copySessionTree(
 	}
 	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
+			batch.End(err)
 			return written, err
 		}
-		stat, err := st.Copy(ctx, path.Join(sessionKey(from), key), path.Join(sessionKey(to), key),
-			storages.WithClientSideCopyFallback())
+		stat, err := copyKey(ctx, key, func(ctx context.Context) (storages.CopyStat, error) {
+			return st.Copy(ctx, path.Join(sessionKey(from), key), path.Join(sessionKey(to), key),
+				storages.WithClientSideCopyFallback())
+		})
 		written += stat.Bytes
 		if err != nil {
+			batch.End(err)
 			return written, fmt.Errorf("copy %s: %w", key, err)
 		}
 	}
+	batch.End(nil)
 	return written, nil
+}
+
+// copyKey runs one top-level key's copy as its own node, ended with the bytes it copied.
+func copyKey(
+	ctx context.Context, key string, copyFn func(ctx context.Context) (storages.CopyStat, error),
+) (storages.CopyStat, error) {
+	ctx, node := progress.Run(ctx, progress.Step{Kind: kindKey, ID: key}, progress.MeasureBytes)
+	stat, err := copyFn(ctx)
+	node.Progress(progress.Sample{Bytes: &progress.Bytes{Done: stat.Bytes}})
+	node.End(err)
+	return stat, err
 }
 
 // copyPrefix copies everything under src to dst. A prefix holding no object, which CopyAll

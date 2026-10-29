@@ -15,7 +15,9 @@
 package core
 
 import (
+	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -24,6 +26,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // capturePolicyChange is one resource a capture takes otherwise than the latest savepoint
@@ -35,9 +38,8 @@ type capturePolicyChange struct {
 	current  string
 }
 
-// warnCapturePolicyDrift warns of every resource the latest savepoint captured otherwise
-// than this capture will: a label added or dropped, an override file left out, the labels
-// a rollback put back. Best-effort: a spec it cannot read is only logged.
+// warnCapturePolicyDrift warns, once per service, of every unit the latest savepoint captured
+// otherwise than this capture will; a spec it cannot read is only logged.
 func (s *Service) warnCapturePolicyDrift(ctx context.Context, savepoints []model.Savepoint, current *types.Project) {
 	latest, ok := findLatestSavepoint(savepoints)
 	if !ok {
@@ -49,10 +51,55 @@ func (s *Service) warnCapturePolicyDrift(ctx context.Context, savepoints []model
 		log.Warn().Err(err).Msg("cannot compare the capture policy with the latest savepoint")
 		return
 	}
-	for _, change := range findCapturePolicyDrift(previous, current) {
-		log.Warn().Str("service", change.service).Str("stamp", change.stampKey).
+	var (
+		changes = findCapturePolicyDrift(previous, current)
+		node    = progress.Current(ctx)
+		ref     = cmp.Or(latest.Name, latest.ID.String())
+	)
+	for _, change := range changes {
+		log.Info().Str("service", change.service).Str("stamp", change.stampKey).
 			Str("was", change.previous).Str("now", change.current).
 			Msg("captured otherwise than in the latest savepoint")
+	}
+	for _, serviceChanges := range newServiceChanges(changes) {
+		node.Warn(newDriftWarning(serviceChanges, ref))
+	}
+}
+
+// newServiceChanges groups changes, sorted by service, one group per service.
+func newServiceChanges(changes []capturePolicyChange) [][]capturePolicyChange {
+	var groups [][]capturePolicyChange
+	for i, change := range changes {
+		if i == 0 || change.service != changes[i-1].service {
+			groups = append(groups, nil)
+		}
+		groups[len(groups)-1] = append(groups[len(groups)-1], change)
+	}
+	return groups
+}
+
+// newDriftWarning renders one service's changes as one line, each unit's stamp before and now.
+func newDriftWarning(changes []capturePolicyChange, ref string) string {
+	units := make([]string, 0, len(changes))
+	for _, change := range changes {
+		unit := strings.Replace(strings.TrimPrefix(change.stampKey, model.CaptureStampLabelPrefix), ".", " ", 1)
+		units = append(units, fmt.Sprintf("%s %s → %s",
+			unit, formatCaptureStamp(change.previous), formatCaptureStamp(change.current)))
+	}
+	return fmt.Sprintf("%s captured otherwise than in savepoint %s: %s",
+		changes[0].service, ref, strings.Join(units, ", "))
+}
+
+// formatCaptureStamp renders a stamp as "left out", else its backend.
+func formatCaptureStamp(stamp string) string {
+	parsed, err := model.ParseCaptureStamp(stamp)
+	switch {
+	case err != nil:
+		return stamp
+	case !parsed.Capture:
+		return "left out"
+	default:
+		return cmp.Or(parsed.Backend, "kept")
 	}
 }
 

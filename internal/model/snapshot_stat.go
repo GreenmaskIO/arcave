@@ -29,5 +29,8 @@ type SnapshotStat struct {
 	// StoredBytes is what this capture added to the store; below SizeBytes when
 	// the backend found the bytes already there, as a cdc increment does.
 	StoredBytes int64 `json:"stored_bytes,omitempty"`
+	// ReusedBytes is what of SizeBytes the backend found already stored; StoredBytes, compressed,
+	// may be less than the rest.
+	ReusedBytes int64 `json:"reused_bytes,omitempty"`
 	Payload     any   `json:"payload,omitempty"`
 }

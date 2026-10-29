@@ -41,13 +41,15 @@ Short aliases: `savepoint` also answers to `save` and `sp`, every `list` to `ls`
 | `--log-format` | `text` | `log.format` | `text` or `json`. |
 | `--wait-timeout` | `2m0s` | `compose.wait_timeout` | How long to wait for services to become healthy after they are started. |
 | `--stop-timeout` | `10s` | `compose.stop_timeout` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |
-| `--progress` | `log` | `compose.progress` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
+| `--progress` | `auto` | *(none)* | How a run shows its progress: `auto` (`tty` on a terminal with text logs, else `log`), `tty` (a live tree on stderr), `log` (log records) or `json` (JSON lines on stdout, the result last). Read from `ARCAVE_PROGRESS` when the flag is absent. See [Output](../output.md#progress). |
+| `--format` | `auto` | *(none)* | How the result is printed on stdout: `auto` (text while the live tree is drawn and stdout is a terminal, else JSON), `json` or `text`. `text` is refused beside `--progress json`. Read from `ARCAVE_FORMAT` when the flag is absent. See [Output](../output.md#result-format). |
+| `--compose-progress` | `log` | `compose.progress` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
 | `-v`, `--version` | — | *(none)* | Print the version, commit and build date. |
 | `-h`, `--help` | — | *(none)* | Show help for the command. |
 
 A flag carrying a **config key** can also be set in `.arcave/config.yaml` or through an `ARCAVE_<KEY>` variable; a changed flag beats the variable, which beats the file, which beats the default. See [Configuration](../configuration.md#precedence).
 
-`--project-name`, `--session` and `--config` carry no config key on purpose: they steer one run rather than describing the project. In particular the compose project is not a config key — one project directory may hold several compose projects.
+`--project-name`, `--session`, `--progress`, `--format` and `--config` carry no config key on purpose: they steer one run rather than describing the project. In particular the compose project is not a config key — one project directory may hold several compose projects.
 
 Durations carry their unit — `90s`, `5m`, `1h30m`. A bare number is an error, not a guess.
 

@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // ObjectCollector finds the garbage of one data kind, one implementation's way.
@@ -147,6 +148,17 @@ func (c *collectorSet) runComposeProjectCollectors(
 // runCollector runs find into the collector's report: a scope or probe failure aborts it, a
 // failure of find is the report's own error.
 func (c *collectorSet) runCollector(
+	ctx context.Context, collector ObjectCollector, composeProject model.DockerComposeProjectName, scopeErr error,
+	find func() (model.GarbageStat, error),
+) model.GarbageReport {
+	_, node := progress.Run(ctx, progress.Step{Kind: kindCollector, ID: string(collector.Kind())})
+	report := c.readCollectorReport(ctx, collector, composeProject, scopeErr, find)
+	endCollectorNode(ctx, node, report)
+	return report
+}
+
+// readCollectorReport runs find into the collector's report.
+func (c *collectorSet) readCollectorReport(
 	ctx context.Context, collector ObjectCollector, composeProject model.DockerComposeProjectName, scopeErr error,
 	find func() (model.GarbageStat, error),
 ) model.GarbageReport {

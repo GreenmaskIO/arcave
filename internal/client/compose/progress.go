@@ -37,42 +37,78 @@ const progressLogMessage = "compose"
 const maxProgressLine = 64 << 10
 
 // skippedStatusPrefix is what SkippedEvent puts in front of its reason. It is
-// the one status the level table cannot hold as a key, since the reason is
+// the one status the state table cannot hold as a key, since the reason is
 // appended to it.
 const skippedStatusPrefix = "Skipped: "
 
-// progressLevels maps compose's status texts onto log levels. The severity
-// compose itself attaches to an event (progress.Working/Done/Warning/Error) is
-// not serialised — jsonMessage carries only StatusText — so the level is
-// recovered from the text, and the full set of texts comes from the event
-// constructors in the library's pkg/progress/event.go.
-//
-// The split is "in flight" versus "settled": a step that is still running is
-// DEBUG, the outcome it settles into is INFO. A status this table does not know
-// stays INFO; see the adapter's doc comment for why nothing guesses harder.
-var progressLevels = map[string]zerolog.Level{
-	"Creating":   zerolog.DebugLevel,
-	"Starting":   zerolog.DebugLevel,
-	"Waiting":    zerolog.DebugLevel,
-	"Restarting": zerolog.DebugLevel,
-	"Stopping":   zerolog.DebugLevel,
-	"Killing":    zerolog.DebugLevel,
-	"Removing":   zerolog.DebugLevel,
-	"Building":   zerolog.DebugLevel,
+// EventState is where one event leaves its object.
+type EventState int
 
-	"Created":   zerolog.InfoLevel,
-	"Started":   zerolog.InfoLevel,
-	"Healthy":   zerolog.InfoLevel,
-	"Exited":    zerolog.InfoLevel,
-	"Restarted": zerolog.InfoLevel,
-	"Running":   zerolog.InfoLevel,
-	"Stopped":   zerolog.InfoLevel,
-	"Killed":    zerolog.InfoLevel,
-	"Removed":   zerolog.InfoLevel,
-	"Built":     zerolog.InfoLevel,
-	"Skipped":   zerolog.InfoLevel,
+const (
+	// EventWorking is a step still under way.
+	EventWorking EventState = iota
+	// EventDone is the outcome a step settled into.
+	EventDone
+	// EventWarning is a step compose skipped.
+	EventWarning
+	// EventError is a step that failed.
+	EventError
+)
 
-	"Error": zerolog.ErrorLevel,
+// Event is one decoded compose progress event.
+type Event struct {
+	// Kind is compose's kind of object — Container, Network, Volume, Image — empty when the id
+	// names none.
+	Kind   string
+	Name   string
+	Status string
+	Text   string
+	State  EventState
+}
+
+// EventSink takes the adapter's events in place of the log while it is set.
+type EventSink interface {
+	Event(evt Event)
+}
+
+// progressStates maps compose's status texts onto the state they leave an object in. The
+// severity compose itself attaches to an event (progress.Working/Done/Warning/Error) is not
+// serialised — jsonMessage carries only StatusText — so the state is recovered from the text,
+// and the full set of texts comes from the event constructors in the library's
+// pkg/progress/event.go. A status this table does not know is done; see the adapter's doc
+// comment for why nothing guesses harder.
+var progressStates = map[string]EventState{
+	"Creating":   EventWorking,
+	"Starting":   EventWorking,
+	"Waiting":    EventWorking,
+	"Restarting": EventWorking,
+	"Stopping":   EventWorking,
+	"Killing":    EventWorking,
+	"Removing":   EventWorking,
+	"Building":   EventWorking,
+
+	"Created":   EventDone,
+	"Started":   EventDone,
+	"Healthy":   EventDone,
+	"Exited":    EventDone,
+	"Restarted": EventDone,
+	"Running":   EventDone,
+	"Stopped":   EventDone,
+	"Killed":    EventDone,
+	"Removed":   EventDone,
+	"Built":     EventDone,
+	"Skipped":   EventDone,
+
+	"Error": EventError,
+}
+
+// stateLevels is the level a state is logged at: a step in flight is DEBUG, the outcome it
+// settles into INFO.
+var stateLevels = map[EventState]zerolog.Level{
+	EventWorking: zerolog.DebugLevel,
+	EventDone:    zerolog.InfoLevel,
+	EventWarning: zerolog.WarnLevel,
+	EventError:   zerolog.ErrorLevel,
 }
 
 // progressEvent is the subset of the compose library's jsonMessage this package
@@ -107,11 +143,15 @@ type progressEvent struct {
 // race. The mutex protects the line buffer, which is where a race would corrupt
 // a record by splicing two half-events together. It does not order the records:
 // concurrent events were unordered before this adapter too.
+//
+// While a sink is set, a decoded event goes to it instead of the log: compose.Client sets the
+// one its call's context carries for the call's duration.
 type ProgressLogger struct {
 	logger zerolog.Logger
 
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	sink EventSink
 }
 
 // NewProgressLogger returns the io.WriteCloser to hand compose as its progress
@@ -120,6 +160,13 @@ type ProgressLogger struct {
 // already exists.
 func NewProgressLogger(logger zerolog.Logger) *ProgressLogger {
 	return &ProgressLogger{logger: logger}
+}
+
+// SetSink routes decoded events to sink, or back to the log for nil.
+func (p *ProgressLogger) SetSink(sink EventSink) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sink = sink
 }
 
 // Write accumulates b and emits one record per complete line. A Write is not
@@ -190,8 +237,20 @@ func (p *ProgressLogger) emit(line string) {
 		return
 	}
 
-	record := p.logger.WithLevel(progressLevel(event))
-	if kind, name := splitProgressID(event.ID); name != "" {
+	kind, name := splitProgressID(event.ID)
+	if p.sink != nil {
+		p.sink.Event(Event{
+			Kind:   kind,
+			Name:   name,
+			Status: event.Status,
+			Text:   event.Text,
+			State:  progressState(event),
+		})
+		return
+	}
+
+	record := p.logger.WithLevel(stateLevels[progressState(event)])
+	if name != "" {
 		if kind != "" {
 			record = record.Str("kind", kind)
 		}
@@ -223,32 +282,31 @@ func (p *ProgressLogger) raw(line string) {
 	p.logger.Info().Str("source", "compose").Msg(line)
 }
 
-// progressLevel picks the level for one event. Byte-progress ticks are demoted
-// wholesale: pull.go fills Current/Total/Percent from the daemon's own progress
-// messages, and those arrive many times per layer. Demoting them by *content*
-// rather than by remembering the previous status is what keeps this adapter
-// stateless — the alternative, an id-to-status map, is deduplication by another
-// name, and duplicate lifecycle events (compose reports Waiting and Healthy
-// twice per Up) are reported honestly instead.
+// progressState picks the state of one event. Byte-progress ticks are in flight wholesale:
+// pull.go fills Current/Total/Percent from the daemon's own progress messages, and those arrive
+// many times per layer. Judging them by *content* rather than by remembering the previous status
+// is what keeps this adapter stateless — the alternative, an id-to-status map, is deduplication
+// by another name, and duplicate lifecycle events (compose reports Waiting and Healthy twice per
+// Up) are reported honestly instead.
 //
-// The terminal "Pull complete" / "Already exists" events arrive with no total,
-// so they stay at INFO: one visible line per layer, none of the ticks.
-func progressLevel(event progressEvent) zerolog.Level {
+// The terminal "Pull complete" / "Already exists" events arrive with no total, so they are
+// done: one visible line per layer, none of the ticks.
+func progressState(event progressEvent) EventState {
 	if event.Total > 0 {
-		return zerolog.DebugLevel
+		return EventWorking
 	}
 	if strings.HasPrefix(event.Status, skippedStatusPrefix) {
-		return zerolog.WarnLevel
+		return EventWarning
 	}
-	if level, ok := progressLevels[event.Status]; ok {
-		return level
+	if state, ok := progressStates[event.Status]; ok {
+		return state
 	}
 	// An unknown status is reported, not guessed at. ErrorMessageEvent puts a
-	// free-form message here and will land on INFO; that is cosmetic, since the
+	// free-form message here and will land as done; that is cosmetic, since the
 	// failure itself still comes back from Up and arcave logs it at ERROR in its
 	// own right. A "contains error/failed → WARN" heuristic would be guesswork,
 	// and guesswork in a log is worse than an honest INFO.
-	return zerolog.InfoLevel
+	return EventDone
 }
 
 // splitProgressID splits compose's event id — "Container arcave-demo-app-1" —

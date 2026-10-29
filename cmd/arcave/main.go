@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,16 +28,27 @@ import (
 // exitInterrupted is the shell's code for a process ended by SIGINT.
 const exitInterrupted = 130
 
+// errInterruptedAgain ends the output of a run a second signal exits.
+var errInterruptedAgain = errors.New("interrupted again: exited before cleaning up")
+
 // main executes the command tree. Config resolution and logger setup happen in
 // rootCmd's PersistentPreRunE (cmd_root.go); each command builds the dependencies
 // it needs via newDependencies (dependencies.go) and releases them on return.
 func main() {
 	ctx, stop := notifyInterrupt()
+	// A panic takes the live tree down first, or the terminal is left without its cursor.
+	defer func() {
+		if r := recover(); r != nil {
+			closeOutput(runOutput, fmt.Errorf("panic: %v", r))
+			panic(r)
+		}
+	}()
 	err := rootCmd.ExecuteContext(ctx)
 	interrupted := ctx.Err() != nil
 	stop()
+	// The output ends first, so the error comes after the final tree, or as the json stream's last line.
+	closeOutput(runOutput, err)
 	if err != nil {
-		// cobra has already reported the error on stderr.
 		if interrupted {
 			os.Exit(exitInterrupted)
 		}
@@ -59,6 +72,11 @@ func notifyInterrupt() (context.Context, context.CancelFunc) {
 		zerolog.Ctx(ctx).Warn().Msg("interrupted: cleaning up, interrupt again to exit at once")
 		cancel()
 		<-signals
+		var out output
+		if opened, ok := openedOutput.Load().(output); ok {
+			out = opened
+		}
+		closeOutput(out, errInterruptedAgain)
 		os.Exit(exitInterrupted)
 	}()
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/rs/zerolog"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 const (
@@ -95,10 +97,12 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 		previous *types.Project
 		parseErr error
 		want     string
+		warnings []string
 	}{
-		{name: "a drift is warned of, naming the savepoint",
+		{name: "a drift is warned of once per service, naming the savepoint",
 			previous: stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): keptStamp}),
-			want:     `"message":"captured otherwise than in the latest savepoint"`},
+			want:     `"message":"captured otherwise than in the latest savepoint"`,
+			warnings: []string{"app captured otherwise than in savepoint sp: mount /cache fullcopy → left out"}},
 		{name: "a spec that cannot be read is only logged",
 			parseErr: errors.New("broken"),
 			want:     `"message":"cannot compare the capture policy with the latest savepoint"`},
@@ -113,7 +117,9 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 			codec.On("Parse", mock.Anything, demoSpecBytes).Return(tt.previous, tt.parseErr).Once()
 			svc := New(Deps{SessionLocker: fakeSessionLocker{}, SavepointRepo: repo, SpecCodec: codec})
 			logs := &syncBuffer{}
+			recorder := &warnedRecorder{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
+			ctx, _ = progress.New(recorder, fixedNow).Begin(ctx, progress.Step{Kind: kindSavepointCreate})
 
 			// Act
 			svc.warnCapturePolicyDrift(ctx, []model.Savepoint{record},
@@ -122,8 +128,32 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 			// Assert
 			assert.Contains(t, logs.String(), tt.want)
 			assert.Contains(t, logs.String(), `"savepoint":"sp"`)
+			assert.Equal(t, tt.warnings, recorder.msgs)
 			repo.AssertExpectations(t)
 			codec.AssertExpectations(t)
 		})
 	}
+}
+
+func fixedNow() time.Time {
+	return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+}
+
+// One line per service, each unit of it spelled was → now.
+func TestNewDriftWarning(t *testing.T) {
+	changes := []capturePolicyChange{
+		{service: "app", stampKey: string(model.NewMountStampLabel("/cache")), previous: keptStamp, current: excludedStamp},
+		{service: "app", stampKey: string(model.SystemLabelImageStamp), previous: excludedStamp, current: "true; origin=config"},
+		{service: "db", stampKey: string(model.SystemLabelWritableLayerStamp), previous: keptStamp, current: "unreadable"},
+	}
+
+	var got []string
+	for _, serviceChanges := range newServiceChanges(changes) {
+		got = append(got, newDriftWarning(serviceChanges, "sp"))
+	}
+
+	assert.Equal(t, []string{
+		"app captured otherwise than in savepoint sp: mount /cache fullcopy → left out, image left out → kept",
+		"db captured otherwise than in savepoint sp: writable-layer fullcopy → unreadable",
+	}, got)
 }

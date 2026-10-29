@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 	"github.com/rs/zerolog"
 	"github.com/xhit/go-str2duration/v2"
 	"golang.org/x/sync/errgroup"
@@ -47,7 +48,13 @@ var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 //
 // On error the record is zero, whatever the store holds: a savepoint committed
 // before a failed restart is named by the error and found by `savepoint list`.
-func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error) {
+func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (_ model.Savepoint, err error) {
+	// Outside the lock: a lost lock cancels the work under it, and the root says why.
+	ctx, node := progress.Begin(ctx, progress.Step{
+		Kind: kindSavepointCreate,
+		Name: req.Name,
+	})
+	defer func() { node.End(err) }()
 	return locked(ctx, s, model.SessionLockOperationSavepointCreate,
 		func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.Savepoint, error) {
 			return s.createSavepoint(ctx, grantedLock, req)
@@ -81,7 +88,7 @@ func (s *Service) createSavepoint(
 	}
 	s.warnCapturePolicyDrift(ctx, visible, working.project)
 
-	killed, err := s.stopServices(ctx, working)
+	killed, err := s.stopServices(ctx, working, true)
 	if err != nil {
 		// A stop that failed or was interrupted partway may have stopped some services.
 		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")
@@ -167,7 +174,9 @@ func visibleSavepoints(savepoints []model.Savepoint) []model.Savepoint {
 //
 // A dry run takes no lock — it only reads. A real removal locks before it lists,
 // so the set it selects is the set it deletes.
-func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error) {
+func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (_ model.RemoveResult, err error) {
+	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindSavepointRemove})
+	defer func() { node.End(err) }()
 	if err := validateRemoveRequest(req); err != nil {
 		return model.RemoveResult{}, err
 	}
@@ -368,17 +377,27 @@ func (s *Service) applyRemoval(
 	// mid-delete. Wait reports only the first failure, so each goroutine records
 	// its own — that is what names the savepoints whose data survived.
 	errs := make([]error, len(removed))
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindSavepointDrop}, len(removed))
 	eg := new(errgroup.Group)
 	eg.SetLimit(maxParallelRemovals)
 	for i, savepoint := range removed {
 		eg.Go(func() error {
-			errs[i] = s.removeSavepoint(ctx, grantedLock, savepoint)
+			removeCtx, node := progress.Begin(ctx, progress.Step{
+				Kind: kindSavepoint,
+				ID:   savepoint.ID.String(),
+				Name: savepoint.Name,
+			})
+			errs[i] = s.removeSavepoint(removeCtx, grantedLock, savepoint)
+			node.End(errs[i])
 			return errs[i]
 		})
 	}
 	if err := eg.Wait(); err != nil {
-		return errors.Join(errs...)
+		err = errors.Join(errs...)
+		batch.End(err)
+		return err
 	}
+	batch.End(nil)
 	return nil
 }
 

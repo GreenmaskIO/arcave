@@ -20,6 +20,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -29,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 const (
@@ -444,6 +446,32 @@ func TestCopier_RestoreWritableLayer_LoadsWhatTheArchiverRenders(t *testing.T) {
 	engine.AssertExpectations(t)
 }
 
+// The load is counted once, here and not in the archiver, out of the archive size the
+// capture recorded.
+func TestCopier_RestoreWritableLayer_CountsTheLoadOutOfTheLayerSize(t *testing.T) {
+	// Arrange
+	recorder := &bytesRecorder{}
+	now := func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
+	ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(recorder, now))
+	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "rollback"})
+	ctx, _ = progress.Run(ctx, progress.Step{Kind: "layer.restore"}, progress.MeasureBytes)
+	engine := &mockImageEngine{}
+	engine.On("ImageExists", mock.Anything, imageID).Return(false, nil).Once()
+	engine.On("LoadImage", mock.Anything, "rendered archive").Return(nil).Once()
+	engine.On("ImageExists", mock.Anything, imageID).Return(true, nil).Once()
+	engine.On("TagImage", mock.Anything, imageID, "arcave/demo:sp-1").Return(nil).Once()
+	req := demoRestoreRequest()
+	req.Layer.SizeBytes = int64(len("rendered archive"))
+
+	// Act
+	_, err := newCopier(newStore(t), engine, &stubArchiver{renders: "rendered archive"}).RestoreWritableLayer(ctx, req)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []progress.Bytes{{Done: req.Layer.SizeBytes, Total: req.Layer.SizeBytes}}, recorder.samples)
+	engine.AssertExpectations(t)
+}
+
 func TestCopier_RestoreWritableLayer_RefusesALoadThatResolvedElsewhere(t *testing.T) {
 	// Arrange: the daemon takes the archive but ends up holding another image.
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -491,6 +519,17 @@ func TestCopier_RestoreWritableLayer_RefusesAnEmptyReference(t *testing.T) {
 	// Assert
 	require.ErrorContains(t, err, "under no reference")
 	engine.AssertExpectations(t)
+}
+
+// bytesRecorder keeps the bytes of every sample the tracker reports.
+type bytesRecorder struct {
+	samples []progress.Bytes
+}
+
+func (r *bytesRecorder) Report(evt progress.Event) {
+	if evt.Sample.Bytes != nil {
+		r.samples = append(r.samples, *evt.Sample.Bytes)
+	}
 }
 
 // stubArchiver stands in for a real archiver: it records the archive it was given and

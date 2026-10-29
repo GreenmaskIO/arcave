@@ -22,9 +22,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/progress"
+	composeprogress "github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -39,6 +40,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // newCDCOptions is the translation that keeps internal/config free of any package
@@ -378,36 +380,36 @@ func TestNewProgressWriter(t *testing.T) {
 	}{
 		{
 			name: "log folds compose's events into arcave's own log",
-			mode: config.ProgressLog, wantMode: progress.ModeJSON,
+			mode: config.ProgressLog, wantMode: composeprogress.ModeJSON,
 		},
 		{
 			// ModeAuto, not ModeTTY: compose then redraws on a terminal and falls
 			// back to plain lines in a pipe, where ModeTTY would spray ANSI escapes
 			// into a log file.
 			name: "tty hands the terminal back to compose's own renderer",
-			mode: config.ProgressTTY, wantMode: progress.ModeAuto, wantOut: os.Stderr,
+			mode: config.ProgressTTY, wantMode: composeprogress.ModeAuto, wantOut: os.Stderr,
 		},
 		{
 			name: "quiet discards the stream as well as the UI",
-			mode: config.ProgressQuiet, wantMode: progress.ModeQuiet, wantOut: io.Discard,
+			mode: config.ProgressQuiet, wantMode: composeprogress.ModeQuiet, wantOut: io.Discard,
 		},
 		{
 			name: "an unset channel is the log",
-			mode: "", wantMode: progress.ModeJSON,
+			mode: "", wantMode: composeprogress.ModeJSON,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: progress.Mode is the library's global, so it is restored.
-			original := progress.Mode
-			t.Cleanup(func() { progress.Mode = original })
+			original := composeprogress.Mode
+			t.Cleanup(func() { composeprogress.Mode = original })
 
 			// Act
 			out := newProgressWriter(tt.mode, zerolog.Nop())
 
 			// Assert
-			assert.Equal(t, tt.wantMode, progress.Mode)
+			assert.Equal(t, tt.wantMode, composeprogress.Mode)
 			if tt.wantOut == nil {
 				assert.IsType(t, &compose.ProgressLogger{}, out)
 				return
@@ -750,4 +752,56 @@ func TestServeResticRepositories(t *testing.T) {
 	require.Len(t, objects, 1)
 	assert.Equal(t, "volume-named-db/locks/a1", objects[0].Name)
 	assert.Contains(t, served.repoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
+}
+
+// eventRecorder keeps every event it is handed.
+type eventRecorder struct {
+	events []progress.Event
+}
+
+func (r *eventRecorder) Report(evt progress.Event) {
+	r.events = append(r.events, evt)
+}
+
+func TestComposeEventSink_Event(t *testing.T) {
+	// Arrange
+	recorder := &eventRecorder{}
+	ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(recorder, time.Now))
+	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "savepoint.create"})
+	ctx, node := progress.Run(ctx, progress.Step{Kind: "compose.stop"}, progress.MeasureResources)
+	sink := newComposeEventSink(ctx)
+	require.NotNil(t, sink)
+
+	// Act
+	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopping", State: compose.EventWorking})
+	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopped", State: compose.EventDone})
+	sink.Event(compose.Event{Name: "3f2a", Status: "Error", Text: "denied", State: compose.EventError})
+	node.End(nil)
+
+	// Assert
+	type line struct {
+		status   progress.Status
+		msg      string
+		resource progress.Resource
+		settled  bool
+	}
+	var got []line
+	for _, evt := range recorder.events {
+		if evt.Resource != nil {
+			got = append(got, line{evt.Status, evt.Msg, *evt.Resource, evt.Settled})
+		}
+	}
+	assert.Equal(t, []line{
+		{progress.StatusInProgress, "Stopping", progress.Resource{Kind: "container", ID: "demo-db-1"}, false},
+		{progress.StatusInProgress, "Stopped", progress.Resource{Kind: "container", ID: "demo-db-1"}, true},
+		{progress.StatusWarned, "Error denied", progress.Resource{Kind: composeResourceObject, ID: "3f2a"}, false},
+	}, got)
+}
+
+func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
+	// Act
+	sink := newComposeEventSink(context.Background())
+
+	// Assert
+	assert.Nil(t, sink)
 }

@@ -33,6 +33,9 @@ type (
 		// Payload is the SnapshotStat.Payload the write reported; only the backend
 		// that produced it interprets it.
 		Payload any
+		// SizeBytes is the SnapshotStat.SizeBytes the write reported, 0 when
+		// unknown: a total for progress, never a check.
+		SizeBytes int64
 	}
 
 	BackendRemoveRequest struct {
