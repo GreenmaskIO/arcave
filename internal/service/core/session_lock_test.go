@@ -157,7 +157,7 @@ func TestService_locked(t *testing.T) {
 			operation: model.SessionLockOperationSavepointRemove,
 			run: func(svc *Service) error {
 				_, err := svc.RemoveSavepoints(newLockTestContext(),
-					model.RemoveRequest{IDs: []model.SavepointID{"019e843e-1650-7000-8000-000000000001"}})
+					model.RemoveRequest{Refs: []string{"019e843e-1650-7000-8000-000000000001"}})
 				return err
 			},
 		},
@@ -587,7 +587,7 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	})
 
 	// Act
-	_, err := svc.RemoveSavepoints(newLockTestContext(), model.RemoveRequest{IDs: []model.SavepointID{record.ID}})
+	_, err := svc.RemoveSavepoints(newLockTestContext(), model.RemoveRequest{Refs: []string{record.ID.String()}})
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrSessionLockLost)

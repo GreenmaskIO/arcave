@@ -71,7 +71,7 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	require.NoError(t, err)
 	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
 	require.NoError(t, err)
-	_, err = baseline.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{IDs: []model.SavepointID{first.ID}})
+	_, err = baseline.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{Refs: []string{first.ID.String()}})
 	require.NoError(t, err)
 
 	composeDir := filepath.Join(env.sessionDir(model.DefaultSession), "compose", env.project)
@@ -381,7 +381,7 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 	second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
 	kept := env.hashAll(t)
-	_, err = env.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{IDs: []model.SavepointID{first.ID}})
+	_, err = env.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{Refs: []string{first.ID.String()}})
 	require.NoError(t, err)
 	for _, stat := range first.Stats {
 		exists, err := env.composeProjectStore.Exists(env.ctx,

@@ -30,9 +30,9 @@ var (
 	savepointRemoveDryRun       bool
 
 	savepointRemoveCmd = &cobra.Command{
-		Use:     "remove [id...]",
+		Use:     "remove [id|name...]",
 		Aliases: []string{"rm"},
-		Short:   "Remove savepoints by ID, or by retention rules",
+		Short:   "Remove savepoints by id or name, or by retention rules",
 		Args:    cobra.ArbitraryArgs,
 		RunE:    runSavepointRemove,
 	}
@@ -45,7 +45,7 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewSavepointRemoveHandler(d.service, d.printer)
 		return h.SavepointRemove(ctx, model.RemoveRequest{
-			IDs:          model.SavepointIDs(args),
+			Refs:         args,
 			RetainRecent: savepointRemoveRetainRecent,
 			RetainFor:    savepointRemoveRetainFor,
 			BeforeDate:   savepointRemoveBeforeDate,

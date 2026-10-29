@@ -104,7 +104,7 @@ arcave savepoint remove 019e84ab-9d60-7000-8000-000000000000 --retain-recent 3
 ```
 
 ```text title="stderr"
-Error: cannot combine savepoint ids with retain-recent/retain-for/before-date
+Error: cannot combine savepoint ids or names with retain-recent/retain-for/before-date
 ```
 
 ```shell
@@ -112,7 +112,7 @@ arcave savepoint remove
 ```
 
 ```text title="stderr"
-Error: specify savepoint ids, or at least one of retain-recent, retain-for or before-date
+Error: specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date
 ```
 
 Neither is a default. A `remove` with nothing to go on would be a command that deletes everything by accident.

@@ -227,7 +227,7 @@ func (s *Service) selectRemoval(ctx context.Context, req model.RemoveRequest) ([
 	return removed, nil
 }
 
-// validateRemoveRequest rejects contradictory or incomplete requests — ids and
+// validateRemoveRequest rejects contradictory or incomplete requests — refs and
 // retention rules are mutually exclusive, one selector is required — with the
 // model sentinels the adapters match on.
 func validateRemoveRequest(req model.RemoveRequest) error {
@@ -239,28 +239,28 @@ func validateRemoveRequest(req model.RemoveRequest) error {
 
 	hasRetention := req.RetainRecent > 0 || req.RetainFor != "" || req.BeforeDate != ""
 
-	if len(req.IDs) > 0 && hasRetention {
+	if len(req.Refs) > 0 && hasRetention {
 		return model.ErrRemoveSelectorConflict
 	}
-	if len(req.IDs) == 0 && !hasRetention {
+	if len(req.Refs) == 0 && !hasRetention {
 		return model.ErrRemoveNoSelector
 	}
 	return nil
 }
 
-// selectSavepointsToRemove splits records by req: an explicit id list when
+// selectSavepointsToRemove splits records by req: an explicit ref list when
 // given, otherwise the retention rules.
 //
-// The two see different sets. An id list sees every record, safety snapshots
-// included — that is how a killed rollback's shard is cleared. The retention
+// The two see different sets. An id sees every record, safety snapshots
+// included — that is how a killed rollback's shard is cleared — a name only the visible ones. The retention
 // rules scan, and a scan sees only what `savepoint list` shows: an undo must
 // neither count as one of the N newest, nor be swept by an age rule.
 func (s *Service) selectSavepointsToRemove(
 	savepoints []model.Savepoint,
 	req model.RemoveRequest,
 ) (kept, removed []model.Savepoint, err error) {
-	if len(req.IDs) > 0 {
-		return partitionByIDs(savepoints, req.IDs)
+	if len(req.Refs) > 0 {
+		return partitionByRefs(savepoints, req.Refs)
 	}
 	cutoffs, err := s.parseRetentionCutoffs(req)
 	if err != nil {
@@ -291,34 +291,44 @@ func (s *Service) parseRetentionCutoffs(req model.RemoveRequest) ([]time.Time, e
 	return cutoffs, nil
 }
 
-// partitionByIDs splits records into the ones whose ID was requested (removed)
-// and the rest (kept). It errors if any requested ID is not present, so a typo
-// never silently deletes nothing.
-func partitionByIDs(
+// partitionByRefs splits records into the ones a ref names (removed) and the rest
+// (kept). A canonical UUID is an id and reaches every record, safety snapshots
+// included; anything else is a name and sees only what `savepoint list` shows. A ref
+// naming nothing, or a name several savepoints carry, fails the whole request.
+func partitionByRefs(
 	savepoints []model.Savepoint,
-	ids []model.SavepointID,
+	refs []string,
 ) (kept, removed []model.Savepoint, err error) {
-	want := make(map[model.SavepointID]bool, len(ids))
-	for _, id := range ids {
-		want[id] = true
-	}
-	seen := make(map[model.SavepointID]bool, len(ids))
-	for _, savepoint := range savepoints {
-		if want[savepoint.ID] {
-			removed = append(removed, savepoint)
-			seen[savepoint.ID] = true
+	var (
+		visible = visibleSavepoints(savepoints)
+		want    = make(map[model.SavepointID]bool, len(refs))
+		missing []string
+	)
+	for _, ref := range refs {
+		var matched []model.Savepoint
+		if id := model.SavepointID(ref); id.Validate() == nil {
+			matched = findSavepointsByID(savepoints, id)
 		} else {
-			kept = append(kept, savepoint)
+			matched = findSavepointsByName(visible, ref)
 		}
-	}
-	var missing []string
-	for _, id := range ids {
-		if !seen[id] {
-			missing = append(missing, id.String())
+		switch len(matched) {
+		case 0:
+			missing = append(missing, ref)
+		case 1:
+			want[matched[0].ID] = true
+		default:
+			return nil, nil, newAmbiguousSavepointNameError(ref, matched)
 		}
 	}
 	if len(missing) > 0 {
 		return nil, nil, fmt.Errorf("savepoint(s) not found: %s", strings.Join(missing, ", "))
+	}
+	for _, savepoint := range savepoints {
+		if want[savepoint.ID] {
+			removed = append(removed, savepoint)
+		} else {
+			kept = append(kept, savepoint)
+		}
 	}
 	return kept, removed, nil
 }
@@ -440,23 +450,47 @@ func findSavepoint(savepoints []model.Savepoint, req model.RollbackRequest) (mod
 		return latest, nil
 	}
 
-	var byName []model.Savepoint
-	for _, savepoint := range savepoints {
-		if savepoint.Name == *req.Name {
-			byName = append(byName, savepoint)
-		}
-	}
+	byName := findSavepointsByName(savepoints, *req.Name)
 	switch len(byName) {
 	case 0:
 		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", *req.Name)
 	case 1:
 		return byName[0], nil
 	default:
-		ids := make([]model.SavepointID, len(byName))
-		for i, savepoint := range byName {
-			ids[i] = savepoint.ID
+		return model.Savepoint{}, newAmbiguousSavepointNameError(*req.Name, byName)
+	}
+}
+
+// findSavepointsByID returns the record carrying id, if any.
+func findSavepointsByID(savepoints []model.Savepoint, id model.SavepointID) []model.Savepoint {
+	for _, savepoint := range savepoints {
+		if savepoint.ID == id {
+			return []model.Savepoint{savepoint}
 		}
-		slices.Sort(ids)
-		return model.Savepoint{}, &model.AmbiguousSavepointNameError{Name: *req.Name, IDs: ids}
+	}
+	return nil
+}
+
+// findSavepointsByName returns every record carrying name.
+func findSavepointsByName(savepoints []model.Savepoint, name string) []model.Savepoint {
+	var byName []model.Savepoint
+	for _, savepoint := range savepoints {
+		if savepoint.Name == name {
+			byName = append(byName, savepoint)
+		}
+	}
+	return byName
+}
+
+// newAmbiguousSavepointNameError names the savepoints carrying name, ids sorted.
+func newAmbiguousSavepointNameError(name string, savepoints []model.Savepoint) error {
+	ids := make([]model.SavepointID, len(savepoints))
+	for i, savepoint := range savepoints {
+		ids[i] = savepoint.ID
+	}
+	slices.Sort(ids)
+	return &model.AmbiguousSavepointNameError{
+		Name: name,
+		IDs:  ids,
 	}
 }
