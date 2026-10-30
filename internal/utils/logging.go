@@ -28,8 +28,8 @@ const (
 	LogFormatText = "text"
 )
 
-// DefaultLogLevel and DefaultLogFormat are the global flag defaults, reused by
-// init when persisting log settings into the project config.
+// DefaultLogLevel is the level of a log no level was set for; DefaultLogFormat the global flag
+// default, reused by init when persisting log settings into the project config.
 var (
 	DefaultLogLevel  = zerolog.LevelInfoValue
 	DefaultLogFormat = LogFormatText

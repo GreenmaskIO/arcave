@@ -60,11 +60,10 @@ capture:
 rollback:
     leftover_volumes: overwrite
 log:
-    level: info
     format: text
 ```
 
-Every key is written out with its default, so the file doubles as a list of what you can change; [Configuration](reference/configuration.md) explains each one. One flag is worth knowing now:
+Every key but `log.level` is written out with its default, so the file doubles as a list of what you can change; [Configuration](reference/configuration.md) explains each one. One flag is worth knowing now:
 
 ```shell
 arcave init --name myapp                        # the storage tenant name
@@ -162,22 +161,20 @@ It prints the savepoint record:
 
 `stats` holds one entry per captured volume, `writable_layers` one per container, and `images` one per distinct image. The layer's `stored_bytes` is small because only what the container wrote over `postgres:16` is new; the image itself is stored once and reused by every later savepoint. A savepoint that left something out also carries `not_covered`; [Output](reference/output.md) has every field.
 
-Progress goes to **stderr**, so it never contaminates the JSON (timestamps trimmed):
+Progress goes to **stderr**, so it never contaminates the JSON. On a terminal it is a live tree; with `--progress log`, as here, it is one log line per step (timestamps and the `started` lines trimmed):
 
 ```text title="stderr"
-INF stopping services
-INF stopping compose services stop_timeout=10s
+INF savepoint.create[before-migration] status=started
+INF savepoint.create[before-migration]/project.introspect elapsed=96ms status=succeeded
 INF savepoint.create[before-migration]/compose.stop msg=Stopped resource=container:myapp-db-1 status=in_progress
-INF volume operation started backend=fullcopy op=snapshot snapshot_id=019e843e-1650-7000-8000-000000000000 volume=volume-named-myapp_pgdata
-INF volume operation finished backend=fullcopy duration=672.240958 op=snapshot snapshot_id=019e843e-1650-7000-8000-000000000000 volume=volume-named-myapp_pgdata
-INF image capture started image=["postgres:16"] image_id=sha256:1a6ab3f5… op=save snapshot_id=019e843e-1650-7000-8000-000000000000
-INF image capture finished duration=1340.946625 image=["postgres:16"] image_id=sha256:1a6ab3f5… op=save snapshot_id=019e843e-1650-7000-8000-000000000000 stored=true stored_bytes=164698711
-INF writable layer capture started container=b6477db82dd0… op=commit replica=1 service=db snapshot_id=019e843e-1650-7000-8000-000000000000
-INF writable layer capture finished container=b6477db82dd0… duration=2224.044625 op=commit replica=1 service=db size_bytes=158913306 snapshot_id=019e843e-1650-7000-8000-000000000000
-INF starting services
-INF waiting for services to become healthy wait_timeout=2m0s
-INF savepoint.create[before-migration]/compose.start msg=Started resource=container:myapp-db-1 status=in_progress
+INF savepoint.create[before-migration]/compose.stop elapsed=312ms msg=Stopped status=succeeded
+INF savepoint.create[before-migration]/savepoint.capture[before-migration]/volume.snapshot/volume[volume-named-myapp_pgdata] bytes=41MB/41MB elapsed=672ms status=succeeded stored=41MB
+INF savepoint.create[before-migration]/savepoint.capture[before-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.341s status=succeeded stored=165MB
+INF savepoint.create[before-migration]/savepoint.capture[before-migration]/layer.capture/layer[myapp-db-1] bytes=159MB/159MB elapsed=2.224s reused=159MB status=succeeded stored=17KB
+INF savepoint.create[before-migration]/savepoint.capture[before-migration] elapsed=4.237s status=succeeded
 INF savepoint.create[before-migration]/compose.start msg=Healthy resource=container:myapp-db-1 status=in_progress
+INF savepoint.create[before-migration]/compose.start elapsed=6.104s msg=Healthy status=succeeded
+INF savepoint.create[before-migration] elapsed=10.873s status=succeeded
 ```
 
 That `id` is what `savepoint remove` takes; `rollback` takes the id or the name.

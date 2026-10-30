@@ -287,7 +287,6 @@ func composeProjectAbsent(introspection model.IntrospectionResult) bool {
 // stopServices puts the services down and returns the containers the stop deadline
 // killed, warned of as in the result when inResult is set.
 func (s *Service) stopServices(ctx context.Context, working workingSet, inResult bool) ([]string, error) {
-	zerolog.Ctx(ctx).Info().Msg("stopping services")
 	ctx, node := progress.Run(ctx, progress.Step{Kind: kindComposeStop}, progress.MeasureResources)
 	killed, err := s.composeRunner.Stop(ctx, working.project)
 	if len(killed) > 0 {
@@ -303,7 +302,6 @@ func (s *Service) stopServices(ctx context.Context, working workingSet, inResult
 // composeDown removes the compose project's containers and networks. It goes by project
 // name, so it also takes down what a failed rebuild left standing.
 func (s *Service) composeDown(ctx context.Context, project *types.Project) error {
-	zerolog.Ctx(ctx).Info().Msg("removing the compose project")
 	if err := runComposeActivity(ctx, kindComposeDown, func(ctx context.Context) error {
 		return s.composeRunner.Down(ctx, project)
 	}); err != nil {
@@ -315,7 +313,6 @@ func (s *Service) composeDown(ctx context.Context, project *types.Project) error
 // composeCreate creates the containers of project without starting them: the data is
 // restored into them first.
 func (s *Service) composeCreate(ctx context.Context, project *types.Project) error {
-	zerolog.Ctx(ctx).Info().Msg("creating the compose project from the spec")
 	if err := runComposeActivity(ctx, kindComposeCreate, func(ctx context.Context) error {
 		return s.composeRunner.Create(ctx, project)
 	}); err != nil {
@@ -334,7 +331,6 @@ func (s *Service) startServices(ctx context.Context, working workingSet) error {
 
 // composeStart starts the containers of project and waits on their health checks.
 func (s *Service) composeStart(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
-	zerolog.Ctx(ctx).Info().Msg("starting services")
 	return runComposeActivity(ctx, kindComposeStart, func(ctx context.Context) error {
 		return s.composeRunner.Start(ctx, project, waitTimeout)
 	})

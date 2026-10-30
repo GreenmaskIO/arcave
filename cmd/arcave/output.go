@@ -144,9 +144,9 @@ func isTerminal(f *os.File) bool {
 }
 
 // openOutput builds the output of mode, printing the result as result says, and installs the
-// logger writing beside it. Above the live tree only warnings show, unless a flag, the environment
-// or the config set the level.
-func openOutput(mode, level string, levelSet bool, logFormat string, result resultOptions) (output, zerolog.Logger, error) {
+// logger writing beside it at level; with no level set, only warnings show above the live tree.
+func openOutput(mode, level, logFormat string, result resultOptions) (output, zerolog.Logger, error) {
+	level = resolveLogLevel(mode, level)
 	if mode != progressModeTTY {
 		logger, err := utils.SetDefaultContextLogger(level, logFormat, os.Stderr)
 		if err != nil {
@@ -162,9 +162,6 @@ func openOutput(mode, level string, levelSet bool, logFormat string, result resu
 		}, logger, nil
 	}
 
-	if !levelSet {
-		level = zerolog.LevelWarnValue
-	}
 	out := &ttyOutput{
 		reporter: tty.New(os.Stderr),
 		result:   result,
@@ -176,6 +173,19 @@ func openOutput(mode, level string, levelSet bool, logFormat string, result resu
 		return nil, zerolog.Logger{}, err
 	}
 	return out, logger, nil
+}
+
+// resolveLogLevel is the level a run of mode logs at: the one set, else warn above the live tree
+// and info in a log.
+func resolveLogLevel(mode, level string) string {
+	switch {
+	case level != "":
+		return level
+	case mode == progressModeTTY:
+		return zerolog.LevelWarnValue
+	default:
+		return utils.DefaultLogLevel
+	}
 }
 
 // closeOutput ends out with err, or writes err as cobra would when no output was opened; only the

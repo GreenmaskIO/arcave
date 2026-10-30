@@ -152,7 +152,7 @@ func initRoot(cmd *cobra.Command) error {
 		profile:        colorprofile.Detect(os.Stdout, os.Environ()),
 	}
 	// Once per run: the logger writes through the output, so the context logger never changes.
-	out, logger, err := openOutput(mode, projectCfg.Log.Level, cfgViper.IsSet("log.level"), projectCfg.Log.Format, result)
+	out, logger, err := openOutput(mode, projectCfg.Log.Level, projectCfg.Log.Format, result)
 	if err != nil {
 		return fmt.Errorf("set log level: %w", err)
 	}
@@ -265,12 +265,14 @@ func init() {
 		fmt.Sprintf("Session to work in, by name or id (default: the current session, see 'arcave session set', else %q; env %s)",
 			model.DefaultSessionName, sessionEnv))
 	persistentFlags.String("log-format", utils.DefaultLogFormat, "Log format: text or json")
-	persistentFlags.String("log-level", utils.DefaultLogLevel,
+	persistentFlags.String("log-level", "",
 		fmt.Sprintf(
-			"logging level %s, %s or %s",
+			"logging level %s, %s or %s (default: %s above the live tree, else %s)",
 			zerolog.LevelDebugValue,
 			zerolog.LevelInfoValue,
 			zerolog.LevelWarnValue,
+			zerolog.LevelWarnValue,
+			utils.DefaultLogLevel,
 		),
 	)
 

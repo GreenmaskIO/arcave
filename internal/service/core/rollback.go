@@ -164,7 +164,6 @@ func (s *Service) rollbackLive(
 	// back. Dropped on every path but a failed revert, and committing a record —
 	// which is what leaves a killed rollback's undo listable, and so applicable by
 	// hand.
-	log.Info().Msg("backing up current state")
 	safetySnapshot, err := s.performSavepoint(
 		safetyCtx, grantedLock, working, killed, safetySnapshotName(savepoint.ID), "", newSafetySnapshotLabels(),
 	)

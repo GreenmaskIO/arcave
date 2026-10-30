@@ -475,6 +475,7 @@ func (c CDCBackend) Validate() error {
 // Log is the project's default logging configuration, persisted under the "log"
 // key in .arcave/config.yaml.
 type Log struct {
+	// Level is empty unless set: the output then picks its own, warn above the live tree, else info.
 	Level  string `yaml:"level,omitempty" mapstructure:"level"`
 	Format string `yaml:"format,omitempty" mapstructure:"format"`
 }
@@ -483,7 +484,6 @@ type Log struct {
 func NewConfig() Config {
 	return Config{
 		Log: Log{
-			Level:  utils.DefaultLogLevel,
 			Format: utils.DefaultLogFormat,
 		},
 	}

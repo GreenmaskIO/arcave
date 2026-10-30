@@ -166,6 +166,30 @@ func TestResolveFormat(t *testing.T) {
 	}
 }
 
+func TestResolveLogLevel(t *testing.T) {
+	tests := []struct {
+		name  string
+		mode  string
+		level string
+		want  string
+	}{
+		{name: "none set under the tree is warn", mode: progressModeTTY, want: "warn"},
+		{name: "none set in a log is info", mode: progressModeLog, want: "info"},
+		{name: "none set in the json stream is info", mode: progressModeJSON, want: "info"},
+		{name: "a level set stands under the tree", mode: progressModeTTY, level: "info", want: "info"},
+		{name: "a level set stands in a log", mode: progressModeLog, level: "debug", want: "debug"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := resolveLogLevel(tt.mode, tt.level)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestJSONOutput_Close(t *testing.T) {
 	errPartial := errors.New("gc partial")
 	tests := []struct {

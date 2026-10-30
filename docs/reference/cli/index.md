@@ -37,7 +37,7 @@ Short aliases: `savepoint` also answers to `save` and `sp`, every `list` to `ls`
 | `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`, `mcp`, `status` and the `session` commands; an MCP tool call names its compose project itself. Read from `ARCAVE_PROJECT_NAME` when the flag is absent. |
 | `--session` | the current session, else `baseline` | *(none)* | The session to work in, by id or by name. Read from `ARCAVE_SESSION` when the flag is absent; with neither, the current session `arcave session set` chose, else `baseline`. See [`arcave session`](session.md#naming-the-session-a-command-works-in). |
 | `--config` | `.arcave/config.yaml` | *(none)* | Path to the config file. |
-| `--log-level` | `info` | `log.level` | `debug`, `info` or `warn`. |
+| `--log-level` | `warn` above the live tree, else `info` | `log.level` | `debug`, `info` or `warn`. |
 | `--log-format` | `text` | `log.format` | `text` or `json`. |
 | `--wait-timeout` | `2m0s` | `compose.wait_timeout` | How long to wait for services to become healthy after they are started. |
 | `--stop-timeout` | `10s` | `compose.stop_timeout` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |

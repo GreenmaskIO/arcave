@@ -32,24 +32,20 @@ arcave savepoint create pre-migration --description "orders table, 1000 rows"
 ```
 
 ```text title="stderr (trimmed)"
-INF stopping services
-INF stopping compose services stop_timeout=10s
-INF volume operation started volume=volume-named-arcave-demo_pgdata backend=fullcopy op=snapshot
-INF volume operation started volume=volume-named-arcave-demo_miniodata backend=fullcopy op=snapshot
-INF volume operation started volume=volume-anon-redis-1-data backend=fullcopy op=snapshot
-INF volume operation finished volume=volume-anon-redis-1-data backend=fullcopy op=snapshot
-INF volume operation finished volume=volume-named-arcave-demo_miniodata backend=fullcopy op=snapshot
-INF volume operation finished volume=volume-named-arcave-demo_pgdata backend=fullcopy op=snapshot
-INF image capture started image=["postgres:16"] op=save
-INF image capture finished image=["postgres:16"] op=save stored=true
-INF writable layer capture started service=postgres replica=1 op=commit
-INF writable layer capture finished service=postgres replica=1 op=commit
-INF starting services
-INF waiting for services to become healthy wait_timeout=2m0s
+INF savepoint.create[pre-migration] status=started
+INF savepoint.create[pre-migration]/compose.stop elapsed=308ms msg=Stopped status=succeeded
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.snapshot items=0/3 status=started
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.snapshot/volume[volume-anon-redis-1-data] bytes=485B/485B elapsed=1.419s status=succeeded stored=485B
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.snapshot/volume[volume-named-arcave-demo_miniodata] bytes=17KB/17KB elapsed=1.478s status=succeeded stored=17KB
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.snapshot/volume[volume-named-arcave-demo_pgdata] bytes=48MB/48MB elapsed=1.504s status=succeeded stored=48MB
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.snapshot elapsed=1.505s items=3/3 status=succeeded
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.341s status=succeeded stored=165MB
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/layer.capture/layer[arcave-demo-postgres-1] bytes=159MB/159MB elapsed=4.381s reused=159MB status=succeeded stored=18KB
 INF savepoint.create[pre-migration]/compose.start msg=Healthy resource=container:arcave-demo-postgres-1 status=in_progress
+INF savepoint.create[pre-migration] elapsed=14.582s status=succeeded
 ```
 
-Trimmed to one image and one writable layer, and to the fields that tell the lines apart; every line also carries `snapshot_id`, and the image lines `image_id`. The three volumes are captured concurrently, so their lines interleave. Then each distinct image is kept once, and every container's writable layer is committed over it.
+Trimmed to one image and one writable layer, with `--progress log` and the timestamps left out. Each line names its step by its path in the tree, and a step that measures bytes ends with what it read, stored and found already stored. The three volumes are captured concurrently, so their lines interleave. Then each distinct image is kept once, and every container's writable layer is committed over it.
 
 ```json title="stdout (trimmed)"
 {
@@ -149,25 +145,17 @@ arcave rollback pre-migration
 ```text title="stderr (trimmed)"
 INF writable layer restored from the savepoint service=postgres origin=config backend=dedupcopy
 INF mount restored from the savepoint service=postgres origin=config backend=fullcopy target=/var/lib/postgresql/data
-INF writable layer restore started service=postgres replica=1 op=load
-INF writable layer restore finished service=postgres replica=1 op=load tag=arcave/arcave-demo-postgres-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000
-INF stopping services
-INF stopping compose services stop_timeout=10s
-INF backing up current state
-INF volume operation started volume=volume-named-arcave-demo_pgdata backend=fullcopy op=snapshot
-INF volume operation finished volume=volume-named-arcave-demo_pgdata backend=fullcopy op=snapshot
-INF writable layer capture started service=postgres replica=1 op=commit
-INF writable layer capture finished service=postgres replica=1 op=commit
-INF removing the compose project
-INF removing compose containers and networks stop_timeout=10s
-INF creating the compose project from the spec
-INF creating compose containers
-INF volume operation started volume=volume-named-arcave-demo_pgdata backend=fullcopy op=restore
-INF volume operation finished volume=volume-named-arcave-demo_pgdata backend=fullcopy op=restore
-INF starting services
-INF waiting for services to become healthy wait_timeout=2m0s
+INF rollback[pre-migration]/rollback.prepare/layer.restore elapsed=2.207s items=3/3 status=succeeded
+INF rollback[pre-migration]/rollback.prepare elapsed=2.222s status=succeeded
+INF rollback[pre-migration]/rollback.safety-snapshot/compose.stop elapsed=352ms msg=Stopped status=succeeded
+INF rollback[pre-migration]/rollback.safety-snapshot/savepoint.capture[safety-snapshot-019e843e-1650-7000-8000-000000000000] elapsed=3.98s status=succeeded
+INF rollback[pre-migration]/rollback.apply/compose.down elapsed=142ms msg=Removed status=succeeded
+INF rollback[pre-migration]/rollback.apply/compose.create elapsed=232ms msg=Created status=succeeded
+INF rollback[pre-migration]/rollback.apply/volume.restore/volume[volume-named-arcave-demo_pgdata] bytes=48MB/48MB elapsed=1.488s status=succeeded
 INF rollback[pre-migration]/rollback.apply/compose.start msg=Healthy resource=container:arcave-demo-postgres-1 status=in_progress
+INF rollback[pre-migration]/rollback.apply elapsed=9.238s status=succeeded
 INF the containers run on the savepoint's writable layers: `docker compose up` from your compose file recreates them on its images and drops those layers; roll back again to restore them writable_layers=3
+INF rollback[pre-migration] elapsed=16.926s status=succeeded
 ```
 
 Trimmed to the `postgres` lines. arcave first reads what the savepoint says it holds, then loads the writable layers back into the daemon — all before anything is stopped, so a savepoint that cannot be rebuilt leaves the project running. Then arcave takes the safety snapshot of the live state, rebuilds the project from the savepoint's spec, and restores every volume into it.

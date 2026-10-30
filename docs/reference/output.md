@@ -65,7 +65,7 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
 
 `--progress` decides how a run shows what it is doing; the result stays the result whatever it says.
 
-- **`tty`** draws the workflow as a live tree on stderr — every step, the bytes of every volume and layer — a bar where the total is known exactly, when a volume or layer is restored and for every `cdc` volume, and the bytes with their rate while a capture runs — a warning under the step it concerns — and leaves the final tree in the scrollback before the result goes to stdout. Only warnings print above the tree unless the `--log-level` flag is given; `log.level` in the config does not lift it. `auto`, the default, picks it when stderr is a terminal and `log.format` is `text`.
+- **`tty`** draws the workflow as a live tree on stderr — every step, the bytes of every volume and layer — a bar where the total is known exactly, when a volume or layer is restored and for every `cdc` volume, and the bytes with their rate while a capture runs — a warning under the step it concerns — and leaves the final tree in the scrollback before the result goes to stdout. Only warnings print above the tree unless a level is set, by `--log-level`, `ARCAVE_LOG_LEVEL` or `log.level` in the config. `auto`, the default, picks it when stderr is a terminal and `log.format` is `text`.
 - **`log`** writes one log record per step event, named by its path in the tree:
 
   ```text

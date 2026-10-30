@@ -120,7 +120,7 @@ func (c *Client) Down(ctx context.Context, project *types.Project) error {
 func (c *Client) Create(ctx context.Context, project *types.Project) error {
 	defer c.routeEvents(ctx)()
 	timeout := c.stopTimeout()
-	zerolog.Ctx(ctx).Info().Msg("creating compose containers")
+	zerolog.Ctx(ctx).Debug().Msg("creating compose containers")
 
 	return c.api.Create(ctx, withComposeLabels(project), api.CreateOptions{
 		Timeout:              &timeout,
@@ -139,7 +139,7 @@ func (c *Client) Create(ctx context.Context, project *types.Project) error {
 func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	defer c.routeEvents(ctx)()
 	waitTimeout = c.waitTimeoutOr(waitTimeout)
-	zerolog.Ctx(ctx).Info().Str("wait_timeout", waitTimeout.String()).
+	zerolog.Ctx(ctx).Debug().Str("wait_timeout", waitTimeout.String()).
 		Msg("waiting for services to become healthy")
 
 	if !healthCheckDisabled(project) {
@@ -171,14 +171,15 @@ func (c *Client) routeEvents(ctx context.Context) func() {
 	return func() { c.opts.Events.SetSink(nil) }
 }
 
-// logStopTimeout resolves the stop bound for project and logs it with msg.
+// logStopTimeout resolves the stop bound for project and logs it with msg, at info only when a
+// service's stop_grace_period raised it.
 func (c *Client) logStopTimeout(ctx context.Context, project *types.Project, msg string) time.Duration {
 	timeout, raisedBy := c.stopTimeoutFor(project)
 	// Str, not Dur: zerolog renders a Dur in milliseconds, and "10000" is not what
 	// a user reading a grace period wants to see.
-	event := zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String())
+	event := zerolog.Ctx(ctx).Debug().Str("stop_timeout", timeout.String())
 	if raisedBy != "" {
-		event = event.Str("raised_by", raisedBy)
+		event = zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String()).Str("raised_by", raisedBy)
 	}
 	event.Msg(msg)
 	return timeout
