@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/greenmaskio/storages"
@@ -214,7 +213,7 @@ func (s *GarbageCollector) reportGarbage(
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
-	result := s.newGarbageCollectResult(req, found, slices.Concat(collectors.warnings, inflightWarnings))
+	result := s.newGarbageCollectResult(req, found, inflightWarnings)
 	if result.IsPartial() {
 		return result, model.ErrGarbageCollectPartial
 	}
@@ -238,8 +237,7 @@ func (s *GarbageCollector) deleteGarbage(
 	eraseCtx, erase := progress.Begin(ctx, progress.Step{Kind: kindGCErase})
 	deleted, err := s.erasers.deleteGarbage(eraseCtx, grantedLock, found)
 	erase.End(err)
-	warnings := slices.Concat(collectors.warnings, newUndeletedWarnings(deleted.reports()))
-	result := s.newGarbageCollectResult(req, deleted, warnings)
+	result := s.newGarbageCollectResult(req, deleted, newUndeletedWarnings(deleted.reports()))
 	if err != nil {
 		return result, &model.GarbageCollectInterruptedError{Cause: err}
 	}

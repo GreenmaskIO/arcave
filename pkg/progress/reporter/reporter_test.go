@@ -73,7 +73,6 @@ func newStream() []progress.Event {
 		{
 			Node:   2,
 			Status: progress.StatusSucceeded,
-			Msg:    "unreachable",
 			Sample: progress.Sample{Elapsed: elapsed(300)},
 			At:     at(300),
 		},

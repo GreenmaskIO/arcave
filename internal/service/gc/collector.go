@@ -58,30 +58,26 @@ type collectorSet struct {
 	composeProject []ComposeProjectCollector
 	// unavailable aborts the collector of a kind whose probe failed.
 	unavailable map[model.GarbageCollectorKind]error
-	warnings    []string
 }
 
 // readCollectorSet picks, in their order, the collectors resolving dataKinds — none named looks
-// at every data kind — and probes them: one that cannot reach what it reads is aborted, with a
-// warning, since a report that looked at nothing would read as clean.
+// at every data kind — and probes them: one that cannot reach what it reads is aborted, since a
+// report that looked at nothing would read as clean.
 func (s *GarbageCollector) readCollectorSet(ctx context.Context, dataKinds []model.GarbageDataKind) collectorSet {
 	var (
 		daemon         = selectCollectors(s.daemonCollectors, dataKinds)
 		composeProject = selectCollectors(s.composeProjectCollectors, dataKinds)
 		unavailable    = map[model.GarbageCollectorKind]error{}
-		warnings       []string
 	)
 	for _, collector := range slices.Concat(toObjectCollectors(daemon), toObjectCollectors(composeProject)) {
 		if err := probeCollector(ctx, collector); err != nil {
 			unavailable[collector.Kind()] = err
-			warnings = append(warnings, fmt.Sprintf("%s is not judged: %v", collector.DataKind(), err))
 		}
 	}
 	return collectorSet{
 		daemon:         daemon,
 		composeProject: composeProject,
 		unavailable:    unavailable,
-		warnings:       warnings,
 	}
 }
 
@@ -113,7 +109,7 @@ func probeCollector(ctx context.Context, collector ObjectCollector) error {
 	}
 	err := probe.Probe(ctx)
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Str("collector", string(collector.Kind())).Msg("garbage kind is not judged")
+		zerolog.Ctx(ctx).Info().Err(err).Str("collector", string(collector.Kind())).Msg("garbage kind is not judged")
 	}
 	return err
 }

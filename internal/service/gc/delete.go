@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -160,12 +159,12 @@ func deleteReportFindings[E GarbageEraser](
 		return &model.GarbageDeletion{NotRun: len(ops)}, fmt.Errorf("verify session lock: %w", err)
 	}
 	reportCtx, node := progress.Begin(ctx, progress.Step{
-		Kind: kindCollector,
-		ID:   string(report.Collector),
+		Kind: kindEraser,
+		ID:   string(eraser.Action()),
 	})
 	deletion := erase(reportCtx, eraser, ops)
 	node.End(newDeletionError(reportCtx, &deletion))
-	zerolog.Ctx(ctx).Info().Str("data_kind", string(report.DataKind)).
+	zerolog.Ctx(ctx).Debug().Str("data_kind", string(report.DataKind)).
 		Str("compose_project", report.ComposeProject.String()).
 		Int("deleted", len(deletion.Deleted)).Int("failed", len(deletion.Failed)).Int("not_run", deletion.NotRun).
 		Msg("garbage deleted")
@@ -197,13 +196,13 @@ func DeleteOps(
 		failed  []model.GarbageDeleteFailure
 		notRun  int
 	)
-	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindGCDelete}, len(ops))
+	ctx, batch := BeginDeletion(ctx, len(ops))
 	for i, op := range ops {
 		if ctx.Err() != nil {
 			notRun = len(ops) - i
 			break
 		}
-		opCtx, node := progress.Run(ctx, progress.Step{Kind: kindGarbage, ID: op.Target}, progress.MeasureBytes)
+		opCtx, node := BeginTarget(ctx, op.Target)
 		switch err := del(opCtx, op); {
 		case errors.Is(err, storages.ErrFileNotFound), errors.Is(err, model.ErrImageRefNotFound):
 			node.Done(progress.Sample{})
@@ -220,28 +219,38 @@ func DeleteOps(
 				Interrupted: ctx.Err() != nil,
 			})
 		default:
-			node.Done(newFreedSample(op.Bytes))
+			node.Done(NewFreedSample(op.Bytes))
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  op.Bytes,
 			})
 		}
 	}
-	// A stop that came past the last op cut nothing short.
-	cutShort := notRun > 0 || slices.ContainsFunc(failed, func(f model.GarbageDeleteFailure) bool { return f.Interrupted })
-	switch {
-	case cutShort:
-		batch.End(context.Cause(ctx))
-	case len(failed) > 0:
-		batch.End(fmt.Errorf("%d deletion(s) failed", len(failed)))
-	default:
-		batch.End(nil)
-	}
-	return model.GarbageDeletion{
+	deletion := model.GarbageDeletion{
 		Deleted: deleted,
 		Failed:  failed,
 		NotRun:  notRun,
 	}
+	EndDeletion(ctx, batch, deletion)
+	return deletion
+}
+
+// BeginDeletion opens the batch an eraser's n targets report under; EndDeletion ends it.
+func BeginDeletion(ctx context.Context, n int) (context.Context, *progress.Node) {
+	return progress.Batch(ctx, progress.Step{Kind: kindGCDelete}, n)
+}
+
+// BeginTarget opens the node of one target of a deletion, measuring the bytes it frees.
+func BeginTarget(ctx context.Context, target string) (context.Context, *progress.Node) {
+	return progress.Run(ctx, progress.Step{
+		Kind: kindGarbage,
+		ID:   target,
+	}, progress.MeasureBytes)
+}
+
+// EndDeletion ends the batch BeginDeletion opened on ctx with what deletion did.
+func EndDeletion(ctx context.Context, batch *progress.Node, deletion model.GarbageDeletion) {
+	batch.End(newDeletionError(ctx, &deletion))
 }
 
 func withDeletion(report model.GarbageReport, deletion *model.GarbageDeletion) model.GarbageReport {
@@ -266,8 +275,8 @@ func newUndeletedWarnings(reports []model.GarbageReport) []string {
 	return warnings
 }
 
-// newFreedSample is what deleting an op freed: its size, when known.
-func newFreedSample(bytes *int64) progress.Sample {
+// NewFreedSample is what deleting a target freed: its size, when known.
+func NewFreedSample(bytes *int64) progress.Sample {
 	if bytes == nil {
 		return progress.Sample{}
 	}

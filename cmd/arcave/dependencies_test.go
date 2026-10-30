@@ -406,14 +406,16 @@ func TestNewProgressWriter(t *testing.T) {
 			t.Cleanup(func() { composeprogress.Mode = original })
 
 			// Act
-			out := newProgressWriter(tt.mode, zerolog.Nop())
+			out, events := newProgressWriter(tt.mode, zerolog.Nop())
 
 			// Assert
 			assert.Equal(t, tt.wantMode, composeprogress.Mode)
 			if tt.wantOut == nil {
 				assert.IsType(t, &compose.ProgressLogger{}, out)
+				assert.Same(t, out, events, "the adapter compose renders on is the one its events reach")
 				return
 			}
+			assert.Nil(t, events)
 			// The streams arcave does not own are wrapped so Close cannot reach
 			// them — closing os.Stderr would take the process's error stream down
 			// with it.

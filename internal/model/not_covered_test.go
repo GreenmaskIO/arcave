@@ -113,3 +113,79 @@ func TestNotCovered_Notices(t *testing.T) {
 		})
 	}
 }
+
+func TestSavepoint_Notices(t *testing.T) {
+	tests := []struct {
+		name      string
+		savepoint Savepoint
+		want      []Notice
+	}{
+		{
+			name: "nothing left out",
+		},
+		{
+			name: "an image not stored goes before what only informs",
+			savepoint: Savepoint{
+				NotCovered: &NotCovered{ServicesWithoutVolumes: []string{"web"}},
+				Images: []Image{
+					{ID: "sha256:0123456789abcdef", Stored: true, Refs: []string{"redis:7"}},
+					{ID: "sha256:0123456789abcdef", Stored: false},
+					{ID: "sha256:fedcba9876543210", Stored: false, Refs: []string{"postgres:16"}},
+				},
+			},
+			want: []Notice{
+				{
+					Message: "image 0123456789ab is not stored, only its identity",
+					Hint:    "a rollback needs it pullable to rebuild a container on it",
+					Severe:  true,
+				},
+				{
+					Message: "image postgres:16 is not stored, only its identity",
+					Hint:    "a rollback needs it pullable to rebuild a container on it",
+					Severe:  true,
+				},
+				{Message: "web has no volumes: only its writable layer is held"},
+			},
+		},
+		{
+			name: "an image not stored with nothing else left out",
+			savepoint: Savepoint{
+				Images: []Image{{ID: "sha256:fedcba9876543210", Refs: []string{"postgres:16"}}},
+			},
+			want: []Notice{
+				{
+					Message: "image postgres:16 is not stored, only its identity",
+					Hint:    "a rollback needs it pullable to rebuild a container on it",
+					Severe:  true,
+				},
+			},
+		},
+		{
+			name: "what is left out that is severe stays ahead of an image not stored",
+			savepoint: Savepoint{
+				NotCovered: &NotCovered{ReplicaGaps: []ReplicaGap{{Service: "db", Replicas: []int{1}, Missing: []int{2}}}},
+				Images:     []Image{{ID: "sha256:fedcba9876543210", Refs: []string{"postgres:16"}}},
+			},
+			want: []Notice{
+				{
+					Message: "db: replica 2 gone, only 1 held",
+					Severe:  true,
+				},
+				{
+					Message: "image postgres:16 is not stored, only its identity",
+					Hint:    "a rollback needs it pullable to rebuild a container on it",
+					Severe:  true,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := tt.savepoint.Notices()
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

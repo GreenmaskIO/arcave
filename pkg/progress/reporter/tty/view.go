@@ -27,6 +27,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/greenmaskio/arcave/pkg/progress"
+	"github.com/greenmaskio/arcave/pkg/progress/reporter/internal/format"
 )
 
 const (
@@ -76,15 +77,10 @@ type frame struct {
 	width  int
 	height int
 	spin   int
-	// final renders every node whole but a quiet success below the roots: nothing folded or cut.
+	// final renders every node whole but a quiet success below the roots: nothing folded or cut,
+	// as StopOptions say.
 	final bool
-	// essential renders the roots and their children, then only the paths to what a result beside
-	// the tree does not say: failures, cancellations and warnings not marked InResult.
-	essential bool
-	// omitRootError leaves a root's error line out: the caller writes the error itself.
-	omitRootError bool
-	// moreHint follows the count of the warnings a final frame leaves out of a node.
-	moreHint string
+	StopOptions
 	// minColumn is as far left as a live frame may put the right edge of the elapsed time.
 	minColumn int
 }
@@ -134,7 +130,7 @@ func newItems(t *tree, ids []progress.NodeID, depth int, f frame, underBatch boo
 	items := make([]*item, 0, len(ids))
 	for _, id := range ids {
 		current := t.nodes[id]
-		if (underBatch || (f.essential && depth > 1)) && isHiddenUnderBatch(t, current, f) {
+		if (underBatch || (f.Essential && depth > 1)) && isHiddenUnderBatch(t, current, f) {
 			continue
 		}
 		items = append(items, newItem(t, current, depth, f))
@@ -209,7 +205,7 @@ func hasNoticeBesidesCancel(t *tree, current *node, f frame) bool {
 
 // isShown reports whether the frame writes w: an essential one leaves out what the result repeats.
 func isShown(w warning, f frame) bool {
-	return !f.essential || !w.inResult
+	return !f.Essential || !w.inResult
 }
 
 func hasFailure(t *tree, current *node) bool {
@@ -384,18 +380,18 @@ func newBytesWidget(bytes progress.Bytes, elapsed time.Duration, detail widgetDe
 		parts = append(parts, shortBar.ViewAs(percent))
 	}
 	if known {
-		parts = append(parts, formatSize(bytes.Done)+"/"+formatSize(bytes.Total))
+		parts = append(parts, format.Size(bytes.Done)+"/"+format.Size(bytes.Total))
 	} else {
-		parts = append(parts, formatSize(bytes.Done))
+		parts = append(parts, format.Size(bytes.Done))
 	}
 	if detail == widgetFull && elapsed > 0 {
-		parts = append(parts, formatSize(int64(float64(bytes.Done)/elapsed.Seconds()))+"/s")
+		parts = append(parts, format.Size(int64(float64(bytes.Done)/elapsed.Seconds()))+"/s")
 	}
 	if bytes.Stored != 0 {
-		parts = append(parts, "stored "+formatSize(bytes.Stored))
+		parts = append(parts, "stored "+format.Size(bytes.Stored))
 	}
 	if bytes.Reused != 0 {
-		parts = append(parts, "reused "+formatSize(bytes.Reused))
+		parts = append(parts, "reused "+format.Size(bytes.Reused))
 	}
 	return strings.Join(parts, " ")
 }
@@ -442,27 +438,6 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d/time.Minute), int(d%time.Minute/time.Second))
 }
 
-// formatSize renders a byte count in decimal units, to three significant digits at most, as the
-// log reporter does.
-func formatSize(size int64) string {
-	const unit = 1000
-	if size < unit {
-		return fmt.Sprintf("%dB", size)
-	}
-	var (
-		suffixes = []string{"KB", "MB", "GB", "TB", "PB"}
-		value    = float64(size) / unit
-		i        int
-	)
-	for ; value >= 999.5 && i < len(suffixes)-1; i++ {
-		value /= unit
-	}
-	if value < 9.95 {
-		return fmt.Sprintf("%.1f%s", value, suffixes[i])
-	}
-	return fmt.Sprintf("%.0f%s", value, suffixes[i])
-}
-
 func truncate(s string, width int) string {
 	return ansi.Truncate(s, width, "…")
 }
@@ -496,7 +471,7 @@ func newDetailLines(current *node, f frame, budget int, depth int) []string {
 	}
 	for _, line := range current.resources {
 		switch {
-		case !line.warned && f.essential:
+		case !line.warned && f.Essential:
 		case !line.warned:
 			lines = append(lines, cut("  "+formatResource(line.resource)+"  "+line.msg))
 		case keep():
@@ -509,9 +484,9 @@ func newDetailLines(current *node, f frame, budget int, depth int) []string {
 		}
 	}
 	if hidden := warned - maxFinalWarnings; f.final && hidden > 0 {
-		lines = append(lines, styleFaint.Render(newMoreLine(hidden, f.moreHint)))
+		lines = append(lines, styleFaint.Render(newMoreLine(hidden, f.MoreHint)))
 	}
-	if current.last.Error != "" && (depth > 0 || !f.omitRootError) {
+	if current.last.Error != "" && (depth > 0 || !f.OmitRootError) {
 		lines = append(lines, styleFailed.Render(cut("  error: "+current.last.Error)))
 	}
 	return lines
@@ -530,28 +505,28 @@ func newMoreLine(hidden int, hint string) string {
 // lines are saved, and how many it saved. A fold that saves nothing — one line traded for the
 // "… more finished" line — is not made.
 func fold(it *item, excess int) (*item, int) {
+	if excess <= 0 {
+		return it, 0
+	}
 	var (
 		children = make([]*item, 0, len(it.children))
-		folded   = it.folded
+		folded   int
 		saved    int
 	)
-	if excess > 0 {
-		for _, child := range it.children {
-			if saved < excess && child.foldable {
-				saved += newItemHeight(child)
-				folded++
-				continue
-			}
-			children = append(children, child)
+	for _, child := range it.children {
+		if saved < excess && child.foldable {
+			saved += newItemHeight(child)
+			folded++
+			continue
 		}
-		if it.folded == 0 && folded > 0 {
-			saved--
-		}
-		if saved <= 0 {
-			children, folded, saved = slices.Clone(it.children), it.folded, 0
-		}
-	} else {
-		children = slices.Clone(it.children)
+		children = append(children, child)
+	}
+	if folded > 0 {
+		// The "… more finished" line takes one of the lines saved.
+		saved--
+	}
+	if saved <= 0 {
+		children, folded, saved = slices.Clone(it.children), 0, 0
 	}
 	for i, child := range children {
 		if saved >= excess {

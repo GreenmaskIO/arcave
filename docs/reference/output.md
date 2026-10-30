@@ -80,7 +80,28 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
   {"type":"result","result":{ … }}
   ```
 
-  A failure ends the stream with `{"type":"error","error":"…"}` instead, and a partial `gc` with its result and its `error` on one line. A failure before the output exists — an unreadable config, a bad flag — is still plain text on stderr. Rebuild the tree by `open.parent`; each later event of a node replaces its state whole.
+  A failure ends the stream with `{"type":"error","error":"…"}` instead, and a partial `gc` with its result and its `error` on one line. A failure before the output exists — an unreadable config, a bad flag — is still plain text on stderr. Rebuild the tree by `open.parent`; each later event of a node replaces its state whole, but a `warned` or resource event's `msg` is that event's alone: the node's own `msg` is the last plain update's.
+
+### Step kinds
+
+Every node's `open.step.kind` is one of these, and they are part of the stream's contract: an action is `<namespace>.<action>`, an object a bare noun, its key in `step.id` or its name in `step.name`.
+
+| Kind | What it is |
+|---|---|
+| `savepoint.create`, `savepoint.remove`, `rollback`, `gc`, `session.fork`, `session.remove` | the root of the command that ran |
+| `session.lock` | the wait for another holder of the session's lock; reported only when there is one |
+| `project.introspect` | reading the live compose project |
+| `compose.stop`, `compose.down`, `compose.create`, `compose.start` | a compose operation, one `resource` per container |
+| `savepoint.capture` | one savepoint's capture, a safety snapshot's included |
+| `volume.capture`, `volume.restore`, `volume.remove` → `volume` | a batch over the volumes, one `volume` per volume |
+| `layer.capture`, `layer.restore` → `layer` | a batch over the writable layers, one `layer` per container |
+| `image.capture` → `image` | a batch over the images, one `image` per image |
+| `replica.rebuild` → `replica` | the replicas a rollback recreates under their recorded number |
+| `savepoint.drop` → `savepoint` | the savepoints a remove takes |
+| `rollback.prepare`, `rollback.safety-snapshot`, `rollback.apply`, `rollback.revert`, `rollback.cleanup` | a rollback's phases |
+| `session.copy` → `key` | a fork's copy, one `key` per top-level directory or object |
+| `gc.find` → `collector`, `gc.find` → `compose-project` → `collector` | what each collector found: the daemon's, then each compose project's |
+| `gc.erase` → `eraser`, `gc.erase` → `compose-project` → `eraser`, then → `gc.delete` → `garbage` | the deletions, one `garbage` per target — per repository for a restic `forget` |
 
 [`arcave mcp`](cli/mcp.md) always logs its progress: a tool's answer is its result alone.
 
@@ -221,7 +242,7 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 }
 ```
 
-One entry per distinct image the services run, stored once for every savepoint and replica naming it. `id` is the image's id; `refs` and `repo_digests` are its names, omitted when it has none. `stored_bytes` is what this savepoint added — omitted when the image was already in the store. `stored` is `false` when neither the store nor the daemon held the image: only its identity is recorded, with a warning, and a rollback needs it pullable to rebuild a container on it.
+One entry per distinct image the services run, stored once for every savepoint and replica naming it. `id` is the image's id; `refs` and `repo_digests` are its names, omitted when it has none. `stored_bytes` is what this savepoint added — omitted when the image was already in the store. `stored` is `false` when neither the store nor the daemon held the image, or the daemon failed to hand it over: only its identity is recorded, with a warning, and a rollback needs it pullable to rebuild a container on it.
 
 ### `not_covered`
 

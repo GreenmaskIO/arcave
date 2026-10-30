@@ -39,7 +39,7 @@ func main() {
 	// A panic takes the live tree down first, or the terminal is left without its cursor.
 	defer func() {
 		if r := recover(); r != nil {
-			closeOutput(runOutput, fmt.Errorf("panic: %v", r))
+			closeOutput(loadRunOutput(), fmt.Errorf("panic: %v", r))
 			panic(r)
 		}
 	}()
@@ -47,7 +47,7 @@ func main() {
 	interrupted := ctx.Err() != nil
 	stop()
 	// The output ends first, so the error comes after the final tree, or as the json stream's last line.
-	closeOutput(runOutput, err)
+	closeOutput(loadRunOutput(), err)
 	if err != nil {
 		if interrupted {
 			os.Exit(exitInterrupted)
@@ -72,11 +72,7 @@ func notifyInterrupt() (context.Context, context.CancelFunc) {
 		zerolog.Ctx(ctx).Warn().Msg("interrupted: cleaning up, interrupt again to exit at once")
 		cancel()
 		<-signals
-		var out output
-		if opened, ok := openedOutput.Load().(output); ok {
-			out = opened
-		}
-		closeOutput(out, errInterruptedAgain)
+		closeOutput(loadRunOutput(), errInterruptedAgain)
 		os.Exit(exitInterrupted)
 	}()
 

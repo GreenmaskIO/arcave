@@ -96,6 +96,8 @@ func TestReporter_Report(t *testing.T) {
 		stop     = make(chan struct{})
 		done     = make(chan struct{})
 	)
+	// The goroutine below reads the tree and the log in the program's place.
+	reporter.state = stateRunning
 	go func() {
 		defer close(done)
 		for {
@@ -133,24 +135,24 @@ func TestReporter_Report(t *testing.T) {
 	assert.Len(t, reporter.snapshot().roots, 8)
 }
 
-func TestReporter_Stop_beforeStart(t *testing.T) {
+// Before the first event there is no tree: the log goes straight to out, and Stop draws nothing.
+func TestReporter_Stop_beforeTheFirstEvent(t *testing.T) {
 	var (
 		out      = &syncBuffer{}
 		reporter = newFixedReporter(out)
 	)
-	for _, evt := range newFinishedStream(t) {
-		reporter.Report(evt)
-	}
 	_, err := reporter.LogWriter().Write([]byte("WRN slow disk\nERR lost\n"))
 	require.NoError(t, err)
 
-	reporter.Stop(StopOptions{})
-	reporter.Stop(StopOptions{})
+	drawn := reporter.Stop(StopOptions{})
+	again := reporter.Stop(StopOptions{})
+	_, err = reporter.LogWriter().Write([]byte("WRN late\n"))
+	require.NoError(t, err)
 
-	assert.Equal(t, "WRN slow disk\nERR lost\n"+
-		"✔ album.publish summer  0.4s\n"+
-		"└── ✔ file beach.jpg    0.4s\n",
-		ansi.Strip(out.String()))
+	assert.False(t, drawn)
+	assert.False(t, again)
+	assert.Nil(t, reporter.program, "no program was started")
+	assert.Equal(t, "WRN slow disk\nERR lost\nWRN late\n", ansi.Strip(out.String()))
 }
 
 func TestReporter_LogWriter_afterStop(t *testing.T) {
@@ -166,38 +168,39 @@ func TestReporter_LogWriter_afterStop(t *testing.T) {
 	assert.Equal(t, "WRN late\n", ansi.Strip(out.String()))
 }
 
-// TestReporter_Start runs the program on a buffer: the log is printed once, above the final tree,
+// The first event starts the program on a buffer: the log is printed once, above the final tree,
 // which comes last.
-func TestReporter_Start(t *testing.T) {
+func TestReporter_Report_startsTheProgram(t *testing.T) {
 	var (
 		out      = &syncBuffer{}
 		reporter = newFixedReporter(out)
 		events   = newFinishedStream(t)
 		final    = newFinalTree(events)
 	)
-	require.NoError(t, reporter.Start())
 	for _, evt := range events {
 		reporter.Report(evt)
 	}
 	_, err := reporter.LogWriter().Write([]byte("WRN slow disk\n"))
 	require.NoError(t, err)
 
-	reporter.Stop(StopOptions{})
-	reporter.Stop(StopOptions{})
+	drawn := reporter.Stop(StopOptions{})
+	again := reporter.Stop(StopOptions{})
 
 	got := ansi.Strip(out.String())
+	assert.True(t, drawn)
+	assert.False(t, again, "the tree is written once")
 	assert.True(t, strings.HasSuffix(got, final), "the final tree comes last:\n%s", got)
 	assert.Equal(t, 1, strings.Count(got, "WRN slow disk"))
 	assert.Less(t, strings.Index(got, "WRN slow disk"), strings.Index(got, final))
 }
 
-func TestReporter_Start_afterStop(t *testing.T) {
+func TestReporter_Report_afterStop(t *testing.T) {
 	reporter := newFixedReporter(&syncBuffer{})
 	reporter.Stop(StopOptions{})
 
-	err := reporter.Start()
+	reporter.Report(newFinishedStream(t)[0])
 
-	assert.ErrorIs(t, err, errStarted)
+	assert.Nil(t, reporter.program, "a stopped reporter starts no program")
 }
 
 // TestReporter_Stop_afterRunExits covers a program that ended on its own: the log and the tree go
@@ -208,11 +211,11 @@ func TestReporter_Stop_afterRunExits(t *testing.T) {
 		reporter = newFixedReporter(out)
 		events   = newFinishedStream(t)
 	)
-	require.NoError(t, reporter.Start())
+	reporter.Report(events[0])
 	reporter.program.Quit()
 	<-reporter.done
 	start := len(out.String())
-	for _, evt := range events {
+	for _, evt := range events[1:] {
 		reporter.Report(evt)
 	}
 	_, err := reporter.LogWriter().Write([]byte("WRN late\n"))

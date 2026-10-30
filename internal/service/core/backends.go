@@ -30,6 +30,27 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
+// volumeOp is one operation forEachBackend runs: its name in logs and errors, and its batch's kind.
+type volumeOp struct {
+	name string
+	kind progress.Kind
+}
+
+var (
+	volumeCapture = volumeOp{
+		name: "snapshot",
+		kind: kindVolumeCapture,
+	}
+	volumeRestore = volumeOp{
+		name: "restore",
+		kind: kindVolumeRestore,
+	}
+	volumeRemove = volumeOp{
+		name: "remove",
+		kind: kindVolumeRemove,
+	}
+)
+
 // newBackends builds one backend per volume, all rooted at the one store, in
 // input order. All up front: an unregistered backend fails before any byte moves.
 func (s *Service) newBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
@@ -53,7 +74,7 @@ func (s *Service) captureVolumes(
 	ctx context.Context, id model.SavepointID, labels map[string]string, backends []model.VolumeSnapshotBackend,
 ) ([]model.SnapshotStat, error) {
 	stats := make([]model.SnapshotStat, len(backends))
-	err := s.forEachBackend(ctx, id, backends, "snapshot",
+	err := s.forEachBackend(ctx, id, backends, volumeCapture,
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{
 				SnapshotID: id,
@@ -222,7 +243,7 @@ func abandonCapture(ctx context.Context, worker *heartbeat.Worker, id model.Save
 func (s *Service) restoreVolumes(
 	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
 ) error {
-	return s.forEachBackend(ctx, savepoint.ID, backends, "restore",
+	return s.forEachBackend(ctx, savepoint.ID, backends, volumeRestore,
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			if err := backend.Restore(ctx, model.BackendRestoreRequest{
 				SnapshotID: savepoint.ID,
@@ -254,7 +275,7 @@ func (s *Service) dropSavepoint(
 		return fmt.Errorf("%w: uncommit savepoint %s: %w", errStillCommitted, savepoint.ID, err)
 	}
 
-	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, "remove",
+	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, volumeRemove,
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			if err := backend.Remove(ctx, model.BackendRemoveRequest{
 				SnapshotID: savepoint.ID,
@@ -272,14 +293,14 @@ func (s *Service) dropSavepoint(
 	return errors.Join(removeErr, sweepErr)
 }
 
-// forEachBackend runs op over every backend concurrently and waits for all of them.
-// op gets its slice index and a context whose node counts the volume's bytes.
+// forEachBackend runs fn over every backend concurrently and waits for all of them.
+// fn gets its slice index and a context whose node counts the volume's bytes.
 func (s *Service) forEachBackend(
 	ctx context.Context,
 	snapshotID model.SavepointID,
 	backends []model.VolumeSnapshotBackend,
-	opName string,
-	op func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error,
+	op volumeOp,
+	fn func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error,
 ) error {
 	if err := snapshotID.Validate(); err != nil {
 		return fmt.Errorf("validate savepoint id: %w", err)
@@ -289,20 +310,20 @@ func (s *Service) forEachBackend(
 	}
 
 	// Before the group: the batch reports the group's cancellation, so it opens outside it.
-	ctx, batch := progress.Batch(ctx, progress.Step{Kind: newVolumeOpKind(opName)}, len(backends))
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: op.kind}, len(backends))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, backend := range backends {
 		eg.Go(func() error {
-			opCtx := volumeOpContext(egCtx, backend, snapshotID, opName)
+			opCtx := volumeOpContext(egCtx, backend, snapshotID, op.name)
 			opCtx, node := progress.Run(opCtx, progress.Step{Kind: kindVolume, ID: backend.Volume().ObjectID},
 				progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
 			log.Debug().Msg("volume operation started")
-			if err := op(opCtx, i, backend); err != nil {
-				err = fmt.Errorf("%s %s: %w", opName, backend.Volume().ObjectID, err)
+			if err := fn(opCtx, i, backend); err != nil {
+				err = fmt.Errorf("%s %s: %w", op.name, backend.Volume().ObjectID, err)
 				node.End(err)
 				return err
 			}

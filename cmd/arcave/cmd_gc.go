@@ -71,7 +71,7 @@ func runGC(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return withGCDeps(cmd.Context(), func(ctx context.Context, d *gcDependencies) error {
-		return cli.NewGCHandler(d.service, runOutput).GarbageCollect(ctx, req)
+		return cli.NewGCHandler(d.service, d.printer).GarbageCollect(ctx, req)
 	})
 }
 

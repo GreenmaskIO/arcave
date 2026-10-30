@@ -96,7 +96,7 @@ func Example_publish() {
 	// INF album.publish[summer]/queue.pause msg=Paused resource=worker:worker-1 status=in_progress
 	// DBG album.publish[summer]/queue.pause msg=Draining resource=worker:worker-2 status=in_progress
 	// INF album.publish[summer]/queue.pause msg=Paused resource=worker:worker-2 status=in_progress
-	// INF album.publish[summer]/queue.pause elapsed=400ms msg=Paused status=succeeded
+	// INF album.publish[summer]/queue.pause elapsed=400ms status=succeeded
 	// INF album.publish[summer]/album.export status=started
 	// WRN album.publish[summer]/album.export msg="2 raw files skipped" status=warned
 	// INF album.publish[summer]/album.export/photo.resize items=0/2 status=started
@@ -109,7 +109,7 @@ func Example_publish() {
 	// INF album.publish[summer]/album.export/photo.resize elapsed=1.05s items=2/2 status=succeeded
 	// INF album.publish[summer]/album.export/manifest.write status=started
 	// INF album.publish[summer]/album.export/manifest.write elapsed=50ms status=succeeded
-	// INF album.publish[summer]/album.export elapsed=1.1s msg="2 raw files skipped" status=succeeded
+	// INF album.publish[summer]/album.export elapsed=1.1s status=succeeded
 	// INF album.publish[summer]/cdn.upload items=0/2 status=started
 	// INF album.publish[summer]/cdn.upload/file[beach.jpg] status=started
 	// INF album.publish[summer]/cdn.upload/file[beach.jpg] bytes=2.1MB/2.1MB elapsed=350ms status=succeeded
@@ -120,7 +120,7 @@ func Example_publish() {
 	// INF album.publish[summer]/cdn.upload elapsed=700ms items=2/2 status=succeeded
 	// INF album.publish[summer]/queue.resume status=started
 	// INF album.publish[summer]/queue.resume msg=Running resource=worker:worker-1 status=in_progress
-	// INF album.publish[summer]/queue.resume elapsed=100ms msg=Running status=succeeded
+	// INF album.publish[summer]/queue.resume elapsed=100ms status=succeeded
 	// INF album.publish[summer] elapsed=2.3s status=succeeded
 	// err: <nil>
 }
@@ -150,7 +150,7 @@ func Example_publishFailure() {
 	// {"node":3,"status":"succeeded","sample":{"elapsed_ns":600000000,"items":{"done":1,"total":1}},"at":"2026-10-29T12:00:00.6Z"}
 	// {"node":5,"status":"started","open":{"parent":2,"step":{"kind":"manifest.write","type":"activity"}},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00.6Z"}
 	// {"node":5,"status":"succeeded","sample":{"elapsed_ns":50000000},"at":"2026-10-29T12:00:00.65Z"}
-	// {"node":2,"status":"succeeded","msg":"2 raw files skipped","sample":{"elapsed_ns":650000000},"at":"2026-10-29T12:00:00.65Z"}
+	// {"node":2,"status":"succeeded","sample":{"elapsed_ns":650000000},"at":"2026-10-29T12:00:00.65Z"}
 	// {"node":6,"status":"started","open":{"parent":1,"step":{"kind":"cdn.upload","type":"workflow"},"measures":["items"]},"sample":{"elapsed_ns":0,"items":{"done":0,"total":4}},"at":"2026-10-29T12:00:00.65Z"}
 	// {"node":7,"status":"started","open":{"parent":6,"step":{"kind":"file","type":"activity","id":"beach.jpg"},"measures":["bytes"]},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:00.65Z"}
 	// {"node":7,"status":"in_progress","sample":{"elapsed_ns":0,"bytes":{"done":1050000}},"at":"2026-10-29T12:00:00.65Z"}
@@ -172,7 +172,7 @@ func Example_publishFailure() {
 	// {"node":12,"status":"started","open":{"parent":11,"step":{"kind":"cdn.purge","type":"workflow"},"measures":["items"]},"sample":{"elapsed_ns":0,"items":{"done":0,"total":1}},"at":"2026-10-29T12:00:01.25Z"}
 	// {"node":13,"status":"started","open":{"parent":12,"step":{"kind":"file","type":"activity","id":"beach.jpg"}},"sample":{"elapsed_ns":0},"at":"2026-10-29T12:00:01.25Z"}
 	// {"node":13,"status":"warned","msg":"purge failed, the file stays on the CDN: edge timeout","sample":{"elapsed_ns":50000000},"at":"2026-10-29T12:00:01.3Z"}
-	// {"node":13,"status":"succeeded","msg":"purge failed, the file stays on the CDN: edge timeout","sample":{"elapsed_ns":50000000},"at":"2026-10-29T12:00:01.3Z"}
+	// {"node":13,"status":"succeeded","sample":{"elapsed_ns":50000000},"at":"2026-10-29T12:00:01.3Z"}
 	// {"node":12,"status":"in_progress","sample":{"elapsed_ns":50000000,"items":{"done":1,"total":1}},"at":"2026-10-29T12:00:01.3Z"}
 	// {"node":12,"status":"succeeded","sample":{"elapsed_ns":50000000,"items":{"done":1,"total":1}},"at":"2026-10-29T12:00:01.3Z"}
 	// {"node":11,"status":"succeeded","sample":{"elapsed_ns":50000000},"at":"2026-10-29T12:00:01.3Z"}

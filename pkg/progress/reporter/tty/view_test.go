@@ -64,14 +64,14 @@ func TestRender(t *testing.T) {
 		{name: "final_ignores_column", workflow: twoRoots, frame: frame{width: 80, height: 24, minColumn: 60, final: true}},
 		{name: "stop_just_ended", workflow: stopThenStart, frame: frame{width: 80, height: 24}},
 		{name: "stop_folded", workflow: stopThenStart, frame: frame{width: 80, height: 24}, after: ms(700)},
-		{name: "essential_failed", workflow: backupFailed, frame: frame{width: 80, height: 24, final: true, essential: true, omitRootError: true}},
-		{name: "final_root_error_omitted", workflow: refusedAtRoot, frame: frame{width: 80, height: 24, final: true, omitRootError: true}},
+		{name: "essential_failed", workflow: backupFailed, frame: frame{width: 80, height: 24, final: true, StopOptions: StopOptions{Essential: true, OmitRootError: true}}},
+		{name: "final_root_error_omitted", workflow: refusedAtRoot, frame: frame{width: 80, height: 24, final: true, StopOptions: StopOptions{OmitRootError: true}}},
 		{name: "final_root_error", workflow: refusedAtRoot, frame: frame{width: 80, height: 24, final: true}},
-		{name: "essential_quiet", workflow: publishQuietly, frame: frame{width: 80, height: 24, final: true, essential: true}},
-		{name: "essential_in_result", workflow: publishWarned, frame: frame{width: 80, height: 24, final: true, essential: true}},
-		{name: "essential_below_stages", workflow: exportMixed, frame: frame{width: 80, height: 24, final: true, essential: true}},
+		{name: "essential_quiet", workflow: publishQuietly, frame: frame{width: 80, height: 24, final: true, StopOptions: StopOptions{Essential: true}}},
+		{name: "essential_in_result", workflow: publishWarned, frame: frame{width: 80, height: 24, final: true, StopOptions: StopOptions{Essential: true}}},
+		{name: "essential_below_stages", workflow: exportMixed, frame: frame{width: 80, height: 24, final: true, StopOptions: StopOptions{Essential: true}}},
 		{name: "final_in_result", workflow: publishWarned, frame: frame{width: 80, height: 24, final: true}},
-		{name: "final_many_warnings", workflow: manyWarnings, frame: frame{width: 80, height: 24, final: true, moreHint: "see the log"}},
+		{name: "final_many_warnings", workflow: manyWarnings, frame: frame{width: 80, height: 24, final: true, StopOptions: StopOptions{MoreHint: "see the log"}}},
 		{name: "live_many_warnings", workflow: manyWarnings, frame: frame{width: 80, height: 24}},
 	}
 	for _, tt := range tests {
@@ -102,28 +102,6 @@ func TestFormatElapsed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			assert.Equal(t, tt.want, formatElapsed(tt.elapsed))
-		})
-	}
-}
-
-func TestFormatSize(t *testing.T) {
-	tests := []struct {
-		size int64
-		want string
-	}{
-		{size: 999, want: "999B"},
-		{size: 1000, want: "1.0KB"},
-		{size: 420_000, want: "420KB"},
-		{size: 999_499, want: "999KB"},
-		{size: 999_500, want: "1.0MB"},
-		{size: 9_949_999, want: "9.9MB"},
-		{size: 9_950_000, want: "10MB"},
-		{size: 24_000_000, want: "24MB"},
-		{size: 2_000_000_000_000_000_000, want: "2000PB"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatSize(tt.size))
 		})
 	}
 }

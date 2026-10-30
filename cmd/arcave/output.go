@@ -59,8 +59,17 @@ const (
 	outputLineError    = "error"
 )
 
-// openedOutput is runOutput for the signal handler, which reads it from its own goroutine.
+// openedOutput holds the output initRoot opens and main closes; the signal handler reads it from
+// its own goroutine.
 var openedOutput atomic.Value
+
+// loadRunOutput is the run's output, nil before initRoot opens it.
+func loadRunOutput() output {
+	if out, ok := openedOutput.Load().(output); ok {
+		return out
+	}
+	return nil
+}
 
 // outputClosed lets one caller close the output: one racing it waits for that close to finish.
 var outputClosed sync.Once
@@ -237,29 +246,15 @@ type ttyOutput struct {
 	stderr   io.Writer
 
 	mu      sync.Mutex
-	started bool
 	printed []byte
 }
 
 func (o *ttyOutput) Report(evt progress.Event) {
-	o.mu.Lock()
-	if !o.started {
-		o.started = true
-		// A program that cannot start keeps the events; Stop writes the final tree.
-		//nolint:errcheck // Start fails only on a second call, which started rules out
-		_ = o.reporter.Start()
-	}
-	o.mu.Unlock()
 	o.reporter.Report(evt)
 }
 
 // Write is the log's writer: straight to stderr until the tree is drawn, above it after.
 func (o *ttyOutput) Write(p []byte) (int, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if !o.started {
-		return o.stderr.Write(p)
-	}
 	return o.reporter.LogWriter().Write(p)
 }
 
@@ -275,37 +270,29 @@ func (o *ttyOutput) Print(v any) error {
 	return nil
 }
 
+// Close takes the live tree down, leaving the final one in the scrollback, then writes the result
+// and err.
 func (o *ttyOutput) Close(err error) {
 	o.mu.Lock()
 	printed := o.printed
 	o.printed = nil
 	o.mu.Unlock()
-	o.stop(tty.StopOptions{
-		Essential:     o.result.format == formatText && printed != nil,
+	essential := o.result.format == formatText && printed != nil
+	drawn := o.reporter.Stop(tty.StopOptions{
+		Essential:     essential,
 		OmitRootError: err != nil,
 		MoreHint:      moreWarningsHint,
 	})
+	if drawn && essential {
+		// The tree and the result below it are two blocks.
+		//nolint:errcheck // stderr that fails a write has nowhere to report it
+		_, _ = fmt.Fprintln(o.stderr)
+	}
 	if printed != nil {
 		//nolint:errcheck // stdout that fails a write has nowhere to report it
 		_, _ = o.stdout.Write(printed)
 	}
 	writeError(o.stderr, err)
-}
-
-// stop takes the live tree down and leaves the final one in the scrollback, as opts say.
-func (o *ttyOutput) stop(opts tty.StopOptions) {
-	o.mu.Lock()
-	started := o.started
-	o.mu.Unlock()
-	if !started {
-		return
-	}
-	o.reporter.Stop(opts)
-	if opts.Essential {
-		// The tree and the result below it are two blocks.
-		//nolint:errcheck // stderr that fails a write has nowhere to report it
-		_, _ = fmt.Fprintln(o.stderr)
-	}
 }
 
 // outputLine is one line of the json stream: an event, the result, or the error, which a

@@ -38,7 +38,7 @@ func (s *Printer) formatSavepoint(savepoint model.Savepoint) string {
 	title := noun + s.formatSavepointTitle(savepoint, "15:04:05") + " · stored " + formatSize(newStoredBytes(savepoint))
 	b.WriteString(styleTitle.Render(title) + "\n")
 	b.WriteString(formatCaptureRows([]string{"count", "size", "stored"}, newCaptureRows(savepoint)))
-	b.WriteString(formatNotices(newSavepointNotices(savepoint)))
+	b.WriteString(formatNotices(savepoint.Notices()))
 	b.WriteString("\n  roll back:  " + s.newCommand(true, "rollback", newSavepointRef(savepoint)) + "\n")
 	return b.String()
 }
@@ -57,7 +57,7 @@ func (s *Printer) formatSavepoints(savepoints []model.Savepoint) string {
 			strconv.Itoa(len(savepoint.Stats)),
 			strconv.Itoa(len(savepoint.WritableLayers)),
 			formatSize(newStoredBytes(savepoint)),
-			formatZeroDash(len(newSavepointNotices(savepoint))),
+			formatZeroDash(len(savepoint.Notices())),
 		})
 	}
 	return formatTable([]string{"NAME", "ID", "CREATED", "VOLUMES", "LAYERS", "STORED", "NOT COVERED"}, rows)
@@ -198,32 +198,6 @@ func formatCaptureLine(kind string, cells []string, widths []int) string {
 		line += fmt.Sprintf("  %*s", widths[i], cell)
 	}
 	return strings.TrimRight(line, " ")
-}
-
-// newSavepointNotices is what the savepoint leaves out, and every image it names but does not hold.
-func newSavepointNotices(savepoint model.Savepoint) []model.Notice {
-	var notices []model.Notice
-	if savepoint.NotCovered != nil {
-		notices = savepoint.NotCovered.Notices()
-	}
-	for _, image := range savepoint.Images {
-		if image.Stored {
-			continue
-		}
-		notices = append(notices, model.Notice{
-			Message: fmt.Sprintf("image %s is not stored: neither the store nor the daemon held it", newImageName(image)),
-			Severe:  true,
-		})
-	}
-	return notices
-}
-
-// newImageName is an image's first reference, else its short id.
-func newImageName(image model.Image) string {
-	if len(image.Refs) > 0 {
-		return image.Refs[0]
-	}
-	return formatShortID(strings.TrimPrefix(image.ID.String(), "sha256:"))
 }
 
 // newSavepointRef is what rollback takes the savepoint by: its name, else its id.

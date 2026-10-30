@@ -112,9 +112,6 @@ func runScenario(ctx context.Context, kind string, p publisher, s scenario) erro
 			NoColor:      noColor,
 			PartsExclude: []string{zerolog.TimestampFieldName},
 		}).Level(zerolog.WarnLevel)
-		if err := progressReporter.Start(); err != nil {
-			return err
-		}
 		defer progressReporter.Stop(tty.StopOptions{})
 		return s.run(p, logger.WithContext(ctx), progress.New(progressReporter, p.clock.Now))
 	case reporterJSON:

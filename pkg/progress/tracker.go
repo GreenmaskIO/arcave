@@ -167,22 +167,18 @@ func findParent(ctx context.Context, step Step) (*Node, bool) {
 		return nil, false
 	}
 	if parent.step.Type == NodeTypeActivity {
-		warnMute(ctx, step, parent, "progress: an activity has no children, the node is mute")
+		zerolog.Ctx(ctx).Warn().
+			Str("kind", string(step.Kind)).
+			Str("parent", string(parent.step.Kind)).
+			Msg("progress: an activity has no children, the node is mute")
 		return nil, false
 	}
-	parent.tracker.mu.Lock()
-	ended := parent.ended
-	parent.tracker.mu.Unlock()
-	if ended {
-		warnMute(ctx, step, parent, "progress: the parent has ended, the node is mute")
+	if parent.isEnded() {
+		zerolog.Ctx(ctx).Warn().
+			Str("kind", string(step.Kind)).
+			Str("parent", string(parent.step.Kind)).
+			Msg("progress: the parent has ended, the node is mute")
 		return nil, false
 	}
 	return parent, true
-}
-
-func warnMute(ctx context.Context, step Step, parent *Node, msg string) {
-	zerolog.Ctx(ctx).Warn().
-		Str("kind", string(step.Kind)).
-		Str("parent", string(parent.step.Kind)).
-		Msg(msg)
 }

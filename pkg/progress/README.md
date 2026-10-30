@@ -59,8 +59,9 @@ workflow (Begin): [lazy] ──first child / Warn──► started+Open ──�
 - `started` carries `Open` — the parent, the step and the declared `Measures` — once. Every
   later event names the node by number only: a renderer reads the stream from its start and
   builds a node's widget once, as compose's and OpenTelemetry's do.
-- Every event is a full snapshot: the current `msg`, the last sample, a fresh `Elapsed` counted
-  from the constructor. A caller reports only what changed: `Done(sample)` and `Progress(sample)`
+- Every event is a full snapshot: the node's own `msg` — the last `Update`'s — the last sample, a
+  fresh `Elapsed` counted from the constructor; a `warned` event's or a resource's `msg` is that
+  event's alone. A caller reports only what changed: `Done(sample)` and `Progress(sample)`
   replace the fields they set and keep the rest; `Fail` keeps the last sample.
 - A node ends once; every call after is ignored.
 
@@ -231,18 +232,17 @@ WRN album.backup[summer]/cdn.upload/file[cover.jpg] elapsed=0s status=cancelled
               ! purge failed, the file stays on the CDN: edge timeout
 ```
 
-`Report` and `LogWriter` only change the reporter's state under its own lock; the program reads
-it on a 100ms tick, so the tracker never waits on the terminal. Log lines go through
-`LogWriter()` — an `io.Writer` of whole lines, filtered by the logger's level — and print above
-the tree. The program reads no input and handles no signal: Ctrl-C stays the caller's, to cancel
-its context. `Start` begins drawing; `Stop` must follow on every path, a panic included:
+While the program runs, `Report` and `LogWriter` only change the reporter's state under its own
+lock; the program reads it on a 100ms tick, so the tracker never waits on the terminal. Log lines
+go through `LogWriter()` — an `io.Writer` of whole lines, filtered by the logger's level — and
+print above the tree, or straight to the terminal while there is none. The program reads no input
+and handles no signal: Ctrl-C stays the caller's, to cancel its context. The first event starts
+it, so a run that reports none never takes the terminal; `Stop` must follow on every path a panic
+of the calling goroutine takes, and reports whether it wrote a tree:
 
 ```go
 progressReporter := tty.New(os.Stderr)
 logger := zerolog.New(zerolog.ConsoleWriter{Out: progressReporter.LogWriter()}).Level(zerolog.WarnLevel)
-if err := progressReporter.Start(); err != nil {
-	return err
-}
 defer progressReporter.Stop(tty.StopOptions{})
 tracker := progress.New(progressReporter, time.Now)
 ```

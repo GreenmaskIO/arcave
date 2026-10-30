@@ -139,8 +139,8 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 			want: []string{
 				"savepoint.create/project.introspect succeeded",
 				"savepoint.create/compose.stop succeeded",
-				"savepoint.create/savepoint.capture/volume.snapshot/volume[volume-named-demo_db] succeeded",
-				"savepoint.create/savepoint.capture/volume.snapshot succeeded",
+				"savepoint.create/savepoint.capture/volume.capture/volume[volume-named-demo_db] succeeded",
+				"savepoint.create/savepoint.capture/volume.capture succeeded",
 				"savepoint.create/savepoint.capture succeeded",
 				"savepoint.create/compose.start succeeded",
 				"savepoint.create succeeded",
@@ -152,9 +152,9 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 			want: []string{
 				"savepoint.create/project.introspect succeeded",
 				"savepoint.create/compose.stop succeeded",
-				"savepoint.create/savepoint.capture/volume.snapshot/volume[volume-named-demo_db] failed " +
+				"savepoint.create/savepoint.capture/volume.capture/volume[volume-named-demo_db] failed " +
 					"error=snapshot volume-named-demo_db: capture volume: disk full",
-				"savepoint.create/savepoint.capture/volume.snapshot failed",
+				"savepoint.create/savepoint.capture/volume.capture failed",
 				"savepoint.create/savepoint.capture failed",
 				"savepoint.create/compose.start succeeded",
 				"savepoint.create failed",
@@ -200,9 +200,10 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Act
 	_, err := withSessionLock(ctx, locker, model.SessionLockOperationSavepointCreate,
 		func(ctx context.Context, _ model.GrantedSessionLock) (string, error) {
-			return "", runActivity(ctx, kindComposeStop, func(ctx context.Context) error {
-				return preferInterrupt(ctx, errWorkflow)
-			})
+			_, node := progress.Run(ctx, progress.Step{Kind: kindComposeStop})
+			err := preferInterrupt(ctx, errWorkflow)
+			node.End(err)
+			return "", err
 		})
 	root.End(err)
 
@@ -336,6 +337,47 @@ func TestWarn(t *testing.T) {
 			warn(node, "not covered: 1 mount(s)", isInResult(tt.labels))
 
 			assert.Equal(t, tt.want, recorder.inResult)
+		})
+	}
+}
+
+func TestNewImageSample(t *testing.T) {
+	tests := []struct {
+		name  string
+		image model.Image
+		want  progress.Sample
+	}{
+		{
+			name: "stored by this capture",
+			image: model.Image{
+				SizeBytes:   100,
+				StoredBytes: 40,
+				Stored:      true,
+			},
+			want: newCaptureSample(100, 40, 60),
+		},
+		{
+			name: "already stored",
+			image: model.Image{
+				SizeBytes: 100,
+				Stored:    true,
+			},
+			want: newCaptureSample(100, 0, 100),
+		},
+		{
+			name: "not stored moves nothing",
+			image: model.Image{
+				SizeBytes: 100,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := newImageSample(tt.image)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

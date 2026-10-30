@@ -150,7 +150,7 @@ func (s *Service) captureImages(
 			if !image.Stored {
 				warn(node, "not stored: a replica left out of the capture cannot be rebuilt from it", inResult)
 			}
-			node.Done(newCaptureSample(image.SizeBytes, image.StoredBytes, max(image.SizeBytes-image.StoredBytes, 0)))
+			node.Done(newImageSample(image))
 			log.Debug().Dur("duration", time.Since(started)).Bool("stored", image.Stored).
 				Int64("stored_bytes", image.StoredBytes).Msg("image capture finished")
 			return nil
@@ -292,7 +292,7 @@ func (s *Service) rebuildReplica(ctx context.Context, rebuild replicaRebuild) er
 	replica := rebuild.recorded
 	ctx, node := progress.Run(ctx, progress.Step{Kind: kindReplica, ID: replica.containerName})
 	if replica.number != rebuild.created {
-		log.Warn().Str("service", replica.service).Int("replica", replica.number).Int("created_replica", rebuild.created).
+		log.Info().Str("service", replica.service).Int("replica", replica.number).Int("created_replica", rebuild.created).
 			Msg("compose numbers replicas without gaps and created this one under another number; " +
 				"it is recreated under the number and name the savepoint recorded")
 		node.Warn(fmt.Sprintf("created as replica %d, recreated as %d", rebuild.created, replica.number))

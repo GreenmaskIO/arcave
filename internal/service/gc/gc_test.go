@@ -744,10 +744,7 @@ func TestGarbageCollector_GarbageCollect_ProbeFails(t *testing.T) {
 				model.GarbageDataKindDeduplicatedVolumes: "connection refused",
 			}, aborted)
 			assert.Equal(t, 2, result.Total.Aborted)
-			assert.Equal(t, []string{
-				"restored-layers is not judged: connection refused",
-				"deduplicated-volumes is not judged: connection refused",
-			}, result.Warnings)
+			assert.Empty(t, result.Warnings, "the aborted reports say it")
 			tags.AssertExpectations(t)
 			restic.AssertExpectations(t)
 			blobs.AssertExpectations(t)

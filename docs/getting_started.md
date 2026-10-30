@@ -168,7 +168,7 @@ INF savepoint.create[before-migration] status=started
 INF savepoint.create[before-migration]/project.introspect elapsed=96ms status=succeeded
 INF savepoint.create[before-migration]/compose.stop msg=Stopped resource=container:myapp-db-1 status=in_progress
 INF savepoint.create[before-migration]/compose.stop elapsed=312ms msg=Stopped status=succeeded
-INF savepoint.create[before-migration]/savepoint.capture[before-migration]/volume.snapshot/volume[volume-named-myapp_pgdata] bytes=41MB/41MB elapsed=672ms status=succeeded stored=41MB
+INF savepoint.create[before-migration]/savepoint.capture[before-migration]/volume.capture/volume[volume-named-myapp_pgdata] bytes=41MB/41MB elapsed=672ms status=succeeded stored=41MB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.341s status=succeeded stored=165MB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/layer.capture/layer[myapp-db-1] bytes=159MB/159MB elapsed=2.224s reused=159MB status=succeeded stored=17KB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration] elapsed=4.237s status=succeeded

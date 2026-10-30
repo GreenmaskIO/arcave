@@ -144,7 +144,7 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 	}
 	for _, kind := range []progress.Kind{
 		"savepoint.create", "project.introspect", "compose.stop",
-		"savepoint.capture", "volume.snapshot", "volume", "layer.capture", "layer", "compose.start",
+		"savepoint.capture", "volume.capture", "volume", "layer.capture", "layer", "compose.start",
 	} {
 		assert.True(t, created.kinds[kind], "savepoint create reports %s", kind)
 	}
@@ -153,7 +153,7 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 	assert.True(t, rolledBack.settled["compose.create"], "and under compose.create")
 	for _, kind := range []progress.Kind{
 		"rollback", "rollback.prepare", "layer.restore", "rollback.safety-snapshot", "savepoint.capture",
-		"rollback.apply", "compose.down", "compose.create", "volume.restore", "compose.start", "rollback.reap",
+		"rollback.apply", "compose.down", "compose.create", "volume.restore", "compose.start", "rollback.cleanup",
 	} {
 		assert.True(t, rolledBack.kinds[kind], "rollback reports %s", kind)
 	}

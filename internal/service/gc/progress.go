@@ -23,15 +23,16 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The kinds of the nodes a gc opens.
+// The kinds of the nodes a gc opens: <namespace>.<action> for an action, a bare noun for an object.
 const (
 	kindGC             progress.Kind = "gc"
 	kindSessionLock    progress.Kind = "session.lock"
 	kindGCFind         progress.Kind = "gc.find"
 	kindGCErase        progress.Kind = "gc.erase"
-	kindComposeProject progress.Kind = "compose.project"
-	kindCollector      progress.Kind = "collector"
 	kindGCDelete       progress.Kind = "gc.delete"
+	kindComposeProject progress.Kind = "compose-project"
+	kindCollector      progress.Kind = "collector"
+	kindEraser         progress.Kind = "eraser"
 	kindGarbage        progress.Kind = "garbage"
 )
 

@@ -64,7 +64,7 @@ func TestService_prepare(t *testing.T) {
 	// Act
 	working, err := svc.prepare(ctx, 0)
 	require.NoError(t, err)
-	killed, err := svc.stopServices(ctx, working, true)
+	killed, err := svc.stopServices(ctx, working)
 
 	// Assert
 	require.NoError(t, err)

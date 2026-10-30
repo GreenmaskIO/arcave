@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/pkg/progress"
+	"github.com/greenmaskio/arcave/pkg/progress/reporter/internal/format"
 )
 
 // Log writes the stream as log records, one per event worth a line, each named by its node's
@@ -54,12 +55,17 @@ func (r *Log) Report(evt progress.Event) {
 	items := toItems(evt.Sample.Items)
 	skip := evt.Status == progress.StatusInProgress &&
 		evt.Msg == node.msg && evt.Resource == nil && items == node.items
+	// A warning's or a resource's message is its event's alone: the node keeps its own.
+	msg := evt.Msg
+	if evt.Resource != nil || evt.Status == progress.StatusWarned {
+		msg = node.msg
+	}
 	if evt.Status.IsTerminal() {
 		delete(r.nodes, evt.Node)
 	} else {
 		r.nodes[evt.Node] = logNode{
 			path:  node.path,
-			msg:   evt.Msg,
+			msg:   msg,
 			items: items,
 		}
 	}
@@ -91,10 +97,10 @@ func (r *Log) newRecord(evt progress.Event) *zerolog.Event {
 	if bytes := evt.Sample.Bytes; bytes != nil {
 		record = record.Str("bytes", formatBytes(*bytes))
 		if bytes.Stored != 0 {
-			record = record.Str("stored", formatSize(bytes.Stored))
+			record = record.Str("stored", format.Size(bytes.Stored))
 		}
 		if bytes.Reused != 0 {
-			record = record.Str("reused", formatSize(bytes.Reused))
+			record = record.Str("reused", format.Size(bytes.Reused))
 		}
 	}
 	if items := evt.Sample.Items; items != nil {
@@ -145,9 +151,9 @@ func formatPath(parent string, step progress.Step) string {
 // formatBytes renders done/total, or done alone while the total is unknown or exceeded.
 func formatBytes(bytes progress.Bytes) string {
 	if bytes.Total == 0 || bytes.Done > bytes.Total {
-		return formatSize(bytes.Done)
+		return format.Size(bytes.Done)
 	}
-	return formatSize(bytes.Done) + "/" + formatSize(bytes.Total)
+	return format.Size(bytes.Done) + "/" + format.Size(bytes.Total)
 }
 
 // formatItems renders done/total, or done alone while the total is unknown.
@@ -156,24 +162,4 @@ func formatItems(items progress.Items) string {
 		return fmt.Sprint(items.Done)
 	}
 	return fmt.Sprintf("%d/%d", items.Done, items.Total)
-}
-
-// formatSize renders a byte count in decimal units, to three significant digits at most.
-func formatSize(size int64) string {
-	const unit = 1000
-	if size < unit {
-		return fmt.Sprintf("%dB", size)
-	}
-	var (
-		suffixes = []string{"KB", "MB", "GB", "TB", "PB"}
-		value    = float64(size) / unit
-		i        int
-	)
-	for ; value >= 999.5 && i < len(suffixes)-1; i++ {
-		value /= unit
-	}
-	if value < 9.95 {
-		return fmt.Sprintf("%.1f%s", value, suffixes[i])
-	}
-	return fmt.Sprintf("%.0f%s", value, suffixes[i])
 }

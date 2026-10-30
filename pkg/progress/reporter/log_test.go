@@ -16,6 +16,7 @@ package reporter
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -39,6 +40,62 @@ func TestLog_Report(t *testing.T) {
 	assertGolden(t, "stream.log", out.Bytes())
 }
 
+// A warning's or a resource's message is its event's alone: a tick after it repeating the node's
+// own message is no line.
+func TestLog_Report_skipsATickAfter(t *testing.T) {
+	tests := []struct {
+		name  string
+		event progress.Event
+	}{
+		{
+			name: "a warning",
+			event: progress.Event{
+				Node:   1,
+				Status: progress.StatusWarned,
+				Msg:    "slow disk",
+			},
+		},
+		{
+			name: "a resource",
+			event: progress.Event{
+				Node:     1,
+				Status:   progress.StatusInProgress,
+				Msg:      "Paused",
+				Resource: &progress.Resource{Kind: "worker", ID: "worker-1"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			var out bytes.Buffer
+			reporter := NewLog(zerolog.New(zerolog.ConsoleWriter{
+				Out:          &out,
+				NoColor:      true,
+				PartsExclude: []string{zerolog.TimestampFieldName},
+			}))
+			tick := progress.Event{
+				Node:   1,
+				Status: progress.StatusInProgress,
+				Msg:    "copying",
+			}
+
+			// Act
+			reporter.Report(progress.Event{
+				Node:   1,
+				Status: progress.StatusStarted,
+				Open:   &progress.Open{Step: progress.Step{Kind: "volume.capture", Type: progress.NodeTypeWorkflow}},
+			})
+			reporter.Report(tick)
+			reporter.Report(tt.event)
+			reporter.Report(tick)
+
+			// Assert
+			assert.Equal(t, 1, strings.Count(out.String(), "msg=copying"), out.String())
+		})
+	}
+}
+
 func TestFormatBytes(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -53,28 +110,6 @@ func TestFormatBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, formatBytes(tt.bytes))
-		})
-	}
-}
-
-func TestFormatSize(t *testing.T) {
-	tests := []struct {
-		size int64
-		want string
-	}{
-		{size: 999, want: "999B"},
-		{size: 1000, want: "1.0KB"},
-		{size: 420_000, want: "420KB"},
-		{size: 999_499, want: "999KB"},
-		{size: 999_500, want: "1.0MB"},
-		{size: 9_949_999, want: "9.9MB"},
-		{size: 9_950_000, want: "10MB"},
-		{size: 24_000_000, want: "24MB"},
-		{size: 2_000_000_000_000_000_000, want: "2000PB"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatSize(tt.size))
 		})
 	}
 }

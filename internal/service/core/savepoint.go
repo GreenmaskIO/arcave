@@ -88,7 +88,7 @@ func (s *Service) createSavepoint(
 	}
 	s.warnCapturePolicyDrift(ctx, visible, working.project)
 
-	killed, err := s.stopServices(ctx, working, true)
+	killed, err := s.stopServices(ctx, working)
 	if err != nil {
 		// A stop that failed or was interrupted partway may have stopped some services.
 		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")

@@ -30,8 +30,7 @@ type tree struct {
 type node struct {
 	open progress.Open
 	last progress.Event
-	// msg is the node's own message: one no resource line or warning already shows. It is read off
-	// a change of the event's msg, so an Update repeating the last resource's message is missed.
+	// msg is the node's own message, the last Update's.
 	msg       string
 	children  []progress.NodeID
 	resources []resourceLine
@@ -77,7 +76,7 @@ func (t *tree) apply(evt progress.Event) {
 			msg:      evt.Msg,
 			inResult: evt.InResult,
 		})
-	case evt.Msg != current.last.Msg:
+	default:
 		current.msg = evt.Msg
 	}
 	current.last = evt

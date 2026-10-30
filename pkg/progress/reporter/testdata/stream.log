@@ -2,7 +2,7 @@ INF album.backup[summer] status=started
 INF album.backup[summer]/queue.pause status=started
 INF album.backup[summer]/queue.pause msg=Paused resource=worker:worker-1 status=in_progress
 WRN album.backup[summer]/queue.pause msg=unreachable resource=worker:worker-2 status=warned
-INF album.backup[summer]/queue.pause elapsed=300ms msg=unreachable status=succeeded
+INF album.backup[summer]/queue.pause elapsed=300ms status=succeeded
 INF album.backup[summer]/cdn.upload items=0/3 status=started
 INF album.backup[summer]/cdn.upload/file[beach.jpg] status=started
 INF album.backup[summer]/cdn.upload/file[beach.jpg] bytes=1.1MB msg=retrying status=in_progress

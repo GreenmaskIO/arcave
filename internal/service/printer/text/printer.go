@@ -18,7 +18,6 @@ package text
 import (
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -160,35 +159,20 @@ func formatOptionalSize(size *int64) string {
 	return formatSize(*size)
 }
 
-// formatNotices renders the warnings block, the severe first; "" for no notice.
+// formatNotices renders the warnings block in the order given; "" for no notice.
 func formatNotices(notices []model.Notice) string {
 	if len(notices) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("\n" + styleWarningsTitle.Render(fmt.Sprintf("Warnings (%d)", len(notices))) + "\n")
-	sorted := slices.SortedStableFunc(slices.Values(notices), func(a, b model.Notice) int {
-		return compareSevere(a.Severe, b.Severe)
-	})
-	for _, notice := range sorted {
+	for _, notice := range notices {
 		b.WriteString(styleWarning.Render("  ! "+notice.Message) + "\n")
 		if notice.Hint != "" {
 			b.WriteString(styleHint.Render("    → "+notice.Hint) + "\n")
 		}
 	}
 	return b.String()
-}
-
-// compareSevere orders a severe notice before one that only informs.
-func compareSevere(a, b bool) int {
-	switch {
-	case a == b:
-		return 0
-	case a:
-		return -1
-	default:
-		return 1
-	}
 }
 
 // formatShortID is the first eight characters of an id.

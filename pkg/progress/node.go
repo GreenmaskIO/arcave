@@ -98,7 +98,10 @@ func (n *Node) Progress(sample Sample) {
 	if !n.opened {
 		return
 	}
-	n.emitLocked(StatusInProgress, nil, false, false, "")
+	n.emitLocked(Event{
+		Status: StatusInProgress,
+		Msg:    n.msg,
+	})
 }
 
 // Done ends the node succeeded, merging sample as Progress does. A lazy workflow never opened
@@ -115,7 +118,10 @@ func (n *Node) Done(sample Sample) {
 	n.ended = true
 	n.mergeLocked(sample)
 	if n.opened {
-		n.emitLocked(StatusSucceeded, nil, false, false, "")
+		n.emitLocked(Event{
+			Status: StatusSucceeded,
+			Msg:    n.msg,
+		})
 	}
 	n.parent.countChildLocked(StatusSucceeded)
 }
@@ -147,7 +153,11 @@ func (n *Node) Fail(msg string, err error) {
 	case err != nil && (n.step.Type == NodeTypeActivity || !n.childFailed):
 		errText = err.Error()
 	}
-	n.emitLocked(status, nil, false, false, errText)
+	n.emitLocked(Event{
+		Status: status,
+		Msg:    n.msg,
+		Error:  errText,
+	})
 	if status == StatusFailed {
 		for ancestor := n.parent; ancestor != nil; ancestor = ancestor.parent {
 			ancestor.childFailed = true
@@ -182,6 +192,13 @@ func (n *Node) isMute() bool {
 	return n == nil || n.tracker == nil
 }
 
+// isEnded reports whether the node has ended.
+func (n *Node) isEnded() bool {
+	n.tracker.mu.Lock()
+	defer n.tracker.mu.Unlock()
+	return n.ended
+}
+
 func (n *Node) declares(measure Measure) bool {
 	return slices.Contains(n.measures, measure)
 }
@@ -201,17 +218,24 @@ func (n *Node) report(status Status, msg string, resource *Resource, settled, in
 	if n.ended {
 		return
 	}
-	if status == StatusInProgress && !n.opened {
-		n.msg = msg
-		return
-	}
-	n.openLocked()
-	n.msg = msg
 	if resource != nil && !n.declares(MeasureResources) {
 		n.warnUndeclared(MeasureResources)
-		resource, settled = nil, false
+		return
 	}
-	n.emitLocked(status, resource, settled, inResult, "")
+	// Only an Update's message is the node's own; a warning's or a resource's is its event's alone.
+	if status == StatusInProgress && resource == nil {
+		n.msg = msg
+	}
+	if status == StatusInProgress && !n.opened {
+		return
+	}
+	n.emitLocked(Event{
+		Status:   status,
+		Msg:      msg,
+		Resource: resource,
+		Settled:  settled,
+		InResult: inResult,
+	})
 }
 
 // mergeLocked takes the fields sample sets that the node declares, warning of the rest.
@@ -254,13 +278,16 @@ func (n *Node) countChildLocked(status Status) {
 		items.Cancelled++
 	}
 	n.sample.Items = &items
-	n.emitLocked(StatusInProgress, nil, false, false, "")
+	n.emitLocked(Event{
+		Status: StatusInProgress,
+		Msg:    n.msg,
+	})
 }
 
-// emitLocked reports one event, opening the node, and its unopened ancestors, first.
-func (n *Node) emitLocked(status Status, resource *Resource, settled, inResult bool, errText string) {
+// emitLocked reports evt, opening the node, and its unopened ancestors, first.
+func (n *Node) emitLocked(evt Event) {
 	n.openLocked()
-	n.tracker.reporter.Report(n.newEventLocked(status, nil, resource, settled, inResult, errText))
+	n.tracker.reporter.Report(n.newEventLocked(evt))
 }
 
 func (n *Node) openLocked() {
@@ -280,31 +307,21 @@ func (n *Node) openLocked() {
 		Step:     n.step,
 		Measures: n.measures,
 	}
-	n.tracker.reporter.Report(n.newEventLocked(StatusStarted, &open, nil, false, false, ""))
+	n.tracker.reporter.Report(n.newEventLocked(Event{
+		Status: StatusStarted,
+		Open:   &open,
+		Msg:    n.msg,
+	}))
 }
 
-// newEventLocked snapshots the node; the sample is copied, so a reporter may keep the event.
-func (n *Node) newEventLocked(
-	status Status,
-	open *Open,
-	resource *Resource,
-	settled bool,
-	inResult bool,
-	errText string,
-) Event {
+// newEventLocked is evt as the node's event now: its id, a copy of its sample, so a reporter may
+// keep the event, and the time.
+func (n *Node) newEventLocked(evt Event) Event {
 	now := n.tracker.now()
-	return Event{
-		Node:     n.id,
-		Status:   status,
-		Open:     open,
-		Msg:      n.msg,
-		Error:    errText,
-		Resource: resource,
-		Settled:  settled,
-		InResult: inResult,
-		Sample:   newSampleCopy(n.sample, now.Sub(n.startedAt)),
-		At:       now,
-	}
+	evt.Node = n.id
+	evt.Sample = newSampleCopy(n.sample, now.Sub(n.startedAt))
+	evt.At = now
+	return evt
 }
 
 // newSampleCopy copies sample, pointers included, with elapsed set.

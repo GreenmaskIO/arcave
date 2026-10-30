@@ -53,9 +53,9 @@ var (
 	// sessionRef names the session, by id or name, every project-bound command works in;
 	// empty is the current session, else model.DefaultSession.
 	sessionRef string
-	// progressMode is --progress as given; runOutput is the output initRoot opens and main closes.
-	progressMode string
-	runOutput    output
+	// progressMode is --progress as given; runProgressMode the mode initRoot resolved it to.
+	progressMode    string
+	runProgressMode string
 	// resultFormat is --format as given.
 	resultFormat string
 )
@@ -92,7 +92,7 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 		// One tracker per run: every workflow the command calls opens its root on it.
-		cmd.SetContext(progress.WithTracker(cmd.Context(), progress.New(runOutput, time.Now)))
+		cmd.SetContext(progress.WithTracker(cmd.Context(), progress.New(loadRunOutput(), time.Now)))
 		return nil
 	},
 }
@@ -154,9 +154,9 @@ func initRoot(cmd *cobra.Command) error {
 	// Once per run: the logger writes through the output, so the context logger never changes.
 	out, logger, err := openOutput(mode, projectCfg.Log.Level, projectCfg.Log.Format, result)
 	if err != nil {
-		return fmt.Errorf("set log level: %w", err)
+		return fmt.Errorf("open output: %w", err)
 	}
-	runOutput = out
+	runProgressMode = mode
 	openedOutput.Store(out)
 
 	// The bridge goes in here, the moment the logger exists and before any

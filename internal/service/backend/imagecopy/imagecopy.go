@@ -240,7 +240,7 @@ func (s *Copier) CaptureImage(
 
 	log := zerolog.Ctx(ctx).With().Str("image_id", image.ID.String()).Logger()
 	if !req.ExistsInDaemon {
-		log.Warn().Msg("the image is in neither the store nor the daemon; only its identity is recorded")
+		log.Info().Msg("the image is in neither the store nor the daemon; only its identity is recorded")
 		return image, nil
 	}
 	size, err := s.storeImage(ctx, s.imageArchiver, upstreamStore, image.ID)
@@ -248,7 +248,7 @@ func (s *Copier) CaptureImage(
 		if ctx.Err() != nil {
 			return model.Image{}, err
 		}
-		log.Warn().Err(err).Msg("the image could not be stored; only its identity is recorded")
+		log.Info().Err(err).Msg("the image could not be stored; only its identity is recorded")
 		return image, nil
 	}
 	image.Stored = true

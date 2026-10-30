@@ -159,7 +159,7 @@ A target is relative to the compose project's directory in the store. A `restore
 | `--restored-layer-grace` is negative | `invalid garbage collect request: negative restored layer grace -1h0m0s`. Nothing is opened first. |
 | `--kind` names a kind arcave does not know | `invalid garbage collect request: unknown kind "restic"`. Nothing is opened first. |
 | Another arcave command holds the project lock | The command fails at once, without reading anything. |
-| No daemon answers within 10 seconds | The `restored-layers` and `deduplicated-volumes` reports are `aborted` with the ping's error, whether or not `--kind` names them, and a warning says each is not judged. The other kinds still run, and the run is partial: the full report is printed, then the command exits `1`. |
+| No daemon answers within 10 seconds | The `restored-layers` and `deduplicated-volumes` reports are `aborted` with the ping's error, whether or not `--kind` names them. The other kinds still run, and the run is partial: the full report is printed, then the command exits `1`. |
 | A `docker.*` setting is wrong | The command fails as every command does, whichever kinds run. |
 | `-p/--project-name` is passed | `gc works on a session, every compose project in it: drop -p/--project-name` |
 | The session was removed after gc resolved it | The command fails with `session not found`, and reads nothing. |

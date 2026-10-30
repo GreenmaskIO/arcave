@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,7 +254,10 @@ func TestJSONOutput_Report(t *testing.T) {
 
 func TestTTYOutput_Write_BeforeTheFirstEvent(t *testing.T) {
 	var stderr bytes.Buffer
-	out := &ttyOutput{stderr: &stderr}
+	out := &ttyOutput{
+		reporter: tty.New(&stderr),
+		stderr:   &stderr,
+	}
 
 	_, err := out.Write([]byte("WRN a warning\n"))
 	require.NoError(t, err)
@@ -267,9 +270,10 @@ func TestTTYOutput_Write_BeforeTheFirstEvent(t *testing.T) {
 func TestTTYOutput_Close_WritesTheResultThenTheError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	out := &ttyOutput{
-		result: resultOptions{format: formatText},
-		stdout: &stdout,
-		stderr: &stderr,
+		reporter: tty.New(&stderr),
+		result:   resultOptions{format: formatText},
+		stdout:   &stdout,
+		stderr:   &stderr,
 	}
 
 	require.NoError(t, out.Print(model.RemoveResponse{}))
@@ -319,7 +323,6 @@ func TestTTYOutput_Close_FinalTree(t *testing.T) {
 					result:   resultOptions{format: formatText},
 					stdout:   &stdout,
 					stderr:   &stderr,
-					started:  true,
 				}
 				at      = time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 				tracker = progress.New(out, func() time.Time { return at })
@@ -338,50 +341,42 @@ func TestTTYOutput_Close_FinalTree(t *testing.T) {
 
 			out.Close(tt.err)
 
-			assert.Equal(t, tt.wantStderr, ansi.Strip(stderr.String()))
+			// The live frames come first; the final tree is what stays.
+			got := ansi.Strip(stderr.String())
+			assert.True(t, strings.HasSuffix(got, tt.wantStderr), "got:\n%s", got)
+			assert.Equal(t, 1, strings.Count(got, tt.wantStderr), "the final tree is written once")
 		})
 	}
 }
 
 func TestComposeProgressMode(t *testing.T) {
 	tests := []struct {
-		name string
-		out  output
-		mode string
-		want string
+		name    string
+		drawing bool
+		mode    string
+		want    string
 	}{
 		{
-			name: "compose's renderer gives way to arcave's tree",
-			out:  &ttyOutput{},
-			mode: config.ProgressTTY,
-			want: config.ProgressLog,
+			name:    "compose's renderer gives way to arcave's tree",
+			drawing: true,
+			mode:    config.ProgressTTY,
+			want:    config.ProgressLog,
 		},
 		{
-			name: "under the tree, another mode stands",
-			out:  &ttyOutput{},
-			mode: config.ProgressQuiet,
-			want: config.ProgressQuiet,
+			name:    "under the tree, another mode stands",
+			drawing: true,
+			mode:    config.ProgressQuiet,
+			want:    config.ProgressQuiet,
 		},
 		{
 			name: "with no tree, compose's renderer stands",
-			out:  &logOutput{},
-			mode: config.ProgressTTY,
-			want: config.ProgressTTY,
-		},
-		{
-			name: "nor under the json stream, which leaves stderr to it",
-			out:  newJSONOutput(io.Discard),
 			mode: config.ProgressTTY,
 			want: config.ProgressTTY,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			previous := runOutput
-			runOutput = tt.out
-			t.Cleanup(func() { runOutput = previous })
-
-			got := composeProgressMode(zerolog.Nop().WithContext(context.Background()), tt.mode)
+			got := composeProgressMode(zerolog.Nop().WithContext(context.Background()), tt.mode, tt.drawing)
 
 			assert.Equal(t, tt.want, got)
 		})

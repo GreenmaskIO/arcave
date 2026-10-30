@@ -36,7 +36,7 @@ const (
 	kindRollbackSafetySnapshot progress.Kind = "rollback.safety-snapshot"
 	kindRollbackApply          progress.Kind = "rollback.apply"
 	kindRollbackRevert         progress.Kind = "rollback.revert"
-	kindRollbackReap           progress.Kind = "rollback.reap"
+	kindRollbackCleanup        progress.Kind = "rollback.cleanup"
 
 	kindSessionRemove progress.Kind = "session.remove"
 	kindSessionLock   progress.Kind = "session.lock"
@@ -48,6 +48,9 @@ const (
 	kindComposeCreate     progress.Kind = "compose.create"
 	kindComposeStart      progress.Kind = "compose.start"
 
+	kindVolumeCapture  progress.Kind = "volume.capture"
+	kindVolumeRestore  progress.Kind = "volume.restore"
+	kindVolumeRemove   progress.Kind = "volume.remove"
 	kindVolume         progress.Kind = "volume"
 	kindImageCapture   progress.Kind = "image.capture"
 	kindImage          progress.Kind = "image"
@@ -58,23 +61,9 @@ const (
 	kindReplica        progress.Kind = "replica"
 )
 
-// newVolumeOpKind is the batch kind of one volume operation: volume.snapshot, volume.restore,
-// volume.remove.
-func newVolumeOpKind(opName string) progress.Kind {
-	return progress.Kind("volume." + opName)
-}
-
 // runStep runs fn under a workflow node of kind, ended with fn's error.
 func runStep(ctx context.Context, kind progress.Kind, fn func(ctx context.Context) error) error {
 	ctx, node := progress.Begin(ctx, progress.Step{Kind: kind})
-	err := fn(ctx)
-	node.End(err)
-	return err
-}
-
-// runActivity runs fn as one activity of kind, ended with fn's error.
-func runActivity(ctx context.Context, kind progress.Kind, fn func(ctx context.Context) error) error {
-	ctx, node := progress.Run(ctx, progress.Step{Kind: kind})
 	err := fn(ctx)
 	node.End(err)
 	return err
@@ -97,6 +86,14 @@ func newCaptureSample(size, stored, reused int64) progress.Sample {
 		Stored: stored,
 		Reused: reused,
 	}}
+}
+
+// newImageSample is what capturing image moved: nothing for one not stored.
+func newImageSample(image model.Image) progress.Sample {
+	if !image.Stored {
+		return progress.Sample{}
+	}
+	return newCaptureSample(image.SizeBytes, image.StoredBytes, max(image.SizeBytes-image.StoredBytes, 0))
 }
 
 // newRestoreSample is the sample a restored unit ends with: its size.

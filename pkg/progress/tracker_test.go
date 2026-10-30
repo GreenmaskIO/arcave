@@ -204,7 +204,7 @@ func TestTracker_Begin(t *testing.T) {
 			},
 		},
 		{
-			name: "a warning opens a lazy workflow, and its message stays on later events",
+			name: "a warning opens a lazy workflow, and its message stays its event's",
 			run: func(ctx context.Context, tracker *progress.Tracker, _ *exampleClock) {
 				_, root := tracker.Begin(ctx, stepPublish)
 				root.Warn("2 raw files skipped")
@@ -213,7 +213,7 @@ func TestTracker_Begin(t *testing.T) {
 			want: []string{
 				"1 started <0 album.publish workflow",
 				`1 warned msg="2 raw files skipped"`,
-				`1 succeeded msg="2 raw files skipped"`,
+				"1 succeeded",
 			},
 		},
 		{
@@ -226,7 +226,7 @@ func TestTracker_Begin(t *testing.T) {
 			want: []string{
 				"1 started <0 album.publish workflow",
 				`1 warned msg="2 raw files skipped" in_result`,
-				`1 succeeded msg="2 raw files skipped"`,
+				"1 succeeded",
 			},
 		},
 		{
@@ -429,7 +429,7 @@ func TestTracker_Begin(t *testing.T) {
 				`2 in_progress msg="Draining" resource=worker:worker-1`,
 				`2 in_progress msg="Paused" resource=worker:worker-1 settled`,
 				`2 warned msg="unreachable" resource=worker:worker-2`,
-				`2 succeeded msg="unreachable"`,
+				"2 succeeded",
 			},
 		},
 	}
@@ -511,7 +511,7 @@ func TestNode_Progress(t *testing.T) {
 			wantDropped: []progress.Measure{progress.MeasureBytes, progress.MeasureItems},
 		},
 		{
-			name: "a resource on a node not declaring resources",
+			name: "a resource on a node not declaring resources, dropped with its message",
 			run: func(ctx context.Context) {
 				_, write := progress.Run(ctx, stepWrite)
 				write.UpdateResource(progress.Resource{Kind: resourceWorker, ID: "worker-1"}, "Paused")
@@ -519,7 +519,6 @@ func TestNode_Progress(t *testing.T) {
 			want: []string{
 				"1 started <0 album.publish workflow",
 				"2 started <1 manifest.write activity",
-				`2 in_progress msg="Paused"`,
 			},
 			wantDropped: []progress.Measure{progress.MeasureResources},
 		},
@@ -651,11 +650,11 @@ func TestWithTracker(t *testing.T) {
 		"1 started <0 album.publish workflow",
 		"2 started <1 album.export workflow",
 		`2 warned msg="2 raw files skipped"`,
-		`2 succeeded msg="2 raw files skipped"`,
+		"2 succeeded",
 		"1 succeeded",
 		"3 started <0 album.extras workflow",
 		`3 warned msg="a second root"`,
-		`3 succeeded msg="a second root"`,
+		"3 succeeded",
 	}, events.lines())
 }
 

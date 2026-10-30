@@ -284,14 +284,11 @@ func composeProjectAbsent(introspection model.IntrospectionResult) bool {
 	return len(introspection.Project.Services) == 0
 }
 
-// stopServices puts the services down and returns the containers the stop deadline
-// killed, warned of as in the result when inResult is set.
-func (s *Service) stopServices(ctx context.Context, working workingSet, inResult bool) ([]string, error) {
+// stopServices puts the services down and returns the containers the stop deadline killed, which
+// the capture's not-covered warning reports.
+func (s *Service) stopServices(ctx context.Context, working workingSet) ([]string, error) {
 	ctx, node := progress.Run(ctx, progress.Step{Kind: kindComposeStop}, progress.MeasureResources)
 	killed, err := s.composeRunner.Stop(ctx, working.project)
-	if len(killed) > 0 {
-		warn(node, fmt.Sprintf("%d container(s) killed at the stop deadline", len(killed)), inResult)
-	}
 	node.End(err)
 	if err != nil {
 		return nil, fmt.Errorf("stopping services: %w", err)

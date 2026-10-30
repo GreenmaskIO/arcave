@@ -16,7 +16,6 @@
 package tty
 
 import (
-	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -28,12 +27,10 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-var errStarted = errors.New("tty: the reporter has already been started")
-
 type reporterState int
 
 const (
-	// stateIdle is before Start.
+	// stateIdle is before the first event: log lines go straight to out.
 	stateIdle reporterState = iota
 	stateRunning
 	// stateAbandoned is a program that ended on its own: what is written goes straight to out.
@@ -70,8 +67,9 @@ type Reporter struct {
 	done    chan struct{}
 }
 
-// New returns a Reporter drawing to out, a terminal. It collects events and log lines at once;
-// Start begins drawing them.
+// New returns a Reporter drawing to out, a terminal. It takes the terminal on the first event, so
+// a run that reports none never does; Stop must follow on every path, a panic included, or the
+// terminal is left without its cursor.
 func New(out io.Writer) *Reporter {
 	return &Reporter{
 		out:  out,
@@ -80,48 +78,36 @@ func New(out io.Writer) *Reporter {
 	}
 }
 
-// Start runs the program drawing the tree. Stop must follow on every path, a panic included,
-// or the terminal is left without its cursor.
-func (r *Reporter) Start() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.state != stateIdle {
-		return errStarted
-	}
-	program := tea.NewProgram(
-		newModel(r, r.now),
-		tea.WithInput(nil),
-		tea.WithoutSignalHandler(),
-		tea.WithOutput(r.out),
-	)
-	r.program = program
-	r.state = stateRunning
-	r.done = make(chan struct{})
-	go r.run(program, r.done)
-	return nil
-}
-
-// Report reads evt into the tree; it neither writes nor waits.
+// Report reads evt into the tree, starting the program drawing it on the first event; it neither
+// writes nor waits.
 func (r *Reporter) Report(evt progress.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tree.apply(evt)
+	if r.state == stateIdle {
+		r.startLocked()
+	}
 }
 
 // LogWriter returns the writer log lines go through: printed above the tree, or straight to out
-// once the tree is gone. It filters nothing; the logger's level does.
+// while there is none. It filters nothing; the logger's level does.
 func (r *Reporter) LogWriter() io.Writer {
 	return logWriter{reporter: r}
 }
 
 // Stop clears the live frame, gives the terminal back and writes what is left of the log and the
-// final tree to out, as opts say. It is idempotent.
-func (r *Reporter) Stop(opts StopOptions) {
+// final tree to out, as opts say; it reports whether it wrote a tree, which a run that reported
+// no event has not. It is idempotent.
+func (r *Reporter) Stop(opts StopOptions) bool {
 	r.mu.Lock()
 	switch r.state {
+	case stateIdle:
+		r.state = stateStopped
+		r.mu.Unlock()
+		return false
 	case stateStopped, stateStopping:
 		r.mu.Unlock()
-		return
+		return false
 	case stateRunning:
 		r.state = stateStopping
 		program, done := r.program, r.done
@@ -134,14 +120,26 @@ func (r *Reporter) Stop(opts StopOptions) {
 	r.state = stateStopped
 	r.writeLocked(r.drainLocked()...)
 	final, _ := render(r.tree, frame{
-		now:           r.now(),
-		width:         r.width,
-		final:         true,
-		essential:     opts.Essential,
-		omitRootError: opts.OmitRootError,
-		moreHint:      opts.MoreHint,
+		now:         r.now(),
+		width:       r.width,
+		final:       true,
+		StopOptions: opts,
 	})
 	r.writeLocked(final)
+	return true
+}
+
+func (r *Reporter) startLocked() {
+	program := tea.NewProgram(
+		newModel(r, r.now),
+		tea.WithInput(nil),
+		tea.WithoutSignalHandler(),
+		tea.WithOutput(r.out),
+	)
+	r.program = program
+	r.state = stateRunning
+	r.done = make(chan struct{})
+	go r.run(program, r.done)
 }
 
 func (r *Reporter) run(program *tea.Program, done chan struct{}) {
@@ -205,7 +203,7 @@ func (w logWriter) Write(p []byte) (int, error) {
 	r := w.reporter
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state == stateStopped || r.state == stateAbandoned {
+	if r.state != stateRunning && r.state != stateStopping {
 		r.writeLocked(lines...)
 		return len(p), nil
 	}
