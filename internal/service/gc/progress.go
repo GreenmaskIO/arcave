@@ -23,7 +23,7 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The kinds of the nodes a gc opens: <namespace>.<action> for an action, a bare noun for an object.
+// The kinds of the steps a gc opens: <namespace>.<action> for an action, a bare noun for an object.
 const (
 	kindGC             progress.Kind = "gc"
 	kindSessionLock    progress.Kind = "session.lock"
@@ -36,32 +36,32 @@ const (
 	kindGarbage        progress.Kind = "garbage"
 )
 
-// endCollectorNode ends a collector's node with what its report says: a failure on its error,
+// endCollectorStep ends a collector's step with what its report says: a failure on its error,
 // what it held back or was refused as warnings the result repeats; one ctx's end cut short is cancelled.
-func endCollectorNode(ctx context.Context, node *progress.Node, report model.GarbageReport) {
+func endCollectorStep(ctx context.Context, step *progress.StepReporter, report model.GarbageReport) {
 	summary := report.Summary
 	if summary.Aborted != "" {
-		node.WarnInResult("aborted: " + summary.Aborted)
+		step.WarnInResult("aborted: " + summary.Aborted)
 	}
 	if summary.Unjudged > 0 {
-		node.WarnInResult(fmt.Sprintf("%d object(s) not judged", summary.Unjudged))
+		step.WarnInResult(fmt.Sprintf("%d object(s) not judged", summary.Unjudged))
 	}
 	if summary.Skipped > 0 {
-		node.WarnInResult(fmt.Sprintf("%d object(s) held back", summary.Skipped))
+		step.WarnInResult(fmt.Sprintf("%d object(s) held back", summary.Skipped))
 	}
 	switch {
 	case report.Error != "" && ctx.Err() != nil:
-		node.Fail("", context.Cause(ctx))
+		step.Fail("", context.Cause(ctx))
 		return
 	case report.Error != "":
-		node.Fail("", errors.New(report.Error))
+		step.Fail("", errors.New(report.Error))
 		return
 	}
-	node.Update(fmt.Sprintf("%d found", summary.Found))
-	node.Done(progress.Sample{})
+	step.Update(fmt.Sprintf("%d found", summary.Found))
+	step.Done(progress.Sample{})
 }
 
-// newDeletionError is what a deletion's node, opened on ctx, ends with: nil when every op ran and
+// newDeletionError is what a deletion's step, opened on ctx, ends with: nil when every op ran and
 // none failed, ctx's cause when its end cut the deletion short.
 func newDeletionError(ctx context.Context, deletion *model.GarbageDeletion) error {
 	switch {

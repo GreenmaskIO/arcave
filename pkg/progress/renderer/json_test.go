@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package reporter
+package renderer
 
 import (
 	"bytes"
@@ -23,28 +23,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestJSON_Report(t *testing.T) {
+func TestJSON_Render(t *testing.T) {
 	var out bytes.Buffer
-	reporter := NewJSON(&out)
+	renderer := NewJSON(&out)
 
 	for _, evt := range newStream() {
-		reporter.Report(evt)
+		renderer.Render(evt)
 	}
 
-	require.NoError(t, reporter.Err())
+	require.NoError(t, renderer.Err())
 	assertGolden(t, "stream.ndjson", out.Bytes())
 }
 
 func TestJSON_Report_StopsAtAFailedWrite(t *testing.T) {
 	errDisk := errors.New("disk gone")
 	w := &failingWriter{err: errDisk}
-	reporter := NewJSON(w)
+	renderer := NewJSON(w)
 
 	for _, evt := range newStream()[:2] {
-		reporter.Report(evt)
+		renderer.Render(evt)
 	}
 
-	assert.ErrorIs(t, reporter.Err(), errDisk)
+	assert.ErrorIs(t, renderer.Err(), errDisk)
 	assert.Equal(t, 1, w.writes)
 }
 

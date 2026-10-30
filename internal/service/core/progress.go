@@ -23,7 +23,7 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The kinds of the nodes core opens: <namespace>.<action> for an action, a bare noun for an object.
+// The kinds of the steps core opens: <namespace>.<action> for an action, a bare noun for an object.
 const (
 	kindSavepointCreate  progress.Kind = "savepoint.create"
 	kindSavepointRemove  progress.Kind = "savepoint.remove"
@@ -61,19 +61,19 @@ const (
 	kindReplica        progress.Kind = "replica"
 )
 
-// runStep runs fn under a workflow node of kind, ended with fn's error.
+// runStep runs fn under a workflow step of kind, ended with fn's error.
 func runStep(ctx context.Context, kind progress.Kind, fn func(ctx context.Context) error) error {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kind})
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kind})
 	err := fn(ctx)
-	node.End(err)
+	step.End(err)
 	return err
 }
 
 // runComposeActivity runs fn as one compose activity of kind, a line per object compose reports.
 func runComposeActivity(ctx context.Context, kind progress.Kind, fn func(ctx context.Context) error) error {
-	ctx, node := progress.Run(ctx, progress.Step{Kind: kind}, progress.MeasureResources)
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kind}, progress.MeasureResources)
 	err := fn(ctx)
-	node.End(err)
+	step.End(err)
 	return err
 }
 
@@ -104,13 +104,13 @@ func newRestoreSample(size int64) progress.Sample {
 	}}
 }
 
-// warn reports msg on node, marked InResult when inResult is set.
-func warn(node *progress.Node, msg string, inResult bool) {
+// warn reports msg on step, marked InResult when inResult is set.
+func warn(step *progress.StepReporter, msg string, inResult bool) {
 	if inResult {
-		node.WarnInResult(msg)
+		step.WarnInResult(msg)
 		return
 	}
-	node.Warn(msg)
+	step.Warn(msg)
 }
 
 // isInResult reports whether a capture under labels is its run's result, i.e. no safety snapshot.

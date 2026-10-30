@@ -27,7 +27,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter/internal/format"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer/internal/format"
 )
 
 const (
@@ -126,7 +126,7 @@ func render(t *tree, f frame) (string, int) {
 
 // newItems lays out ids at depth; under a batch, and below the roots' children in an essential
 // frame, what it has nothing to say about is not shown at all, the batch's count speaking for it.
-func newItems(t *tree, ids []progress.NodeID, depth int, f frame, underBatch bool) []*item {
+func newItems(t *tree, ids []progress.StepID, depth int, f frame, underBatch bool) []*item {
 	items := make([]*item, 0, len(ids))
 	for _, id := range ids {
 		current := t.nodes[id]
@@ -200,7 +200,7 @@ func hasNoticeBesidesCancel(t *tree, current *node, f frame) bool {
 	warned := slices.ContainsFunc(current.warnings, func(w warning) bool { return isShown(w, f) }) ||
 		slices.ContainsFunc(current.resources, func(line resourceLine) bool { return line.warned })
 	return warned || hasFailure(t, current) ||
-		slices.ContainsFunc(current.children, func(id progress.NodeID) bool { return hasNotice(t, t.nodes[id], f) })
+		slices.ContainsFunc(current.children, func(id progress.StepID) bool { return hasNotice(t, t.nodes[id], f) })
 }
 
 // isShown reports whether the frame writes w: an essential one leaves out what the result repeats.
@@ -210,11 +210,11 @@ func isShown(w warning, f frame) bool {
 
 func hasFailure(t *tree, current *node) bool {
 	return current.last.Status == progress.StatusFailed ||
-		slices.ContainsFunc(current.children, func(id progress.NodeID) bool { return hasFailure(t, t.nodes[id]) })
+		slices.ContainsFunc(current.children, func(id progress.StepID) bool { return hasFailure(t, t.nodes[id]) })
 }
 
 func isBatch(current *node) bool {
-	return current.open.Step.Type == progress.NodeTypeWorkflow &&
+	return current.open.Step.Type == progress.StepTypeWorkflow &&
 		slices.Contains(current.open.Measures, progress.MeasureItems)
 }
 

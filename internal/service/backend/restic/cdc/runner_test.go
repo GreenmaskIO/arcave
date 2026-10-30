@@ -221,7 +221,7 @@ func writeLines(w interface{ Write([]byte) (int, error) }, lines []string) {
 }
 
 // restic counts a run's bytes itself, under a field its command names; its numbers go to the
-// node of the run's context.
+// step of the run's context.
 func TestRunner_runStatus(t *testing.T) {
 	tests := []struct {
 		name string
@@ -253,12 +253,12 @@ func TestRunner_runStatus(t *testing.T) {
 			events := &eventRecorder{}
 			ctx, root := progress.New(events, func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }).Begin(zerolog.Nop().WithContext(context.Background()),
 				progress.Step{Kind: "test"})
-			ctx, node := progress.Run(ctx, progress.Step{Kind: "volume"}, progress.MeasureBytes)
+			ctx, step := progress.Run(ctx, progress.Step{Kind: "volume"}, progress.MeasureBytes)
 			r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
 
 			// Act
 			_, err := r.run(ctx, resticCmd{args: tt.args})
-			node.End(err)
+			step.End(err)
 			root.End(err)
 
 			// Assert
@@ -275,7 +275,7 @@ type eventRecorder struct {
 	lastBytes *progress.Bytes
 }
 
-func (r *eventRecorder) Report(evt progress.Event) {
+func (r *eventRecorder) Render(evt progress.Event) {
 	if evt.Status == progress.StatusInProgress && evt.Sample.Bytes != nil {
 		r.lastBytes = evt.Sample.Bytes
 	}

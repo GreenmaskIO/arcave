@@ -118,9 +118,9 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 
 // introspect reads the compose project as the daemon holds it now.
 func (s *Service) introspect(ctx context.Context) (model.IntrospectionResult, error) {
-	ctx, node := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
 	introspection, err := s.composeInspector.Introspect(ctx)
-	node.End(err)
+	step.End(err)
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("introspect compose project: %w", err)
 	}
@@ -287,9 +287,9 @@ func composeProjectAbsent(introspection model.IntrospectionResult) bool {
 // stopServices puts the services down and returns the containers the stop deadline killed, which
 // the capture's not-covered warning reports.
 func (s *Service) stopServices(ctx context.Context, working workingSet) ([]string, error) {
-	ctx, node := progress.Run(ctx, progress.Step{Kind: kindComposeStop}, progress.MeasureResources)
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindComposeStop}, progress.MeasureResources)
 	killed, err := s.composeRunner.Stop(ctx, working.project)
-	node.End(err)
+	step.End(err)
 	if err != nil {
 		return nil, fmt.Errorf("stopping services: %w", err)
 	}

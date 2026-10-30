@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package format renders what the reporters print alike.
+// Package format renders what the renderers print alike.
 package format
 
 import "fmt"

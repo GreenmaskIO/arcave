@@ -1,24 +1,24 @@
 # progress
 
-A workflow's progress as a stream of events over a tree of nodes. The tree follows the code's
-own composition: a workflow opens its nodes under whatever node the context carries, and never
+A workflow's progress as a stream of events over a tree of steps. The tree follows the code's
+own composition: a workflow opens its steps under whatever step the context carries, and never
 knows who called it. The package declares no kinds and knows nothing of arcave; the examples
 publish a photo album (`example_test.go`, and the runnable `examples/`). It owns its types
 (`event.go`) and imports only the standard library and zerolog, so it can leave the repository
-whole; the terminal reporter's Bubble Tea and Lip Gloss stay in `reporter/tty`, and
+whole; the terminal renderer's Bubble Tea and Lip Gloss stay in `renderer/tty`, and
 
 ```bash
-go list -deps ./pkg/progress ./pkg/progress/reporter | grep charm
+go list -deps ./pkg/progress ./pkg/progress/renderer | grep charm
 ```
 
 stays empty.
 
-## Nodes
+## Steps
 
 | Constructor | Type | Opens | Measures |
 |---|---|---|---|
 | `Tracker.Begin` | workflow, the root | lazily | none |
-| `Begin` on `WithTracker(ctx, t)` | workflow, `t`'s root, when `ctx` carries no node | lazily | none |
+| `Begin` on `WithTracker(ctx, t)` | workflow, `t`'s root, when `ctx` carries no step | lazily | none |
 | `Begin` | workflow | lazily — on its first child or `Warn` | none |
 | `Batch` | workflow over objects of one kind | at once, with `Items.Total` | `items`, counted by the tracker |
 | `Run` | activity — one action, no children | at once | what the caller declares |
@@ -26,11 +26,12 @@ stays empty.
 `WithTracker` lets a workflow open its own root without knowing whether it is one: the same
 `Begin` opens the tracker's root at the top of a run, and a child when another workflow calls it.
 
-Every constructor returns a context carrying the new node. Code deeper down that holds only the
-context reaches its activity through `Current(ctx)`. `WithNode(ctx, node)` puts a node back on a context
-derived from an activity's — a lock's, say, whose context the rest of the workflow runs on. A constructor under an activity, or under a node
-that has ended, returns a mute node and logs a warning; so does every constructor when the context carries no tracker,
-and under `Discard()`. Every method of a mute node is a no-op, so a consumer's tests change
+Every constructor returns a context carrying the new step, and the `*StepReporter` it reports
+through. Code deeper down that holds only the
+context reaches its activity through `Current(ctx)`. `WithStep(ctx, step)` puts a step back on a context
+derived from an activity's — a lock's, say, whose context the rest of the workflow runs on. A constructor under an activity, or under a step
+that has ended, returns a mute step and logs a warning; so does every constructor when the context carries no tracker,
+and under `Discard()`. Every method of a mute step is a no-op, so a consumer's tests change
 nothing.
 
 A lazy workflow that ends without a child reports nothing: what never ran is never mentioned.
@@ -54,16 +55,18 @@ batch (Batch):    started+Open ──► in_progress per finished child ──�
 workflow (Begin): [lazy] ──first child / Warn──► started+Open ──► (warned)* ──► succeeded | failed | cancelled
 ```
 
-- Nodes are numbered from 1 in the order they open; a lazy workflow opens its unopened
+- Steps are numbered from 1 in the order they open; a lazy workflow opens its unopened
   ancestors top down first, so a parent's `started` always precedes its child's.
+- `node` in the stream is the step's `StepID`, and `open.parent` its parent's: on the wire the stream
+  is a tree, and the words are the tree's.
 - `started` carries `Open` — the parent, the step and the declared `Measures` — once. Every
-  later event names the node by number only: a renderer reads the stream from its start and
-  builds a node's widget once, as compose's and OpenTelemetry's do.
-- Every event is a full snapshot: the node's own `msg` — the last `Update`'s — the last sample, a
+  later event names the step by number only: a renderer reads the stream from its start and
+  builds a step's widget once, as compose's and OpenTelemetry's do.
+- Every event is a full snapshot: the step's own `msg` — the last `Update`'s — the last sample, a
   fresh `Elapsed` counted from the constructor; a `warned` event's or a resource's `msg` is that
   event's alone. A caller reports only what changed: `Done(sample)` and `Progress(sample)`
   replace the fields they set and keep the rest; `Fail` keeps the last sample.
-- A node ends once; every call after is ignored.
+- A step ends once; every call after is ignored.
 
 ## Samples
 
@@ -73,19 +76,19 @@ successes only — `3/5 failed=1` is three done and one failed of five. A `Total
 and left out of the JSON: a renderer shows `Done` alone, with no bar; a `Total` may appear later
 in the same stream, and a `Done` past it is shown without one. Anything not a count goes in `msg`.
 
-A node reports only the measures it declared; the rest is dropped with a warning. A batch counts
+A step reports only the measures it declared; the rest is dropped with a warning. A batch counts
 its children's outcomes itself and takes no `Items` from its caller; it never sums their bytes.
 
 ## Failure and cancellation
 
-`Fail(msg, err)`, or `End(err)` for a non-nil `err`, ends a node `failed` — or `cancelled` when
-`errors.Is(err, context.Canceled)`, or when the context the node was opened on is cancelled and
+`Fail(msg, err)`, or `End(err)` for a non-nil `err`, ends a step `failed` — or `cancelled` when
+`errors.Is(err, context.Canceled)`, or when the context the step was opened on is cancelled and
 `err` is its `context.Cause`: the siblings an errgroup cancels after the first failure are
 counted `Cancelled`, not `Failed`, and carry no error. A deadline is a failure.
 
-A node opens on the context **outside** the cancellation it reports. A workflow that cancels
-its own work with a cause — a lost lock, a missed heartbeat — opens its node before deriving
-that context: its children end `cancelled` and the node itself `failed`, carrying the cause
+A step opens on the context **outside** the cancellation it reports. A workflow that cancels
+its own work with a cause — a lost lock, a missed heartbeat — opens its step before deriving
+that context: its children end `cancelled` and the step itself `failed`, carrying the cause
 once. Opened under that context, it would end `cancelled` too, and the cause would not be in
 the stream at all. Likewise a `Batch` opens before `errgroup.WithContext`, and its children
 open on the group's context:
@@ -96,7 +99,7 @@ defer func() { batch.End(err) }()
 eg, egCtx := errgroup.WithContext(ctx)
 for _, f := range files {
 	eg.Go(func() error {
-		_, node := progress.Run(egCtx, progress.Step{Kind: kindFile, ID: f.name}, progress.MeasureBytes)
+		_, step := progress.Run(egCtx, progress.Step{Kind: kindFile, ID: f.name}, progress.MeasureBytes)
 		...
 	})
 }
@@ -104,7 +107,7 @@ for _, f := range files {
 
 The error is reported where it arose: always on an activity, on a workflow only when none of
 its descendants failed — an error raised by the workflow's own code. The ancestors of a failed
-node end `failed` with no error, so the cause is in the stream exactly once.
+step end `failed` with no error, so the cause is in the stream exactly once.
 
 A best-effort step whose failure does not fail the operation calls `Warn` and then `Done`.
 `WarnInResult` is `Warn` for a warning the operation's result repeats: its event carries
@@ -115,8 +118,8 @@ the result beside the tree may leave it out.
 
 ```go
 func (p publisher) exportAlbum(ctx context.Context, photos []photo) (err error) {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindAlbumExport})
-	defer func() { node.End(err) }() // not defer node.End(err)
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindAlbumExport})
+	defer func() { step.End(err) }() // not defer step.End(err)
 	...
 }
 ```
@@ -127,39 +130,39 @@ An activity handles its resources one of two ways. When a batch runs one object 
 the resource's key is the object's `Step.ID`. When one call handles the whole set — a queue
 pausing every worker — the activity declares `resources` and reports each through
 `UpdateResource` while one is under way, `SettleResource` once it reaches its outcome — the
-event's `settled` — and `WarnResource` with a `progress.Resource`; the resources are not nodes.
-The `Log` reporter writes a resource under way at debug and a settled one at info.
+event's `settled` — and `WarnResource` with a `progress.Resource`; the resources are not steps.
+The `Log` renderer writes a resource under way at debug and a settled one at info.
 
 ## Sources deep in the call
 
-A source that counts as it goes reports through a `Sampler`: its topic is the node to report on,
+A source that counts as it goes reports through a `Sampler`: its topic is the step to report on,
 its template the sample's shape and the values known upfront, such as a `Total`. `Update(fn)`
 changes the accumulated sample — adding as a stream flows, or replacing it with numbers the
 source counts itself — and sends it at most once per the tracker's interval (200ms on its
-clock); the first update goes at once, and the last is never flushed: the node's `Done` carries
+clock); the first update goes at once, and the last is never flushed: the step's `Done` carries
 the total. Throttling in the source keeps the tracker's lock off every 32KB read of parallel
 streams. A sampler whose topic is mute, or does not declare the template's measures, is mute.
 
 `NewReader(ctx, r, total)` and `NewWriter(ctx, w, total)` count a stream's bytes on
-`Current(ctx)` through a sampler, and return `r` or `w` itself when that node reports no bytes.
+`Current(ctx)` through a sampler, and return `r` or `w` itself when that step reports no bytes.
 Pass a `total` only when it is exact, else 0: an estimate draws a bar stuck at 100% or one that
 turns into a counter midway, which reads as a fault.
 
 ```go
 src = progress.NewReader(ctx, src, size) // the source knows ctx, not the tree
 
-sampler := progress.NewSampler(node, progress.Sample{Bytes: &progress.Bytes{}})
+sampler := progress.NewSampler(step, progress.Sample{Bytes: &progress.Bytes{}})
 sampler.Update(func(sample *progress.Sample) {
 	sample.Bytes.Done = status.BytesDone
 	sample.Bytes.Total = status.TotalBytes // 0 until the source has counted
 })
 ```
 
-## Reporters
+## Renderers
 
-`Reporter` is the one seam: `Report(progress.Event)`, called under the tracker's lock.
-`reporter.NewJSON` writes the stream as is, one event per line, and stops at a failed write,
-which `Err` returns; a consumer rebuilds the tree by `open.parent`. `reporter.NewLog` writes a record per event worth a line, named by the node's
+`Renderer` is the one seam: `Render(progress.Event)`, called under the tracker's lock.
+`renderer.NewJSON` writes the stream as is, one event per line, and stops at a failed write,
+which `Err` returns; a consumer rebuilds the tree by `open.parent`. `renderer.NewLog` writes a record per event worth a line, named by the step's
 path, and skips a sample tick that changes nothing but bytes:
 
 ```
@@ -232,7 +235,7 @@ WRN album.backup[summer]/cdn.upload/file[cover.jpg] elapsed=0s status=cancelled
               ! purge failed, the file stays on the CDN: edge timeout
 ```
 
-While the program runs, `Report` and `LogWriter` only change the reporter's state under its own
+While the program runs, `Render` and `LogWriter` only change the renderer's state under its own
 lock; the program reads it on a 100ms tick, so the tracker never waits on the terminal. Log lines
 go through `LogWriter()` — an `io.Writer` of whole lines, filtered by the logger's level — and
 print above the tree, or straight to the terminal while there is none. The program reads no input
@@ -241,12 +244,12 @@ it, so a run that reports none never takes the terminal; `Stop` must follow on e
 of the calling goroutine takes, and reports whether it wrote a tree:
 
 ```go
-progressReporter := tty.New(os.Stderr)
-logger := zerolog.New(zerolog.ConsoleWriter{Out: progressReporter.LogWriter()}).Level(zerolog.WarnLevel)
-defer progressReporter.Stop(tty.StopOptions{})
-tracker := progress.New(progressReporter, time.Now)
+progressRenderer := tty.New(os.Stderr)
+logger := zerolog.New(zerolog.ConsoleWriter{Out: progressRenderer.LogWriter()}).Level(zerolog.WarnLevel)
+defer progressRenderer.Stop(tty.StopOptions{})
+tracker := progress.New(progressRenderer, time.Now)
 ```
 
 `go run ./pkg/progress/examples -scenario all` runs four workflows through it — success, failure
 with cancellation and rollback, four uploads at once, a source with no total — or through
-`-reporter log|json`; `-speed` scales them.
+`-renderer log|json`; `-speed` scales them.

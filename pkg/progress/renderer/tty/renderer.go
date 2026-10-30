@@ -27,11 +27,11 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-type reporterState int
+type rendererState int
 
 const (
 	// stateIdle is before the first event: log lines go straight to out.
-	stateIdle reporterState = iota
+	stateIdle rendererState = iota
 	stateRunning
 	// stateAbandoned is a program that ended on its own: what is written goes straight to out.
 	stateAbandoned
@@ -51,15 +51,15 @@ type StopOptions struct {
 	MoreHint string
 }
 
-// Reporter draws the stream as a tree redrawn in place, with log lines printed above it.
+// Renderer draws the stream as a tree redrawn in place, with log lines printed above it.
 // While the program runs, Report and the log writer never wait on the terminal: it reads them on
 // its own tick.
-type Reporter struct {
+type Renderer struct {
 	out io.Writer
 	now func() time.Time
 
 	mu      sync.Mutex
-	state   reporterState
+	state   rendererState
 	tree    *tree
 	logs    []string
 	width   int
@@ -67,11 +67,11 @@ type Reporter struct {
 	done    chan struct{}
 }
 
-// New returns a Reporter drawing to out, a terminal. It takes the terminal on the first event, so
+// New returns a Renderer drawing to out, a terminal. It takes the terminal on the first event, so
 // a run that reports none never does; Stop must follow on every path, a panic included, or the
 // terminal is left without its cursor.
-func New(out io.Writer) *Reporter {
-	return &Reporter{
+func New(out io.Writer) *Renderer {
+	return &Renderer{
 		out:  out,
 		now:  time.Now,
 		tree: newTree(),
@@ -80,7 +80,7 @@ func New(out io.Writer) *Reporter {
 
 // Report reads evt into the tree, starting the program drawing it on the first event; it neither
 // writes nor waits.
-func (r *Reporter) Report(evt progress.Event) {
+func (r *Renderer) Render(evt progress.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tree.apply(evt)
@@ -91,14 +91,14 @@ func (r *Reporter) Report(evt progress.Event) {
 
 // LogWriter returns the writer log lines go through: printed above the tree, or straight to out
 // while there is none. It filters nothing; the logger's level does.
-func (r *Reporter) LogWriter() io.Writer {
-	return logWriter{reporter: r}
+func (r *Renderer) LogWriter() io.Writer {
+	return logWriter{renderer: r}
 }
 
 // Stop clears the live frame, gives the terminal back and writes what is left of the log and the
 // final tree to out, as opts say; it reports whether it wrote a tree, which a run that reported
 // no event has not. It is idempotent.
-func (r *Reporter) Stop(opts StopOptions) bool {
+func (r *Renderer) Stop(opts StopOptions) bool {
 	r.mu.Lock()
 	switch r.state {
 	case stateIdle:
@@ -129,7 +129,7 @@ func (r *Reporter) Stop(opts StopOptions) bool {
 	return true
 }
 
-func (r *Reporter) startLocked() {
+func (r *Renderer) startLocked() {
 	program := tea.NewProgram(
 		newModel(r, r.now),
 		tea.WithInput(nil),
@@ -142,8 +142,8 @@ func (r *Reporter) startLocked() {
 	go r.run(program, r.done)
 }
 
-func (r *Reporter) run(program *tea.Program, done chan struct{}) {
-	//nolint:errcheck // a program that fails is abandoned: the reporter writes to out itself
+func (r *Renderer) run(program *tea.Program, done chan struct{}) {
+	//nolint:errcheck // a program that fails is abandoned: the renderer writes to out itself
 	_, _ = program.Run()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -155,34 +155,34 @@ func (r *Reporter) run(program *tea.Program, done chan struct{}) {
 }
 
 // snapshot copies the tree for the program to render.
-func (r *Reporter) snapshot() *tree {
+func (r *Renderer) snapshot() *tree {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.tree.snapshot()
 }
 
 // drainLogs takes the log lines written since the last call.
-func (r *Reporter) drainLogs() []string {
+func (r *Renderer) drainLogs() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.drainLocked()
 }
 
 // resize keeps the terminal's width for the final tree.
-func (r *Reporter) resize(width int) {
+func (r *Renderer) resize(width int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.width = width
 }
 
-func (r *Reporter) drainLocked() []string {
+func (r *Renderer) drainLocked() []string {
 	logs := r.logs
 	r.logs = nil
 	return logs
 }
 
 // writeLocked writes lines straight to out, colors downsampled to what it takes.
-func (r *Reporter) writeLocked(lines ...string) {
+func (r *Renderer) writeLocked(lines ...string) {
 	for _, line := range lines {
 		if line == "" {
 			continue
@@ -193,14 +193,14 @@ func (r *Reporter) writeLocked(lines ...string) {
 }
 
 type logWriter struct {
-	reporter *Reporter
+	renderer *Renderer
 }
 
 // Write takes p as whole lines: buffered for the program's next tick while it runs, else
 // written to out.
 func (w logWriter) Write(p []byte) (int, error) {
 	lines := strings.Split(strings.TrimSuffix(string(p), "\n"), "\n")
-	r := w.reporter
+	r := w.renderer
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state != stateRunning && r.state != stateStopping {

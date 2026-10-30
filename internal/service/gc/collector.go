@@ -147,9 +147,9 @@ func (c *collectorSet) runCollector(
 	ctx context.Context, collector ObjectCollector, composeProject model.DockerComposeProjectName, scopeErr error,
 	find func() (model.GarbageStat, error),
 ) model.GarbageReport {
-	_, node := progress.Run(ctx, progress.Step{Kind: kindCollector, ID: string(collector.Kind())})
+	_, step := progress.Run(ctx, progress.Step{Kind: kindCollector, ID: string(collector.Kind())})
 	report := c.readCollectorReport(ctx, collector, composeProject, scopeErr, find)
-	endCollectorNode(ctx, node, report)
+	endCollectorStep(ctx, step, report)
 	return report
 }
 

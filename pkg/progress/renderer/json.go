@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package reporter holds progress.Reporters that render a stream as JSON lines or log records.
-package reporter
+// Package renderer holds progress.Renderers that render a stream as JSON lines or log records.
+package renderer
 
 import (
 	"encoding/json"
@@ -30,13 +30,13 @@ type JSON struct {
 	err error
 }
 
-// NewJSON returns a JSON reporter writing to w.
+// NewJSON returns a JSON renderer writing to w.
 func NewJSON(w io.Writer) *JSON {
 	return &JSON{enc: json.NewEncoder(w)}
 }
 
-// Report writes evt. After a failed write it writes nothing more: the stream is torn.
-func (r *JSON) Report(evt progress.Event) {
+// Render writes evt. After a failed write it writes nothing more: the stream is torn.
+func (r *JSON) Render(evt progress.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.err != nil {

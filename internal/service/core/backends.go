@@ -115,14 +115,14 @@ func (s *Service) performSavepoint(
 		writer     heartbeatWriter
 		captured   capturedSavepoint
 	)
-	// Outside the heartbeat's cancellation, which the node reports with its cause.
-	ctx, node := progress.Begin(ctx, progress.Step{
+	// Outside the heartbeat's cancellation, which the step reports with its cause.
+	ctx, step := progress.Begin(ctx, progress.Step{
 		Kind: kindSavepointCapture,
 		Name: cmp.Or(name, id.String()),
 	})
-	defer func() { node.End(err) }()
+	defer func() { step.End(err) }()
 	if warning := newNotCoveredWarning(notCovered); warning != "" {
-		warn(node, warning, isInResult(labels))
+		warn(step, warning, isInResult(labels))
 	}
 	if err = s.requireEmptyTree(ctx, id); err != nil {
 		return model.Savepoint{}, err
@@ -294,7 +294,7 @@ func (s *Service) dropSavepoint(
 }
 
 // forEachBackend runs fn over every backend concurrently and waits for all of them.
-// fn gets its slice index and a context whose node counts the volume's bytes.
+// fn gets its slice index and a context whose step counts the volume's bytes.
 func (s *Service) forEachBackend(
 	ctx context.Context,
 	snapshotID model.SavepointID,
@@ -316,7 +316,7 @@ func (s *Service) forEachBackend(
 	for i, backend := range backends {
 		eg.Go(func() error {
 			opCtx := volumeOpContext(egCtx, backend, snapshotID, op.name)
-			opCtx, node := progress.Run(opCtx, progress.Step{Kind: kindVolume, ID: backend.Volume().ObjectID},
+			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindVolume, ID: backend.Volume().ObjectID},
 				progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
 
@@ -324,10 +324,10 @@ func (s *Service) forEachBackend(
 			log.Debug().Msg("volume operation started")
 			if err := fn(opCtx, i, backend); err != nil {
 				err = fmt.Errorf("%s %s: %w", op.name, backend.Volume().ObjectID, err)
-				node.End(err)
+				step.End(err)
 				return err
 			}
-			node.End(nil)
+			step.End(nil)
 			log.Debug().Dur("duration", time.Since(started)).Msg("volume operation finished")
 			return nil
 		})

@@ -237,7 +237,7 @@ type warningRecorder struct {
 	warnings []string
 }
 
-func (r *warningRecorder) Report(evt progress.Event) {
+func (r *warningRecorder) Render(evt progress.Event) {
 	if evt.Status == progress.StatusWarned {
 		r.warnings = append(r.warnings, evt.Msg)
 	}
@@ -268,11 +268,11 @@ func TestLocker_Lock_WarnsOncePerHolder(t *testing.T) {
 	locker := newTestLocker(store, clock)
 	recorder := &warningRecorder{}
 	ctx := progress.WithTracker(newTestContext(), progress.New(recorder, clock.now))
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: "session.lock"})
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: "session.lock"})
 
 	// Act
 	_, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationSavepointCreate)
-	node.End(err)
+	step.End(err)
 
 	// Assert
 	require.NoError(t, err)
@@ -293,11 +293,11 @@ func TestLocker_Lock_WarnsOncePerHolderPastALostClaim(t *testing.T) {
 	locker := newTestLocker(store, clock)
 	recorder := &warningRecorder{}
 	ctx := progress.WithTracker(newTestContext(), progress.New(recorder, clock.now))
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: "session.lock"})
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: "session.lock"})
 
 	// Act
 	_, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationSavepointCreate)
-	node.End(err)
+	step.End(err)
 
 	// Assert
 	require.NoError(t, err)

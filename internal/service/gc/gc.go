@@ -121,8 +121,8 @@ func (s *GarbageCollector) GarbageCollect(
 	ctx context.Context, req model.GarbageCollectRequest,
 ) (_ model.GarbageCollectResult, err error) {
 	// Outside the locks: a lost lock cancels the work under it, and the root says why.
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindGC})
-	defer func() { node.End(err) }()
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindGC})
+	defer func() { step.End(err) }()
 	if err := req.Validate(); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
@@ -173,7 +173,7 @@ func withSessionLock[T any](
 			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
 		}
 	}()
-	return fn(progress.WithNode(lockCtx, progress.Current(ctx)), grantedLock)
+	return fn(progress.WithStep(lockCtx, progress.Current(ctx)), grantedLock)
 }
 
 // requireSession refuses a session other than the default that has no record: one removed
@@ -284,8 +284,8 @@ func (s *GarbageCollector) readInflightWarnings(ctx context.Context) []string {
 func (s *GarbageCollector) findGarbage(
 	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
 ) garbageFound {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindGCFind})
-	defer func() { node.End(context.Cause(ctx)) }()
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindGCFind})
+	defer func() { step.End(context.Cause(ctx)) }()
 	grace := s.grace
 	if req.RestoredLayerGrace != nil {
 		grace = *req.RestoredLayerGrace
@@ -321,13 +321,13 @@ func (s *GarbageCollector) findComposeProjectGarbage(
 	}
 	garbage := make([]composeProjectGarbage, 0, len(names))
 	for _, name := range names {
-		projectCtx, node := progress.Begin(ctx, progress.Step{
+		projectCtx, step := progress.Begin(ctx, progress.Step{
 			Kind: kindComposeProject,
 			Name: name.String(),
 		})
 		scope, store, err := s.readComposeProjectScope(projectCtx, sessionStore, name)
 		reports := collectors.runComposeProjectCollectors(projectCtx, name, scope, err)
-		node.End(context.Cause(projectCtx))
+		step.End(context.Cause(projectCtx))
 		logGarbageFound(ctx, reports)
 		garbage = append(garbage, composeProjectGarbage{
 			scope:   scope,

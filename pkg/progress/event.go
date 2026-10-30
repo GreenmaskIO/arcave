@@ -16,7 +16,7 @@ package progress
 
 import "time"
 
-// A progress stream is a sequence of Events over a tree of nodes. A tree such as
+// A progress stream is a sequence of Events over a tree of steps. A tree such as
 //
 //	album.publish "summer"          workflow
 //	├─ queue.pause                  activity  [resources]
@@ -41,28 +41,30 @@ import "time"
 //	{"node":3,"status":"failed","sample":{"items":{"done":1,"failed":1,"total":2}}}
 //	{"node":1,"status":"failed"}
 //
-// A reader reads the stream from its start and keeps one entry per node:
+// "node" in the stream is the step's StepID, "parent" its parent's: on the wire the stream is a tree.
 //
-//   - started: the node is new; Open names its parent (0 for the root, which always opens
+// A reader reads the stream from its start and keeps one entry per step:
+//
+//   - started: the step is new; Open names its parent (0 for the root, which always opens
 //     first), its step and its measures — the widget to build, once.
-//   - any later event: replace the node's state with it whole — msg, sample, resource — since
+//   - any later event: replace the step's state with it whole — msg, sample, resource — since
 //     every event is a full snapshot, not a delta.
 //   - an in_progress event with a resource: that resource's line, under way, or settled into
 //     its outcome when Settled is set.
-//   - succeeded, failed, cancelled: the node's last event. Error is set only on the node the
+//   - succeeded, failed, cancelled: the step's last event. Error is set only on the step the
 //     failure arose on; its failed ancestors carry none.
 
-// NodeType says whether a node is made of other nodes or is one action.
-type NodeType string
+// StepType says whether a step is made of other steps or is one action.
+type StepType string
 
 const (
-	// NodeTypeWorkflow is a node made of other nodes, a batch included.
-	NodeTypeWorkflow NodeType = "workflow"
-	// NodeTypeActivity is one action; it has no children.
-	NodeTypeActivity NodeType = "activity"
+	// StepTypeWorkflow is a step made of other steps, a batch included.
+	StepTypeWorkflow StepType = "workflow"
+	// StepTypeActivity is one action; it has no children.
+	StepTypeActivity StepType = "activity"
 )
 
-// Measure names what a node reports, and so which widget renders it. A node declaring
+// Measure names what a step reports, and so which widget renders it. A step declaring
 // none is a spinner: a status and a message.
 type Measure string
 
@@ -77,7 +79,7 @@ const (
 	MeasureResources Measure = "resources"
 )
 
-// Status is the state an event reports a node in.
+// Status is the state an event reports a step in.
 type Status string
 
 const (
@@ -89,34 +91,34 @@ const (
 	StatusCancelled  Status = "cancelled"
 )
 
-// IsTerminal reports whether no event follows this one on its node.
+// IsTerminal reports whether no event follows this one on its step.
 func (s Status) IsTerminal() bool {
 	return s == StatusSucceeded || s == StatusFailed || s == StatusCancelled
 }
 
-// Kind names a node: "<namespace>.<action>" for an action, a bare noun for an object.
+// Kind names a step: "<namespace>.<action>" for an action, a bare noun for an object.
 // The consumer declares its kinds.
 type Kind string
 
 // ResourceKind names what a resource of a summary activity is. The consumer declares it.
 type ResourceKind string
 
-// NodeID numbers a node within one operation, from 1.
-type NodeID uint64
+// StepID numbers a step within one operation, from 1.
+type StepID uint64
 
-// Step says what a node does.
+// Step says what a step does.
 type Step struct {
 	Kind Kind     `json:"kind"`
-	Type NodeType `json:"type"`
+	Type StepType `json:"type"`
 	// ID is the object's resource key under a batch; empty elsewhere.
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
 }
 
-// Open describes a node once, on its started event: where it is and how to render it.
+// Open describes a step once, on its started event: where it is and how to render it.
 type Open struct {
 	// Parent is 0 for the root.
-	Parent   NodeID    `json:"parent,omitempty"`
+	Parent   StepID    `json:"parent,omitempty"`
 	Step     Step      `json:"step"`
 	Measures []Measure `json:"measures,omitempty"`
 }
@@ -144,25 +146,26 @@ type Items struct {
 	Total     int64 `json:"total,omitempty"`
 }
 
-// Sample is a node's accumulated state at an event.
+// Sample is a step's accumulated state at an event.
 type Sample struct {
 	Elapsed time.Duration `json:"elapsed_ns"`
 	Bytes   *Bytes        `json:"bytes,omitempty"`
 	Items   *Items        `json:"items,omitempty"`
 }
 
-// Event is one event of a progress stream, a full snapshot of its node.
+// Event is one event of a progress stream, a full snapshot of its step.
 type Event struct {
-	Node   NodeID `json:"node"`
+	// StepID is the step's id, "node" on the wire.
+	StepID StepID `json:"node"`
 	Status Status `json:"status"`
 	// Open is set on started only.
 	Open *Open  `json:"open,omitempty"`
 	Msg  string `json:"msg,omitempty"`
-	// Error is set on failed only, on the node the error arose on.
+	// Error is set on failed only, on the step the error arose on.
 	Error    string    `json:"error,omitempty"`
 	Resource *Resource `json:"resource,omitempty"`
 	// Settled marks an in_progress event of a resource that has reached its outcome, while the
-	// node goes on; one without it is the resource still under way.
+	// step goes on; one without it is the resource still under way.
 	Settled bool `json:"settled,omitempty"`
 	// InResult marks a warning the operation's result repeats: a renderer beside the result may
 	// leave it out.

@@ -96,9 +96,9 @@ func TestSampler_Update(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tracker, events, clock := newTestTracker()
-			_, node := progress.Run(withRoot(context.Background(), tracker), newStepPhoto("beach.jpg"),
+			_, step := progress.Run(withRoot(context.Background(), tracker), newStepPhoto("beach.jpg"),
 				progress.MeasureBytes, progress.MeasureItems)
-			sampler := progress.NewSampler(node, tt.template)
+			sampler := progress.NewSampler(step, tt.template)
 
 			tt.run(sampler, clock)
 
@@ -111,8 +111,8 @@ func TestSampler_Update(t *testing.T) {
 func TestSampler_Update_Concurrent(t *testing.T) {
 	const writers = 20
 	tracker, events, clock := newTestTracker()
-	_, node := progress.Run(withRoot(context.Background(), tracker), newStepPhoto("beach.jpg"), progress.MeasureBytes)
-	sampler := progress.NewSampler(node, progress.Sample{Bytes: &progress.Bytes{}})
+	_, step := progress.Run(withRoot(context.Background(), tracker), newStepPhoto("beach.jpg"), progress.MeasureBytes)
+	sampler := progress.NewSampler(step, progress.Sample{Bytes: &progress.Bytes{}})
 	sampler.Update(func(*progress.Sample) {})
 
 	var wg sync.WaitGroup
@@ -131,11 +131,11 @@ func TestSampler_Update_Concurrent(t *testing.T) {
 	assert.Equal(t, "2 in_progress bytes=2000/0", formatEvent(events.events[len(events.events)-1]))
 }
 
-func TestSampler_Update_AfterTheNodeEnded(t *testing.T) {
+func TestSampler_Update_AfterTheStepEnded(t *testing.T) {
 	tracker, events, _ := newTestTracker()
-	_, node := progress.Run(withRoot(context.Background(), tracker), newStepPhoto("beach.jpg"), progress.MeasureBytes)
-	sampler := progress.NewSampler(node, progress.Sample{Bytes: &progress.Bytes{}})
-	node.End(nil)
+	_, step := progress.Run(withRoot(context.Background(), tracker), newStepPhoto("beach.jpg"), progress.MeasureBytes)
+	sampler := progress.NewSampler(step, progress.Sample{Bytes: &progress.Bytes{}})
+	step.End(nil)
 
 	sampler.Update(func(sample *progress.Sample) { sample.Bytes.Done = 1 })
 
@@ -236,7 +236,7 @@ func TestNewSampler(t *testing.T) {
 		ctx  func(tracker *progress.Tracker) context.Context
 	}{
 		{
-			name: "no node in the context",
+			name: "no step in the context",
 			ctx: func(*progress.Tracker) context.Context {
 				return context.Background()
 			},
@@ -249,7 +249,7 @@ func TestNewSampler(t *testing.T) {
 			},
 		},
 		{
-			name: "a node not reporting bytes",
+			name: "a step not reporting bytes",
 			ctx: func(tracker *progress.Tracker) context.Context {
 				ctx, _ := progress.Run(withRoot(context.Background(), tracker), stepWrite)
 				return ctx

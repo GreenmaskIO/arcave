@@ -488,7 +488,7 @@ func TestForgetEraser_Erase_concurrent(t *testing.T) {
 	pruner.AssertExpectations(t)
 }
 
-// ForgetEraser reports one node per repository under the deletion's batch, ended with what its
+// ForgetEraser reports one step per repository under the deletion's batch, ended with what its
 // prune freed; a repository the run's end came before opens none.
 func TestForgetEraser_Erase_progress(t *testing.T) {
 	var (
@@ -504,7 +504,7 @@ func TestForgetEraser_Erase_progress(t *testing.T) {
 		want      []string
 	}{
 		{
-			name: "one node per repository",
+			name: "one step per repository",
 			want: []string{
 				"garbage[restic/volume-named-db] succeeded bytes=7",
 				"garbage[restic/volume-named-logs] failed",
@@ -525,7 +525,7 @@ func TestForgetEraser_Erase_progress(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			var (
-				recorder = &endedRecorder{steps: map[progress.NodeID]progress.Step{}}
+				recorder = &endedRecorder{steps: map[progress.StepID]progress.Step{}}
 				tracker  = progress.New(recorder, func() time.Time { return time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC) })
 			)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -557,20 +557,20 @@ func TestForgetEraser_Erase_progress(t *testing.T) {
 	}
 }
 
-// endedRecorder renders every node's last event as "<kind>[<id>] <status> [bytes] [items]".
+// endedRecorder renders every step's last event as "<kind>[<id>] <status> [bytes] [items]".
 type endedRecorder struct {
-	steps map[progress.NodeID]progress.Step
+	steps map[progress.StepID]progress.Step
 	ended []string
 }
 
-func (r *endedRecorder) Report(evt progress.Event) {
+func (r *endedRecorder) Render(evt progress.Event) {
 	if evt.Open != nil {
-		r.steps[evt.Node] = evt.Open.Step
+		r.steps[evt.StepID] = evt.Open.Step
 	}
 	if !evt.Status.IsTerminal() {
 		return
 	}
-	step := r.steps[evt.Node]
+	step := r.steps[evt.StepID]
 	line := fmt.Sprintf("%s[%s] %s", step.Kind, step.ID, evt.Status)
 	if evt.Sample.Bytes != nil {
 		line += fmt.Sprintf(" bytes=%d", evt.Sample.Bytes.Done)

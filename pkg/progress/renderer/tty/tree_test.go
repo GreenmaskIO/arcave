@@ -47,11 +47,11 @@ func TestTree_apply(t *testing.T) {
 				root.End(nil)
 			}),
 			check: func(t *testing.T, got *tree) {
-				require.Contains(t, got.nodes, progress.NodeID(1))
-				require.Contains(t, got.nodes, progress.NodeID(2))
-				assert.Equal(t, []progress.NodeID{1}, got.roots)
-				assert.Equal(t, []progress.NodeID{2, 4}, got.nodes[1].children)
-				assert.Equal(t, []progress.NodeID{3}, got.nodes[2].children)
+				require.Contains(t, got.nodes, progress.StepID(1))
+				require.Contains(t, got.nodes, progress.StepID(2))
+				assert.Equal(t, []progress.StepID{1}, got.roots)
+				assert.Equal(t, []progress.StepID{2, 4}, got.nodes[1].children)
+				assert.Equal(t, []progress.StepID{3}, got.nodes[2].children)
 			},
 		},
 		{
@@ -63,7 +63,7 @@ func TestTree_apply(t *testing.T) {
 				second.Warn("slow")
 			}),
 			check: func(t *testing.T, got *tree) {
-				assert.Equal(t, []progress.NodeID{1, 2}, got.roots)
+				assert.Equal(t, []progress.StepID{1, 2}, got.roots)
 			},
 		},
 		{
@@ -78,7 +78,7 @@ func TestTree_apply(t *testing.T) {
 				root.Fail("", nil)
 			}),
 			check: func(t *testing.T, got *tree) {
-				require.Contains(t, got.nodes, progress.NodeID(2))
+				require.Contains(t, got.nodes, progress.StepID(2))
 				assert.Equal(t, []resourceLine{
 					{key: "worker/worker-1", resource: worker("worker-1"), msg: "unreachable", warned: true},
 					{key: "worker/worker-2", resource: worker("worker-2"), msg: "Paused"},
@@ -97,7 +97,7 @@ func TestTree_apply(t *testing.T) {
 				root.End(nil)
 			}),
 			check: func(t *testing.T, got *tree) {
-				require.Contains(t, got.nodes, progress.NodeID(2))
+				require.Contains(t, got.nodes, progress.StepID(2))
 				assert.Equal(t, []warning{
 					{msg: "retrying"},
 					{msg: "edge timeout", inResult: true},
@@ -115,7 +115,7 @@ func TestTree_apply(t *testing.T) {
 				root.End(nil)
 			}),
 			check: func(t *testing.T, got *tree) {
-				require.Contains(t, got.nodes, progress.NodeID(2))
+				require.Contains(t, got.nodes, progress.StepID(2))
 				assert.Equal(t, "unable to upload", got.nodes[2].msg)
 				assert.Equal(t, "403 forbidden", got.nodes[2].last.Error)
 			},
@@ -131,8 +131,8 @@ func TestTree_apply(t *testing.T) {
 				root.End(nil)
 			}),
 			check: func(t *testing.T, got *tree) {
-				require.Contains(t, got.nodes, progress.NodeID(1))
-				require.Contains(t, got.nodes, progress.NodeID(2))
+				require.Contains(t, got.nodes, progress.StepID(1))
+				require.Contains(t, got.nodes, progress.StepID(2))
 				assert.True(t, start.Equal(got.nodes[1].startedAt), "started at %v", got.nodes[1].startedAt)
 				assert.True(t, start.Add(ms(300)).Equal(got.nodes[2].startedAt), "started at %v", got.nodes[2].startedAt)
 				assert.True(t, start.Add(ms(500)).Equal(got.nodes[2].endedAt), "ended at %v", got.nodes[2].endedAt)
@@ -142,22 +142,22 @@ func TestTree_apply(t *testing.T) {
 		{
 			name: "a second started of a node is ignored",
 			events: []progress.Event{
-				{Node: 1, Status: progress.StatusStarted, Open: &progress.Open{Step: progress.Step{Kind: "album.publish"}}, At: start},
-				{Node: 2, Status: progress.StatusStarted, Open: &progress.Open{Parent: 1, Step: progress.Step{Kind: "file"}}, At: start},
-				{Node: 2, Status: progress.StatusStarted, Open: &progress.Open{Parent: 1, Step: progress.Step{Kind: "file"}}, At: start},
+				{StepID: 1, Status: progress.StatusStarted, Open: &progress.Open{Step: progress.Step{Kind: "album.publish"}}, At: start},
+				{StepID: 2, Status: progress.StatusStarted, Open: &progress.Open{Parent: 1, Step: progress.Step{Kind: "file"}}, At: start},
+				{StepID: 2, Status: progress.StatusStarted, Open: &progress.Open{Parent: 1, Step: progress.Step{Kind: "file"}}, At: start},
 			},
 			check: func(t *testing.T, got *tree) {
-				require.Contains(t, got.nodes, progress.NodeID(1))
-				assert.Equal(t, []progress.NodeID{1}, got.roots)
-				assert.Equal(t, []progress.NodeID{2}, got.nodes[1].children)
+				require.Contains(t, got.nodes, progress.StepID(1))
+				assert.Equal(t, []progress.StepID{1}, got.roots)
+				assert.Equal(t, []progress.StepID{2}, got.nodes[1].children)
 			},
 		},
 		{
 			name: "an event without its started is dropped",
 			events: []progress.Event{
-				{Node: 2, Status: progress.StatusInProgress, Msg: "orphan", At: start},
+				{StepID: 2, Status: progress.StatusInProgress, Msg: "orphan", At: start},
 				{
-					Node:   3,
+					StepID: 3,
 					Status: progress.StatusStarted,
 					Open:   &progress.Open{Parent: 2, Step: progress.Step{Kind: "file"}},
 					At:     start,
@@ -192,20 +192,20 @@ func TestTree_snapshot(t *testing.T) {
 	}))
 
 	snapshot := original.snapshot()
-	original.apply(progress.Event{Node: 1, Status: progress.StatusWarned, Msg: "slower", At: start})
-	original.apply(progress.Event{Node: 2, Status: progress.StatusInProgress, Msg: "Paused", Resource: &worker, At: start})
+	original.apply(progress.Event{StepID: 1, Status: progress.StatusWarned, Msg: "slower", At: start})
+	original.apply(progress.Event{StepID: 2, Status: progress.StatusInProgress, Msg: "Paused", Resource: &worker, At: start})
 	original.apply(progress.Event{
-		Node:   3,
+		StepID: 3,
 		Status: progress.StatusStarted,
 		Open:   &progress.Open{Parent: 1, Step: progress.Step{Kind: "file"}},
 		At:     start,
 	})
 
-	require.Contains(t, snapshot.nodes, progress.NodeID(1))
-	require.Contains(t, snapshot.nodes, progress.NodeID(2))
+	require.Contains(t, snapshot.nodes, progress.StepID(1))
+	require.Contains(t, snapshot.nodes, progress.StepID(2))
 	require.Len(t, snapshot.nodes[2].resources, 1)
 	assert.Equal(t, []warning{{msg: "slow"}}, snapshot.nodes[1].warnings)
-	assert.Equal(t, []progress.NodeID{2}, snapshot.nodes[1].children)
+	assert.Equal(t, []progress.StepID{2}, snapshot.nodes[1].children)
 	assert.Equal(t, "Draining", snapshot.nodes[2].resources[0].msg)
-	assert.NotContains(t, snapshot.nodes, progress.NodeID(3))
+	assert.NotContains(t, snapshot.nodes, progress.StepID(3))
 }

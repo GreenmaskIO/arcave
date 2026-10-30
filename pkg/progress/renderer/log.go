@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package reporter
+package renderer
 
 import (
 	"fmt"
@@ -21,14 +21,14 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter/internal/format"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer/internal/format"
 )
 
 // Log writes the stream as log records, one per event worth a line, each named by its node's
 // path: album.publish[summer]/album.export/photo.resize/photo[beach.jpg].
 type Log struct {
 	logger zerolog.Logger
-	nodes  map[progress.NodeID]logNode
+	nodes  map[progress.StepID]logNode
 }
 
 type logNode struct {
@@ -37,18 +37,18 @@ type logNode struct {
 	items progress.Items
 }
 
-// NewLog returns a Log reporter writing to logger.
+// NewLog returns a Log renderer writing to logger.
 func NewLog(logger zerolog.Logger) *Log {
 	return &Log{
 		logger: logger,
-		nodes:  make(map[progress.NodeID]logNode),
+		nodes:  make(map[progress.StepID]logNode),
 	}
 }
 
-// Report logs evt unless it is a tick changing neither its message nor its count: bytes alone
+// Render logs evt unless it is a tick changing neither its message nor its count: bytes alone
 // are not worth a line. A node is forgotten once it ends.
-func (r *Log) Report(evt progress.Event) {
-	node := r.nodes[evt.Node]
+func (r *Log) Render(evt progress.Event) {
+	node := r.nodes[evt.StepID]
 	if evt.Open != nil {
 		node = logNode{path: formatPath(r.nodes[evt.Open.Parent].path, evt.Open.Step)}
 	}
@@ -61,9 +61,9 @@ func (r *Log) Report(evt progress.Event) {
 		msg = node.msg
 	}
 	if evt.Status.IsTerminal() {
-		delete(r.nodes, evt.Node)
+		delete(r.nodes, evt.StepID)
 	} else {
-		r.nodes[evt.Node] = logNode{
+		r.nodes[evt.StepID] = logNode{
 			path:  node.path,
 			msg:   msg,
 			items: items,

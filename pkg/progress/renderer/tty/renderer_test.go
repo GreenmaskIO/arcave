@@ -74,10 +74,10 @@ func newResourceStream(t *testing.T) []progress.Event {
 	})
 }
 
-func newFixedReporter(out *syncBuffer) *Reporter {
-	reporter := New(out)
-	reporter.now = func() time.Time { return start }
-	return reporter
+func newFixedRenderer(out *syncBuffer) *Renderer {
+	renderer := New(out)
+	renderer.now = func() time.Time { return start }
+	return renderer
 }
 
 // newFinalTree is the final tree Stop writes for events, as out shows it.
@@ -86,10 +86,10 @@ func newFinalTree(events []progress.Event) string {
 	return ansi.Strip(final) + "\n"
 }
 
-// TestReporter_Report races reports and log lines against the program's reads; run it with -race.
-func TestReporter_Report(t *testing.T) {
+// TestRenderer_Render races reports and log lines against the program's reads; run it with -race.
+func TestRenderer_Render(t *testing.T) {
 	var (
-		reporter = newFixedReporter(&syncBuffer{})
+		renderer = newFixedRenderer(&syncBuffer{})
 		events   = newResourceStream(t)
 		wg       sync.WaitGroup
 		drained  int
@@ -97,7 +97,7 @@ func TestReporter_Report(t *testing.T) {
 		done     = make(chan struct{})
 	)
 	// The goroutine below reads the tree and the log in the program's place.
-	reporter.state = stateRunning
+	renderer.state = stateRunning
 	go func() {
 		defer close(done)
 		for {
@@ -105,8 +105,8 @@ func TestReporter_Report(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				render(reporter.snapshot(), frame{now: start})
-				drained += len(reporter.drainLogs())
+				render(renderer.snapshot(), frame{now: start})
+				drained += len(renderer.drainLogs())
 			}
 		}
 	}()
@@ -114,14 +114,14 @@ func TestReporter_Report(t *testing.T) {
 	for i := range 8 {
 		wg.Go(func() {
 			for _, evt := range events {
-				evt.Node += progress.NodeID(i * 100)
+				evt.StepID += progress.StepID(i * 100)
 				if evt.Open != nil && evt.Open.Parent != 0 {
 					open := *evt.Open
-					open.Parent += progress.NodeID(i * 100)
+					open.Parent += progress.StepID(i * 100)
 					evt.Open = &open
 				}
-				reporter.Report(evt)
-				_, err := fmt.Fprintf(reporter.LogWriter(), "line %d\n", i)
+				renderer.Render(evt)
+				_, err := fmt.Fprintf(renderer.LogWriter(), "line %d\n", i)
 				assert.NoError(t, err)
 			}
 		})
@@ -130,39 +130,39 @@ func TestReporter_Report(t *testing.T) {
 	close(stop)
 	<-done
 
-	total := drained + len(reporter.drainLogs())
+	total := drained + len(renderer.drainLogs())
 	assert.Equal(t, 8*len(events), total)
-	assert.Len(t, reporter.snapshot().roots, 8)
+	assert.Len(t, renderer.snapshot().roots, 8)
 }
 
 // Before the first event there is no tree: the log goes straight to out, and Stop draws nothing.
-func TestReporter_Stop_beforeTheFirstEvent(t *testing.T) {
+func TestRenderer_Stop_beforeTheFirstEvent(t *testing.T) {
 	var (
 		out      = &syncBuffer{}
-		reporter = newFixedReporter(out)
+		renderer = newFixedRenderer(out)
 	)
-	_, err := reporter.LogWriter().Write([]byte("WRN slow disk\nERR lost\n"))
+	_, err := renderer.LogWriter().Write([]byte("WRN slow disk\nERR lost\n"))
 	require.NoError(t, err)
 
-	drawn := reporter.Stop(StopOptions{})
-	again := reporter.Stop(StopOptions{})
-	_, err = reporter.LogWriter().Write([]byte("WRN late\n"))
+	drawn := renderer.Stop(StopOptions{})
+	again := renderer.Stop(StopOptions{})
+	_, err = renderer.LogWriter().Write([]byte("WRN late\n"))
 	require.NoError(t, err)
 
 	assert.False(t, drawn)
 	assert.False(t, again)
-	assert.Nil(t, reporter.program, "no program was started")
+	assert.Nil(t, renderer.program, "no program was started")
 	assert.Equal(t, "WRN slow disk\nERR lost\nWRN late\n", ansi.Strip(out.String()))
 }
 
-func TestReporter_LogWriter_afterStop(t *testing.T) {
+func TestRenderer_LogWriter_afterStop(t *testing.T) {
 	var (
 		out      = &syncBuffer{}
-		reporter = newFixedReporter(out)
+		renderer = newFixedRenderer(out)
 	)
-	reporter.Stop(StopOptions{})
+	renderer.Stop(StopOptions{})
 
-	_, err := reporter.LogWriter().Write([]byte("WRN late\n"))
+	_, err := renderer.LogWriter().Write([]byte("WRN late\n"))
 
 	require.NoError(t, err)
 	assert.Equal(t, "WRN late\n", ansi.Strip(out.String()))
@@ -170,21 +170,21 @@ func TestReporter_LogWriter_afterStop(t *testing.T) {
 
 // The first event starts the program on a buffer: the log is printed once, above the final tree,
 // which comes last.
-func TestReporter_Report_startsTheProgram(t *testing.T) {
+func TestRenderer_Render_startsTheProgram(t *testing.T) {
 	var (
 		out      = &syncBuffer{}
-		reporter = newFixedReporter(out)
+		renderer = newFixedRenderer(out)
 		events   = newFinishedStream(t)
 		final    = newFinalTree(events)
 	)
 	for _, evt := range events {
-		reporter.Report(evt)
+		renderer.Render(evt)
 	}
-	_, err := reporter.LogWriter().Write([]byte("WRN slow disk\n"))
+	_, err := renderer.LogWriter().Write([]byte("WRN slow disk\n"))
 	require.NoError(t, err)
 
-	drawn := reporter.Stop(StopOptions{})
-	again := reporter.Stop(StopOptions{})
+	drawn := renderer.Stop(StopOptions{})
+	again := renderer.Stop(StopOptions{})
 
 	got := ansi.Strip(out.String())
 	assert.True(t, drawn)
@@ -194,34 +194,34 @@ func TestReporter_Report_startsTheProgram(t *testing.T) {
 	assert.Less(t, strings.Index(got, "WRN slow disk"), strings.Index(got, final))
 }
 
-func TestReporter_Report_afterStop(t *testing.T) {
-	reporter := newFixedReporter(&syncBuffer{})
-	reporter.Stop(StopOptions{})
+func TestRenderer_Render_afterStop(t *testing.T) {
+	renderer := newFixedRenderer(&syncBuffer{})
+	renderer.Stop(StopOptions{})
 
-	reporter.Report(newFinishedStream(t)[0])
+	renderer.Render(newFinishedStream(t)[0])
 
-	assert.Nil(t, reporter.program, "a stopped reporter starts no program")
+	assert.Nil(t, renderer.program, "a stopped renderer starts no program")
 }
 
-// TestReporter_Stop_afterRunExits covers a program that ended on its own: the log and the tree go
+// TestRenderer_Stop_afterRunExits covers a program that ended on its own: the log and the tree go
 // straight to out.
-func TestReporter_Stop_afterRunExits(t *testing.T) {
+func TestRenderer_Stop_afterRunExits(t *testing.T) {
 	var (
 		out      = &syncBuffer{}
-		reporter = newFixedReporter(out)
+		renderer = newFixedRenderer(out)
 		events   = newFinishedStream(t)
 	)
-	reporter.Report(events[0])
-	reporter.program.Quit()
-	<-reporter.done
+	renderer.Render(events[0])
+	renderer.program.Quit()
+	<-renderer.done
 	start := len(out.String())
 	for _, evt := range events[1:] {
-		reporter.Report(evt)
+		renderer.Render(evt)
 	}
-	_, err := reporter.LogWriter().Write([]byte("WRN late\n"))
+	_, err := renderer.LogWriter().Write([]byte("WRN late\n"))
 	require.NoError(t, err)
 
-	reporter.Stop(StopOptions{})
+	renderer.Stop(StopOptions{})
 
 	assert.Equal(t, "WRN late\n"+newFinalTree(events), ansi.Strip(out.String()[start:]))
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package reporter
+package renderer
 
 import (
 	"bytes"
@@ -25,16 +25,16 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-func TestLog_Report(t *testing.T) {
+func TestLog_Render(t *testing.T) {
 	var out bytes.Buffer
-	reporter := NewLog(zerolog.New(zerolog.ConsoleWriter{
+	renderer := NewLog(zerolog.New(zerolog.ConsoleWriter{
 		Out:          &out,
 		NoColor:      true,
 		PartsExclude: []string{zerolog.TimestampFieldName},
 	}))
 
 	for _, evt := range newStream() {
-		reporter.Report(evt)
+		renderer.Render(evt)
 	}
 
 	assertGolden(t, "stream.log", out.Bytes())
@@ -50,7 +50,7 @@ func TestLog_Report_skipsATickAfter(t *testing.T) {
 		{
 			name: "a warning",
 			event: progress.Event{
-				Node:   1,
+				StepID: 1,
 				Status: progress.StatusWarned,
 				Msg:    "slow disk",
 			},
@@ -58,7 +58,7 @@ func TestLog_Report_skipsATickAfter(t *testing.T) {
 		{
 			name: "a resource",
 			event: progress.Event{
-				Node:     1,
+				StepID:   1,
 				Status:   progress.StatusInProgress,
 				Msg:      "Paused",
 				Resource: &progress.Resource{Kind: "worker", ID: "worker-1"},
@@ -69,26 +69,26 @@ func TestLog_Report_skipsATickAfter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			var out bytes.Buffer
-			reporter := NewLog(zerolog.New(zerolog.ConsoleWriter{
+			renderer := NewLog(zerolog.New(zerolog.ConsoleWriter{
 				Out:          &out,
 				NoColor:      true,
 				PartsExclude: []string{zerolog.TimestampFieldName},
 			}))
 			tick := progress.Event{
-				Node:   1,
+				StepID: 1,
 				Status: progress.StatusInProgress,
 				Msg:    "copying",
 			}
 
 			// Act
-			reporter.Report(progress.Event{
-				Node:   1,
+			renderer.Render(progress.Event{
+				StepID: 1,
 				Status: progress.StatusStarted,
-				Open:   &progress.Open{Step: progress.Step{Kind: "volume.capture", Type: progress.NodeTypeWorkflow}},
+				Open:   &progress.Open{Step: progress.Step{Kind: "volume.capture", Type: progress.StepTypeWorkflow}},
 			})
-			reporter.Report(tick)
-			reporter.Report(tt.event)
-			reporter.Report(tick)
+			renderer.Render(tick)
+			renderer.Render(tt.event)
+			renderer.Render(tick)
 
 			// Assert
 			assert.Equal(t, 1, strings.Count(out.String(), "msg=copying"), out.String())

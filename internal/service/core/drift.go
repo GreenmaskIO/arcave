@@ -53,7 +53,7 @@ func (s *Service) warnCapturePolicyDrift(ctx context.Context, savepoints []model
 	}
 	var (
 		changes = findCapturePolicyDrift(previous, current)
-		node    = progress.Current(ctx)
+		step    = progress.Current(ctx)
 		ref     = cmp.Or(latest.Name, latest.ID.String())
 	)
 	for _, change := range changes {
@@ -62,7 +62,7 @@ func (s *Service) warnCapturePolicyDrift(ctx context.Context, savepoints []model
 			Msg("captured otherwise than in the latest savepoint")
 	}
 	for _, serviceChanges := range newServiceChanges(changes) {
-		node.Warn(newDriftWarning(serviceChanges, ref))
+		step.Warn(newDriftWarning(serviceChanges, ref))
 	}
 }
 

@@ -21,10 +21,10 @@ import (
 	"time"
 )
 
-// Sampler accumulates a node's sample for a source deep in the call and sends it at most once
-// per the tracker's interval. The last value is not flushed: the node's Done carries the total.
+// Sampler accumulates a step's sample for a source deep in the call and sends it at most once
+// per the tracker's interval. The last value is not flushed: the step's Done carries the total.
 type Sampler struct {
-	topic    *Node
+	topic    *StepReporter
 	template Sample
 
 	mu     sync.Mutex
@@ -35,7 +35,7 @@ type Sampler struct {
 
 // NewSampler returns a Sampler for topic, its sample shaped by template and starting from its
 // values. It is mute when topic is, or when topic does not declare a measure template sets.
-func NewSampler(topic *Node, template Sample) *Sampler {
+func NewSampler(topic *StepReporter, template Sample) *Sampler {
 	if topic.isMute() || !topic.declaresSample(template) {
 		return &Sampler{}
 	}
@@ -79,8 +79,8 @@ type reader struct {
 	sampler *Sampler
 }
 
-// NewReader counts the bytes read from r on the node of ctx, out of total, 0 if unknown. It
-// returns r itself when that node does not report bytes.
+// NewReader counts the bytes read from r on the step of ctx, out of total, 0 if unknown. It
+// returns r itself when that step does not report bytes.
 func NewReader(ctx context.Context, r io.Reader, total int64) io.Reader {
 	sampler := newBytesSampler(ctx, total)
 	if sampler.topic == nil {
@@ -103,8 +103,8 @@ type writer struct {
 	sampler *Sampler
 }
 
-// NewWriter counts the bytes written to w on the node of ctx, out of total, 0 if unknown. It
-// returns w itself when that node does not report bytes.
+// NewWriter counts the bytes written to w on the step of ctx, out of total, 0 if unknown. It
+// returns w itself when that step does not report bytes.
 func NewWriter(ctx context.Context, w io.Writer, total int64) io.Writer {
 	sampler := newBytesSampler(ctx, total)
 	if sampler.topic == nil {

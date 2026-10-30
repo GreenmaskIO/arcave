@@ -225,7 +225,7 @@ type bytesRecorder struct {
 	samples []progress.Bytes
 }
 
-func (r *bytesRecorder) Report(evt progress.Event) {
+func (r *bytesRecorder) Render(evt progress.Event) {
 	if evt.Sample.Bytes != nil {
 		r.samples = append(r.samples, *evt.Sample.Bytes)
 	}

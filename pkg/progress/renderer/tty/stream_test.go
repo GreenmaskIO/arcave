@@ -42,7 +42,7 @@ type recorder struct {
 	events []progress.Event
 }
 
-func (r *recorder) Report(evt progress.Event) {
+func (r *recorder) Render(evt progress.Event) {
 	r.events = append(r.events, evt)
 }
 

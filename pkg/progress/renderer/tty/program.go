@@ -24,7 +24,7 @@ import (
 // tickInterval is how often the frame is redrawn and the log drained.
 const tickInterval = 100 * time.Millisecond
 
-// source is the reporter's state as the program reads it.
+// source is the renderer's state as the program reads it.
 type source interface {
 	snapshot() *tree
 	drainLogs() []string
@@ -34,7 +34,7 @@ type source interface {
 
 type tickMsg time.Time
 
-// stopMsg asks the program to quit on its next tick, once the last print is in. The reporter
+// stopMsg asks the program to quit on its next tick, once the last print is in. The renderer
 // writes the rest of the log and the final tree after the frame is gone, so a frame taller than
 // the screen does not scroll into the scrollback.
 type stopMsg struct{}

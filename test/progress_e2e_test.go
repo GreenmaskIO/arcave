@@ -44,9 +44,9 @@ type progressStream struct {
 	// settled are the kinds of the nodes a resource settled under: compose's containers.
 	settled map[progress.Kind]bool
 	// unended are the nodes that opened and never reached a terminal status.
-	unended []progress.NodeID
+	unended []progress.StepID
 	// orphans are the nodes opened under a parent the stream had not opened.
-	orphans []progress.NodeID
+	orphans []progress.StepID
 	root    progress.Status
 	last    progressLine
 }
@@ -57,11 +57,11 @@ func readProgressStream(t *testing.T, out []byte) progressStream {
 	var (
 		kinds   = map[progress.Kind]bool{}
 		settled = map[progress.Kind]bool{}
-		nodes   = map[progress.NodeID]progress.Kind{}
-		open    = map[progress.NodeID]bool{}
-		ended   = map[progress.NodeID]bool{}
-		order   []progress.NodeID
-		orphans []progress.NodeID
+		nodes   = map[progress.StepID]progress.Kind{}
+		open    = map[progress.StepID]bool{}
+		ended   = map[progress.StepID]bool{}
+		order   []progress.StepID
+		orphans []progress.StepID
 		root    progress.Status
 		last    progressLine
 	)
@@ -78,25 +78,25 @@ func readProgressStream(t *testing.T, out []byte) progressStream {
 		require.NotNil(t, evt, "a progress line carries its event")
 		if evt.Open != nil {
 			if evt.Open.Parent != 0 && !open[evt.Open.Parent] {
-				orphans = append(orphans, evt.Node)
+				orphans = append(orphans, evt.StepID)
 			}
-			open[evt.Node] = true
-			order = append(order, evt.Node)
+			open[evt.StepID] = true
+			order = append(order, evt.StepID)
 			kinds[evt.Open.Step.Kind] = true
-			nodes[evt.Node] = evt.Open.Step.Kind
+			nodes[evt.StepID] = evt.Open.Step.Kind
 		}
 		if evt.Resource != nil && evt.Settled {
-			settled[nodes[evt.Node]] = true
+			settled[nodes[evt.StepID]] = true
 		}
 		if evt.Status.IsTerminal() {
-			ended[evt.Node] = true
-			if evt.Node == 1 {
+			ended[evt.StepID] = true
+			if evt.StepID == 1 {
 				root = evt.Status
 			}
 		}
 	}
 	require.NoError(t, scanner.Err())
-	var unended []progress.NodeID
+	var unended []progress.StepID
 	for _, node := range order {
 		if !ended[node] {
 			unended = append(unended, node)

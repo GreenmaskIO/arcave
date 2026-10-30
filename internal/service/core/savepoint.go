@@ -50,11 +50,11 @@ var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 // before a failed restart is named by the error and found by `savepoint list`.
 func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (_ model.Savepoint, err error) {
 	// Outside the lock: a lost lock cancels the work under it, and the root says why.
-	ctx, node := progress.Begin(ctx, progress.Step{
+	ctx, step := progress.Begin(ctx, progress.Step{
 		Kind: kindSavepointCreate,
 		Name: req.Name,
 	})
-	defer func() { node.End(err) }()
+	defer func() { step.End(err) }()
 	return locked(ctx, s, model.SessionLockOperationSavepointCreate,
 		func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.Savepoint, error) {
 			return s.createSavepoint(ctx, grantedLock, req)
@@ -175,8 +175,8 @@ func visibleSavepoints(savepoints []model.Savepoint) []model.Savepoint {
 // A dry run takes no lock — it only reads. A real removal locks before it lists,
 // so the set it selects is the set it deletes.
 func (s *Service) RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (_ model.RemoveResult, err error) {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindSavepointRemove})
-	defer func() { node.End(err) }()
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindSavepointRemove})
+	defer func() { step.End(err) }()
 	if err := validateRemoveRequest(req); err != nil {
 		return model.RemoveResult{}, err
 	}
@@ -382,13 +382,13 @@ func (s *Service) applyRemoval(
 	eg.SetLimit(maxParallelRemovals)
 	for i, savepoint := range removed {
 		eg.Go(func() error {
-			removeCtx, node := progress.Begin(ctx, progress.Step{
+			removeCtx, step := progress.Begin(ctx, progress.Step{
 				Kind: kindSavepoint,
 				ID:   savepoint.ID.String(),
 				Name: savepoint.Name,
 			})
 			errs[i] = s.removeSavepoint(removeCtx, grantedLock, savepoint)
-			node.End(errs[i])
+			step.End(errs[i])
 			return errs[i]
 		})
 	}

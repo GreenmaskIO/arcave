@@ -294,11 +294,11 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 func (s *SessionService) RemoveSession(
 	ctx context.Context, req model.RemoveSessionRequest,
 ) (_ model.RemoveSessionResponse, err error) {
-	ctx, node := progress.Begin(ctx, progress.Step{
+	ctx, step := progress.Begin(ctx, progress.Step{
 		Kind: kindSessionRemove,
 		Name: req.Session,
 	})
-	defer func() { node.End(err) }()
+	defer func() { step.End(err) }()
 	if req.Session == "" {
 		return model.RemoveSessionResponse{}, model.ErrNoSessionRef
 	}
@@ -679,11 +679,11 @@ func requireFreeName(sessions []model.Session, name string) error {
 // delete what the copy reads. The new session is no one's to touch until its record lands.
 func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.Session) (err error) {
 	// Outside the source's lock, and the heartbeat's cancellation: the root says why either ended it.
-	ctx, node := progress.Begin(ctx, progress.Step{
+	ctx, step := progress.Begin(ctx, progress.Step{
 		Kind: kindSessionFork,
 		Name: cmp.Or(session.Name, session.ID.String()),
 	})
-	defer func() { node.End(err) }()
+	defer func() { step.End(err) }()
 	source := session.From.Session
 	locker, err := s.newLocker(source)
 	if err != nil {

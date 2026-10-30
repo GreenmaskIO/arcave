@@ -208,17 +208,17 @@ func forgetRepo(ctx context.Context, pruner Pruner, repo repoForget) repoPrune {
 	if ctx.Err() != nil {
 		return repoPrune{notRun: true}
 	}
-	repoCtx, node := gc.BeginTarget(ctx, cdc.NewRepositoryKey(repo.objectID))
+	repoCtx, step := gc.BeginTarget(ctx, cdc.NewRepositoryKey(repo.objectID))
 	freed, err := pruner.Forget(repoCtx, repo.objectID, repo.ids)
 	if err != nil {
-		node.End(err)
+		step.End(err)
 		zerolog.Ctx(ctx).Error().Err(err).Str("repository", repo.objectID).Msg("forget dead snapshots")
 		return repoPrune{
 			err:         err,
 			interrupted: ctx.Err() != nil,
 		}
 	}
-	node.Done(gc.NewFreedSample(freed))
+	step.Done(gc.NewFreedSample(freed))
 	return repoPrune{freed: freed}
 }
 

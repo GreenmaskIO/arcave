@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command examples runs a photo album's workflows through a progress reporter:
+// Command examples runs a photo album's workflows through a progress renderer:
 //
-//	go run ./pkg/progress/examples -scenario all -reporter auto -speed 1
+//	go run ./pkg/progress/examples -scenario all -renderer auto -speed 1
 package main
 
 import (
@@ -30,15 +30,15 @@ import (
 	"golang.org/x/term"
 
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter/tty"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer/tty"
 )
 
 const (
-	reporterAuto = "auto"
-	reporterTTY  = "tty"
-	reporterLog  = "log"
-	reporterJSON = "json"
+	rendererAuto = "auto"
+	rendererTTY  = "tty"
+	rendererLog  = "log"
+	rendererJSON = "json"
 )
 
 type scenario struct {
@@ -60,7 +60,7 @@ func main() {
 func run() int {
 	var (
 		name     = flag.String("scenario", "all", "publish, backup, parallel, unknown or all")
-		kind     = flag.String("reporter", reporterAuto, "auto, tty, log or json")
+		kind     = flag.String("renderer", rendererAuto, "auto, tty, log or json")
 		speed    = flag.Float64("speed", 1, "how many times faster than real time the workflows run")
 		selected []scenario
 	)
@@ -70,14 +70,14 @@ func run() int {
 			selected = append(selected, s)
 		}
 	}
-	if len(selected) == 0 || *speed <= 0 || !slices.Contains([]string{reporterAuto, reporterTTY, reporterLog, reporterJSON}, *kind) {
+	if len(selected) == 0 || *speed <= 0 || !slices.Contains([]string{rendererAuto, rendererTTY, rendererLog, rendererJSON}, *kind) {
 		flag.Usage()
 		return 2
 	}
-	if *kind == reporterAuto {
-		*kind = reporterLog
+	if *kind == rendererAuto {
+		*kind = rendererLog
 		if term.IsTerminal(int(os.Stderr.Fd())) {
-			*kind = reporterTTY
+			*kind = rendererTTY
 		}
 	}
 
@@ -100,26 +100,26 @@ func run() int {
 	return code
 }
 
-// runScenario runs s on its own tracker and reporter; it returns once the reporter has printed
+// runScenario runs s on its own tracker and renderer; it returns once the renderer has printed
 // its final tree, so an error is printed after it.
 func runScenario(ctx context.Context, kind string, p publisher, s scenario) error {
 	noColor := os.Getenv("NO_COLOR") != ""
 	switch kind {
-	case reporterTTY:
-		progressReporter := tty.New(os.Stderr)
+	case rendererTTY:
+		progressRenderer := tty.New(os.Stderr)
 		logger := zerolog.New(zerolog.ConsoleWriter{
-			Out:          progressReporter.LogWriter(),
+			Out:          progressRenderer.LogWriter(),
 			NoColor:      noColor,
 			PartsExclude: []string{zerolog.TimestampFieldName},
 		}).Level(zerolog.WarnLevel)
-		defer progressReporter.Stop(tty.StopOptions{})
-		return s.run(p, logger.WithContext(ctx), progress.New(progressReporter, p.clock.Now))
-	case reporterJSON:
+		defer progressRenderer.Stop(tty.StopOptions{})
+		return s.run(p, logger.WithContext(ctx), progress.New(progressRenderer, p.clock.Now))
+	case rendererJSON:
 		logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, NoColor: noColor}).With().Timestamp().Logger()
-		progressReporter := reporter.NewJSON(os.Stdout)
-		return s.run(p, logger.WithContext(ctx), progress.New(progressReporter, p.clock.Now))
+		progressRenderer := renderer.NewJSON(os.Stdout)
+		return s.run(p, logger.WithContext(ctx), progress.New(progressRenderer, p.clock.Now))
 	default:
 		logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, NoColor: noColor}).With().Timestamp().Logger()
-		return s.run(p, logger.WithContext(ctx), progress.New(reporter.NewLog(logger), p.clock.Now))
+		return s.run(p, logger.WithContext(ctx), progress.New(renderer.NewLog(logger), p.clock.Now))
 	}
 }

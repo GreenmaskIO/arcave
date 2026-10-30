@@ -37,7 +37,7 @@ type recorder struct {
 	events []progress.Event
 }
 
-func (r *recorder) Report(evt progress.Event) {
+func (r *recorder) Render(evt progress.Event) {
 	r.events = append(r.events, evt)
 }
 
@@ -52,7 +52,7 @@ func (r *recorder) lines() []string {
 
 func formatEvent(evt progress.Event) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d %s", evt.Node, evt.Status)
+	fmt.Fprintf(&b, "%d %s", evt.StepID, evt.Status)
 	if evt.Open != nil {
 		fmt.Fprintf(&b, " <%d %s %s", evt.Open.Parent, evt.Open.Step.Kind, evt.Open.Step.Type)
 		if len(evt.Open.Measures) > 0 {
@@ -232,8 +232,8 @@ func TestTracker_Begin(t *testing.T) {
 		{
 			name: "the constructor sets the type, whatever the caller passed",
 			run: func(ctx context.Context, tracker *progress.Tracker, _ *exampleClock) {
-				ctx, root := tracker.Begin(ctx, progress.Step{Kind: kindAlbumPublish, Type: progress.NodeTypeActivity})
-				_, write := progress.Run(ctx, progress.Step{Kind: kindManifestWrite, Type: progress.NodeTypeWorkflow})
+				ctx, root := tracker.Begin(ctx, progress.Step{Kind: kindAlbumPublish, Type: progress.StepTypeActivity})
+				_, write := progress.Run(ctx, progress.Step{Kind: kindManifestWrite, Type: progress.StepTypeWorkflow})
 				write.End(nil)
 				root.End(nil)
 			},
@@ -373,7 +373,7 @@ func TestTracker_Begin(t *testing.T) {
 			},
 		},
 		{
-			name: "a node ends once and ignores every call after",
+			name: "a step ends once and ignores every call after",
 			run: func(ctx context.Context, tracker *progress.Tracker, _ *exampleClock) {
 				_, pause := progress.Run(withRoot(ctx, tracker), stepPause, progress.MeasureResources)
 				pause.Done(progress.Sample{})
@@ -468,12 +468,12 @@ func TestTracker_Begin_ElapsedCountsFromTheConstructor(t *testing.T) {
 	assert.True(t, events.events[3].At.Equal(start.Add(2*time.Second)), "at = %v", events.events[3].At)
 }
 
-func TestNode_End_DeferredOverANamedError(t *testing.T) {
+func TestStepReporter_End_DeferredOverANamedError(t *testing.T) {
 	tracker, events, _ := newTestTracker()
 	errQueue := errors.New("queue unreachable")
 	pause := func(ctx context.Context) (err error) {
-		_, node := progress.Run(ctx, stepPause)
-		defer func() { node.End(err) }()
+		_, step := progress.Run(ctx, stepPause)
+		defer func() { step.End(err) }()
 		return errQueue
 	}
 
@@ -487,7 +487,7 @@ func TestNode_End_DeferredOverANamedError(t *testing.T) {
 	}, events.lines())
 }
 
-func TestNode_Progress(t *testing.T) {
+func TestStepReporter_Progress(t *testing.T) {
 	tests := []struct {
 		name        string
 		run         func(ctx context.Context)
@@ -511,7 +511,7 @@ func TestNode_Progress(t *testing.T) {
 			wantDropped: []progress.Measure{progress.MeasureBytes, progress.MeasureItems},
 		},
 		{
-			name: "a resource on a node not declaring resources, dropped with its message",
+			name: "a resource on a step not declaring resources, dropped with its message",
 			run: func(ctx context.Context) {
 				_, write := progress.Run(ctx, stepWrite)
 				write.UpdateResource(progress.Resource{Kind: resourceWorker, ID: "worker-1"}, "Paused")
@@ -545,7 +545,7 @@ func TestNode_Progress(t *testing.T) {
 			tt.run(ctx)
 
 			assert.Equal(t, tt.want, events.lines())
-			assert.Equal(t, len(tt.wantDropped), strings.Count(logs.String(), "the node does not report this measure"))
+			assert.Equal(t, len(tt.wantDropped), strings.Count(logs.String(), "the step does not report this measure"))
 			for _, measure := range tt.wantDropped {
 				assert.Contains(t, logs.String(), `"measure":"`+string(measure)+`"`)
 			}
@@ -575,7 +575,7 @@ func TestRun_UnderAnActivity(t *testing.T) {
 		"2 started <1 manifest.write activity",
 		"2 succeeded",
 	}, events.lines())
-	assert.Contains(t, logs.String(), "progress: an activity has no children, the node is mute")
+	assert.Contains(t, logs.String(), "progress: an activity has no children, the step is mute")
 }
 
 func TestCurrent(t *testing.T) {
@@ -658,7 +658,7 @@ func TestWithTracker(t *testing.T) {
 	}, events.lines())
 }
 
-func TestWithNode(t *testing.T) {
+func TestWithStep(t *testing.T) {
 	tracker, events, _ := newTestTracker()
 	ctx, root := tracker.Begin(context.Background(), stepPublish)
 
@@ -666,7 +666,7 @@ func TestWithNode(t *testing.T) {
 	derived, cancel := context.WithCancel(pauseCtx)
 	defer cancel()
 	pause.End(nil)
-	_, write := progress.Run(progress.WithNode(derived, root), stepWrite)
+	_, write := progress.Run(progress.WithStep(derived, root), stepWrite)
 	write.End(nil)
 
 	assert.Equal(t, []string{
@@ -732,13 +732,13 @@ func TestBatch_ConcurrentChildren(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range photos {
 		wg.Go(func() {
-			_, node := progress.Run(ctx, newStepPhoto(fmt.Sprint(i)), progress.MeasureBytes)
-			node.Progress(progress.Sample{Bytes: &progress.Bytes{Done: int64(i)}})
+			_, step := progress.Run(ctx, newStepPhoto(fmt.Sprint(i)), progress.MeasureBytes)
+			step.Progress(progress.Sample{Bytes: &progress.Bytes{Done: int64(i)}})
 			if i%5 == 0 {
-				node.Fail("", errors.New("unable to resize"))
+				step.Fail("", errors.New("unable to resize"))
 				return
 			}
-			node.End(nil)
+			step.End(nil)
 		})
 	}
 	wg.Wait()
@@ -749,13 +749,13 @@ func TestBatch_ConcurrentChildren(t *testing.T) {
 	assert.Equal(t, "2 started <1 photo.resize workflow [items] items=0/0/0/50", formatEvent(events.events[1]))
 	last := events.events[len(events.events)-1]
 	assert.Equal(t, "2 succeeded items=40/10/0/50", formatEvent(last))
-	opened := make(map[progress.NodeID]bool)
+	opened := make(map[progress.StepID]bool)
 	for _, evt := range events.events {
 		if evt.Open != nil {
-			opened[evt.Node] = true
-			assert.True(t, opened[evt.Open.Parent] || evt.Open.Parent == 0, "node %d opened before its parent", evt.Node)
+			opened[evt.StepID] = true
+			assert.True(t, opened[evt.Open.Parent] || evt.Open.Parent == 0, "step %d opened before its parent", evt.StepID)
 		}
-		assert.True(t, opened[evt.Node], "node %d reported before it opened", evt.Node)
+		assert.True(t, opened[evt.StepID], "step %d reported before it opened", evt.StepID)
 	}
 }
 
@@ -769,5 +769,5 @@ func TestBegin_UnderAnEndedWorkflow(t *testing.T) {
 	write.End(nil)
 
 	assert.Empty(t, events.lines())
-	assert.Contains(t, logs.String(), "progress: the parent has ended, the node is mute")
+	assert.Contains(t, logs.String(), "progress: the parent has ended, the step is mute")
 }

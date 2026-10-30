@@ -172,7 +172,7 @@ func parallelPeak(ctx context.Context, tracker *progress.Tracker, clock *fakeClo
 		_, file := progress.Run(uploadCtx, progress.Step{Kind: "file", ID: fmt.Sprintf("photo-%02d.jpg", i)}, progress.MeasureBytes)
 		file.Done(progress.Sample{Bytes: &progress.Bytes{Done: 1_000_000, Total: 1_000_000}})
 	}
-	var files []*progress.Node
+	var files []*progress.StepReporter
 	for i := 2; i < 6; i++ {
 		_, file := progress.Run(uploadCtx, progress.Step{Kind: "file", ID: fmt.Sprintf("photo-%02d.jpg", i)}, progress.MeasureBytes)
 		files = append(files, file)

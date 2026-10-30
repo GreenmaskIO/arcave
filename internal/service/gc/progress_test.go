@@ -31,20 +31,20 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// endedRecorder renders every node's last event as "<kind>[<id>] <status> [bytes]".
+// endedRecorder renders every step's last event as "<kind>[<id>] <status> [bytes]".
 type endedRecorder struct {
-	steps map[progress.NodeID]progress.Step
+	steps map[progress.StepID]progress.Step
 	ended []string
 }
 
-func (r *endedRecorder) Report(evt progress.Event) {
+func (r *endedRecorder) Render(evt progress.Event) {
 	if evt.Open != nil {
-		r.steps[evt.Node] = evt.Open.Step
+		r.steps[evt.StepID] = evt.Open.Step
 	}
 	if !evt.Status.IsTerminal() {
 		return
 	}
-	step := r.steps[evt.Node]
+	step := r.steps[evt.StepID]
 	line := fmt.Sprintf("%s[%s] %s", step.Kind, step.ID, evt.Status)
 	if evt.Sample.Bytes != nil {
 		line += fmt.Sprintf(" bytes=%d", evt.Sample.Bytes.Done)
@@ -100,7 +100,7 @@ func TestDeleteOpsProgress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			recorder := &endedRecorder{steps: map[progress.NodeID]progress.Step{}}
+			recorder := &endedRecorder{steps: map[progress.StepID]progress.Step{}}
 			tracker := progress.New(recorder, fixedNow)
 			ctx, root := tracker.Begin(zerolog.Nop().WithContext(context.Background()), progress.Step{Kind: kindGC})
 			del := &mockDel{}
@@ -147,7 +147,7 @@ func TestEndCollectorNode(t *testing.T) {
 			},
 		},
 		{
-			name:   "a collector's failure fails its node with its error",
+			name:   "a collector's failure fails its step with its error",
 			report: model.GarbageReport{Error: "store unreachable"},
 			want:   []string{`failed error="store unreachable"`},
 		},
@@ -158,10 +158,10 @@ func TestEndCollectorNode(t *testing.T) {
 			recorder := &eventRecorder{}
 			tracker := progress.New(recorder, fixedNow)
 			ctx, _ := tracker.Begin(zerolog.Nop().WithContext(context.Background()), progress.Step{Kind: kindGC})
-			_, node := progress.Run(ctx, progress.Step{Kind: kindCollector})
+			_, step := progress.Run(ctx, progress.Step{Kind: kindCollector})
 
 			// Act
-			endCollectorNode(ctx, node, tt.report)
+			endCollectorStep(ctx, step, tt.report)
 
 			// Assert
 			assert.Equal(t, tt.want, recorder.lines)
@@ -169,13 +169,13 @@ func TestEndCollectorNode(t *testing.T) {
 	}
 }
 
-// eventRecorder renders every event of the collector's node, the root's opening left out.
+// eventRecorder renders every event of the collector's step, the root's opening left out.
 type eventRecorder struct {
 	lines []string
 }
 
-func (r *eventRecorder) Report(evt progress.Event) {
-	if evt.Node != 2 || evt.Status == progress.StatusStarted {
+func (r *eventRecorder) Render(evt progress.Event) {
+	if evt.StepID != 2 || evt.Status == progress.StatusStarted {
 		return
 	}
 	line := string(evt.Status)

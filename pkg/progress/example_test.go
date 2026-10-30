@@ -26,7 +26,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer"
 )
 
 // The kinds a consumer declares.
@@ -82,7 +82,7 @@ func Example_publish() {
 	var (
 		clock   = &exampleClock{now: start}
 		logger  = newExampleLogger()
-		tracker = progress.New(reporter.NewLog(logger), clock.Now)
+		tracker = progress.New(renderer.NewLog(logger), clock.Now)
 		p       = publisher{clock: clock}
 	)
 
@@ -130,7 +130,7 @@ func Example_publish() {
 func Example_publishFailure() {
 	var (
 		clock   = &exampleClock{now: start}
-		tracker = progress.New(reporter.NewJSON(os.Stdout), clock.Now)
+		tracker = progress.New(renderer.NewJSON(os.Stdout), clock.Now)
 		p       = publisher{clock: clock}
 	)
 
@@ -184,7 +184,7 @@ func Example_publishFailure() {
 func Example_lazy() {
 	var (
 		clock   = &exampleClock{now: start}
-		tracker = progress.New(reporter.NewLog(newExampleLogger()), clock.Now)
+		tracker = progress.New(renderer.NewLog(newExampleLogger()), clock.Now)
 	)
 
 	ctx, root := tracker.Begin(context.Background(), progress.Step{Kind: kindAlbumPublish, Name: "summer"})
@@ -239,31 +239,31 @@ func (p publisher) backup(ctx context.Context, tracker *progress.Tracker, photos
 
 // pauseQueue is a summary activity: one call handles every worker, each a resource.
 func (p publisher) pauseQueue(ctx context.Context) error {
-	_, node := progress.Run(ctx, progress.Step{Kind: kindQueuePause}, progress.MeasureResources)
+	_, step := progress.Run(ctx, progress.Step{Kind: kindQueuePause}, progress.MeasureResources)
 	for _, worker := range []string{"worker-1", "worker-2"} {
 		resource := progress.Resource{Kind: resourceWorker, ID: worker}
-		node.UpdateResource(resource, "Draining")
+		step.UpdateResource(resource, "Draining")
 		p.clock.advance(200 * time.Millisecond)
-		node.SettleResource(resource, "Paused")
+		step.SettleResource(resource, "Paused")
 	}
-	node.Done(progress.Sample{})
+	step.Done(progress.Sample{})
 	return nil
 }
 
 func (p publisher) resumeQueue(ctx context.Context) error {
-	_, node := progress.Run(ctx, progress.Step{Kind: kindQueueResume}, progress.MeasureResources)
+	_, step := progress.Run(ctx, progress.Step{Kind: kindQueueResume}, progress.MeasureResources)
 	p.clock.advance(100 * time.Millisecond)
-	node.SettleResource(progress.Resource{Kind: resourceWorker, ID: "worker-1"}, "Running")
-	node.Done(progress.Sample{})
+	step.SettleResource(progress.Resource{Kind: resourceWorker, ID: "worker-1"}, "Running")
+	step.Done(progress.Sample{})
 	return nil
 }
 
 // exportAlbum is a shared workflow: it does not know which root it runs under.
 func (p publisher) exportAlbum(ctx context.Context, photos []photo) (err error) {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindAlbumExport})
-	defer func() { node.End(err) }()
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindAlbumExport})
+	defer func() { step.End(err) }()
 
-	node.Warn("2 raw files skipped")
+	step.Warn("2 raw files skipped")
 	batchCtx, batch := progress.Batch(ctx, progress.Step{Kind: kindPhotoResize}, len(photos))
 	for _, item := range photos {
 		if err = p.resizePhoto(batchCtx, item); err != nil {
@@ -283,14 +283,14 @@ func (p publisher) exportAlbum(ctx context.Context, photos []photo) (err error) 
 }
 
 func (p publisher) resizePhoto(ctx context.Context, item photo) (err error) {
-	ctx, node := progress.Run(ctx, progress.Step{Kind: kindPhoto, ID: item.name}, progress.MeasureBytes)
-	defer func() { node.End(err) }()
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindPhoto, ID: item.name}, progress.MeasureBytes)
+	defer func() { step.End(err) }()
 
 	resized, err := p.resize(ctx, bytes.NewReader(make([]byte, item.size)), item.size)
 	if err != nil {
 		return err
 	}
-	node.Done(progress.Sample{Bytes: &progress.Bytes{Done: item.size, Total: item.size, Stored: resized}})
+	step.Done(progress.Sample{Bytes: &progress.Bytes{Done: item.size, Total: item.size, Stored: resized}})
 	return nil
 }
 
@@ -331,20 +331,20 @@ func (p publisher) uploadFiles(ctx context.Context, photos []photo, failAt int) 
 }
 
 func (p publisher) uploadFile(ctx context.Context, item photo, deny bool) (err error) {
-	_, node := progress.Run(ctx, progress.Step{Kind: kindFile, ID: item.name}, progress.MeasureBytes)
-	defer func() { node.End(err) }()
+	_, step := progress.Run(ctx, progress.Step{Kind: kindFile, ID: item.name}, progress.MeasureBytes)
+	defer func() { step.End(err) }()
 
 	if err = ctx.Err(); err != nil {
 		return err
 	}
 	// The CDN counts the bytes itself and names the total only once it has the whole file.
-	sampler := progress.NewSampler(node, progress.Sample{Bytes: &progress.Bytes{}})
+	sampler := progress.NewSampler(step, progress.Sample{Bytes: &progress.Bytes{}})
 	sampler.Update(func(sample *progress.Sample) {
 		sample.Bytes.Done = item.size / 2
 	})
 	p.clock.advance(250 * time.Millisecond)
 	if deny {
-		node.Fail("unable to upload", errDenied)
+		step.Fail("unable to upload", errDenied)
 		return errDenied
 	}
 	sampler.Update(func(sample *progress.Sample) {
@@ -355,14 +355,14 @@ func (p publisher) uploadFile(ctx context.Context, item photo, deny bool) (err e
 	sampler.Update(func(sample *progress.Sample) {
 		sample.Bytes.Done = item.size * 7 / 8
 	})
-	node.Done(progress.Sample{Bytes: &progress.Bytes{Done: item.size, Total: item.size}})
+	step.Done(progress.Sample{Bytes: &progress.Bytes{Done: item.size, Total: item.size}})
 	return nil
 }
 
 // rollbackAlbum purges what was uploaded; a purge that fails only warns.
 func (p publisher) rollbackAlbum(ctx context.Context, uploaded []photo) (err error) {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindAlbumRollback})
-	defer func() { node.End(err) }()
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindAlbumRollback})
+	defer func() { step.End(err) }()
 
 	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindCDNPurge}, len(uploaded))
 	defer func() { batch.End(err) }()

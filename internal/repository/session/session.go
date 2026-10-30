@@ -35,7 +35,7 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The kinds of the nodes a fork's copy reports: the copy, and each top-level key it copies.
+// The kinds of the steps a fork's copy reports: the copy, and each top-level key it copies.
 const (
 	kindSessionCopy progress.Kind = "session.copy"
 	kindKey         progress.Kind = "key"
@@ -344,14 +344,14 @@ func copySessionTree(
 	return written, nil
 }
 
-// copyKey runs one top-level key's copy as its own node, ended with the bytes it copied.
+// copyKey runs one top-level key's copy as its own step, ended with the bytes it copied.
 func copyKey(
 	ctx context.Context, key string, copyFn func(ctx context.Context) (storages.CopyStat, error),
 ) (storages.CopyStat, error) {
-	ctx, node := progress.Run(ctx, progress.Step{Kind: kindKey, ID: key}, progress.MeasureBytes)
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindKey, ID: key}, progress.MeasureBytes)
 	stat, err := copyFn(ctx)
-	node.Progress(progress.Sample{Bytes: &progress.Bytes{Done: stat.Bytes}})
-	node.End(err)
+	step.Progress(progress.Sample{Bytes: &progress.Bytes{Done: stat.Bytes}})
+	step.End(err)
 	return stat, err
 }
 

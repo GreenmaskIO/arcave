@@ -70,11 +70,11 @@ func newSafetySnapshotLabels() map[string]string {
 // back if it fails after `compose down`; a project with no containers goes to rollbackColdStart.
 func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (_ model.RollbackResult, err error) {
 	// Outside the lock: a lost lock cancels the work under it, and the root says why.
-	ctx, node := progress.Begin(ctx, progress.Step{
+	ctx, step := progress.Begin(ctx, progress.Step{
 		Kind: kindRollback,
 		Name: req.Ref(),
 	})
-	defer func() { node.End(err) }()
+	defer func() { step.End(err) }()
 	// Ahead of the lock: a request that names no savepoint must not make a
 	// concurrent workflow wait to be told so.
 	if err := req.Validate(); err != nil {
@@ -241,8 +241,8 @@ func (s *Service) prepareLive(
 func (s *Service) takeSafetySnapshot(
 	ctx context.Context, grantedLock model.GrantedSessionLock, savepoint model.Savepoint, working workingSet,
 ) (_ model.Savepoint, err error) {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindRollbackSafetySnapshot})
-	defer func() { node.End(err) }()
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackSafetySnapshot})
+	defer func() { step.End(err) }()
 	killed, err := s.stopServices(ctx, working)
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
@@ -265,12 +265,12 @@ func (s *Service) cleanUpRollback(
 	safetySnapshot model.Savepoint,
 	restoredVolumes []model.Volume,
 ) model.SavepointID {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindRollbackCleanup})
-	defer node.End(nil)
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackCleanup})
+	defer step.End(nil)
 	s.reapAnonymousVolumes(ctx, working, restoredVolumes)
 	kept := s.releaseSafetySnapshot(ctx, grantedLock, safetySnapshot, working.backends)
 	if kept != "" {
-		node.WarnInResult(fmt.Sprintf("safety snapshot %s kept", kept))
+		step.WarnInResult(fmt.Sprintf("safety snapshot %s kept", kept))
 	}
 	return kept
 }
@@ -405,9 +405,9 @@ func (s *Service) abortColdStart(ctx context.Context, project *types.Project, ow
 	// compose project behind.
 	ctx, cancel := revertContext(ctx)
 	defer cancel()
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindRollbackRevert})
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackRevert})
 	downErr := s.composeDown(ctx, project)
-	defer node.End(downErr)
+	defer step.End(downErr)
 
 	if downErr != nil {
 		log.Error().Err(downErr).Msg("failed to remove what the failed rollback created")
@@ -554,8 +554,8 @@ func (s *Service) revert(
 	working workingSet,
 	targetID model.SavepointID,
 ) (err error) {
-	ctx, node := progress.Begin(ctx, progress.Step{Kind: kindRollbackRevert})
-	defer func() { node.End(err) }()
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackRevert})
+	defer func() { step.End(err) }()
 	// The safety snapshot holds the layers the live compose project had, so the undo has to
 	// put them back — the same parity the capture side already has.
 	restored, err := s.restoreWritableLayers(ctx, safetySnapshot, working.project.Name)

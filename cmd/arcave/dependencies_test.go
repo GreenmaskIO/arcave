@@ -761,7 +761,7 @@ type eventRecorder struct {
 	events []progress.Event
 }
 
-func (r *eventRecorder) Report(evt progress.Event) {
+func (r *eventRecorder) Render(evt progress.Event) {
 	r.events = append(r.events, evt)
 }
 
@@ -770,7 +770,7 @@ func TestComposeEventSink_Event(t *testing.T) {
 	recorder := &eventRecorder{}
 	ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(recorder, time.Now))
 	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "savepoint.create"})
-	ctx, node := progress.Run(ctx, progress.Step{Kind: "compose.stop"}, progress.MeasureResources)
+	ctx, step := progress.Run(ctx, progress.Step{Kind: "compose.stop"}, progress.MeasureResources)
 	sink := newComposeEventSink(ctx)
 	require.NotNil(t, sink)
 
@@ -778,7 +778,7 @@ func TestComposeEventSink_Event(t *testing.T) {
 	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopping", State: compose.EventWorking})
 	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopped", State: compose.EventDone})
 	sink.Event(compose.Event{Name: "3f2a", Status: "Error", Text: "denied", State: compose.EventError})
-	node.End(nil)
+	step.End(nil)
 
 	// Assert
 	type line struct {

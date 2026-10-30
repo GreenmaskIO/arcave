@@ -546,7 +546,7 @@ func (nopWriteCloser) Close() error { return nil }
 
 // newProgressWriter sets compose's global render mode and returns the writer compose renders on:
 // stderr or nothing, or by default the adapter re-emitting its events as log records, returned
-// again as what they reach a node through, nil otherwise.
+// again as what they reach a step through, nil otherwise.
 func newProgressWriter(mode string, logger zerolog.Logger) (io.WriteCloser, *compose.ProgressLogger) {
 	switch mode {
 	case config.ProgressQuiet:
@@ -564,19 +564,19 @@ func newProgressWriter(mode string, logger zerolog.Logger) (io.WriteCloser, *com
 	}
 }
 
-// composeEventSink puts compose's events on the progress node of the call, a resource per object.
+// composeEventSink puts compose's events on the progress step of the call, a resource per object.
 type composeEventSink struct {
-	node *progress.Node
+	step *progress.StepReporter
 }
 
-// newComposeEventSink is the sink of the node ctx carries; nil under a mute one, so the events
+// newComposeEventSink is the sink of the step ctx carries; nil under a mute one, so the events
 // stay in the log.
 func newComposeEventSink(ctx context.Context) compose.EventSink {
-	node := progress.Current(ctx)
-	if node.IsMute() {
+	step := progress.Current(ctx)
+	if step.IsMute() {
 		return nil
 	}
-	return composeEventSink{node: node}
+	return composeEventSink{step: step}
 }
 
 // Event reports one event as its object's line: in flight, settled, or a warning.
@@ -594,11 +594,11 @@ func (s composeEventSink) Event(evt compose.Event) {
 	)
 	switch evt.State {
 	case compose.EventWorking:
-		s.node.UpdateResource(resource, msg)
+		s.step.UpdateResource(resource, msg)
 	case compose.EventDone:
-		s.node.SettleResource(resource, msg)
+		s.step.SettleResource(resource, msg)
 	default:
-		s.node.WarnResource(resource, msg)
+		s.step.WarnResource(resource, msg)
 	}
 }
 

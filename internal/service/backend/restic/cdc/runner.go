@@ -143,7 +143,7 @@ func (r runner) run(ctx context.Context, cmd resticCmd) (resticSummary, error) {
 
 	var (
 		summary resticSummary
-		// restic counts the bytes itself: its numbers replace the node's.
+		// restic counts the bytes itself: its numbers replace the step's.
 		sampler  = progress.NewSampler(progress.Current(ctx), progress.Sample{Bytes: &progress.Bytes{}})
 		restores = len(cmd.args) > 0 && cmd.args[0] == "restore"
 	)

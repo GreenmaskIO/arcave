@@ -103,7 +103,7 @@ func TestModel_Update(t *testing.T) {
 			wantView:   "✔ album.publish summer    0.4s\n  ! slow",
 		},
 		{
-			name:        "stop only marks the model, leaving the log to the reporter",
+			name:        "stop only marks the model, leaving the log to the renderer",
 			logs:        []string{"WRN slow disk"},
 			msg:         stopMsg{},
 			wantLogs:    []string{"WRN slow disk"},

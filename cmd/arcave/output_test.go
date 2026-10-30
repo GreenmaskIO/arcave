@@ -31,7 +31,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter/tty"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer/tty"
 )
 
 func TestResolveProgressMode(t *testing.T) {
@@ -233,13 +233,13 @@ func TestJSONOutput_Close(t *testing.T) {
 	}
 }
 
-func TestJSONOutput_Report(t *testing.T) {
+func TestJSONOutput_Render(t *testing.T) {
 	var buf bytes.Buffer
 	out := newJSONOutput(&buf)
 	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 
-	out.Report(progress.Event{
-		Node:   1,
+	out.Render(progress.Event{
+		StepID: 1,
 		Status: progress.StatusStarted,
 		At:     at,
 	})
@@ -255,7 +255,7 @@ func TestJSONOutput_Report(t *testing.T) {
 func TestTTYOutput_Write_BeforeTheFirstEvent(t *testing.T) {
 	var stderr bytes.Buffer
 	out := &ttyOutput{
-		reporter: tty.New(&stderr),
+		renderer: tty.New(&stderr),
 		stderr:   &stderr,
 	}
 
@@ -270,7 +270,7 @@ func TestTTYOutput_Write_BeforeTheFirstEvent(t *testing.T) {
 func TestTTYOutput_Close_WritesTheResultThenTheError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	out := &ttyOutput{
-		reporter: tty.New(&stderr),
+		renderer: tty.New(&stderr),
 		result:   resultOptions{format: formatText},
 		stdout:   &stdout,
 		stderr:   &stderr,
@@ -319,7 +319,7 @@ func TestTTYOutput_Close_FinalTree(t *testing.T) {
 			var (
 				stdout, stderr bytes.Buffer
 				out            = &ttyOutput{
-					reporter: tty.New(&stderr),
+					renderer: tty.New(&stderr),
 					result:   resultOptions{format: formatText},
 					stdout:   &stdout,
 					stderr:   &stderr,

@@ -80,7 +80,7 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
   {"type":"result","result":{ … }}
   ```
 
-  A failure ends the stream with `{"type":"error","error":"…"}` instead, and a partial `gc` with its result and its `error` on one line. A failure before the output exists — an unreadable config, a bad flag — is still plain text on stderr. Rebuild the tree by `open.parent`; each later event of a node replaces its state whole, but a `warned` or resource event's `msg` is that event's alone: the node's own `msg` is the last plain update's.
+  A failure ends the stream with `{"type":"error","error":"…"}` instead, and a partial `gc` with its result and its `error` on one line. A failure before the output exists — an unreadable config, a bad flag — is still plain text on stderr. `node` is the step's id — the Go API calls it `StepID` — and `open.parent` its parent's. Rebuild the tree by `open.parent`; each later event of a node replaces its state whole, but a `warned` or resource event's `msg` is that event's alone: the node's own `msg` is the last plain update's.
 
 ### Step kinds
 

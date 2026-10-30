@@ -59,7 +59,7 @@ func (s *Archiver) Store(
 	manifest := imagecopy.Manifest{ImageID: imageID, Format: imagecopy.FormatBlobs}
 	seen := map[string]bool{}
 
-	// One sampler for the node's bytes: read off the stream, stored or reused per member.
+	// One sampler for the step's bytes: read off the stream, stored or reused per member.
 	sampler := progress.NewSampler(progress.Current(ctx), progress.Sample{Bytes: &progress.Bytes{}})
 	reader := tar.NewReader(&sampledReader{
 		r:       archive,

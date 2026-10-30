@@ -84,7 +84,7 @@ func (e eraserSet) deleteGarbage(
 			})
 	)
 	for _, garbage := range found.composeProjects {
-		projectCtx, node := progress.Begin(ctx, progress.Step{
+		projectCtx, step := progress.Begin(ctx, progress.Step{
 			Kind: kindComposeProject,
 			Name: garbage.scope.ComposeProject.String(),
 		})
@@ -93,7 +93,7 @@ func (e eraserSet) deleteGarbage(
 				return eraser.Erase(ctx, garbage.store, ops)
 			},
 		)
-		node.End(newReportsError(projectCtx, reports))
+		step.End(newReportsError(projectCtx, reports))
 		stopped = stopped || reportsStopped
 		composeProjects = append(composeProjects, composeProjectGarbage{
 			scope:   garbage.scope,
@@ -158,12 +158,12 @@ func deleteReportFindings[E GarbageEraser](
 			Msg("session lock no longer vouches for the gc: nothing more is deleted")
 		return &model.GarbageDeletion{NotRun: len(ops)}, fmt.Errorf("verify session lock: %w", err)
 	}
-	reportCtx, node := progress.Begin(ctx, progress.Step{
+	reportCtx, step := progress.Begin(ctx, progress.Step{
 		Kind: kindEraser,
 		ID:   string(eraser.Action()),
 	})
 	deletion := erase(reportCtx, eraser, ops)
-	node.End(newDeletionError(reportCtx, &deletion))
+	step.End(newDeletionError(reportCtx, &deletion))
 	zerolog.Ctx(ctx).Debug().Str("data_kind", string(report.DataKind)).
 		Str("compose_project", report.ComposeProject.String()).
 		Int("deleted", len(deletion.Deleted)).Int("failed", len(deletion.Failed)).Int("not_run", deletion.NotRun).
@@ -202,16 +202,16 @@ func DeleteOps(
 			notRun = len(ops) - i
 			break
 		}
-		opCtx, node := BeginTarget(ctx, op.Target)
+		opCtx, step := BeginTarget(ctx, op.Target)
 		switch err := del(opCtx, op); {
 		case errors.Is(err, storages.ErrFileNotFound), errors.Is(err, model.ErrImageRefNotFound):
-			node.Done(progress.Sample{})
+			step.Done(progress.Sample{})
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  new(int64),
 			})
 		case err != nil:
-			node.End(err)
+			step.End(err)
 			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
 			failed = append(failed, model.GarbageDeleteFailure{
 				Target:      op.Target,
@@ -219,7 +219,7 @@ func DeleteOps(
 				Interrupted: ctx.Err() != nil,
 			})
 		default:
-			node.Done(NewFreedSample(op.Bytes))
+			step.Done(NewFreedSample(op.Bytes))
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  op.Bytes,
@@ -236,12 +236,12 @@ func DeleteOps(
 }
 
 // BeginDeletion opens the batch an eraser's n targets report under; EndDeletion ends it.
-func BeginDeletion(ctx context.Context, n int) (context.Context, *progress.Node) {
+func BeginDeletion(ctx context.Context, n int) (context.Context, *progress.StepReporter) {
 	return progress.Batch(ctx, progress.Step{Kind: kindGCDelete}, n)
 }
 
-// BeginTarget opens the node of one target of a deletion, measuring the bytes it frees.
-func BeginTarget(ctx context.Context, target string) (context.Context, *progress.Node) {
+// BeginTarget opens the step of one target of a deletion, measuring the bytes it frees.
+func BeginTarget(ctx context.Context, target string) (context.Context, *progress.StepReporter) {
 	return progress.Run(ctx, progress.Step{
 		Kind: kindGarbage,
 		ID:   target,
@@ -249,7 +249,7 @@ func BeginTarget(ctx context.Context, target string) (context.Context, *progress
 }
 
 // EndDeletion ends the batch BeginDeletion opened on ctx with what deletion did.
-func EndDeletion(ctx context.Context, batch *progress.Node, deletion model.GarbageDeletion) {
+func EndDeletion(ctx context.Context, batch *progress.StepReporter, deletion model.GarbageDeletion) {
 	batch.End(newDeletionError(ctx, &deletion))
 }
 
@@ -286,7 +286,7 @@ func NewFreedSample(bytes *int64) progress.Sample {
 	}}
 }
 
-// newReportsError is what a compose project's deletions, under a node opened on ctx, end with: the
+// newReportsError is what a compose project's deletions, under a step opened on ctx, end with: the
 // first report's that failed.
 func newReportsError(ctx context.Context, reports []model.GarbageReport) error {
 	for _, report := range reports {

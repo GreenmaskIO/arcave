@@ -30,14 +30,14 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// progressRecorder renders every node's last event as "<path> <status>[ error=…]", in the order
-// the nodes end; the tracker calls it under its own lock.
+// progressRecorder renders every step's last event as "<path> <status>[ error=…]", in the order
+// the steps end; the tracker calls it under its own lock.
 type progressRecorder struct {
-	paths map[progress.NodeID]string
+	paths map[progress.StepID]string
 	ended []string
 }
 
-func (r *progressRecorder) Report(evt progress.Event) {
+func (r *progressRecorder) Render(evt progress.Event) {
 	if evt.Open != nil {
 		segment := string(evt.Open.Step.Kind)
 		if id := evt.Open.Step.ID; id != "" {
@@ -46,12 +46,12 @@ func (r *progressRecorder) Report(evt progress.Event) {
 		if parent := r.paths[evt.Open.Parent]; parent != "" {
 			segment = parent + "/" + segment
 		}
-		r.paths[evt.Node] = segment
+		r.paths[evt.StepID] = segment
 	}
 	if !evt.Status.IsTerminal() {
 		return
 	}
-	line := r.paths[evt.Node] + " " + string(evt.Status)
+	line := r.paths[evt.StepID] + " " + string(evt.Status)
 	if evt.Error != "" {
 		line += " error=" + evt.Error
 	}
@@ -59,7 +59,7 @@ func (r *progressRecorder) Report(evt progress.Event) {
 }
 
 func newProgressContext() (context.Context, *progressRecorder) {
-	recorder := &progressRecorder{paths: map[progress.NodeID]string{}}
+	recorder := &progressRecorder{paths: map[progress.StepID]string{}}
 	ctx := zerolog.Nop().WithContext(context.Background())
 	now := func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
 	return progress.WithTracker(ctx, progress.New(recorder, now)), recorder
@@ -200,9 +200,9 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Act
 	_, err := withSessionLock(ctx, locker, model.SessionLockOperationSavepointCreate,
 		func(ctx context.Context, _ model.GrantedSessionLock) (string, error) {
-			_, node := progress.Run(ctx, progress.Step{Kind: kindComposeStop})
+			_, step := progress.Run(ctx, progress.Step{Kind: kindComposeStop})
 			err := preferInterrupt(ctx, errWorkflow)
-			node.End(err)
+			step.End(err)
 			return "", err
 		})
 	root.End(err)
@@ -218,7 +218,7 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	grantedLock.AssertExpectations(t)
 }
 
-// The lock's node is shown only once the locker waits on another holder.
+// The lock's step is shown only once the locker waits on another holder.
 func TestWithSessionLock_ShowsTheWaitOnlyWhenHeld(t *testing.T) {
 	tests := []struct {
 		name string
@@ -301,7 +301,7 @@ type warnedRecorder struct {
 	inResult []bool
 }
 
-func (r *warnedRecorder) Report(evt progress.Event) {
+func (r *warnedRecorder) Render(evt progress.Event) {
 	if evt.Status == progress.StatusWarned {
 		r.msgs = append(r.msgs, evt.Msg)
 		r.inResult = append(r.inResult, evt.InResult)
@@ -332,9 +332,9 @@ func TestWarn(t *testing.T) {
 				now      = func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
 				ctx      = zerolog.Nop().WithContext(context.Background())
 			)
-			_, node := progress.New(recorder, now).Begin(ctx, progress.Step{Kind: kindSavepointCapture})
+			_, step := progress.New(recorder, now).Begin(ctx, progress.Step{Kind: kindSavepointCapture})
 
-			warn(node, "not covered: 1 mount(s)", isInResult(tt.labels))
+			warn(step, "not covered: 1 mount(s)", isInResult(tt.labels))
 
 			assert.Equal(t, tt.want, recorder.inResult)
 		})

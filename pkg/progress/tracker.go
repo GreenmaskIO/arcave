@@ -25,125 +25,125 @@ import (
 // defaultSampleInterval is how often a Sampler sends at most.
 const defaultSampleInterval = 200 * time.Millisecond
 
-// Reporter renders a progress stream. A Tracker calls it under its own lock, one event at a time.
-type Reporter interface {
-	Report(evt Event)
+// Renderer renders a progress stream. A Tracker calls it under its own lock, one event at a time.
+type Renderer interface {
+	Render(evt Event)
 }
 
 type (
-	nodeKey    struct{}
+	stepKey    struct{}
 	trackerKey struct{}
 )
 
-// Tracker numbers the nodes of one operation and hands their events to a Reporter.
+// Tracker numbers the steps of one operation and hands their events to a Renderer.
 type Tracker struct {
-	reporter Reporter
+	renderer Renderer
 	now      func() time.Time
 	interval time.Duration
 
 	mu     sync.Mutex
-	lastID NodeID
+	lastID StepID
 }
 
-// New returns a Tracker reporting to reporter, timing on now.
-func New(reporter Reporter, now func() time.Time) *Tracker {
+// New returns a Tracker rendering to renderer, timing on now.
+func New(renderer Renderer, now func() time.Time) *Tracker {
 	return &Tracker{
-		reporter: reporter,
+		renderer: renderer,
 		now:      now,
 		interval: defaultSampleInterval,
 	}
 }
 
-// Discard returns a Tracker whose every node is mute.
+// Discard returns a Tracker whose every step is mute.
 func Discard() *Tracker {
 	return nil
 }
 
-// Begin opens the root workflow, lazily, whatever node ctx carries.
-func (t *Tracker) Begin(ctx context.Context, step Step) (context.Context, *Node) {
+// Begin opens the root workflow, lazily, whatever step ctx carries.
+func (t *Tracker) Begin(ctx context.Context, step Step) (context.Context, *StepReporter) {
 	if t == nil {
-		return withNode(ctx, muteNode), muteNode
+		return withStep(ctx, muteReporter), muteReporter
 	}
-	node := t.newNode(ctx, nil, step, NodeTypeWorkflow, nil, Sample{})
-	return withNode(ctx, node), node
+	reporter := t.newStepReporter(ctx, nil, step, StepTypeWorkflow, nil, Sample{})
+	return withStep(ctx, reporter), reporter
 }
 
-// WithTracker returns ctx carrying t: a Begin on it with no node opens t's root.
+// WithTracker returns ctx carrying t: a Begin on it with no step opens t's root.
 func WithTracker(ctx context.Context, t *Tracker) context.Context {
 	return context.WithValue(ctx, trackerKey{}, t)
 }
 
-// Begin opens a workflow under the node of ctx, or the root of the tracker ctx carries when it
-// carries no node. It reports nothing until its first child or Warn.
-func Begin(ctx context.Context, step Step) (context.Context, *Node) {
-	if _, ok := ctx.Value(nodeKey{}).(*Node); !ok {
+// Begin opens a workflow under the step of ctx, or the root of the tracker ctx carries when it
+// carries no step. It reports nothing until its first child or Warn.
+func Begin(ctx context.Context, step Step) (context.Context, *StepReporter) {
+	if _, ok := ctx.Value(stepKey{}).(*StepReporter); !ok {
 		if tracker, ok := ctx.Value(trackerKey{}).(*Tracker); ok {
 			return tracker.Begin(ctx, step)
 		}
 	}
 	parent, ok := findParent(ctx, step)
 	if !ok {
-		return ctx, muteNode
+		return ctx, muteReporter
 	}
-	node := parent.tracker.newNode(ctx, parent, step, NodeTypeWorkflow, nil, Sample{})
-	return withNode(ctx, node), node
+	reporter := parent.tracker.newStepReporter(ctx, parent, step, StepTypeWorkflow, nil, Sample{})
+	return withStep(ctx, reporter), reporter
 }
 
-// Batch opens a loop over total objects under the node of ctx, at once; it counts its
+// Batch opens a loop over total objects under the step of ctx, at once; it counts its
 // children's outcomes itself. A total of 0 is unknown.
-func Batch(ctx context.Context, step Step, total int) (context.Context, *Node) {
+func Batch(ctx context.Context, step Step, total int) (context.Context, *StepReporter) {
 	parent, ok := findParent(ctx, step)
 	if !ok {
-		return ctx, muteNode
+		return ctx, muteReporter
 	}
 	var (
 		measures = []Measure{MeasureItems}
 		sample   = Sample{Items: &Items{Total: int64(total)}}
-		node     = parent.tracker.newNode(ctx, parent, step, NodeTypeWorkflow, measures, sample)
+		reporter = parent.tracker.newStepReporter(ctx, parent, step, StepTypeWorkflow, measures, sample)
 	)
-	node.tracker.mu.Lock()
-	defer node.tracker.mu.Unlock()
-	node.openLocked()
-	return withNode(ctx, node), node
+	reporter.tracker.mu.Lock()
+	defer reporter.tracker.mu.Unlock()
+	reporter.openLocked()
+	return withStep(ctx, reporter), reporter
 }
 
-// Run opens an activity under the node of ctx, at once, reporting the measures it declares.
-func Run(ctx context.Context, step Step, measures ...Measure) (context.Context, *Node) {
+// Run opens an activity under the step of ctx, at once, reporting the measures it declares.
+func Run(ctx context.Context, step Step, measures ...Measure) (context.Context, *StepReporter) {
 	parent, ok := findParent(ctx, step)
 	if !ok {
-		return ctx, muteNode
+		return ctx, muteReporter
 	}
-	node := parent.tracker.newNode(ctx, parent, step, NodeTypeActivity, measures, Sample{})
-	node.tracker.mu.Lock()
-	defer node.tracker.mu.Unlock()
-	node.openLocked()
-	return withNode(ctx, node), node
+	reporter := parent.tracker.newStepReporter(ctx, parent, step, StepTypeActivity, measures, Sample{})
+	reporter.tracker.mu.Lock()
+	defer reporter.tracker.mu.Unlock()
+	reporter.openLocked()
+	return withStep(ctx, reporter), reporter
 }
 
-// WithNode returns ctx carrying node: the work that follows an activity, on a context derived
-// from the activity's, goes on under node again.
-func WithNode(ctx context.Context, node *Node) context.Context {
-	return withNode(ctx, node)
+// WithStep returns ctx carrying reporter: the work that follows an activity, on a context derived
+// from the activity's, goes on under reporter again.
+func WithStep(ctx context.Context, reporter *StepReporter) context.Context {
+	return withStep(ctx, reporter)
 }
 
-// Current returns the node of ctx, a mute one when ctx carries none.
-func Current(ctx context.Context) *Node {
-	if node, ok := ctx.Value(nodeKey{}).(*Node); ok {
-		return node
+// Current returns the step of ctx, a mute one when ctx carries none.
+func Current(ctx context.Context) *StepReporter {
+	if reporter, ok := ctx.Value(stepKey{}).(*StepReporter); ok {
+		return reporter
 	}
-	return muteNode
+	return muteReporter
 }
 
-func (t *Tracker) newNode(
+func (t *Tracker) newStepReporter(
 	ctx context.Context,
-	parent *Node,
+	parent *StepReporter,
 	step Step,
-	nodeType NodeType,
+	stepType StepType,
 	measures []Measure,
 	sample Sample,
-) *Node {
-	step.Type = nodeType
-	return &Node{
+) *StepReporter {
+	step.Type = stepType
+	return &StepReporter{
 		tracker:   t,
 		parent:    parent,
 		step:      step,
@@ -156,28 +156,28 @@ func (t *Tracker) newNode(
 	}
 }
 
-func withNode(ctx context.Context, node *Node) context.Context {
-	return context.WithValue(ctx, nodeKey{}, node)
+func withStep(ctx context.Context, reporter *StepReporter) context.Context {
+	return context.WithValue(ctx, stepKey{}, reporter)
 }
 
-// findParent returns the node of ctx a child may open under: neither mute, an activity nor ended.
-func findParent(ctx context.Context, step Step) (*Node, bool) {
+// findParent returns the step of ctx a child may open under: neither mute, an activity nor ended.
+func findParent(ctx context.Context, step Step) (*StepReporter, bool) {
 	parent := Current(ctx)
 	if parent.isMute() {
 		return nil, false
 	}
-	if parent.step.Type == NodeTypeActivity {
+	if parent.step.Type == StepTypeActivity {
 		zerolog.Ctx(ctx).Warn().
 			Str("kind", string(step.Kind)).
 			Str("parent", string(parent.step.Kind)).
-			Msg("progress: an activity has no children, the node is mute")
+			Msg("progress: an activity has no children, the step is mute")
 		return nil, false
 	}
 	if parent.isEnded() {
 		zerolog.Ctx(ctx).Warn().
 			Str("kind", string(step.Kind)).
 			Str("parent", string(parent.step.Kind)).
-			Msg("progress: the parent has ended, the node is mute")
+			Msg("progress: the parent has ended, the step is mute")
 		return nil, false
 	}
 	return parent, true

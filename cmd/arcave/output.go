@@ -31,8 +31,8 @@ import (
 	textprinter "github.com/greenmaskio/arcave/internal/service/printer/text"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter"
-	"github.com/greenmaskio/arcave/pkg/progress/reporter/tty"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer"
+	"github.com/greenmaskio/arcave/pkg/progress/renderer/tty"
 )
 
 const (
@@ -76,7 +76,7 @@ var outputClosed sync.Once
 
 // output is a run's one channel: progress while it runs, the result once it is done.
 type output interface {
-	progress.Reporter
+	progress.Renderer
 	// Print takes the run's result; it is cli's printer seam.
 	Print(v any) error
 	// Close ends the stream, err being what the run failed with, nil for none.
@@ -165,14 +165,14 @@ func openOutput(mode, level, logFormat string, result resultOptions) (output, ze
 			return newJSONOutput(os.Stdout), logger, nil
 		}
 		return &logOutput{
-			reporter: reporter.NewLog(logger),
+			renderer: renderer.NewLog(logger),
 			printer:  result.newPrinter(os.Stdout),
 			stderr:   os.Stderr,
 		}, logger, nil
 	}
 
 	out := &ttyOutput{
-		reporter: tty.New(os.Stderr),
+		renderer: tty.New(os.Stderr),
 		result:   result,
 		stdout:   os.Stdout,
 		stderr:   os.Stderr,
@@ -220,13 +220,13 @@ func writeError(w io.Writer, err error) {
 
 // logOutput reports progress as log records and prints the result through its printer.
 type logOutput struct {
-	reporter *reporter.Log
+	renderer *renderer.Log
 	printer  resultPrinter
 	stderr   io.Writer
 }
 
-func (o *logOutput) Report(evt progress.Event) {
-	o.reporter.Report(evt)
+func (o *logOutput) Render(evt progress.Event) {
+	o.renderer.Render(evt)
 }
 
 func (o *logOutput) Print(v any) error {
@@ -240,7 +240,7 @@ func (o *logOutput) Close(err error) {
 // ttyOutput draws progress as a live tree on stderr from the first event, and writes the result to
 // stdout at Close, once the tree is down.
 type ttyOutput struct {
-	reporter *tty.Reporter
+	renderer *tty.Renderer
 	result   resultOptions
 	stdout   io.Writer
 	stderr   io.Writer
@@ -249,13 +249,13 @@ type ttyOutput struct {
 	printed []byte
 }
 
-func (o *ttyOutput) Report(evt progress.Event) {
-	o.reporter.Report(evt)
+func (o *ttyOutput) Render(evt progress.Event) {
+	o.renderer.Render(evt)
 }
 
 // Write is the log's writer: straight to stderr until the tree is drawn, above it after.
 func (o *ttyOutput) Write(p []byte) (int, error) {
-	return o.reporter.LogWriter().Write(p)
+	return o.renderer.LogWriter().Write(p)
 }
 
 // Print renders v for Close to write: a partial gc prints its result and still fails.
@@ -278,7 +278,7 @@ func (o *ttyOutput) Close(err error) {
 	o.printed = nil
 	o.mu.Unlock()
 	essential := o.result.format == formatText && printed != nil
-	drawn := o.reporter.Stop(tty.StopOptions{
+	drawn := o.renderer.Stop(tty.StopOptions{
 		Essential:     essential,
 		OmitRootError: err != nil,
 		MoreHint:      moreWarningsHint,
@@ -316,7 +316,7 @@ func newJSONOutput(w io.Writer) *jsonOutput {
 	return &jsonOutput{enc: json.NewEncoder(w)}
 }
 
-func (o *jsonOutput) Report(evt progress.Event) {
+func (o *jsonOutput) Render(evt progress.Event) {
 	o.write(outputLine{
 		Type:  outputLineProgress,
 		Event: &evt,

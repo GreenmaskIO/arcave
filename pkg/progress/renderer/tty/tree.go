@@ -23,8 +23,8 @@ import (
 
 // tree is the stream read so far: one entry per node, the roots in the order they opened.
 type tree struct {
-	nodes map[progress.NodeID]*node
-	roots []progress.NodeID
+	nodes map[progress.StepID]*node
+	roots []progress.StepID
 }
 
 type node struct {
@@ -32,7 +32,7 @@ type node struct {
 	last progress.Event
 	// msg is the node's own message, the last Update's.
 	msg       string
-	children  []progress.NodeID
+	children  []progress.StepID
 	resources []resourceLine
 	warnings  []warning
 	startedAt time.Time
@@ -55,7 +55,7 @@ type resourceLine struct {
 }
 
 func newTree() *tree {
-	return &tree{nodes: make(map[progress.NodeID]*node)}
+	return &tree{nodes: make(map[progress.StepID]*node)}
 }
 
 // apply reads evt into the tree. An event of a node whose started was never read is dropped.
@@ -64,7 +64,7 @@ func (t *tree) apply(evt progress.Event) {
 		t.openNode(evt)
 		return
 	}
-	current, ok := t.nodes[evt.Node]
+	current, ok := t.nodes[evt.StepID]
 	if !ok {
 		return
 	}
@@ -86,19 +86,19 @@ func (t *tree) apply(evt progress.Event) {
 }
 
 func (t *tree) openNode(evt progress.Event) {
-	if _, ok := t.nodes[evt.Node]; ok {
+	if _, ok := t.nodes[evt.StepID]; ok {
 		return
 	}
 	parent, ok := t.nodes[evt.Open.Parent]
 	switch {
 	case evt.Open.Parent == 0:
-		t.roots = append(t.roots, evt.Node)
+		t.roots = append(t.roots, evt.StepID)
 	case ok:
-		parent.children = append(parent.children, evt.Node)
+		parent.children = append(parent.children, evt.StepID)
 	default:
 		return
 	}
-	t.nodes[evt.Node] = &node{
+	t.nodes[evt.StepID] = &node{
 		open:      *evt.Open,
 		last:      evt,
 		msg:       evt.Msg,
@@ -124,7 +124,7 @@ func withResource(lines []resourceLine, evt progress.Event) []resourceLine {
 
 // snapshot copies the tree for a render outside the lock. Events are shared: no one mutates one.
 func (t *tree) snapshot() *tree {
-	nodes := make(map[progress.NodeID]*node, len(t.nodes))
+	nodes := make(map[progress.StepID]*node, len(t.nodes))
 	for id, current := range t.nodes {
 		copied := *current
 		copied.children = slices.Clone(current.children)
