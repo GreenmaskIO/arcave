@@ -28,6 +28,8 @@ import ArcaveLockup from './assets/arcave-lockup-brand-on-light.svg';
 
 Your code is versioned. The state your environment accumulates is not — and that asymmetry is why a bad migration costs an afternoon.
 
+<video src={require('./assets/demo/base-cycle.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
 **arcave** gives a Docker Compose project the semantics you already have for code: save the whole state, come back to it, and branch off any saved point. It does not save your source tree; it saves the live environment underneath it — the volumes, the container filesystems, and the compose specification the project was running under.
 
 ![A static environment drifts through seeds, migrations and half-reverted hotfixes until the only way back is to rebuild it; with arcave, sessions branch off a baseline line of named savepoints and move back inside their own line.](./assets/ephemeral-environments-on-light.svg)
@@ -43,8 +45,6 @@ arcave savepoint create before-migration
 # ...run the migration, the test suite, the agent...
 arcave rollback before-migration
 ```
-
-<video src={require('./assets/demo/base-cycle.mp4').default} autoPlay loop muted playsInline controls width="100%" />
 
 *What it shows:* a savepoint, a dropped table, `arcave rollback` — and the rows are back.
 
