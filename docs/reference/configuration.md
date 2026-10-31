@@ -48,7 +48,6 @@ backends:
         container_host: host.docker.internal
         network_mode: auto
 log:
-    level: info
     format: text
 ```
 
@@ -135,7 +134,7 @@ How patient arcave is with the project, and how loudly compose reports its own p
 |---|---|---|---|
 | `compose.wait_timeout` | `--wait-timeout` | `2m0s` | How long to wait for services to become healthy after a start. |
 | `compose.stop_timeout` | `--stop-timeout` | `10s` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |
-| `compose.progress` | `--progress` | `log` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
+| `compose.progress` | `--compose-progress` | `log` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
 
 **`wait_timeout` must be positive.** "Wait forever" is not on offer: it is exactly the failure this bound exists to turn into an error, since a crash-looping container with `restart: always` would otherwise hold a savepoint open indefinitely.
 
@@ -408,7 +407,7 @@ unsupported backends.cdc.network_mode "none" (supported: auto, host, bridge)
 
 | Key | Flag | Default | Description |
 |---|---|---|---|
-| `log.level` | `--log-level` | `info` | `debug`, `info` or `warn`. |
+| `log.level` | `--log-level` | `warn` above the live tree, else `info` | `debug`, `info` or `warn`. Unset unless you set it: `arcave init` writes none. |
 | `log.format` | `--log-format` | `text` | `text` or `json`. |
 
 Both are checked when a command starts, and an unknown value fails it rather than silencing the log:

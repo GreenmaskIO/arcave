@@ -29,6 +29,8 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/greenmaskio/arcave/pkg/progress"
+
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
@@ -75,6 +77,7 @@ func (s *Service) captureWritableLayers(
 	}
 
 	captures := make([]model.WritableLayer, len(reqs))
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindLayerCapture}, len(reqs))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, req := range reqs {
@@ -82,21 +85,27 @@ func (s *Service) captureWritableLayers(
 			container := req.Container
 			req.SnapshotID = snapshotID
 			opCtx := imageOpContext(egCtx, container, snapshotID)
+			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindLayer, ID: container.Name}, progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
-			log.Info().Msg("writable layer capture started")
+			log.Debug().Msg("writable layer capture started")
 			capture, err := s.imageBackend.CaptureWritableLayer(opCtx, req)
 			if err != nil {
-				return fmt.Errorf("capture writable layer of %s/%d: %w", container.Service, container.Replica, err)
+				err = fmt.Errorf("capture writable layer of %s/%d: %w", container.Service, container.Replica, err)
+				step.End(err)
+				return err
 			}
 			captures[i] = capture
-			log.Info().Dur("duration", time.Since(started)).Int64("size_bytes", capture.SizeBytes).
+			step.Done(newCaptureSample(capture.SizeBytes, capture.StoredBytes, max(capture.SizeBytes-capture.StoredBytes, 0)))
+			log.Debug().Dur("duration", time.Since(started)).Int64("size_bytes", capture.SizeBytes).
 				Msg("writable layer capture finished")
 			return nil
 		})
 	}
-	if err := eg.Wait(); err != nil {
+	err := eg.Wait()
+	batch.End(err)
+	if err != nil {
 		zerolog.Ctx(ctx).Warn().Str("snapshot_id", snapshotID.String()).
 			Msg("the partial writable layer capture is retained for a later gc")
 		return nil, err
@@ -104,16 +113,17 @@ func (s *Service) captureWritableLayers(
 	return captures, nil
 }
 
-// captureImages keeps every distinct image, concurrently, apart from the writable
-// layers: a savepoint holds its images whether or not it holds a layer.
+// captureImages stores every distinct image concurrently, apart from the writable layers.
+// inResult marks the warning of an image not stored as InResult.
 func (s *Service) captureImages(
-	ctx context.Context, snapshotID model.SavepointID, reqs []model.ImageCaptureRequest,
+	ctx context.Context, snapshotID model.SavepointID, reqs []model.ImageCaptureRequest, inResult bool,
 ) ([]model.Image, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
 
 	images := make([]model.Image, len(reqs))
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindImageCapture}, len(reqs))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, req := range reqs {
@@ -125,21 +135,30 @@ func (s *Service) captureImages(
 				Str("op", "save").
 				Logger().
 				WithContext(egCtx)
+			opCtx, step := progress.Run(opCtx, newImageStep(req.Image), progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
-			log.Info().Msg("image capture started")
+			log.Debug().Msg("image capture started")
 			image, err := s.imageBackend.CaptureImage(opCtx, req)
 			if err != nil {
-				return fmt.Errorf("capture image %s: %w", req.Image.ID, err)
+				err = fmt.Errorf("capture image %s: %w", req.Image.ID, err)
+				step.End(err)
+				return err
 			}
 			images[i] = image
-			log.Info().Dur("duration", time.Since(started)).Bool("stored", image.Stored).
+			if !image.Stored {
+				warn(step, "not stored: a replica left out of the capture cannot be rebuilt from it", inResult)
+			}
+			step.Done(newImageSample(image))
+			log.Debug().Dur("duration", time.Since(started)).Bool("stored", image.Stored).
 				Int64("stored_bytes", image.StoredBytes).Msg("image capture finished")
 			return nil
 		})
 	}
-	if err := eg.Wait(); err != nil {
+	err := eg.Wait()
+	batch.End(err)
+	if err != nil {
 		return nil, err
 	}
 	return images, nil
@@ -158,30 +177,38 @@ func (s *Service) restoreWritableLayers(
 	}
 
 	restored := make([]model.WritableLayerRestoreResult, len(savepoint.WritableLayers))
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindLayerRestore}, len(savepoint.WritableLayers))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, capture := range savepoint.WritableLayers {
 		eg.Go(func() error {
 			opCtx := imageRestoreContext(egCtx, capture, savepoint.ID)
+			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindLayer, ID: capture.ContainerName},
+				progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
-			log.Info().Msg("writable layer restore started")
+			log.Debug().Msg("writable layer restore started")
 			image, err := s.imageBackend.RestoreWritableLayer(opCtx, model.WritableLayerRestoreRequest{
 				SnapshotID: savepoint.ID,
 				Layer:      capture,
 				Tag:        restoredLayerTag(composeProject, savepoint.ID, capture),
 			})
 			if err != nil {
-				return fmt.Errorf("restore writable layer of %s/%d: %w", capture.Service, capture.Replica, err)
+				err = fmt.Errorf("restore writable layer of %s/%d: %w", capture.Service, capture.Replica, err)
+				step.End(err)
+				return err
 			}
 			restored[i] = image
-			log.Info().Dur("duration", time.Since(started)).Str("tag", image.Tag).
+			step.Done(newRestoreSample(capture.SizeBytes))
+			log.Debug().Dur("duration", time.Since(started)).Str("tag", image.Tag).
 				Msg("writable layer restore finished")
 			return nil
 		})
 	}
-	if err := eg.Wait(); err != nil {
+	err := eg.Wait()
+	batch.End(err)
+	if err != nil {
 		return nil, err
 	}
 	return restored, nil
@@ -248,23 +275,37 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, replicas []recor
 		return err
 	}
 
-	log := zerolog.Ctx(ctx)
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindReplicaRebuild}, len(rebuilds))
 	for _, rebuild := range rebuilds {
-		replica := rebuild.recorded
-		if replica.number != rebuild.created {
-			log.Warn().Str("service", replica.service).Int("replica", replica.number).Int("created_replica", rebuild.created).
-				Msg("compose numbers replicas without gaps and created this one under another number; " +
-					"it is recreated under the number and name the savepoint recorded")
+		if err := s.rebuildReplica(ctx, rebuild); err != nil {
+			batch.End(err)
+			return err
 		}
-		identity := model.ReplicaIdentity{Name: replica.containerName, Number: replica.number}
-		rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, rebuild.containerID, identity, replica.image)
-		if err != nil {
-			return fmt.Errorf("rebuild replica %d of service %s from %s: %w",
-				replica.number, replica.service, replica.image, err)
-		}
-		log.Info().Str("service", replica.service).Int("replica", replica.number).
-			Str("container", rebuilt).Str("image", replica.image).Msg("replica rebuilt as the savepoint recorded it")
 	}
+	batch.End(nil)
+	return nil
+}
+
+// rebuildReplica recreates one created container as the replica the savepoint recorded.
+func (s *Service) rebuildReplica(ctx context.Context, rebuild replicaRebuild) error {
+	log := zerolog.Ctx(ctx)
+	replica := rebuild.recorded
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindReplica, ID: replica.containerName})
+	if replica.number != rebuild.created {
+		log.Info().Str("service", replica.service).Int("replica", replica.number).Int("created_replica", rebuild.created).
+			Msg("compose numbers replicas without gaps and created this one under another number; " +
+				"it is recreated under the number and name the savepoint recorded")
+		step.Warn(fmt.Sprintf("created as replica %d, recreated as %d", rebuild.created, replica.number))
+	}
+	identity := model.ReplicaIdentity{Name: replica.containerName, Number: replica.number}
+	rebuilt, err := s.containerRebuilder.RecreateWithImage(ctx, rebuild.containerID, identity, replica.image)
+	step.End(err)
+	if err != nil {
+		return fmt.Errorf("rebuild replica %d of service %s from %s: %w",
+			replica.number, replica.service, replica.image, err)
+	}
+	log.Info().Str("service", replica.service).Int("replica", replica.number).
+		Str("container", rebuilt).Str("image", replica.image).Msg("replica rebuilt as the savepoint recorded it")
 	return nil
 }
 
@@ -455,6 +496,19 @@ func builtContainers(introspection model.IntrospectionResult) map[string]map[int
 		}
 	}
 	return built
+}
+
+// newImageStep names an image's step by its first reference, else its id.
+func newImageStep(image model.Image) progress.Step {
+	var name string
+	if len(image.Refs) > 0 {
+		name = image.Refs[0]
+	}
+	return progress.Step{
+		Kind: kindImage,
+		ID:   image.ID.String(),
+		Name: name,
+	}
 }
 
 // imageOpContext attributes every line the capture logs.

@@ -1,0 +1,6 @@
+⠋ album.publish summer                               1.0s
+└── ⠋ cdn.upload  2/8                                1.0s
+    ├── ⠋ file photo-02.jpg  ██░░░░░░░░ 1.0MB/5.0MB  1.0s
+    ├── ⠋ file photo-03.jpg  ████░░░░░░ 2.0MB/5.0MB  0.8s
+    ├── ⠋ file photo-04.jpg  ██████░░░░ 3.0MB/5.0MB  0.5s
+    └── ⠋ file photo-05.jpg  ████████░░ 4.0MB/5.0MB  0.2s

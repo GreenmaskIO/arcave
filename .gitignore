@@ -49,3 +49,7 @@ CLAUDE.md
 AGENTS.md
 skills-lock.json
 /arcave
+
+# build output of the progress example and the debugger
+/pkg/progress/examples/examples
+/cmd/arcave/__debug_bin*

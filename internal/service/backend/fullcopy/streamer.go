@@ -36,6 +36,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // archiveName is the one object a capture consists of.
@@ -44,12 +45,6 @@ const archiveName = "data.tar"
 // errNoStore refuses a spec carrying no root. This backend keeps its captures in
 // the tree it was handed, so without one there is nowhere to write.
 var errNoStore = errors.New("backend spec carries no store")
-
-// Payload is a capture's SnapshotStat payload. The size_bytes json tag matches
-// the old core's records, so they read back without a migration.
-type Payload struct {
-	SizeBytes int64 `json:"size_bytes"`
-}
 
 // VolumeStreamer is what the backend needs from the Docker engine: the mount
 // source of a volume, a stream of the whole volume out, and the same stream wiped and
@@ -117,18 +112,20 @@ func (s *Snapshotter) Snapshot(
 	// The counter sits in the stream, so the size reported is the size
 	// actually written.
 	counted := utils.NewCountingReader(archive)
-	if err := captureStore.PutObject(ctx, archiveName, counted); err != nil {
+	if err := captureStore.PutObject(ctx, archiveName, progress.NewReader(ctx, counted, 0)); err != nil {
 		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
 	return model.SnapshotStat{
-		Volume:  s.volume,
-		Type:    model.SnapshotBackendFullCopy,
-		Payload: Payload{SizeBytes: counted.N()},
+		Volume:      s.volume,
+		Type:        model.SnapshotBackendFullCopy,
+		SizeBytes:   counted.N(),
+		StoredBytes: counted.N(),
 	}, nil
 }
 
 // Restore hands the stored tar stream to WriteVolume, which wipes the volume
-// and extracts into it. req.Payload is not read: the key is recomputed.
+// and extracts into it. req.Payload is not read: the key is recomputed, and
+// req.SizeBytes is the stream's own length, the capture's counted size.
 func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
 	captureStore, err := s.captureStore(req.SnapshotID)
 	if err != nil {
@@ -150,7 +147,7 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 		}
 	}()
 
-	if err := s.docker.WriteVolume(ctx, src, archive); err != nil {
+	if err := s.docker.WriteVolume(ctx, src, progress.NewReader(ctx, archive, req.SizeBytes)); err != nil {
 		return fmt.Errorf("write docker volume %s: %w", src.Source, err)
 	}
 	return nil

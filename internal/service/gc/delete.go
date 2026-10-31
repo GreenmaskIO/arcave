@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // GarbageEraser carries out one GarbageAction.
@@ -83,11 +84,16 @@ func (e eraserSet) deleteGarbage(
 			})
 	)
 	for _, garbage := range found.composeProjects {
-		reports, reportsStopped := deleteFindings(ctx, stop, grantedLock, garbage.reports, e.composeProject,
+		projectCtx, step := progress.Begin(ctx, progress.Step{
+			Kind: kindComposeProject,
+			Name: garbage.scope.ComposeProject.String(),
+		})
+		reports, reportsStopped := deleteFindings(projectCtx, stop, grantedLock, garbage.reports, e.composeProject,
 			func(ctx context.Context, eraser ComposeProjectEraser, ops []model.GarbageOp) model.GarbageDeletion {
 				return eraser.Erase(ctx, garbage.store, ops)
 			},
 		)
+		step.End(newReportsError(projectCtx, reports))
 		stopped = stopped || reportsStopped
 		composeProjects = append(composeProjects, composeProjectGarbage{
 			scope:   garbage.scope,
@@ -152,8 +158,13 @@ func deleteReportFindings[E GarbageEraser](
 			Msg("session lock no longer vouches for the gc: nothing more is deleted")
 		return &model.GarbageDeletion{NotRun: len(ops)}, fmt.Errorf("verify session lock: %w", err)
 	}
-	deletion := erase(ctx, eraser, ops)
-	zerolog.Ctx(ctx).Info().Str("data_kind", string(report.DataKind)).
+	reportCtx, step := progress.Begin(ctx, progress.Step{
+		Kind: kindEraser,
+		ID:   string(eraser.Action()),
+	})
+	deletion := erase(reportCtx, eraser, ops)
+	step.End(newDeletionError(reportCtx, &deletion))
+	zerolog.Ctx(ctx).Debug().Str("data_kind", string(report.DataKind)).
 		Str("compose_project", report.ComposeProject.String()).
 		Int("deleted", len(deletion.Deleted)).Int("failed", len(deletion.Failed)).Int("not_run", deletion.NotRun).
 		Msg("garbage deleted")
@@ -185,18 +196,22 @@ func DeleteOps(
 		failed  []model.GarbageDeleteFailure
 		notRun  int
 	)
+	ctx, batch := BeginDeletion(ctx, len(ops))
 	for i, op := range ops {
 		if ctx.Err() != nil {
 			notRun = len(ops) - i
 			break
 		}
-		switch err := del(ctx, op); {
+		opCtx, step := BeginTarget(ctx, op.Target)
+		switch err := del(opCtx, op); {
 		case errors.Is(err, storages.ErrFileNotFound), errors.Is(err, model.ErrImageRefNotFound):
+			step.Done(progress.Sample{})
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  new(int64),
 			})
 		case err != nil:
+			step.End(err)
 			zerolog.Ctx(ctx).Error().Err(err).Str("target", op.Target).Msg("delete garbage")
 			failed = append(failed, model.GarbageDeleteFailure{
 				Target:      op.Target,
@@ -204,17 +219,38 @@ func DeleteOps(
 				Interrupted: ctx.Err() != nil,
 			})
 		default:
+			step.Done(NewFreedSample(op.Bytes))
 			deleted = append(deleted, model.GarbageDeleted{
 				Target: op.Target,
 				Bytes:  op.Bytes,
 			})
 		}
 	}
-	return model.GarbageDeletion{
+	deletion := model.GarbageDeletion{
 		Deleted: deleted,
 		Failed:  failed,
 		NotRun:  notRun,
 	}
+	EndDeletion(ctx, batch, deletion)
+	return deletion
+}
+
+// BeginDeletion opens the batch an eraser's n targets report under; EndDeletion ends it.
+func BeginDeletion(ctx context.Context, n int) (context.Context, *progress.StepReporter) {
+	return progress.Batch(ctx, progress.Step{Kind: kindGCDelete}, n)
+}
+
+// BeginTarget opens the step of one target of a deletion, measuring the bytes it frees.
+func BeginTarget(ctx context.Context, target string) (context.Context, *progress.StepReporter) {
+	return progress.Run(ctx, progress.Step{
+		Kind: kindGarbage,
+		ID:   target,
+	}, progress.MeasureBytes)
+}
+
+// EndDeletion ends the batch BeginDeletion opened on ctx with what deletion did.
+func EndDeletion(ctx context.Context, batch *progress.StepReporter, deletion model.GarbageDeletion) {
+	batch.End(newDeletionError(ctx, &deletion))
 }
 
 func withDeletion(report model.GarbageReport, deletion *model.GarbageDeletion) model.GarbageReport {
@@ -237,4 +273,26 @@ func newUndeletedWarnings(reports []model.GarbageReport) []string {
 		warnings = append(warnings, fmt.Sprintf("%s is reported, not deleted, yet", report.DataKind))
 	}
 	return warnings
+}
+
+// NewFreedSample is what deleting a target freed: its size, when known.
+func NewFreedSample(bytes *int64) progress.Sample {
+	if bytes == nil {
+		return progress.Sample{}
+	}
+	return progress.Sample{Bytes: &progress.Bytes{
+		Done:  *bytes,
+		Total: *bytes,
+	}}
+}
+
+// newReportsError is what a compose project's deletions, under a step opened on ctx, end with: the
+// first report's that failed.
+func newReportsError(ctx context.Context, reports []model.GarbageReport) error {
+	for _, report := range reports {
+		if err := newDeletionError(ctx, report.Deletion); err != nil {
+			return err
+		}
+	}
+	return nil
 }

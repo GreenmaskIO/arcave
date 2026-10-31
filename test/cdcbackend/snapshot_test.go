@@ -37,12 +37,13 @@ func TestSnapshotter_Snapshot_InitialisesTheRepository(t *testing.T) {
 	before := env.hash(t, vol)
 
 	// Act
-	payload := env.snapshot(t, backend, idFirst, nil)
+	stat := env.snapshotStat(t, backend, idFirst, nil)
 
 	// Assert
+	payload := snapshotPayload(t, stat)
 	assert.Regexp(t, "^[0-9a-f]{64}$", payload.SnapshotObjectID)
-	assert.Positive(t, payload.DataAdded, "the first capture ships the volume whole")
-	assert.Positive(t, payload.TotalBytesProcessed)
+	assert.Positive(t, stat.StoredBytes, "the first capture ships the volume whole")
+	assert.Positive(t, stat.SizeBytes)
 
 	assert.Equal(t, []string{payload.SnapshotObjectID}, env.snapshotObjectIDs(t, vol),
 		"one capture is one snapshot object, named by the id the payload carries")
@@ -63,19 +64,21 @@ func TestSnapshotter_Snapshot_ShipsAnIncrement(t *testing.T) {
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
 	backend := env.backend(t, vol)
-	first := env.snapshot(t, backend, idFirst, nil)
+	first := env.snapshotStat(t, backend, idFirst, nil)
 	env.mutate(t, vol)
 
 	// Act
-	second := env.snapshot(t, backend, idSecond, nil)
+	second := env.snapshotStat(t, backend, idSecond, nil)
 
 	// Assert
-	t.Logf("data added: first %d bytes, second %d bytes", first.DataAdded, second.DataAdded)
+	t.Logf("data added: first %d bytes, second %d bytes", first.StoredBytes, second.StoredBytes)
 	// Half, not a quarter: the edit reships whole chunks, whose size is a per-
 	// repository die roll, and /4 sat inside that spread. A full reship is 2x this.
-	assert.Less(t, second.DataAdded, first.DataAdded/2,
+	assert.Less(t, second.StoredBytes, first.StoredBytes/2,
 		"a capture after a ~%d KiB change must not reship the volume", mutateKiB)
-	assert.ElementsMatch(t, []string{first.SnapshotObjectID, second.SnapshotObjectID}, env.snapshotObjectIDs(t, vol),
+	assert.ElementsMatch(t, []string{
+		snapshotPayload(t, first).SnapshotObjectID, snapshotPayload(t, second).SnapshotObjectID,
+	}, env.snapshotObjectIDs(t, vol),
 		"the two captures are two snapshots in one repository")
 }
 
@@ -148,16 +151,18 @@ func TestSnapshotter_Snapshot_BothTiersShareTheRepository(t *testing.T) {
 	// Arrange
 	env := newEnv(t, wipeOptions())
 	vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
-	savepoint := env.snapshot(t, env.backend(t, vol), idFirst, nil)
+	savepoint := env.snapshotStat(t, env.backend(t, vol), idFirst, nil)
 
 	// Act: the same volume, unchanged, captured by the undo's own instance.
-	safety := env.snapshot(t, env.backend(t, vol), idSecond, nil)
+	safety := env.snapshotStat(t, env.backend(t, vol), idSecond, nil)
 
 	// Assert
-	t.Logf("data added: savepoint %d bytes, safety %d bytes", savepoint.DataAdded, safety.DataAdded)
-	assert.Less(t, safety.DataAdded, savepoint.DataAdded/4,
+	t.Logf("data added: savepoint %d bytes, safety %d bytes", savepoint.StoredBytes, safety.StoredBytes)
+	assert.Less(t, safety.StoredBytes, savepoint.StoredBytes/4,
 		"the safety snapshot must find the savepoint as its parent, not reship the volume")
-	assert.ElementsMatch(t, []string{savepoint.SnapshotObjectID, safety.SnapshotObjectID}, env.snapshotObjectIDs(t, vol))
+	assert.ElementsMatch(t, []string{
+		snapshotPayload(t, savepoint).SnapshotObjectID, snapshotPayload(t, safety).SnapshotObjectID,
+	}, env.snapshotObjectIDs(t, vol))
 	assert.Contains(t, env.repoKeys(t, vol), configKey, "one repository, so one config object")
 }
 

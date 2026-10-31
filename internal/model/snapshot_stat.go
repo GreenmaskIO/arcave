@@ -15,13 +15,22 @@
 package model
 
 // SnapshotStat is the result of snapshotting one volume. Payload is the
-// backend's own: full-copy — bytes stored, cdc — stream position.
+// backend's own addressing — cdc's snapshot id; fullcopy has none.
 //
 // It is also the savepoint's per-volume bookkeeping: a restore addresses each
 // archive from the Volume here. Payload decodes back as a map[string]any, which
 // costs nothing while no reader outside its own backend interprets one.
 type SnapshotStat struct {
-	Volume  Volume              `json:"volume"`
-	Type    SnapshotBackendKind `json:"type"`
-	Payload any                 `json:"payload,omitempty"`
+	Volume Volume              `json:"volume"`
+	Type   SnapshotBackendKind `json:"type"`
+	// SizeBytes is the backend's measure of the volume: fullcopy's archive,
+	// the bytes cdc read.
+	SizeBytes int64 `json:"size_bytes"`
+	// StoredBytes is what this capture added to the store; below SizeBytes when
+	// the backend found the bytes already there, as a cdc increment does.
+	StoredBytes int64 `json:"stored_bytes,omitempty"`
+	// ReusedBytes is what of SizeBytes the backend found already stored; StoredBytes, compressed,
+	// may be less than the rest.
+	ReusedBytes int64 `json:"reused_bytes,omitempty"`
+	Payload     any   `json:"payload,omitempty"`
 }

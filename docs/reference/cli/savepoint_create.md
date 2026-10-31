@@ -63,7 +63,8 @@ The savepoint record, as JSON on stdout.
         }
       },
       "type": "fullcopy",
-      "payload": { "size_bytes": 41172480 }
+      "size_bytes": 41172480,
+      "stored_bytes": 41172480
     }
   ],
   "writable_layers": [
@@ -100,7 +101,7 @@ The savepoint record, as JSON on stdout.
 | `id` | A UUIDv7 in canonical form, assigned at capture. What `rollback` and `savepoint remove` take. |
 | `name`, `description` | What you passed, or empty strings. |
 | `created_at` | RFC3339Nano. |
-| `stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `payload` is the backend's own bookkeeping. |
+| `stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `size_bytes` is the volume's size, `stored_bytes` what this capture added to the store; `payload` is the backend's own bookkeeping. |
 | `writable_layers` | One entry per container whose writable layer was committed. `imagebackend` is `dedupcopy` or `fullcopy`; `size_bytes` is the committed image's size, `stored_bytes` what it added to the store after deduplication. |
 | `images` | One entry per distinct image the services run on, stored once however many savepoints and replicas name it. `stored_bytes` is what this savepoint added, omitted when the image was already stored; `stored: false` means only its identity could be recorded. |
 | `spec` | The compose spec committed beside the record. `format` is always `compose-yaml`. |

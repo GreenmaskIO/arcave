@@ -32,6 +32,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // "images" is a reserved key beside savepoint.json — no volume collides with it, every
@@ -239,7 +240,7 @@ func (s *Copier) CaptureImage(
 
 	log := zerolog.Ctx(ctx).With().Str("image_id", image.ID.String()).Logger()
 	if !req.ExistsInDaemon {
-		log.Warn().Msg("the image is in neither the store nor the daemon; only its identity is recorded")
+		log.Info().Msg("the image is in neither the store nor the daemon; only its identity is recorded")
 		return image, nil
 	}
 	size, err := s.storeImage(ctx, s.imageArchiver, upstreamStore, image.ID)
@@ -247,7 +248,7 @@ func (s *Copier) CaptureImage(
 		if ctx.Err() != nil {
 			return model.Image{}, err
 		}
-		log.Warn().Err(err).Msg("the image could not be stored; only its identity is recorded")
+		log.Info().Err(err).Msg("the image could not be stored; only its identity is recorded")
 		return image, nil
 	}
 	image.Stored = true
@@ -293,7 +294,7 @@ func (s *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLay
 		return model.WritableLayerRestoreResult{}, err
 	}
 	if !present {
-		if err := s.loadImage(ctx, archiver, imageStore, req.Layer.CommittedImageID); err != nil {
+		if err := s.loadImage(ctx, archiver, imageStore, req.Layer.CommittedImageID, req.Layer.SizeBytes); err != nil {
 			return model.WritableLayerRestoreResult{}, err
 		}
 	}
@@ -311,10 +312,11 @@ func (s *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLay
 }
 
 // loadImage has archiver render the archive into a pipe the daemon reads from,
-// then confirms the daemon holds the id the record names: a load resolving to
-// another image must fail here and not at the rebuild.
+// counting it out of size, the archive size the capture recorded, then confirms
+// the daemon holds the id the record names: a load resolving to another image
+// must fail here and not at the rebuild.
 func (s *Copier) loadImage(
-	ctx context.Context, archiver ImageArchiver, imageStore storages.Storager, imageID model.ImageDigestID,
+	ctx context.Context, archiver ImageArchiver, imageStore storages.Storager, imageID model.ImageDigestID, size int64,
 ) error {
 	pr, pw := io.Pipe()
 	defer func() {
@@ -325,7 +327,7 @@ func (s *Copier) loadImage(
 
 	stored := make(chan error, 1)
 	go func() {
-		err := archiver.Load(ctx, imageStore, imageID, pw)
+		err := archiver.Load(ctx, imageStore, imageID, progress.NewWriter(ctx, pw, size))
 		stored <- err
 		// CloseWithError(nil) closes cleanly, so an archiver that finished writing
 		// reaches the reader as a clean EOF.

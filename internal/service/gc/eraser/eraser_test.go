@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/utils/gctest"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // TreeEraser removes each tree its ops name, whole, in order.
@@ -484,6 +486,99 @@ func TestForgetEraser_Erase_concurrent(t *testing.T) {
 	}, got.Reclaimed, "assembled in the order the repositories first appear")
 	opener.AssertExpectations(t)
 	pruner.AssertExpectations(t)
+}
+
+// ForgetEraser reports one step per repository under the deletion's batch, ended with what its
+// prune freed; a repository the run's end came before opens none.
+func TestForgetEraser_Erase_progress(t *testing.T) {
+	var (
+		dbSnapshot = strings.Repeat("a", 64)
+		ops        = []model.GarbageOp{
+			{Action: model.GarbageActionForget, Target: cdc.NewSnapshotKey("volume-named-db", dbSnapshot)},
+			{Action: model.GarbageActionForget, Target: cdc.NewRepositoryKey("volume-named-logs")},
+		}
+	)
+	tests := []struct {
+		name      string
+		cancelled bool
+		want      []string
+	}{
+		{
+			name: "one step per repository",
+			want: []string{
+				"garbage[restic/volume-named-db] succeeded bytes=7",
+				"garbage[restic/volume-named-logs] failed",
+				"gc.delete[] failed items=1/1",
+				"gc[] succeeded",
+			},
+		},
+		{
+			name:      "a run already stopped opens no repository",
+			cancelled: true,
+			want: []string{
+				"gc.delete[] cancelled items=0/0",
+				"gc[] succeeded",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			var (
+				recorder = &endedRecorder{steps: map[progress.StepID]progress.Step{}}
+				tracker  = progress.New(recorder, func() time.Time { return time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC) })
+			)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx, root := tracker.Begin(ctx, progress.Step{Kind: "gc"})
+			store := &gctest.MockStore{}
+			pruner := &mockPruner{}
+			opener := &mockPrunerOpener{}
+			opener.On("Open", mock.Anything, store).Return(pruner, nil).Once()
+			if tt.cancelled {
+				cancel()
+			} else {
+				pruner.On("Forget", mock.Anything, "volume-named-db", []string{dbSnapshot}).
+					Return(utils.New(int64(7)), nil).Once()
+				pruner.On("Forget", mock.Anything, "volume-named-logs", []string(nil)).
+					Return(nil, errors.New("repository is locked")).Once()
+			}
+			pruner.On("Close", mock.Anything).Once()
+
+			// Act
+			NewForgetEraser(opener, 1).Erase(ctx, store, ops)
+			root.End(nil)
+
+			// Assert
+			assert.Equal(t, tt.want, recorder.ended)
+			opener.AssertExpectations(t)
+			pruner.AssertExpectations(t)
+		})
+	}
+}
+
+// endedRecorder renders every step's last event as "<kind>[<id>] <status> [bytes] [items]".
+type endedRecorder struct {
+	steps map[progress.StepID]progress.Step
+	ended []string
+}
+
+func (r *endedRecorder) Render(evt progress.Event) {
+	if evt.Open != nil {
+		r.steps[evt.StepID] = evt.Open.Step
+	}
+	if !evt.Status.IsTerminal() {
+		return
+	}
+	step := r.steps[evt.StepID]
+	line := fmt.Sprintf("%s[%s] %s", step.Kind, step.ID, evt.Status)
+	if evt.Sample.Bytes != nil {
+		line += fmt.Sprintf(" bytes=%d", evt.Sample.Bytes.Done)
+	}
+	if evt.Sample.Items != nil {
+		line += fmt.Sprintf(" items=%d/%d", evt.Sample.Items.Done, evt.Sample.Items.Failed)
+	}
+	r.ended = append(r.ended, line)
 }
 
 // TagEraser takes each tag off the daemon unforced; one a container uses fails alone.

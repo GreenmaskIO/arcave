@@ -78,11 +78,10 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, model.SnapshotBackendCDC, stat.Type)
-			assert.Equal(t, Payload{
-				SnapshotObjectID:    "3f8a1c0d9b",
-				DataAdded:           1048576,
-				TotalBytesProcessed: 10485760,
-			}, stat.Payload)
+			assert.Equal(t, Payload{SnapshotObjectID: "3f8a1c0d9b"}, stat.Payload)
+			assert.Equal(t, int64(10485760), stat.SizeBytes, "the volume's logical size")
+			assert.Equal(t, int64(524288), stat.StoredBytes, "what the repository grew by, packed")
+			assert.Equal(t, int64(10485760-1048576), stat.ReusedBytes, "what was read but not added, before compression")
 
 			// Whatever the state, the locks are gone and nothing else was touched.
 			assert.Empty(t, objectsUnder(t, h.repo, locksPrefix), "every standing lock is an orphan by construction")
@@ -343,11 +342,7 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	// Act
 	err := h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
 		SnapshotID: "019e843e-1650-7000-8000-000000000000",
-		Payload: map[string]any{
-			"restic_snapshot_id":    "3f8a1c0d9b",
-			"data_added":            float64(1048576),
-			"total_bytes_processed": float64(10485760),
-		},
+		Payload:    map[string]any{"restic_snapshot_id": "3f8a1c0d9b"},
 	})
 
 	// Assert

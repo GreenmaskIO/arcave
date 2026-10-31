@@ -14,7 +14,12 @@
 
 package model
 
-import "time"
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+)
 
 // The label a rollback stamps its safety snapshot with — the only thing telling
 // it from an ordinary savepoint, and named by the service, the backends and both
@@ -61,4 +66,46 @@ type SpecRef struct {
 // a savepoint a user asked for.
 func (m Savepoint) IsSafetySnapshot() bool {
 	return m.Labels[SavepointLabelSafetySnapshot] == SavepointLabelSafetySnapshotValue
+}
+
+// Notices spells out what the savepoint leaves out and every image it names but does not store,
+// the severe first.
+func (m Savepoint) Notices() []Notice {
+	var notices []Notice
+	if m.NotCovered != nil {
+		notices = m.NotCovered.Notices()
+	}
+	for _, image := range m.Images {
+		if image.Stored {
+			continue
+		}
+		notices = append(notices, Notice{
+			Message: fmt.Sprintf("image %s is not stored, only its identity", newImageName(image)),
+			Hint:    "a rollback needs it pullable to rebuild a container on it",
+			Severe:  true,
+		})
+	}
+	return slices.SortedStableFunc(slices.Values(notices), func(a, b Notice) int {
+		return compareSevere(a.Severe, b.Severe)
+	})
+}
+
+// newImageName is an image's first reference, else its short id.
+func newImageName(image Image) string {
+	if len(image.Refs) > 0 {
+		return image.Refs[0]
+	}
+	return formatShortID(strings.TrimPrefix(image.ID.String(), "sha256:"))
+}
+
+// compareSevere orders a severe notice before one that only informs.
+func compareSevere(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return -1
+	default:
+		return 1
+	}
 }

@@ -15,6 +15,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,28 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/pkg/progress"
+)
+
+// volumeOp is one operation forEachBackend runs: its name in logs and errors, and its batch's kind.
+type volumeOp struct {
+	name string
+	kind progress.Kind
+}
+
+var (
+	volumeCapture = volumeOp{
+		name: "snapshot",
+		kind: kindVolumeCapture,
+	}
+	volumeRestore = volumeOp{
+		name: "restore",
+		kind: kindVolumeRestore,
+	}
+	volumeRemove = volumeOp{
+		name: "remove",
+		kind: kindVolumeRemove,
+	}
 )
 
 // newBackends builds one backend per volume, all rooted at the one store, in
@@ -51,7 +74,7 @@ func (s *Service) captureVolumes(
 	ctx context.Context, id model.SavepointID, labels map[string]string, backends []model.VolumeSnapshotBackend,
 ) ([]model.SnapshotStat, error) {
 	stats := make([]model.SnapshotStat, len(backends))
-	err := s.forEachBackend(ctx, id, backends, "snapshot",
+	err := s.forEachBackend(ctx, id, backends, volumeCapture,
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{
 				SnapshotID: id,
@@ -61,6 +84,7 @@ func (s *Service) captureVolumes(
 				return fmt.Errorf("capture volume: %w", err)
 			}
 			stats[i] = stat
+			progress.Current(ctx).Done(newCaptureSample(stat.SizeBytes, stat.StoredBytes, stat.ReusedBytes))
 			return nil
 		})
 	if err != nil {
@@ -83,14 +107,23 @@ func (s *Service) performSavepoint(
 	name string,
 	description string,
 	labels map[string]string,
-) (model.Savepoint, error) {
+) (_ model.Savepoint, err error) {
 	var (
-		id        = model.NewSavepointID()
-		createdAt = time.Now()
-		writer    heartbeatWriter
-		captured  capturedSavepoint
-		err       error
+		id         = model.NewSavepointID()
+		createdAt  = time.Now()
+		notCovered = working.newNotCovered(killed)
+		writer     heartbeatWriter
+		captured   capturedSavepoint
 	)
+	// Outside the heartbeat's cancellation, which the step reports with its cause.
+	ctx, step := progress.Begin(ctx, progress.Step{
+		Kind: kindSavepointCapture,
+		Name: cmp.Or(name, id.String()),
+	})
+	defer func() { step.End(err) }()
+	if warning := newNotCoveredWarning(notCovered); warning != "" {
+		warn(step, warning, isInResult(labels))
+	}
 	if err = s.requireEmptyTree(ctx, id); err != nil {
 		return model.Savepoint{}, err
 	}
@@ -140,7 +173,7 @@ func (s *Service) performSavepoint(
 		Images:         captured.images,
 		WritableLayers: captured.writableLayers,
 		Spec:           &model.SpecRef{Format: model.SpecFormatComposeYAML},
-		NotCovered:     working.newNotCovered(killed),
+		NotCovered:     notCovered,
 	}
 	if err = s.savepointRepo.SaveSavepoint(ctx, savepoint); err != nil {
 		err = fmt.Errorf("commit savepoint %s: %w", id, err)
@@ -182,7 +215,7 @@ func (s *Service) captureSavepoint(
 		return capturedSavepoint{}, err
 	}
 	// The images first: a writable layer's stored_bytes is then what it adds over its image.
-	if images, err = s.captureImages(ctx, id, working.images.upstreams); err != nil {
+	if images, err = s.captureImages(ctx, id, working.images.upstreams, isInResult(labels)); err != nil {
 		return capturedSavepoint{}, err
 	}
 	if writableLayers, err = s.captureWritableLayers(ctx, id, working.images.writableLayers); err != nil {
@@ -210,14 +243,16 @@ func abandonCapture(ctx context.Context, worker *heartbeat.Worker, id model.Save
 func (s *Service) restoreVolumes(
 	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
 ) error {
-	return s.forEachBackend(ctx, savepoint.ID, backends, "restore",
+	return s.forEachBackend(ctx, savepoint.ID, backends, volumeRestore,
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			if err := backend.Restore(ctx, model.BackendRestoreRequest{
 				SnapshotID: savepoint.ID,
 				Payload:    savepoint.Stats[i].Payload,
+				SizeBytes:  savepoint.Stats[i].SizeBytes,
 			}); err != nil {
 				return fmt.Errorf("restore capture: %w", err)
 			}
+			progress.Current(ctx).Done(newRestoreSample(savepoint.Stats[i].SizeBytes))
 			return nil
 		})
 }
@@ -240,7 +275,7 @@ func (s *Service) dropSavepoint(
 		return fmt.Errorf("%w: uncommit savepoint %s: %w", errStillCommitted, savepoint.ID, err)
 	}
 
-	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, "remove",
+	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, volumeRemove,
 		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
 			if err := backend.Remove(ctx, model.BackendRemoveRequest{
 				SnapshotID: savepoint.ID,
@@ -258,38 +293,48 @@ func (s *Service) dropSavepoint(
 	return errors.Join(removeErr, sweepErr)
 }
 
-// forEachBackend runs op over every backend concurrently and waits for all of
-// them, so the caller's next group starts only once this one finished
-// everywhere. op gets the index to write into a caller-preallocated slice.
-// snapshotID is validated here once, ahead of every dispatch.
+// forEachBackend runs fn over every backend concurrently and waits for all of them.
+// fn gets its slice index and a context whose step counts the volume's bytes.
 func (s *Service) forEachBackend(
 	ctx context.Context,
 	snapshotID model.SavepointID,
 	backends []model.VolumeSnapshotBackend,
-	opName string,
-	op func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error,
+	op volumeOp,
+	fn func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error,
 ) error {
 	if err := snapshotID.Validate(); err != nil {
 		return fmt.Errorf("validate savepoint id: %w", err)
 	}
+	if len(backends) == 0 {
+		return nil
+	}
 
+	// Before the group: the batch reports the group's cancellation, so it opens outside it.
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: op.kind}, len(backends))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, backend := range backends {
 		eg.Go(func() error {
-			opCtx := volumeOpContext(egCtx, backend, snapshotID, opName)
+			opCtx := volumeOpContext(egCtx, backend, snapshotID, op.name)
+			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindVolume, ID: backend.Volume().ObjectID},
+				progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
-			log.Info().Msg("volume operation started")
-			if err := op(opCtx, i, backend); err != nil {
-				return fmt.Errorf("%s %s: %w", opName, backend.Volume().ObjectID, err)
+			log.Debug().Msg("volume operation started")
+			if err := fn(opCtx, i, backend); err != nil {
+				err = fmt.Errorf("%s %s: %w", op.name, backend.Volume().ObjectID, err)
+				step.End(err)
+				return err
 			}
-			log.Info().Dur("duration", time.Since(started)).Msg("volume operation finished")
+			step.End(nil)
+			log.Debug().Dur("duration", time.Since(started)).Msg("volume operation finished")
 			return nil
 		})
 	}
-	return eg.Wait()
+	err := eg.Wait()
+	batch.End(err)
+	return err
 }
 
 // volumeOpContext attributes every line the operation logs.

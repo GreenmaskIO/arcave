@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // testTiming never renews on its own: a test renews by hand, or sets Renew to watch keep.
@@ -229,6 +230,80 @@ func TestLocker_Lock(t *testing.T) {
 			assert.Equal(t, tt.wantFrom, store.claimedFrom)
 		})
 	}
+}
+
+// warningRecorder keeps the messages of every warned event.
+type warningRecorder struct {
+	warnings []string
+}
+
+func (r *warningRecorder) Render(evt progress.Event) {
+	if evt.Status == progress.StatusWarned {
+		r.warnings = append(r.warnings, evt.Msg)
+	}
+}
+
+// The wait warns once per holder it sees: a holder's renewals are not news.
+func TestLocker_Lock_WarnsOncePerHolder(t *testing.T) {
+	// Arrange
+	store := newFakeSessionLockStore()
+	store.set(foreignLock)
+	clock := &fakeClock{at: testStart}
+	var sleeps int
+	clock.onSleep = func(time.Duration) {
+		sleeps++
+		switch sleeps {
+		case 1:
+			renewed := foreignLock
+			renewed.Revision++
+			store.set(renewed)
+		case 2:
+			next := foreignLock
+			next.OperationID, next.Operation = "019e843e-1650-7000-8000-000000000003", model.SessionLockOperationRollback
+			store.set(next)
+		case 3:
+			store.clear()
+		}
+	}
+	locker := newTestLocker(store, clock)
+	recorder := &warningRecorder{}
+	ctx := progress.WithTracker(newTestContext(), progress.New(recorder, clock.now))
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: "session.lock"})
+
+	// Act
+	_, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationSavepointCreate)
+	step.End(err)
+
+	// Assert
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = grantedLock.Unlock(newTestContext()) })
+	assert.Equal(t, []string{
+		"waiting: held by gc on other (pid 7)",
+		"waiting: held by rollback on other (pid 7)",
+	}, recorder.warnings)
+}
+
+// A claim lost to another is followed by a fresh look, which warns of no holder already warned of.
+func TestLocker_Lock_WarnsOncePerHolderPastALostClaim(t *testing.T) {
+	// Arrange
+	store := newFakeSessionLockStore()
+	store.set(foreignLock)
+	store.claimErrs = []error{ErrClaimLost}
+	clock := &fakeClock{at: testStart}
+	locker := newTestLocker(store, clock)
+	recorder := &warningRecorder{}
+	ctx := progress.WithTracker(newTestContext(), progress.New(recorder, clock.now))
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: "session.lock"})
+
+	// Act
+	_, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationSavepointCreate)
+	step.End(err)
+
+	// Assert
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = grantedLock.Unlock(newTestContext()) })
+	assert.Equal(t, []model.OperationID{foreignOp, foreignOp}, store.claimedFrom)
+	assert.Equal(t, []string{"waiting: held by gc on other (pid 7)"}, recorder.warnings)
 }
 
 func TestLocker_Lock_Refused(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v2/pkg/api"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
+	composeprogress "github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
@@ -65,14 +65,17 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
-	"github.com/greenmaskio/arcave/internal/service/printer/json"
 	"github.com/greenmaskio/arcave/internal/service/sessionlock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
+
+// composeResourceObject is the resource kind of a compose event whose id names no kind of object.
+const composeResourceObject = "object"
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
@@ -88,7 +91,7 @@ type dependencies struct {
 	// down to the backend is the URL base, never the object.
 	resticServer *echo.Echo
 	service      *core.Service
-	printer      *json.Printer
+	printer      resultPrinter
 }
 
 // newDependencies wires the savepoint workflows for the project rooted at projectPath, in the
@@ -126,7 +129,8 @@ func newDependencies(
 	}
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
-	progressWriter := newProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
+	progressWriter, composeEvents := newProgressWriter(
+		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx))
 	opened.add("compose progress writer", progressWriter)
 
 	// One docker/cli instance is the single daemon connection both halves of
@@ -146,8 +150,10 @@ func newDependencies(
 
 	composeService := dockercompose.NewComposeService(dockerCli)
 	composeRunner := compose.NewClient(composeService, compose.Options{
-		WaitTimeout: cfg.Compose.WaitTimeout,
-		StopTimeout: cfg.Compose.StopTimeout,
+		WaitTimeout:     cfg.Compose.WaitTimeout,
+		StopTimeout:     cfg.Compose.StopTimeout,
+		Events:          composeEvents,
+		SinkFromContext: newComposeEventSink,
 	})
 
 	// The effective cdc section, defaults included even where the project carries
@@ -252,7 +258,7 @@ func newDependencies(
 		composeRunner:       composeRunner,
 		resticServer:        resticServer,
 		service:             svc,
-		printer:             json.New(os.Stdout),
+		printer:             loadRunOutput(),
 	}, nil
 }
 
@@ -344,15 +350,15 @@ func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 
 // newInitDependencies wires `arcave init`: somewhere to write the config, nothing
 // more. Nothing here holds a resource.
-func newInitDependencies(projectPath string) (*core.InitService, *json.Printer) {
-	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), json.New(os.Stdout)
+func newInitDependencies(projectPath string) (*core.InitService, resultPrinter) {
+	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), loadRunOutput()
 }
 
 // toolsDependencies is what the tools commands run on: one daemon connection, no store.
 type toolsDependencies struct {
 	dockerClient client.APIClient
 	service      *core.ComposeFileService
-	printer      *json.Printer
+	printer      resultPrinter
 }
 
 // newToolsDependencies wires the tools commands for composeProject over the daemon docker.* names.
@@ -371,7 +377,11 @@ func newToolsDependencies(cfg config.Config, composeProject model.DockerComposeP
 		ProjectAssembler: composespec.NewAssembler(),
 		SpecCodec:        composespec.NewComposeFileCodec(),
 	})
-	return &toolsDependencies{dockerClient: dockerClientAPI, service: svc, printer: json.New(os.Stdout)}, nil
+	return &toolsDependencies{
+		dockerClient: dockerClientAPI,
+		service:      svc,
+		printer:      loadRunOutput(),
+	}, nil
 }
 
 func (d *toolsDependencies) Close() error {
@@ -383,7 +393,7 @@ func (d *toolsDependencies) Close() error {
 type sessionDependencies struct {
 	store   storages.Storager
 	service *core.SessionService
-	printer *json.Printer
+	printer resultPrinter
 }
 
 func newSessionDependencies(ctx context.Context, projectPath string, cfg config.Config) (*sessionDependencies, error) {
@@ -392,7 +402,11 @@ func newSessionDependencies(ctx context.Context, projectPath string, cfg config.
 		return nil, err
 	}
 	svc := newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore))
-	return &sessionDependencies{store: root, service: svc, printer: json.New(os.Stdout)}, nil
+	return &sessionDependencies{
+		store:   root,
+		service: svc,
+		printer: loadRunOutput(),
+	}, nil
 }
 
 // newSessionService wires the session commands over the arcave project's store.
@@ -530,24 +544,73 @@ type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
 
-// newProgressWriter translates compose.progress into the library's global
-// render mode (progress.Mode) plus the writer compose renders on. The destination
-// is always stderr or nothing — stdout carries arcave's JSON — and the default
-// re-emits compose's events as arcave log records, so the run speaks one format.
-func newProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
+// newProgressWriter sets compose's global render mode and returns the writer compose renders on:
+// stderr or nothing, or by default the adapter re-emitting its events as log records, returned
+// again as what they reach a step through, nil otherwise.
+func newProgressWriter(mode string, logger zerolog.Logger) (io.WriteCloser, *compose.ProgressLogger) {
 	switch mode {
 	case config.ProgressQuiet:
 		// Discarding the stream too covers the warnings compose writes outside the UI.
-		progress.Mode = progress.ModeQuiet
-		return nopWriteCloser{io.Discard}
+		composeprogress.Mode = composeprogress.ModeQuiet
+		return nopWriteCloser{io.Discard}, nil
 	case config.ProgressTTY:
 		// ModeAuto, not ModeTTY: compose falls back to plain lines in a pipe.
-		progress.Mode = progress.ModeAuto
-		return nopWriteCloser{os.Stderr}
+		composeprogress.Mode = composeprogress.ModeAuto
+		return nopWriteCloser{os.Stderr}, nil
 	default:
-		progress.Mode = progress.ModeJSON
-		return compose.NewProgressLogger(logger)
+		composeprogress.Mode = composeprogress.ModeJSON
+		adapter := compose.NewProgressLogger(logger)
+		return adapter, adapter
 	}
+}
+
+// composeEventSink puts compose's events on the progress step of the call, a resource per object.
+type composeEventSink struct {
+	step *progress.StepReporter
+}
+
+// newComposeEventSink is the sink of the step ctx carries; nil under a mute one, so the events
+// stay in the log.
+func newComposeEventSink(ctx context.Context) compose.EventSink {
+	step := progress.Current(ctx)
+	if step.IsMute() {
+		return nil
+	}
+	return composeEventSink{step: step}
+}
+
+// Event reports one event as its object's line: in flight, settled, or a warning.
+func (s composeEventSink) Event(evt compose.Event) {
+	kind := strings.ToLower(evt.Kind)
+	if kind == "" {
+		kind = composeResourceObject
+	}
+	var (
+		resource = progress.Resource{
+			Kind: progress.ResourceKind(kind),
+			ID:   evt.Name,
+		}
+		msg = strings.TrimSpace(evt.Status + " " + evt.Text)
+	)
+	switch evt.State {
+	case compose.EventWorking:
+		s.step.UpdateResource(resource, msg)
+	case compose.EventDone:
+		s.step.SettleResource(resource, msg)
+	default:
+		s.step.WarnResource(resource, msg)
+	}
+}
+
+// composeProgressMode keeps compose's own renderer off a terminal arcave's tree is drawn on:
+// two renderers on one stderr tear each other's frames.
+func composeProgressMode(ctx context.Context, mode string, drawing bool) string {
+	if !drawing || mode != config.ProgressTTY {
+		return mode
+	}
+	log.Ctx(ctx).Warn().Msg("compose.progress: tty is ignored while arcave draws its own progress; " +
+		"compose's progress goes to the log, pass --progress log to keep compose's renderer")
+	return config.ProgressLog
 }
 
 // newDockerClient resolves cfg into the one docker/cli instance both halves of
@@ -648,12 +711,13 @@ func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 	}
 }
 
-// gcDependencies is what gc runs on: the arcave project's store and the daemon. It holds no
-// printer, since arcave mcp builds one too.
+// gcDependencies is what gc runs on: the arcave project's store and the daemon; arcave mcp
+// leaves its printer unused.
 type gcDependencies struct {
 	store   storages.Storager
 	engine  *docker.Engine
 	service *gc.GarbageCollector
+	printer resultPrinter
 }
 
 // newGCDependencies wires a gc over the session's compose projects, one collector per kind. The
@@ -687,11 +751,7 @@ func newGCDependencies(
 	engine := docker.NewEngine(dockerClientAPI)
 	opened.add("docker engine", engine)
 
-	deps := &gcDependencies{
-		store:  root,
-		engine: engine,
-	}
-	deps.service = gc.New(gc.Deps{
+	service := gc.New(gc.Deps{
 		Store:                    arcaveProjectStore,
 		Session:                  session.ID,
 		Sessions:                 sessions,
@@ -708,7 +768,12 @@ func newGCDependencies(
 		RestoredLayerGrace: utils.Value(cfg.GC.RestoredLayerGrace),
 	})
 	opened.keep()
-	return deps, nil
+	return &gcDependencies{
+		store:   root,
+		engine:  engine,
+		service: service,
+		printer: loadRunOutput(),
+	}, nil
 }
 
 func (d *gcDependencies) Close(ctx context.Context) error {

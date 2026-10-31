@@ -1,0 +1,8 @@
+✔ album.publish summer  0.7s
+└── ✔ album.export      0.7s
+      ! photo-00.jpg recompressed
+      ! photo-01.jpg recompressed
+      ! photo-02.jpg recompressed
+      ! photo-03.jpg recompressed
+      ! photo-04.jpg recompressed
+      … 2 more, see the log

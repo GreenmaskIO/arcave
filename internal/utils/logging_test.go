@@ -15,6 +15,7 @@
 package utils
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,13 +35,17 @@ func TestNewLogger(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewLogger(tt.level, tt.format)
+			var out bytes.Buffer
+
+			logger, err := NewLogger(tt.level, tt.format, &out)
 
 			if tt.wantErr != nil {
 				assert.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 			assert.NoError(t, err)
+			logger.Info().Msg("written where asked")
+			assert.Contains(t, out.String(), "written where asked")
 		})
 	}
 }

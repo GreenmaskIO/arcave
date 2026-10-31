@@ -75,6 +75,11 @@ type Options struct {
 	// StopTimeout is the least grace period before Stop and Down SIGKILL a container;
 	// a service's stop_grace_period raises it.
 	StopTimeout time.Duration
+	// Events is the adapter compose renders its progress on; nil when it renders elsewhere.
+	Events *ProgressLogger
+	// SinkFromContext returns the sink a call's events go to instead of the log; nil, or a nil
+	// sink, keeps them in the log.
+	SinkFromContext func(ctx context.Context) EventSink
 }
 
 // NewClient returns a runner over the engine's daemon connection. opts carries the
@@ -86,6 +91,7 @@ func NewClient(composeAPI dockerComposeAPI, opts Options) *Client {
 // Stop stops all project services, waits for the containers to exit, and returns
 // the ids of those the stop timeout SIGKILLed.
 func (c *Client) Stop(ctx context.Context, project *types.Project) ([]string, error) {
+	defer c.routeEvents(ctx)()
 	timeout := c.logStopTimeout(ctx, project, "stopping compose services")
 	running := c.runningContainers(ctx, project)
 
@@ -98,6 +104,7 @@ func (c *Client) Stop(ctx context.Context, project *types.Project) ([]string, er
 // Down removes the project's containers and networks. Volumes are kept: a volume
 // arcave does not capture has no copy anywhere else.
 func (c *Client) Down(ctx context.Context, project *types.Project) error {
+	defer c.routeEvents(ctx)()
 	timeout := c.logStopTimeout(ctx, project, "removing compose containers and networks")
 
 	return c.api.Down(ctx, project.Name, api.DownOptions{
@@ -111,8 +118,9 @@ func (c *Client) Down(ctx context.Context, project *types.Project) error {
 // Create builds the project's containers, networks and volumes without starting
 // them. Inherit is off so an anonymous volume is created fresh, not reused.
 func (c *Client) Create(ctx context.Context, project *types.Project) error {
+	defer c.routeEvents(ctx)()
 	timeout := c.stopTimeout()
-	zerolog.Ctx(ctx).Info().Msg("creating compose containers")
+	zerolog.Ctx(ctx).Debug().Msg("creating compose containers")
 
 	return c.api.Create(ctx, withComposeLabels(project), api.CreateOptions{
 		Timeout:              &timeout,
@@ -129,8 +137,9 @@ func (c *Client) Create(ctx context.Context, project *types.Project) error {
 // falls back to Options. Start rather than Up: what Create built must not be recreated under it.
 // A project with a disabled healthcheck is waited for by Start itself: compose refuses one.
 func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
+	defer c.routeEvents(ctx)()
 	waitTimeout = c.waitTimeoutOr(waitTimeout)
-	zerolog.Ctx(ctx).Info().Str("wait_timeout", waitTimeout.String()).
+	zerolog.Ctx(ctx).Debug().Str("wait_timeout", waitTimeout.String()).
 		Msg("waiting for services to become healthy")
 
 	if !healthCheckDisabled(project) {
@@ -148,14 +157,29 @@ func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout 
 	return c.waitReady(ctx, project, waitTimeout)
 }
 
-// logStopTimeout resolves the stop bound for project and logs it with msg.
+// routeEvents hands the adapter the sink ctx carries, until the returned func takes it back.
+// A Client's calls run one at a time, so the adapter is never another call's meanwhile.
+func (c *Client) routeEvents(ctx context.Context) func() {
+	if c.opts.Events == nil || c.opts.SinkFromContext == nil {
+		return func() {}
+	}
+	sink := c.opts.SinkFromContext(ctx)
+	if sink == nil {
+		return func() {}
+	}
+	c.opts.Events.SetSink(sink)
+	return func() { c.opts.Events.SetSink(nil) }
+}
+
+// logStopTimeout resolves the stop bound for project and logs it with msg, at info only when a
+// service's stop_grace_period raised it.
 func (c *Client) logStopTimeout(ctx context.Context, project *types.Project, msg string) time.Duration {
 	timeout, raisedBy := c.stopTimeoutFor(project)
 	// Str, not Dur: zerolog renders a Dur in milliseconds, and "10000" is not what
 	// a user reading a grace period wants to see.
-	event := zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String())
+	event := zerolog.Ctx(ctx).Debug().Str("stop_timeout", timeout.String())
 	if raisedBy != "" {
-		event = event.Str("raised_by", raisedBy)
+		event = zerolog.Ctx(ctx).Info().Str("stop_timeout", timeout.String()).Str("raised_by", raisedBy)
 	}
 	event.Msg(msg)
 	return timeout

@@ -93,13 +93,12 @@ func (s *Snapshotter) Snapshot(
 	}
 
 	return model.SnapshotStat{
-		Volume: s.volume,
-		Type:   model.SnapshotBackendCDC,
-		Payload: Payload{
-			SnapshotObjectID:    summary.SnapshotID,
-			DataAdded:           summary.DataAdded,
-			TotalBytesProcessed: summary.TotalBytesProcessed,
-		},
+		Volume:      s.volume,
+		Type:        model.SnapshotBackendCDC,
+		SizeBytes:   summary.TotalBytesProcessed,
+		StoredBytes: summary.DataAddedPacked,
+		ReusedBytes: max(summary.TotalBytesProcessed-summary.DataAdded, 0),
+		Payload:     Payload{SnapshotObjectID: summary.SnapshotID},
 	}, nil
 }
 

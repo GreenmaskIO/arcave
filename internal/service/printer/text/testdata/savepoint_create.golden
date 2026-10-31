@@ -1,0 +1,14 @@
+Savepoint test3 · 01a188c4 · 19:45:35 · stored 48.9 MB
+            count     size   stored
+  volumes       4  48.9 MB  48.9 MB
+  layers        1   275 MB  44.0 KB
+  images        2   1.1 GB        0
+
+Warnings (3)
+  ! db-1 was killed at the stop deadline: its volumes may hold a crash state
+    → raise compose.stop_timeout or the service's stop_grace_period
+  ! image 0123456789ab is not stored, only its identity
+    → a rollback needs it pullable to rebuild a container on it
+  ! worker has no volumes: only its writable layer is held
+
+  roll back:  arcave -p arcave-demo rollback test3

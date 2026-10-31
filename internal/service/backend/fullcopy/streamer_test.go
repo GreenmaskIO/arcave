@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -30,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // The stream lands verbatim at <id>/<objectID>/data.tar of the store the spec
@@ -55,7 +57,9 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 				assert.Equal(t, payload, readObject(t, store, archiveKey))
 				assert.Equal(t, volume, stat.Volume, "the stat carries the unit it captured")
 				assert.Equal(t, model.SnapshotBackendFullCopy, stat.Type)
-				assert.Equal(t, Payload{SizeBytes: int64(len(payload))}, stat.Payload)
+				assert.Equal(t, int64(len(payload)), stat.SizeBytes)
+				assert.Equal(t, int64(len(payload)), stat.StoredBytes, "the archive is stored whole")
+				assert.Nil(t, stat.Payload, "a fullcopy archive is addressed by its key alone")
 			},
 		},
 		{
@@ -214,6 +218,54 @@ func TestSnapshotter_Restore(t *testing.T) {
 			docker.AssertExpectations(t)
 		})
 	}
+}
+
+// bytesRecorder keeps the bytes of every sample the tracker reports.
+type bytesRecorder struct {
+	samples []progress.Bytes
+}
+
+func (r *bytesRecorder) Render(evt progress.Event) {
+	if evt.Sample.Bytes != nil {
+		r.samples = append(r.samples, *evt.Sample.Bytes)
+	}
+}
+
+// The restore reports its bytes out of the size the request carries, the capture's own count.
+func TestSnapshotter_Restore_ReportsTheRequestedTotal(t *testing.T) {
+	// Arrange
+	const payload = "tar-stream-bytes"
+	volume := bindVolume("app", "/etc/cfg")
+	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
+	docker := &mockVolumeStreamer{}
+	store := newStore(t, "savepoints")
+	recorder := &bytesRecorder{}
+	now := func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
+	ctx := progress.WithTracker(context.Background(), progress.New(recorder, now))
+	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "rollback"})
+	ctx, _ = progress.Run(ctx, progress.Step{Kind: "volume.restore"}, progress.MeasureBytes)
+	require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(payload)))
+	docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
+	docker.On("WriteVolume", mock.Anything, bindAddress("/etc/cfg"), mock.Anything).
+		Run(func(args mock.Arguments) {
+			_, err := io.Copy(io.Discard, args.Get(2).(io.Reader))
+			assert.NoError(t, err)
+		}).
+		Return(nil).Once()
+	snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
+	require.NoError(t, err)
+
+	// Act
+	err = snapshotter.Restore(ctx, model.BackendRestoreRequest{
+		SnapshotID: "019e843e-1650-7000-8000-000000000000",
+		SizeBytes:  int64(len(payload)),
+	})
+
+	// Assert
+	require.NoError(t, err)
+	require.NotEmpty(t, recorder.samples)
+	assert.Equal(t, int64(len(payload)), recorder.samples[0].Total)
+	docker.AssertExpectations(t)
 }
 
 // Removal is a sweep — an archive already gone is not an error — and the

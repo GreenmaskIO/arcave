@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // ObjectCollector finds the garbage of one data kind, one implementation's way.
@@ -57,30 +58,26 @@ type collectorSet struct {
 	composeProject []ComposeProjectCollector
 	// unavailable aborts the collector of a kind whose probe failed.
 	unavailable map[model.GarbageCollectorKind]error
-	warnings    []string
 }
 
 // readCollectorSet picks, in their order, the collectors resolving dataKinds — none named looks
-// at every data kind — and probes them: one that cannot reach what it reads is aborted, with a
-// warning, since a report that looked at nothing would read as clean.
+// at every data kind — and probes them: one that cannot reach what it reads is aborted, since a
+// report that looked at nothing would read as clean.
 func (s *GarbageCollector) readCollectorSet(ctx context.Context, dataKinds []model.GarbageDataKind) collectorSet {
 	var (
 		daemon         = selectCollectors(s.daemonCollectors, dataKinds)
 		composeProject = selectCollectors(s.composeProjectCollectors, dataKinds)
 		unavailable    = map[model.GarbageCollectorKind]error{}
-		warnings       []string
 	)
 	for _, collector := range slices.Concat(toObjectCollectors(daemon), toObjectCollectors(composeProject)) {
 		if err := probeCollector(ctx, collector); err != nil {
 			unavailable[collector.Kind()] = err
-			warnings = append(warnings, fmt.Sprintf("%s is not judged: %v", collector.DataKind(), err))
 		}
 	}
 	return collectorSet{
 		daemon:         daemon,
 		composeProject: composeProject,
 		unavailable:    unavailable,
-		warnings:       warnings,
 	}
 }
 
@@ -112,7 +109,7 @@ func probeCollector(ctx context.Context, collector ObjectCollector) error {
 	}
 	err := probe.Probe(ctx)
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Str("collector", string(collector.Kind())).Msg("garbage kind is not judged")
+		zerolog.Ctx(ctx).Info().Err(err).Str("collector", string(collector.Kind())).Msg("garbage kind is not judged")
 	}
 	return err
 }
@@ -147,6 +144,17 @@ func (c *collectorSet) runComposeProjectCollectors(
 // runCollector runs find into the collector's report: a scope or probe failure aborts it, a
 // failure of find is the report's own error.
 func (c *collectorSet) runCollector(
+	ctx context.Context, collector ObjectCollector, composeProject model.DockerComposeProjectName, scopeErr error,
+	find func() (model.GarbageStat, error),
+) model.GarbageReport {
+	_, step := progress.Run(ctx, progress.Step{Kind: kindCollector, ID: string(collector.Kind())})
+	report := c.readCollectorReport(ctx, collector, composeProject, scopeErr, find)
+	endCollectorStep(ctx, step, report)
+	return report
+}
+
+// readCollectorReport runs find into the collector's report.
+func (c *collectorSet) readCollectorReport(
 	ctx context.Context, collector ObjectCollector, composeProject model.DockerComposeProjectName, scopeErr error,
 	find func() (model.GarbageStat, error),
 ) model.GarbageReport {

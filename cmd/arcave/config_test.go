@@ -47,7 +47,7 @@ func TestResolveConfig(t *testing.T) {
 				// No project segment: storefactory roots the store at the project itself.
 				assert.Equal(t, filepath.Join(".arcave", "storage"), cfg.Storage.DirectoryPath())
 				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
-				assert.Equal(t, utils.DefaultLogLevel, cfg.Log.Level)
+				assert.Empty(t, cfg.Log.Level, "the output picks the level when none is set")
 				assert.Equal(t, utils.DefaultLogFormat, cfg.Log.Format)
 			},
 		},
@@ -132,7 +132,7 @@ func TestResolveConfig(t *testing.T) {
 		{
 			// The flag's own default is the *lowest* precedence source, so an
 			// unchanged --wait-timeout must not overwrite the file's value.
-			name:      "an unchanged --progress leaves the file's mode alone",
+			name:      "an unchanged --compose-progress leaves the file's mode alone",
 			file:      "compose:\n  progress: quiet\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -264,7 +264,7 @@ func TestResolveConfig_IgnoresUnboundFlags(t *testing.T) {
 	writeConfig(t, root, "log:\n  level: warn\n")
 	v := testViper(root)
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-	fs.String("log-level", utils.DefaultLogLevel, "") // deliberately NOT bound
+	fs.String("log-level", "", "") // deliberately NOT bound
 	require.NoError(t, fs.Set("log-level", "debug"))
 
 	// Act
@@ -304,17 +304,17 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	t.Helper()
 
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-	fs.String("log-level", utils.DefaultLogLevel, "")
+	fs.String("log-level", "", "")
 	fs.String("log-format", utils.DefaultLogFormat, "")
 	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
-	fs.String("progress", config.ProgressLog, "")
+	fs.String("compose-progress", config.ProgressLog, "")
 	viperBind(v, fs, map[string]string{
-		"log-level":    "log.level",
-		"log-format":   "log.format",
-		"wait-timeout": "compose.wait_timeout",
-		"stop-timeout": "compose.stop_timeout",
-		"progress":     "compose.progress",
+		"log-level":        "log.level",
+		"log-format":       "log.format",
+		"wait-timeout":     "compose.wait_timeout",
+		"stop-timeout":     "compose.stop_timeout",
+		"compose-progress": "compose.progress",
 	})
 	return fs
 }

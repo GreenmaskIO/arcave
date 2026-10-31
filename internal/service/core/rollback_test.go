@@ -55,7 +55,7 @@ func TestService_Rollback_RestoresAndDropsTheSafetySnapshot(t *testing.T) {
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	up := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
 	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	removeSafety := safetySnapshotBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
@@ -141,7 +141,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
 	// The revert rebuilds the compose project the backup was taken of and replays it under the
 	// id its capture reported; a successful revert drops the backup too.
@@ -227,7 +227,7 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
@@ -300,7 +300,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
 
 	safetySnapshotBackend := &mockBackend{volume: vol}
@@ -446,7 +446,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
 
 	var safetySnapshotID model.SavepointID
@@ -546,7 +546,7 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
@@ -618,7 +618,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 
 	safetySnapshotBackend := &mockBackend{volume: vol}
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
@@ -740,7 +740,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}},
+		Stats:     []model.SnapshotStat{{Volume: vol, Type: model.SnapshotBackendFullCopy, SizeBytes: demoVolumeSize, Payload: "sp-payload"}},
 		Spec:      demoSpecRef(),
 	}
 	store := newDirStore(t)
@@ -904,7 +904,7 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 		}},
 	}}
 	record := demoRecord()
-	record.Stats = []model.SnapshotStat{{Volume: anonVol, Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}}
+	record.Stats = []model.SnapshotStat{{Volume: anonVol, Type: model.SnapshotBackendFullCopy, SizeBytes: demoVolumeSize, Payload: "sp-payload"}}
 
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
@@ -926,7 +926,7 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 
 	savepointBackend := &mockBackend{volume: anonVol}
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: anonVol}
 	safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -1047,7 +1047,7 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 	create := runner.On("Create", mock.Anything, target).Return(nil).Once()
 	backend := &mockBackend{volume: vol}
 	restoreVolume := backend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	start := runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
 
 	mock.InOrder(gateGet, loadSpec, restoreImage, putRecreating, create, putRestoring,
@@ -1305,7 +1305,7 @@ func TestService_Rollback_InterruptedRestoreReverts(t *testing.T) {
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Run(func(mock.Arguments) { cancel() }).Return(context.Canceled).Once()
 
 	safetySnapshotBackend := &mockBackend{volume: vol}

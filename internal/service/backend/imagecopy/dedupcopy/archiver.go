@@ -26,6 +26,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // NamespaceBlobs is the blob store's key under the compose project store, beside the savepoints;
@@ -58,7 +59,12 @@ func (s *Archiver) Store(
 	manifest := imagecopy.Manifest{ImageID: imageID, Format: imagecopy.FormatBlobs}
 	seen := map[string]bool{}
 
-	reader := tar.NewReader(archive)
+	// One sampler for the step's bytes: read off the stream, stored or reused per member.
+	sampler := progress.NewSampler(progress.Current(ctx), progress.Sample{Bytes: &progress.Bytes{}})
+	reader := tar.NewReader(&sampledReader{
+		r:       archive,
+		sampler: sampler,
+	})
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -79,6 +85,12 @@ func (s *Archiver) Store(
 		if member.Kind == imagecopy.KindMetadata {
 			seen[member.Name] = true
 		}
+		sampler.Update(func(sample *progress.Sample) {
+			sample.Bytes.Stored += written
+			if member.Kind == imagecopy.KindBlob && written == 0 {
+				sample.Bytes.Reused += header.Size
+			}
+		})
 		size.Image += header.Size
 		size.Written += written
 		manifest.Members = append(manifest.Members, member)
@@ -215,4 +227,20 @@ func openSized(ctx context.Context, store storages.Storager, key string) (io.Rea
 		return nil, 0, fmt.Errorf("read %s: %w", key, err)
 	}
 	return body, stat.Size, nil
+}
+
+// sampledReader counts the bytes read off an archive on a sampler.
+type sampledReader struct {
+	r       io.Reader
+	sampler *progress.Sampler
+}
+
+func (r *sampledReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.sampler.Update(func(sample *progress.Sample) {
+			sample.Bytes.Done += int64(n)
+		})
+	}
+	return n, err
 }

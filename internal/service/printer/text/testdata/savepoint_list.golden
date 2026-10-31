@@ -1,0 +1,3 @@
+NAME                      ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+test3                     01a188c4-1650-7000-8000-000000000001  2026-10-29 19:45  4        1       48.9 MB  3
+before-rollback (safety)  01a188c9-0000-7000-8000-000000000002  2026-10-29 20:45  0        0       0 B      -

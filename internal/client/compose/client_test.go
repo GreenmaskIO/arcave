@@ -636,3 +636,39 @@ func (m *mockComposeAPI) calledOnce(t *testing.T, method string) mock.Call {
 	require.Len(t, found, 1, "expected exactly one %s call", method)
 	return found[0]
 }
+
+type sinkKey struct{}
+
+// Each call routes compose's events to the sink of its own context, and takes it back on return.
+func TestClient_Stop_RoutesEventsToTheContextsSink(t *testing.T) {
+	// Arrange
+	project := fixtureProject()
+	var logs bytes.Buffer
+	adapter := NewProgressLogger(zerolog.New(&logs))
+	sink := &sinkRecorder{}
+	composeAPI := &mockComposeAPI{}
+	composeAPI.On("Ps", mock.Anything, "demo", psRunning(project)).Return([]api.ContainerSummary{}, nil).Once()
+	composeAPI.On("Stop", mock.Anything, "demo", mock.Anything).
+		Run(func(mock.Arguments) {
+			_, _ = adapter.Write([]byte(`{"id":"Container demo-db-1","status":"Stopped"}` + "\n"))
+		}).
+		Return(nil).Once()
+	opts := testOptions
+	opts.Events = adapter
+	opts.SinkFromContext = func(ctx context.Context) EventSink {
+		sink, _ := ctx.Value(sinkKey{}).(EventSink)
+		return sink
+	}
+	c := NewClient(composeAPI, opts)
+	ctx := context.WithValue(context.Background(), sinkKey{}, EventSink(sink))
+
+	// Act
+	_, err := c.Stop(ctx, project)
+	_, _ = adapter.Write([]byte(`{"id":"Container demo-db-1","status":"Removed"}` + "\n"))
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []Event{{Kind: "Container", Name: "demo-db-1", Status: "Stopped", State: EventDone}}, sink.events)
+	assert.Contains(t, logs.String(), `"status":"Removed"`, "an event past the call goes to the log again")
+	composeAPI.AssertExpectations(t)
+}

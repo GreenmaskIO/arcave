@@ -60,9 +60,10 @@ func (s *Service) resolveBackupVolumes(
 		return nil, model.NotCovered{}, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
 
+	// Info, not Warn: what is left out is in the record's not_covered, and the result says so.
 	log := zerolog.Ctx(ctx)
 	for _, skippedMount := range notCovered.Mounts {
-		event := log.Warn()
+		event := log.Info()
 		if skippedMount.Volume != "" {
 			event = event.Str("volume", skippedMount.Volume)
 		}
@@ -80,7 +81,7 @@ func (s *Service) resolveBackupVolumes(
 		event.Str("reason", skippedMount.Detail).Msg(msg)
 	}
 	for _, serviceName := range notCovered.ServicesWithoutVolumes {
-		log.Warn().Str("service", serviceName).Msg("service has no volume to back up")
+		log.Info().Str("service", serviceName).Msg("service has no volume to back up")
 	}
 	return volumes, notCovered, nil
 }

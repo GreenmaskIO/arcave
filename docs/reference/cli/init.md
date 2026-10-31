@@ -62,7 +62,6 @@ capture:
 rollback:
     leftover_volumes: overwrite
 log:
-    level: info
     format: text
 ```
 
