@@ -11,6 +11,10 @@ import TabItem from '@theme/TabItem';
 
 A loop that snapshots on every iteration will fill a disk. `savepoint remove` is how you bound it, and [`arcave gc`](../reference/cli/gc.md) is how you get the space back.
 
+<video src={require('../assets/demo/gc.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* three `cdc` savepoints, `savepoint rm --retain-recent 1`, then `arcave gc --dry-run` listing what would be freed — the removed savepoints' restic snapshots and image blobs — and `arcave gc` freeing it.
+
 ## 1. See what you have
 
 ```shell
@@ -233,10 +237,6 @@ Only after you are certain you do not need the pre-rollback state it holds. A sa
 ## 8. Reclaim the space
 
 `savepoint remove` deletes a savepoint's record and its own directory. What it shared with other savepoints — the deduplicated image blobs and images, and with the `cdc` backend its restic snapshots — stays in the store until [`arcave gc`](../reference/cli/gc.md) finds no savepoint using it:
-
-<video src={require('../assets/demo/gc.mp4').default} autoPlay loop muted playsInline controls width="100%" />
-
-*What it shows:* three `cdc` savepoints, `savepoint rm --retain-recent 1`, then `arcave gc --dry-run` listing what would be freed — the removed savepoints' restic snapshots and image blobs — and `arcave gc` freeing it.
 
 ```shell
 arcave gc --dry-run    # what would be freed, nothing deleted

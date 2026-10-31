@@ -8,6 +8,10 @@ keywords: [arcave sessions, branching, fork, savepoint, environment branching, d
 
 A **session** is an independent line of savepoints inside a project. A session starts empty or as a copy of another session, and the lines do not mix. A branch is a session, and its name is the session's name.
 
+<video src={require('./assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
+
 `arcave init` puts you in `baseline`, the default session, which is why the diagrams below start in it. Creating a session does not switch you into it. A command works in the session you name with `--session` or `ARCAVE_SESSION`, by id or by name; when you name none, it works in the **current session**, and in `baseline` when no current session is set:
 
 | Command | What it does |
@@ -78,10 +82,6 @@ arcave session create --from=baseline --name=feat/add-new-table
 export ARCAVE_SESSION=feat/add-new-table   # or: arcave session set feat/add-new-table
 arcave rollback -p shop v1.0
 ```
-
-<video src={require('./assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
-
-*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
 
 ## Related docs
 

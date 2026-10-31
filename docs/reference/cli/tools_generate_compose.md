@@ -8,15 +8,15 @@ keywords: [arcave tools generate-compose, docker compose file, generate compose,
 
 Writes a docker compose file for the running compose project, built from what the Docker daemon reports about its containers, volumes and networks. It is for a project whose compose file was lost, or was never written.
 
+<video src={require('../../assets/demo/generate-compose.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* `arcave tools generate-compose -o recovered.yaml` on a running project, and the head of the compose file it wrote.
+
 ```text title="Synopsis"
 arcave tools generate-compose -p <compose-project> -o <file> [flags]
 ```
 
 This is the spec `savepoint create` records in a savepoint's `project.yaml`, minus arcave's own labels and extensions. It is read-only: it stops nothing, takes no lock, opens no store and needs no `arcave init`. It needs only a reachable daemon, the one `docker.*` names.
-
-<video src={require('../../assets/demo/generate-compose.mp4').default} autoPlay loop muted playsInline controls width="100%" />
-
-*What it shows:* `arcave tools generate-compose -o recovered.yaml` on a running project, and the head of the compose file it wrote.
 
 ## Flags
 

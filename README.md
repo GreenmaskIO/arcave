@@ -13,6 +13,8 @@
 
 It works on any Compose project, on the Docker you already have.
 
+![arcave: savepoint, break, rollback](docs/assets/demo/base-cycle.gif)
+
 > **Alpha.** arcave is at `v0.1.0-alpha.2`. Commands, output and the storage format may change between alphas, with no migration path for savepoints taken by an earlier one. It is not ready for production use yet.
 
 [![Discord](https://img.shields.io/discord/1179422525294399488?label=Discord&logo=discord)](https://discord.com/invite/rKBKvDECfd)
@@ -22,8 +24,6 @@ It works on any Compose project, on the Docker you already have.
 [![GitHub Release](https://img.shields.io/github/v/release/GreenmaskIO/arcave)](https://github.com/GreenmaskIO/arcave/releases/latest)
 [![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/GreenmaskIO/arcave/total)](https://github.com/GreenmaskIO/arcave/releases)
 
-
-![arcave: savepoint, break, rollback](docs/assets/demo/base-cycle.gif)
 
 ## Key Features
 
