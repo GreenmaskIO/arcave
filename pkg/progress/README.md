@@ -23,6 +23,18 @@ stays empty.
 | `Batch` | workflow over objects of one kind | at once, with `Items.Total` | `items`, counted by the tracker |
 | `Run` | activity — one action, no children | at once | what the caller declares |
 
+A step is either made of other steps or does the work itself, and only the second measures:
+
+- it will open steps of its own → `Begin`;
+- it loops over objects of one kind, to be counted `done/total` → `Batch`, each object a `Run`;
+- it is one action — a copy, a call, a wait — whether or not it measures anything → `Run`.
+
+Nothing opens under a `Run`: code below an activity reports into it, through `Current(ctx)`.
+
+`Step.Kind` is the consumer's; `Type` is set by the constructor and never by the caller. `Name`
+names a workflow's instance (`album.publish summer`), `ID` an object under a batch
+(`file beach.jpg`).
+
 `WithTracker` lets a workflow open its own root without knowing whether it is one: the same
 `Begin` opens the tracker's root at the top of a run, and a child when another workflow calls it.
 
@@ -32,7 +44,8 @@ context reaches its activity through `Current(ctx)`. `WithStep(ctx, step)` puts 
 derived from an activity's — a lock's, say, whose context the rest of the workflow runs on. A constructor under an activity, or under a step
 that has ended, returns a mute step and logs a warning; so does every constructor when the context carries no tracker,
 and under `Discard()`. Every method of a mute step is a no-op, so a consumer's tests change
-nothing.
+nothing. `IsMute()` tells a caller that would set something up only to report into the step —
+a sink for another library's events, say — that nothing would be reported.
 
 A lazy workflow that ends without a child reports nothing: what never ran is never mentioned.
 `Update` and `Progress` keep it unopened; only a child, `Warn` or a failure opens it. A batch
@@ -99,11 +112,17 @@ defer func() { batch.End(err) }()
 eg, egCtx := errgroup.WithContext(ctx)
 for _, f := range files {
 	eg.Go(func() error {
-		_, step := progress.Run(egCtx, progress.Step{Kind: kindFile, ID: f.name}, progress.MeasureBytes)
-		...
+		ctx, step := progress.Run(egCtx, progress.Step{Kind: kindFile, ID: f.name}, progress.MeasureBytes)
+		err := upload(ctx, f) // ctx, not egCtx: Current(ctx) is the file's step, which counts the bytes
+		step.End(err)
+		return err
 	})
 }
 ```
+
+The context a constructor returns is the one to pass down: the step's code below reaches it
+through `Current(ctx)` and nothing else. Passed the parent's instead, `NewReader` counts on the
+batch, which declares no bytes, and the bytes are dropped.
 
 The error is reported where it arose: always on an activity, on a workflow only when none of
 its descendants failed — an error raised by the workflow's own code. The ancestors of a failed
@@ -253,3 +272,22 @@ tracker := progress.New(progressRenderer, time.Now)
 `go run ./pkg/progress/examples -scenario all` runs four workflows through it — success, failure
 with cancellation and rollback, four uploads at once, a source with no total — or through
 `-renderer log|json`; `-speed` scales them.
+
+## Testing
+
+A test that is not about progress needs nothing: without a tracker every step is mute. A test
+that is records the stream through its own `Renderer` on a tracker with a fixed clock, put on the
+context the code under test is handed:
+
+```go
+type recorder struct{ events []progress.Event }
+
+func (r *recorder) Render(evt progress.Event) { r.events = append(r.events, evt) }
+
+rec := &recorder{}
+tracker := progress.New(rec, func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) })
+err := svc.Publish(progress.WithTracker(ctx, tracker), album)
+```
+
+`Render` is called under the tracker's lock, so the recorder needs none of its own.
+`example_test.go` moves its clock by hand and asserts the stream through `renderer.NewLog`.
