@@ -8,6 +8,10 @@ keywords: [database branching, environment branching, session, fork, savepoint, 
 
 Branch your environment roughly the way you branch your code: fork a line off a known state, go off and change things on it, and switch between lines when you want to.
 
+<video src={require('../assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
+
 In arcave a branch is a [session](../sessions.md) — an independent line of savepoints. A fork copies every savepoint of the session it starts from, and nothing written on one line reaches the other. It is not a copy-on-write clone and there is no second environment running beside the first — but for the thing developers actually want from database branching on a laptop, it gets most of the way there with nothing but Docker.
 
 The commands below assume the compose project is named in the shell, `export ARCAVE_PROJECT_NAME=myapp`, or with `-p myapp` on each `savepoint` and `rollback` command.
@@ -44,10 +48,6 @@ arcave rollback billing-wip
 ```
 
 A fork deploys nothing: the running project keeps whatever it ran until you roll back inside the new session. `session set` makes a session the current one for every command that names none; to work in another session for one command, pass `--session feature/reporting` instead.
-
-<video src={require('../assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
-
-*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
 
 The session names and the git branch names are yours to keep in step. arcave does not read your repository and will not do it for you.
 
