@@ -1,7 +1,7 @@
 ---
 title: Environment variables
-description: The ARCAVE_ variables arcave reads — which config keys they reach, the two different things ARCAVE_PROJECT_NAME names, and ARCAVE_SESSION.
-keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, config keys, docker compose]
+description: The ARCAVE_ variables arcave reads — which config keys they reach, the two different things ARCAVE_PROJECT_NAME names, ARCAVE_SESSION, ARCAVE_FORMAT and ARCAVE_PROGRESS.
+keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS, config keys, docker compose]
 ---
 
 # Environment variables
@@ -63,6 +63,21 @@ arcave -p myapp savepoint create step-1
 ```
 
 For [`arcave mcp`](cli/mcp.md) it pins the server: every tool call given no `session` works in that session, and `session_set` and `session_unset` are refused.
+
+## `ARCAVE_FORMAT` and `ARCAVE_PROGRESS`
+
+How a run prints its result and shows its progress — the same things `--format` and `--progress` name, and beaten by them. Neither is a config key: they describe one run's output, not the project.
+
+| Variable | Values | Unset |
+|---|---|---|
+| `ARCAVE_FORMAT` | `auto`, `json`, `text` | `auto`: text while the live tree is drawn and stdout is a terminal, else JSON |
+| `ARCAVE_PROGRESS` | `auto`, `tty`, `log`, `json` | `auto`: the live tree on a terminal stderr with `log.format: text`, else log records |
+
+```shell title="JSON results on a terminal, for the rest of the shell"
+export ARCAVE_FORMAT=json
+```
+
+See [Output and exit codes](output.md).
 
 ## Variables that are not arcave's
 

@@ -4,6 +4,9 @@ description: Find and delete the garbage arcave leaves in the store and in the D
 keywords: [arcave gc, garbage collection, dry run, delete, savepoint data, deduplicated volumes, image blobs, restored layers]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # arcave gc
 
 Finds what no live savepoint of a session keeps alive, and deletes it. The report covers the session's store, every compose project in it, and the Docker daemon. `--dry-run` reports without deleting anything.
@@ -15,6 +18,10 @@ arcave gc [--dry-run] [--session <session>] [--kind <kind>…] [--restored-layer
 gc deletes every kind of data it finds: savepoint directories, stored images and their layers, `cdc` snapshots, and the layer tags rollbacks left in Docker. gc asks nothing before it deletes: run `arcave gc --dry-run` first to see what will go.
 
 gc stops nothing. It holds the project lock for its whole run, so it refuses to run while another arcave command in the project is working. It also holds the session's lock in the store, which it waits for as every command does. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
+
+<video src={require('../../assets/demo/gc.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* three `cdc` savepoints, `savepoint rm --retain-recent 1`, `arcave gc --dry-run` reporting what the two removed ones left — their restic snapshots and image blobs — and `arcave gc` deleting it.
 
 ## Flags
 
@@ -89,44 +96,119 @@ gc refuses to delete while an interrupted rollback is marked in `.arcave/infligh
 
 ## Output
 
-stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions gc takes, or under `--dry-run` would take. An op's `action` is what deleting its target takes: `delete-tree` (a savepoint's directory), `delete-image` (a stored image, its manifest first), `delete-object` (a blob), `forget` (a `cdc` snapshot, or a `cdc` repository to prune) or `untag` (a restored layer's tag). A run that deletes adds each report's `deletion`: what deleting those ops did. A dry run and a report that was aborted or failed carry none; a report that found nothing carries an empty one.
+On a terminal, the summary adds the reports up by data kind, and its `Warnings` name what was held back, left unjudged, aborted or failed. In the JSON, stdout carries one report per collector for each compose project of the session, what each dead savepoint frees, and a total. A `restored-layers` report has no `compose_project`: it covers the daemon. Each report has a `summary` that every kind shares, and a `detail` specific to its kind. `detail.ops` lists the actions gc takes, or under `--dry-run` would take. An op's `action` is what deleting its target takes: `delete-tree` (a savepoint's directory), `delete-image` (a stored image, its manifest first), `delete-object` (a blob), `forget` (a `cdc` snapshot, or a `cdc` repository to prune) or `untag` (a restored layer's tag). A run that deletes adds each report's `deletion`: what deleting those ops did. A dry run and a report that was aborted or failed carry none; a report that found nothing carries an empty one.
 
-```json title="stdout"
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stderr + stdout"
+✔ gc            1.3s
+├── ✔ gc.find   0.3s
+└── ✔ gc.erase  0.0s
+
+Garbage collected · session 00000000-0000-0000-0000-000000000001
+  DATA                  FOUND  SIZE     DELETED  FREED
+  savepoint-data        0      0 B      0        0 B
+  deduplicated-volumes  0      0 B      0        0 B
+  image-layers          5      52.5 MB  5        52.5 MB
+  upstream-images       0      0 B      0        0 B
+  restored-layers       0      0 B      0        0 B
+  total                 5      52.5 MB  5        52.5 MB
+
+Warnings (1)
+  ! restored-layers: 2 objects held back
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
+```json title="stdout (trimmed)"
 {
   "dry_run": false,
   "session": "00000000-0000-0000-0000-000000000001",
   "reports": [
     {
+      "data_kind": "restored-layers",
+      "collector": "docker-layer-tags",
+      "summary": {
+        "found": 0,
+        "bytes": 0,
+        "skipped": 2,
+        "unjudged": 0
+      },
+      "detail": {
+        "ops": [],
+        "skipped": [
+          {
+            "target": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000",
+            "reason": "recently-tagged",
+            "last_modified": "2026-10-31T09:32:30.14592126Z"
+          },
+          {
+            "target": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
+            "reason": "recently-tagged",
+            "last_modified": "2026-10-31T09:32:31.344103927Z"
+          }
+        ],
+        "in_use": 2,
+        "unattributed": 21,
+        "other_compose_projects": 0
+      },
+      "deletion": { "not_run": 0 }
+    },
+    …,
+    {
       "data_kind": "image-layers",
       "collector": "oci-blobs",
-      "compose_project": "demo",
-      "summary": {"found": 1, "bytes": 52428800, "skipped": 0, "unjudged": 0},
+      "compose_project": "myapp",
+      "summary": {
+        "found": 5,
+        "bytes": 52454335,
+        "skipped": 0,
+        "unjudged": 0
+      },
       "detail": {
-        "ops": [{
-          "action": "delete-object",
-          "target": "shared/oci/blobs/sha256/4f…",
-          "bytes": 52428800,
-          "reason": "unreferenced",
-          "last_modified": "2026-10-12T09:14:03Z",
-          "savepoint": "019e843e-1650-7000-8000-000000000002"
-        }],
-        "live": 12
+        "ops": [
+          {
+            "action": "delete-object",
+            "target": "shared/oci/blobs/sha256/436681949bce0e8d645de26d30b5c0ade6fba606b0aee33f358f3cd5c7984ecc",
+            "bytes": 52434565,
+            "reason": "unreferenced",
+            "last_modified": "2026-10-31T11:34:56.838360686+02:00"
+          },
+          …
+        ],
+        "live": 36
       },
       "deletion": {
-        "deleted": [{"target": "shared/oci/blobs/sha256/4f…", "bytes": 52428800}],
+        "deleted": [
+          {
+            "target": "shared/oci/blobs/sha256/436681949bce0e8d645de26d30b5c0ade6fba606b0aee33f358f3cd5c7984ecc",
+            "bytes": 52434565
+          },
+          …
+        ],
         "not_run": 0
       }
-    }
-  ],
-  "savepoints": [
-    {"compose_project": "demo", "savepoint": "019e843e-1650-7000-8000-000000000002", "found": 2, "bytes": 52430912}
+    },
+    …
   ],
   "total": {
-    "found": 1, "bytes": 52428800, "bytes_complete": true, "skipped": 0, "unjudged": 0, "aborted": 0, "failed": 0,
-    "deleted": 1, "freed_bytes": 52428800
+    "found": 5,
+    "bytes": 52454335,
+    "bytes_complete": true,
+    "skipped": 2,
+    "unjudged": 0,
+    "aborted": 0,
+    "failed": 0,
+    "deleted": 5,
+    "freed_bytes": 52454335
   }
 }
 ```
+
+</TabItem>
+</Tabs>
 
 | Field | Meaning |
 |---|---|

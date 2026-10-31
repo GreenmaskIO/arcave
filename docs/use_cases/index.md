@@ -22,10 +22,11 @@ And on one constraint, which shapes every workflow here:
 arcave savepoint create <NAME>       # capture
 arcave savepoint list                # find
 arcave rollback <NAME|ID|latest>     # restore
-arcave savepoint remove <ID>         # prune
+arcave savepoint remove <NAME|ID>    # prune
+arcave gc                            # reclaim the space
 ```
 
-Four commands. Every workflow below is a way of arranging them. When the savepoints need more than one line — a branch per feature, a baseline kept apart — the [`arcave session`](../reference/cli/session.md) commands add independent lines of savepoints beside the default one; see [Sessions and branching](../sessions.md).
+Four commands, and `gc` to give back the space removed savepoints held. Every workflow below is a way of arranging them. When the savepoints need more than one line — a branch per feature, a baseline kept apart — the [`arcave session`](../reference/cli/session.md) commands add independent lines of savepoints beside the default one; see [Sessions and branching](../sessions.md).
 
 ## A workflow for every situation
 

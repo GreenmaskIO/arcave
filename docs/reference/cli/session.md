@@ -4,6 +4,9 @@ description: Create, list, remove and switch sessions — the independent lines 
 keywords: [arcave session, session create, fork, branch, docker compose, savepoint]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # arcave session
 
 A **session** is an independent line of savepoints inside a project. A session forked from another is what arcave calls a branch; there is no separate verb for it.
@@ -61,7 +64,7 @@ Four things to know before you run it.
 
 ## `session list`
 
-The project's sessions as a JSON array, newest first — `baseline`, created by no one, comes last — or oldest first with `--sort asc`: each one's id, name, `status`, whether it is `current` — the session a command naming none works in, or the one `--session` names —, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store.
+The project's sessions, newest first — `baseline`, created by no one, comes last — or oldest first with `--sort asc`: each one's id, name, `status`, whether it is `current` — the session a command naming none works in, or the one `--session` names —, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store. On a terminal they are a table, the current session marked `*`; in a script, a JSON array.
 
 Without `--all` every session listed is `ready`. `--all` adds the session directories that never got their record — what a fork leaves while it copies, or after it failed. They have no name; address them by id.
 
@@ -75,15 +78,30 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 
 `size_bytes` is measured from the store, not added up from the savepoints: it counts everything under the session's directory — volume data, container layers, the image blobs its savepoints share, and data a removed savepoint left behind. That is exactly what `session remove` frees.
 
-```json title="Output"
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+  NAME                ID                                    STATUS  CREATED           SAVEPOINTS  SIZE
+* feat/add-new-table  019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31  ready   2026-10-10 12:00  3           292 MB
+  baseline            00000000-0000-0000-0000-000000000001  ready   -                 2           251 MB
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
+```json title="stdout"
 [
   {"id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table",
    "created_at": "2026-10-10T12:00:00Z", "from": {"session": "00000000-0000-0000-0000-000000000001"},
-   "status": "ready", "current": true, "savepoint_count": 2, "compose_projects": ["shop"], "size_bytes": 734003396},
+   "status": "ready", "current": true, "savepoint_count": 3, "compose_projects": ["shop"], "size_bytes": 291585156},
   {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline",
-   "status": "ready", "current": false, "savepoint_count": 2, "compose_projects": ["shop"], "size_bytes": 734003200}
+   "status": "ready", "current": false, "savepoint_count": 2, "compose_projects": ["shop"], "size_bytes": 250689663}
 ]
 ```
+
+</TabItem>
+</Tabs>
 
 ## `session remove`
 
@@ -109,6 +127,8 @@ arcave session set feat/add-new-table
 {"id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table", "created_at": "2026-10-10T12:00:00Z",
  "from": {"session": "00000000-0000-0000-0000-000000000001"}}
 ```
+
+On a terminal: `Session feat/add-new-table · 019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31 · from 00000000-0000-0000-0000-000000000001`.
 
 ## `session unset`
 
@@ -144,6 +164,10 @@ arcave session current
 ```shell title="Fork a line of work off baseline"
 arcave session create --from=baseline --name=feat/add-new-table
 ```
+
+<video src={require('../../assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
 
 ```shell title="Work in it from now on, starting from a known good state"
 arcave session set feat/add-new-table

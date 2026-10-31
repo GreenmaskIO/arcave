@@ -79,6 +79,10 @@ export ARCAVE_SESSION=feat/add-new-table   # or: arcave session set feat/add-new
 arcave rollback -p shop v1.0
 ```
 
+<video src={require('./assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
+
 ## Related docs
 
 * [`arcave session`](reference/cli/session.md) — the command, its flags and its errors.

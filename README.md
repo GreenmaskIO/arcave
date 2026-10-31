@@ -13,7 +13,7 @@
 
 It works on any Compose project, on the Docker you already have.
 
-> **Alpha.** arcave is at `v0.1.0-alpha.1`. Commands, output and the storage format may change between alphas, with no migration path for savepoints taken by an earlier one. It is not ready for production use yet.
+> **Alpha.** arcave is at `v0.1.0-alpha.2`. Commands, output and the storage format may change between alphas, with no migration path for savepoints taken by an earlier one. It is not ready for production use yet.
 
 [![Discord](https://img.shields.io/discord/1179422525294399488?label=Discord&logo=discord)](https://discord.com/invite/rKBKvDECfd)
 
@@ -22,11 +22,8 @@ It works on any Compose project, on the Docker you already have.
 [![GitHub Release](https://img.shields.io/github/v/release/GreenmaskIO/arcave)](https://github.com/GreenmaskIO/arcave/releases/latest)
 [![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/GreenmaskIO/arcave/total)](https://github.com/GreenmaskIO/arcave/releases)
 
-```shell
-arcave savepoint create before-migration
-# ...run the migration, the test suite, the agent...
-arcave rollback before-migration
-```
+
+![arcave: savepoint, break, rollback](docs/assets/demo/base-cycle.gif)
 
 ## Key Features
 
@@ -35,7 +32,10 @@ arcave rollback before-migration
 *   **[Reversible rollback](https://www.greenmask.io/docs/arcave/reference/cli/rollback/?utm_source=github&utm_medium=repo&utm_campaign=oss)**: A rollback takes a safety snapshot of what it is about to overwrite and replays it automatically if anything fails. A failed rollback leaves you where you started.
 *   **[Sessions and branching](https://www.greenmask.io/docs/arcave/reference/cli/session/?utm_source=github&utm_medium=repo&utm_campaign=oss)**: Independent lines of savepoints inside one project. A fork copies a whole session into a new one, and the two lines never mix.
 *   **[Incremental capture](https://www.greenmask.io/docs/arcave/reference/configuration/?utm_source=github&utm_medium=repo&utm_campaign=oss#snapshot)**: The `cdc` backend writes only the chunks that changed since the last savepoint. Container filesystems and images are deduplicated by default, whichever volume backend you pick — the base layer every savepoint shares is stored once.
-*   **[Built for agents](https://www.greenmask.io/docs/arcave/reference/mcp_tools/?utm_source=github&utm_medium=repo&utm_campaign=oss)**: `arcave mcp` serves savepoint create, list, remove and rollback — and the session commands — as MCP tools, so an agent checkpoints before it acts, rolls back when validation fails, and can fork a session of its own.
+*   **[Built for agents](https://www.greenmask.io/docs/arcave/reference/mcp_tools/?utm_source=github&utm_medium=repo&utm_campaign=oss)**: `arcave mcp` serves savepoint create, list, remove and rollback, the session commands, `gc` and compose-file generation as MCP tools, so an agent checkpoints before it acts, rolls back when validation fails, and can fork a session of its own.
+*   **[Space back on demand](https://www.greenmask.io/docs/arcave/reference/cli/gc/?utm_source=github&utm_medium=repo&utm_campaign=oss)**: `arcave gc` deletes what no remaining savepoint uses — stored data, `cdc` snapshots, the image tags rollbacks left in Docker. `--dry-run` shows it first.
+*   **[See what it is doing](https://www.greenmask.io/docs/arcave/reference/output/?utm_source=github&utm_medium=repo&utm_campaign=oss#progress)**: A live tree of every step on a terminal, a log line per step in CI, a JSON stream for a program. Results are text for you and JSON for a pipe.
+*   **[A compose file from a running project](https://www.greenmask.io/docs/arcave/reference/cli/tools_generate_compose/?utm_source=github&utm_medium=repo&utm_campaign=oss)**: `arcave tools generate-compose` writes the compose file Docker's view of the project implies — for a project whose file was lost, or never written.
 *   **Plain Docker**: No ZFS, no copy-on-write filesystem, no storage appliance, no Docker daemon to reconfigure — the daemon you already run, and the arcave binary.
 *   **Any compose project**: Postgres, MySQL, Kafka, Redis, MinIO, your own services. No allowlist — arcave reads what your Docker daemon is running.
 

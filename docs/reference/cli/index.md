@@ -23,7 +23,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`rollback`](rollback.md) | Returns the environment to a savepoint, selected by id, by name, or by `latest`. |
 | [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `remove`, `set`, `unset`, `current`. |
 | [`tools generate-compose`](tools_generate_compose.md) | Writes a docker compose file for a running compose project, from what the daemon reports. |
-| [`gc`](gc.md) | Finds and deletes the garbage arcave left in a session's store, and reports what it left in the Docker daemon. |
+| [`gc`](gc.md) | Finds and deletes the garbage arcave left in a session's store and in the Docker daemon. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |
 | [`status`](status.md) | Planned. Registered, and returns `not implemented`. |
 | `completion` | Cobra's shell-completion script generator, for bash, zsh, fish and PowerShell. |
@@ -94,7 +94,7 @@ compose project "myapp": no containers found: bring the compose project up once,
 
 `rollback` does not: a compose project with no containers — never started, or taken down — is built from the savepoint's own spec. See [Rolling back a project that is not running](rollback.md#rolling-back-a-project-that-is-not-running).
 
-Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `session remove`, `session set`, `session unset` — claims a non-blocking lock on `.arcave/lock`. A second one against the same project fails at once rather than queuing:
+Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `gc` (`--dry-run` included), `session create`, `session remove`, `session set`, `session unset` — claims a non-blocking lock on `.arcave/lock`. A second one against the same project fails at once rather than queuing:
 
 ```text
 another arcave command is already running in this project
