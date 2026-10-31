@@ -158,7 +158,7 @@ const (
 		"session_set (or pass session) and then rollback to one of its savepoints. A fork holds the project " +
 		"lock for its whole copy, so every other tool fails with a lock error until it finishes."
 	descSessionRemove = "Remove a session and every savepoint it holds, permanently. A compose project " +
-		"running from it is left as it is. The default session (baseline) cannot be removed. The current " +
+		"running from it is left as it is. The default session (baseline) is only emptied, and only with force. The current " +
 		"session, and the one this server is pinned to, are refused unless force is set, which also resets the current session to baseline; force " +
 		"likewise removes a tree whose fork still looks alive — only when no fork is running."
 	descSessionSet = "Make a session the current one, by name or id: every later tool call that is given " +
@@ -268,12 +268,12 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 	return nil, listOutput{Savepoints: savepoints}, nil
 }
 
-// removeSavepointInput selects savepoints to remove, either by explicit IDs or by
+// removeSavepointInput selects savepoints to remove, either by explicit refs or by
 // retention rules (the two modes are mutually exclusive).
 type removeSavepointInput struct {
 	Project      string   `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
 	Session      string   `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
-	IDs          []string `json:"ids,omitempty" jsonschema:"savepoint ids to delete; cannot be combined with the retention fields"`
+	Refs         []string `json:"refs,omitempty" jsonschema:"savepoints to delete, each by id or name; cannot be combined with the retention fields"`
 	RetainRecent int      `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest"`
 	RetainFor    string   `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
 	BeforeDate   string   `json:"before_date,omitempty" jsonschema:"delete savepoints created before this RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z"`
@@ -289,7 +289,7 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 	defer release()
 
 	res, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{
-		IDs:          model.SavepointIDs(in.IDs),
+		Refs:         in.Refs,
 		RetainRecent: in.RetainRecent,
 		RetainFor:    in.RetainFor,
 		BeforeDate:   in.BeforeDate,
@@ -464,7 +464,7 @@ func (h *MCPHandler) createSessionMCP(ctx context.Context, _ *mcpsdk.CallToolReq
 // sessionRemoveInput is session_remove's input schema.
 type sessionRemoveInput struct {
 	Session string `json:"session" jsonschema:"the session to remove, by name or id; a tree without a record by id only"`
-	Force   bool   `json:"force,omitempty" jsonschema:"also remove the current session, resetting the current session to baseline, or a tree whose fork still looks alive"`
+	Force   bool   `json:"force,omitempty" jsonschema:"also empty the default session, remove the current session, resetting the current session to baseline, or a tree whose fork still looks alive"`
 }
 
 // removeSessionMCP removes a session and reports the bytes it freed.

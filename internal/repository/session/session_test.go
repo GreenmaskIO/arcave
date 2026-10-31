@@ -480,17 +480,22 @@ func TestRepository_DeleteSession_RecordFirst(t *testing.T) {
 	}, rec.calls)
 }
 
-func TestRepository_DeleteSession_RefusesDefault(t *testing.T) {
+func TestRepository_DeleteSession_EmptiesDefault(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	store, _ := newStore(t)
+	store, root := newStore(t)
 	repo := New(store)
+	writeObject(t, root, "sessions/"+model.DefaultSession.String()+"/compose/shop/x/data.tar", "bytes")
 
 	// Act
 	err := repo.DeleteSession(ctx, model.DefaultSession)
+	sessions, listErr := repo.ListSessions(ctx)
 
 	// Assert
-	require.Error(t, err)
+	require.NoError(t, err)
+	require.NoError(t, listErr)
+	assert.NoDirExists(t, filepath.Join(root, "sessions", model.DefaultSession.String()))
+	assert.Equal(t, []model.Session{model.DefaultSessionRecord}, sessions, "the default session still exists")
 }
 
 // recordingStorage records the deletes it forwards, in order.

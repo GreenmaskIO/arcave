@@ -189,10 +189,10 @@ func (r *Repository) IsSessionTreeEmpty(ctx context.Context, id model.SessionID)
 	return len(objects) == 0, nil
 }
 
-// DeleteSession removes a session's record first, then everything under sessions/<id>.
-// Deleting a session that is already gone is a no-op.
+// DeleteSession removes a session's record first, then everything under sessions/<id>; for
+// model.DefaultSession, which has no record, it empties the tree. Deleting a session already gone is a no-op.
 func (r *Repository) DeleteSession(ctx context.Context, id model.SessionID) error {
-	if err := validateID(id); err != nil {
+	if err := id.Validate(); err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
 	exists, err := r.storage.Exists(ctx, recordKey(id))

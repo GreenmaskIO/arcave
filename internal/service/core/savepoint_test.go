@@ -1053,7 +1053,7 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 		},
 		{
 			name: "an explicit id reaches the backup",
-			req:  model.RemoveRequest{IDs: []model.SavepointID{backup.ID}, DryRun: true},
+			req:  model.RemoveRequest{Refs: []string{backup.ID.String()}, DryRun: true},
 			want: []model.Savepoint{backup},
 		},
 	}
@@ -1118,7 +1118,7 @@ func TestService_RemoveSavepoints(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	res, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []model.SavepointID{record.ID}})
+	res, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{record.ID.String()}})
 
 	// Assert
 	require.NoError(t, err)
@@ -1160,7 +1160,7 @@ func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
 	// Act
-	_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []model.SavepointID{record.ID}})
+	_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{record.ID.String()}})
 
 	// Assert
 	require.Error(t, err)
@@ -1191,7 +1191,7 @@ func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	res, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []model.SavepointID{record.ID}, DryRun: true})
+	res, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{record.ID.String()}, DryRun: true})
 
 	// Assert
 	require.NoError(t, err)
@@ -1212,12 +1212,12 @@ func TestValidateRemoveRequest(t *testing.T) {
 		req  model.RemoveRequest
 		want error
 	}{
-		{name: "explicit ids", req: model.RemoveRequest{IDs: []model.SavepointID{"1"}}},
+		{name: "explicit ids", req: model.RemoveRequest{Refs: []string{"1"}}},
 		{name: "retain recent", req: model.RemoveRequest{RetainRecent: 2}},
 		{name: "retain for", req: model.RemoveRequest{RetainFor: "1d"}},
 		{
 			name: "ids and retention conflict",
-			req:  model.RemoveRequest{IDs: []model.SavepointID{"1"}, RetainRecent: 2},
+			req:  model.RemoveRequest{Refs: []string{"1"}, RetainRecent: 2},
 			want: model.ErrRemoveSelectorConflict,
 		},
 		{name: "no selector at all", req: model.RemoveRequest{}, want: model.ErrRemoveNoSelector},
@@ -1228,7 +1228,7 @@ func TestValidateRemoveRequest(t *testing.T) {
 		},
 		{
 			name: "negative retain recent beats a conflicting id list",
-			req:  model.RemoveRequest{IDs: []model.SavepointID{"1"}, RetainRecent: -1},
+			req:  model.RemoveRequest{Refs: []string{"1"}, RetainRecent: -1},
 			want: model.ErrRetainRecentNegative,
 		},
 	}
@@ -1471,7 +1471,105 @@ func TestFindSavepoint_AmbiguousName(t *testing.T) {
 	require.ErrorAs(t, err, &ambiguous)
 	assert.Equal(t, name, ambiguous.Name)
 	assert.Equal(t, []model.SavepointID{"200", "300"}, ambiguous.IDs, "sorted, and never the safety snapshot")
-	assert.EqualError(t, err, `2 savepoints are named "dup"; roll back by id instead: 200, 300`)
+	assert.EqualError(t, err, `2 savepoints are named "dup"; name one by id instead: 200, 300`)
+}
+
+// TestPartitionByRefs pins what a remove ref reaches: an id every record, a name
+// only the visible ones; a ref naming nothing or several fails the whole request.
+func TestPartitionByRefs(t *testing.T) {
+	record, backup := demoRecord(), demoSafetySnapshot()
+	other := model.Savepoint{
+		ID:        "019e8488-3ac8-7000-8000-000000000000",
+		Name:      "other",
+		CreatedAt: record.CreatedAt,
+	}
+	records := []model.Savepoint{record, backup, other}
+
+	tests := []struct {
+		name        string
+		refs        []string
+		wantKept    []model.Savepoint
+		wantRemoved []model.Savepoint
+		wantErr     string
+	}{
+		{
+			name:        "by id",
+			refs:        []string{record.ID.String()},
+			wantKept:    []model.Savepoint{backup, other},
+			wantRemoved: []model.Savepoint{record},
+		},
+		{
+			name:        "by name",
+			refs:        []string{"other"},
+			wantKept:    []model.Savepoint{record, backup},
+			wantRemoved: []model.Savepoint{other},
+		},
+		{
+			name:        "an id and a name mixed",
+			refs:        []string{"sp", other.ID.String()},
+			wantKept:    []model.Savepoint{backup},
+			wantRemoved: []model.Savepoint{record, other},
+		},
+		{
+			name:        "one savepoint named twice is removed once",
+			refs:        []string{"sp", record.ID.String()},
+			wantKept:    []model.Savepoint{backup, other},
+			wantRemoved: []model.Savepoint{record},
+		},
+		{
+			name:        "an id reaches a safety snapshot",
+			refs:        []string{backup.ID.String()},
+			wantKept:    []model.Savepoint{record, other},
+			wantRemoved: []model.Savepoint{backup},
+		},
+		{
+			name:    "a name does not reach a safety snapshot",
+			refs:    []string{backup.Name},
+			wantErr: "savepoint(s) not found: " + backup.Name,
+		},
+		{
+			name:    "every ref naming nothing is reported",
+			refs:    []string{"nope", "sp", "019e8497-cf10-7000-8000-000000000000"},
+			wantErr: "savepoint(s) not found: nope, 019e8497-cf10-7000-8000-000000000000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			kept, removed, err := partitionByRefs(records, tt.refs)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				assert.Nil(t, kept)
+				assert.Nil(t, removed)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantKept, kept)
+			assert.Equal(t, tt.wantRemoved, removed)
+		})
+	}
+}
+
+func TestPartitionByRefs_AmbiguousName(t *testing.T) {
+	// Arrange
+	now := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	records := []model.Savepoint{
+		{ID: "019e8488-3ac8-7000-8000-000000000000", Name: "dup", CreatedAt: now},
+		{ID: "019e843e-1650-7000-8000-000000000000", Name: "dup", CreatedAt: now},
+	}
+
+	// Act
+	kept, removed, err := partitionByRefs(records, []string{"dup"})
+
+	// Assert
+	var ambiguous *model.AmbiguousSavepointNameError
+	require.ErrorAs(t, err, &ambiguous)
+	assert.Equal(t, []model.SavepointID{records[1].ID, records[0].ID}, ambiguous.IDs)
+	assert.Nil(t, kept)
+	assert.Nil(t, removed)
 }
 
 // recordsAt plants one record per instant, each id a UUIDv7 of its creation time.

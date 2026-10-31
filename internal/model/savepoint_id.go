@@ -46,13 +46,3 @@ func (m SavepointID) Validate() error {
 
 // String renders the id as the path segment it becomes.
 func (m SavepointID) String() string { return string(m) }
-
-// SavepointIDs converts adapter input — CLI args, a JSON array — into ids. It
-// validates nothing: the layer that renders one into a storage key gates it.
-func SavepointIDs(ids []string) []SavepointID {
-	out := make([]SavepointID, len(ids))
-	for i, id := range ids {
-		out[i] = SavepointID(id)
-	}
-	return out
-}

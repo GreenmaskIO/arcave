@@ -1,15 +1,15 @@
 ---
 title: arcave savepoint remove
-description: Delete arcave savepoints by id or by retention rules — keep the newest N, keep anything younger than a duration, drop everything before a timestamp — with a dry-run mode.
+description: Delete arcave savepoints by id, by name or by retention rules — keep the newest N, keep anything younger than a duration, drop everything before a timestamp — with a dry-run mode.
 keywords: [arcave savepoint remove, retention, dry run, safety snapshot, docker compose]
 ---
 
 # arcave savepoint remove
 
-Deletes savepoints of the compose project, in the session the command works in, selected either by id or by retention rules.
+Deletes savepoints of the compose project, in the session the command works in, selected either by id or name, or by retention rules.
 
 ```text title="Synopsis"
-arcave savepoint remove [id...] [flags]
+arcave savepoint remove [id|name...] [flags]
 ```
 
 ## Flags
@@ -27,10 +27,10 @@ Global flags apply — see [the CLI reference](index.md#global-flags).
 
 ## The two selection modes
 
-**By id** — one or more ids as positional arguments:
+**By id or name** — one or more as positional arguments, mixed freely. An argument that is a canonical UUID is an id; anything else is a name:
 
 ```shell
-arcave savepoint remove 019e843e-1650-7000-8000-000000000000 019e8488-3ac8-7000-8000-000000000000
+arcave savepoint remove 019e843e-1650-7000-8000-000000000000 before-migration
 ```
 
 **By retention rule** — one or more of `--retain-recent`, `--retain-for`, `--before-date`:
@@ -48,9 +48,10 @@ When several retention rules are combined, a savepoint survives if **any** one o
 | Selector | Reaches a safety snapshot? |
 |---|---|
 | An explicit id | **Yes** |
+| An explicit name | No |
 | `--retain-recent`, `--retain-for`, `--before-date` | No |
 
-A scanning selector cannot delete the last copy of a pre-rollback state by accident. Removing a [safety snapshot](savepoint_list.md#safety-snapshots-are-hidden) is always deliberate, by id.
+A scanning selector cannot delete the last copy of a pre-rollback state by accident. Neither does a name, as in [`rollback`](rollback.md). Removing a [safety snapshot](savepoint_list.md#safety-snapshots-are-hidden) is always deliberate, by id.
 
 ## Output
 
@@ -85,12 +86,13 @@ Deletion is permanent. It frees the savepoint's own directory; the [deduplicated
 
 | Condition | What happens |
 |---|---|
-| Ids and retention rules together | `cannot combine savepoint ids with retain-recent/retain-for/before-date` |
-| Neither | `specify savepoint ids, or at least one of retain-recent, retain-for or before-date` |
+| Ids and retention rules together | `cannot combine savepoint ids or names with retain-recent/retain-for/before-date` |
+| Neither | `specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date` |
 | A negative `--retain-recent` | `retain-recent must be zero or positive` |
 | An unparseable duration | `invalid --retain-for "2 weeks": …` |
 | A bare date in `--before-date` | `invalid --before-date "2026-06-01": …` — it takes RFC3339Nano. |
-| An id that is not there | `savepoint(s) not found: 019e843e-1650-7000-8000-000000000000`, **and nothing is deleted**. Ids are not checked for form, so a name passed as an id is reported the same way. There are no partial deletes: one typo in a list of five removes none of them. |
+| An id or name that is not there | `savepoint(s) not found: 019e843e-1650-7000-8000-000000000000`, **and nothing is deleted**. Every such argument is named. There are no partial deletes: one typo in a list of five removes none of them. |
+| A name several savepoints carry | `2 savepoints are named "clean"; name one by id instead: 019e843e-1650-7000-8000-000000000000, 019e8488-3ac8-7000-8000-000000000000`, and nothing is deleted. |
 | An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)`. While the marker stands every removal but `--dry-run` is refused, by id or by rule: its safety snapshot is the remedy. Recover the rollback first. |
 | Another arcave run holds the lock | `another arcave command is already running in this project`. `--dry-run` takes no lock and is unaffected. |
 

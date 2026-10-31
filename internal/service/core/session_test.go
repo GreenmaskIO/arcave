@@ -1113,6 +1113,28 @@ func TestSessionService_RemoveSession_NotCurrentKeepsThePointer(t *testing.T) {
 	repo.AssertExpectations(t)
 }
 
+func TestSessionService_RemoveSession_ForcedDefaultKeepsThePointer(t *testing.T) {
+	// Arrange
+	locker := &mockLocker{}
+	expectLock(locker)
+	repo := &mockSessionRepo{}
+	repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+	repo.On("SessionSize", mock.Anything, model.DefaultSession).Return(int64(10), nil).Once()
+	expectSessionDeleted(repo, model.DefaultSession)
+	pointer := pointerAt(model.DefaultSession)
+	svc := NewSessionService(SessionDeps{NewSessionLocker: newFakeSessionLocker, Current: pointer, Sessions: repo, Locker: locker, Inflight: &fakeInflight{}})
+
+	// Act
+	got, err := svc.RemoveSession(context.Background(), model.RemoveSessionRequest{Session: model.DefaultSessionName, Force: true})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, model.RemoveSessionResponse{Session: model.DefaultSession, Removed: true, FreedBytes: 10}, got)
+	require.NotNil(t, pointer.id)
+	assert.Equal(t, model.DefaultSession, *pointer.id)
+	repo.AssertExpectations(t)
+}
+
 func TestSessionService_ListSessions_MarksTheCurrentSession(t *testing.T) {
 	// Arrange
 	exp := sessionRecord(demoSession, "exp", sessionNow)

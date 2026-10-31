@@ -453,9 +453,9 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			setup: func(svc *mockService) {
 				svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint{savepoint}, nil).Once()
 			}, want: listOutput{Savepoints: []model.Savepoint{savepoint}}},
-		{tool: "savepoint_remove", args: map[string]any{"project": "demo", "ids": []string{savepoint.ID.String()}},
+		{tool: "savepoint_remove", args: map[string]any{"project": "demo", "refs": []string{savepoint.ID.String()}},
 			setup: func(svc *mockService) {
-				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{IDs: []model.SavepointID{savepoint.ID}}).
+				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{Refs: []string{savepoint.ID.String()}}).
 					Return(model.RemoveResult{}, nil).Once()
 			}, want: model.RemoveResponse{}},
 		{tool: "rollback", args: map[string]any{"project": "demo", "ref": "latest"},

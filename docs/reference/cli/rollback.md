@@ -112,7 +112,7 @@ Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<bas
 | No argument | cobra refuses the call: `rollback` takes exactly one. |
 | The id is not there | `finding savepoint "019e843e-1650-7000-8000-000000000000": savepoint not found: 019e843e-1650-7000-8000-000000000000` |
 | The name is not there | `finding savepoint "clean": savepoint not found: clean` |
-| The name matches several | `finding savepoint "clean": 2 savepoints are named "clean"; roll back by id instead: 019e843e-1650-7000-8000-000000000000, 019e8488-3ac8-7000-8000-000000000000` |
+| The name matches several | `finding savepoint "clean": 2 savepoints are named "clean"; name one by id instead: 019e843e-1650-7000-8000-000000000000, 019e8488-3ac8-7000-8000-000000000000` |
 | `latest` or a name, with an empty store | `finding savepoint "latest": no savepoints exist` |
 | The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 019e843e-1650-7000-8000-000000000000`. The project is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
 | The Docker daemon is older than 25 | `prepare: unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer` — before anything is stopped. |

@@ -106,7 +106,7 @@ func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act: an id selector, which could otherwise reach the safety snapshot itself.
-	_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{IDs: []model.SavepointID{demoSafetySnapshot().ID}})
+	_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{demoSafetySnapshot().ID.String()}})
 
 	// Assert: refused before the listing — the safety snapshot to recover from stays whole.
 	var interrupted *model.InterruptedRollbackError

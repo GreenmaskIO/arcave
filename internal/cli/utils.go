@@ -32,9 +32,9 @@ import (
 func removeUsageError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrRemoveSelectorConflict):
-		return errors.New("cannot combine savepoint ids with retain-recent/retain-for/before-date")
+		return errors.New("cannot combine savepoint ids or names with retain-recent/retain-for/before-date")
 	case errors.Is(err, model.ErrRemoveNoSelector):
-		return errors.New("specify savepoint ids, or at least one of retain-recent, retain-for or before-date")
+		return errors.New("specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date")
 	case errors.Is(err, model.ErrRetainRecentNegative):
 		return errors.New("retain-recent must be zero or positive")
 	default:

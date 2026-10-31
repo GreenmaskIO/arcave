@@ -289,8 +289,9 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 }
 
 // RemoveSession drops a session and everything it holds, and reports the bytes freed. It refuses
-// the default session and one an inflight marker names; the current or pinned session, and a tree
-// still cloning or unknown, only unless forced. Forcing the current one clears the pointer.
+// one an inflight marker names; the default session, the current or pinned one, and a tree still
+// cloning or unknown, only unless forced. Forcing the current one clears the pointer; forcing the
+// default one empties its tree, and it goes on existing.
 func (s *SessionService) RemoveSession(
 	ctx context.Context, req model.RemoveSessionRequest,
 ) (_ model.RemoveSessionResponse, err error) {
@@ -309,8 +310,9 @@ func (s *SessionService) RemoveSession(
 		}
 		zerolog.Ctx(ctx).Debug().Str("ref", req.Session).Str("session", id.String()).Bool("force", req.Force).
 			Msg("session to delete found")
-		if id == model.DefaultSession {
-			return model.RemoveSessionResponse{}, model.ErrDefaultSessionDelete
+		if id == model.DefaultSession && !req.Force {
+			return model.RemoveSessionResponse{}, fmt.Errorf("%w; --force empties it, every savepoint it holds included",
+				model.ErrDefaultSessionDelete)
 		}
 		marker, found, err := s.inflight.Get(ctx)
 		if err != nil {
@@ -337,7 +339,10 @@ func (s *SessionService) RemoveSession(
 		if err != nil {
 			return model.RemoveSessionResponse{}, err
 		}
-		if current {
+		if id == model.DefaultSession {
+			zerolog.Ctx(ctx).Info().Str("session", id.String()).
+				Msg("the default session was emptied; it still exists")
+		} else if current {
 			if err := s.current.Clear(ctx); err != nil {
 				zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).
 					Msg("the deleted session is still the current one; run 'arcave session unset'")
