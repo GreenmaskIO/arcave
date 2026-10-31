@@ -44,6 +44,10 @@ arcave savepoint create before-migration
 arcave rollback before-migration
 ```
 
+<video src={require('./assets/demo/base-cycle.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* a savepoint, a dropped table, `arcave rollback` — and the rows are back.
+
 ```mermaid
 flowchart LR
     P0(["savepoint: before-migration"]) --> W["write code, run a migration,<br/>let an agent work"]

@@ -4,6 +4,9 @@ description: List a Docker Compose project's committed arcave savepoints, and th
 keywords: [arcave savepoint list, savepoints, safety snapshot, docker compose]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # arcave savepoint list
 
 Prints the committed savepoints of the compose project, in the session the command works in, as a JSON array.
@@ -39,6 +42,17 @@ It is hidden because one normally exists only *while* a rollback runs. One that 
 
 ## Output
 
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+NAME              ID                                    CREATED           VOLUMES  LAYERS  STORED  NOT COVERED
+before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       210 MB  1
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
 ```json title="stdout"
 [
   {
@@ -49,26 +63,53 @@ It is hidden because one normally exists only *while* a rollback runs. One that 
     "stats": [ … ],
     "writable_layers": [ … ],
     "images": [ … ],
-    "spec": { "format": "compose-yaml" }
+    "spec": { "format": "compose-yaml" },
+    "not_covered": { … }
   }
 ]
 ```
 
-Each element is the whole record, exactly as [`savepoint create`](savepoint_create.md#output) printed it — `stats`, `writable_layers`, `images`, `spec` and `not_covered` included. An empty store prints `[]`.
+</TabItem>
+</Tabs>
 
-With `--include-safety-snapshots`, a leftover safety snapshot carries its label and its generated name:
+On a terminal, one row per savepoint: what it captured, what it added to the store, and how many things it does not cover — `not_covered` and images not stored, spelled out by [`savepoint create`](savepoint_create.md#output). In the JSON each element is the whole record, exactly as `savepoint create` printed it — `stats`, `writable_layers`, `images`, `spec` and `not_covered` included. An empty store prints `No savepoints.` on a terminal, `[]` in JSON.
 
-```json title="stdout"
+With `--include-safety-snapshots`, a leftover safety snapshot is listed among the others, marked `(safety)` on a terminal; in the JSON it carries its label and its generated name:
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+NAME                                                           ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+safety-snapshot-019e843e-1650-7000-8000-000000000000 (safety)  019e8491-04c8-7000-8000-000000000000  2026-06-01 21:22  1        2       40.8 MB  1
+before-migration                                               019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       210 MB   1
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
+```json title="stdout (each record trimmed)"
 [
   {
     "id": "019e8491-04c8-7000-8000-000000000000",
     "name": "safety-snapshot-019e843e-1650-7000-8000-000000000000",
     "description": "",
     "labels": { "arcave-safety-snapshot": "true" },
-    "created_at": "2026-06-01T21:22:37.009412Z"
+    "created_at": "2026-06-01T21:22:37.009412Z",
+    …
+  },
+  {
+    "id": "019e843e-1650-7000-8000-000000000000",
+    "name": "before-migration",
+    "description": "before the v2 schema",
+    "created_at": "2026-06-01T19:41:12.123456789Z",
+    …
   }
 ]
 ```
+
+</TabItem>
+</Tabs>
 
 The name carries the id of the savepoint that rollback was applying, so a leftover always identifies the run that abandoned it.
 
@@ -80,7 +121,7 @@ The name carries the id of the savepoint that rollback was applying, so a leftov
 | No compose project named | `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME` |
 | The Docker daemon is unreachable | The command fails while wiring itself up, before it reads the store. |
 | A record that will not decode | `load savepoint 019e843e-1650-7000-8000-000000000000: parse record: …` — a corrupt commit is an error, never a silent skip. |
-| No savepoints | `[]`, exit code `0`. |
+| No savepoints | `No savepoints.` on a terminal, `[]` in JSON; exit code `0`. |
 
 ## Examples
 

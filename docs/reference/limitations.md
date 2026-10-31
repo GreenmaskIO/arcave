@@ -1,6 +1,6 @@
 ---
 title: Limitations
-description: What arcave does not do — downtime on every operation, no point-in-time recovery, one environment and one writer, manual cleanup in the alpha, and the platform-specific constraints.
+description: What arcave does not do — downtime on every operation, no point-in-time recovery, one environment and one writer per session, cleanup in more than one gc run, and the platform-specific constraints.
 keywords: [arcave limitations, downtime, point-in-time recovery, storage cost, virtiofs, docker compose]
 ---
 
@@ -30,13 +30,15 @@ A rollback replaces the project's state rather than starting a second copy besid
 
 ## One writer per project
 
-Only one command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `remove`, `set` or `unset` — runs in a project at a time. A second one fails right away rather than waiting:
+Only one command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `arcave gc`, `session create`, `remove`, `set` or `unset` — runs in a project at a time. A second one on the same machine fails right away rather than waiting:
 
 ```text
 another arcave command is already running in this project
 ```
 
-Commands that only read — `savepoint list`, `session list`, `session current`, `savepoint remove --dry-run` — always run. This guard works on one machine only. Don't point two machines at the same store.
+Commands that only read — `savepoint list`, `session list`, `session current`, `savepoint remove --dry-run` — always run.
+
+Machines sharing one store take turns per session: a command that finds the session held by another machine waits up to 60 seconds, then fails naming the holder. See [One session at a time across hosts](../how_it_works.md#one-session-at-a-time-across-hosts). The one thing not to run on a shared store while another machine works in the same session is a deleting `arcave gc`, see [gc on a shared store](#gc-on-a-shared-store).
 
 ## A rollback puts back the project, not the outside world
 

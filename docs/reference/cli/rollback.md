@@ -4,6 +4,9 @@ description: Return a Docker Compose environment to an arcave savepoint — its 
 keywords: [arcave rollback, savepoint, safety snapshot, compose spec, volume data]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # arcave rollback
 
 Returns the environment to a savepoint.
@@ -59,6 +62,33 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
 
 ## Output
 
+On a terminal, the final tree of the steps on stderr and a summary on stdout; in a script, or with `--format json`, JSON on stdout.
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stderr + stdout"
+✔ rollback before-migration                                                       8.6s
+├── ✔ project.introspect                                                          0.0s
+├── ✔ rollback.prepare                                                            1.3s
+├── ✔ rollback.safety-snapshot                                                    2.7s
+│   └── ✔ savepoint.capture safety-snapshot-019e843e-1650-7000-8000-000000000000  2.4s
+│         ! not covered: 1 service(s) without volumes
+├── ✔ rollback.apply                                                              3.5s
+└── ✔ rollback.cleanup                                                            0.0s
+
+Rolled back to before-migration · 019e843e · 2026-06-01 19:41:12
+  volumes   1
+  layers    2
+
+Warnings (1)
+  ! the containers run on the savepoint's writable layers
+    → `docker compose up` of your compose file recreates them on its images and drops those layers
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
 ```json title="stdout"
 {
   "rolled_back_to": {
@@ -69,7 +99,8 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
     "stats": [ … ],
     "writable_layers": [ … ],
     "images": [ … ],
-    "spec": { "format": "compose-yaml" }
+    "spec": { "format": "compose-yaml" },
+    "not_covered": { … }
   },
   "restored": [
     {
@@ -90,18 +121,29 @@ An id is the only form that reaches a hidden [safety snapshot](savepoint_list.md
       "service": "app",
       "replica": 1,
       "container_name": "myapp-app-1",
-      "image_id": "sha256:aaaa…",
+      "image_id": "sha256:f68cd146c87c7e1e7606d02065a872eed3eafafa97ca55b8836c2785445b72da",
       "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
+    },
+    {
+      "service": "db",
+      "replica": 1,
+      "container_name": "myapp-db-1",
+      "image_id": "sha256:6b3f960b737dff8f5ac90b9538610413cafe14be340f3635dc4cbb279ddc3035",
+      "tag": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
     }
   ]
 }
 ```
+
+</TabItem>
+</Tabs>
 
 | Field | Meaning |
 |---|---|
 | `rolled_back_to` | The savepoint record that was applied, whole. |
 | `restored` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
 | `writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
+| `safety_snapshot_kept` | The id of the safety snapshot a successful rollback could not drop — the marker could not be cleared, the session's lock was no longer the rollback's, or the record could not be deleted. `arcave savepoint remove <id>` drops it. Omitted when it was dropped. |
 
 Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
 

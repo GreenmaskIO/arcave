@@ -18,8 +18,8 @@
 #   examples/demo/tapes/record.sh              # every tape
 #   examples/demo/tapes/record.sh base-cycle   # one tape
 #
-# Each tape runs against a fresh copy of examples/demo, as compose project `myapp`
-# on port 18080, so a demo you have running in examples/demo is left alone.
+# Each tape runs against a fresh copy of examples/demo in /tmp/arcave-tapes, as compose
+# project `myapp` on port 18080, so a demo you have running in examples/demo is left alone.
 set -euo pipefail
 
 TAPES_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -45,16 +45,24 @@ fi
 
 make -C "$REPO_ROOT" build >/dev/null
 
-WORK_DIR=$(mktemp -d)
+# A fixed, neutral path: generate-compose prints the file it wrote, so the directory is on screen.
+WORK_DIR=/tmp/arcave-tapes
+if [ -e "$WORK_DIR" ] && [ ! -f "$WORK_DIR/.arcave-tapes" ]; then
+  echo "record.sh: $WORK_DIR exists and is not a previous recording's; remove it first" >&2
+  exit 1
+fi
+rm -rf "$WORK_DIR"
+mkdir -p "$WORK_DIR"
+touch "$WORK_DIR/.arcave-tapes"
 cleanup() {
-  (cd "$WORK_DIR/demo" 2>/dev/null && docker compose down -v --remove-orphans >/dev/null 2>&1) || true
+  (cd "$WORK_DIR/demo" 2>/dev/null && docker compose down -v --remove-orphans --rmi local >/dev/null 2>&1) || true
   docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=arcave/$PROJECT-*" |
     xargs -r docker image rm >/dev/null 2>&1 || true
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
 
-# A copy named `demo`, so nothing on screen names a home path or a temp dir.
+# A copy named `demo`, so nothing on screen names a home path.
 mkdir -p "$WORK_DIR/demo"
 tar -C "$DEMO_DIR" --exclude ./.arcave --exclude ./repo --exclude ./minio-data --exclude ./tapes \
   --exclude ./test.yaml -cf - . | tar -C "$WORK_DIR/demo" -xf -

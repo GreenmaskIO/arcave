@@ -4,6 +4,9 @@ description: Seed a Postgres, MinIO and Redis project once, capture it as an arc
 keywords: [arcave example, test fixtures, seed data, reset environment, docker compose, minio, redis, Open-Source, Greenmask]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Reset a seeded environment
 
 Seeding is slow. Do it once, snapshot, and reset from the snapshot for the rest of the project's life.
@@ -39,6 +42,28 @@ docker compose exec -T redis redis-cli MSET \
 arcave savepoint create clean --description "seeded baseline — do not delete"
 ```
 
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stderr + stdout"
+✔ savepoint.create clean      10.6s
+├── ✔ project.introspect       0.1s
+├── ✔ compose.stop             0.2s
+├── ✔ savepoint.capture clean  5.7s
+└── ✔ compose.start            3.6s
+
+Savepoint clean · 019e83ff · 18:36:40 · stored 317 MB
+            count     size   stored
+  volumes       3  49.2 MB  49.2 MB
+  layers        3   260 MB  40.6 KB
+  images        3   1.1 GB   268 MB
+
+  roll back:  arcave -p arcave-demo rollback clean
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
 ```json title="stdout (trimmed)"
 {
   "id": "019e83ff-30c0-7000-8000-000000000000",
@@ -46,9 +71,9 @@ arcave savepoint create clean --description "seeded baseline — do not delete"
   "description": "seeded baseline — do not delete",
   "created_at": "2026-06-01T18:36:40.002114Z",
   "stats": [
-    { "volume": { "object_id": "volume-named-arcave-demo_pgdata",    "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
-    { "volume": { "object_id": "volume-named-arcave-demo_miniodata", "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
-    { "volume": { "object_id": "volume-anon-redis-1-data",          "type": "anon",  "backend": "fullcopy" }, "type": "fullcopy" }
+    { "volume": { "object_id": "volume-named-arcave-demo_miniodata",   "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
+    { "volume": { "object_id": "volume-named-arcave-demo_pgdata",      "type": "named", "backend": "fullcopy" }, "type": "fullcopy" },
+    { "volume": { "object_id": "volume-anon-redis-1-data",             "type": "anon",  "backend": "fullcopy" }, "type": "fullcopy" }
   ],
   "writable_layers": [
     { "service": "minio",    "replica": 1, "container_name": "arcave-demo-minio-1",    "upstream_image_ref": "minio/minio:latest" },
@@ -56,15 +81,18 @@ arcave savepoint create clean --description "seeded baseline — do not delete"
     { "service": "redis",    "replica": 1, "container_name": "arcave-demo-redis-1",    "upstream_image_ref": "redis:7" }
   ],
   "images": [
-    { "id": "sha256:…", "refs": ["minio/minio:latest"], "stored": true },
-    { "id": "sha256:…", "refs": ["postgres:16"],        "stored": true },
-    { "id": "sha256:…", "refs": ["redis:7"],            "stored": true }
+    { "id": "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e", "refs": ["minio/minio:latest"], "stored": true },
+    { "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54", "refs": ["postgres:16"],        "stored": true },
+    { "id": "sha256:b2b95679e3b46fb51864949ed25ea976fc3a6bcc00a40a1bc00d568cb2822e50", "refs": ["redis:7"],            "stored": true }
   ],
   "spec": { "format": "compose-yaml" }
 }
 ```
 
-Trimmed to the fields that identify each entry; [Roll back a failed migration](migration_rollback.md#2-take-the-savepoint) shows one of each in full. Three volumes, three writable layers, three images, one savepoint.
+</TabItem>
+</Tabs>
+
+Three volumes, three writable layers, three images, one savepoint. The JSON is trimmed to the fields that identify each entry; [Roll back a failed migration](migration_rollback.md#2-take-the-savepoint) shows one of each in full.
 
 ## 3. Let a test suite make a mess
 
@@ -132,6 +160,18 @@ Resetting before rather than after has two advantages: a crashed suite cannot sk
 arcave savepoint list
 ```
 
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+NAME            ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+after-refactor  019e8488-3ac8-7000-8000-000000000000  2026-06-01 21:13  3        3       49.3 MB  -
+clean           019e83ff-30c0-7000-8000-000000000000  2026-06-01 18:36  3        3       317 MB   -
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
 ```json title="stdout (trimmed)"
 [
   { "id": "019e8488-3ac8-7000-8000-000000000000", "name": "after-refactor", "description": "", "created_at": "2026-06-01T21:13:01.114872Z" },
@@ -139,14 +179,18 @@ arcave savepoint list
 ]
 ```
 
+</TabItem>
+</Tabs>
+
 :::warning
 `arcave savepoint remove --retain-recent 5` will delete `clean` once five newer savepoints exist. Retention rules do not know which savepoint is precious.
 :::
 
-Prune by id instead:
+Remove by name instead, and let `arcave gc` free the space:
 
 ```shell
-arcave savepoint remove 019e8488-3ac8-7000-8000-000000000000
+arcave savepoint remove after-refactor
+arcave gc
 ```
 
 Or keep the baseline in a [session](../sessions.md) of its own. Retention works within one session, so no sweep in the session you work in can reach it:

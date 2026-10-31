@@ -202,7 +202,7 @@ If any step past that point fails — a restore error, or services that never be
 The revert runs on a context that ignores cancellation, with its own 10-minute budget. The Ctrl-C that aborted your rollback must not tear down the revert that is trying to save your environment.
 :::
 
-The safety snapshot is deleted when the rollback succeeds, and when a revert succeeds. It is **kept** when the revert itself fails — at that point it is the last copy of your pre-rollback state, and its id is printed.
+The safety snapshot is deleted when the rollback succeeds, and when a revert succeeds. It is **kept** when the revert itself fails — at that point it is the last copy of your pre-rollback state, and its id is printed. A rollback that succeeded can also keep it, when it could not clear the marker, no longer held the session's lock, or could not delete the record; the result then names it in `safety_snapshot_kept`, and `arcave savepoint remove <id>` drops it.
 
 With the `cdc` backend the safety capture is an increment in the same per-volume repository, on the same host and the same path, which is exactly what restic picks a parent by. The undo therefore costs almost nothing. Deleting the safety snapshot leaves its restic snapshots in the repository, as `savepoint remove` does; [`arcave gc`](reference/cli/gc.md) forgets them and prunes what only they held.
 
@@ -225,7 +225,7 @@ arcave does not finish a rollback it died in the middle of. Recovery is explicit
 
 ## One project at a time
 
-Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, and `session create`, `remove`, `set` and `unset` — holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second such run against the same project fails immediately rather than queuing behind the first: two workflows interleaving stop, capture and start on one compose project has no correct outcome. Commands that only read — `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` — take no lock and are never refused.
+Every command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `arcave gc` (`--dry-run` included), and `session create`, `remove`, `set` and `unset` — holds a non-blocking file lock on `.arcave/lock`, bound to the project root. A second such run against the same project fails immediately rather than queuing behind the first: two workflows interleaving stop, capture and start on one compose project has no correct outcome. Commands that only read — `savepoint list`, `session list`, `session current` and `savepoint remove --dry-run` — take no lock and are never refused.
 
 ## One session at a time across hosts
 

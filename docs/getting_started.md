@@ -4,11 +4,18 @@ description: Initialise arcave in a Docker Compose project, take your first save
 keywords: [arcave quickstart, getting started, savepoint, rollback, docker compose, tutorial, Open-Source, Greenmask]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Getting started
 
 Five minutes, one compose project, and one deliberate mistake to undo.
 
 If you have not installed arcave yet, start at [Installation](installation.md).
+
+<video src={require('./assets/demo/base-cycle.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* the cycle this page walks through — a savepoint, a dropped table, `arcave rollback` — and the rows are back.
 
 ## 1. Bring a compose project up
 
@@ -95,7 +102,29 @@ arcave savepoint create before-migration
 
 arcave stops the services, captures every volume, the image each service runs on and every container's writable layer, records the compose spec, commits the record, starts the services again, and waits for their health checks.
 
-It prints the savepoint record:
+On a terminal you watch the steps as a live tree on stderr, and the result is printed as a summary. When stdout is a pipe or a file — or with `--format json` — the result is the savepoint record as JSON:
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stderr + stdout"
+✔ savepoint.create before-migration      10.9s
+├── ✔ project.introspect                  0.1s
+├── ✔ compose.stop                        0.3s
+├── ✔ savepoint.capture before-migration  4.2s
+└── ✔ compose.start                       6.1s
+
+Savepoint before-migration · 019e843e · 19:41:12 · stored 206 MB
+            count     size   stored
+  volumes       1  40.8 MB  40.8 MB
+  layers        1   159 MB  16.7 KB
+  images        1   658 MB   165 MB
+
+  roll back:  arcave -p myapp rollback before-migration
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
 
 ```json title="stdout"
 {
@@ -159,23 +188,25 @@ It prints the savepoint record:
 }
 ```
 
-`stats` holds one entry per captured volume, `writable_layers` one per container, and `images` one per distinct image. The layer's `stored_bytes` is small because only what the container wrote over `postgres:16` is new; the image itself is stored once and reused by every later savepoint. A savepoint that left something out also carries `not_covered`; [Output](reference/output.md) has every field.
-
-Progress goes to **stderr**, so it never contaminates the JSON. On a terminal it is a live tree; with `--progress log`, as here, it is one log line per step (timestamps and the `started` lines trimmed):
+Progress goes to **stderr**, so it never contaminates the JSON. Off a terminal it is one log line per step, as with `--progress log` here (timestamps and the `started` lines trimmed):
 
 ```text title="stderr"
-INF savepoint.create[before-migration] status=started
 INF savepoint.create[before-migration]/project.introspect elapsed=96ms status=succeeded
 INF savepoint.create[before-migration]/compose.stop msg=Stopped resource=container:myapp-db-1 status=in_progress
-INF savepoint.create[before-migration]/compose.stop elapsed=312ms msg=Stopped status=succeeded
+INF savepoint.create[before-migration]/compose.stop elapsed=312ms status=succeeded
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/volume.capture/volume[volume-named-myapp_pgdata] bytes=41MB/41MB elapsed=672ms status=succeeded stored=41MB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.341s status=succeeded stored=165MB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/layer.capture/layer[myapp-db-1] bytes=159MB/159MB elapsed=2.224s reused=159MB status=succeeded stored=17KB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration] elapsed=4.237s status=succeeded
 INF savepoint.create[before-migration]/compose.start msg=Healthy resource=container:myapp-db-1 status=in_progress
-INF savepoint.create[before-migration]/compose.start elapsed=6.104s msg=Healthy status=succeeded
+INF savepoint.create[before-migration]/compose.start elapsed=6.104s status=succeeded
 INF savepoint.create[before-migration] elapsed=10.873s status=succeeded
 ```
+
+</TabItem>
+</Tabs>
+
+`size` is what the savepoint holds and `stored` what it added to the store. The layer adds little because only what the container wrote over `postgres:16` is new; the image is stored once and reused by every later savepoint. Anything the savepoint left out, or that puts its data at risk, is listed under `Warnings`. In the JSON, `stats` holds one entry per captured volume, `writable_layers` one per container, and `images` one per distinct image; a savepoint that left something out also carries `not_covered`. [Output](reference/output.md) has every field.
 
 `rollback` and `savepoint remove` take that `id` or the name.
 
@@ -190,6 +221,29 @@ docker compose exec -T db psql -U postgres -c 'DROP TABLE orders;'
 ```shell
 arcave rollback before-migration
 ```
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stderr + stdout"
+✔ rollback before-migration     9.7s
+├── ✔ project.introspect        0.1s
+├── ✔ rollback.prepare          1.6s
+├── ✔ rollback.safety-snapshot  3.9s
+├── ✔ rollback.apply            3.1s
+└── ✔ rollback.cleanup          0.0s
+
+Rolled back to before-migration · 019e843e · 2026-06-01 19:41:12
+  volumes   1
+  layers    1
+
+Warnings (1)
+  ! the containers run on the savepoint's writable layers
+    → `docker compose up` of your compose file recreates them on its images and drops those layers
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
 
 ```json title="stdout (rolled_back_to trimmed)"
 {
@@ -229,11 +283,14 @@ arcave rollback before-migration
 }
 ```
 
-`rolled_back_to` is the whole savepoint record, as `savepoint create` printed it. `restored` lists the volumes written back, and `writable_layers` the containers put back on their captured layer.
+</TabItem>
+</Tabs>
+
+In the JSON, `rolled_back_to` is the whole savepoint record, as `savepoint create` printed it. `restored` lists the volumes written back, and `writable_layers` the containers put back on their captured layer.
 
 The table is back. So is everything else the project held at 19:41:12.
 
-The `db` container now runs on the `arcave/…` tag above rather than on `postgres:16`. arcave says so on stderr: a `docker compose up` from your compose file recreates the container on `postgres:16` and drops the restored layer — roll back again to get it back.
+The `db` container now runs on an `arcave/…` tag rather than on `postgres:16` — the warning above: a `docker compose up` from your compose file recreates the container on `postgres:16` and drops the restored layer — roll back again to get it back.
 
 Before overwriting anything, arcave took a **safety snapshot** of the state you are throwing away. If the restore had failed, or the services had come up unhealthy, arcave would have replayed that snapshot automatically and reported the error rather than leaving you between two states. See [How arcave works](how_it_works.md#the-safety-snapshot).
 
@@ -242,6 +299,17 @@ Before overwriting anything, arcave took a **safety snapshot** of the state you 
 ```shell
 arcave savepoint list
 ```
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+NAME              ID                                    CREATED           VOLUMES  LAYERS  STORED  NOT COVERED
+before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        1       206 MB  -
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
 
 ```json title="stdout (each record trimmed)"
 [
@@ -255,7 +323,10 @@ arcave savepoint list
 ]
 ```
 
-Each entry is a full savepoint record, newest first; `--sort asc` lists oldest first. The safety snapshot the rollback took is gone: it is dropped once a rollback succeeds.
+</TabItem>
+</Tabs>
+
+One row per savepoint — in the JSON a full savepoint record — newest first; `--sort asc` lists oldest first. The safety snapshot the rollback took is gone: a rollback that succeeds drops it. If it could not, the rollback's result names it under `safety_snapshot_kept` and says how to drop it.
 
 ## 8. Clean up
 
@@ -263,7 +334,10 @@ Each entry is a full savepoint record, newest first; `--sort asc` lists oldest f
 arcave savepoint remove before-migration      # by name, or by id
 arcave savepoint remove --retain-recent 5     # keep the newest five
 arcave savepoint remove --retain-for 7d --dry-run
+arcave gc                                     # free what they shared
 ```
+
+`savepoint remove` deletes each savepoint's record and its own directory; what it shared with other savepoints — stored images and layers — and its `cdc` snapshots are freed by [`arcave gc`](reference/cli/gc.md). `sp`, `ls` and `rm` are shorter spellings: `arcave sp ls`, `arcave sp rm before-migration` — see [Commands](reference/cli/index.md).
 
 ## 9. Branch off, if you need to
 

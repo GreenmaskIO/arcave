@@ -45,6 +45,10 @@ arcave rollback billing-wip
 
 A fork deploys nothing: the running project keeps whatever it ran until you roll back inside the new session. `session set` makes a session the current one for every command that names none; to work in another session for one command, pass `--session feature/reporting` instead.
 
+<video src={require('../assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
+
 The session names and the git branch names are yours to keep in step. arcave does not read your repository and will not do it for you.
 
 ## Where the analogy holds
@@ -94,10 +98,11 @@ Within a session, prune savepoints the way you prune merged branches:
 arcave savepoint list
 arcave savepoint remove --retain-recent 10
 arcave savepoint remove --retain-for 14d --dry-run
-arcave savepoint remove 019e843e-1650-7000-8000-000000000000 019e8488-3ac8-7000-8000-000000000000
+arcave savepoint remove before-refactor 019e8488-3ac8-7000-8000-000000000000
+arcave gc
 ```
 
-`--dry-run` reports what would go without deleting anything. Deletion by id is all-or-nothing: an unknown id is an error and removes nothing, so a typo cannot half-empty your set of branch points.
+`--dry-run` reports what would go without deleting anything. Removal by name or id is all-or-nothing: an unknown one is an error and removes nothing, so a typo cannot half-empty your set of branch points. `savepoint remove` deletes the records and each savepoint's own directory; [`arcave gc`](../reference/cli/gc.md) frees what they shared with other savepoints, and their `cdc` snapshots.
 
 ## Related docs
 

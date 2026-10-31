@@ -4,6 +4,9 @@ description: Recovering from an interrupted rollback, a held project or session 
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Troubleshooting
 
 Each entry names the symptom as arcave reports it, what happened, and what to do.
@@ -30,17 +33,40 @@ Pass the same two flags to the commands below.
 arcave savepoint list --include-safety-snapshots
 ```
 
-```json title="stdout"
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+NAME                                                           ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+safety-snapshot-019e843e-1650-7000-8000-000000000000 (safety)  019e8491-04c8-7000-8000-000000000000  2026-06-01 21:22  1        2       40.8 MB  1
+before-migration                                               019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       210 MB   1
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
+```json title="stdout (each record trimmed)"
 [
   {
     "id": "019e8491-04c8-7000-8000-000000000000",
     "name": "safety-snapshot-019e843e-1650-7000-8000-000000000000",
     "description": "",
     "labels": { "arcave-safety-snapshot": "true" },
-    "created_at": "2026-06-01T21:22:37.009412Z"
+    "created_at": "2026-06-01T21:22:37.009412Z",
+    …
+  },
+  {
+    "id": "019e843e-1650-7000-8000-000000000000",
+    "name": "before-migration",
+    "description": "before the v2 schema",
+    "created_at": "2026-06-01T19:41:12.123456789Z",
+    …
   }
 ]
 ```
+
+</TabItem>
+</Tabs>
 
 The name carries the id of the savepoint that rollback was applying, so a leftover always identifies the run that abandoned it.
 
@@ -75,7 +101,7 @@ Run that same rollback again; the marker lets it through, and it finishes what t
 
 ## `another arcave command is already running in this project`
 
-Another arcave process holds the lock on `.arcave/lock`. Only commands that change something take it — `savepoint list`, `session list` and `session current` always run. The lock is not a queue — a second run fails rather than waiting.
+Another arcave process holds the lock on `.arcave/lock`. Only commands that change something take it, `arcave gc` (`--dry-run` included) among them — `savepoint list`, `session list` and `session current` always run. The lock is not a queue — a second run fails rather than waiting.
 
 ```shell
 ps aux | grep '[a]rcave'
@@ -322,14 +348,18 @@ mkdir -p /srv/arcave/myapp
 
 ## JSON output is mixed with log lines
 
-It is not — check which stream you are reading. Results go to stdout, logs to stderr.
+It is not — check which stream you are reading. Results go to stdout, logs and the live progress tree to stderr.
 
 ```shell
 arcave savepoint list 2>/dev/null | jq .
 ID=$(arcave savepoint create nightly | jq -r .id)
 ```
 
-Two exceptions: `arcave --version` prints a plain version line, and `arcave mcp` writes nothing to stdout at all.
+## The result is text, not JSON
+
+While the live tree is drawn — stderr a terminal, `log.format: text` — and stdout is a terminal, arcave prints the result as text for a person to read. Anything else gets JSON — a pipe, a redirect, `--log-format json` — and `--format json` (or `ARCAVE_FORMAT=json`) asks for it anywhere. Under `--progress json`, stdout carries a JSON line per step event before the result — the result is the last line, `{"type":"result",…}`; see [Output](output.md#result-format).
+
+Exceptions: `arcave --version` prints a plain version line, and `arcave mcp` writes nothing to stdout at all.
 
 ## Next step
 

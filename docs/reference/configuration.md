@@ -156,7 +156,7 @@ compose.stop_timeout must not be negative, got -1s
 | `tty` | Compose's own redrawing renderer, at the cost of a second format on stderr. |
 | `quiet` | Nothing but arcave's own log lines. |
 
-All three keep compose off stdout, which carries the JSON result and nothing else.
+All three keep compose off stdout, which carries the result and nothing else.
 
 ```text
 unsupported compose.progress "loud" (supported: log, tty, quiet)
@@ -417,7 +417,7 @@ set log level: get logger: log level trace: unknown log level
 set log level: get logger: log format yaml: unknown log format
 ```
 
-Logs go to stderr; results go to stdout as JSON. `--log-format json` makes the whole stderr stream machine-readable, which is what a CI job or an agent wants.
+Logs go to stderr; results go to stdout — as JSON when stdout is a pipe or `--format json` asks, as text on a terminal (see [Output](output.md#result-format)). `--log-format json` makes the whole stderr stream machine-readable, which is what a CI job or an agent wants.
 
 ## Next step
 

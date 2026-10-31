@@ -59,7 +59,7 @@ Two savepoints and two names give you both ends of the migration as fixed points
 
 ## In CI
 
-The same loop runs unattended. Every command prints JSON on stdout, so `jq` is all the parsing it needs:
+The same loop runs unattended. With stdout a pipe, every command prints its result as JSON, so `jq` is all the parsing it needs:
 
 ```shell
 SP=$(arcave --log-format json savepoint create "ci-${CI_RUN_ID}" | jq -r .id)

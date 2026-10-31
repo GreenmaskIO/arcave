@@ -38,7 +38,7 @@ Start the host **in the project directory**, so `.arcave/config.yaml` resolves t
 
 ## 3. What the agent sees
 
-Ten tools:
+Twelve tools:
 
 | Tool | Purpose |
 |---|---|
@@ -52,8 +52,10 @@ Ten tools:
 | `session_current` | Show the session calls work in |
 | `session_set` | Make a session the current one |
 | `session_unset` | Go back to `baseline` |
+| `gc` | Reclaim the space removed savepoints held; reports only unless `dry_run` is `false` |
+| `compose_generate` | A compose file rebuilt from the running project |
 
-The four savepoint tools take `project` explicitly — one server serves many compose projects, and the agent names the one it means per call. They also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `project`: a session holds every compose project of the directory.
+The four savepoint tools and `compose_generate` take `project` explicitly — one server serves many compose projects, and the agent names the one it means per call. The four savepoint tools also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `project`: a session holds every compose project of the directory.
 
 ```json title="A savepoint_create call"
 {
@@ -124,14 +126,14 @@ arcave --log-format json mcp 2> arcave-mcp.log
 ```
 
 ```json title="arcave-mcp.log (trimmed)"
-{"level":"info","message":"stopping services"}
-{"level":"info","volume":"volume-named-arcave-demo_pgdata","backend":"fullcopy","op":"snapshot","message":"volume operation started"}
-{"level":"info","volume":"volume-named-arcave-demo_pgdata","backend":"fullcopy","op":"snapshot","message":"volume operation finished"}
-{"level":"info","message":"starting services"}
-{"level":"info","kind":"Container","name":"arcave-demo-postgres-1","status":"Healthy","message":"compose"}
+{"level":"info","status":"started","message":"savepoint.create[attempt-3]"}
+{"level":"info","status":"succeeded","elapsed":"412ms","message":"savepoint.create[attempt-3]/compose.stop"}
+{"level":"info","status":"succeeded","bytes":"41MB/41MB","stored":"41MB","elapsed":"3.1s","message":"savepoint.create[attempt-3]/savepoint.capture[attempt-3]/volume.capture/volume[volume-named-arcave-demo_pgdata]"}
+{"level":"info","status":"in_progress","msg":"Healthy","resource":"container:arcave-demo-postgres-1","message":"savepoint.create[attempt-3]/compose.start"}
+{"level":"info","status":"succeeded","elapsed":"15.4s","message":"savepoint.create[attempt-3]"}
 ```
 
-Each record also carries its time, and the volume records `snapshot_id` and `duration`. If the host launches the server itself, it usually surfaces stderr in its own log view.
+Each record is one step event, named by its path in the workflow's tree, and also carries its time. `--log-level debug` adds the events of objects still under way. See [Progress](../reference/output.md#progress). If the host launches the server itself, it usually surfaces stderr in its own log view.
 
 ## 7. Prune at the end of a run
 
@@ -149,6 +151,16 @@ Each record also carries its time, and the volume records `snapshot_id` and `dur
   "dry_run": true
 }
 ```
+
+`savepoint_remove` takes `refs` — ids or names — as well. It deletes the records and each savepoint's own directory; what they shared with other savepoints, and their `cdc` snapshots, go with `gc`, which only reports until it is told otherwise:
+
+```json title="gc"
+{
+  "dry_run": false
+}
+```
+
+gc covers every compose project of the session, so it takes no `project`. See [`arcave gc`](../reference/cli/gc.md).
 
 ## 8. Make the loop cheap
 

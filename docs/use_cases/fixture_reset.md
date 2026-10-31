@@ -50,12 +50,13 @@ arcave rollback clean
 Keep the baseline savepoint permanently and exclude it from pruning by removing explicitly rather than by retention:
 
 ```shell
-arcave savepoint list                          # find the ids you want gone
-arcave savepoint remove 019e8488-3ac8-7000-8000-000000000000 019e8497-cf10-7000-8000-000000000000  # and remove only those
+arcave savepoint list                          # find the savepoints you want gone
+arcave savepoint remove after-refactor attempt-2  # and remove only those, by name or id
+arcave gc                                      # then free what they shared
 ```
 
 :::warning
-Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, prune by id, or keep it in a [session](../sessions.md) of its own.
+Retention rules do not know which savepoint is precious. `--retain-recent 5` will delete a `clean` baseline once five newer savepoints exist. If a savepoint must survive, remove by name or id, or keep it in a [session](../sessions.md) of its own.
 :::
 
 ## A session for the baseline
