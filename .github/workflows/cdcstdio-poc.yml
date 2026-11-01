@@ -1,0 +1,27 @@
+# One-off cdc-over-stdio POC on a native Linux daemon: restic over a docker exec
+# stream against the TCP path, and a bare exec stream's ceiling.
+name: cdc stdio POC
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/cdc-stdio]
+    paths: [test/cdcstdio/**, .github/workflows/cdcstdio-poc.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: docker version
+      - name: POC
+        env:
+          CDCSTDIO_TCP_HOST_NETWORK: "1"
+        run: go test -tags cdcstdio -count=1 -v -timeout 30m ./test/cdcstdio/
