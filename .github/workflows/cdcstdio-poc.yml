@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: docker version
+      - run: docker version && docker pull -q busybox && docker pull -q restic/restic:0.19.1
       - name: POC
         env:
           CDCSTDIO_TCP_HOST_NETWORK: "1"
