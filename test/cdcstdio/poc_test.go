@@ -182,7 +182,7 @@ func (s *stdio) run(ctx context.Context, binds []string, args ...string) (string
 	created, err := s.cli.ContainerCreate(ctx, &container.Config{
 		Image:        resticImage,
 		Entrypoint:   []string{"sh", "-c", stdioEntrypoint, "restic"},
-		Cmd:          append(append([]string{}, stdioArgs...), args...),
+		Cmd:          append(append(append([]string{}, stdioArgs...), strings.Fields(os.Getenv("CDCSTDIO_EXTRA_ARGS"))...), args...),
 		Env:          []string{"RESTIC_REPOSITORY=rclone:arcave", "RESTIC_PASSWORD=" + password},
 		Labels:       map[string]string{"arcave.oneshot": "true"},
 		AttachStdout: true,
