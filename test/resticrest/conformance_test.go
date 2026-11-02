@@ -24,12 +24,18 @@ package resticrest
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,53 +60,144 @@ const conformancePassword = "arcave-resticserver-conformance"
 // a repository under — one path segment, and the name of its directory.
 const conformanceObjectID = "volume-named-pgdata"
 
-func TestConformsToRestic(t *testing.T) {
-	// Arrange: repository root → resolver → served endpoint, addressed on the
-	// loopback, since the client here is a binary on the host rather than a
-	// container. The store the assertions read is the sub-root the ObjectID names
-	// — the very one the resolver hands the protocol.
-	resticBin := requireResticBinary(t)
+// relaySocketEnv names the unix socket this test binary relays its stdio to
+// when restic starts it as its rclone program.
+const relaySocketEnv = "ARCAVE_CONFORMANCE_RELAY_SOCKET"
 
-	root, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, root.Close()) })
-	store, err := root.SubStorage(conformanceObjectID, true)
-	require.NoError(t, err)
+// TestMain turns the test binary into the stdio transport's relay when restic
+// runs it: stdin to the socket, the socket to stdout, until either side ends.
+func TestMain(m *testing.M) {
+	if socket := os.Getenv(relaySocketEnv); socket != "" {
+		os.Exit(relay(socket))
+	}
+	os.Exit(m.Run())
+}
+
+// relay pipes stdin and stdout through the unix socket at path.
+func relay(path string) int {
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer conn.Close()
+	go func() {
+		_, _ = io.Copy(conn, os.Stdin)
+		_ = conn.(*net.UnixConn).CloseWrite()
+	}()
+	_, _ = io.Copy(os.Stdout, conn)
+	return 0
+}
+
+func TestConformsToRestic(t *testing.T) {
+	tests := []struct {
+		name string
+		// serve serves root and returns the restic options and repository naming it.
+		serve func(t *testing.T, root storages.Storager) (opts []string, repository string)
+	}{
+		{name: "tcp", serve: serveTCP},
+		{name: "connserver", serve: serveConnServer},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: repository root → resolver → served endpoint. The store the
+			// assertions read is the sub-root the ObjectID names — the very one the
+			// resolver hands the protocol.
+			resticBin := requireResticBinary(t)
+
+			root, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, root.Close()) })
+			store, err := root.SubStorage(conformanceObjectID, true)
+			require.NoError(t, err)
+
+			opts, repository := tt.serve(t, root)
+			run := resticRunner(t, resticBin, repository, opts)
+			fixture := newConformanceFixture(t)
+
+			// Act & Assert: one lifecycle, each step gated on the previous one.
+			run(t, "init")
+			exists, err := store.Exists(context.Background(), "config")
+			require.NoError(t, err)
+			require.True(t, exists, "init must land the repository config in the store")
+
+			run(t, "backup", fixture)
+			require.Contains(t, run(t, "snapshots", "--json"), `"id"`, "the first backup produced no snapshot")
+
+			// A second backup over changed data, so forget has something to drop and
+			// prune has something to repack — the DELETEs of the protocol.
+			require.NoError(t, os.WriteFile(filepath.Join(fixture, "changing.txt"),
+				[]byte(strings.Repeat("second", 4096)), 0o600))
+			run(t, "backup", fixture)
+
+			// --read-data reads every pack back through the ranged GETs.
+			run(t, "check", "--read-data")
+
+			target := t.TempDir()
+			run(t, "restore", "latest", "--target", target)
+
+			run(t, "forget", "--keep-last", "1", "--prune")
+			run(t, "check", "--read-data")
+		})
+	}
+}
+
+// serveTCP serves root on the loopback; the client here is a binary on the
+// host, so the host it names is the loopback rather than a container's name for it.
+func serveTCP(t *testing.T, root storages.Storager) ([]string, string) {
+	t.Helper()
 
 	srv := rest.NewEcho(t.Context(), repo.NewResolver(root))
 	port, err := rest.Serve(srv, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, srv.Close()) })
+	return nil, rest.RepositoryURLBase("", "127.0.0.1", port) + "/" + conformanceObjectID + "/"
+}
 
-	// The client here is a binary on the host, so the host it names is the
-	// loopback rather than a container's name for it.
-	repoURL := rest.RepositoryURLBase("", "127.0.0.1", port) + "/" + conformanceObjectID + "/"
-	run := resticRunner(t, resticBin, repoURL)
-	fixture := newConformanceFixture(t)
+// serveConnServer serves root over rest.ConnServer, one stream per restic run:
+// restic starts this test binary as its rclone program, which relays its stdio
+// to a unix socket served here. The docker exec bridge the stdio transport puts
+// in between is test/cdcbackend's.
+func serveConnServer(t *testing.T, root storages.Storager) ([]string, string) {
+	t.Helper()
 
-	// Act & Assert: one lifecycle, each step gated on the previous one.
-	run(t, "init")
-	exists, err := store.Exists(context.Background(), "config")
+	// A short directory: a unix socket path is capped near 100 bytes.
+	dir, err := os.MkdirTemp("", "arcave-relay")
 	require.NoError(t, err)
-	require.True(t, exists, "init must land the repository config in the store")
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+	ln, err := net.Listen("unix", socket)
+	require.NoError(t, err)
 
-	run(t, "backup", fixture)
-	require.Contains(t, run(t, "snapshots", "--json"), `"id"`, "the first backup produced no snapshot")
+	ctx, cancel := context.WithCancel(t.Context())
+	server := rest.NewConnServer(ctx, repo.NewResolver(root))
+	var served sync.WaitGroup
+	served.Add(1)
+	go func() {
+		defer served.Done()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			served.Add(1)
+			go func() {
+				defer served.Done()
+				_ = server.ServeRepository(ctx, conformanceObjectID, conn)
+			}()
+		}
+	}()
+	// Registered after root's Close, so it runs first: nothing serves root once it closes.
+	t.Cleanup(func() {
+		_ = ln.Close()
+		cancel()
+		served.Wait()
+	})
 
-	// A second backup over changed data, so forget has something to drop and
-	// prune has something to repack — the DELETEs of the protocol.
-	require.NoError(t, os.WriteFile(filepath.Join(fixture, "changing.txt"),
-		[]byte(strings.Repeat("second", 4096)), 0o600))
-	run(t, "backup", fixture)
-
-	// --read-data reads every pack back through the ranged GETs.
-	run(t, "check", "--read-data")
-
-	target := t.TempDir()
-	run(t, "restore", "latest", "--target", target)
-
-	run(t, "forget", "--keep-last", "1", "--prune")
-	run(t, "check", "--read-data")
+	self, err := os.Executable()
+	require.NoError(t, err)
+	t.Setenv(relaySocketEnv, socket)
+	return []string{"-o", "rclone.program=" + self}, "rclone:arcave"
 }
 
 // requireResticBinary skips unless a real restic can be exercised.
@@ -117,19 +214,19 @@ func requireResticBinary(t *testing.T) string {
 	return path
 }
 
-// resticRunner returns a function running one restic command against the served
+// resticRunner returns a function running one restic command, after opts, against the served
 // repository, failing the test with the command's own output.
 //
 // The connection count is left at restic's default of five: production runs one,
 // but the chain must be concurrency-safe and this is the only test that says so.
-func resticRunner(t *testing.T, bin, repoURL string) func(*testing.T, ...string) string {
+func resticRunner(t *testing.T, bin, repository string, opts []string) func(*testing.T, ...string) string {
 	t.Helper()
 
 	return func(t *testing.T, args ...string) string {
 		t.Helper()
-		cmd := exec.CommandContext(t.Context(), bin, args...)
+		cmd := exec.CommandContext(t.Context(), bin, append(slices.Clone(opts), args...)...)
 		cmd.Env = append(os.Environ(),
-			"RESTIC_REPOSITORY="+repoURL,
+			"RESTIC_REPOSITORY="+repository,
 			"RESTIC_PASSWORD="+conformancePassword,
 		)
 		out, err := cmd.CombinedOutput()

@@ -103,6 +103,15 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 				Image:       config.DefaultResticImage,
 			},
 		},
+		{
+			name: "incremental over tcp",
+			cdc: config.CDCBackend{
+				RestoreMode: config.RestoreModeIncremental,
+				Overwrite:   config.OverwriteAlways,
+				Image:       config.DefaultResticImage,
+				Transport:   config.CDCTransportTCP,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -315,7 +324,49 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 	return env
 }
 
-// serviceIn wires the service for session the way the DI root does, with its own restic server.
+// openTransport serves resticRoot over the env's backends.cdc.transport — stdio
+// unless it names tcp, which starts a restic server for the test — and returns
+// whether the containers join the host network.
+func (e *cdcEnv) openTransport(t *testing.T, resticRoot storages.Storager) (cdc.Transport, bool) {
+	t.Helper()
+
+	opened, err := openTestTransport(e.ctx, e.cdcCfg.Transport, resticRoot, e.hostNetwork, e.containerHost)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, opened.stop()) })
+	return opened.transport, opened.hostNetwork
+}
+
+// testTransport is a transport opened over a repository tree, with its stop.
+type testTransport struct {
+	transport   cdc.Transport
+	hostNetwork bool
+	// stop shuts the tcp server down; a no-op under stdio.
+	stop func() error
+}
+
+// openTestTransport serves resticRoot over transport as the DI root does.
+func openTestTransport(
+	ctx context.Context, transport string, resticRoot storages.Storager, hostNetwork bool, containerHost string,
+) (testTransport, error) {
+	if transport != config.CDCTransportTCP {
+		return testTransport{
+			transport: cdc.Transport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))},
+			stop:      func() error { return nil },
+		}, nil
+	}
+	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
+	port, err := rest.Serve(server, "")
+	if err != nil {
+		return testTransport{}, err
+	}
+	return testTransport{
+		transport:   cdc.Transport{RepoURLBase: rest.RepositoryURLBase("", containerHost, port)},
+		hostNetwork: hostNetwork,
+		stop:        server.Close,
+	}, nil
+}
+
+// serviceIn wires the service for session the way the DI root does, over its own transport.
 func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service, storages.Storager) {
 	t.Helper()
 
@@ -329,20 +380,17 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 
 	resticRoot, err := composeProjectStore.SubStorage(cdc.NamespaceRepos, true)
 	require.NoError(t, err)
-	resticServer := rest.NewEcho(e.ctx, repo.NewResolver(resticRoot))
-	resticPort, err := rest.Serve(resticServer, "")
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, resticServer.Close()) })
+	transport, hostNetwork := e.openTransport(t, resticRoot)
 
 	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
 		Runner:         e.engine,
-		Transport:      cdc.Transport{RepoURLBase: rest.RepositoryURLBase("", e.containerHost, resticPort)},
+		Transport:      transport,
 		RepositoryRoot: resticRoot,
 		Options: cdc.Options{
 			Image:       e.cdcCfg.Image,
 			Incremental: e.cdcCfg.RestoreMode == config.RestoreModeIncremental,
 			Overwrite:   e.cdcCfg.Overwrite,
-			HostNetwork: e.hostNetwork,
+			HostNetwork: hostNetwork,
 		},
 	}))
 	require.NoError(t, err)
