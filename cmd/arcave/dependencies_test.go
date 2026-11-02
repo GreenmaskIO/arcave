@@ -640,13 +640,113 @@ func TestNewComposeProjectErasers(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-// newTestResticInspectorOpener is an opener over a fresh directory store, its containers on the
-// host network so that no daemon is asked.
+// newTestResticInspectorOpener is a tcp opener over a fresh directory store, its containers on
+// the host network so that no daemon is asked.
 func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages.Storager) {
 	t.Helper()
 	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
-	return resticInspectorOpener{cfg: config.CDCWithDefaults(&config.CDCBackend{NetworkMode: config.NetworkModeHost})}, store
+	cfg := config.CDCWithDefaults(&config.CDCBackend{
+		Transport:   config.CDCTransportTCP,
+		NetworkMode: config.NetworkModeHost,
+	})
+	return resticInspectorOpener{cfg: cfg}, store
+}
+
+// stdio serves the repositories over each container's exec stream and listens on nothing, so
+// the tcp keys are not read; tcp binds the server and names it to the containers.
+func TestOpenCDCTransport(t *testing.T) {
+	tests := []struct {
+		name   string
+		cfg    config.CDCBackend
+		verify func(t *testing.T, opened openedCDCTransport)
+	}{
+		{
+			// auto would ask the nil engine and the address would not bind, so
+			// either one read under stdio fails the open.
+			name: "stdio is the default and reads no tcp key",
+			cfg: config.CDCWithDefaults(&config.CDCBackend{
+				NetworkMode:   config.NetworkModeAuto,
+				ServerAddress: "192.0.2.1:1",
+			}),
+			verify: func(t *testing.T, opened openedCDCTransport) {
+				assert.NotNil(t, opened.transport.Server)
+				assert.Empty(t, opened.transport.RepoURLBase)
+				assert.Nil(t, opened.server, "stdio listens on nothing")
+				assert.False(t, opened.options.HostNetwork, "network_mode is tcp's")
+			},
+		},
+		{
+			name: "tcp",
+			cfg: config.CDCWithDefaults(&config.CDCBackend{
+				Transport:   config.CDCTransportTCP,
+				NetworkMode: config.NetworkModeHost,
+			}),
+			verify: func(t *testing.T, opened openedCDCTransport) {
+				require.NotNil(t, opened.server)
+				port := strconv.Itoa(opened.server.Listener.Addr().(*net.TCPAddr).Port)
+				assert.Nil(t, opened.transport.Server)
+				assert.Equal(t, "rest:http://127.0.0.1:"+port, opened.transport.RepoURLBase)
+				assert.True(t, opened.options.HostNetwork)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := zerolog.Nop().WithContext(context.Background())
+			store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+			require.NoError(t, err)
+
+			// Act
+			opened, err := openCDCTransport(ctx, tt.cfg, nil, store)
+
+			// Assert
+			require.NoError(t, err)
+			t.Cleanup(func() { shutdownResticServer(ctx, opened.server) })
+			assert.NoError(t, opened.transport.Validate())
+			assert.Equal(t, tt.cfg.Image, opened.options.Image)
+			tt.verify(t, opened)
+		})
+	}
+}
+
+// Under stdio the inspector holds no server, and its Close has nothing to stop.
+func TestResticInspectorOpener_Open_Stdio(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+	require.NoError(t, err)
+	opener := resticInspectorOpener{cfg: config.CDCWithDefaults(nil)}
+
+	// Act
+	inspector, err := opener.Open(ctx, store)
+
+	// Assert
+	require.NoError(t, err)
+	opened, ok := inspector.(resticInspector)
+	require.True(t, ok)
+	assert.Nil(t, opened.server)
+	assert.NotPanics(t, func() { inspector.Close(ctx) })
+}
+
+// Under stdio the pruner holds no server, and its Close has nothing to stop.
+func TestResticPrunerOpener_Open_Stdio(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+	require.NoError(t, err)
+	opener := resticPrunerOpener{cfg: config.CDCWithDefaults(nil)}
+
+	// Act
+	pruner, err := opener.Open(ctx, store)
+
+	// Assert
+	require.NoError(t, err)
+	opened, ok := pruner.(resticPruner)
+	require.True(t, ok)
+	assert.Nil(t, opened.server)
+	assert.NotPanics(t, func() { pruner.Close(ctx) })
 }
 
 // The opener serves the compose project's repositories while the inspector is open.
@@ -744,7 +844,7 @@ func TestServeResticRepositories(t *testing.T) {
 	require.NoError(t, store.PutObject(ctx, "restic/volume-named-db/locks/a1", strings.NewReader("orphan")))
 
 	// Act
-	served, err := serveResticRepositories(ctx, opener.cfg, nil, store)
+	served, err := openResticRepositories(ctx, opener.cfg, nil, store)
 
 	// Assert
 	require.NoError(t, err)
@@ -753,7 +853,7 @@ func TestServeResticRepositories(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, objects, 1)
 	assert.Equal(t, "volume-named-db/locks/a1", objects[0].Name)
-	assert.Contains(t, served.repoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
+	assert.Contains(t, served.transport.RepoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
 }
 
 // eventRecorder keeps every event it is handed.

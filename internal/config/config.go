@@ -75,7 +75,20 @@ const (
 // --delete/--overwrite need restic ≥0.17.
 const DefaultResticImage = "restic/restic:0.19.1"
 
-// Where cdc's restic server lives: the two ends of one loopback hop.
+// The transports backends.cdc.transport accepts.
+const (
+	// CDCTransportStdio serves each repository over a docker exec stream into the
+	// restic container: no listener, no network, any daemon arcave's API reaches.
+	CDCTransportStdio = "stdio"
+	// CDCTransportTCP serves the repositories on a loopback TCP server the container
+	// dials, configured by server_address, server_scheme, container_host, network_mode.
+	CDCTransportTCP = "tcp"
+	// DefaultCDCTransport is the exec stream.
+	DefaultCDCTransport = CDCTransportStdio
+)
+
+// Where cdc's restic server lives under the tcp transport: the two ends of one
+// loopback hop.
 const (
 	// DefaultCDCServerAddress binds the loopback on a port the kernel picks. A
 	// fixed port would collide between two arcave processes — a CLI run and an
@@ -393,8 +406,8 @@ type Backends struct {
 }
 
 // CDCBackend configures the content-defined-chunking backend: which restic image
-// its one-shot containers run, how a restore reaches the live mount, and the two
-// ends of the loopback hop a container fetches its repository over.
+// its one-shot containers run, how a restore reaches the live mount, and how a
+// container reaches its repository — an exec stream, or a loopback TCP hop.
 type CDCBackend struct {
 	// RestoreMode is wipe (clear the mount, then restore it whole) or incremental
 	// (restore over the live data, letting restic write only the difference).
@@ -403,6 +416,10 @@ type CDCBackend struct {
 	Overwrite string `yaml:"overwrite" mapstructure:"overwrite"`
 	// Image is the restic image every cdc command runs in.
 	Image string `yaml:"image" mapstructure:"image"`
+	// Transport is how a restic container reaches its repository: stdio (an exec
+	// stream, the default) or tcp. The four keys below are acted on only under tcp,
+	// and validated under either.
+	Transport string `yaml:"transport" mapstructure:"transport"`
 	// ServerAddress is what arcave's restic server binds. Port 0 lets the kernel
 	// pick, which is what keeps two arcave processes from colliding.
 	ServerAddress string `yaml:"server_address" mapstructure:"server_address"`
@@ -445,6 +462,12 @@ func (c CDCBackend) Validate() error {
 	}
 	if c.Image == "" {
 		return fmt.Errorf("%w: backends.cdc.image is required", ErrInvalid)
+	}
+	switch c.Transport {
+	case CDCTransportStdio, CDCTransportTCP:
+	default:
+		return fmt.Errorf("%w: unsupported backends.cdc.transport %q (supported: %s, %s)", ErrInvalid,
+			c.Transport, CDCTransportStdio, CDCTransportTCP)
 	}
 	if c.ServerAddress == "" {
 		return fmt.Errorf("%w: backends.cdc.server_address is required", ErrInvalid)
@@ -576,6 +599,9 @@ func CDCWithDefaults(configured *CDCBackend) CDCBackend {
 	}
 	if cdc.Image == "" {
 		cdc.Image = DefaultResticImage
+	}
+	if cdc.Transport == "" {
+		cdc.Transport = DefaultCDCTransport
 	}
 	if cdc.ServerAddress == "" {
 		cdc.ServerAddress = DefaultCDCServerAddress

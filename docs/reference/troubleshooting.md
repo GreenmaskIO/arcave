@@ -297,11 +297,20 @@ With `snapshot.backend: cdc`, capturing a host bind mount fails with an I/O erro
 
 ## `cdc` containers cannot reach arcave's restic server
 
-A restic container has to reach a server bound to your host loopback, and how it does that differs per platform.
+This applies to `backends.cdc.transport: tcp` only. The default, `stdio`, reaches the repositories over the Docker API and opens no port; switching back to it is the fix for a remote `DOCKER_HOST`:
+
+```yaml title="The default"
+backends:
+    cdc:
+        transport: stdio
+```
+
+Under `tcp`, a restic container has to reach a server bound to your host loopback, and how it does that differs per platform.
 
 ```yaml title="Let arcave work it out"
 backends:
     cdc:
+        transport: tcp
         network_mode: auto
 ```
 
@@ -310,11 +319,18 @@ backends:
 ```yaml title="A remote or rootless daemon"
 backends:
     cdc:
+        transport: tcp
         network_mode: bridge
         container_host: docker-host.internal
 ```
 
 For a remote daemon, `container_host` has to be a name that resolves **from inside the container** to the host running arcave.
+
+## A custom restic image fails every `cdc` command
+
+Under the default `backends.cdc.transport: stdio`, arcave starts restic behind a small shell entrypoint, so the image in `backends.cdc.image` has to ship a busybox-style `sh`, `mkfifo` and `cat`, as the stock `restic/restic` image does. One without `sh` fails when its container starts; one without `mkfifo` exits with status 127, `mkfifo: not found` among its output.
+
+Build the image on one that carries a shell, or set `transport: tcp`, which runs the image's own entrypoint.
 
 ## An unknown key fails the command
 

@@ -43,6 +43,7 @@ backends:
         restore_mode: incremental
         overwrite: always
         image: restic/restic:0.19.1
+        transport: stdio
         server_address: 127.0.0.1:0
         server_scheme: http
         container_host: host.docker.internal
@@ -375,16 +376,26 @@ One optional subsection per backend. A project that never uses a backend does no
 | `restore_mode` | string | `incremental` | `incremental` writes over the live data, sending only what differs and deleting what the savepoint does not carry. `wipe` clears the mount and writes it back whole. |
 | `overwrite` | string | `always` | Governs an incremental restore only. `always` rewrites every file the savepoint carries; `if-changed` compares content and rewrites only what differs. |
 | `image` | string | `restic/restic:0.19.1` | The restic image every one-shot container runs. `--delete`/`--overwrite` need restic 0.17 or newer. |
-| `server_address` | string | `127.0.0.1:0` | What arcave's restic server binds. Must be `host:port`. |
-| `server_scheme` | string | `http` | The scheme the container fetches the repository over: `http`, or `https` for a TLS proxy in front of it. |
-| `container_host` | string | `host.docker.internal` | That server's hostname **as the container sees it**, on the bridge path. Ignored under host networking. |
-| `network_mode` | string | `auto` | How a restic container reaches the server: `auto`, `host` or `bridge`. |
+| `transport` | string | `stdio` | How a restic container reaches its repository: `stdio`, over the Docker API, or `tcp`, over a loopback server. |
+| `server_address` | string | `127.0.0.1:0` | `tcp` only. What arcave's restic server binds. Must be `host:port`. |
+| `server_scheme` | string | `http` | `tcp` only. The scheme the container fetches the repository over: `http`, or `https` for a TLS proxy in front of it. |
+| `container_host` | string | `host.docker.internal` | `tcp` only. That server's hostname **as the container sees it**, on the bridge path. Ignored under host networking. |
+| `network_mode` | string | `auto` | `tcp` only. How a restic container reaches the server: `auto`, `host` or `bridge`. |
 
 With the defaults, a restore writes over the live data and rewrites every file the savepoint carries — `overwrite: if-changed` is what turns that into a comparison.
 
+**What `transport` decides.** restic in its container needs a way to its repository, which arcave keeps in your storage.
+
+| Value | Behaviour |
+|---|---|
+| `stdio` | arcave serves the repository over a `docker exec` stream into the restic container. Nothing listens, no port is opened, and no network setting matters, so it works with any daemon arcave reaches, a remote `DOCKER_HOST` included. The default. A full restore of a large volume runs slower than over `tcp` on native Linux (about 60% of its speed, measured), because every byte goes through the daemon. |
+| `tcp` | arcave runs a restic server on your loopback for the duration of a command, and the container dials it. Configured by the four keys below `transport`; the way back to the old speed, and the option for engines other than Docker Engine and Docker Desktop. |
+
+Under `stdio` a custom `image` must ship a busybox-style `sh`, `mkfifo` and `cat`: arcave runs restic behind a small shell entrypoint. The default image does.
+
 **Why port `0`.** The kernel picks the port. A fixed one would collide between two arcave processes — a CLI run and an `arcave mcp` server, or two projects — and would be a predictable address on your loopback for anything else on the machine.
 
-**What `network_mode` decides.** A restic container has to reach a server on your host loopback, and how it does that differs per platform.
+**What `network_mode` decides.** Under `tcp`, a restic container has to reach a server on your host loopback, and how it does that differs per platform.
 
 | Value | Behaviour |
 |---|---|
@@ -398,6 +409,7 @@ On Docker Desktop for macOS the `cdc` backend cannot capture a **host bind mount
 
 ```text
 unsupported backends.cdc.restore_mode "partial" (supported: wipe, incremental)
+unsupported backends.cdc.transport "ssh" (supported: stdio, tcp)
 unsupported backends.cdc.overwrite "never" (supported: if-changed, always)
 backends.cdc.server_address "127.0.0.1" is not a host:port address: …
 unsupported backends.cdc.network_mode "none" (supported: auto, host, bridge)

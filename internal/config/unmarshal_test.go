@@ -285,12 +285,38 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
 				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
 				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
+				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
 				// Both ends of the loopback hop default with it, and how a container
 				// crosses it stays a probe.
 				assert.Equal(t, DefaultCDCServerAddress, cfg.Backends.CDC.ServerAddress)
 				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
 				assert.Equal(t, NetworkModeAuto, cfg.Backends.CDC.NetworkMode)
 			},
+		},
+		{
+			name: "the tcp transport is read back",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    transport: tcp\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, CDCTransportTCP, cfg.Backends.CDC.Transport)
+			},
+		},
+		{
+			// The tcp keys stay valid beside stdio, which ignores them.
+			name: "stdio keeps the tcp keys",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    transport: stdio\n    network_mode: bridge\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
+				assert.Equal(t, NetworkModeBridge, cfg.Backends.CDC.NetworkMode)
+			},
+		},
+		{
+			name:       "a transport arcave does not offer is rejected",
+			yaml:       "backends:\n  cdc:\n    transport: ssh\n",
+			wantErrMsg: "unsupported backends.cdc.transport",
 		},
 		{
 			name: "an explicit network mode is read back",

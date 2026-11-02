@@ -20,11 +20,13 @@ unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docke
 unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
 ```
 
-The daemon must also be **reachable**. The `savepoint` commands and `rollback` open a connection while they wire themselves up, before any workflow starts, so an unreachable daemon fails `savepoint list` exactly as it fails `rollback`. `init` and the `session` commands reach no daemon:
+The daemon must also be **reachable** for `savepoint create` and `rollback`, which fail on their first look at the compose project. `init`, `savepoint list`, `savepoint remove` and the `session` commands reach no daemon:
 
 ```text
-init dependencies: resolve backends.cdc.network_mode "auto": read docker daemon info: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+introspect compose project: read containers of compose project "demo": list containers: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
 ```
+
+Under [`backends.cdc.transport: tcp`](configuration.md#backendscdc) with `network_mode: auto`, every command but `init` and the `session` commands asks the daemon while it wires itself up, so an unreachable one fails `savepoint list` too.
 
 Which daemon, and how to reach it, is the [`docker` config section](configuration.md#docker); left empty, it reads `DOCKER_HOST` and friends.
 
@@ -65,7 +67,9 @@ Every command but `init` needs `.arcave/config.yaml` under the working directory
 
 ## For the `cdc` backend only
 
-[`snapshot.backend: cdc`](configuration.md#snapshot) pulls and runs `restic/restic:0.19.1` in one-shot containers, so the daemon needs to be able to pull it, and those containers need to reach a loopback port on your host. `network_mode: auto` works that out per platform; a remote or rootless daemon needs `network_mode: bridge` and a `container_host` that resolves from inside a container.
+[`snapshot.backend: cdc`](configuration.md#snapshot) pulls and runs `restic/restic:0.19.1` in one-shot containers, so the daemon needs to be able to pull it. By default arcave reaches those containers' repositories over the Docker API itself, so nothing else is needed — a remote `DOCKER_HOST` included. That default is supported on Docker Engine and Docker Desktop; on another engine (Podman, OrbStack, Colima) use `backends.cdc.transport: tcp`.
+
+Under `transport: tcp` the containers need to reach a loopback port on your host instead. `network_mode: auto` works that out per platform; a remote or rootless daemon needs `network_mode: bridge` and a `container_host` that resolves from inside a container.
 
 `fullcopy`, the default, needs nothing beyond Docker.
 
