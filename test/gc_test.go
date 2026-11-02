@@ -509,7 +509,7 @@ func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (resti
 		return nil, err
 	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(o.engine, opened.transport, o.options(opened)),
+		Inspector: cdc.NewInspector(o.engine, opened.transport, o.options()),
 		stop:      opened.stop,
 	}, nil
 }
@@ -527,11 +527,8 @@ func (o resticOpener) serve(ctx context.Context, store storages.Navigator) (stor
 	return root, opened, nil
 }
 
-func (o resticOpener) options(opened testTransport) cdc.Options {
-	return cdc.Options{
-		Image:       config.DefaultResticImage,
-		HostNetwork: opened.hostNetwork,
-	}
+func (o resticOpener) options() cdc.Options {
+	return cdc.Options{Image: config.DefaultResticImage}
 }
 
 // resticInspector is a cdc.Inspector with the stop of the transport it reads through.
@@ -551,7 +548,7 @@ func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) 
 		return nil, err
 	}
 	return resticPruner{
-		Pruner: cdc.NewPruner(o.engine, root, opened.transport, o.options(opened)),
+		Pruner: cdc.NewPruner(o.engine, root, opened.transport, o.options()),
 		stop:   opened.stop,
 	}, nil
 }

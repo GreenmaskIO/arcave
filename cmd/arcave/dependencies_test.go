@@ -47,10 +47,9 @@ import (
 // carrying a client: the config's own vocabulary in, the backend's own out.
 func TestNewCDCOptions(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         config.CDCBackend
-		hostNetwork bool
-		want        cdc.Options
+		name string
+		cfg  config.CDCBackend
+		want cdc.Options
 	}{
 		{
 			// A project that never names cdc carries no section, and still gets a
@@ -89,23 +88,12 @@ func TestNewCDCOptions(t *testing.T) {
 				Overwrite:   config.OverwriteIfChanged,
 			},
 		},
-		{
-			name:        "the resolved transport carries through",
-			cfg:         config.CDCWithDefaults(nil),
-			hostNetwork: true,
-			want: cdc.Options{
-				Image:       config.DefaultResticImage,
-				Overwrite:   config.OverwriteAlways,
-				Incremental: true,
-				HostNetwork: true,
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newCDCOptions(tt.cfg, tt.hostNetwork)
+			got := newCDCOptions(tt.cfg)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -670,10 +658,10 @@ func TestOpenCDCTransport(t *testing.T) {
 				ServerAddress: "192.0.2.1:1",
 			}),
 			verify: func(t *testing.T, opened openedCDCTransport) {
-				assert.NotNil(t, opened.transport.Server)
-				assert.Empty(t, opened.transport.RepoURLBase)
+				transport, ok := opened.transport.(cdc.StdioTransport)
+				require.True(t, ok, "transport = %T", opened.transport)
+				assert.NotNil(t, transport.Server)
 				assert.Nil(t, opened.server, "stdio listens on nothing")
-				assert.False(t, opened.options.HostNetwork, "network_mode is tcp's")
 			},
 		},
 		{
@@ -685,9 +673,10 @@ func TestOpenCDCTransport(t *testing.T) {
 			verify: func(t *testing.T, opened openedCDCTransport) {
 				require.NotNil(t, opened.server)
 				port := strconv.Itoa(opened.server.Listener.Addr().(*net.TCPAddr).Port)
-				assert.Nil(t, opened.transport.Server)
-				assert.Equal(t, "rest:http://127.0.0.1:"+port, opened.transport.RepoURLBase)
-				assert.True(t, opened.options.HostNetwork)
+				assert.Equal(t, cdc.TCPTransport{
+					RepoURLBase: "rest:http://127.0.0.1:" + port,
+					HostNetwork: true,
+				}, opened.transport)
 			},
 		},
 	}
@@ -704,8 +693,6 @@ func TestOpenCDCTransport(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			t.Cleanup(func() { shutdownResticServer(ctx, opened.server) })
-			assert.NoError(t, opened.transport.Validate())
-			assert.Equal(t, tt.cfg.Image, opened.options.Image)
 			tt.verify(t, opened)
 		})
 	}
@@ -853,7 +840,9 @@ func TestServeResticRepositories(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, objects, 1)
 	assert.Equal(t, "volume-named-db/locks/a1", objects[0].Name)
-	assert.Contains(t, served.transport.RepoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
+	transport, ok := served.transport.(cdc.TCPTransport)
+	require.True(t, ok, "transport = %T", served.transport)
+	assert.Contains(t, transport.RepoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
 }
 
 // eventRecorder keeps every event it is handed.

@@ -88,7 +88,7 @@ func TestRunner_run(t *testing.T) {
 				}).Return(nil).Once()
 			logs := &strings.Builder{}
 			ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-			r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+			r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: demoTCPTransport}
 
 			// Act
 			got, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}})
@@ -120,7 +120,7 @@ func TestRunner_run_ReportsResticsOwnDiagnosis(t *testing.T) {
 			writeLines(spec.Stderr, []string{backupItemErrorLine, backupExitErrorLine})
 		}).Return(exit).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
-	r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: demoTCPTransport}
 
 	// Act
 	_, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}})
@@ -142,7 +142,7 @@ func TestRunner_run_ReportsAnUnnarratedFailure(t *testing.T) {
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchRestic("backup")).Return(exit).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
-	r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: demoTCPTransport}
 
 	// Act
 	_, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}})
@@ -164,7 +164,7 @@ func TestRunner_run_UnterminatedLastLine(t *testing.T) {
 			_, _ = spec.Stdout.Write([]byte(backupSummaryLine))
 		}).Return(nil).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
-	r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: demoTCPTransport}
 
 	// Act
 	got, err := r.run(ctx, resticCmd{args: []string{"backup", "--json"}})
@@ -254,7 +254,7 @@ func TestRunner_runStatus(t *testing.T) {
 			ctx, root := progress.New(events, func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }).Begin(zerolog.Nop().WithContext(context.Background()),
 				progress.Step{Kind: "test"})
 			ctx, step := progress.Run(ctx, progress.Step{Kind: "volume"}, progress.MeasureBytes)
-			r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+			r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: demoTCPTransport}
 
 			// Act
 			_, err := r.run(ctx, resticCmd{args: tt.args})

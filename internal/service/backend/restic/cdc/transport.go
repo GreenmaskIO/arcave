@@ -18,6 +18,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
+	"strings"
+
+	"github.com/rs/zerolog"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // stdioEntrypoint is restic's PID1 under stdio: it makes the bridge's FIFOs, writes the relay
@@ -47,27 +53,115 @@ var stdioArgs = []string{"-o", "rclone.program=/run/arcave/relay"}
 var bridgeCmd = []string{"sh", "-c",
 	"until [ -p /run/arcave/resp ]; do sleep 0.01; done; cat /run/arcave/req & exec cat > /run/arcave/resp"}
 
+var (
+	errNoTransport   = errors.New("cdc: no transport to the repositories")
+	errNoServer      = errors.New("cdc stdio transport: no repository server")
+	errNoRepoURLBase = errors.New("cdc tcp transport: no repository URL base")
+)
+
 // RepositoryServer serves one repository's REST protocol over stream until it ends.
 type RepositoryServer interface {
 	ServeRepository(ctx context.Context, objectID string, stream io.ReadWriteCloser) error
 }
 
-// Transport is how restic reaches the repositories: exactly one of the two is set.
-type Transport struct {
-	// Server serves each repository over a docker exec stream (backends.cdc.transport: stdio).
-	Server RepositoryServer
-	// RepoURLBase is the TCP server's "rest:http://host:port"; a caller appends
-	// "/<object-id>/" (backends.cdc.transport: tcp).
-	RepoURLBase string
+// Transport is how restic reaches a repository: a StdioTransport or a TCPTransport.
+type Transport interface {
+	validate() error
+	// newOneShotSpec is the container running run against objectID's repository.
+	newOneShotSpec(objectID string, run resticRun) model.OneShotSpec
 }
 
-// Validate refuses a transport naming neither way to the repositories, or both.
-func (m Transport) Validate() error {
-	switch {
-	case m.Server == nil && m.RepoURLBase == "":
-		return errors.New("cdc transport: neither a repository server nor a repository URL base")
-	case m.Server != nil && m.RepoURLBase != "":
-		return errors.New("cdc transport: both a repository server and a repository URL base")
+// resticRun is one restic command's container, whatever the transport.
+type resticRun struct {
+	image string
+	cmd   resticCmd
+	// log takes what a transport runs beside restic has to say.
+	log    *zerolog.Logger
+	stdout io.Writer
+	stderr io.Writer
+}
+
+// StdioTransport serves each repository over a docker exec stream beside restic
+// (backends.cdc.transport: stdio).
+type StdioTransport struct {
+	Server RepositoryServer
+}
+
+func (s StdioTransport) validate() error {
+	if s.Server == nil {
+		return errNoServer
 	}
 	return nil
+}
+
+func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
+	return model.OneShotSpec{
+		Image:      run.image,
+		Entrypoint: stdioEntrypointArgs,
+		Cmd:        append(slices.Clone(stdioArgs), run.cmd.args...),
+		Env: []string{
+			"RESTIC_REPOSITORY=" + stdioRepository,
+			"RESTIC_PASSWORD=" + resticPassword,
+		},
+		Binds:  run.cmd.binds,
+		Stdout: run.stdout,
+		Stderr: run.stderr,
+		Exec: &model.OneShotExec{
+			Cmd:    bridgeCmd,
+			Stderr: bridgeLog{log: run.log},
+			Serve: func(ctx context.Context, stream io.ReadWriteCloser) error {
+				return s.Server.ServeRepository(ctx, objectID, stream)
+			},
+		},
+	}
+}
+
+// bridgeLog writes the bridge's stderr to the debug log, a write at a time: it is
+// diagnosis, and a write needs no flush to reach the log.
+type bridgeLog struct {
+	log *zerolog.Logger
+}
+
+func (w bridgeLog) Write(p []byte) (int, error) {
+	if line := strings.TrimRight(string(p), "\r\n"); line != "" {
+		w.log.Debug().Str("bridge", line).Msg("restic bridge stderr")
+	}
+	return len(p), nil
+}
+
+// TCPTransport has restic dial the TCP server (backends.cdc.transport: tcp).
+type TCPTransport struct {
+	// RepoURLBase is the server's "rest:http://host:port".
+	RepoURLBase string
+	// HostNetwork runs every restic container in the host's network namespace
+	// (backends.cdc.network_mode).
+	HostNetwork bool
+}
+
+func (s TCPTransport) validate() error {
+	if s.RepoURLBase == "" {
+		return errNoRepoURLBase
+	}
+	return nil
+}
+
+func (s TCPTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
+	return model.OneShotSpec{
+		Image: run.image,
+		Cmd:   run.cmd.args,
+		Env: []string{
+			"RESTIC_REPOSITORY=" + s.newRepositoryURL(objectID),
+			"RESTIC_PASSWORD=" + resticPassword,
+		},
+		Binds:       run.cmd.binds,
+		HostNetwork: s.HostNetwork,
+		Stdout:      run.stdout,
+		Stderr:      run.stderr,
+	}
+}
+
+// newRepositoryURL is the base plus the repository's directory, objectID. The trailing
+// slash is the restic protocol's: without it restic talks to the wrong path.
+func (s TCPTransport) newRepositoryURL(objectID string) string {
+	return s.RepoURLBase + "/" + objectID + "/"
 }

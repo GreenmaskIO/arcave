@@ -31,32 +31,24 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-func TestTransport_Validate(t *testing.T) {
+func TestTransport_validate(t *testing.T) {
 	tests := []struct {
 		name      string
 		transport Transport
-		wantErr   string
+		wantErr   error
 	}{
-		{name: "stdio", transport: Transport{Server: &mockServer{}}},
+		{name: "stdio", transport: StdioTransport{Server: &mockServer{}}},
 		{name: "tcp", transport: demoTCPTransport},
-		{name: "neither", transport: Transport{}, wantErr: "neither"},
-		{
-			name:      "both",
-			transport: Transport{Server: &mockServer{}, RepoURLBase: demoRepoURLBase},
-			wantErr:   "both",
-		},
+		{name: "stdio without a server", transport: StdioTransport{}, wantErr: errNoServer},
+		{name: "tcp without a URL base", transport: TCPTransport{}, wantErr: errNoRepoURLBase},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			err := tt.transport.Validate()
+			err := tt.transport.validate()
 
 			// Assert
-			if tt.wantErr != "" {
-				assert.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-			assert.NoError(t, err)
+			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
 }
@@ -79,7 +71,7 @@ func TestRunner_run_Stdio(t *testing.T) {
 		}).Return(nil).Once()
 	logs := &strings.Builder{}
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, server: server}
+	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: StdioTransport{Server: server}}
 
 	// Act
 	_, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}, binds: []string{"vol:/m:ro"}})
@@ -116,7 +108,7 @@ func TestSnapshotter_Snapshot_Stdio(t *testing.T) {
 	)
 	snapshotter, err := NewFactory(Dependencies{
 		Runner:         runner,
-		Transport:      Transport{Server: &mockServer{}},
+		Transport:      StdioTransport{Server: &mockServer{}},
 		RepositoryRoot: newStore(t),
 		Options:        defaultOptions(),
 	}).New(model.BackendSpec{Volume: demoVolume()})
@@ -142,7 +134,7 @@ func TestInspector_ReadSnapshots_Stdio(t *testing.T) {
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"snapshots", "--json", "--no-lock"})).
 		Run(respondWithOutput("[]\n", "")).Return(nil).Once()
-	inspector := NewInspector(containers, Transport{Server: &mockServer{}}, Options{Image: demoImage})
+	inspector := NewInspector(containers, StdioTransport{Server: &mockServer{}}, Options{Image: demoImage})
 
 	// Act
 	got, err := inspector.ReadSnapshots(zerolog.Nop().WithContext(context.Background()), demoObjectID)
@@ -159,7 +151,7 @@ func TestPruner_Forget_Stdio(t *testing.T) {
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"prune"})).
 		Run(respondWithOutput("total prune:           3 blobs / 2.000 KiB\n", "")).Return(nil).Once()
-	pruner := NewPruner(containers, newStore(t), Transport{Server: &mockServer{}}, Options{Image: demoImage})
+	pruner := NewPruner(containers, newStore(t), StdioTransport{Server: &mockServer{}}, Options{Image: demoImage})
 
 	// Act
 	got, err := pruner.Forget(zerolog.Nop().WithContext(context.Background()), demoObjectID, nil)

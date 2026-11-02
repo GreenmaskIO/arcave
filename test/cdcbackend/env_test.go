@@ -145,10 +145,12 @@ func newEnvOver(t *testing.T, transport string, opts cdc.Options) *env {
 	hostNetwork, containerHost := resolveNetwork(t, engine)
 	repoURLBase := rest.RepositoryURLBase("", containerHost, port)
 
-	backendTransport := cdc.Transport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))}
+	var backendTransport cdc.Transport = cdc.StdioTransport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))}
 	if transport == transportTCP {
-		backendTransport = cdc.Transport{RepoURLBase: repoURLBase}
-		opts.HostNetwork = hostNetwork
+		backendTransport = cdc.TCPTransport{
+			RepoURLBase: repoURLBase,
+			HostNetwork: hostNetwork,
+		}
 	}
 
 	e := &env{

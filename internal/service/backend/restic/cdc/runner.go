@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -111,41 +110,26 @@ func (r repositories) newRunner(objectID string) (runner, error) {
 	if err := requireRepository(objectID); err != nil {
 		return runner{}, err
 	}
-	if err := r.transport.Validate(); err != nil {
+	if r.transport == nil {
+		return runner{}, errNoTransport
+	}
+	if err := r.transport.validate(); err != nil {
 		return runner{}, err
 	}
-	if r.transport.Server != nil {
-		return runner{
-			containers: r.containers,
-			image:      r.options.Image,
-			objectID:   objectID,
-			server:     r.transport.Server,
-		}, nil
-	}
 	return runner{
-		containers:  r.containers,
-		image:       r.options.Image,
-		objectID:    objectID,
-		repoURL:     newRepositoryURL(r.transport.RepoURLBase, objectID),
-		hostNetwork: r.options.HostNetwork,
+		containers: r.containers,
+		image:      r.options.Image,
+		objectID:   objectID,
+		transport:  r.transport,
 	}, nil
 }
 
-// newRepositoryURL is base plus the repository's directory, objectID. The trailing
-// slash is the restic protocol's: without it restic talks to the wrong path.
-func newRepositoryURL(base, objectID string) string {
-	return base + "/" + objectID + "/"
-}
-
-// runner executes restic in one-shot containers against one repository: served over
-// an exec stream when server is set, else dialled at repoURL.
+// runner executes restic in one-shot containers against one repository, over its transport.
 type runner struct {
-	containers  ContainerRunner
-	image       string
-	objectID    string
-	server      RepositoryServer
-	repoURL     string
-	hostNetwork bool
+	containers ContainerRunner
+	image      string
+	objectID   string
+	transport  Transport
 }
 
 // run executes one command and returns its summary line, zero-valued when the
@@ -199,12 +183,16 @@ func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error
 	stderr := &lineWriter{emit: func(line string) { readResticStderr(log, line, &fatal) }}
 
 	log.Debug().Strs("args", cmd.args).Msg("running restic")
-	bridgeStderr := &lineWriter{emit: func(line string) { log.Debug().Str("bridge", line).Msg("restic bridge stderr") }}
-	err := r.containers.RunOneShot(ctx, r.newOneShotSpec(cmd, stdout, stderr, bridgeStderr))
+	err := r.containers.RunOneShot(ctx, r.transport.newOneShotSpec(r.objectID, resticRun{
+		image:  r.image,
+		cmd:    cmd,
+		log:    log,
+		stdout: stdout,
+		stderr: stderr,
+	}))
 	// Flushed whatever the outcome: the last line of a failing run is the one
 	// worth having.
 	stderr.flush()
-	bridgeStderr.flush()
 	if err != nil {
 		if fatal != "" {
 			return fmt.Errorf("restic %s: %s: %w", strings.Join(cmd.args, " "), fatal, err)
@@ -212,44 +200,6 @@ func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error
 		return fmt.Errorf("restic %s: %w", strings.Join(cmd.args, " "), err)
 	}
 	return nil
-}
-
-// newOneShotSpec is the container running cmd over the runner's transport;
-// bridgeStderr takes the stdio bridge's stderr.
-func (r runner) newOneShotSpec(cmd resticCmd, stdout, stderr, bridgeStderr io.Writer) model.OneShotSpec {
-	if r.server != nil {
-		return model.OneShotSpec{
-			Image:      r.image,
-			Entrypoint: stdioEntrypointArgs,
-			Cmd:        append(slices.Clone(stdioArgs), cmd.args...),
-			Env: []string{
-				"RESTIC_REPOSITORY=" + stdioRepository,
-				"RESTIC_PASSWORD=" + resticPassword,
-			},
-			Binds:  cmd.binds,
-			Stdout: stdout,
-			Stderr: stderr,
-			Exec: &model.OneShotExec{
-				Cmd:    bridgeCmd,
-				Stderr: bridgeStderr,
-				Serve: func(ctx context.Context, stream io.ReadWriteCloser) error {
-					return r.server.ServeRepository(ctx, r.objectID, stream)
-				},
-			},
-		}
-	}
-	return model.OneShotSpec{
-		Image: r.image,
-		Cmd:   cmd.args,
-		Env: []string{
-			"RESTIC_REPOSITORY=" + r.repoURL,
-			"RESTIC_PASSWORD=" + resticPassword,
-		},
-		Binds:       cmd.binds,
-		HostNetwork: r.hostNetwork,
-		Stdout:      stdout,
-		Stderr:      stderr,
-	}
 }
 
 // readResticStdout routes one line of restic's ndjson, a status line to onStatus.

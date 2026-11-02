@@ -26,6 +26,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/model"
 )
@@ -79,18 +80,20 @@ func (s *ConnServer) ServeRepository(ctx context.Context, objectID string, strea
 			MaxReceiveBufferPerStream:     maxReceiveBufferPerStream,
 		},
 	}
-	listener := newConnListener(conn)
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
-
-	select {
-	case <-conn.closed:
-	case <-ctx.Done():
-	}
-	if err := server.Close(); err != nil {
-		zerolog.Ctx(ctx).Debug().Err(err).Msg("close restic repository server")
-	}
-	if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+	eg, egCtx := errgroup.WithContext(ctx)
+	// Serve never returns nil, so its return cancels egCtx too.
+	eg.Go(func() error { return server.Serve(newConnListener(conn)) })
+	eg.Go(func() error {
+		select {
+		case <-conn.Done():
+		case <-egCtx.Done():
+		}
+		if err := server.Close(); err != nil {
+			zerolog.Ctx(ctx).Debug().Err(err).Msg("close restic repository server")
+		}
+		return nil
+	})
+	if err := eg.Wait(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		zerolog.Ctx(ctx).Debug().Err(err).Msg("restic repository server stopped")
 	}
 	if ctx.Err() != nil {
@@ -116,11 +119,11 @@ func logStreamClose(ctx context.Context, conn *streamConn) {
 	}
 }
 
-// pipeAddr is both ends' address of a stream: there is no network under it.
-type pipeAddr struct{}
+// streamAddr is both ends' address of a stream: there is no network under it.
+type streamAddr struct{}
 
-func (pipeAddr) Network() string { return "pipe" }
-func (pipeAddr) String() string  { return "pipe" }
+func (streamAddr) Network() string { return "stream" }
+func (streamAddr) String() string  { return "stream" }
 
 // streamConn is a stream as a net.Conn. Deadlines are accepted and ignored: the
 // stream's end is its owner's to decide.
@@ -152,8 +155,11 @@ func (c *streamConn) Close() error {
 	return c.err
 }
 
-func (c *streamConn) LocalAddr() net.Addr              { return pipeAddr{} }
-func (c *streamConn) RemoteAddr() net.Addr             { return pipeAddr{} }
+// Done is closed once the conn is.
+func (c *streamConn) Done() <-chan struct{} { return c.closed }
+
+func (c *streamConn) LocalAddr() net.Addr              { return streamAddr{} }
+func (c *streamConn) RemoteAddr() net.Addr             { return streamAddr{} }
 func (c *streamConn) SetDeadline(time.Time) error      { return nil }
 func (c *streamConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *streamConn) SetWriteDeadline(time.Time) error { return nil }
@@ -188,4 +194,4 @@ func (l *connListener) Close() error {
 	return nil
 }
 
-func (l *connListener) Addr() net.Addr { return pipeAddr{} }
+func (l *connListener) Addr() net.Addr { return streamAddr{} }

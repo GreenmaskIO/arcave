@@ -186,7 +186,7 @@ func newDependencies(
 			Runner:         engine,
 			Transport:      cdcTransport.transport,
 			RepositoryRoot: resticRoot,
-			Options:        cdcTransport.options,
+			Options:        newCDCOptions(cdcCfg),
 		}),
 	)
 	if err != nil {
@@ -256,7 +256,6 @@ func newDependencies(
 // openedCDCTransport is how cdc's containers reach one tree of repositories.
 type openedCDCTransport struct {
 	transport cdc.Transport
-	options   cdc.Options
 	// server is the tcp transport's listener, closed by its opener; nil under stdio.
 	server *echo.Echo
 }
@@ -268,8 +267,9 @@ func openCDCTransport(
 ) (openedCDCTransport, error) {
 	if cfg.Transport != config.CDCTransportTCP { // config.CDCTransportStdio — Validate admits nothing else.
 		return openedCDCTransport{
-			transport: cdc.Transport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))},
-			options:   newCDCOptions(cfg, false),
+			transport: cdc.StdioTransport{
+				Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot)),
+			},
 		}, nil
 	}
 
@@ -283,9 +283,11 @@ func openCDCTransport(
 		return openedCDCTransport{}, fmt.Errorf("start the restic server: %w", err)
 	}
 	return openedCDCTransport{
-		transport: cdc.Transport{RepoURLBase: rest.RepositoryURLBase(cfg.ServerScheme, containerHost, port)},
-		options:   newCDCOptions(cfg, hostNetwork),
-		server:    server,
+		transport: cdc.TCPTransport{
+			RepoURLBase: rest.RepositoryURLBase(cfg.ServerScheme, containerHost, port),
+			HostNetwork: hostNetwork,
+		},
+		server: server,
 	}, nil
 }
 
@@ -313,14 +315,12 @@ func resolveCDCNetwork(
 	}
 }
 
-// newCDCOptions translates the backends.cdc section into the backend's own
-// options, plus the host networking resolveCDCNetwork picked.
-func newCDCOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
+// newCDCOptions translates the backends.cdc section into the backend's own options.
+func newCDCOptions(cfg config.CDCBackend) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
-		HostNetwork: hostNetwork,
 	}
 }
 
@@ -899,7 +899,7 @@ func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigato
 		return nil, err
 	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(o.engine, served.transport, served.options),
+		Inspector: cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg)),
 		server:    served.server,
 	}, nil
 }
@@ -925,7 +925,7 @@ func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) 
 		return nil, err
 	}
 	return resticPruner{
-		Pruner: cdc.NewPruner(o.engine, served.root, served.transport, served.options),
+		Pruner: cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg)),
 		server: served.server,
 	}, nil
 }

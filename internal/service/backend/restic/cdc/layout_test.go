@@ -149,13 +149,10 @@ func TestParseSnapshotKey(t *testing.T) {
 	}
 }
 
-// A runner is bound to a volume's repository over either transport; under
-// stdio it carries the server and no URL, and no host network whatever the
-// options say: there is nothing to dial.
+// A runner is bound to a volume's repository over the transport it is handed.
 func TestRepositories_newRunner(t *testing.T) {
-	server := &mockServer{}
-	stdio := Transport{Server: server}
-	options := Options{Image: demoImage, HostNetwork: true}
+	stdio := StdioTransport{Server: &mockServer{}}
+	options := Options{Image: demoImage}
 
 	tests := []struct {
 		name      string
@@ -168,7 +165,7 @@ func TestRepositories_newRunner(t *testing.T) {
 			name:      "tcp: a volume's repository",
 			transport: demoTCPTransport,
 			objectID:  demoObjectID,
-			want:      runner{image: demoImage, objectID: demoObjectID, repoURL: demoRepoURL, hostNetwork: true},
+			want:      runner{image: demoImage, objectID: demoObjectID, transport: demoTCPTransport},
 		},
 		{name: "tcp: a segment that is no volume's", transport: demoTCPTransport, objectID: "..", wantErr: true},
 		{name: "tcp: a segment holding a path", transport: demoTCPTransport, objectID: "volume-named-db/config", wantErr: true},
@@ -176,17 +173,12 @@ func TestRepositories_newRunner(t *testing.T) {
 			name:      "stdio: a volume's repository",
 			transport: stdio,
 			objectID:  demoObjectID,
-			want:      runner{image: demoImage, objectID: demoObjectID, server: server},
+			want:      runner{image: demoImage, objectID: demoObjectID, transport: stdio},
 		},
 		{name: "stdio: a segment that is no volume's", transport: stdio, objectID: "..", wantErr: true},
 		{name: "stdio: a segment holding a path", transport: stdio, objectID: "volume-named-db/config", wantErr: true},
 		{name: "no transport", objectID: demoObjectID, wantErr: true},
-		{
-			name:      "both transports",
-			transport: Transport{Server: server, RepoURLBase: demoRepoURLBase},
-			objectID:  demoObjectID,
-			wantErr:   true,
-		},
+		{name: "stdio without a server", transport: StdioTransport{}, objectID: demoObjectID, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

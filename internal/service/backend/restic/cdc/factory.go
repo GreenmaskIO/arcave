@@ -69,9 +69,6 @@ type Options struct {
 	Incremental bool
 	// Overwrite is restic's --overwrite argument, honoured only when Incremental.
 	Overwrite string
-	// HostNetwork runs every restic container in the host's network namespace
-	// (backends.cdc.network_mode); read only under the tcp transport.
-	HostNetwork bool
 }
 
 // Dependencies is everything the factory is built over. A struct rather than a parameter

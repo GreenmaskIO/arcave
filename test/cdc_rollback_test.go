@@ -325,21 +325,19 @@ func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
 }
 
 // openTransport serves resticRoot over the env's backends.cdc.transport — stdio
-// unless it names tcp, which starts a restic server for the test — and returns
-// whether the containers join the host network.
-func (e *cdcEnv) openTransport(t *testing.T, resticRoot storages.Storager) (cdc.Transport, bool) {
+// unless it names tcp, which starts a restic server for the test.
+func (e *cdcEnv) openTransport(t *testing.T, resticRoot storages.Storager) cdc.Transport {
 	t.Helper()
 
 	opened, err := openTestTransport(e.ctx, e.cdcCfg.Transport, resticRoot, e.hostNetwork, e.containerHost)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, opened.stop()) })
-	return opened.transport, opened.hostNetwork
+	return opened.transport
 }
 
 // testTransport is a transport opened over a repository tree, with its stop.
 type testTransport struct {
-	transport   cdc.Transport
-	hostNetwork bool
+	transport cdc.Transport
 	// stop shuts the tcp server down; a no-op under stdio.
 	stop func() error
 }
@@ -350,7 +348,7 @@ func openTestTransport(
 ) (testTransport, error) {
 	if transport != config.CDCTransportTCP {
 		return testTransport{
-			transport: cdc.Transport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))},
+			transport: cdc.StdioTransport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))},
 			stop:      func() error { return nil },
 		}, nil
 	}
@@ -360,9 +358,11 @@ func openTestTransport(
 		return testTransport{}, err
 	}
 	return testTransport{
-		transport:   cdc.Transport{RepoURLBase: rest.RepositoryURLBase("", containerHost, port)},
-		hostNetwork: hostNetwork,
-		stop:        server.Close,
+		transport: cdc.TCPTransport{
+			RepoURLBase: rest.RepositoryURLBase("", containerHost, port),
+			HostNetwork: hostNetwork,
+		},
+		stop: server.Close,
 	}, nil
 }
 
@@ -380,7 +380,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 
 	resticRoot, err := composeProjectStore.SubStorage(cdc.NamespaceRepos, true)
 	require.NoError(t, err)
-	transport, hostNetwork := e.openTransport(t, resticRoot)
+	transport := e.openTransport(t, resticRoot)
 
 	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
 		Runner:         e.engine,
@@ -390,7 +390,6 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 			Image:       e.cdcCfg.Image,
 			Incremental: e.cdcCfg.RestoreMode == config.RestoreModeIncremental,
 			Overwrite:   e.cdcCfg.Overwrite,
-			HostNetwork: hostNetwork,
 		},
 	}))
 	require.NoError(t, err)

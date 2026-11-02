@@ -86,7 +86,8 @@ func TestFactory_New(t *testing.T) {
 			assert.Equal(t, root.GetCwd()+"/"+tt.volume.ObjectID, snapshotter.repo.store.GetCwd())
 			resticRunner, err := snapshotter.newRunner()
 			require.NoError(t, err)
-			assert.Equal(t, demoRepoURLBase+"/"+tt.volume.ObjectID+"/", resticRunner.repoURL)
+			assert.Equal(t, tt.volume.ObjectID, resticRunner.objectID)
+			assert.Equal(t, demoTCPTransport, resticRunner.transport)
 			assert.Equal(t, tt.wantMounted, snapshotter.mountPath)
 		})
 	}

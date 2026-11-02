@@ -123,7 +123,7 @@ func TestInspector_ReadSnapshots(t *testing.T) {
 			containers := &mockRunner{}
 			containers.On("RunOneShot", mock.Anything, matchInspection([]string{"snapshots", "--json", "--no-lock"}, true)).
 				Run(respondWithOutput(tt.stdout, "")).Return(tt.runErr).Once()
-			inspector := NewInspector(containers, demoTCPTransport, Options{Image: demoImage, HostNetwork: true})
+			inspector := NewInspector(containers, demoHostTCPTransport, Options{Image: demoImage})
 
 			// Act
 			got, err := inspector.ReadSnapshots(zerolog.Nop().WithContext(context.Background()), demoObjectID)
@@ -276,7 +276,7 @@ func TestRunner_output_ReportsAPlainFatalLine(t *testing.T) {
 	containers := &mockRunner{}
 	containers.On("RunOneShot", mock.Anything, matchRestic("forget")).
 		Run(respondWithOutput("", "Fatal: unable to open config file\n")).Return(exit).Once()
-	r := runner{containers: containers, image: demoImage, repoURL: demoRepoURL}
+	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: demoTCPTransport}
 
 	// Act
 	_, err := r.output(zerolog.Nop().WithContext(context.Background()), resticCmd{args: []string{"forget"}})
