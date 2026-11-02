@@ -336,7 +336,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 
 	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
 		Runner:         e.engine,
-		RepoURLBase:    rest.RepositoryURLBase("", e.containerHost, resticPort),
+		Transport:      cdc.Transport{RepoURLBase: rest.RepositoryURLBase("", e.containerHost, resticPort)},
 		RepositoryRoot: resticRoot,
 		Options: cdc.Options{
 			Image:       e.cdcCfg.Image,

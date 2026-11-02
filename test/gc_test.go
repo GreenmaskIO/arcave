@@ -496,7 +496,7 @@ func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (resti
 		return nil, err
 	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(o.engine, repoURLBase, o.options()),
+		Inspector: cdc.NewInspector(o.engine, cdc.Transport{RepoURLBase: repoURLBase}, o.options()),
 		server:    server,
 	}, nil
 }
@@ -540,7 +540,7 @@ func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) 
 		return nil, err
 	}
 	return resticPruner{
-		Pruner: cdc.NewPruner(o.engine, root, repoURLBase, o.options()),
+		Pruner: cdc.NewPruner(o.engine, root, cdc.Transport{RepoURLBase: repoURLBase}, o.options()),
 		server: server,
 	}, nil
 }

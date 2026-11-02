@@ -193,7 +193,7 @@ func newDependencies(
 			Runner: engine,
 			// The container's own name for the server, joined to the port it bound:
 			// the value the backend is handed, so nothing below holds the server.
-			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcContainerHost, resticPort),
+			Transport:      cdc.Transport{RepoURLBase: rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcContainerHost, resticPort)},
 			RepositoryRoot: resticRoot,
 			Options:        newCDCOptions(cdcCfg, cdcHostNetwork),
 		}),
@@ -880,7 +880,7 @@ func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigato
 		return nil, err
 	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(o.engine, served.repoURLBase, served.options),
+		Inspector: cdc.NewInspector(o.engine, cdc.Transport{RepoURLBase: served.repoURLBase}, served.options),
 		server:    served.server,
 	}, nil
 }
@@ -906,7 +906,7 @@ func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) 
 		return nil, err
 	}
 	return resticPruner{
-		Pruner: cdc.NewPruner(o.engine, served.root, served.repoURLBase, served.options),
+		Pruner: cdc.NewPruner(o.engine, served.root, cdc.Transport{RepoURLBase: served.repoURLBase}, served.options),
 		server: served.server,
 	}, nil
 }

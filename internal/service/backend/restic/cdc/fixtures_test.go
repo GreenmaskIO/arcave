@@ -47,6 +47,9 @@ const (
 	demoImage = "restic/restic:0.19.1"
 )
 
+// demoTCPTransport reaches the repositories over the TCP server.
+var demoTCPTransport = Transport{RepoURLBase: demoRepoURLBase}
+
 // The restic ndjson these tests feed back, taken from the shape a real run
 // prints: progress lines, then one summary.
 const (
@@ -119,7 +122,7 @@ func newHarness(t *testing.T, opts Options) *harness {
 
 	snapshotter, err := NewFactory(Dependencies{
 		Runner:         runner,
-		RepoURLBase:    demoRepoURLBase,
+		Transport:      demoTCPTransport,
 		RepositoryRoot: root,
 		Options:        opts,
 	}).New(model.BackendSpec{Volume: demoVolume()})

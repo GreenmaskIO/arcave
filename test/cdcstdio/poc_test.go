@@ -64,7 +64,8 @@ printf '%s\n' '#!/bin/sh' 'cat /run/arcave/resp 2>/dev/null &' 'exec cat > /run/
 chmod +x /run/arcave/relay
 exec restic "$@"`
 
-var bridgeCmd = []string{"sh", "-c", "cat /run/arcave/req & exec cat > /run/arcave/resp"}
+var bridgeCmd = []string{"sh", "-c",
+	"until [ -p /run/arcave/resp ]; do sleep 0.01; done; cat /run/arcave/req & exec cat > /run/arcave/resp"}
 
 var stdioArgs = []string{"-o", "rclone.program=/run/arcave/relay"}
 

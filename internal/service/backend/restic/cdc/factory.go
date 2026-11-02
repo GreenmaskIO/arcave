@@ -69,8 +69,8 @@ type Options struct {
 	Incremental bool
 	// Overwrite is restic's --overwrite argument, honoured only when Incremental.
 	Overwrite string
-	// HostNetwork runs every restic container in the host's network namespace —
-	// resolved at the DI root from backends.cdc.network_mode, never probed here.
+	// HostNetwork runs every restic container in the host's network namespace
+	// (backends.cdc.network_mode); read only under the tcp transport.
 	HostNetwork bool
 }
 
@@ -79,11 +79,8 @@ type Options struct {
 // an existing one at a call site.
 type Dependencies struct {
 	Runner VolumeRunner
-	// RepoURLBase is the restic repository URL minus its path; a caller appends
-	// "<object-id>/" to address one repository. A value and not a seam onto the
-	// server: everything in it is known before the first backend is built, so
-	// nothing here has to hold a listener to ask it a question.
-	RepoURLBase string
+	// Transport is how restic reaches the repositories.
+	Transport Transport
 	// RepositoryRoot is the tree the repositories live in — one directory per
 	// volume, named by its ObjectID. It is the very root the server resolves
 	// against, so a name on the wire and a directory here are the same thing.
@@ -91,14 +88,13 @@ type Dependencies struct {
 	Options        Options
 }
 
-// Factory builds cdc snapshotters over one repository URL base and one
-// repository root.
+// Factory builds cdc snapshotters over one transport and one repository root.
 type Factory struct {
 	deps Dependencies
 }
 
-// NewFactory builds the factory over collaborators it does not own: the server
-// the URL base names is already listening, and is closed by whoever started it.
+// NewFactory builds the factory over collaborators it does not own: a server
+// the transport names is closed by whoever started it.
 func NewFactory(deps Dependencies) *Factory { return &Factory{deps: deps} }
 
 func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendCDC }

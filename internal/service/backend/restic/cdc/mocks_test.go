@@ -17,6 +17,8 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"io"
+	"slices"
 	"sync"
 
 	"github.com/stretchr/testify/mock"
@@ -61,12 +63,28 @@ func (m *mockRunner) Specs() []model.OneShotSpec {
 	return append([]model.OneShotSpec(nil), m.specs...)
 }
 
-// matchRestic matches a one-shot run by the restic subcommand it invokes, which
-// is the one stable thing about a spec carrying live stdio writers.
+// matchRestic matches a one-shot run by its restic subcommand, skipping the stdio
+// transport's global flags before it.
 func matchRestic(verb string) any {
 	return mock.MatchedBy(func(spec model.OneShotSpec) bool {
-		return len(spec.Cmd) > 0 && spec.Cmd[0] == verb
+		args := spec.Cmd
+		if spec.Exec != nil {
+			if len(args) < len(stdioArgs) || !slices.Equal(args[:len(stdioArgs)], stdioArgs) {
+				return false
+			}
+			args = args[len(stdioArgs):]
+		}
+		return len(args) > 0 && args[0] == verb
 	})
+}
+
+// mockServer doubles RepositoryServer.
+type mockServer struct {
+	mock.Mock
+}
+
+func (m *mockServer) ServeRepository(ctx context.Context, objectID string, stream io.ReadWriteCloser) error {
+	return m.Called(ctx, objectID, stream).Error(0)
 }
 
 // respondWith writes lines to a run's stdout, standing in for what restic prints

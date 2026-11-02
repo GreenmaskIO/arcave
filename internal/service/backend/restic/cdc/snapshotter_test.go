@@ -224,7 +224,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 		Run(respondWith(backupSummaryLine)).Return(nil).Once()
 
 	snapshotter, err := NewFactory(Dependencies{
-		Runner: runner, RepoURLBase: demoRepoURLBase,
+		Runner: runner, Transport: demoTCPTransport,
 		RepositoryRoot: newStore(t), Options: defaultOptions(),
 	}).New(model.BackendSpec{Volume: vol})
 	require.NoError(t, err)
@@ -252,7 +252,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 // report it, restic would simply talk to the wrong path.
 func TestSnapshotter_newRunner(t *testing.T) {
 	// Arrange
-	backend, err := NewFactory(Dependencies{RepoURLBase: demoRepoURLBase, RepositoryRoot: newStore(t)}).
+	backend, err := NewFactory(Dependencies{Transport: demoTCPTransport, RepositoryRoot: newStore(t)}).
 		New(model.BackendSpec{Volume: demoVolume()})
 	require.NoError(t, err)
 	snapshotter, ok := backend.(*Snapshotter)

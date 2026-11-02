@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -91,16 +92,16 @@ type ContainerRunner interface {
 
 // repositories is what reaching any repository through restic takes.
 type repositories struct {
-	containers  ContainerRunner
-	repoURLBase string
-	options     Options
+	containers ContainerRunner
+	transport  Transport
+	options    Options
 }
 
-func newRepositories(containers ContainerRunner, repoURLBase string, options Options) repositories {
+func newRepositories(containers ContainerRunner, transport Transport, options Options) repositories {
 	return repositories{
-		containers:  containers,
-		repoURLBase: repoURLBase,
-		options:     options,
+		containers: containers,
+		transport:  transport,
+		options:    options,
 	}
 }
 
@@ -110,10 +111,22 @@ func (r repositories) newRunner(objectID string) (runner, error) {
 	if err := requireRepository(objectID); err != nil {
 		return runner{}, err
 	}
+	if err := r.transport.Validate(); err != nil {
+		return runner{}, err
+	}
+	if r.transport.Server != nil {
+		return runner{
+			containers: r.containers,
+			image:      r.options.Image,
+			objectID:   objectID,
+			server:     r.transport.Server,
+		}, nil
+	}
 	return runner{
 		containers:  r.containers,
 		image:       r.options.Image,
-		repoURL:     newRepositoryURL(r.repoURLBase, objectID),
+		objectID:    objectID,
+		repoURL:     newRepositoryURL(r.transport.RepoURLBase, objectID),
 		hostNetwork: r.options.HostNetwork,
 	}, nil
 }
@@ -124,11 +137,13 @@ func newRepositoryURL(base, objectID string) string {
 	return base + "/" + objectID + "/"
 }
 
-// runner executes restic commands in one-shot containers of the stock image,
-// against one repository URL.
+// runner executes restic in one-shot containers against one repository: served over
+// an exec stream when server is set, else dialled at repoURL.
 type runner struct {
 	containers  ContainerRunner
 	image       string
+	objectID    string
+	server      RepositoryServer
 	repoURL     string
 	hostNetwork bool
 }
@@ -184,7 +199,46 @@ func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error
 	stderr := &lineWriter{emit: func(line string) { readResticStderr(log, line, &fatal) }}
 
 	log.Debug().Strs("args", cmd.args).Msg("running restic")
-	err := r.containers.RunOneShot(ctx, model.OneShotSpec{
+	bridgeStderr := &lineWriter{emit: func(line string) { log.Debug().Str("bridge", line).Msg("restic bridge stderr") }}
+	err := r.containers.RunOneShot(ctx, r.newOneShotSpec(cmd, stdout, stderr, bridgeStderr))
+	// Flushed whatever the outcome: the last line of a failing run is the one
+	// worth having.
+	stderr.flush()
+	bridgeStderr.flush()
+	if err != nil {
+		if fatal != "" {
+			return fmt.Errorf("restic %s: %s: %w", strings.Join(cmd.args, " "), fatal, err)
+		}
+		return fmt.Errorf("restic %s: %w", strings.Join(cmd.args, " "), err)
+	}
+	return nil
+}
+
+// newOneShotSpec is the container running cmd over the runner's transport;
+// bridgeStderr takes the stdio bridge's stderr.
+func (r runner) newOneShotSpec(cmd resticCmd, stdout, stderr, bridgeStderr io.Writer) model.OneShotSpec {
+	if r.server != nil {
+		return model.OneShotSpec{
+			Image:      r.image,
+			Entrypoint: stdioEntrypointArgs,
+			Cmd:        append(slices.Clone(stdioArgs), cmd.args...),
+			Env: []string{
+				"RESTIC_REPOSITORY=" + stdioRepository,
+				"RESTIC_PASSWORD=" + resticPassword,
+			},
+			Binds:  cmd.binds,
+			Stdout: stdout,
+			Stderr: stderr,
+			Exec: &model.OneShotExec{
+				Cmd:    bridgeCmd,
+				Stderr: bridgeStderr,
+				Serve: func(ctx context.Context, stream io.ReadWriteCloser) error {
+					return r.server.ServeRepository(ctx, r.objectID, stream)
+				},
+			},
+		}
+	}
+	return model.OneShotSpec{
 		Image: r.image,
 		Cmd:   cmd.args,
 		Env: []string{
@@ -195,17 +249,7 @@ func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error
 		HostNetwork: r.hostNetwork,
 		Stdout:      stdout,
 		Stderr:      stderr,
-	})
-	// Flushed whatever the outcome: the last line of a failing run is the one
-	// worth having.
-	stderr.flush()
-	if err != nil {
-		if fatal != "" {
-			return fmt.Errorf("restic %s: %s: %w", strings.Join(cmd.args, " "), fatal, err)
-		}
-		return fmt.Errorf("restic %s: %w", strings.Join(cmd.args, " "), err)
 	}
-	return nil
 }
 
 // readResticStdout routes one line of restic's ndjson, a status line to onStatus.

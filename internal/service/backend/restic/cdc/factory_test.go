@@ -68,7 +68,7 @@ func TestFactory_New(t *testing.T) {
 			// Arrange
 			root := newStore(t)
 			factory := NewFactory(Dependencies{
-				RepoURLBase:    demoRepoURLBase,
+				Transport:      demoTCPTransport,
 				RepositoryRoot: root,
 				Options:        defaultOptions(),
 			})

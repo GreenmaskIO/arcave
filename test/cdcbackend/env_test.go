@@ -142,7 +142,7 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 	}
 	e.factory = cdc.NewFactory(cdc.Dependencies{
 		Runner:         engine,
-		RepoURLBase:    e.repoURLBase,
+		Transport:      cdc.Transport{RepoURLBase: e.repoURLBase},
 		RepositoryRoot: resticRoot,
 		Options:        opts,
 	})
