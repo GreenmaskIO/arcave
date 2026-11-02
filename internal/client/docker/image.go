@@ -50,11 +50,22 @@ func (e *Engine) CommitContainer(
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
-	imageID, err := model.ParseImageDigestID(resp.ID)
+	imageID, err := model.ParseImageDigestID(withDigestAlgorithm(resp.ID))
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
 	return imageID, nil
+}
+
+// withDigestAlgorithm spells a bare 64-hex image id, as Podman answers a commit
+// with, the way Docker does; anything else is left for the parse to judge.
+func withDigestAlgorithm(id string) string {
+	const bareHexLen = 64
+	isHex := func(r rune) bool { return '0' <= r && r <= '9' || 'a' <= r && r <= 'f' }
+	if len(id) != bareHexLen || strings.ContainsFunc(id, func(r rune) bool { return !isHex(r) }) {
+		return id
+	}
+	return "sha256:" + id
 }
 
 // labelChanges renders labels as Dockerfile LABEL instructions, in key order so the
