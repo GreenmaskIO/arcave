@@ -275,16 +275,18 @@ func TestNewEcho_JournalsBothEnds(t *testing.T) {
 	}
 }
 
-// TestNewEcho_JournalsServedRequestsAtDebug pins that a request answered is
-// silent at INFO — restic issues one per blob — while a 500 is not.
+// TestNewEcho_JournalsServedRequestsAtDebug pins that a request answered or missed is
+// silent at INFO — restic issues one per blob, and probes with a 404 — while a 500 is not.
 func TestNewEcho_JournalsServedRequestsAtDebug(t *testing.T) {
 	tests := []struct {
 		name      string
 		repo      model.Repository
+		target    string
 		wantEmpty bool
 	}{
-		{name: "served", repo: stubRepository{}, wantEmpty: true},
-		{name: "failed", repo: failingRepository{}, wantEmpty: false},
+		{name: "served", repo: stubRepository{}, target: "/testrepo/config", wantEmpty: true},
+		{name: "not found", repo: stubRepository{}, target: "/testrepo/file-123", wantEmpty: true},
+		{name: "failed", repo: failingRepository{}, target: "/testrepo/config", wantEmpty: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -294,7 +296,7 @@ func TestNewEcho_JournalsServedRequestsAtDebug(t *testing.T) {
 			e := NewEcho(ctx, oneRepository(tt.repo))
 
 			// Act
-			e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/testrepo/config", nil))
+			e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tt.target, nil))
 
 			// Assert
 			assert.Equal(t, tt.wantEmpty, journal.Len() == 0, journal.String())

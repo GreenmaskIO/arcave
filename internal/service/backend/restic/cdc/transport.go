@@ -26,11 +26,16 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// makeFIFOs makes the bridge's two FIFOs, or finds them made: restic's entrypoint
+// and the bridge both run it, in whichever order the daemon starts them, and
+// opening a FIFO blocks until its peer opens it, so neither waits on the other.
+const makeFIFOs = `mkdir -p /run/arcave
+mkfifo /run/arcave/req /run/arcave/resp 2>/dev/null || true
+[ -p /run/arcave/req ] && [ -p /run/arcave/resp ]`
+
 // stdioEntrypoint is restic's PID1 under stdio: it makes the bridge's FIFOs, writes the relay
 // (one printf argument per line, past restic's argument splitter) and execs restic.
-const stdioEntrypoint = `set -e
-mkdir -p /run/arcave
-mkfifo /run/arcave/req /run/arcave/resp
+const stdioEntrypoint = "set -e\n" + makeFIFOs + `
 printf '%s\n' '#!/bin/sh' 'cat /run/arcave/resp 2>/dev/null &' 'exec cat > /run/arcave/req' > /run/arcave/relay
 chmod +x /run/arcave/relay
 exec restic "$@"`
@@ -47,17 +52,13 @@ var stdioEntrypointArgs = []string{"sh", "-c", stdioEntrypoint, "restic"}
 // precede the subcommand.
 var stdioArgs = []string{"-o", "rclone.program=/run/arcave/relay"}
 
-// bridgeCmd is the exec beside restic, started once the entrypoint has made the
-// FIFOs (resp is the later one): the relay's requests out on its stdout,
+// bridgeCmd is the exec beside restic: the relay's requests out on its stdout,
 // the server's responses in on its stdin.
-var bridgeCmd = []string{"sh", "-c",
-	"until [ -p /run/arcave/resp ]; do sleep 0.01; done; cat /run/arcave/req & exec cat > /run/arcave/resp"}
+var bridgeCmd = []string{"sh", "-c", "set -e\n" + makeFIFOs + `
+cat /run/arcave/req &
+exec cat > /run/arcave/resp`}
 
-var (
-	errNoTransport   = errors.New("cdc: no transport to the repositories")
-	errNoServer      = errors.New("cdc stdio transport: no repository server")
-	errNoRepoURLBase = errors.New("cdc tcp transport: no repository URL base")
-)
+var errNoTransport = errors.New("cdc: no transport to the repositories")
 
 // RepositoryServer serves one repository's REST protocol over stream until it ends.
 type RepositoryServer interface {
@@ -66,7 +67,6 @@ type RepositoryServer interface {
 
 // Transport is how restic reaches a repository: a StdioTransport or a TCPTransport.
 type Transport interface {
-	validate() error
 	// newOneShotSpec is the container running run against objectID's repository.
 	newOneShotSpec(objectID string, run resticRun) model.OneShotSpec
 }
@@ -85,13 +85,6 @@ type resticRun struct {
 // (backends.cdc.transport: stdio).
 type StdioTransport struct {
 	Server RepositoryServer
-}
-
-func (s StdioTransport) validate() error {
-	if s.Server == nil {
-		return errNoServer
-	}
-	return nil
 }
 
 func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
@@ -136,13 +129,6 @@ type TCPTransport struct {
 	// HostNetwork runs every restic container in the host's network namespace
 	// (backends.cdc.network_mode).
 	HostNetwork bool
-}
-
-func (s TCPTransport) validate() error {
-	if s.RepoURLBase == "" {
-		return errNoRepoURLBase
-	}
-	return nil
 }
 
 func (s TCPTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {

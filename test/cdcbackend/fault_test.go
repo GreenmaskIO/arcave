@@ -172,8 +172,9 @@ func (e *env) newSlowVolume(t *testing.T, service string) model.Volume {
 	return namedVolume(name, model.ServiceReference{Service: "db", Target: "/data"})
 }
 
-// cancelOnRestic cancels once a restic container mounting vol runs, and delivers
-// when it did; a run that never got there fails the test.
+// cancelOnRestic cancels once a restic container mounting vol runs with its bridge
+// exec started, so the cancel always meets a live stream, and delivers when it
+// did; a run that never got there fails the test.
 func cancelOnRestic(
 	t *testing.T, ctx context.Context, cancel context.CancelFunc, cli *client.Client, vol model.Volume,
 ) <-chan time.Time {
@@ -183,7 +184,10 @@ func cancelOnRestic(
 	cancelled := make(chan time.Time, 1)
 	go func() {
 		defer stopStrike()
-		_, err := waitForRestic(strikeCtx, cli, vol)
+		id, err := waitForRestic(strikeCtx, cli, vol)
+		if err == nil {
+			err = waitForExec(strikeCtx, cli, id)
+		}
 		at := time.Now()
 		cancel()
 		if err != nil {
@@ -226,6 +230,26 @@ func waitForRestic(ctx context.Context, cli *client.Client, vol model.Volume) (s
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// waitForExec returns once containerID has an exec started in it — the bridge.
+func waitForExec(ctx context.Context, cli *client.Client, containerID string) error {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		inspect, err := cli.ContainerInspect(ctx, containerID)
+		if err != nil {
+			return err
+		}
+		if len(inspect.ExecIDs) > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-ticker.C:
 		}
 	}

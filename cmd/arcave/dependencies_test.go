@@ -645,9 +645,10 @@ func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages
 // the tcp keys are not read; tcp binds the server and names it to the containers.
 func TestOpenCDCTransport(t *testing.T) {
 	tests := []struct {
-		name   string
-		cfg    config.CDCBackend
-		verify func(t *testing.T, opened openedCDCTransport)
+		name    string
+		cfg     config.CDCBackend
+		verify  func(t *testing.T, opened openedCDCTransport)
+		wantErr string
 	}{
 		{
 			// auto would ask the nil engine and the address would not bind, so
@@ -662,6 +663,7 @@ func TestOpenCDCTransport(t *testing.T) {
 				require.True(t, ok, "transport = %T", opened.transport)
 				assert.NotNil(t, transport.Server)
 				assert.Nil(t, opened.server, "stdio listens on nothing")
+				assert.NotPanics(t, func() { opened.Close(context.Background()) }, "Close has nothing to stop")
 			},
 		},
 		{
@@ -679,6 +681,11 @@ func TestOpenCDCTransport(t *testing.T) {
 				}, opened.transport)
 			},
 		},
+		{
+			name:    "a transport arcave does not offer is refused",
+			cfg:     config.CDCBackend{Transport: "ssh"},
+			wantErr: `unsupported backends.cdc.transport "ssh"`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -691,49 +698,15 @@ func TestOpenCDCTransport(t *testing.T) {
 			opened, err := openCDCTransport(ctx, tt.cfg, nil, store)
 
 			// Assert
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
 			require.NoError(t, err)
-			t.Cleanup(func() { shutdownResticServer(ctx, opened.server) })
+			t.Cleanup(func() { opened.Close(ctx) })
 			tt.verify(t, opened)
 		})
 	}
-}
-
-// Under stdio the inspector holds no server, and its Close has nothing to stop.
-func TestResticInspectorOpener_Open_Stdio(t *testing.T) {
-	// Arrange
-	ctx := zerolog.Nop().WithContext(context.Background())
-	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
-	require.NoError(t, err)
-	opener := resticInspectorOpener{cfg: config.CDCWithDefaults(nil)}
-
-	// Act
-	inspector, err := opener.Open(ctx, store)
-
-	// Assert
-	require.NoError(t, err)
-	opened, ok := inspector.(resticInspector)
-	require.True(t, ok)
-	assert.Nil(t, opened.server)
-	assert.NotPanics(t, func() { inspector.Close(ctx) })
-}
-
-// Under stdio the pruner holds no server, and its Close has nothing to stop.
-func TestResticPrunerOpener_Open_Stdio(t *testing.T) {
-	// Arrange
-	ctx := zerolog.Nop().WithContext(context.Background())
-	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
-	require.NoError(t, err)
-	opener := resticPrunerOpener{cfg: config.CDCWithDefaults(nil)}
-
-	// Act
-	pruner, err := opener.Open(ctx, store)
-
-	// Assert
-	require.NoError(t, err)
-	opened, ok := pruner.(resticPruner)
-	require.True(t, ok)
-	assert.Nil(t, opened.server)
-	assert.NotPanics(t, func() { pruner.Close(ctx) })
 }
 
 // The opener serves the compose project's repositories while the inspector is open.
@@ -824,7 +797,7 @@ func TestResticPruner_Close(t *testing.T) {
 
 // The served repositories are the compose project store's restic/ namespace, as objects too: a
 // pruner clears the locks it finds there.
-func TestServeResticRepositories(t *testing.T) {
+func TestOpenResticRepositories(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	opener, store := newTestResticInspectorOpener(t)
@@ -835,7 +808,7 @@ func TestServeResticRepositories(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	t.Cleanup(func() { shutdownResticServer(ctx, served.server) })
+	t.Cleanup(func() { served.Close(ctx) })
 	objects, err := served.root.List(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, objects, 1)

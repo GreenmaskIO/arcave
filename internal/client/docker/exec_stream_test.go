@@ -16,7 +16,6 @@ package docker
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"testing"
@@ -37,7 +36,7 @@ func TestExecStream_Read(t *testing.T) {
 		hj.closeOutput()
 	}()
 	var stderr bytes.Buffer
-	stream := newExecStream(context.Background(), hj.resp, &stderr)
+	stream := newExecStream(hj.resp, &stderr)
 
 	// Act
 	got, err := io.ReadAll(stream)
@@ -53,7 +52,7 @@ func TestExecStream_Write(t *testing.T) {
 	// Arrange
 	hj := newFakeHijack()
 	stdinGot := hj.collectStdin()
-	stream := newExecStream(context.Background(), hj.resp, nil)
+	stream := newExecStream(hj.resp, nil)
 
 	// Act
 	_, err := io.WriteString(stream, "request")
@@ -65,12 +64,12 @@ func TestExecStream_Write(t *testing.T) {
 	assert.Equal(t, "request", string(<-stdinGot))
 }
 
-// Close half-closes the exec's stdin and unblocks a pending read; a second
-// Close is a no-op.
+// Close drops the exec's connection and unblocks a pending read; a second Close
+// is a no-op.
 func TestExecStream_Close(t *testing.T) {
 	// Arrange
 	hj := newFakeHijack()
-	stream := newExecStream(context.Background(), hj.resp, nil)
+	stream := newExecStream(hj.resp, nil)
 	readDone := make(chan error, 1)
 	go func() {
 		_, err := stream.Read(make([]byte, 1))
@@ -84,7 +83,7 @@ func TestExecStream_Close(t *testing.T) {
 	// Assert
 	require.NoError(t, firstErr)
 	require.NoError(t, secondErr)
-	assertClosedWrite(t, hj, "Close must half-close the exec's stdin")
+	assertConnClosed(t, hj, "Close must drop the exec's connection")
 	assert.ErrorIs(t, <-readDone, io.ErrClosedPipe, "a pending read must end once the stream is closed")
 }
 
@@ -97,7 +96,7 @@ func TestExecStream_Read_BrokenStream(t *testing.T) {
 		_, _ = io.WriteString(hj.stdout, "partial")
 		_ = hj.outW.CloseWithError(broken)
 	}()
-	stream := newExecStream(context.Background(), hj.resp, nil)
+	stream := newExecStream(hj.resp, nil)
 
 	// Act
 	got, err := io.ReadAll(stream)

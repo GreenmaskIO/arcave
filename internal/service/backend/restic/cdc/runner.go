@@ -113,9 +113,6 @@ func (r repositories) newRunner(objectID string) (runner, error) {
 	if r.transport == nil {
 		return runner{}, errNoTransport
 	}
-	if err := r.transport.validate(); err != nil {
-		return runner{}, err
-	}
 	return runner{
 		containers: r.containers,
 		image:      r.options.Image,

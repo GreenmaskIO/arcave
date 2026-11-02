@@ -375,7 +375,7 @@ One optional subsection per backend. A project that never uses a backend does no
 |---|---|---|---|
 | `restore_mode` | string | `incremental` | `incremental` writes over the live data, sending only what differs and deleting what the savepoint does not carry. `wipe` clears the mount and writes it back whole. |
 | `overwrite` | string | `always` | Governs an incremental restore only. `always` rewrites every file the savepoint carries; `if-changed` compares content and rewrites only what differs. |
-| `image` | string | `restic/restic:0.19.1` | The restic image every one-shot container runs. `--delete`/`--overwrite` need restic 0.17 or newer. |
+| `image` | string | `restic/restic:0.19.1` | The restic image every one-shot container runs. `--delete`/`--overwrite` need restic 0.17 or newer; under `stdio` it needs a shell too, see below the table. |
 | `transport` | string | `stdio` | How a restic container reaches its repository: `stdio`, over the Docker API, or `tcp`, over a loopback server. |
 | `server_address` | string | `127.0.0.1:0` | `tcp` only. What arcave's restic server binds. Must be `host:port`. |
 | `server_scheme` | string | `http` | `tcp` only. The scheme the container fetches the repository over: `http`, or `https` for a TLS proxy in front of it. |
@@ -391,7 +391,7 @@ With the defaults, a restore writes over the live data and rewrites every file t
 | `stdio` | arcave serves the repository over a `docker exec` stream into the restic container. Nothing listens, no port is opened, and no network setting matters, so it works with any daemon arcave reaches, a remote `DOCKER_HOST` included. The default. Every byte goes through the daemon's `docker exec` stream, so a full restore runs slower than over `tcp` wherever the engine's network is faster than that stream — see the [measured speeds](requirements.md#container-engines). |
 | `tcp` | arcave runs a restic server on your loopback for the duration of a command, and the container dials it. Configured by the four keys below `transport`, which are read and checked only under it; the way to the network's speed, and the alternative wherever `stdio` does not run. |
 
-Under `stdio` a custom `image` must ship a busybox-style `sh`, `mkfifo` and `cat`: arcave runs restic behind a small shell entrypoint. The default image does.
+Under `stdio` a custom `image` must ship `sh`, `mkdir`, `mkfifo`, `printf`, `chmod` and `cat`, and leave `/run` writable: arcave runs restic behind a small shell entrypoint and a shell bridge beside it. The default image, Alpine with busybox, does; a distroless or `scratch` restic image does not, and fails on the first command.
 
 **Why port `0`.** The kernel picks the port. A fixed one would collide between two arcave processes — a CLI run and an `arcave mcp` server, or two projects — and would be a predictable address on your loopback for anything else on the machine.
 

@@ -112,8 +112,6 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 // runStorageE2E is one row of TestStorageE2E_CoreWorkflow: its own arcave project,
 // so its sessions are its own, on a store it shares with the other rows.
 func runStorageE2E(t *testing.T, target storageTarget, backend string) {
-	t.Helper()
-
 	// Arrange
 	arcaveProject := storageE2EArcaveProject + "-" + backend
 	compose := newImageRollbackEnv(t)

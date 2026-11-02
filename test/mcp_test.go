@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 )
@@ -345,4 +346,49 @@ func TestMCP_SavepointsFollowTheCurrentSession(t *testing.T) {
 	baselineStore, err := env.in(t, model.DefaultSession).svc.ListSavepoints(env.ctx, model.ListRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(baselineStore))
+}
+
+// The cdc backend runs under `arcave mcp` as under the CLI: each tool call serves its
+// restic runs over their exec streams, and a gc forgets through them too. Any byte
+// off the JSON-RPC channel on stdout would fail the client.
+func TestMCP_CDCOverStdio(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newSessionEnv(t)
+	env.withComposeProject(t)
+	initArcave(t, env)
+	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendCDC)
+	cs := newMCPClient(t, env)
+	compose := env.in(t, model.DefaultSession)
+	compose.write(t, compose.replicas(t)[0], "v1")
+	v1 := callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"project": env.project, "name": "v1"})
+	compose.write(t, compose.replicas(t)[0], "v2")
+
+	// Act: the rollback's dropped safety snapshot leaves a restic snapshot for the gc.
+	rolledBack := callTool[model.RollbackResponse](t, cs, "rollback", map[string]any{"project": env.project, "ref": "v1"})
+	collected := callTool[mcpGCReports](t, cs, "gc", map[string]any{
+		"dry_run": false,
+		"kinds":   []string{string(model.GarbageDataKindDeduplicatedVolumes)},
+	})
+
+	// Assert
+	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendCDC}, statKinds(v1))
+	assert.Equal(t, v1.ID, rolledBack.RolledBackTo.ID)
+	assert.Equal(t, "v1", compose.read(t, compose.replicas(t)[0], volumeMarker), "the volume is back at v1")
+	require.Len(t, collected.Reports, 1)
+	deletion := collected.Reports[0].Deletion
+	require.NotNil(t, deletion, "the gc deleted nothing: %s", collected.Reports[0].Error)
+	assert.NotEmpty(t, deletion.Deleted, "the safety snapshot's restic snapshot is forgotten")
+	assert.Empty(t, deletion.Failed)
+}
+
+// mcpGCReports is the part of a gc result a test reads back: Detail is an interface
+// a decoder cannot fill.
+type mcpGCReports struct {
+	Reports []struct {
+		DataKind model.GarbageDataKind  `json:"data_kind"`
+		Error    string                 `json:"error"`
+		Deletion *model.GarbageDeletion `json:"deletion"`
+	} `json:"reports"`
 }

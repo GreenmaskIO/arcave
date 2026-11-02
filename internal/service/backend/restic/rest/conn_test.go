@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,18 @@ func serveOverPipe(t *testing.T, ctx context.Context) (*http.Client, string, <-c
 	return newPipeClient(clientEnd), root, served
 }
 
+// receiveWithin is what served yields, failing the test if it yields nothing in time.
+func receiveWithin(t *testing.T, served <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-served:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("the serve did not return")
+		return nil
+	}
+}
+
 // call sends one request to the served repository and returns its status and body.
 func call(t *testing.T, client *http.Client, method, path string, body []byte) (int, []byte) {
 	t.Helper()
@@ -89,12 +102,10 @@ func call(t *testing.T, client *http.Client, method, path string, body []byte) (
 // paths taken relative to it.
 func TestConnServer_ServeRepository(t *testing.T) {
 	// Arrange
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
-	client, root, served := serveOverPipe(t, ctx)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, root, _ := serveOverPipe(t, ctx)
 	blob := "/data/" + string(testID)
-
-	// Act and Assert: the steps of a session, in order.
 	steps := []struct {
 		name   string
 		method string
@@ -113,18 +124,75 @@ func TestConnServer_ServeRepository(t *testing.T) {
 		{name: "delete the blob", method: http.MethodDelete, path: blob, status: http.StatusOK},
 		{name: "the deleted blob is gone", method: http.MethodHead, path: blob, status: http.StatusNotFound},
 	}
-	for _, step := range steps {
-		status, body := call(t, client, step.method, step.path, step.body)
-		assert.Equal(t, step.status, status, step.name)
-		if step.want != nil {
-			assert.Equal(t, step.want, body, step.name)
-		}
+
+	// Act: the steps of a session, in order.
+	statuses := make([]int, len(steps))
+	bodies := make([][]byte, len(steps))
+	for i, step := range steps {
+		statuses[i], bodies[i] = call(t, client, step.method, step.path, step.body)
 	}
 
+	// Assert
+	for i, step := range steps {
+		assert.Equal(t, step.status, statuses[i], step.name)
+		if step.want != nil {
+			assert.Equal(t, step.want, bodies[i], step.name)
+		}
+	}
 	_, err := os.Stat(filepath.Join(root, connRepoID, "config"))
 	assert.NoError(t, err, "the config lands under the stream's repository")
+}
+
+// Cancelling the context ends the serve with the context's cause.
+func TestConnServer_ServeRepository_Cancelled(t *testing.T) {
+	// Arrange
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	client, _, served := serveOverPipe(t, ctx)
+	status, _ := call(t, client, http.MethodPost, "/?create=true", nil)
+	require.Equal(t, http.StatusOK, status)
+
+	// Act
 	cancel(errCancelled)
-	assert.ErrorIs(t, <-served, errCancelled)
+
+	// Assert
+	assert.ErrorIs(t, receiveWithin(t, served), errCancelled)
+}
+
+// A stream bound to one repository reaches no other, whatever its path says.
+func TestConnServer_ServeRepository_StaysInItsRepository(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "read a sibling's config", method: http.MethodGet, path: "/../volume-other/config"},
+		{name: "overwrite a sibling's config", method: http.MethodPost, path: "/../volume-other/config"},
+		{name: "list a sibling's snapshots", method: http.MethodGet, path: "/../volume-other/snapshots/"},
+		{name: "escaped dots", method: http.MethodGet, path: "/%2e%2e/volume-other/config"},
+		{name: "an escaped slash", method: http.MethodGet, path: "/..%2fvolume-other%2fconfig"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client, root, _ := serveOverPipe(t, ctx)
+			other := filepath.Join(root, "volume-other")
+			require.NoError(t, os.MkdirAll(filepath.Join(other, "snapshots"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(other, "config"), []byte("sibling"), 0o600))
+
+			// Act
+			status, body := call(t, client, tt.method, tt.path, stubBody)
+
+			// Assert
+			assert.GreaterOrEqual(t, status, http.StatusBadRequest, "answered %q", body)
+			assert.NotContains(t, string(body), "sibling")
+			got, err := os.ReadFile(filepath.Join(other, "config"))
+			require.NoError(t, err)
+			assert.Equal(t, "sibling", string(got))
+		})
+	}
 }
 
 // A range read answers the slice asked for, over the same stream.
@@ -169,7 +237,7 @@ func TestConnServer_ServeRepository_ClientHangsUp(t *testing.T) {
 	require.NoError(t, clientEnd.Close())
 
 	// Assert
-	assert.NoError(t, <-served)
+	assert.NoError(t, receiveWithin(t, served))
 }
 
 // A repository the resolver refuses is never served, and its stream is closed.

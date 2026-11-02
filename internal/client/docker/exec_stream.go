@@ -23,7 +23,6 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -31,7 +30,6 @@ import (
 // execStream is an exec's stdio as one stream: its stdout read, its stdin
 // written. Its stderr goes to the writer it was opened with.
 type execStream struct {
-	ctx      context.Context
 	hijacked types.HijackedResponse
 	pr       *io.PipeReader
 	// demuxed is closed once the demultiplexer has stopped writing.
@@ -43,7 +41,7 @@ var _ io.ReadWriteCloser = (*execStream)(nil)
 
 // newExecStream demultiplexes hijacked in the background: stdout into the
 // stream's reads, stderr into stderr.
-func newExecStream(ctx context.Context, hijacked types.HijackedResponse, stderr io.Writer) *execStream {
+func newExecStream(hijacked types.HijackedResponse, stderr io.Writer) *execStream {
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -56,7 +54,6 @@ func newExecStream(ctx context.Context, hijacked types.HijackedResponse, stderr 
 		pw.CloseWithError(err)
 	}()
 	return &execStream{
-		ctx:      ctx,
 		hijacked: hijacked,
 		pr:       pr,
 		demuxed:  demuxed,
@@ -72,13 +69,10 @@ func (s *execStream) Close() error {
 	return nil
 }
 
-// release half-closes the exec's stdin, then drops the connection, once, and
-// returns when nothing writes to the exec's stderr writer any more.
+// release drops the exec's connection, once, and returns when nothing writes to
+// the exec's stderr writer any more.
 func (s *execStream) release() {
 	s.once.Do(func() {
-		if err := s.hijacked.CloseWrite(); err != nil {
-			zerolog.Ctx(s.ctx).Debug().Err(err).Msg("half-close exec stdin")
-		}
 		s.hijacked.Close()
 		//nolint:errcheck // a PipeReader's Close does not fail
 		s.pr.Close()
@@ -106,5 +100,5 @@ func openExecStream(
 	if err != nil {
 		return nil, fmt.Errorf("attach to exec %s: %w", created.ID, err)
 	}
-	return newExecStream(ctx, hijacked, exec.Stderr), nil
+	return newExecStream(hijacked, exec.Stderr), nil
 }

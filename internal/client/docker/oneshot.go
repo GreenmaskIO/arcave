@@ -119,6 +119,9 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		switch {
 		case err != nil && isContainerRunning(ctx, api, created.ID):
 			// A container waiting on its exec's peer would never exit.
+			zerolog.Ctx(ctx).Debug().Str("container", created.ID).Str("image", spec.Image).
+				Strs("container_output", containerOutput(ctx, api, created.ID)).
+				Msg("one-shot container exec not started")
 			return fmt.Errorf("serve %s container: %w", spec.Image, err)
 		case err != nil:
 			execErr = err

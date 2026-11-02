@@ -31,28 +31,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-func TestTransport_validate(t *testing.T) {
-	tests := []struct {
-		name      string
-		transport Transport
-		wantErr   error
-	}{
-		{name: "stdio", transport: StdioTransport{Server: &mockServer{}}},
-		{name: "tcp", transport: demoTCPTransport},
-		{name: "stdio without a server", transport: StdioTransport{}, wantErr: errNoServer},
-		{name: "tcp without a URL base", transport: TCPTransport{}, wantErr: errNoRepoURLBase},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			err := tt.transport.validate()
-
-			// Assert
-			assert.ErrorIs(t, err, tt.wantErr)
-		})
-	}
-}
-
 // A stdio run is restic behind the FIFO entrypoint, its repository the relay,
 // with the bridge exec beside it serving the runner's own repository.
 func TestRunner_run_Stdio(t *testing.T) {

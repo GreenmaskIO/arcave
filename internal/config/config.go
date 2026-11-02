@@ -610,6 +610,10 @@ func CDCWithDefaults(configured *CDCBackend) CDCBackend {
 	if cdc.Transport == "" {
 		cdc.Transport = DefaultCDCTransport
 	}
+	if cdc.Transport != CDCTransportTCP {
+		return cdc
+	}
+	// The keys only tcp reads default only under it.
 	if cdc.ServerAddress == "" {
 		cdc.ServerAddress = DefaultCDCServerAddress
 	}

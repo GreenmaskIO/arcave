@@ -26,7 +26,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/model"
 )
@@ -80,24 +79,16 @@ func (s *ConnServer) ServeRepository(ctx context.Context, objectID string, strea
 			MaxReceiveBufferPerStream:     maxReceiveBufferPerStream,
 		},
 	}
-	eg, egCtx := errgroup.WithContext(ctx)
-	// Serve never returns nil, so its return cancels egCtx too.
-	eg.Go(func() error { return server.Serve(newConnListener(conn)) })
-	eg.Go(func() error {
-		select {
-		case <-conn.Done():
-		case <-egCtx.Done():
-		}
-		if err := server.Close(); err != nil {
-			zerolog.Ctx(ctx).Debug().Err(err).Msg("close restic repository server")
-		}
-		return nil
-	})
-	if err := eg.Wait(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		zerolog.Ctx(ctx).Debug().Err(err).Msg("restic repository server stopped")
-	}
+	// The listener ends with the conn: closed by the client's hang-up, or here on ctx.
+	stop := context.AfterFunc(ctx, func() { logStreamClose(ctx, conn) })
+	defer stop()
+
+	err := server.Serve(newConnListener(conn))
 	if ctx.Err() != nil {
 		return context.Cause(ctx)
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("serve restic repository %q: %w", objectID, err)
 	}
 	return nil
 }
@@ -164,19 +155,18 @@ func (c *streamConn) SetDeadline(time.Time) error      { return nil }
 func (c *streamConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *streamConn) SetWriteDeadline(time.Time) error { return nil }
 
-// connListener accepts its one conn, then blocks until it is closed.
+// connListener accepts its one conn, then blocks until that conn is closed.
 type connListener struct {
 	conns chan net.Conn
-	once  sync.Once
-	done  chan struct{}
+	done  <-chan struct{}
 }
 
-func newConnListener(conn net.Conn) *connListener {
+func newConnListener(conn *streamConn) *connListener {
 	conns := make(chan net.Conn, 1)
 	conns <- conn
 	return &connListener{
 		conns: conns,
-		done:  make(chan struct{}),
+		done:  conn.Done(),
 	}
 }
 
@@ -189,9 +179,7 @@ func (l *connListener) Accept() (net.Conn, error) {
 	}
 }
 
-func (l *connListener) Close() error {
-	l.once.Do(func() { close(l.done) })
-	return nil
-}
+// Close is a no-op: the conn's own close ends the listener.
+func (l *connListener) Close() error { return nil }
 
 func (l *connListener) Addr() net.Addr { return streamAddr{} }

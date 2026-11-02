@@ -342,7 +342,8 @@ type testTransport struct {
 	stop func() error
 }
 
-// openTestTransport serves resticRoot over transport as the DI root does.
+// openTestTransport serves resticRoot over transport: a copy of cmd/arcave's
+// openCDCTransport, which a test outside package main cannot import.
 func openTestTransport(
 	ctx context.Context, transport string, resticRoot storages.Storager, hostNetwork bool, containerHost string,
 ) (testTransport, error) {
