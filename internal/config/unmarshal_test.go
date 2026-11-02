@@ -303,14 +303,15 @@ func TestUnmarshal(t *testing.T) {
 			},
 		},
 		{
-			// The tcp keys stay valid beside stdio, which ignores them.
-			name: "stdio keeps the tcp keys",
+			// stdio never reads the tcp keys, so it does not judge them either.
+			name: "stdio leaves the tcp keys unchecked",
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
-				"    transport: stdio\n    network_mode: bridge\n",
+				"    transport: stdio\n    server_address: 18080\n    network_mode: vpn\n",
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Backends.CDC)
 				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
-				assert.Equal(t, NetworkModeBridge, cfg.Backends.CDC.NetworkMode)
+				assert.Equal(t, "18080", cfg.Backends.CDC.ServerAddress)
+				assert.Equal(t, "vpn", cfg.Backends.CDC.NetworkMode)
 			},
 		},
 		{
@@ -329,7 +330,7 @@ func TestUnmarshal(t *testing.T) {
 		},
 		{
 			name:       "a network mode arcave does not offer is rejected",
-			yaml:       "backends:\n  cdc:\n    network_mode: vpn\n",
+			yaml:       "backends:\n  cdc:\n    transport: tcp\n    network_mode: vpn\n",
 			wantErrMsg: "unsupported backends.cdc.network_mode",
 		},
 		{
@@ -346,7 +347,7 @@ func TestUnmarshal(t *testing.T) {
 			// The address is bound at wiring time, so a value that cannot split
 			// fails here rather than halfway through a command.
 			name:       "a server address that is not host:port is rejected",
-			yaml:       "backends:\n  cdc:\n    server_address: 18080\n",
+			yaml:       "backends:\n  cdc:\n    transport: tcp\n    server_address: 18080\n",
 			wantErrMsg: "is not a host:port address",
 		},
 		{

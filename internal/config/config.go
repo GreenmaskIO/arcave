@@ -417,8 +417,8 @@ type CDCBackend struct {
 	// Image is the restic image every cdc command runs in.
 	Image string `yaml:"image" mapstructure:"image"`
 	// Transport is how a restic container reaches its repository: stdio (an exec
-	// stream, the default) or tcp. The four keys below are acted on only under tcp,
-	// and validated under either.
+	// stream, the default) or tcp. The four keys below are acted on, and validated,
+	// only under tcp.
 	Transport string `yaml:"transport" mapstructure:"transport"`
 	// ServerAddress is what arcave's restic server binds. Port 0 lets the kernel
 	// pick, which is what keeps two arcave processes from colliding.
@@ -445,8 +445,8 @@ func (b Backends) Validate() error {
 	return b.CDC.Validate()
 }
 
-// Validate rejects a mode or an overwrite policy the backend cannot act on, and
-// a server address it cannot bind.
+// Validate rejects a mode or an overwrite policy the backend cannot act on, and,
+// under tcp, a server it cannot bind or reach.
 func (c CDCBackend) Validate() error {
 	switch c.RestoreMode {
 	case RestoreModeWipe, RestoreModeIncremental:
@@ -464,11 +464,18 @@ func (c CDCBackend) Validate() error {
 		return fmt.Errorf("%w: backends.cdc.image is required", ErrInvalid)
 	}
 	switch c.Transport {
-	case CDCTransportStdio, CDCTransportTCP:
+	case CDCTransportStdio:
+		return nil
+	case CDCTransportTCP:
+		return c.validateTCP()
 	default:
 		return fmt.Errorf("%w: unsupported backends.cdc.transport %q (supported: %s, %s)", ErrInvalid,
 			c.Transport, CDCTransportStdio, CDCTransportTCP)
 	}
+}
+
+// validateTCP checks the keys only the tcp transport reads.
+func (c CDCBackend) validateTCP() error {
 	if c.ServerAddress == "" {
 		return fmt.Errorf("%w: backends.cdc.server_address is required", ErrInvalid)
 	}

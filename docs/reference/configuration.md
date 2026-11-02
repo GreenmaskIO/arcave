@@ -388,8 +388,8 @@ With the defaults, a restore writes over the live data and rewrites every file t
 
 | Value | Behaviour |
 |---|---|
-| `stdio` | arcave serves the repository over a `docker exec` stream into the restic container. Nothing listens, no port is opened, and no network setting matters, so it works with any daemon arcave reaches, a remote `DOCKER_HOST` included. The default. A full restore of a large volume runs slower than over `tcp` on native Linux (about 60% of its speed, measured), because every byte goes through the daemon. |
-| `tcp` | arcave runs a restic server on your loopback for the duration of a command, and the container dials it. Configured by the four keys below `transport`; the way back to the old speed, and the option for engines other than Docker Engine and Docker Desktop. |
+| `stdio` | arcave serves the repository over a `docker exec` stream into the restic container. Nothing listens, no port is opened, and no network setting matters, so it works with any daemon arcave reaches, a remote `DOCKER_HOST` included. The default. Every byte goes through the daemon's `docker exec` stream, so a full restore runs slower than over `tcp` wherever the engine's network is faster than that stream — see the [measured speeds](requirements.md#container-engines). |
+| `tcp` | arcave runs a restic server on your loopback for the duration of a command, and the container dials it. Configured by the four keys below `transport`, which are read and checked only under it; the way to the network's speed, and the alternative wherever `stdio` does not run. |
 
 Under `stdio` a custom `image` must ship a busybox-style `sh`, `mkfifo` and `cat`: arcave runs restic behind a small shell entrypoint. The default image does.
 

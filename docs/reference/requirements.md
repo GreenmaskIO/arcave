@@ -67,11 +67,38 @@ Every command but `init` needs `.arcave/config.yaml` under the working directory
 
 ## For the `cdc` backend only
 
-[`snapshot.backend: cdc`](configuration.md#snapshot) pulls and runs `restic/restic:0.19.1` in one-shot containers, so the daemon needs to be able to pull it. By default arcave reaches those containers' repositories over the Docker API itself, so nothing else is needed — a remote `DOCKER_HOST` included. That default is supported on Docker Engine and Docker Desktop; on another engine (Podman, OrbStack, Colima) use `backends.cdc.transport: tcp`.
+[`snapshot.backend: cdc`](configuration.md#snapshot) pulls and runs `restic/restic:0.19.1` in one-shot containers, so the daemon needs to be able to pull it. By default arcave reaches those containers' repositories over the Docker API itself, so nothing else is needed — a remote `DOCKER_HOST` included. That default is verified on Docker Engine and Docker Desktop; for other engines see the [support matrix](#container-engines). `backends.cdc.transport: tcp` is the alternative wherever the default does not run.
 
 Under `transport: tcp` the containers need to reach a loopback port on your host instead. `network_mode: auto` works that out per platform; a remote or rootless daemon needs `network_mode: bridge` and a `container_host` that resolves from inside a container.
 
 `fullcopy`, the default, needs nothing beyond Docker.
+
+## Container engines
+
+Tested on macOS arm64, 2026-11-02, with arcave's integration suites and a smoke of the built binary
+(savepoint, change, rollback, compare, gc) over each transport.
+
+| Engine | Version | `fullcopy` | `cdc`, `stdio` | `cdc`, `tcp` | Notes |
+|---|---|---|---|---|---|
+| Docker Desktop | Engine 29.8.2 | ✅ | ✅ | ✅ | |
+| Docker Engine on Linux | 29.8.2, in Docker Desktop's VM | ✅ | ✅ | ✅ | `network_mode: auto` picks the host network |
+| Docker Engine, rootless | 29.6.2, Ubuntu 26.04 in Lima | ✅ | ✅ | ✅ | |
+| Colima | 0.10.3, dockerd 29.5.2 | ✅ | ✅ | ✅ | |
+| OrbStack | 2.2.5, Engine 29.8.2 | ✅ | ✅ | ✅ | |
+| Podman, rootless and rootful | 6.1.4 | volumes only | ✅ volumes only | ✅ volumes only | its `docker save` writes no OCI layout: set `capture.writable_layers` and `capture.images` to `false` |
+
+Speed of a first backup and a full restore of 1 GiB, in seconds — `stdio` against `tcp`. `stdio` is bound by
+how fast the engine streams a `docker exec`, `tcp` by its network:
+
+| Engine | backup, `stdio` / `tcp` | restore, `stdio` / `tcp` |
+|---|---|---|
+| Docker Desktop | 5.5 / 2.5 | 7.2 / 1.8 |
+| Docker Engine on Linux | 8.1 / 3.1 | 8.5 / 1.6 |
+| Docker Engine, rootless | 5.0 / 5.6 | 5.3 / 8.0 |
+| Colima | 5.0 / 3.7 | 4.5 / 4.6 |
+| OrbStack | 3.5 / 3.0 | 3.2 / 1.5 |
+| Podman, rootless | 6.4 / 4.7 | 10.0 / 9.2 |
+| Podman, rootful | 6.1 / 3.8 | 11.2 / 9.5 |
 
 ## There is nothing else to install
 
