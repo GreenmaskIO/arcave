@@ -25,6 +25,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/compose/v2/pkg/api"
+	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
@@ -859,6 +860,19 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 				daemon.On("Info", mock.Anything).Return(system.Info{}, daemonErr).Once()
 			},
 		},
+		{
+			name:    "reading daemon version",
+			wantMsg: `read docker daemon version`,
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
+				daemon.expectVolumes()
+				daemon.expectInspect("c-db-1")
+				daemon.expectNetworks()
+				daemon.expectImage(testImageID, nil)
+				daemon.On("Info", mock.Anything).Return(system.Info{}, nil).Once()
+				daemon.On("ServerVersion", mock.Anything).Return(dockertypes.Version{}, daemonErr).Once()
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1038,6 +1052,7 @@ func TestInspector_Introspect_Volumes(t *testing.T) {
 func TestInspector_Introspect_Daemon(t *testing.T) {
 	// Arrange
 	info := system.Info{ID: "daemon-1", ServerVersion: "28.5.2", Driver: "overlay2"}
+	version := dockertypes.Version{Version: "28.5.2", Components: []dockertypes.ComponentVersion{{Name: "Engine", Version: "28.5.2"}}}
 	daemon := &mockDockerAPI{}
 	daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
 	daemon.expectInspect("c-db-1")
@@ -1045,6 +1060,7 @@ func TestInspector_Introspect_Daemon(t *testing.T) {
 	daemon.expectNetworks()
 	daemon.expectImage(testImageID, nil)
 	daemon.On("Info", mock.Anything).Return(info, nil).Once()
+	daemon.On("ServerVersion", mock.Anything).Return(version, nil).Once()
 
 	// Act
 	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -1052,6 +1068,7 @@ func TestInspector_Introspect_Daemon(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, info, got.Daemon)
+	assert.Equal(t, version, got.DaemonVersion)
 	daemon.AssertExpectations(t)
 }
 
@@ -1149,6 +1166,7 @@ func (m *mockDockerAPI) expectImage(id model.ImageDigestID, labels map[string]st
 
 func (m *mockDockerAPI) expectInfo() {
 	m.On("Info", mock.Anything).Return(system.Info{ID: "daemon"}, nil).Once()
+	m.On("ServerVersion", mock.Anything).Return(dockertypes.Version{Version: "29.0.0"}, nil).Once()
 }
 
 func (m *mockDockerAPI) expectVolumes(volumes ...volume.Volume) {
@@ -1201,6 +1219,11 @@ func (m *mockDockerAPI) ImageInspect(
 func (m *mockDockerAPI) Info(ctx context.Context) (system.Info, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(system.Info), args.Error(1)
+}
+
+func (m *mockDockerAPI) ServerVersion(ctx context.Context) (dockertypes.Version, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(dockertypes.Version), args.Error(1)
 }
 
 func TestContainerName(t *testing.T) {

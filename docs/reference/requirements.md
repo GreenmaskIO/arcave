@@ -14,11 +14,13 @@ arcave captures each container's writable layer by committing it and exporting i
 unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer
 ```
 
-`rollback` reports it after `prepare: `. `savepoint list`, `savepoint remove` and the `session` commands touch no image and keep working. A daemon whose version cannot be read — usually an engine that is not Docker, such as Podman, which reports its own version — is let through with a warning, and the capture itself still refuses an archive of the old shape:
+`rollback` reports it after `prepare: `. `savepoint list`, `savepoint remove` and the `session` commands touch no image and keep working. An engine that is not Docker — Podman, which names itself in `docker version` — and a daemon whose version cannot be read are let through with a warning, and the capture itself still refuses an archive of the old shape:
 
 ```text
-unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
+unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape
 ```
+
+Podman 6 exports that shape, so on Podman arcave captures volumes only: set [`capture.writable_layers` and `capture.images`](configuration.md#capture) to `false`.
 
 The daemon must also be **reachable** for `savepoint create` and `rollback`, which fail on their first look at the compose project. `init`, `savepoint list`, `savepoint remove` and the `session` commands reach no daemon:
 

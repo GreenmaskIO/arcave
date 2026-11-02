@@ -31,6 +31,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/compose/v2/pkg/api"
+	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -64,6 +65,7 @@ type dockerAPI interface {
 	NetworkList(ctx context.Context, opts network.ListOptions) ([]network.Summary, error)
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
 	Info(ctx context.Context) (system.Info, error)
+	ServerVersion(ctx context.Context) (dockertypes.Version, error)
 }
 
 // Inspector reports the one compose project it is constructed with.
@@ -120,6 +122,10 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon info: %w", err)
 	}
+	version, err := s.api.ServerVersion(ctx)
+	if err != nil {
+		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon version: %w", err)
+	}
 
 	return model.IntrospectionResult{
 		Project: model.Project{
@@ -128,10 +134,11 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 			Volumes:  s.newNamedVolumes(services, volumeIndex),
 			Networks: networks,
 		},
-		Daemon:     info,
-		Images:     images,
-		Volumes:    volumeIndex,
-		Referenced: referenced,
+		Daemon:        info,
+		DaemonVersion: version,
+		Images:        images,
+		Volumes:       volumeIndex,
+		Referenced:    referenced,
 	}, nil
 }
 

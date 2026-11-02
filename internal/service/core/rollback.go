@@ -114,7 +114,7 @@ func (s *Service) rollback(
 		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
 	}
-	if err := requireDaemon(ctx, introspection.Daemon, s.minDaemonMajor); err != nil {
+	if err := requireDaemon(ctx, introspection.Daemon, introspection.DaemonVersion, s.minDaemonMajor); err != nil {
 		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
 	}
