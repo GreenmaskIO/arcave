@@ -48,15 +48,9 @@ func attaches(spec model.OneShotSpec) bool {
 	return spec.Stdin != nil || spec.Stdout != nil || spec.Stderr != nil
 }
 
-// runOneShotContainer drives one throwaway container through its whole
-// lifecycle: ensure the image is present, create, attach (when the spec carries
-// stdio), start, exchange, wait for exit, and always remove it. A non-zero exit
-// returns an error carrying the container's own output, the way the CLI's
-// combined output used to.
-//
-// This is the mechanism only — which image to run and what to mount it with is
-// the caller's policy: wipeMount's in this package, a backend's through
-// Engine.RunOneShot.
+// runOneShotContainer runs one throwaway container to exit, serving spec.Exec
+// while it runs, and always removes it. A non-zero exit, carrying the container's
+// output, outranks an exec that could not start.
 func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotSpec) error {
 	if err := ensureImage(ctx, api, spec.Image); err != nil {
 		return err
@@ -64,6 +58,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 
 	cfg := &container.Config{
 		Image:        spec.Image,
+		Entrypoint:   spec.Entrypoint,
 		Cmd:          spec.Cmd,
 		Env:          spec.Env,
 		Labels:       newOneShotLabels(),
@@ -118,6 +113,20 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		return fmt.Errorf("start %s container: %w", spec.Image, err)
 	}
 
+	var execErr error
+	if spec.Exec != nil {
+		stopExec, err := serveExec(ctx, api, created.ID, spec)
+		switch {
+		case err != nil && isContainerRunning(ctx, api, created.ID):
+			// A container waiting on its exec's peer would never exit.
+			return fmt.Errorf("serve %s container: %w", spec.Image, err)
+		case err != nil:
+			execErr = err
+		default:
+			defer stopExec()
+		}
+	}
+
 	if attaches(spec) {
 		if err := exchange(ctx, attached, spec); err != nil {
 			return err
@@ -136,6 +145,10 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 				Str("image", spec.Image).
 				Strs("container_output", output).
 				Msg("one-shot container exited non-zero")
+			if execErr != nil {
+				zerolog.Ctx(ctx).Debug().Err(execErr).Str("container", created.ID).
+					Msg("one-shot container exec not started")
+			}
 			return &model.ContainerExitError{
 				Image:      spec.Image,
 				StatusCode: status.StatusCode,
@@ -143,7 +156,49 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 			}
 		}
 	}
+	if execErr != nil {
+		return fmt.Errorf("serve %s container: %w", spec.Image, execErr)
+	}
 	return nil
+}
+
+// serveExec starts spec.Exec and runs Exec.Serve on its stream in the background.
+// The returned stop closes the stream and waits for Serve, logging its error.
+func serveExec(ctx context.Context, api dockerAPI, containerID string, spec model.OneShotSpec) (func(), error) {
+	stream, err := openExecStream(ctx, api, containerID, *spec.Exec)
+	if err != nil {
+		return nil, err
+	}
+
+	served := make(chan error, 1)
+	go func() { served <- spec.Exec.Serve(ctx, stream) }()
+	// Serve may not watch ctx; closing the stream ends it either way.
+	stopOnCancel := context.AfterFunc(ctx, stream.release)
+
+	return func() {
+		stopOnCancel()
+		stream.release()
+		err := <-served
+		if err == nil {
+			return
+		}
+		level := zerolog.WarnLevel
+		if ctx.Err() != nil {
+			level = zerolog.DebugLevel
+		}
+		zerolog.Ctx(ctx).WithLevel(level).Err(err).Str("container", containerID).Str("image", spec.Image).
+			Msg("serve one-shot container exec")
+	}, nil
+}
+
+// isContainerRunning reports whether containerID still runs; a container the
+// daemon cannot inspect counts as running, so the caller does not wait on it.
+func isContainerRunning(ctx context.Context, api dockerAPI, containerID string) bool {
+	inspect, err := api.ContainerInspect(ctx, containerID)
+	if err != nil || inspect.ContainerJSONBase == nil || inspect.State == nil {
+		return true
+	}
+	return inspect.State.Running
 }
 
 // scratchCmd is what the scratch container runs: it exists to hold the volume,

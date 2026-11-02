@@ -14,7 +14,10 @@
 
 package model
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 // OneShotSpec describes a throwaway container run to completion, optionally
 // exchanging stdio with the caller. It lives in model because it crosses a seam:
@@ -22,7 +25,9 @@ import "io"
 // neither imports the other.
 type OneShotSpec struct {
 	Image string
-	Cmd   []string
+	// Entrypoint, when set, replaces the image's entrypoint; Cmd becomes its arguments.
+	Entrypoint []string
+	Cmd        []string
 	// Env entries are "KEY=value", the daemon's own shape.
 	Env []string
 	// Binds are "source:target" mounts: a volume name or a host path.
@@ -39,4 +44,19 @@ type OneShotSpec struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// Exec, when set, is a second process started in the running container
+	// whose stdio is handed to Exec.Serve as one stream while the container runs.
+	Exec *OneShotExec
+}
+
+// OneShotExec is a process run beside a one-shot container's own, its stdout
+// read and its stdin written as one stream.
+type OneShotExec struct {
+	Cmd []string
+	// Stderr receives the process's stderr; nil discards it.
+	Stderr io.Writer
+	// Serve is handed the stream, which is closed once the container exits or
+	// the context ends; it must return then. Its error changes no outcome.
+	Serve func(ctx context.Context, stream io.ReadWriteCloser) error
 }
