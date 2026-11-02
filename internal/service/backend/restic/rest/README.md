@@ -770,3 +770,26 @@ The last row is the operational catch worth designing for now: with restic, *del
 does not free space*. Something has to run `prune`, it is expensive, and it wants exclusive access to
 the repository — so it belongs to a deliberate, schedulable maintenance operation, not to the tail of
 `arcave savepoint remove`.
+
+---
+
+## 13. Transports
+
+The same echo — `NewEcho` over a `model.RepositoryResolver` — answers restic over either of two
+transports; the routes, handlers and store layout are identical behind both.
+
+| Transport | Entry point | How restic reaches it |
+|---|---|---|
+| TCP | `Serve(e, address)` + `RepositoryURLBase` | `-r rest:http://<host>:<port>/<object-id>/` — a listener (loopback, kernel-picked port), dialled from the container through `host.docker.internal` or the host's network |
+| stream | `NewConnServer(ctx, repos)` + `ServeRepository(ctx, objectID, stream)` | `-r rclone:…` — restic speaks the REST protocol v2 over HTTP/2 with prior knowledge (h2c) on a child's stdin/stdout, one connection per restic run |
+
+Over a stream there is no listener and no address: one stream carries one repository, bound at serve
+time by its object id. The client always addresses the repository's root — `/config`, `/data/<id>` —
+and `ServeRepository` prefixes `/<object-id>` before the routes see the path. restic's startup probe,
+`GET /file-<random>`, matches no route and gets a `404`, which is all it waits for. The HTTP/2
+flow-control windows are raised to net/http's ceilings (~4 MiB per connection and stream, 1 MiB
+frames): the defaults stall every pack upload on the window.
+
+`ServeRepository` returns when the client hangs up — restic closing its end — or when its context
+ends, with the context's cause; it closes the stream either way. An object id the resolver refuses is
+returned unserved.
