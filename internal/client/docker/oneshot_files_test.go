@@ -131,8 +131,8 @@ func TestRunOneShotContainer_Files(t *testing.T) {
 	api := &mockAPI{}
 	copyCall, copied := expectCopy(t, api, nil)
 	mock.InOrder(
-		api.On("ImageInspect", mock.Anything, scratchImage).Return(image.InspectResponse{}, nil).Once(),
-		expectScratchCreate(api),
+		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil).Once(),
+		expectOneShotCreate(api),
 		copyCall,
 		api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil).Once(),
 		api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
@@ -141,7 +141,7 @@ func TestRunOneShotContainer_Files(t *testing.T) {
 	)
 
 	// Act
-	err := runWithin(t, context.Background(), api, model.OneShotSpec{Image: scratchImage, Files: files})
+	err := runWithin(t, context.Background(), api, model.OneShotSpec{Image: testImage, Files: files})
 
 	// Assert
 	require.NoError(t, err)
@@ -158,13 +158,13 @@ func TestRunOneShotContainer_FilesRefused(t *testing.T) {
 	api := &mockAPI{}
 	copyCall, _ := expectCopy(t, api, refused)
 	mock.InOrder(
-		api.On("ImageInspect", mock.Anything, scratchImage).Return(image.InspectResponse{}, nil).Once(),
-		expectScratchCreate(api),
+		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil).Once(),
+		expectOneShotCreate(api),
 		copyCall,
 		api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil).Once(),
 	)
 	spec := model.OneShotSpec{
-		Image: scratchImage,
+		Image: testImage,
 		Files: []model.OneShotFile{{Path: "/run/arcave/stdio.sh", Mode: 0o755}},
 	}
 
@@ -176,10 +176,10 @@ func TestRunOneShotContainer_FilesRefused(t *testing.T) {
 	api.AssertExpectations(t)
 }
 
-// expectScratchCreate expects the one create of a scratch container with no stdio.
-func expectScratchCreate(api *mockAPI) *mock.Call {
+// expectOneShotCreate expects the one create of a one-shot container with no stdio.
+func expectOneShotCreate(api *mockAPI) *mock.Call {
 	return api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
-		return cfg.Image == scratchImage
+		return cfg.Image == testImage
 	}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
 		Return(container.CreateResponse{ID: oneShotID}, nil).Once()
 }

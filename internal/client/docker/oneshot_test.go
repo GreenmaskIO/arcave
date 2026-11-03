@@ -49,14 +49,14 @@ const oneShotID = "oneshot-1"
 func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ImageInspect", mock.Anything, scratchImage).
+	api.On("ImageInspect", mock.Anything, testImage).
 		Return(image.InspectResponse{}, cerrdefs.ErrNotFound)
 	pulled := &countingReader{ReadCloser: io.NopCloser(strings.NewReader(`{"status":"done"}`))}
-	api.On("ImagePull", mock.Anything, scratchImage, image.PullOptions{}).Return(io.ReadCloser(pulled), nil)
+	api.On("ImagePull", mock.Anything, testImage, image.PullOptions{}).Return(io.ReadCloser(pulled), nil)
 	expectOneShotRun(api, 0)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: scratchImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.NoError(t, err)
@@ -76,19 +76,19 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	_, _ = io.WriteString(stdcopy.NewStdWriter(&framed, stdcopy.Stderr), "rm: permission denied\n")
 
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 137)
 	api.On("ContainerLogs", mock.Anything, oneShotID, mock.Anything).
 		Return(io.NopCloser(bytes.NewReader(framed.Bytes())), nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: scratchImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.Error(t, err)
 	var exitErr *model.ContainerExitError
 	require.ErrorAs(t, err, &exitErr, "the exit must surface as a typed error errors.As can recover")
-	assert.Equal(t, scratchImage, exitErr.Image)
+	assert.Equal(t, testImage, exitErr.Image)
 	assert.Equal(t, int64(137), exitErr.StatusCode)
 	assert.Equal(t, []string{"rm: permission denied"}, exitErr.Output)
 
@@ -104,12 +104,12 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(container.CreateResponse{}, errors.New("boom"))
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: scratchImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.Error(t, err)
@@ -121,14 +121,14 @@ func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
 func TestRunOneShotContainer_RemovesContainerOnStartFailure(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(container.CreateResponse{ID: oneShotID}, nil)
 	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(errors.New("no such image"))
 	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
 
 	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: scratchImage})
+	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
 
 	// Assert
 	require.Error(t, err)
@@ -147,17 +147,17 @@ func TestRunOneShotContainer_AttachConfig(t *testing.T) {
 	}{
 		{
 			name: "no stdio does not attach at all",
-			spec: model.OneShotSpec{Image: scratchImage},
+			spec: model.OneShotSpec{Image: testImage},
 		},
 		{
 			name:       "stdin opens and attaches stdin",
-			spec:       model.OneShotSpec{Image: scratchImage, Stdin: strings.NewReader("")},
+			spec:       model.OneShotSpec{Image: testImage, Stdin: strings.NewReader("")},
 			wantAttach: true,
 			wantCfg:    container.Config{OpenStdin: true, StdinOnce: true, AttachStdin: true},
 		},
 		{
 			name:       "output receivers attach their own streams",
-			spec:       model.OneShotSpec{Image: scratchImage, Stdout: io.Discard, Stderr: io.Discard},
+			spec:       model.OneShotSpec{Image: testImage, Stdout: io.Discard, Stderr: io.Discard},
 			wantAttach: true,
 			wantCfg:    container.Config{AttachStdout: true, AttachStderr: true},
 		},
@@ -167,7 +167,7 @@ func TestRunOneShotContainer_AttachConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
-			expectImagePresent(api, scratchImage)
+			expectImagePresent(api, testImage)
 			expectOneShotRun(api, 0)
 			if tt.wantAttach {
 				hj := newFakeHijack()
@@ -210,7 +210,7 @@ func TestRunOneShotContainer_Stdio(t *testing.T) {
 	}()
 
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 0)
 	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
 
@@ -218,7 +218,7 @@ func TestRunOneShotContainer_Stdio(t *testing.T) {
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
-		Image:  scratchImage,
+		Image:  testImage,
 		Stdin:  strings.NewReader("to stdin"),
 		Stdout: &stdout,
 		Stderr: &stderr,
@@ -254,7 +254,7 @@ func TestRunOneShotContainer_StdioLargePayload(t *testing.T) {
 	}()
 
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 0)
 	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
 
@@ -264,7 +264,7 @@ func TestRunOneShotContainer_StdioLargePayload(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- runOneShotContainer(context.Background(), api, model.OneShotSpec{
-			Image:  scratchImage,
+			Image:  testImage,
 			Stdin:  bytes.NewReader(payload),
 			Stdout: &stdout,
 		})
@@ -291,13 +291,13 @@ func TestRunOneShotContainer_StdinReadError(t *testing.T) {
 	hj.closeOutput() // the container prints nothing, so the reader half returns at once
 
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 0)
 	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
-		Image: scratchImage,
+		Image: testImage,
 		Stdin: &errReader{err: errors.New("source gone")},
 	})
 
@@ -315,7 +315,7 @@ func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
 	hj := newFakeHijack()
 
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(container.CreateResponse{ID: oneShotID}, nil)
 	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
@@ -328,7 +328,7 @@ func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
 	// Act
 	done := make(chan error, 1)
 	go func() {
-		done <- runOneShotContainer(ctx, api, model.OneShotSpec{Image: scratchImage, Stdout: &stdout})
+		done <- runOneShotContainer(ctx, api, model.OneShotSpec{Image: testImage, Stdout: &stdout})
 	}()
 	cancel()
 
@@ -382,11 +382,11 @@ func TestEngine_RunOneShot(t *testing.T) {
 func TestEngine_RunOneShot_HostNetwork(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 0)
 
 	// Act
-	err := NewEngine(api).RunOneShot(context.Background(), model.OneShotSpec{Image: scratchImage, HostNetwork: true})
+	err := NewEngine(api).RunOneShot(context.Background(), model.OneShotSpec{Image: testImage, HostNetwork: true})
 
 	// Assert
 	require.NoError(t, err)
@@ -396,6 +396,9 @@ func TestEngine_RunOneShot_HostNetwork(t *testing.T) {
 }
 
 const execID = "exec-1"
+
+// testImage is the image every one-shot test runs.
+const testImage = "busybox"
 
 // The exec every exec test starts, and the attach of a stdout-only run.
 var (
@@ -427,7 +430,7 @@ func TestRunOneShotContainer_Exec(t *testing.T) {
 
 	api := &mockAPI{}
 	mock.InOrder(
-		api.On("ImageInspect", mock.Anything, scratchImage).Return(image.InspectResponse{}, nil),
+		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil),
 		api.On("ContainerCreate", mock.Anything,
 			mock.MatchedBy(func(cfg *container.Config) bool {
 				return slices.Equal(cfg.Entrypoint, []string{"sh", "-c", "script"}) &&
@@ -449,7 +452,7 @@ func TestRunOneShotContainer_Exec(t *testing.T) {
 	var execStderr bytes.Buffer
 	served := make(chan string, 1)
 	spec := model.OneShotSpec{
-		Image:      scratchImage,
+		Image:      testImage,
 		Entrypoint: []string{"sh", "-c", "script"},
 		Cmd:        []string{"arg"},
 		Stdout:     io.Discard,
@@ -548,7 +551,6 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 				api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
 					Return(container.ExecCreateResponse{}, execErr)
 				api.On("ContainerInspect", mock.Anything, oneShotID).Return(running, nil)
-				expectLogs(api)
 			},
 			verify: func(t *testing.T, err error) {
 				assert.ErrorIs(t, err, execErr)
@@ -561,7 +563,6 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 					Return(container.ExecCreateResponse{}, execErr)
 				api.On("ContainerInspect", mock.Anything, oneShotID).
 					Return(container.InspectResponse{}, errors.New("daemon gone"))
-				expectLogs(api)
 			},
 			verify: func(t *testing.T, err error) {
 				assert.ErrorIs(t, err, execErr)
@@ -573,9 +574,9 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
-			expectImagePresent(api, scratchImage)
+			expectImagePresent(api, testImage)
 			api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
-				return cfg.Image == scratchImage
+				return cfg.Image == testImage
 			}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
 				Return(container.CreateResponse{ID: oneShotID}, nil)
 			api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
@@ -583,7 +584,7 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 			tt.arrange(api)
 			served := make(chan struct{}, 1)
 			spec := model.OneShotSpec{
-				Image: scratchImage,
+				Image: testImage,
 				Exec: &model.OneShotExec{
 					Cmd: bridgeCmd,
 					Serve: func(context.Context, io.ReadWriteCloser) error {
@@ -605,18 +606,64 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 	}
 }
 
+// An exited container whose exec could not start still has its stderr read: it
+// is what says why the container exited.
+func TestRunOneShotContainer_ExecFails_ReadsExitedStderr(t *testing.T) {
+	// Arrange
+	hj := newFakeHijack()
+	go func() {
+		_, _ = io.WriteString(hj.stderr, "Fatal: no password")
+		hj.closeOutput()
+	}()
+	exited := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+		State: &container.State{Running: false},
+	}}
+
+	api := &mockAPI{}
+	expectImagePresent(api, testImage)
+	expectOneShotRun(api, 1)
+	expectLogs(api)
+	api.On("ContainerAttach", mock.Anything, oneShotID, container.AttachOptions{
+		Stream: true,
+		Stderr: true,
+	}).Return(hj.resp, nil)
+	api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+		Return(container.ExecCreateResponse{}, errors.New("exec refused"))
+	api.On("ContainerInspect", mock.Anything, oneShotID).Return(exited, nil)
+	var stderr bytes.Buffer
+	spec := model.OneShotSpec{
+		Image:  testImage,
+		Stderr: &stderr,
+		Exec: &model.OneShotExec{
+			Cmd: bridgeCmd,
+			Serve: func(context.Context, io.ReadWriteCloser) error {
+				return nil
+			},
+		},
+	}
+
+	// Act
+	err := runWithin(t, context.Background(), api, spec)
+
+	// Assert
+	var exitErr *model.ContainerExitError
+	require.ErrorAs(t, err, &exitErr)
+	api.AssertExpectations(t)
+	assert.Equal(t, "Fatal: no password", stderr.String())
+}
+
 // Serve's failure changes no outcome: the container's exit decides the run.
 func TestRunOneShotContainer_ExecServeFails(t *testing.T) {
 	// Arrange
 	exec := newFakeHijack()
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 0)
 	api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
 		Return(container.ExecCreateResponse{ID: execID}, nil)
 	api.On("ContainerExecAttach", mock.Anything, execID, container.ExecAttachOptions{}).Return(exec.resp, nil)
 	spec := model.OneShotSpec{
-		Image: scratchImage,
+		Image: testImage,
 		Exec: &model.OneShotExec{
 			Cmd:   bridgeCmd,
 			Serve: func(context.Context, io.ReadWriteCloser) error { return errors.New("store gone") },
@@ -639,9 +686,9 @@ func TestRunOneShotContainer_ExecWithoutStdio(t *testing.T) {
 	serveDone := make(chan struct{})
 	api := &mockAPI{}
 	mock.InOrder(
-		api.On("ImageInspect", mock.Anything, scratchImage).Return(image.InspectResponse{}, nil),
+		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil),
 		api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
-			return cfg.Image == scratchImage && !cfg.AttachStdout
+			return cfg.Image == testImage && !cfg.AttachStdout
 		}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
 			Return(container.CreateResponse{ID: oneShotID}, nil),
 		api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil),
@@ -654,7 +701,7 @@ func TestRunOneShotContainer_ExecWithoutStdio(t *testing.T) {
 			Run(requireClosedBefore(t, exec, serveDone)).Return(nil),
 	)
 	spec := model.OneShotSpec{
-		Image: scratchImage,
+		Image: testImage,
 		Exec: &model.OneShotExec{
 			Cmd: bridgeCmd,
 			Serve: func(_ context.Context, stream io.ReadWriteCloser) error {
@@ -680,9 +727,9 @@ func TestRunOneShotContainer_ExecCancelledInWait(t *testing.T) {
 	exec := newFakeHijack()
 	waitErr := make(chan error, 1)
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
-		return cfg.Image == scratchImage
+		return cfg.Image == testImage
 	}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
 		Return(container.CreateResponse{ID: oneShotID}, nil)
 	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
@@ -698,7 +745,7 @@ func TestRunOneShotContainer_ExecCancelledInWait(t *testing.T) {
 	serving := make(chan struct{})
 	serveDone := make(chan struct{})
 	spec := model.OneShotSpec{
-		Image: scratchImage,
+		Image: testImage,
 		Exec: &model.OneShotExec{
 			Cmd: bridgeCmd,
 			Serve: func(_ context.Context, stream io.ReadWriteCloser) error {
@@ -740,9 +787,9 @@ func TestRunOneShotContainer_ExecCancellation(t *testing.T) {
 	exec := newFakeHijack()
 
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, testImage)
 	api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
-		return cfg.Image == scratchImage && cfg.AttachStdout
+		return cfg.Image == testImage && cfg.AttachStdout
 	}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
 		Return(container.CreateResponse{ID: oneShotID}, nil)
 	api.On("ContainerAttach", mock.Anything, oneShotID, stdoutAttachOptions).Return(main.resp, nil)
@@ -756,7 +803,7 @@ func TestRunOneShotContainer_ExecCancellation(t *testing.T) {
 	serving := make(chan struct{})
 	serveDone := make(chan error, 1)
 	spec := model.OneShotSpec{
-		Image:  scratchImage,
+		Image:  testImage,
 		Stdout: io.Discard,
 		Exec: &model.OneShotExec{
 			Cmd: bridgeCmd,
