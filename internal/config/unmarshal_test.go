@@ -268,6 +268,39 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: "stray",
 		},
 		{
+			name: "a full-copy project compresses with zstd by default",
+			yaml: "snapshot:\n  backend: fullcopy\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name: "an explicit compression is read back",
+			yaml: "backends:\n  fullcopy:\n    compression: none\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name: "a cdc project compresses a volume a label routes through fullcopy too",
+			yaml: "snapshot:\n  backend: cdc\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name: "a fullcopy section under a cdc project is still honoured",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  fullcopy:\n    compression: none\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name:       "a compression arcave does not offer is rejected",
+			yaml:       "backends:\n  fullcopy:\n    compression: gzip\n",
+			wantErrMsg: "unsupported backends.fullcopy.compression",
+		},
+		{
 			// A full-copy project carries no cdc section: a backend it never runs
 			// should not be a block in its config file.
 			name: "a full-copy project gets no cdc arm",

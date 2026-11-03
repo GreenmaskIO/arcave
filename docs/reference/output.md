@@ -35,9 +35,9 @@ The tree is drawn on stderr and the result goes to stdout, so `ID=$(arcave savep
 ├── ✔ savepoint.capture            12.1s
 └── ✔ compose.start                 2.7s
 
-Savepoint nightly · 01a188c4 · 19:45:35 · stored 48.9 MB
+Savepoint nightly · 01a188c4 · 19:45:35 · stored 4.7 MB
             count     size   stored
-  volumes       3  48.8 MB  48.8 MB
+  volumes       3  48.8 MB   4.7 MB
   layers        4   275 MB  44.1 KB
   images        4   1.1 GB        0
 
@@ -191,7 +191,8 @@ What a savepoint captures follows the `capture` defaults in the config and the `
   },
   "type": "fullcopy",
   "size_bytes": 41172480,
-  "stored_bytes": 41172480
+  "stored_bytes": 3948691,
+  "payload": { "compression": "zstd" }
 }
 ```
 
@@ -203,11 +204,11 @@ What a savepoint captures follows the `capture` defaults in the config and the `
 | `bind` | `bind` | `service`, `target`, `source` (the host path), `read_only` |
 | `anon` | `anon` | `service`, `replica`, `target`, `read_only`, `subpath` |
 
-`read_only` and `subpath` are omitted when unset. `size_bytes` is the volume as the backend measured it — the archive for `fullcopy`, the bytes read for `cdc` — and `stored_bytes` what this capture added to the store, omitted when it added nothing: `fullcopy` stores the archive whole, so the two are equal; `cdc` stores only the chunks that changed, compressed. `reused_bytes` is what of `size_bytes` the backend found already stored, omitted when none was: `cdc`'s unchanged chunks, counted before compression, so `stored_bytes` and `reused_bytes` need not add up to `size_bytes`. `payload` is the capturing backend's own bookkeeping, and only that backend reads it:
+`read_only` and `subpath` are omitted when unset. `size_bytes` is the volume as the backend measured it — the tar archive for `fullcopy`, the bytes read for `cdc` — and `stored_bytes` what this capture added to the store, omitted when it added nothing: `fullcopy` stores the archive whole, zstd-compressed unless `backends.fullcopy.compression` is `none`, when the two are equal; `cdc` stores only the chunks that changed, compressed. `reused_bytes` is what of `size_bytes` the backend found already stored, omitted when none was: `cdc`'s unchanged chunks, counted before compression, so `stored_bytes` and `reused_bytes` need not add up to `size_bytes`. `payload` is the capturing backend's own bookkeeping, and only that backend reads it:
 
 | Backend | `payload` |
 |---|---|
-| `fullcopy` | omitted — the archive is found by its key |
+| `fullcopy` | `{"compression": …}` — `zstd` or `none`, the format the archive is stored in |
 | `cdc` | `{"restic_snapshot_id": …}` — the restic snapshot the capture made |
 
 ### `writable_layers[]`

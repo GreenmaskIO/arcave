@@ -27,6 +27,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/greenmaskio/storages v0.3.6-0.20261103180456-6dfbb25f682c
+	github.com/klauspost/compress v1.18.5
 	github.com/labstack/echo/v4 v4.16.0
 	github.com/labstack/gommon v0.5.0
 	github.com/moby/docker-image-spec v1.3.1
@@ -150,7 +151,6 @@ require (
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect

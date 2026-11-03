@@ -55,9 +55,9 @@ On a terminal, the final tree of the steps on stderr and a summary of what was c
 ├── ✔ savepoint.capture before-migration  3.6s
 └── ✔ compose.start                       2.2s
 
-Savepoint before-migration · 019e843e · 19:41:12 · stored 210 MB
+Savepoint before-migration · 019e843e · 19:41:12 · stored 173 MB
             count     size   stored
-  volumes       1  40.9 MB  40.9 MB
+  volumes       1  40.9 MB   3.9 MB
   layers        2   163 MB  20.6 KB
   images        2   671 MB   169 MB
 
@@ -92,7 +92,8 @@ Warnings (1)
       },
       "type": "fullcopy",
       "size_bytes": 40863232,
-      "stored_bytes": 40863232
+      "stored_bytes": 3919032,
+      "payload": { "compression": "zstd" }
     }
   ],
   "writable_layers": [

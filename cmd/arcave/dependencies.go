@@ -190,7 +190,7 @@ func newDependencies(
 	// The one place a volume's Backend becomes an instance, and the only place
 	// that names the engine — through the seam its backend declares.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
-		fullcopy.NewFactory(engine),
+		fullcopy.NewFactory(engine, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:         engine,
 			Transport:      cdcTransport.transport,
