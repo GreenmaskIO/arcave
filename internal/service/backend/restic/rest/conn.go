@@ -155,7 +155,9 @@ func (c *streamConn) SetDeadline(time.Time) error      { return nil }
 func (c *streamConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *streamConn) SetWriteDeadline(time.Time) error { return nil }
 
-// connListener accepts its one conn, then blocks until that conn is closed.
+// connListener accepts its one conn, then blocks until that conn is closed:
+// http.Server serves only a listener, and HTTP/2 multiplexes every request of
+// the stream over that one conn. See README.md §13.1.
 type connListener struct {
 	conns chan net.Conn
 	done  <-chan struct{}

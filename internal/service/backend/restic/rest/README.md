@@ -795,3 +795,39 @@ frames): the defaults stall every pack upload on the window.
 `ServeRepository` returns when the client hangs up — restic closing its end — or when its context
 ends, with the context's cause; it closes the stream either way. An object id the resolver refuses is
 returned unserved.
+
+### 13.1 One stream, one connection, many requests
+
+```
+ restic container                                     │ arcave (host)
+                                                      │
+ PID1: stdio.sh entrypoint                            │
+   └─exec restic -o rclone.program=stdio.sh           │
+          │  (HTTP/2 client, N concurrent requests)   │
+          │ stdin/stdout                              │
+   stdio.sh relay ──▶ FIFO req ──▶ stdio.sh bridge ───┼─ exec stdout ─┐
+                  ◀── FIFO resp ◀──                ◀──┼─ exec stdin ──┤
+                                                      │               │
+                                                      │  docker.Engine.RunOneShot
+                                                      │   └ execStream (io.ReadWriteCloser)
+                                                      │       │ OneShotExec.Serve
+                                                      │       ▼
+                                                      │  ConnServer.ServeRepository(ctx, objectID, stream)
+                                                      │   ├ newStreamConn(stream)   → net.Conn
+                                                      │   ├ newConnListener(conn)   → net.Listener over that one conn
+                                                      │   └ http.Server{UnencryptedHTTP2}.Serve(listener)
+                                                      │        ├ Accept #1 → conn  → h2 serverConn
+                                                      │        │     ├ stream 1: GET  /config     ┐ newRepositoryHandler:
+                                                      │        │     ├ stream 3: POST /data/ab..  ├ "/x" → "/<objectID>/x"
+                                                      │        │     └ stream 5: GET  /snapshots/ ┘   → echo → Storager
+                                                      │        └ Accept #2 → blocks on conn.Done() → net.ErrClosed → Serve returns
+```
+
+The `docker exec` stream is the only byte pipe between restic and arcave, so it is one connection, and
+restic never opens a second: its rclone backend has one child's stdin/stdout. Concurrency lives inside
+it — HTTP/2 multiplexes every request restic has in flight as its own h2 stream.
+
+`net/http` serves only a `net.Listener`, so `connListener` adapts the one conn to one: its channel is
+preloaded with the conn, so the first `Accept` returns it at once; the second blocks until the conn is
+closed — restic's hang-up, or `ServeRepository`'s context ending — and returns `net.ErrClosed`, which
+ends `Serve` and is read as a clean return.
