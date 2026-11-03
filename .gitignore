@@ -41,6 +41,8 @@ dist/
 # restic fixture the demo generates
 examples/demo/repo/
 .idea
+.run
+.DS_Store
 
 .mcp.json
 .agents
