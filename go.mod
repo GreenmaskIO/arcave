@@ -26,7 +26,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
-	github.com/greenmaskio/storages v0.3.6-0.20261103180456-6dfbb25f682c
+	github.com/greenmaskio/storages v0.4.0
 	github.com/klauspost/compress v1.18.5
 	github.com/labstack/echo/v4 v4.16.0
 	github.com/labstack/gommon v0.5.0
