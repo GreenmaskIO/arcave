@@ -15,6 +15,7 @@
 package fullcopy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,8 @@ import (
 	"runtime"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/rs/zerolog"
+	"golang.org/x/sync/errgroup"
 )
 
 // The formats a capture's archive is stored in.
@@ -90,19 +93,60 @@ func DecodePayload(stored any) (Payload, error) {
 	return payload, nil
 }
 
-// newEncoder wraps w in the format's encoder; Close flushes it and leaves w open.
-func newEncoder(compression Compression, w io.Writer) (io.WriteCloser, error) {
+// newEncoder returns r encoded in the format, read as it is produced: the
+// encoder's failure fails the read, and Close releases the encoder.
+func newEncoder(ctx context.Context, compression Compression, r io.Reader) io.ReadCloser {
 	if compression == CompressionNone {
-		return nopWriteCloser{Writer: w}, nil
+		return io.NopCloser(r)
 	}
+	pr, pw := io.Pipe()
+	var group errgroup.Group
+	group.Go(func() error {
+		err := copyZstd(ctx, pw, r)
+		//nolint:errcheck // a PipeWriter's Close does not fail; the error travels to the reader
+		pw.CloseWithError(err)
+		return err
+	})
+	return &encodingReader{
+		PipeReader: pr,
+		group:      &group,
+	}
+}
+
+// encodingReader is the zstd side of newEncoder: the pipe the encoder writes
+// into, and the goroutine encoding into it.
+type encodingReader struct {
+	*io.PipeReader
+	group *errgroup.Group
+}
+
+// Close unblocks an encoder its reader stopped reading and waits for it; the
+// encoder's own echo of that close is no error.
+func (r *encodingReader) Close() error {
+	//nolint:errcheck // a PipeReader's Close does not fail; it unblocks the encoder's write
+	r.CloseWithError(io.ErrClosedPipe)
+	if err := r.group.Wait(); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		return err
+	}
+	return nil
+}
+
+// copyZstd copies r into w through a zstd encoder, finishing the frame on success.
+func copyZstd(ctx context.Context, w io.Writer, r io.Reader) error {
 	encoder, err := zstd.NewWriter(w,
 		zstd.WithEncoderLevel(zstd.SpeedDefault),
 		zstd.WithEncoderConcurrency(runtime.GOMAXPROCS(0)),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("open zstd encoder: %w", err)
+		return fmt.Errorf("open zstd encoder: %w", err)
 	}
-	return encoder, nil
+	if _, err := io.Copy(encoder, r); err != nil {
+		if closeErr := encoder.Close(); closeErr != nil {
+			zerolog.Ctx(ctx).Debug().Err(closeErr).Msg("close zstd encoder")
+		}
+		return err
+	}
+	return encoder.Close()
 }
 
 // newDecoder wraps r in the format's decoder; Close releases it and leaves r open.
@@ -116,7 +160,3 @@ func newDecoder(compression Compression, r io.Reader) (io.ReadCloser, error) {
 	}
 	return decoder.IOReadCloser(), nil
 }
-
-type nopWriteCloser struct{ io.Writer }
-
-func (nopWriteCloser) Close() error { return nil }

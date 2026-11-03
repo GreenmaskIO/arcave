@@ -107,7 +107,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 				wantErrMsg:  []string{"write archive", "stream boom"},
 			},
 			testCase{
-				// The store reads nothing, so only the pipe's close unblocks the encoder.
+				// The store reads nothing, so only the encoder's Close unblocks it.
 				name:        prefix + "a store refusing the archive fails the capture, wrapped",
 				compression: compression,
 				putErr:      errStore,

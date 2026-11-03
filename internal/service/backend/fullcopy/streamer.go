@@ -34,7 +34,6 @@ import (
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -110,7 +109,6 @@ func (s *Snapshotter) Snapshot(
 		captureStore storages.Storager
 		src          model.MountSource
 		archive      io.ReadCloser
-		stored       int64
 		err          error
 	)
 	if captureStore, err = s.captureStore(req.SnapshotID); err != nil {
@@ -132,58 +130,23 @@ func (s *Snapshotter) Snapshot(
 	// Both counters sit in the stream: the tar's ahead of the encoder, the
 	// store's behind it.
 	size := utils.NewCountingReader(archive)
-	if stored, err = s.storeArchive(ctx, captureStore, progress.NewReader(ctx, size, 0)); err != nil {
+	encoded := newEncoder(ctx, s.compression, progress.NewReader(ctx, size, 0))
+	defer func() {
+		if err := encoded.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("close encoder")
+		}
+	}()
+	stored := utils.NewCountingReader(encoded)
+	if err := captureStore.PutObject(ctx, s.compression.archiveName(), stored); err != nil {
 		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
 	return model.SnapshotStat{
 		Volume:      s.volume,
 		Type:        model.SnapshotBackendFullCopy,
 		SizeBytes:   size.N(),
-		StoredBytes: stored,
+		StoredBytes: stored.N(),
 		Payload:     Payload{Compression: s.compression},
 	}, nil
-}
-
-// storeArchive encodes the tar stream into the archive's key and returns the
-// bytes stored. The encoder writes into a pipe the store reads, so a failure on
-// either side unblocks the other, and the side that failed first is the error.
-func (s *Snapshotter) storeArchive(ctx context.Context, store storages.Writer, tarStream io.Reader) (int64, error) {
-	pr, pw := io.Pipe()
-	stored := utils.NewCountingReader(pr)
-	// Whichever side fails first closes the pipe with its error, so the other
-	// side fails with the same cause.
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.Go(func() error {
-		err := s.encode(groupCtx, pw, tarStream)
-		//nolint:errcheck // the error travels to the store's read
-		pw.CloseWithError(err)
-		return err
-	})
-	group.Go(func() error {
-		err := store.PutObject(groupCtx, s.compression.archiveName(), stored)
-		//nolint:errcheck // the error travels to the encoder's write
-		pr.CloseWithError(err)
-		return err
-	})
-	if err := group.Wait(); err != nil {
-		return 0, err
-	}
-	return stored.N(), nil
-}
-
-// encode copies the tar stream through the format's encoder into w.
-func (s *Snapshotter) encode(ctx context.Context, w io.Writer, tarStream io.Reader) error {
-	encoder, err := newEncoder(s.compression, w)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(encoder, tarStream); err != nil {
-		if closeErr := encoder.Close(); closeErr != nil {
-			zerolog.Ctx(ctx).Debug().Err(closeErr).Msg("close encoder")
-		}
-		return err
-	}
-	return encoder.Close()
 }
 
 // Restore decodes the stored archive and hands the tar stream to WriteVolume,
