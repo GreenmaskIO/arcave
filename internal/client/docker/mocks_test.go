@@ -59,6 +59,16 @@ func (m *mockAPI) ContainerAttach(ctx context.Context, containerID string, optio
 	return args.Get(0).(dockertypes.HijackedResponse), args.Error(1)
 }
 
+func (m *mockAPI) ContainerExecCreate(ctx context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error) {
+	args := m.Called(ctx, containerID, options)
+	return args.Get(0).(container.ExecCreateResponse), args.Error(1)
+}
+
+func (m *mockAPI) ContainerExecAttach(ctx context.Context, execID string, options container.ExecAttachOptions) (dockertypes.HijackedResponse, error) {
+	args := m.Called(ctx, execID, options)
+	return args.Get(0).(dockertypes.HijackedResponse), args.Error(1)
+}
+
 func (m *mockAPI) ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
 	args := m.Called(ctx, containerID, condition)
 	return args.Get(0).(<-chan container.WaitResponse), args.Get(1).(<-chan error)

@@ -32,17 +32,20 @@ func TestSnapshotter_Restore(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		opts cdc.Options
+		name      string
+		transport string
+		opts      cdc.Options
 	}{
-		{name: "wipe clears the mount and restores it whole", opts: wipeOptions()},
-		{name: "incremental restores over the live data", opts: incrementalOptions()},
+		{name: "wipe clears the mount and restores it whole", transport: transportStdio, opts: wipeOptions()},
+		{name: "incremental restores over the live data", transport: transportStdio, opts: incrementalOptions()},
+		{name: "wipe over tcp", transport: transportTCP, opts: wipeOptions()},
+		{name: "incremental over tcp", transport: transportTCP, opts: incrementalOptions()},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			env := newEnv(t, tt.opts)
+			env := newEnvOver(t, tt.transport, tt.opts)
 			vol := env.newVolume(t, "db", "/var/lib/postgresql/data")
 			backend := env.backend(t, vol)
 			payload := env.snapshot(t, backend, idFirst, nil)

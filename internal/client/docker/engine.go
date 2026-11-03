@@ -58,17 +58,18 @@ const (
 	composeNumberLabel  = "com.docker.compose.container-number"
 )
 
-// scratchImage is the throwaway image every volume operation runs: small,
-// ubiquitous, and carrying the `find` the wipe needs.
-const scratchImage = "busybox"
+// volumeToolsImage is the throwaway image every volume operation runs, the volume
+// holder and the wipe alike: small, ubiquitous, and carrying the `find` the wipe
+// needs.
+const volumeToolsImage = "busybox"
 
-// scratchMount is where a volume is mounted inside that container. It is absent
+// volumeHolderMount is where a volume is mounted inside its holder. It is absent
 // from the image on purpose: starting a container with an empty volume mounted
 // at a path the image *does* carry copies the image's content into the volume.
-const scratchMount = "/arcave-data"
+const volumeHolderMount = "/arcave-data"
 
 // wipeMountPath is where the volume sits inside the wipe container. Absent from
-// the image for the same reason as scratchMount.
+// the image for the same reason as volumeHolderMount.
 const wipeMountPath = "/data"
 
 // dockerAPI is the slice of the Docker API client this package actually calls —
@@ -80,6 +81,8 @@ type dockerAPI interface {
 	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
 	ContainerAttach(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error)
+	ContainerExecCreate(ctx context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error)
+	ContainerExecAttach(ctx context.Context, execID string, options container.ExecAttachOptions) (types.HijackedResponse, error)
 	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
 	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
@@ -181,35 +184,38 @@ func (e *Engine) ResolveMountSource(ctx context.Context, volume model.Volume) (m
 }
 
 // OpenVolume streams the whole volume out as a tar, through a throwaway
-// container that mounts it at scratchMount. The archive is streamed verbatim
+// container that mounts it at volumeHolderMount. The archive is streamed verbatim
 // rather than extracted so that ownership and permissions — which an
 // unprivileged host process could not reapply — survive a later restore.
 //
 // The caller owns the returned stream: closing it removes the container, which
 // therefore outlives this call.
 func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error) {
-	id, remove, err := startScratchContainer(ctx, e.api, src)
+	id, err := startVolumeHolder(ctx, e.api, src)
 	if err != nil {
 		return nil, err
 	}
 
-	rc, _, err := e.api.CopyFromContainer(ctx, id, scratchMount)
+	rc, _, err := e.api.CopyFromContainer(ctx, id, volumeHolderMount)
 	if err != nil {
-		remove()
+		removeVolumeHolder(ctx, e.api, id)
 		return nil, fmt.Errorf("export volume %s: %w", src.Source, err)
 	}
-	return closeAfter{ReadCloser: rc, after: remove}, nil
+	return closeAfter{
+		ReadCloser: rc,
+		after:      func() { removeVolumeHolder(ctx, e.api, id) },
+	}, nil
 }
 
 // WriteVolume clears the volume and extracts the tar back into it, the mirror of
-// OpenVolume. The archive's top entry is scratchMount's basename, so it is
+// OpenVolume. The archive's top entry is volumeHolderMount's basename, so it is
 // extracted at the container's root and the data lands back in the volume.
 func (e *Engine) WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error {
 	if err := e.WipeVolume(ctx, src); err != nil {
 		return fmt.Errorf("clear volume %s before restore: %w", src.Source, err)
 	}
 
-	return withScratchContainer(ctx, e.api, src, func(id string) error {
+	return withVolumeHolder(ctx, e.api, src, func(id string) error {
 		// readOnly hides r's Close from the SDK: CopyToContainer passes the stream to
 		// net/http as the request body, and http.NewRequestWithContext type-asserts it
 		// to io.ReadCloser — so the transport would close the caller's stream, and the
@@ -315,7 +321,7 @@ func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
 // reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
 func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error {
 	return runOneShotContainer(ctx, api, model.OneShotSpec{
-		Image: scratchImage,
+		Image: volumeToolsImage,
 		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
 		Cmd: []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",
 			"-exec", "rm", "-rf", "{}", "+"},

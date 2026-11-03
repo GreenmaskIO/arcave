@@ -262,19 +262,19 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 }
 
 // The whole volume comes out through a container of arcave's own, mounted at
-// scratchMount — no service container is involved. The container outlives the
+// volumeHolderMount — no service container is involved. The container outlives the
 // call: it goes away only once the caller closes the stream copied out of it.
 func TestEngine_OpenVolume(t *testing.T) {
 	// Arrange
 	const payload = "tar-bytes"
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
-	scratch := expectContainerRun(api, "scratch-1", scratchCmd[0])
-	copyOut := api.On("CopyFromContainer", mock.Anything, "scratch-1", scratchMount).
+	expectImagePresent(api, volumeToolsImage)
+	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
+	copyOut := api.On("CopyFromContainer", mock.Anything, "holder-1", volumeHolderMount).
 		Return(io.NopCloser(strings.NewReader(payload)), container.PathStat{}, nil).Once()
 	removed := make(chan struct{})
-	scratch.remove.Run(func(mock.Arguments) { close(removed) })
-	mock.InOrder(scratch.create, copyOut, scratch.remove)
+	holder.remove.Run(func(mock.Arguments) { close(removed) })
+	mock.InOrder(holder.create, copyOut, holder.remove)
 	e := &Engine{api: api}
 
 	// Act
@@ -291,24 +291,24 @@ func TestEngine_OpenVolume(t *testing.T) {
 	require.NoError(t, rc.Close())
 	assertClosed(t, removed, "closing the stream must remove the container")
 	api.AssertExpectations(t)
-	assert.Equal(t, []string{"demo_pgdata:" + scratchMount}, scratch.host.Binds)
-	assert.Equal(t, map[string]string{oneShotLabel: "true"}, scratch.cfg.Labels)
+	assert.Equal(t, []string{"demo_pgdata:" + volumeHolderMount}, holder.host.Binds)
+	assert.Equal(t, map[string]string{oneShotLabel: "true"}, holder.cfg.Labels)
 }
 
 // A restore clears the volume before extracting into it, and extracts at the
-// container's root: the archive's top entry is scratchMount's own basename, so
+// container's root: the archive's top entry is volumeHolderMount's own basename, so
 // no path arithmetic decides where the data lands.
 func TestEngine_WriteVolume(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, volumeToolsImage)
 	wipe := expectContainerRun(api, "wipe-1", "find")
-	scratch := expectContainerRun(api, "scratch-1", scratchCmd[0])
-	extract := api.On("CopyToContainer", mock.Anything, "scratch-1", "/", mock.Anything, mock.Anything).
+	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
+	extract := api.On("CopyToContainer", mock.Anything, "holder-1", "/", mock.Anything, mock.Anything).
 		Return(nil).Once()
 	// The wipe must be finished before a byte is written back, or the restore
 	// deletes itself.
-	mock.InOrder(wipe.remove, scratch.create, extract, scratch.remove)
+	mock.InOrder(wipe.remove, holder.create, extract, holder.remove)
 	e := &Engine{api: api}
 
 	// Act
@@ -320,7 +320,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 	require.NoError(t, err)
 	api.AssertExpectations(t)
 	assert.Equal(t, []string{"demo_pgdata:" + wipeMountPath}, wipe.host.Binds, "the wipe binds the volume it clears")
-	assert.Equal(t, []string{"demo_pgdata:" + scratchMount}, scratch.host.Binds)
+	assert.Equal(t, []string{"demo_pgdata:" + volumeHolderMount}, holder.host.Binds)
 }
 
 // A volume the daemon refuses to clear stops the restore before the stream is
@@ -328,7 +328,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 	// Arrange: no CopyToContainer expectation, so an extract fails the run.
 	api := &mockAPI{}
-	expectImagePresent(api, scratchImage)
+	expectImagePresent(api, volumeToolsImage)
 	expectContainerRun(api, "wipe-1", "find").exit(1)
 	api.On("ContainerLogs", mock.Anything, "wipe-1", mock.Anything).
 		Return(io.NopCloser(strings.NewReader("")), nil).Once()
@@ -376,7 +376,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			api := &mockAPI{}
 			var wipe *containerRun
 			if tt.wantErr == "" {
-				expectImagePresent(api, scratchImage)
+				expectImagePresent(api, volumeToolsImage)
 				wipe = expectContainerRun(api, "wipe-1", "find")
 			}
 			e := &Engine{api: api}
@@ -392,7 +392,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			}
 			require.NoError(t, err)
 			api.AssertExpectations(t)
-			assert.Equal(t, scratchImage, wipe.cfg.Image)
+			assert.Equal(t, volumeToolsImage, wipe.cfg.Image)
 			assert.EqualValues(t, []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",
 				"-exec", "rm", "-rf", "{}", "+"}, wipe.cfg.Cmd)
 			assert.Equal(t, tt.wantBinds, wipe.host.Binds)
@@ -496,7 +496,7 @@ func expectContainerRun(api *mockAPI, id, verb string) *containerRun {
 }
 
 // matchCommand matches a container by the command it runs, which is what tells
-// the wipe container and the scratch container of one restore apart.
+// the wipe container and the volume holder of one restore apart.
 func matchCommand(verb string) any {
 	return mock.MatchedBy(func(cfg *container.Config) bool {
 		return len(cfg.Cmd) > 0 && cfg.Cmd[0] == verb

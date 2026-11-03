@@ -72,9 +72,11 @@ project, arcave takes a safety snapshot first and reverts to it if the rollback 
 
 ### Local network services
 
-The `cdc` backend runs a restic REST server for the duration of a command. By default it
-binds to `127.0.0.1` on a random port. Don't change `backends.cdc.server_address` to a
-public interface.
+By default (`backends.cdc.transport: stdio`) the `cdc` backend opens no port: it serves
+each restic repository over a `docker exec` stream into the restic container, through the
+Docker API connection arcave already holds. Under `transport: tcp` it runs a restic REST
+server for the duration of a command, bound to `127.0.0.1` on a random port. Don't change
+`backends.cdc.server_address` to a public interface.
 
 ### MCP server
 

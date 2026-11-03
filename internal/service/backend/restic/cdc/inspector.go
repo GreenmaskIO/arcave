@@ -46,9 +46,9 @@ type Inspector struct {
 	repositories repositories
 }
 
-// NewInspector runs restic through runner against the repositories repoURLBase addresses.
-func NewInspector(runner ContainerRunner, repoURLBase string, options Options) *Inspector {
-	return &Inspector{repositories: newRepositories(runner, repoURLBase, options)}
+// NewInspector runs restic through runner against the repositories transport reaches.
+func NewInspector(runner ContainerRunner, transport Transport, options Options) *Inspector {
+	return &Inspector{repositories: newRepositories(runner, transport, options)}
 }
 
 // ReadSnapshots lists the snapshots of objectID's repository.

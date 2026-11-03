@@ -87,9 +87,8 @@ type dependencies struct {
 	composeService      api.Compose
 	engine              *docker.Engine
 	composeRunner       *compose.Client
-	// resticServer is held for one reason only — so Close shuts it down. What goes
-	// down to the backend is the URL base, never the object.
-	resticServer *echo.Echo
+	// cdcTransport is how cdc's containers reach their repositories, closed by Close.
+	cdcTransport openedCDCTransport
 	service      *core.Service
 	printer      resultPrinter
 }
@@ -170,19 +169,13 @@ func newDependencies(
 		return nil, fmt.Errorf("initialise restic repository root: %w", err)
 	}
 
-	// The server cdc's containers fetch their repositories over. It listens for
-	// the whole process, so an address that will not bind fails the command up
-	// front, and the port it took is known here — before the first backend.
-	resticServer := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
-	resticPort, err := rest.Serve(resticServer, cdcCfg.ServerAddress)
-	if err != nil {
-		return nil, fmt.Errorf("start the restic server: %w", err)
-	}
-	opened.add("restic server", resticServer)
-
-	cdcHostNetwork, cdcContainerHost, err := resolveCDCTransport(ctx, cdcCfg, engine)
+	// Under tcp the server listens for the whole process, so a bad address fails up front.
+	cdcTransport, err := openCDCTransport(ctx, cdcCfg, engine, resticRoot)
 	if err != nil {
 		return nil, err
+	}
+	if cdcTransport.server != nil {
+		opened.add("restic server", cdcTransport.server)
 	}
 
 	// The one place a volume's Backend becomes an instance, and the only place
@@ -190,12 +183,10 @@ func newDependencies(
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
 		fullcopy.NewFactory(engine),
 		cdc.NewFactory(cdc.Dependencies{
-			Runner: engine,
-			// The container's own name for the server, joined to the port it bound:
-			// the value the backend is handed, so nothing below holds the server.
-			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcContainerHost, resticPort),
+			Runner:         engine,
+			Transport:      cdcTransport.transport,
 			RepositoryRoot: resticRoot,
-			Options:        newCDCOptions(cdcCfg, cdcHostNetwork),
+			Options:        newCDCOptions(cdcCfg),
 		}),
 	)
 	if err != nil {
@@ -256,17 +247,69 @@ func newDependencies(
 		composeService:      composeService,
 		engine:              engine,
 		composeRunner:       composeRunner,
-		resticServer:        resticServer,
+		cdcTransport:        cdcTransport,
 		service:             svc,
 		printer:             loadRunOutput(),
 	}, nil
 }
 
-// resolveCDCTransport turns backends.cdc.network_mode into the transport the
-// restic containers use: whether they join the host's network namespace, and
+// openedCDCTransport is how cdc's containers reach one tree of repositories.
+type openedCDCTransport struct {
+	transport cdc.Transport
+	// server is the tcp transport's listener; nil under stdio.
+	server *echo.Echo
+}
+
+// Close stops the tcp transport's server, if any.
+func (o openedCDCTransport) Close(ctx context.Context) { shutdownResticServer(ctx, o.server) }
+
+// openCDCTransport opens backends.cdc.transport over resticRoot: a stream server
+// under stdio, a listening server and the URL base to dial it at under tcp.
+func openCDCTransport(
+	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, resticRoot storages.Storager,
+) (openedCDCTransport, error) {
+	switch cfg.Transport {
+	case config.CDCTransportStdio:
+		return openedCDCTransport{
+			transport: cdc.StdioTransport{
+				Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot)),
+			},
+		}, nil
+	case config.CDCTransportTCP:
+		return openTCPTransport(ctx, cfg, engine, resticRoot)
+	default:
+		return openedCDCTransport{}, fmt.Errorf("unsupported backends.cdc.transport %q", cfg.Transport)
+	}
+}
+
+// openTCPTransport starts the server restic containers dial, and names the URL base
+// they dial it at.
+func openTCPTransport(
+	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, resticRoot storages.Storager,
+) (openedCDCTransport, error) {
+	hostNetwork, containerHost, err := resolveCDCNetwork(ctx, cfg, engine)
+	if err != nil {
+		return openedCDCTransport{}, err
+	}
+	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
+	port, err := rest.Serve(server, cfg.ServerAddress)
+	if err != nil {
+		return openedCDCTransport{}, fmt.Errorf("start the restic server: %w", err)
+	}
+	return openedCDCTransport{
+		transport: cdc.TCPTransport{
+			RepoURLBase: rest.RepositoryURLBase(cfg.ServerScheme, containerHost, port),
+			HostNetwork: hostNetwork,
+		},
+		server: server,
+	}, nil
+}
+
+// resolveCDCNetwork turns backends.cdc.network_mode into how the tcp
+// transport's restic containers reach the server: whether they join the host's network namespace, and
 // the host their repository URL names. Auto probes the daemon, but mispicks
 // host networking for a remote Linux daemon — bridge is the escape hatch there.
-func resolveCDCTransport(
+func resolveCDCNetwork(
 	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine,
 ) (hostNetwork bool, containerHost string, err error) {
 	switch cfg.NetworkMode {
@@ -286,14 +329,12 @@ func resolveCDCTransport(
 	}
 }
 
-// newCDCOptions translates the backends.cdc section into the backend's own
-// options, plus the transport resolveCDCTransport picked.
-func newCDCOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
+// newCDCOptions translates the backends.cdc section into the backend's own options.
+func newCDCOptions(cfg config.CDCBackend) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
-		HostNetwork: hostNetwork,
 	}
 }
 
@@ -324,22 +365,23 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 	}
 }
 
-// Close releases the restic server, the Docker engine, the progress writer and
+// Close releases the cdc transport, the Docker engine, the progress writer and
 // the store this root owns; only the store's error is returned. The progress
 // writer is closed after the engine, so a line compose left unterminated is
 // still emitted. dockerClient is not closed — the engine was built over it.
 func (d *dependencies) Close(ctx context.Context) error {
-	shutdownResticServer(ctx, d.resticServer)
+	d.cdcTransport.Close(ctx)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
 	return d.storeRoot.Close()
 }
 
-// shutdownResticServer stops serving gracefully: restic in a container reports a
-// severed connection as a repository error rather than as the shutdown it was.
-// The deadline is detached from ctx, which is routinely already cancelled by the
-// time Close runs from a defer — and a cancelled Shutdown severs at once.
+// shutdownResticServer stops server gracefully, on a deadline detached from ctx: restic
+// reads a severed connection as a repository error. A nil server is a no-op.
 func shutdownResticServer(ctx context.Context, server *echo.Echo) {
+	if server == nil {
+		return
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resticShutdownTimeout)
 	defer cancel()
 
@@ -832,38 +874,29 @@ func newComposeProjectErasers(cfg config.Config, engine *docker.Engine) []gc.Com
 	}
 }
 
-// servedRestic is one compose project's restic repositories, served to restic containers.
-type servedRestic struct {
+// openedRestic is one compose project's restic repositories, served to restic containers.
+type openedRestic struct {
 	// root is the repositories as objects, rooted at cdc.NamespaceRepos.
-	root        storages.Storager
-	repoURLBase string
-	options     cdc.Options
-	server      *echo.Echo
+	root storages.Storager
+	openedCDCTransport
 }
 
-// serveResticRepositories starts the restic server over store's repositories, as newDependencies
-// serves them to the cdc backend; shutdownResticServer stops it.
-func serveResticRepositories(
+// openResticRepositories opens the transport over store's repositories, as newDependencies
+// serves them to the cdc backend; the transport's Close releases it.
+func openResticRepositories(
 	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, store storages.Navigator,
-) (servedRestic, error) {
+) (openedRestic, error) {
 	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
 	if err != nil {
-		return servedRestic{}, fmt.Errorf("open restic repository root: %w", err)
+		return openedRestic{}, fmt.Errorf("open restic repository root: %w", err)
 	}
-	hostNetwork, containerHost, err := resolveCDCTransport(ctx, cfg, engine)
+	transport, err := openCDCTransport(ctx, cfg, engine, resticRoot)
 	if err != nil {
-		return servedRestic{}, err
+		return openedRestic{}, err
 	}
-	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
-	port, err := rest.Serve(server, cfg.ServerAddress)
-	if err != nil {
-		return servedRestic{}, fmt.Errorf("start the restic server: %w", err)
-	}
-	return servedRestic{
-		root:        resticRoot,
-		repoURLBase: rest.RepositoryURLBase(cfg.ServerScheme, containerHost, port),
-		options:     newCDCOptions(cfg, hostNetwork),
-		server:      server,
+	return openedRestic{
+		root:               resticRoot,
+		openedCDCTransport: transport,
 	}, nil
 }
 
@@ -873,25 +906,23 @@ type resticInspectorOpener struct {
 	engine *docker.Engine
 }
 
-// Open starts the restic server over store's repositories; the inspector's Close stops it.
+// Open opens the transport over store's repositories; the inspector's Close releases it.
 func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
-	served, err := serveResticRepositories(ctx, o.cfg, o.engine, store)
+	served, err := openResticRepositories(ctx, o.cfg, o.engine, store)
 	if err != nil {
 		return nil, err
 	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(o.engine, served.repoURLBase, served.options),
-		server:    served.server,
+		Inspector:          cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg)),
+		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
 
-// resticInspector is a cdc.Inspector with the server it reads through.
+// resticInspector is a cdc.Inspector with the transport it reads through.
 type resticInspector struct {
 	*cdc.Inspector
-	server *echo.Echo
+	openedCDCTransport
 }
-
-func (i resticInspector) Close(ctx context.Context) { shutdownResticServer(ctx, i.server) }
 
 // resticPrunerOpener serves one compose project's restic repositories to a cdc.Pruner.
 type resticPrunerOpener struct {
@@ -899,22 +930,20 @@ type resticPrunerOpener struct {
 	engine *docker.Engine
 }
 
-// Open starts the restic server over store's repositories; the pruner's Close stops it.
+// Open opens the transport over store's repositories; the pruner's Close releases it.
 func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
-	served, err := serveResticRepositories(ctx, o.cfg, o.engine, store)
+	served, err := openResticRepositories(ctx, o.cfg, o.engine, store)
 	if err != nil {
 		return nil, err
 	}
 	return resticPruner{
-		Pruner: cdc.NewPruner(o.engine, served.root, served.repoURLBase, served.options),
-		server: served.server,
+		Pruner:             cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg)),
+		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
 
-// resticPruner is a cdc.Pruner with the server it prunes through.
+// resticPruner is a cdc.Pruner with the transport it prunes through.
 type resticPruner struct {
 	*cdc.Pruner
-	server *echo.Echo
+	openedCDCTransport
 }
-
-func (p resticPruner) Close(ctx context.Context) { shutdownResticServer(ctx, p.server) }

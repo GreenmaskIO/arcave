@@ -86,11 +86,11 @@ type env struct {
 	ctx    context.Context
 	cli    *client.Client
 	engine *dockerclient.Engine
-	// hostNetwork is the transport the probe picked; the oracle's own restic
-	// containers must reach the server the same way the backend's do.
+	// hostNetwork is the network the probe picked for the tcp server; the
+	// oracle's own restic containers reach it that way.
 	hostNetwork bool
-	// repoURLBase is what the DI root hands a backend: the served endpoint as a
-	// container names it, with a volume's ObjectID still to append.
+	// repoURLBase is the tcp server the oracle reads through, whatever transport
+	// the backend writes over: a second, independent path to the same tree.
 	repoURLBase         string
 	composeProjectStore storages.Storager
 	// resticRoot is the tree the repositories live in — the one the server
@@ -98,13 +98,28 @@ type env struct {
 	// root wires it.
 	resticRoot storages.Storager
 	factory    *cdc.Factory
-	opts       cdc.Options
+	// transport is how the backend reaches the repositories.
+	transport cdc.Transport
+	opts      cdc.Options
 }
 
-// newEnv wires the backend as cmd/arcave does, with the compose project store in memory:
-// the restic server is started once here and lives for the whole case, exactly as
-// the DI root keeps it for the whole process.
+// The transports a backend can be wired over.
+const (
+	transportStdio = config.CDCTransportStdio
+	transportTCP   = config.CDCTransportTCP
+)
+
+// newEnv wires the backend as cmd/arcave does by default — over the exec stream —
+// with the compose project store in memory.
 func newEnv(t *testing.T, opts cdc.Options) *env {
+	t.Helper()
+
+	return newEnvOver(t, transportStdio, opts)
+}
+
+// newEnvOver wires the backend over transport. The tcp server is started either
+// way and lives for the whole case: the oracle reads through it.
+func newEnvOver(t *testing.T, transport string, opts cdc.Options) *env {
 	t.Helper()
 
 	cli := newDaemonClient(t)
@@ -127,22 +142,31 @@ func newEnv(t *testing.T, opts cdc.Options) *env {
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, server.Close()) })
 	engine := dockerclient.NewEngine(cli)
-	hostNetwork, containerHost := transport(t, engine)
-	opts.HostNetwork = hostNetwork
+	hostNetwork, containerHost := resolveNetwork(t, engine)
+	repoURLBase := rest.RepositoryURLBase("", containerHost, port)
+
+	var backendTransport cdc.Transport = cdc.StdioTransport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))}
+	if transport == transportTCP {
+		backendTransport = cdc.TCPTransport{
+			RepoURLBase: repoURLBase,
+			HostNetwork: hostNetwork,
+		}
+	}
 
 	e := &env{
 		ctx:                 ctx,
 		cli:                 cli,
 		engine:              engine,
 		hostNetwork:         hostNetwork,
-		repoURLBase:         rest.RepositoryURLBase("", containerHost, port),
+		repoURLBase:         repoURLBase,
 		composeProjectStore: composeProjectStore,
 		resticRoot:          resticRoot,
+		transport:           backendTransport,
 		opts:                opts,
 	}
 	e.factory = cdc.NewFactory(cdc.Dependencies{
 		Runner:         engine,
-		RepoURLBase:    e.repoURLBase,
+		Transport:      backendTransport,
 		RepositoryRoot: resticRoot,
 		Options:        opts,
 	})
@@ -411,9 +435,9 @@ func newDaemonClient(t *testing.T) *client.Client {
 	return cli
 }
 
-// transport resolves how this daemon's containers reach the test's server,
-// exactly as the DI root's auto mode does.
-func transport(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool, containerHost string) {
+// resolveNetwork resolves how this daemon's containers reach the test's tcp
+// server, exactly as the DI root's auto mode does.
+func resolveNetwork(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool, containerHost string) {
 	t.Helper()
 
 	shared, err := engine.HostLoopbackShared(context.Background())

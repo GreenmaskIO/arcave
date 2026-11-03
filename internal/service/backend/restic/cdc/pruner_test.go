@@ -111,7 +111,7 @@ func TestPruner_Forget(t *testing.T) {
 					}).
 					Return(tt.runErr).Once()
 			}
-			pruner := NewPruner(containers, root, demoRepoURLBase, Options{Image: demoImage})
+			pruner := NewPruner(containers, root, demoTCPTransport, Options{Image: demoImage})
 
 			// Act
 			got, err := pruner.Forget(ctx, objectID, tt.ids)

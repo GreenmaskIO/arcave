@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -121,7 +122,7 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 	compose := newImageRollbackEnv(t)
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", "arcave-progress-e2e")
-	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file)
+	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, config.SnapshotBackendFullCopy)
 	compose.up(t, 1)
 	run := func(args ...string) []byte {
 		t.Helper()

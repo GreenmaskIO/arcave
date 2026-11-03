@@ -28,11 +28,11 @@ type Pruner struct {
 	store        storages.Navigator
 }
 
-// NewPruner runs restic through runner against the repositories repoURLBase addresses; store is
+// NewPruner runs restic through runner against the repositories transport reaches; store is
 // rooted at NamespaceRepos, the same repositories as objects.
-func NewPruner(runner ContainerRunner, store storages.Navigator, repoURLBase string, options Options) *Pruner {
+func NewPruner(runner ContainerRunner, store storages.Navigator, transport Transport, options Options) *Pruner {
 	return &Pruner{
-		repositories: newRepositories(runner, repoURLBase, options),
+		repositories: newRepositories(runner, transport, options),
 		store:        store,
 	}
 }

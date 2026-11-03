@@ -770,3 +770,64 @@ The last row is the operational catch worth designing for now: with restic, *del
 does not free space*. Something has to run `prune`, it is expensive, and it wants exclusive access to
 the repository — so it belongs to a deliberate, schedulable maintenance operation, not to the tail of
 `arcave savepoint remove`.
+
+---
+
+## 13. Transports
+
+The same echo — `NewEcho` over a `model.RepositoryResolver` — answers restic over either of two
+transports; the routes, handlers and store layout are identical behind both.
+
+| Transport | Entry point | How restic reaches it |
+|---|---|---|
+| TCP | `Serve(e, address)` + `RepositoryURLBase` | `-r rest:http://<host>:<port>/<object-id>/` — a listener (loopback, kernel-picked port), dialled from the container through `host.docker.internal` or the host's network |
+| stream | `NewConnServer(ctx, repos)` + `ServeRepository(ctx, objectID, stream)` | `-r rclone:…` — restic speaks the REST protocol v2 over HTTP/2 with prior knowledge (h2c) on a child's stdin/stdout, one connection per restic run |
+
+Over a stream there is no listener and no address: one stream carries one repository, bound at serve
+time by its object id. The client always addresses the repository's root — `/config`, `/data/<id>` —
+and `ServeRepository` prefixes `/<object-id>` before the routes see the path. restic's startup probe,
+`GET /file-<random>`, matches no route and gets a `404`, which is all it waits for, journalled at debug
+like every 4xx. How the child's stdin/stdout becomes that stream — a relay, two FIFOs and a `docker exec`
+bridge — is cdc's, and its whole story is the header of `../cdc/stdio.sh`. The HTTP/2
+flow-control windows are raised to net/http's ceilings (~4 MiB per connection and stream, 1 MiB
+frames): the defaults stall every pack upload on the window.
+
+`ServeRepository` returns when the client hangs up — restic closing its end — or when its context
+ends, with the context's cause; it closes the stream either way. An object id the resolver refuses is
+returned unserved.
+
+### 13.1 One stream, one connection, many requests
+
+```
+ restic container                                     │ arcave (host)
+                                                      │
+ PID1: stdio.sh entrypoint                            │
+   └─exec restic -o rclone.program=stdio.sh           │
+          │  (HTTP/2 client, N concurrent requests)   │
+          │ stdin/stdout                              │
+   stdio.sh relay ──▶ FIFO req ──▶ stdio.sh bridge ───┼─ exec stdout ─┐
+                  ◀── FIFO resp ◀──                ◀──┼─ exec stdin ──┤
+                                                      │               │
+                                                      │  docker.Engine.RunOneShot
+                                                      │   └ execStream (io.ReadWriteCloser)
+                                                      │       │ OneShotExec.Serve
+                                                      │       ▼
+                                                      │  ConnServer.ServeRepository(ctx, objectID, stream)
+                                                      │   ├ newStreamConn(stream)   → net.Conn
+                                                      │   ├ newConnListener(conn)   → net.Listener over that one conn
+                                                      │   └ http.Server{UnencryptedHTTP2}.Serve(listener)
+                                                      │        ├ Accept #1 → conn  → h2 serverConn
+                                                      │        │     ├ stream 1: GET  /config     ┐ newRepositoryHandler:
+                                                      │        │     ├ stream 3: POST /data/ab..  ├ "/x" → "/<objectID>/x"
+                                                      │        │     └ stream 5: GET  /snapshots/ ┘   → echo → Storager
+                                                      │        └ Accept #2 → blocks on conn.Done() → net.ErrClosed → Serve returns
+```
+
+The `docker exec` stream is the only byte pipe between restic and arcave, so it is one connection, and
+restic never opens a second: its rclone backend has one child's stdin/stdout. Concurrency lives inside
+it — HTTP/2 multiplexes every request restic has in flight as its own h2 stream.
+
+`net/http` serves only a `net.Listener`, so `connListener` adapts the one conn to one: its channel is
+preloaded with the conn, so the first `Accept` returns it at once; the second blocks until the conn is
+closed — restic's hang-up, or `ServeRepository`'s context ending — and returns `net.ErrClosed`, which
+ends `Serve` and is read as a clean return.

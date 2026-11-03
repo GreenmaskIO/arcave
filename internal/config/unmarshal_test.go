@@ -285,17 +285,49 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
 				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
 				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
-				// Both ends of the loopback hop default with it, and how a container
-				// crosses it stays a probe.
+				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
+				// stdio reads none of the tcp keys, so none defaults.
+				assert.Empty(t, cfg.Backends.CDC.ServerAddress)
+				assert.Empty(t, cfg.Backends.CDC.ServerScheme)
+				assert.Empty(t, cfg.Backends.CDC.ContainerHost)
+				assert.Empty(t, cfg.Backends.CDC.NetworkMode)
+			},
+		},
+		{
+			name: "the tcp transport fills both ends of the loopback hop",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    transport: tcp\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, CDCTransportTCP, cfg.Backends.CDC.Transport)
+				// How a container crosses the hop stays a probe.
 				assert.Equal(t, DefaultCDCServerAddress, cfg.Backends.CDC.ServerAddress)
+				assert.Equal(t, DefaultCDCServerScheme, cfg.Backends.CDC.ServerScheme)
 				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
 				assert.Equal(t, NetworkModeAuto, cfg.Backends.CDC.NetworkMode)
 			},
 		},
 		{
+			// stdio never reads the tcp keys, so it does not judge them either.
+			name: "stdio leaves the tcp keys unchecked",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    transport: stdio\n    server_address: 18080\n    network_mode: vpn\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
+				assert.Equal(t, "18080", cfg.Backends.CDC.ServerAddress)
+				assert.Equal(t, "vpn", cfg.Backends.CDC.NetworkMode)
+			},
+		},
+		{
+			name:       "a transport arcave does not offer is rejected",
+			yaml:       "backends:\n  cdc:\n    transport: ssh\n",
+			wantErrMsg: "unsupported backends.cdc.transport",
+		},
+		{
 			name: "an explicit network mode is read back",
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
-				"    network_mode: host\n",
+				"    transport: tcp\n    network_mode: host\n",
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Backends.CDC)
 				assert.Equal(t, NetworkModeHost, cfg.Backends.CDC.NetworkMode)
@@ -303,13 +335,13 @@ func TestUnmarshal(t *testing.T) {
 		},
 		{
 			name:       "a network mode arcave does not offer is rejected",
-			yaml:       "backends:\n  cdc:\n    network_mode: vpn\n",
+			yaml:       "backends:\n  cdc:\n    transport: tcp\n    network_mode: vpn\n",
 			wantErrMsg: "unsupported backends.cdc.network_mode",
 		},
 		{
 			name: "the server address is read, and the container host still defaults",
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
-				"    server_address: 127.0.0.1:18080\n",
+				"    transport: tcp\n    server_address: 127.0.0.1:18080\n",
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Backends.CDC)
 				assert.Equal(t, "127.0.0.1:18080", cfg.Backends.CDC.ServerAddress)
@@ -320,12 +352,12 @@ func TestUnmarshal(t *testing.T) {
 			// The address is bound at wiring time, so a value that cannot split
 			// fails here rather than halfway through a command.
 			name:       "a server address that is not host:port is rejected",
-			yaml:       "backends:\n  cdc:\n    server_address: 18080\n",
+			yaml:       "backends:\n  cdc:\n    transport: tcp\n    server_address: 18080\n",
 			wantErrMsg: "is not a host:port address",
 		},
 		{
-			// The transport is tcp and nothing else, so the union that used to
-			// carry it is gone: its keys are unknown ones now, and named as such.
+			// The transport is backends.cdc.transport now, so the union that used to
+			// carry it is gone: its keys are unknown ones, and named as such.
 			name:       "the withdrawn data_plane block is rejected as an unknown key",
 			yaml:       "backends:\n  cdc:\n    data_plane:\n      transport: unix\n",
 			wantErrMsg: "data_plane",

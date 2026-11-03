@@ -47,10 +47,9 @@ import (
 // carrying a client: the config's own vocabulary in, the backend's own out.
 func TestNewCDCOptions(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         config.CDCBackend
-		hostNetwork bool
-		want        cdc.Options
+		name string
+		cfg  config.CDCBackend
+		want cdc.Options
 	}{
 		{
 			// A project that never names cdc carries no section, and still gets a
@@ -89,23 +88,12 @@ func TestNewCDCOptions(t *testing.T) {
 				Overwrite:   config.OverwriteIfChanged,
 			},
 		},
-		{
-			name:        "the resolved transport carries through",
-			cfg:         config.CDCWithDefaults(nil),
-			hostNetwork: true,
-			want: cdc.Options{
-				Image:       config.DefaultResticImage,
-				Overwrite:   config.OverwriteAlways,
-				Incremental: true,
-				HostNetwork: true,
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newCDCOptions(tt.cfg, tt.hostNetwork)
+			got := newCDCOptions(tt.cfg)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -640,13 +628,85 @@ func TestNewComposeProjectErasers(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-// newTestResticInspectorOpener is an opener over a fresh directory store, its containers on the
-// host network so that no daemon is asked.
+// newTestResticInspectorOpener is a tcp opener over a fresh directory store, its containers on
+// the host network so that no daemon is asked.
 func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages.Storager) {
 	t.Helper()
 	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
-	return resticInspectorOpener{cfg: config.CDCWithDefaults(&config.CDCBackend{NetworkMode: config.NetworkModeHost})}, store
+	cfg := config.CDCWithDefaults(&config.CDCBackend{
+		Transport:   config.CDCTransportTCP,
+		NetworkMode: config.NetworkModeHost,
+	})
+	return resticInspectorOpener{cfg: cfg}, store
+}
+
+// stdio serves the repositories over each container's exec stream and listens on nothing, so
+// the tcp keys are not read; tcp binds the server and names it to the containers.
+func TestOpenCDCTransport(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.CDCBackend
+		verify  func(t *testing.T, opened openedCDCTransport)
+		wantErr string
+	}{
+		{
+			// auto would ask the nil engine and the address would not bind, so
+			// either one read under stdio fails the open.
+			name: "stdio is the default and reads no tcp key",
+			cfg: config.CDCWithDefaults(&config.CDCBackend{
+				NetworkMode:   config.NetworkModeAuto,
+				ServerAddress: "192.0.2.1:1",
+			}),
+			verify: func(t *testing.T, opened openedCDCTransport) {
+				transport, ok := opened.transport.(cdc.StdioTransport)
+				require.True(t, ok, "transport = %T", opened.transport)
+				assert.NotNil(t, transport.Server)
+				assert.Nil(t, opened.server, "stdio listens on nothing")
+				assert.NotPanics(t, func() { opened.Close(context.Background()) }, "Close has nothing to stop")
+			},
+		},
+		{
+			name: "tcp",
+			cfg: config.CDCWithDefaults(&config.CDCBackend{
+				Transport:   config.CDCTransportTCP,
+				NetworkMode: config.NetworkModeHost,
+			}),
+			verify: func(t *testing.T, opened openedCDCTransport) {
+				require.NotNil(t, opened.server)
+				port := strconv.Itoa(opened.server.Listener.Addr().(*net.TCPAddr).Port)
+				assert.Equal(t, cdc.TCPTransport{
+					RepoURLBase: "rest:http://127.0.0.1:" + port,
+					HostNetwork: true,
+				}, opened.transport)
+			},
+		},
+		{
+			name:    "a transport arcave does not offer is refused",
+			cfg:     config.CDCBackend{Transport: "ssh"},
+			wantErr: `unsupported backends.cdc.transport "ssh"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := zerolog.Nop().WithContext(context.Background())
+			store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+			require.NoError(t, err)
+
+			// Act
+			opened, err := openCDCTransport(ctx, tt.cfg, nil, store)
+
+			// Assert
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { opened.Close(ctx) })
+			tt.verify(t, opened)
+		})
+	}
 }
 
 // The opener serves the compose project's repositories while the inspector is open.
@@ -737,23 +797,25 @@ func TestResticPruner_Close(t *testing.T) {
 
 // The served repositories are the compose project store's restic/ namespace, as objects too: a
 // pruner clears the locks it finds there.
-func TestServeResticRepositories(t *testing.T) {
+func TestOpenResticRepositories(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	opener, store := newTestResticInspectorOpener(t)
 	require.NoError(t, store.PutObject(ctx, "restic/volume-named-db/locks/a1", strings.NewReader("orphan")))
 
 	// Act
-	served, err := serveResticRepositories(ctx, opener.cfg, nil, store)
+	served, err := openResticRepositories(ctx, opener.cfg, nil, store)
 
 	// Assert
 	require.NoError(t, err)
-	t.Cleanup(func() { shutdownResticServer(ctx, served.server) })
+	t.Cleanup(func() { served.Close(ctx) })
 	objects, err := served.root.List(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, objects, 1)
 	assert.Equal(t, "volume-named-db/locks/a1", objects[0].Name)
-	assert.Contains(t, served.repoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
+	transport, ok := served.transport.(cdc.TCPTransport)
+	require.True(t, ok, "transport = %T", served.transport)
+	assert.Contains(t, transport.RepoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
 }
 
 // eventRecorder keeps every event it is handed.

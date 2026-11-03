@@ -91,16 +91,16 @@ type ContainerRunner interface {
 
 // repositories is what reaching any repository through restic takes.
 type repositories struct {
-	containers  ContainerRunner
-	repoURLBase string
-	options     Options
+	containers ContainerRunner
+	transport  Transport
+	options    Options
 }
 
-func newRepositories(containers ContainerRunner, repoURLBase string, options Options) repositories {
+func newRepositories(containers ContainerRunner, transport Transport, options Options) repositories {
 	return repositories{
-		containers:  containers,
-		repoURLBase: repoURLBase,
-		options:     options,
+		containers: containers,
+		transport:  transport,
+		options:    options,
 	}
 }
 
@@ -110,27 +110,23 @@ func (r repositories) newRunner(objectID string) (runner, error) {
 	if err := requireRepository(objectID); err != nil {
 		return runner{}, err
 	}
+	if r.transport == nil {
+		return runner{}, errNoTransport
+	}
 	return runner{
-		containers:  r.containers,
-		image:       r.options.Image,
-		repoURL:     newRepositoryURL(r.repoURLBase, objectID),
-		hostNetwork: r.options.HostNetwork,
+		containers: r.containers,
+		image:      r.options.Image,
+		objectID:   objectID,
+		transport:  r.transport,
 	}, nil
 }
 
-// newRepositoryURL is base plus the repository's directory, objectID. The trailing
-// slash is the restic protocol's: without it restic talks to the wrong path.
-func newRepositoryURL(base, objectID string) string {
-	return base + "/" + objectID + "/"
-}
-
-// runner executes restic commands in one-shot containers of the stock image,
-// against one repository URL.
+// runner executes restic in one-shot containers against one repository, over its transport.
 type runner struct {
-	containers  ContainerRunner
-	image       string
-	repoURL     string
-	hostNetwork bool
+	containers ContainerRunner
+	image      string
+	objectID   string
+	transport  Transport
 }
 
 // run executes one command and returns its summary line, zero-valued when the
@@ -184,18 +180,13 @@ func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error
 	stderr := &lineWriter{emit: func(line string) { readResticStderr(log, line, &fatal) }}
 
 	log.Debug().Strs("args", cmd.args).Msg("running restic")
-	err := r.containers.RunOneShot(ctx, model.OneShotSpec{
-		Image: r.image,
-		Cmd:   cmd.args,
-		Env: []string{
-			"RESTIC_REPOSITORY=" + r.repoURL,
-			"RESTIC_PASSWORD=" + resticPassword,
-		},
-		Binds:       cmd.binds,
-		HostNetwork: r.hostNetwork,
-		Stdout:      stdout,
-		Stderr:      stderr,
-	})
+	err := r.containers.RunOneShot(ctx, r.transport.newOneShotSpec(r.objectID, resticRun{
+		image:  r.image,
+		cmd:    cmd,
+		log:    log,
+		stdout: stdout,
+		stderr: stderr,
+	}))
 	// Flushed whatever the outcome: the last line of a failing run is the one
 	// worth having.
 	stderr.flush()

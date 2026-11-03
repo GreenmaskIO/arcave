@@ -48,64 +48,33 @@ func attaches(spec model.OneShotSpec) bool {
 	return spec.Stdin != nil || spec.Stdout != nil || spec.Stderr != nil
 }
 
-// runOneShotContainer drives one throwaway container through its whole
-// lifecycle: ensure the image is present, create, attach (when the spec carries
-// stdio), start, exchange, wait for exit, and always remove it. A non-zero exit
-// returns an error carrying the container's own output, the way the CLI's
-// combined output used to.
-//
-// This is the mechanism only — which image to run and what to mount it with is
-// the caller's policy: wipeMount's in this package, a backend's through
-// Engine.RunOneShot.
+// runOneShotContainer runs one throwaway container to exit, its spec.Files
+// copied in before it starts and spec.Exec served while it runs, and always
+// removes it. A non-zero exit, carrying the container's output, outranks an exec
+// that could not start.
 func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotSpec) error {
 	if err := ensureImage(ctx, api, spec.Image); err != nil {
 		return err
 	}
-
-	cfg := &container.Config{
-		Image:        spec.Image,
-		Cmd:          spec.Cmd,
-		Env:          spec.Env,
-		Labels:       newOneShotLabels(),
-		OpenStdin:    spec.Stdin != nil,
-		StdinOnce:    spec.Stdin != nil,
-		AttachStdin:  spec.Stdin != nil,
-		AttachStdout: spec.Stdout != nil,
-		AttachStderr: spec.Stderr != nil,
-		// Tty stays false even with stdio: the framed stream is what lets stdout
-		// and stderr be told apart on the way back.
-	}
-	hostCfg := &container.HostConfig{Binds: spec.Binds}
-	if spec.HostNetwork {
-		hostCfg.NetworkMode = network.NetworkHost
-	}
+	cfg, hostCfg := newOneShotConfig(spec)
 	created, err := api.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
 	if err != nil {
 		return fmt.Errorf("create %s container: %w", spec.Image, err)
 	}
-	defer func() {
-		// The removal must outlive a cancelled run: on the run's own ctx the daemon
-		// would refuse it, leaving the container running with nobody to stop it.
-		if err := api.ContainerRemove(
-			context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true},
-		); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Str("container", created.ID).Str("image", spec.Image).
-				Msg("remove one-shot container")
+	defer removeOneShotContainer(ctx, api, created.ID, spec.Image, "one-shot")
+
+	if len(spec.Files) > 0 {
+		if err := copyOneShotFiles(ctx, api, created.ID, spec.Files); err != nil {
+			return err
 		}
-	}()
+	}
 
 	// The attach happens before the start, not after: a container started first
 	// can produce — and lose — output before anyone is listening.
 	var attached types.HijackedResponse
 	if attaches(spec) {
-		attached, err = api.ContainerAttach(ctx, created.ID, container.AttachOptions{
-			Stream: true,
-			Stdin:  spec.Stdin != nil,
-			Stdout: spec.Stdout != nil,
-			Stderr: spec.Stderr != nil,
-		})
-		if err != nil {
-			return fmt.Errorf("attach to %s container: %w", spec.Image, err)
+		if attached, err = attachOneShotContainer(ctx, api, created.ID, spec); err != nil {
+			return err
 		}
 		defer attached.Close()
 		// Nothing in the copy watches ctx, so cancellation has to break the raw
@@ -118,100 +87,43 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		return fmt.Errorf("start %s container: %w", spec.Image, err)
 	}
 
+	// An exec that could not start still lets an exited container's stdio be read:
+	// its stderr is what says why it exited.
+	var execErr error
+	if spec.Exec != nil {
+		stopExec, err := serveExec(ctx, api, created.ID, spec)
+		switch {
+		case err != nil && isContainerRunning(ctx, api, created.ID):
+			// A container waiting on its exec's peer would never exit.
+			if event := zerolog.Ctx(ctx).Debug(); event.Enabled() {
+				event.Err(err).Str("container", created.ID).Str("image", spec.Image).
+					Strs("container_output", containerOutput(ctx, api, created.ID)).
+					Msg("one-shot container exec not started")
+			}
+			return fmt.Errorf("serve %s container: %w", spec.Image, err)
+		case err != nil:
+			execErr = err
+		default:
+			defer stopExec()
+		}
+	}
+
 	if attaches(spec) {
 		if err := exchange(ctx, attached, spec); err != nil {
 			return err
 		}
 	}
-
-	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		return fmt.Errorf("wait for %s container: %w", spec.Image, err)
-	case status := <-statusCh:
-		if status.StatusCode != 0 {
-			output := containerOutput(ctx, api, created.ID)
-			zerolog.Ctx(ctx).Debug().
-				Str("container", created.ID).
-				Str("image", spec.Image).
-				Strs("container_output", output).
-				Msg("one-shot container exited non-zero")
-			return &model.ContainerExitError{
-				Image:      spec.Image,
-				StatusCode: status.StatusCode,
-				Output:     output,
-			}
+	if err := waitOneShotContainer(ctx, api, created.ID, spec.Image); err != nil {
+		if execErr != nil {
+			zerolog.Ctx(ctx).Debug().Err(execErr).Str("container", created.ID).Str("image", spec.Image).
+				Msg("one-shot container exec not started")
 		}
-	}
-	return nil
-}
-
-// scratchCmd is what the scratch container runs: it exists to hold the volume,
-// so it exits at once and is only ever copied in and out of.
-var scratchCmd = []string{"true"}
-
-// withScratchContainer runs fn against a throwaway container with source mounted
-// at scratchMount, and removes it when fn returns.
-func withScratchContainer(
-	ctx context.Context, api dockerAPI, src model.MountSource, fn func(id string) error,
-) error {
-	id, remove, err := startScratchContainer(ctx, api, src)
-	if err != nil {
 		return err
 	}
-	defer remove()
-
-	return fn(id)
-}
-
-// startScratchContainer creates a container holding source at scratchMount, runs
-// it to exit, and returns its id together with its removal. The caller runs the
-// removal — a stream copied out of the container has to outlive the call that
-// opened it.
-//
-// The run to exit is not ceremony: the daemon populates a volume when the
-// container that mounts it starts, so copying before that would read a mount
-// nothing has set up yet.
-func startScratchContainer(
-	ctx context.Context, api dockerAPI, src model.MountSource,
-) (id string, remove func(), err error) {
-	if src.Source == "" {
-		return "", nil, fmt.Errorf("cannot reach a %q volume with no source", src.Type)
+	if execErr != nil {
+		return fmt.Errorf("serve %s container: %w", spec.Image, execErr)
 	}
-	if err := ensureImage(ctx, api, scratchImage); err != nil {
-		return "", nil, err
-	}
-
-	created, err := api.ContainerCreate(ctx,
-		&container.Config{Image: scratchImage, Cmd: scratchCmd, Labels: newOneShotLabels()},
-		&container.HostConfig{Binds: []string{src.Source + ":" + scratchMount}},
-		nil, nil, "")
-	if err != nil {
-		return "", nil, fmt.Errorf("create %s container: %w", scratchImage, err)
-	}
-	remove = func() {
-		// The removal must outlive a cancelled run: on the run's own ctx the daemon
-		// would refuse it, leaving the container behind with nobody to remove it.
-		if err := api.ContainerRemove(
-			context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true},
-		); err != nil {
-			zerolog.Ctx(ctx).Error().Err(err).Str("container", created.ID).Str("image", scratchImage).
-				Msg("remove scratch container")
-		}
-	}
-
-	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
-		remove()
-		return "", nil, fmt.Errorf("start %s container: %w", scratchImage, err)
-	}
-	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		remove()
-		return "", nil, fmt.Errorf("wait for %s container: %w", scratchImage, err)
-	case <-statusCh:
-	}
-	return created.ID, remove, nil
+	return nil
 }
 
 // ensureImage pulls ref unless the daemon already has it. The pull stream is
@@ -240,7 +152,97 @@ func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 	return nil
 }
 
-// exchange pumps the caller's streams through the hijacked connection while the
+// newOneShotConfig is the container and host config spec runs under.
+func newOneShotConfig(spec model.OneShotSpec) (*container.Config, *container.HostConfig) {
+	cfg := &container.Config{
+		Image:        spec.Image,
+		Entrypoint:   spec.Entrypoint,
+		Cmd:          spec.Cmd,
+		Env:          spec.Env,
+		Labels:       newOneShotLabels(),
+		OpenStdin:    spec.Stdin != nil,
+		StdinOnce:    spec.Stdin != nil,
+		AttachStdin:  spec.Stdin != nil,
+		AttachStdout: spec.Stdout != nil,
+		AttachStderr: spec.Stderr != nil,
+		// Tty stays false even with stdio: the framed stream is what lets stdout
+		// and stderr be told apart on the way back.
+	}
+	hostCfg := &container.HostConfig{Binds: spec.Binds}
+	if spec.HostNetwork {
+		hostCfg.NetworkMode = network.NetworkHost
+	}
+	return cfg, hostCfg
+}
+
+// removeOneShotContainer force-removes containerID, logging a failure under its
+// role. The removal outlives a cancelled run: on the run's own ctx the daemon
+// would refuse it, leaving the container behind with nobody to remove it.
+func removeOneShotContainer(ctx context.Context, api dockerAPI, containerID, image, role string) {
+	if err := api.ContainerRemove(
+		context.WithoutCancel(ctx), containerID, container.RemoveOptions{Force: true},
+	); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("container", containerID).Str("image", image).
+			Msgf("remove %s container", role)
+	}
+}
+
+// attachOneShotContainer attaches to the stdio spec exchanges with containerID.
+func attachOneShotContainer(
+	ctx context.Context, api dockerAPI, containerID string, spec model.OneShotSpec,
+) (types.HijackedResponse, error) {
+	attached, err := api.ContainerAttach(ctx, containerID, container.AttachOptions{
+		Stream: true,
+		Stdin:  spec.Stdin != nil,
+		Stdout: spec.Stdout != nil,
+		Stderr: spec.Stderr != nil,
+	})
+	if err != nil {
+		return types.HijackedResponse{}, fmt.Errorf("attach to %s container: %w", spec.Image, err)
+	}
+	return attached, nil
+}
+
+// serveExec starts spec.Exec and runs Exec.Serve on its stream in the background.
+// The returned stop closes the stream and waits for Serve, logging its error.
+func serveExec(ctx context.Context, api dockerAPI, containerID string, spec model.OneShotSpec) (func(), error) {
+	stream, err := openExecStream(ctx, api, containerID, *spec.Exec)
+	if err != nil {
+		return nil, err
+	}
+
+	served := make(chan error, 1)
+	go func() { served <- spec.Exec.Serve(ctx, stream) }()
+	// Serve may not watch ctx; closing the stream ends it either way.
+	stopOnCancel := context.AfterFunc(ctx, stream.release)
+
+	return func() {
+		stopOnCancel()
+		stream.release()
+		err := <-served
+		if err == nil {
+			return
+		}
+		level := zerolog.WarnLevel
+		if ctx.Err() != nil {
+			level = zerolog.DebugLevel
+		}
+		zerolog.Ctx(ctx).WithLevel(level).Err(err).Str("container", containerID).Str("image", spec.Image).
+			Msg("serve one-shot container exec")
+	}, nil
+}
+
+// isContainerRunning reports whether containerID still runs; a container the
+// daemon cannot inspect counts as running, so the caller does not wait on it.
+func isContainerRunning(ctx context.Context, api dockerAPI, containerID string) bool {
+	inspect, err := api.ContainerInspect(ctx, containerID)
+	if err != nil || inspect.ContainerJSONBase == nil || inspect.State == nil {
+		return true
+	}
+	return inspect.State.Running
+}
+
+// exchange pumps the caller's streams through the attached connection while the
 // container runs, and returns once both directions are done.
 //
 // The writer and the reader are concurrent on purpose: filling stdin before
@@ -308,6 +310,31 @@ func (rr *recordingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// waitOneShotContainer waits for containerID to exit; a non-zero exit is a
+// model.ContainerExitError carrying the container's output.
+func waitOneShotContainer(ctx context.Context, api dockerAPI, containerID, image string) error {
+	statusCh, errCh := api.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("wait for %s container: %w", image, err)
+	case status := <-statusCh:
+		if status.StatusCode == 0 {
+			return nil
+		}
+		output := containerOutput(ctx, api, containerID)
+		zerolog.Ctx(ctx).Debug().
+			Str("container", containerID).
+			Str("image", image).
+			Strs("container_output", output).
+			Msg("one-shot container exited non-zero")
+		return &model.ContainerExitError{
+			Image:      image,
+			StatusCode: status.StatusCode,
+			Output:     output,
+		}
+	}
+}
+
 // maxContainerOutputBytes bounds how much of a failed container's log is read
 // back into an error: enough to diagnose the failure, not enough to flood a JSON
 // result or the context of an agent reading an MCP tool result. Tail already
@@ -350,4 +377,67 @@ func containerOutput(ctx context.Context, api dockerAPI, containerID string) []s
 		return nil
 	}
 	return strings.Split(trimmed, "\n")
+}
+
+// volumeHolderCmd is what the volume holder runs: it exists to hold the volume,
+// so it exits at once and is only ever copied in and out of.
+var volumeHolderCmd = []string{"true"}
+
+// withVolumeHolder runs fn against a volume holder with source mounted
+// at volumeHolderMount, and removes it when fn returns.
+func withVolumeHolder(
+	ctx context.Context, api dockerAPI, src model.MountSource, fn func(id string) error,
+) error {
+	id, err := startVolumeHolder(ctx, api, src)
+	if err != nil {
+		return err
+	}
+	defer removeVolumeHolder(ctx, api, id)
+
+	return fn(id)
+}
+
+// startVolumeHolder creates a volume holder — a container that only holds source
+// at volumeHolderMount for the archive API to reach — runs it to exit, and
+// returns its id. The caller removes it with removeVolumeHolder: a stream copied
+// out of the container has to outlive the call that opened it.
+//
+// The run to exit is not ceremony: the daemon populates a volume when the
+// container that mounts it starts, so copying before that would read a mount
+// nothing has set up yet.
+func startVolumeHolder(
+	ctx context.Context, api dockerAPI, src model.MountSource,
+) (string, error) {
+	if src.Source == "" {
+		return "", fmt.Errorf("cannot reach a %q volume with no source", src.Type)
+	}
+	if err := ensureImage(ctx, api, volumeToolsImage); err != nil {
+		return "", err
+	}
+
+	created, err := api.ContainerCreate(ctx,
+		&container.Config{Image: volumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
+		&container.HostConfig{Binds: []string{src.Source + ":" + volumeHolderMount}},
+		nil, nil, "")
+	if err != nil {
+		return "", fmt.Errorf("create %s container: %w", volumeToolsImage, err)
+	}
+
+	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		removeVolumeHolder(ctx, api, created.ID)
+		return "", fmt.Errorf("start %s container: %w", volumeToolsImage, err)
+	}
+	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		removeVolumeHolder(ctx, api, created.ID)
+		return "", fmt.Errorf("wait for %s container: %w", volumeToolsImage, err)
+	case <-statusCh:
+	}
+	return created.ID, nil
+}
+
+// removeVolumeHolder force-removes a volume holder, logging a failure.
+func removeVolumeHolder(ctx context.Context, api dockerAPI, containerID string) {
+	removeOneShotContainer(ctx, api, containerID, volumeToolsImage, "volume holder")
 }

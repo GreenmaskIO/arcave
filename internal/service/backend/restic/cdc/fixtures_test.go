@@ -47,6 +47,12 @@ const (
 	demoImage = "restic/restic:0.19.1"
 )
 
+// demoTCPTransport reaches the repositories over the TCP server.
+var demoTCPTransport = TCPTransport{RepoURLBase: demoRepoURLBase}
+
+// demoHostTCPTransport is demoTCPTransport with its containers on the host network.
+var demoHostTCPTransport = TCPTransport{RepoURLBase: demoRepoURLBase, HostNetwork: true}
+
 // The restic ndjson these tests feed back, taken from the shape a real run
 // prints: progress lines, then one summary.
 const (
@@ -110,6 +116,13 @@ type harness struct {
 func newHarness(t *testing.T, opts Options) *harness {
 	t.Helper()
 
+	return newHarnessOver(t, demoTCPTransport, opts)
+}
+
+// newHarnessOver is newHarness over transport.
+func newHarnessOver(t *testing.T, transport Transport, opts Options) *harness {
+	t.Helper()
+
 	root := newStore(t)
 	repo, err := root.SubStorage(demoObjectID, true)
 	require.NoError(t, err)
@@ -119,7 +132,7 @@ func newHarness(t *testing.T, opts Options) *harness {
 
 	snapshotter, err := NewFactory(Dependencies{
 		Runner:         runner,
-		RepoURLBase:    demoRepoURLBase,
+		Transport:      transport,
 		RepositoryRoot: root,
 		Options:        opts,
 	}).New(model.BackendSpec{Volume: demoVolume()})

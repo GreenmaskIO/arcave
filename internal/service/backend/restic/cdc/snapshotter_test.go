@@ -138,7 +138,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 		assert.ElementsMatch(t,
 			[]string{"RESTIC_REPOSITORY=" + demoRepoURL, "RESTIC_PASSWORD=" + resticPassword},
 			spec.Env, "run %d", i)
-		assert.False(t, spec.HostNetwork, "run %d: the default transport is the bridge", i)
+		assert.False(t, spec.HostNetwork, "run %d: tcp keeps off the host network unless told", i)
 	}
 	h.runner.AssertExpectations(t)
 }
@@ -146,9 +146,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 // The transport the DI root resolved reaches every restic container.
 func TestSnapshotter_Snapshot_HostNetwork(t *testing.T) {
 	// Arrange
-	opts := defaultOptions()
-	opts.HostNetwork = true
-	h := newHarness(t, opts)
+	h := newHarnessOver(t, demoHostTCPTransport, defaultOptions())
 	h.runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
 	h.runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
 		Run(respondWith(backupSummaryLine)).Return(nil).Once()
@@ -224,7 +222,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 		Run(respondWith(backupSummaryLine)).Return(nil).Once()
 
 	snapshotter, err := NewFactory(Dependencies{
-		Runner: runner, RepoURLBase: demoRepoURLBase,
+		Runner: runner, Transport: demoTCPTransport,
 		RepositoryRoot: newStore(t), Options: defaultOptions(),
 	}).New(model.BackendSpec{Volume: vol})
 	require.NoError(t, err)
@@ -252,7 +250,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 // report it, restic would simply talk to the wrong path.
 func TestSnapshotter_newRunner(t *testing.T) {
 	// Arrange
-	backend, err := NewFactory(Dependencies{RepoURLBase: demoRepoURLBase, RepositoryRoot: newStore(t)}).
+	backend, err := NewFactory(Dependencies{Transport: demoTCPTransport, RepositoryRoot: newStore(t)}).
 		New(model.BackendSpec{Volume: demoVolume()})
 	require.NoError(t, err)
 	snapshotter, ok := backend.(*Snapshotter)
@@ -263,7 +261,9 @@ func TestSnapshotter_newRunner(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	got := resticRunner.repoURL
+	transport, ok := resticRunner.transport.(TCPTransport)
+	require.True(t, ok)
+	got := transport.newRepositoryURL(resticRunner.objectID)
 	assert.Equal(t, demoRepoURL, got)
 	parsed, err := url.Parse(strings.TrimPrefix(got, "rest:"))
 	require.NoError(t, err)
