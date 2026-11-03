@@ -84,9 +84,32 @@ var storageServers = []struct {
 	{name: config.StorageTypeSSH, start: startSSHStorage},
 }
 
+// storageE2EBackend is one snapshot backend a storage server is driven through.
+type storageE2EBackend struct {
+	name    string
+	backend string
+	// compression is backends.fullcopy.compression; empty keeps the default, zstd.
+	compression string
+}
+
 // storageE2EBackends are the snapshot backends each storage server is driven
-// through: cdc runs restic over its default stdio transport, into the same store.
-var storageE2EBackends = []string{config.SnapshotBackendFullCopy, config.SnapshotBackendCDC}
+// through: fullcopy under its default zstd and uncompressed, and cdc over its
+// default stdio transport, into the same store.
+var storageE2EBackends = []storageE2EBackend{
+	{
+		name:    config.SnapshotBackendFullCopy,
+		backend: config.SnapshotBackendFullCopy,
+	},
+	{
+		name:        config.SnapshotBackendFullCopy + "-" + config.CompressionNone,
+		backend:     config.SnapshotBackendFullCopy,
+		compression: config.CompressionNone,
+	},
+	{
+		name:    config.SnapshotBackendCDC,
+		backend: config.SnapshotBackendCDC,
+	},
+}
 
 // TestStorageE2E_CoreWorkflow drives the built binary through the core workflow on
 // every storage backend and snapshot backend: create, list, rollback, fork, a
@@ -100,7 +123,7 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 
 			target := server.start(t)
 			for _, backend := range storageE2EBackends {
-				t.Run(backend, func(t *testing.T) {
+				t.Run(backend.name, func(t *testing.T) {
 					t.Parallel()
 					runStorageE2E(t, target, backend)
 				})
@@ -111,9 +134,9 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 
 // runStorageE2E is one row of TestStorageE2E_CoreWorkflow: its own arcave project,
 // so its sessions are its own, on a store it shares with the other rows.
-func runStorageE2E(t *testing.T, target storageTarget, backend string) {
+func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend) {
 	// Arrange
-	arcaveProject := storageE2EArcaveProject + "-" + backend
+	arcaveProject := storageE2EArcaveProject + "-" + backend.name
 	compose := newImageRollbackEnv(t)
 	projectRoot := t.TempDir()
 	run := func(args ...string) []byte {
@@ -121,7 +144,7 @@ func runStorageE2E(t *testing.T, target storageTarget, backend string) {
 		return runArcave(t, projectRoot, target.env, append([]string{"-p", compose.project}, args...)...)
 	}
 	runArcave(t, projectRoot, target.env, "init", "--name", arcaveProject)
-	writeStorageConfig(t, projectRoot, target.file, backend)
+	writeStorageConfigWith(t, projectRoot, target.file, backend)
 	compose.up(t, 1)
 	compose.write(t, compose.replicas(t)[0], "v1")
 
@@ -143,8 +166,11 @@ func runStorageE2E(t *testing.T, target storageTarget, backend string) {
 	afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
 
 	// Assert
-	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendKind(backend)}, statKinds(sp1),
+	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendKind(backend.backend)}, statKinds(sp1),
 		"the volume went through the configured backend")
+	if backend.backend == config.SnapshotBackendFullCopy {
+		assert.Equal(t, []any{wantCompression(backend)}, statCompressions(sp1), "the record names the configured format")
+	}
 	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(listed), "newest first by default")
 	assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(ascending))
 	assert.Equal(t, sp1.ID, rolledBack.RolledBackTo.ID)
@@ -314,13 +340,26 @@ func runArcave(t *testing.T, projectRoot string, env []string, args ...string) [
 func writeStorageConfig(t *testing.T, projectRoot string, storage config.Storage, backend string) {
 	t.Helper()
 
+	writeStorageConfigWith(t, projectRoot, storage, storageE2EBackend{
+		name:    backend,
+		backend: backend,
+	})
+}
+
+// writeStorageConfigWith is writeStorageConfig for a row that also names fullcopy's compression.
+func writeStorageConfigWith(t *testing.T, projectRoot string, storage config.Storage, backend storageE2EBackend) {
+	t.Helper()
+
 	file := config.Path(projectRoot)
 	data, err := os.ReadFile(file)
 	require.NoError(t, err)
 	var cfg config.Config
 	require.NoError(t, yaml.Unmarshal(data, &cfg))
 	cfg.Storage = storage
-	cfg.Snapshot.Backend = backend
+	cfg.Snapshot.Backend = backend.backend
+	if backend.compression != "" {
+		cfg.Backends.FullCopy.Compression = backend.compression
+	}
 	data, err = yaml.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(file, data, 0o600))
@@ -360,6 +399,24 @@ func savepointNames(savepoints []model.Savepoint) []string {
 		names[i] = savepoint.Name
 	}
 	return names
+}
+
+// wantCompression is the format a fullcopy row's record names.
+func wantCompression(backend storageE2EBackend) string {
+	if backend.compression == "" {
+		return config.CompressionZstd
+	}
+	return backend.compression
+}
+
+// statCompressions is the format each fullcopy stat's payload names, as decoded from JSON.
+func statCompressions(savepoint model.Savepoint) []any {
+	compressions := make([]any, len(savepoint.Stats))
+	for i, stat := range savepoint.Stats {
+		payload, _ := stat.Payload.(map[string]any)
+		compressions[i] = payload["compression"]
+	}
+	return compressions
 }
 
 func statKinds(savepoint model.Savepoint) []model.SnapshotBackendKind {

@@ -48,7 +48,7 @@ A session directory without `session.json` is not a session: no `--session` find
     project.yaml                               the compose spec the project was captured under
     heartbeat.json                             the state of the capture that wrote the tree
     volume-named-myapp_pgdata/
-      data.tar                                 a fullcopy capture of one volume
+      data.tar.zst                             a fullcopy capture of one volume, zstd; data.tar under compression: none
     images/app/replicas/1/                     one container's writable layer, dedupcopy
       index.json                               verbatim from the image archive
       manifest.json                            verbatim from the image archive

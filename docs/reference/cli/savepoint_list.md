@@ -47,7 +47,7 @@ It is hidden because one normally exists only *while* a rollback runs. One that 
 
 ```text title="stdout"
 NAME              ID                                    CREATED           VOLUMES  LAYERS  STORED  NOT COVERED
-before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       210 MB  1
+before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       173 MB  1
 ```
 
 </TabItem>
@@ -81,8 +81,8 @@ With `--include-safety-snapshots`, a leftover safety snapshot is listed among th
 
 ```text title="stdout"
 NAME                                                           ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
-safety-snapshot-019e843e-1650-7000-8000-000000000000 (safety)  019e8491-04c8-7000-8000-000000000000  2026-06-01 21:22  1        2       40.8 MB  1
-before-migration                                               019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       210 MB   1
+safety-snapshot-019e843e-1650-7000-8000-000000000000 (safety)  019e8491-04c8-7000-8000-000000000000  2026-06-01 21:22  1        2       3.9 MB   1
+before-migration                                               019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       173 MB   1
 ```
 
 </TabItem>
