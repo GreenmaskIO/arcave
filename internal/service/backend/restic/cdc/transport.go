@@ -16,9 +16,10 @@ package cdc
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"io"
-	"slices"
+	"io/fs"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -26,37 +27,22 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// makeFIFOs makes the bridge's two FIFOs, or finds them made: restic's entrypoint
-// and the bridge both run it, in whichever order the daemon starts them, and
-// opening a FIFO blocks until its peer opens it, so neither waits on the other.
-const makeFIFOs = `mkdir -p /run/arcave
-mkfifo /run/arcave/req /run/arcave/resp 2>/dev/null || true
-[ -p /run/arcave/req ] && [ -p /run/arcave/resp ]`
+// The stdio transport's layout in every restic container. stdioDir is
+// world-writable and sticky, like /tmp, so the FIFOs stdio.sh makes in it can be
+// made by whichever user the image runs restic as.
+const (
+	stdioDir        = "/run/arcave"
+	stdioScriptPath = stdioDir + "/stdio.sh"
+	// stdioRepository is RESTIC_REPOSITORY under stdio: restic's rclone backend,
+	// whose remote name stdio.sh ignores.
+	stdioRepository = "rclone:arcave"
+)
 
-// stdioEntrypoint is restic's PID1 under stdio: it makes the bridge's FIFOs, writes the relay
-// (one printf argument per line, past restic's argument splitter) and execs restic.
-const stdioEntrypoint = "set -e\n" + makeFIFOs + `
-printf '%s\n' '#!/bin/sh' 'cat /run/arcave/resp 2>/dev/null &' 'exec cat > /run/arcave/req' > /run/arcave/relay
-chmod +x /run/arcave/relay
-exec restic "$@"`
-
-// stdioRepository is RESTIC_REPOSITORY under the stdio transport; the remote
-// name is an ignored argument of the relay.
-const stdioRepository = "rclone:arcave"
-
-// stdioEntrypointArgs runs stdioEntrypoint with "restic" as its $0, so the
-// container's Cmd becomes its "$@".
-var stdioEntrypointArgs = []string{"sh", "-c", stdioEntrypoint, "restic"}
-
-// stdioArgs point restic's rclone backend at the relay; global flags, so they
-// precede the subcommand.
-var stdioArgs = []string{"-o", "rclone.program=/run/arcave/relay"}
-
-// bridgeCmd is the exec beside restic: the relay's requests out on its stdout,
-// the server's responses in on its stdin.
-var bridgeCmd = []string{"sh", "-c", "set -e\n" + makeFIFOs + `
-cat /run/arcave/req &
-exec cat > /run/arcave/resp`}
+// stdioScript is the shell half of the stdio transport; its header says what
+// runs where, and when.
+//
+//go:embed stdio.sh
+var stdioScript []byte
 
 var errNoTransport = errors.New("cdc: no transport to the repositories")
 
@@ -82,7 +68,8 @@ type resticRun struct {
 }
 
 // StdioTransport serves each repository over a docker exec stream beside restic
-// (backends.cdc.transport: stdio).
+// (backends.cdc.transport: stdio): restic runs behind stdio.sh, copied into its
+// container, and Server serves the stream of the script's bridge.
 type StdioTransport struct {
 	Server RepositoryServer
 }
@@ -90,8 +77,9 @@ type StdioTransport struct {
 func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
 	return model.OneShotSpec{
 		Image:      run.image,
-		Entrypoint: stdioEntrypointArgs,
-		Cmd:        append(slices.Clone(stdioArgs), run.cmd.args...),
+		Files:      newStdioFiles(),
+		Entrypoint: []string{stdioScriptPath, "entrypoint"},
+		Cmd:        run.cmd.args,
 		Env: []string{
 			"RESTIC_REPOSITORY=" + stdioRepository,
 			"RESTIC_PASSWORD=" + resticPassword,
@@ -100,12 +88,20 @@ func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.One
 		Stdout: run.stdout,
 		Stderr: run.stderr,
 		Exec: &model.OneShotExec{
-			Cmd:    bridgeCmd,
+			Cmd:    []string{stdioScriptPath, "bridge"},
 			Stderr: bridgeLog{log: run.log},
 			Serve: func(ctx context.Context, stream io.ReadWriteCloser) error {
 				return s.Server.ServeRepository(ctx, objectID, stream)
 			},
 		},
+	}
+}
+
+// newStdioFiles is what every stdio container is created with: stdio.sh in its directory.
+func newStdioFiles() []model.OneShotFile {
+	return []model.OneShotFile{
+		{Path: stdioDir, Mode: fs.ModeDir | fs.ModeSticky | 0o777},
+		{Path: stdioScriptPath, Mode: 0o755, Content: stdioScript},
 	}
 }
 

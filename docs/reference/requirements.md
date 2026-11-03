@@ -69,7 +69,7 @@ Every command but `init` needs `.arcave/config.yaml` under the working directory
 
 [`snapshot.backend: cdc`](configuration.md#snapshot) pulls and runs `restic/restic:0.19.1` in one-shot containers, so the daemon needs to be able to pull it. By default arcave reaches those containers' repositories over the Docker API itself, so nothing else is needed — a remote `DOCKER_HOST` included. That default is verified on Docker Engine and Docker Desktop; for other engines see the [support matrix](#container-engines). `backends.cdc.transport: tcp` is the alternative wherever the default does not run.
 
-A custom `backends.cdc.image` needs a shell under the default transport — `sh`, `mkdir`, `mkfifo`, `printf`, `chmod`, `cat` and a writable `/run`; the stock image has them. See [`backends.cdc`](configuration.md#backendscdc).
+A custom `backends.cdc.image` needs a shell under the default transport — `/bin/sh`, `mkfifo` and `cat`; the stock image has them. See [`backends.cdc`](configuration.md#backendscdc).
 
 Under `transport: tcp` the containers need to reach a loopback port on your host instead. `network_mode: auto` works that out per platform; a remote or rootless daemon needs `network_mode: bridge` and a `container_host` that resolves from inside a container.
 

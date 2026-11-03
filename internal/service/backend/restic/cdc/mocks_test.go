@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"sync"
 
 	"github.com/stretchr/testify/mock"
@@ -63,18 +62,10 @@ func (m *mockRunner) Specs() []model.OneShotSpec {
 	return append([]model.OneShotSpec(nil), m.specs...)
 }
 
-// matchRestic matches a one-shot run by its restic subcommand, skipping the stdio
-// transport's global flags before it.
+// matchRestic matches a one-shot run by its restic subcommand.
 func matchRestic(verb string) any {
 	return mock.MatchedBy(func(spec model.OneShotSpec) bool {
-		args := spec.Cmd
-		if spec.Exec != nil {
-			if len(args) < len(stdioArgs) || !slices.Equal(args[:len(stdioArgs)], stdioArgs) {
-				return false
-			}
-			args = args[len(stdioArgs):]
-		}
-		return len(args) > 0 && args[0] == verb
+		return len(spec.Cmd) > 0 && spec.Cmd[0] == verb
 	})
 }
 

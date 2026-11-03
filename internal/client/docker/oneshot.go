@@ -48,9 +48,10 @@ func attaches(spec model.OneShotSpec) bool {
 	return spec.Stdin != nil || spec.Stdout != nil || spec.Stderr != nil
 }
 
-// runOneShotContainer runs one throwaway container to exit, serving spec.Exec
-// while it runs, and always removes it. A non-zero exit, carrying the container's
-// output, outranks an exec that could not start.
+// runOneShotContainer runs one throwaway container to exit, its spec.Files
+// copied in before it starts and spec.Exec served while it runs, and always
+// removes it. A non-zero exit, carrying the container's output, outranks an exec
+// that could not start.
 func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotSpec) error {
 	if err := ensureImage(ctx, api, spec.Image); err != nil {
 		return err
@@ -88,6 +89,12 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 				Msg("remove one-shot container")
 		}
 	}()
+
+	if len(spec.Files) > 0 {
+		if err := copyOneShotFiles(ctx, api, created.ID, spec.Files); err != nil {
+			return err
+		}
+	}
 
 	// The attach happens before the start, not after: a container started first
 	// can produce — and lose — output before anyone is listening.

@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -31,8 +33,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// A stdio run is restic behind the FIFO entrypoint, its repository the relay,
-// with the bridge exec beside it serving the runner's own repository.
+// A stdio run is restic behind stdio.sh, copied in with the container, its
+// repository the script's relay, with its bridge exec serving the runner's own repository.
 func TestRunner_run_Stdio(t *testing.T) {
 	// Arrange
 	served := errors.New("served")
@@ -60,14 +62,18 @@ func TestRunner_run_Stdio(t *testing.T) {
 	require.Len(t, specs, 1)
 	spec := specs[0]
 	assert.Equal(t, demoImage, spec.Image)
-	assert.Equal(t, []string{"sh", "-c", stdioEntrypoint, "restic"}, spec.Entrypoint)
-	assert.Equal(t, []string{"-o", "rclone.program=/run/arcave/relay", "backup", "/m", "--json"}, spec.Cmd)
+	assert.Equal(t, []string{"/run/arcave/stdio.sh", "entrypoint"}, spec.Entrypoint)
+	assert.Equal(t, []string{"backup", "/m", "--json"}, spec.Cmd)
+	assert.Equal(t, []model.OneShotFile{
+		{Path: "/run/arcave", Mode: fs.ModeDir | fs.ModeSticky | 0o777},
+		{Path: "/run/arcave/stdio.sh", Mode: 0o755, Content: stdioScript},
+	}, spec.Files)
 	assert.ElementsMatch(t,
 		[]string{"RESTIC_REPOSITORY=rclone:arcave", "RESTIC_PASSWORD=" + resticPassword}, spec.Env)
 	assert.Equal(t, []string{"vol:/m:ro"}, spec.Binds)
 	assert.False(t, spec.HostNetwork)
 	require.NotNil(t, spec.Exec)
-	assert.Equal(t, bridgeCmd, spec.Exec.Cmd)
+	assert.Equal(t, []string{"/run/arcave/stdio.sh", "bridge"}, spec.Exec.Cmd)
 	assert.ErrorIs(t, serveErr, served, "Serve must be the server's, over this runner's repository")
 	assert.Contains(t, logs.String(), "cat: broken pipe", "the bridge's last stderr line, unterminated, must reach the debug log")
 	containers.AssertExpectations(t)
@@ -145,15 +151,16 @@ func TestPruner_Forget_Stdio(t *testing.T) {
 func matchStdio(args []string) any {
 	return mock.MatchedBy(func(spec model.OneShotSpec) bool {
 		return isStdioSpec(spec) && spec.Image == demoImage &&
-			slices.Equal(spec.Cmd, append(slices.Clone(stdioArgs), args...))
+			slices.Equal(spec.Cmd, args)
 	})
 }
 
 // isStdioSpec reports whether spec reaches its repository over the exec bridge.
 func isStdioSpec(spec model.OneShotSpec) bool {
 	return spec.Exec != nil &&
-		slices.Equal(spec.Exec.Cmd, bridgeCmd) &&
-		slices.Equal(spec.Entrypoint, stdioEntrypointArgs) &&
+		slices.Equal(spec.Exec.Cmd, []string{stdioScriptPath, "bridge"}) &&
+		slices.Equal(spec.Entrypoint, []string{stdioScriptPath, "entrypoint"}) &&
+		reflect.DeepEqual(spec.Files, newStdioFiles()) &&
 		slices.Contains(spec.Env, "RESTIC_REPOSITORY="+stdioRepository) &&
 		!spec.HostNetwork
 }

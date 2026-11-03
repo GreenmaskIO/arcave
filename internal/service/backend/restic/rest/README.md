@@ -786,7 +786,9 @@ transports; the routes, handlers and store layout are identical behind both.
 Over a stream there is no listener and no address: one stream carries one repository, bound at serve
 time by its object id. The client always addresses the repository's root — `/config`, `/data/<id>` —
 and `ServeRepository` prefixes `/<object-id>` before the routes see the path. restic's startup probe,
-`GET /file-<random>`, matches no route and gets a `404`, which is all it waits for. The HTTP/2
+`GET /file-<random>`, matches no route and gets a `404`, which is all it waits for, journalled at debug
+like every 4xx. How the child's stdin/stdout becomes that stream — a relay, two FIFOs and a `docker exec`
+bridge — is cdc's, and its whole story is the header of `../cdc/stdio.sh`. The HTTP/2
 flow-control windows are raised to net/http's ceilings (~4 MiB per connection and stream, 1 MiB
 frames): the defaults stall every pack upload on the window.
 

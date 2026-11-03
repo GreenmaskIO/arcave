@@ -328,7 +328,7 @@ For a remote daemon, `container_host` has to be a name that resolves **from insi
 
 ## A custom restic image fails every `cdc` command
 
-Under the default `backends.cdc.transport: stdio`, arcave starts restic behind a small shell entrypoint, so the image in `backends.cdc.image` has to ship a busybox-style `sh`, `mkfifo` and `cat`, as the stock `restic/restic` image does. One without `sh` fails when its container starts; one without `mkfifo` exits with status 127, `mkfifo: not found` among its output.
+Under the default `backends.cdc.transport: stdio`, arcave copies a small shell script into each restic container and starts restic behind it, so the image in `backends.cdc.image` has to ship `/bin/sh`, `mkfifo` and `cat`, as the stock `restic/restic` image does. One without `/bin/sh` fails when its container starts, with `exec /run/arcave/stdio.sh: no such file or directory`; one without `mkfifo` exits with status 1 and `arcave-stdio: cannot make the FIFOs` among its output.
 
 Build the image on one that carries a shell, or set `transport: tcp`, which runs the image's own entrypoint.
 
