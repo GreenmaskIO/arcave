@@ -16,11 +16,13 @@ package test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -585,15 +587,24 @@ func newDaemonClient(t *testing.T) *client.Client {
 
 // cdcTransport resolves how this daemon's containers reach the test's restic
 // server, exactly as the DI root's auto mode does.
+// ARCAVE_TEST_NETWORK_MODE (host, bridge) and ARCAVE_TEST_CONTAINER_HOST override
+// it, as network_mode and container_host do the binary's.
 func cdcTransport(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool, containerHost string) {
 	t.Helper()
 
+	containerHost = cmp.Or(os.Getenv("ARCAVE_TEST_CONTAINER_HOST"), "host.docker.internal")
+	switch os.Getenv("ARCAVE_TEST_NETWORK_MODE") {
+	case "host":
+		return true, "127.0.0.1"
+	case "bridge":
+		return false, containerHost
+	}
 	shared, err := engine.HostLoopbackShared(context.Background())
 	require.NoError(t, err)
 	if shared {
 		return true, "127.0.0.1"
 	}
-	return false, "host.docker.internal"
+	return false, containerHost
 }
 
 // randomSuffix keeps concurrent copies of this test apart on one daemon.

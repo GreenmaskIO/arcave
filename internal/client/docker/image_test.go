@@ -59,6 +59,23 @@ func TestEngine_CommitContainer(t *testing.T) {
 	api.AssertExpectations(t)
 }
 
+func TestEngine_CommitContainer_PrefixesABareDigest(t *testing.T) {
+	// Arrange
+	const bare = "ebf716eb4137a315c21ae58522ef7b138f6b91f15585e3e2f694c5af324afbe9"
+	api := &mockAPI{}
+	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false, Changes: []string{}}).
+		Return(container.CommitResponse{ID: bare}, nil).Once()
+	e := &Engine{api: api}
+
+	// Act
+	id, err := e.CommitContainer(context.Background(), "c0ffee", "", nil)
+
+	// Assert: Podman answers with the hex alone.
+	require.NoError(t, err)
+	assert.Equal(t, model.ImageDigestID("sha256:"+bare), id)
+	api.AssertExpectations(t)
+}
+
 func TestEngine_CommitContainer_RefusesAnAnswerThatIsNotADigest(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}

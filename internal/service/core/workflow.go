@@ -105,7 +105,7 @@ func (s *Service) prepare(ctx context.Context, waitTimeout time.Duration) (worki
 	if err != nil {
 		return workingSet{}, err
 	}
-	if err := requireDaemon(ctx, introspection.Daemon, s.minDaemonMajor); err != nil {
+	if err := requireDaemon(ctx, introspection.Daemon, introspection.DaemonVersion, s.minDaemonMajor); err != nil {
 		return workingSet{}, err
 	}
 	// Before anything else: a bad label fails while the project is still running.
