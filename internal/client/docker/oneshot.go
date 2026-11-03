@@ -305,7 +305,7 @@ func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 	return nil
 }
 
-// exchange pumps the caller's streams through the hijacked connection while the
+// exchange pumps the caller's streams through the attached connection while the
 // container runs, and returns once both directions are done.
 //
 // The writer and the reader are concurrent on purpose: filling stdin before

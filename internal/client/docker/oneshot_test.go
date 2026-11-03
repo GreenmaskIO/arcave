@@ -307,7 +307,7 @@ func TestRunOneShotContainer_StdinReadError(t *testing.T) {
 	assert.Contains(t, err.Error(), "source gone", "the source's own error must be wrapped")
 }
 
-// A cancelled run ends, and takes its container with it: the hijacked stream is
+// A cancelled run ends, and takes its container with it: the attached stream is
 // broken by hand, and the removal travels on a context the cancellation cannot
 // refuse. Both halves compile clean when missing, and a quiet container hangs.
 func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
@@ -964,7 +964,7 @@ func (f *fakeHijack) collectStdin() <-chan []byte {
 // reader half return.
 func (f *fakeHijack) closeOutput() { _ = f.outW.Close() }
 
-// fakeConn is the net.Conn under a fake hijacked response: reads deliver the
+// fakeConn is the net.Conn under a fake attached response: reads deliver the
 // container's framed output, writes are its stdin. It is hand-rolled rather than
 // taken from net.Pipe because the run half-closes stdin, and only a conn with
 // its own CloseWrite can keep the read direction open across that.

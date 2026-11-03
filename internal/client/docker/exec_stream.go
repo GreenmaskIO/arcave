@@ -30,7 +30,7 @@ import (
 // execStream is an exec's stdio as one stream: its stdout read, its stdin
 // written. Its stderr goes to the writer it was opened with.
 type execStream struct {
-	hijacked types.HijackedResponse
+	attached types.HijackedResponse
 	pr       *io.PipeReader
 	// demuxed is closed once the demultiplexer has stopped writing.
 	demuxed chan struct{}
@@ -39,9 +39,9 @@ type execStream struct {
 
 var _ io.ReadWriteCloser = (*execStream)(nil)
 
-// newExecStream demultiplexes hijacked in the background: stdout into the
+// newExecStream demultiplexes attached in the background: stdout into the
 // stream's reads, stderr into stderr.
-func newExecStream(hijacked types.HijackedResponse, stderr io.Writer) *execStream {
+func newExecStream(attached types.HijackedResponse, stderr io.Writer) *execStream {
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -49,19 +49,19 @@ func newExecStream(hijacked types.HijackedResponse, stderr io.Writer) *execStrea
 	demuxed := make(chan struct{})
 	go func() {
 		defer close(demuxed)
-		_, err := stdcopy.StdCopy(pw, stderr, hijacked.Reader)
+		_, err := stdcopy.StdCopy(pw, stderr, attached.Reader)
 		//nolint:errcheck // the error travels to the reader
 		pw.CloseWithError(err)
 	}()
 	return &execStream{
-		hijacked: hijacked,
+		attached: attached,
 		pr:       pr,
 		demuxed:  demuxed,
 	}
 }
 
 func (s *execStream) Read(p []byte) (int, error)  { return s.pr.Read(p) }
-func (s *execStream) Write(p []byte) (int, error) { return s.hijacked.Conn.Write(p) }
+func (s *execStream) Write(p []byte) (int, error) { return s.attached.Conn.Write(p) }
 
 // Close is release; it never fails.
 func (s *execStream) Close() error {
@@ -73,7 +73,7 @@ func (s *execStream) Close() error {
 // the exec's stderr writer any more.
 func (s *execStream) release() {
 	s.once.Do(func() {
-		s.hijacked.Close()
+		s.attached.Close()
 		//nolint:errcheck // a PipeReader's Close does not fail
 		s.pr.Close()
 	})
@@ -96,9 +96,9 @@ func openExecStream(
 	if err != nil {
 		return nil, fmt.Errorf("create exec in container %s: %w", containerID, err)
 	}
-	hijacked, err := api.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	attached, err := api.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("attach to exec %s: %w", created.ID, err)
 	}
-	return newExecStream(hijacked, exec.Stderr), nil
+	return newExecStream(attached, exec.Stderr), nil
 }
