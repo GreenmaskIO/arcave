@@ -15,6 +15,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -444,6 +445,30 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: "unsupported writable_layers.backend",
 		},
 		{
+			name: "encryption is off by default",
+			yaml: "",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, Encryption{}, cfg.Encryption)
+			},
+		},
+		{
+			name: "the encryption section is read",
+			yaml: "encryption:\n  enabled: true\n  password: hunter2\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, Encryption{Enabled: true, Password: "hunter2"}, cfg.Encryption)
+			},
+		},
+		{
+			name:       "encryption without a password is rejected",
+			yaml:       "encryption:\n  enabled: true\n",
+			wantErrMsg: "encryption.enabled needs encryption.password",
+		},
+		{
+			name:       "a password with encryption off is rejected",
+			yaml:       "encryption:\n  password: hunter2\n",
+			wantErrMsg: "encryption.password is set but encryption.enabled is not",
+		},
+		{
 			name:       "an unknown key under backends is rejected",
 			yaml:       "backends:\n  cdc:\n    password: hunter2\n",
 			wantErrMsg: "password",
@@ -517,6 +542,9 @@ func TestUnmarshal_DefaultsTheProjectNameFromTheDirectory(t *testing.T) {
 func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
 	t.Setenv("ARCAVE_IT_S3_SECRET", "s3cr3t")
 	t.Setenv("ARCAVE_IT_WAIT", "45s")
+	// Unset for the run, restored after it.
+	t.Setenv("ARCAVE_PASSWORD", "")
+	require.NoError(t, os.Unsetenv("ARCAVE_PASSWORD"))
 
 	tests := []struct {
 		name       string
@@ -567,6 +595,11 @@ func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
 				require.NotNil(t, cfg.Storage.S3)
 				assert.Empty(t, cfg.Storage.S3.Prefix)
 			},
+		},
+		{
+			name:       "the password init writes is refused while ARCAVE_PASSWORD is unset",
+			yaml:       "encryption:\n  enabled: true\n  password: " + PasswordFromEnv + "\n",
+			wantErrMsg: "set ARCAVE_PASSWORD to the store password",
 		},
 		{
 			name:       "an unset required variable is an error",

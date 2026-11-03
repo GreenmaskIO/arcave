@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -88,9 +90,12 @@ var storageServers = []struct {
 // through: cdc runs restic over its default stdio transport, into the same store.
 var storageE2EBackends = []string{config.SnapshotBackendFullCopy, config.SnapshotBackendCDC}
 
+// storageE2EPassword encrypts the rows run with encryption.
+const storageE2EPassword = "e2e correct horse"
+
 // TestStorageE2E_CoreWorkflow drives the built binary through the core workflow on
-// every storage backend and snapshot backend: create, list, rollback, fork, a
-// rollback in the fork, and remove.
+// every storage backend and snapshot backend, with and without encryption: create,
+// list, rollback, fork, a rollback in the fork, remove and gc.
 func TestStorageE2E_CoreWorkflow(t *testing.T) {
 	t.Parallel()
 
@@ -100,10 +105,16 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 
 			target := server.start(t)
 			for _, backend := range storageE2EBackends {
-				t.Run(backend, func(t *testing.T) {
-					t.Parallel()
-					runStorageE2E(t, target, backend)
-				})
+				for _, encrypted := range []bool{false, true} {
+					name := backend
+					if encrypted {
+						name += "-encrypted"
+					}
+					t.Run(name, func(t *testing.T) {
+						t.Parallel()
+						runStorageE2E(t, target, backend, encrypted)
+					})
+				}
 			}
 		})
 	}
@@ -111,16 +122,23 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 
 // runStorageE2E is one row of TestStorageE2E_CoreWorkflow: its own arcave project,
 // so its sessions are its own, on a store it shares with the other rows.
-func runStorageE2E(t *testing.T, target storageTarget, backend string) {
+func runStorageE2E(t *testing.T, target storageTarget, backend string, encrypted bool) {
 	// Arrange
 	arcaveProject := storageE2EArcaveProject + "-" + backend
+	env := target.env
+	initArgs := []string{"init", "--name", arcaveProject}
+	if encrypted {
+		arcaveProject += "-encrypted"
+		env = append(slices.Clone(env), "ARCAVE_PASSWORD="+storageE2EPassword)
+		initArgs = []string{"init", "--name", arcaveProject, "--encrypt"}
+	}
 	compose := newImageRollbackEnv(t)
 	projectRoot := t.TempDir()
 	run := func(args ...string) []byte {
 		t.Helper()
-		return runArcave(t, projectRoot, target.env, append([]string{"-p", compose.project}, args...)...)
+		return runArcave(t, projectRoot, env, append([]string{"-p", compose.project}, args...)...)
 	}
-	runArcave(t, projectRoot, target.env, "init", "--name", arcaveProject)
+	runArcave(t, projectRoot, env, initArgs...)
 	writeStorageConfig(t, projectRoot, target.file, backend)
 	compose.up(t, 1)
 	compose.write(t, compose.replicas(t)[0], "v1")
@@ -141,6 +159,9 @@ func runStorageE2E(t *testing.T, target storageTarget, backend string) {
 	volumeInFork := compose.read(t, compose.replicas(t)[0], volumeMarker)
 	removed := decode[model.RemoveResponse](t, run("savepoint", "remove", sp2.ID.String()))
 	afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
+	// runArcave fails on a partial gc's non-zero exit.
+	collected := decode[storageE2EGarbage](t, runArcave(t, projectRoot, env, "gc"))
+	afterGC := decode[[]model.Savepoint](t, run("savepoint", "list"))
 
 	// Assert
 	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendKind(backend)}, statKinds(sp1),
@@ -155,10 +176,15 @@ func runStorageE2E(t *testing.T, target storageTarget, backend string) {
 	assert.Equal(t, "v2", volumeInFork, "the fork's copy of sp2 restores")
 	assert.Equal(t, []model.SavepointID{sp2.ID}, savepointIDs(removed.Removed))
 	assert.Equal(t, []string{"sp1"}, savepointNames(afterRemove))
+	for _, report := range collected.Reports {
+		assert.Zero(t, report.Summary.Unjudged, "%s judges every object through the store as written", report.Collector)
+	}
+	assert.Equal(t, []string{"sp1"}, savepointNames(afterGC), "gc keeps what a record names")
 
 	assertRecord(t, target.storage, arcaveProject, compose.project, model.DefaultSession, sp1.ID, true)
 	assertRecord(t, target.storage, arcaveProject, compose.project, model.DefaultSession, sp2.ID, false)
 	assertRecord(t, target.storage, arcaveProject, compose.project, fork.ID, sp2.ID, true)
+	assertRecordEncrypted(t, target.storage, arcaveProject, compose.project, sp1, encrypted)
 }
 
 func startDirectoryStorage(t *testing.T) storageTarget {
@@ -344,6 +370,40 @@ func assertRecord(
 
 	require.NoError(t, err)
 	assert.Equal(t, want, exists, "record %s", key)
+}
+
+// storageE2EGarbage is what the e2e reads of a gc result.
+type storageE2EGarbage struct {
+	Reports []struct {
+		Collector string `json:"collector"`
+		Summary   struct {
+			Unjudged int `json:"unjudged"`
+		} `json:"summary"`
+	} `json:"reports"`
+}
+
+// assertRecordEncrypted says whether savepoint's record is stored as an age file, unreadable
+// without the arcave project's key.
+func assertRecordEncrypted(
+	t *testing.T, storage config.Storage, arcaveProject, composeProject string,
+	savepoint model.Savepoint, want bool,
+) {
+	t.Helper()
+
+	ctx := context.Background()
+	root, err := storefactory.Root(ctx, storage, t.TempDir())
+	require.NoError(t, err)
+	defer func() { _ = root.Close() }()
+	key := path.Join("projects", arcaveProject, "sessions", model.DefaultSession.String(),
+		"compose", composeProject, savepoint.ID.String(), "savepoint.json")
+	body, err := root.GetObject(ctx, key)
+	require.NoError(t, err)
+	defer func() { _ = body.Close() }()
+	raw, err := io.ReadAll(body)
+	require.NoError(t, err)
+
+	assert.Equal(t, want, bytes.HasPrefix(raw, []byte("age-encryption.org/v1\n")), "record %s", key)
+	assert.Equal(t, !want, bytes.Contains(raw, []byte(savepoint.ID.String())), "record %s", key)
 }
 
 func decode[T any](t *testing.T, out []byte) T {

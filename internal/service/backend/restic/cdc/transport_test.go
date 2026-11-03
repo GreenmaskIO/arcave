@@ -51,7 +51,13 @@ func TestRunner_run_Stdio(t *testing.T) {
 		}).Return(nil).Once()
 	logs := &strings.Builder{}
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: StdioTransport{Server: server}}
+	r := runner{
+		containers: containers,
+		image:      demoImage,
+		password:   demoPassword,
+		objectID:   demoObjectID,
+		transport:  StdioTransport{Server: server},
+	}
 
 	// Act
 	_, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}, binds: []string{"vol:/m:ro"}})
@@ -66,10 +72,11 @@ func TestRunner_run_Stdio(t *testing.T) {
 	assert.Equal(t, []string{"backup", "/m", "--json"}, spec.Cmd)
 	assert.Equal(t, []model.OneShotFile{
 		{Path: "/run/arcave", Mode: fs.ModeDir | fs.ModeSticky | 0o777},
+		{Path: "/run/arcave/password", Mode: 0o444, Content: []byte(demoPassword)},
 		{Path: "/run/arcave/stdio.sh", Mode: 0o755, Content: stdioScript},
 	}, spec.Files)
 	assert.ElementsMatch(t,
-		[]string{"RESTIC_REPOSITORY=rclone:arcave", "RESTIC_PASSWORD=" + resticPassword}, spec.Env)
+		[]string{"RESTIC_REPOSITORY=rclone:arcave", "RESTIC_PASSWORD_FILE=/run/arcave/password"}, spec.Env)
 	assert.Equal(t, []string{"vol:/m:ro"}, spec.Binds)
 	assert.False(t, spec.HostNetwork)
 	require.NotNil(t, spec.Exec)
@@ -160,7 +167,7 @@ func isStdioSpec(spec model.OneShotSpec) bool {
 	return spec.Exec != nil &&
 		slices.Equal(spec.Exec.Cmd, []string{stdioScriptPath, "bridge"}) &&
 		slices.Equal(spec.Entrypoint, []string{stdioScriptPath, "entrypoint"}) &&
-		reflect.DeepEqual(spec.Files, newStdioFiles()) &&
+		reflect.DeepEqual(spec.Files, newStdioFiles(DefaultPassword)) || reflect.DeepEqual(spec.Files, newStdioFiles(demoPassword)) &&
 		slices.Contains(spec.Env, "RESTIC_REPOSITORY="+stdioRepository) &&
 		!spec.HostNetwork
 }

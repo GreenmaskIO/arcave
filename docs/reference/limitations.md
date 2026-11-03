@@ -99,6 +99,17 @@ If a rollback is killed partway through, arcave refuses every command that chang
 
 On Docker Desktop for macOS, the `cdc` backend can't capture a host bind mount (VirtioFS returns `EIO`). Named volumes are fine. Use a named volume, switch Docker Desktop's file sharing to gRPC FUSE, or use `fullcopy` for that project.
 
+## Encryption hides contents, not shape
+
+[`encryption`](configuration.md#encryption) keeps whoever reads the store — the provider, a leaked read-only bucket key, a shared SFTP account — from reading or silently altering any object. It does not hide:
+
+- **Names**: savepoint and session ids, volume object ids (`volume-named-myapp_pgdata`), compose project names, image digests and restic pack names.
+- **Shape**: object sizes, give or take the encryption overhead, and how many objects there are and when they were written.
+- **Anything from whoever can write**: they can delete objects, or put one encrypted object under another's name.
+- **The host**: the password in `.arcave/config.yaml` when it is written there literally, the process environment, and the images in the Docker daemon — a writable layer holding a secret is encrypted in the store, not in the daemon.
+
+A forgotten password cannot be recovered, and an unencrypted store is not encrypted in place: start an encrypted one at an empty location.
+
 ## SFTP storage does not check host keys
 
 The `ssh` storage doesn't verify the server's host key. Use it only on a network you trust.

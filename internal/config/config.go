@@ -186,6 +186,7 @@ type Config struct {
 	Docker         Docker         `yaml:"docker,omitempty" mapstructure:"docker"`
 	Compose        Compose        `yaml:"compose" mapstructure:"compose"`
 	Storage        Storage        `yaml:"storage" mapstructure:"storage"`
+	Encryption     Encryption     `yaml:"encryption,omitempty" mapstructure:"encryption"`
 	Snapshot       Snapshot       `yaml:"snapshot" mapstructure:"snapshot"`
 	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
@@ -211,6 +212,28 @@ type Project struct {
 func (p Project) Validate() error {
 	if err := model.ArcaveProjectName(p.Name).Validate(); err != nil {
 		return fmt.Errorf("%w: project.name: %w (set project.name explicitly)", ErrInvalid, err)
+	}
+	return nil
+}
+
+// Encryption encrypts every object arcave writes to the store, with a key kept in the store
+// under Password.
+type Encryption struct {
+	Enabled bool `yaml:"enabled,omitempty" mapstructure:"enabled"`
+	// Password opens the arcave project's key. Secret.
+	Password string `yaml:"password,omitempty" mapstructure:"password"`
+}
+
+// PasswordFromEnv is the password init writes: read from ARCAVE_PASSWORD, refused unset.
+const PasswordFromEnv = "${ARCAVE_PASSWORD?set ARCAVE_PASSWORD to the store password}"
+
+// Validate refuses encryption without a password, and a password that would do nothing.
+func (e Encryption) Validate() error {
+	switch {
+	case e.Enabled && e.Password == "":
+		return fmt.Errorf("%w: encryption.enabled needs encryption.password", ErrInvalid)
+	case !e.Enabled && e.Password != "":
+		return fmt.Errorf("%w: encryption.password is set but encryption.enabled is not", ErrInvalid)
 	}
 	return nil
 }
@@ -676,6 +699,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Storage.Validate(); err != nil {
+		return err
+	}
+	if err := c.Encryption.Validate(); err != nil {
 		return err
 	}
 	if err := c.Snapshot.Validate(); err != nil {

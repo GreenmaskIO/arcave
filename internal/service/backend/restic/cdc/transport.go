@@ -33,6 +33,9 @@ import (
 const (
 	stdioDir        = "/run/arcave"
 	stdioScriptPath = stdioDir + "/stdio.sh"
+	// passwordPath is RESTIC_PASSWORD_FILE under either transport: a file, unlike the
+	// environment, is not what docker inspect shows. Readable by whichever user runs restic.
+	passwordPath = stdioDir + "/password"
 	// stdioRepository is RESTIC_REPOSITORY under stdio: restic's rclone backend,
 	// whose remote name stdio.sh ignores.
 	stdioRepository = "rclone:arcave"
@@ -59,8 +62,9 @@ type Transport interface {
 
 // resticRun is one restic command's container, whatever the transport.
 type resticRun struct {
-	image string
-	cmd   resticCmd
+	image    string
+	password string
+	cmd      resticCmd
 	// log takes what a transport runs beside restic has to say.
 	log    *zerolog.Logger
 	stdout io.Writer
@@ -77,12 +81,12 @@ type StdioTransport struct {
 func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
 	return model.OneShotSpec{
 		Image:      run.image,
-		Files:      newStdioFiles(),
+		Files:      newStdioFiles(run.password),
 		Entrypoint: []string{stdioScriptPath, "entrypoint"},
 		Cmd:        run.cmd.args,
 		Env: []string{
 			"RESTIC_REPOSITORY=" + stdioRepository,
-			"RESTIC_PASSWORD=" + resticPassword,
+			"RESTIC_PASSWORD_FILE=" + passwordPath,
 		},
 		Binds:  run.cmd.binds,
 		Stdout: run.stdout,
@@ -97,11 +101,16 @@ func (s StdioTransport) newOneShotSpec(objectID string, run resticRun) model.One
 	}
 }
 
-// newStdioFiles is what every stdio container is created with: stdio.sh in its directory.
-func newStdioFiles() []model.OneShotFile {
+// newStdioFiles is what every stdio container is created with: stdio.sh beside the password.
+func newStdioFiles(password string) []model.OneShotFile {
+	return append(newPasswordFiles(password), model.OneShotFile{Path: stdioScriptPath, Mode: 0o755, Content: stdioScript})
+}
+
+// newPasswordFiles is what every restic container is created with: the repository's password.
+func newPasswordFiles(password string) []model.OneShotFile {
 	return []model.OneShotFile{
 		{Path: stdioDir, Mode: fs.ModeDir | fs.ModeSticky | 0o777},
-		{Path: stdioScriptPath, Mode: 0o755, Content: stdioScript},
+		{Path: passwordPath, Mode: 0o444, Content: []byte(password)},
 	}
 }
 
@@ -130,10 +139,11 @@ type TCPTransport struct {
 func (s TCPTransport) newOneShotSpec(objectID string, run resticRun) model.OneShotSpec {
 	return model.OneShotSpec{
 		Image: run.image,
+		Files: newPasswordFiles(run.password),
 		Cmd:   run.cmd.args,
 		Env: []string{
 			"RESTIC_REPOSITORY=" + s.newRepositoryURL(objectID),
-			"RESTIC_PASSWORD=" + resticPassword,
+			"RESTIC_PASSWORD_FILE=" + passwordPath,
 		},
 		Binds:       run.cmd.binds,
 		HostNetwork: s.HostNetwork,

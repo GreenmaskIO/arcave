@@ -23,6 +23,16 @@ Four things are named there, outermost first:
 
 The static `arcave` segment is what bounds every write and every delete: point the path at `/etc` and arcave operates in `/etc/arcave`. Each segment below it is checked against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.
 
+An [encrypted](configuration.md#encryption) arcave project keeps its key beside its sessions — the one object it stores in plaintext form, wrapped by the password:
+
+```text
+projects/<project>/
+  keys/<key-id>.age                            the data key, encrypted to the store password
+  sessions/…                                   every object below is an age file
+```
+
+`<key-id>` is the first 16 hex digits of the SHA-256 of the key's public recipient. Object names, directories and sizes are the same as in an unencrypted store, give or take 200 bytes per object and 16 per 64 KiB.
+
 `compose/` has a reserved sibling for a second timeline that is not built yet, which is why the compose project sits one level down rather than at the root.
 
 ## Inside a session
@@ -95,7 +105,7 @@ The [`cdc` backend](configuration.md#snapshot) keeps one restic repository per v
 
 ## Moving a savepoint
 
-Everything about one savepoint is under its own directory, except the blobs and images it shares and its cdc repositories. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as the storage path, `project.name` and `-p` point at the same three segments.
+Everything about one savepoint is under its own directory, except the blobs and images it shares and its cdc repositories. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as the storage path, `project.name` and `-p` point at the same three segments. In an [encrypted](configuration.md#encryption) store, copy `keys/` along with it: the objects open only with the key of the arcave project that wrote them.
 
 ## On the host
 

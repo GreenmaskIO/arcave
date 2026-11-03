@@ -79,6 +79,10 @@ export ARCAVE_FORMAT=json
 
 See [Output and exit codes](output.md).
 
+## `ARCAVE_PASSWORD`
+
+The store password, by convention: the config [`arcave init --encrypt`](cli/init.md) writes reads `encryption.password` from it, and fails while it is unset. arcave itself reads it only through that `${ARCAVE_PASSWORD?…}` in the file. See [`encryption`](configuration.md#encryption).
+
 ## Variables that are not arcave's
 
 `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` are read by the Docker client when the [`docker` section](configuration.md#docker) leaves the matching key empty, which is the default.

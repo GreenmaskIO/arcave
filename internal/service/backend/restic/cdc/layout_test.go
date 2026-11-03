@@ -152,11 +152,11 @@ func TestParseSnapshotKey(t *testing.T) {
 // A runner is bound to a volume's repository over the transport it is handed.
 func TestRepositories_newRunner(t *testing.T) {
 	stdio := StdioTransport{Server: &mockServer{}}
-	options := Options{Image: demoImage}
 
 	tests := []struct {
 		name      string
 		transport Transport
+		password  string
 		objectID  string
 		want      runner
 		wantErr   string
@@ -165,7 +165,14 @@ func TestRepositories_newRunner(t *testing.T) {
 			name:      "tcp: a volume's repository",
 			transport: demoTCPTransport,
 			objectID:  demoObjectID,
-			want:      runner{image: demoImage, objectID: demoObjectID, transport: demoTCPTransport},
+			want:      runner{image: demoImage, password: DefaultPassword, objectID: demoObjectID, transport: demoTCPTransport},
+		},
+		{
+			name:      "an encrypted store's own password",
+			transport: demoTCPTransport,
+			password:  demoPassword,
+			objectID:  demoObjectID,
+			want:      runner{image: demoImage, password: demoPassword, objectID: demoObjectID, transport: demoTCPTransport},
 		},
 		{name: "tcp: a segment that is no volume's", transport: demoTCPTransport, objectID: "..", wantErr: "no volume's repository"},
 		{name: "tcp: a segment holding a path", transport: demoTCPTransport, objectID: "volume-named-db/config", wantErr: "no volume's repository"},
@@ -173,7 +180,7 @@ func TestRepositories_newRunner(t *testing.T) {
 			name:      "stdio: a volume's repository",
 			transport: stdio,
 			objectID:  demoObjectID,
-			want:      runner{image: demoImage, objectID: demoObjectID, transport: stdio},
+			want:      runner{image: demoImage, password: DefaultPassword, objectID: demoObjectID, transport: stdio},
 		},
 		{name: "stdio: a segment that is no volume's", transport: stdio, objectID: "..", wantErr: "no volume's repository"},
 		{name: "stdio: a segment holding a path", transport: stdio, objectID: "volume-named-db/config", wantErr: "no volume's repository"},
@@ -183,6 +190,7 @@ func TestRepositories_newRunner(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			containers := &mockRunner{}
+			options := Options{Image: demoImage, Password: tt.password}
 
 			// Act
 			got, err := newRepositories(containers, tt.transport, options).newRunner(tt.objectID)

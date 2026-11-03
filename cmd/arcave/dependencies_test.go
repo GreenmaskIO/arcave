@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -39,6 +40,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -47,20 +49,23 @@ import (
 // carrying a client: the config's own vocabulary in, the backend's own out.
 func TestNewCDCOptions(t *testing.T) {
 	tests := []struct {
-		name string
-		cfg  config.CDCBackend
-		want cdc.Options
+		name     string
+		cfg      config.CDCBackend
+		password string
+		want     cdc.Options
 	}{
 		{
 			// A project that never names cdc carries no section, and still gets a
 			// runnable image: an old cdc savepoint is rolled back through cdc
 			// whatever snapshot.backend says now.
-			name: "an absent section resolves to the defaults",
-			cfg:  config.CDCWithDefaults(nil),
+			name:     "an absent section resolves to the defaults",
+			cfg:      config.CDCWithDefaults(nil),
+			password: cdc.DefaultPassword,
 			want: cdc.Options{
 				Image:       config.DefaultResticImage,
 				Overwrite:   config.OverwriteAlways,
 				Incremental: true,
+				Password:    cdc.DefaultPassword,
 			},
 		},
 		{
@@ -82,10 +87,12 @@ func TestNewCDCOptions(t *testing.T) {
 				Overwrite:   config.OverwriteIfChanged,
 				Image:       "restic/restic:0.18.0",
 			},
+			password: "derived",
 			want: cdc.Options{
 				Image:       "restic/restic:0.18.0",
 				Incremental: true,
 				Overwrite:   config.OverwriteIfChanged,
+				Password:    "derived",
 			},
 		},
 	}
@@ -93,7 +100,7 @@ func TestNewCDCOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newCDCOptions(tt.cfg)
+			got := newCDCOptions(tt.cfg, tt.password)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -579,7 +586,7 @@ func TestNewObjectCollectors(t *testing.T) {
 	for _, collector := range newDaemonCollectors(config.Config{}, engine) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind(), daemon: true})
 	}
-	for _, collector := range newComposeProjectCollectors(config.Config{}, engine) {
+	for _, collector := range newComposeProjectCollectors(config.Config{}, engine, cdc.DefaultPassword) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind()})
 	}
 
@@ -620,7 +627,7 @@ func TestNewComposeProjectErasers(t *testing.T) {
 
 	// Act
 	var got []model.GarbageAction
-	for _, eraser := range newComposeProjectErasers(config.Config{}, nil) {
+	for _, eraser := range newComposeProjectErasers(config.Config{}, nil, cdc.DefaultPassword) {
 		got = append(got, eraser.Action())
 	}
 
@@ -868,4 +875,136 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 
 	// Assert
 	assert.Nil(t, sink)
+}
+
+// The encryption section decides how an encrypted arcave project's store opens again: with its
+// password every object reads back, and a section that does not fit the store is refused with
+// the fix.
+func TestOpenArcaveProjectStore_EncryptedStore(t *testing.T) {
+	tests := []struct {
+		name       string
+		encryption config.Encryption
+		wantErr    error
+		wantMsg    string
+	}{
+		{name: "the password it was created with", encryption: config.Encryption{Enabled: true, Password: "correct horse"}},
+		{
+			name:       "a wrong password",
+			encryption: config.Encryption{Enabled: true, Password: "wrong"},
+			wantErr:    model.ErrWrongPassword,
+			wantMsg:    "check encryption.password",
+		},
+		{
+			name:    "encryption off",
+			wantErr: model.ErrStoreEncrypted,
+			wantMsg: "set encryption.enabled: true",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			useFastStoreKeys(t)
+			projectPath := t.TempDir()
+			created, err := openArcaveProjectStore(t.Context(),
+				newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Password: "correct horse"}), projectPath)
+			require.NoError(t, err)
+			require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
+			require.NoError(t, created.root.Close())
+
+			// Act
+			opened, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath)
+
+			// Assert
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMsg)
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, opened.root.Close()) })
+			assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
+			assert.NotEqual(t, cdc.DefaultPassword, opened.resticPassword)
+			assert.Equal(t, created.resticPassword, opened.resticPassword)
+			raw, err := os.ReadFile(filepath.Join(projectPath, ".arcave", "storage", "arcave",
+				"projects", "demo", "sessions", "x", "session.json"))
+			require.NoError(t, err)
+			assert.NotContains(t, string(raw), "a secret")
+		})
+	}
+}
+
+// An unencrypted arcave project opens plainly, and is never encrypted in place: the refusal
+// writes no key, so it still opens plainly after.
+func TestOpenArcaveProjectStore_UnencryptedStore(t *testing.T) {
+	tests := []struct {
+		name       string
+		encryption config.Encryption
+		wantErr    error
+		wantMsg    string
+	}{
+		{name: "encryption off"},
+		{
+			name:       "encryption on",
+			encryption: config.Encryption{Enabled: true, Password: "correct horse"},
+			wantErr:    model.ErrStoreUnencrypted,
+			wantMsg:    "point storage at an empty location",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			useFastStoreKeys(t)
+			projectPath := t.TempDir()
+			plain := newEncryptionConfig(t, projectPath, config.Encryption{})
+			created, err := openArcaveProjectStore(t.Context(), plain, projectPath)
+			require.NoError(t, err)
+			require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
+			require.NoError(t, created.root.Close())
+
+			// Act
+			opened, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath)
+
+			// Assert
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMsg)
+				assert.NoDirExists(t, filepath.Join(projectPath, ".arcave", "storage", "arcave", "projects", "demo", "keys"))
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, opened.root.Close()) })
+			assert.Equal(t, cdc.DefaultPassword, opened.resticPassword)
+			assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
+		})
+	}
+}
+
+func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Encryption) config.Config {
+	t.Helper()
+	cfg := config.Config{
+		Project:    config.Project{Name: "demo"},
+		Encryption: encryption,
+	}
+	cfg.ApplyDefaults(projectPath)
+	require.NoError(t, cfg.Validate())
+	return cfg
+}
+
+// useFastStoreKeys opens the store keys with no settle, a cheap scrypt and no key kept from
+// another test.
+func useFastStoreKeys(t *testing.T) {
+	t.Helper()
+	opener, workFactor := storeKeys, storeKeyWorkFactor
+	storeKeys, storeKeyWorkFactor = storekey.NewOpener().SetSettle(0), 10
+	t.Cleanup(func() { storeKeys, storeKeyWorkFactor = opener, workFactor })
+}
+
+func readStoreObject(t *testing.T, store storages.Storager, key string) string {
+	t.Helper()
+	body, err := store.GetObject(t.Context(), key)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, body.Close()) })
+	data, err := io.ReadAll(body)
+	require.NoError(t, err)
+	return string(data)
 }

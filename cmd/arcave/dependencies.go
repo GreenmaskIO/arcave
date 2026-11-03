@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/compose/v2/pkg/api"
@@ -43,6 +45,7 @@ import (
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
+	"github.com/greenmaskio/arcave/internal/repository/keyring"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
@@ -66,6 +69,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/sessionlock"
+	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -76,6 +80,13 @@ const resticShutdownTimeout = 5 * time.Second
 
 // composeResourceObject is the resource kind of a compose event whose id names no kind of object.
 const composeResourceObject = "object"
+
+// storeKeys keeps the keys this process opened: arcave mcp opens the store on every tool call,
+// and a key costs a second of scrypt to open.
+var storeKeys = storekey.NewOpener()
+
+// storeKeyWorkFactor is scrypt's cost for a key this process creates; age's default when 0.
+var storeKeyWorkFactor = 0
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
@@ -104,10 +115,11 @@ func newDependencies(
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	storeRoot, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
+	storeRoot, arcaveProjectStore := arcaveProject.root, arcaveProject.store
 	opened.add("store root", storeRoot)
 
 	sessions := sessionrepo.New(arcaveProjectStore)
@@ -186,7 +198,7 @@ func newDependencies(
 			Runner:         engine,
 			Transport:      cdcTransport.transport,
 			RepositoryRoot: resticRoot,
-			Options:        newCDCOptions(cdcCfg),
+			Options:        newCDCOptions(cdcCfg, arcaveProject.resticPassword),
 		}),
 	)
 	if err != nil {
@@ -329,12 +341,14 @@ func resolveCDCNetwork(
 	}
 }
 
-// newCDCOptions translates the backends.cdc section into the backend's own options.
-func newCDCOptions(cfg config.CDCBackend) cdc.Options {
+// newCDCOptions translates the backends.cdc section into the backend's own options, with the
+// password the arcave project's repositories open with.
+func newCDCOptions(cfg config.CDCBackend, resticPassword string) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
+		Password:    resticPassword,
 	}
 }
 
@@ -439,13 +453,13 @@ type sessionDependencies struct {
 }
 
 func newSessionDependencies(ctx context.Context, projectPath string, cfg config.Config) (*sessionDependencies, error) {
-	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
-	svc := newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore))
+	svc := newSessionService(projectPath, arcaveProject.store, sessionrepo.New(arcaveProject.store))
 	return &sessionDependencies{
-		store:   root,
+		store:   arcaveProject.root,
 		service: svc,
 		printer: loadRunOutput(),
 	}, nil
@@ -491,21 +505,98 @@ func newRunnerInfo() heartbeat.RunnerInfo {
 	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
 }
 
-// openArcaveProjectStore opens the store root and descends to the arcave project; the root
-// is what the caller closes.
-func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (root, arcaveProjectStore storages.Storager, err error) {
-	root, err = storefactory.Root(ctx, cfg.Storage, projectPath)
+// openedArcaveProject is the arcave project's store as every workflow reads and writes it.
+type openedArcaveProject struct {
+	// root is what the caller closes.
+	root  storages.Storager
+	store storages.Storager
+	// resticPassword opens the arcave project's restic repositories.
+	resticPassword string
+}
+
+// openArcaveProjectStore opens the store root and descends to the arcave project: encrypted
+// under encryption.enabled, its key opened, or created on the arcave project's first use.
+func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (openedArcaveProject, error) {
+	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialise store root: %w", err)
+		return openedArcaveProject{}, fmt.Errorf("initialise store root: %w", err)
 	}
-	arcaveProjectStore, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name))
+	arcaveProject, err := openArcaveProject(ctx, cfg, root)
 	if err != nil {
 		if closeErr := root.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("close store root")
 		}
-		return nil, nil, fmt.Errorf("initialise arcave project store: %w", err)
+		return openedArcaveProject{}, err
 	}
-	return root, arcaveProjectStore, nil
+	return arcaveProject, nil
+}
+
+func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Storager) (openedArcaveProject, error) {
+	var (
+		plain     storages.Storager
+		keysStore storages.Storager
+		key       model.StoreKey
+		identity  *age.X25519Identity
+		store     storages.Storager
+		password  string
+		err       error
+	)
+	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
+		return openedArcaveProject{}, fmt.Errorf("initialise arcave project store: %w", err)
+	}
+	if keysStore, err = storefactory.Keys(plain); err != nil {
+		return openedArcaveProject{}, fmt.Errorf("initialise store keys: %w", err)
+	}
+	keys := keyring.New(keysStore).SetWorkFactor(storeKeyWorkFactor)
+	if !cfg.Encryption.Enabled {
+		if err = storekey.RequireUnencrypted(ctx, keys); err != nil {
+			return openedArcaveProject{}, newStoreKeyError(err)
+		}
+		return openedArcaveProject{
+			root:           root,
+			store:          plain,
+			resticPassword: cdc.DefaultPassword,
+		}, nil
+	}
+	holdsData := func(ctx context.Context) (bool, error) {
+		return storefactory.HoldsData(ctx, plain)
+	}
+	if key, err = storeKeys.Open(ctx, keys, holdsData, cfg.Encryption.Password); err != nil {
+		return openedArcaveProject{}, newStoreKeyError(err)
+	}
+	if identity, err = storekey.ParseIdentity(key); err != nil {
+		return openedArcaveProject{}, err
+	}
+	if store, err = storefactory.Encrypt(plain, identity); err != nil {
+		return openedArcaveProject{}, err
+	}
+	if password, err = storekey.NewResticPassword(key); err != nil {
+		return openedArcaveProject{}, err
+	}
+	return openedArcaveProject{
+		root:           root,
+		store:          store,
+		resticPassword: password,
+	}, nil
+}
+
+// newStoreKeyError adds the fix to a store the encryption section does not open.
+func newStoreKeyError(err error) error {
+	switch {
+	case errors.Is(err, model.ErrWrongPassword):
+		return fmt.Errorf("open the store: %w (check encryption.password, ARCAVE_PASSWORD by default)", err)
+	case errors.Is(err, model.ErrStoreUnencrypted):
+		return fmt.Errorf("open the store: %w: the arcave project was written without encryption, "+
+			"and arcave does not encrypt it in place (set encryption.enabled: false, "+
+			"or point storage at an empty location)", err)
+	case errors.Is(err, model.ErrAmbiguousStoreKey):
+		return fmt.Errorf("open the store: %w: a host that lost the race to create the first key "+
+			"left its key behind; delete the keys/<id>.age written later, which no data is encrypted to", err)
+	case errors.Is(err, model.ErrStoreEncrypted):
+		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.password)", err)
+	default:
+		return fmt.Errorf("open the store key: %w", err)
+	}
 }
 
 // closeQuietly closes c and logs any error without failing the caller.
@@ -770,10 +861,11 @@ func newGCDependencies(
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
+	root, arcaveProjectStore := arcaveProject.root, arcaveProject.store
 	opened.add("store root", root)
 
 	sessions := sessionrepo.New(arcaveProjectStore)
@@ -802,9 +894,9 @@ func newGCDependencies(
 		SessionLocker:            sessionLocker,
 		Inflight:                 inflightrepo.New(projectPath),
 		DaemonCollectors:         newDaemonCollectors(cfg, engine),
-		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
+		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine, arcaveProject.resticPassword),
 		DaemonErasers:            newDaemonErasers(engine),
-		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
+		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine, arcaveProject.resticPassword),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
 		RestoredLayerGrace: utils.Value(cfg.GC.RestoredLayerGrace),
@@ -842,14 +934,17 @@ func newDaemonCollectors(cfg config.Config, engine *docker.Engine) []gc.DaemonCo
 }
 
 // newComposeProjectCollectors builds the collectors judging a compose project's store.
-func newComposeProjectCollectors(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectCollector {
+func newComposeProjectCollectors(
+	cfg config.Config, engine *docker.Engine, resticPassword string,
+) []gc.ComposeProjectCollector {
 	return []gc.ComposeProjectCollector{
 		savepointdir.New(),
 		ociimage.New(),
 		ociblob.New(cfg.Common.Concurrency),
 		resticrepo.New(engine, resticInspectorOpener{
-			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
-			engine: engine,
+			cfg:            config.CDCWithDefaults(cfg.Backends.CDC),
+			resticPassword: resticPassword,
+			engine:         engine,
 		}),
 	}
 }
@@ -862,14 +957,17 @@ func newDaemonErasers(engine *docker.Engine) []gc.DaemonEraser {
 }
 
 // newComposeProjectErasers builds the erasers carrying out the gc's actions in a compose project's store.
-func newComposeProjectErasers(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectEraser {
+func newComposeProjectErasers(
+	cfg config.Config, engine *docker.Engine, resticPassword string,
+) []gc.ComposeProjectEraser {
 	return []gc.ComposeProjectEraser{
 		eraser.NewTreeEraser(),
 		eraser.NewImageEraser(),
 		eraser.NewObjectEraser(),
 		eraser.NewForgetEraser(resticPrunerOpener{
-			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
-			engine: engine,
+			cfg:            config.CDCWithDefaults(cfg.Backends.CDC),
+			resticPassword: resticPassword,
+			engine:         engine,
 		}, cfg.Common.Concurrency),
 	}
 }
@@ -902,8 +1000,9 @@ func openResticRepositories(
 
 // resticInspectorOpener serves one compose project's restic repositories to a cdc.Inspector.
 type resticInspectorOpener struct {
-	cfg    config.CDCBackend
-	engine *docker.Engine
+	cfg            config.CDCBackend
+	resticPassword string
+	engine         *docker.Engine
 }
 
 // Open opens the transport over store's repositories; the inspector's Close releases it.
@@ -913,7 +1012,7 @@ func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigato
 		return nil, err
 	}
 	return resticInspector{
-		Inspector:          cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg)),
+		Inspector:          cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg, o.resticPassword)),
 		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
@@ -926,8 +1025,9 @@ type resticInspector struct {
 
 // resticPrunerOpener serves one compose project's restic repositories to a cdc.Pruner.
 type resticPrunerOpener struct {
-	cfg    config.CDCBackend
-	engine *docker.Engine
+	cfg            config.CDCBackend
+	resticPassword string
+	engine         *docker.Engine
 }
 
 // Open opens the transport over store's repositories; the pruner's Close releases it.
@@ -937,7 +1037,7 @@ func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) 
 		return nil, err
 	}
 	return resticPruner{
-		Pruner:             cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg)),
+		Pruner:             cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg, o.resticPassword)),
 		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }

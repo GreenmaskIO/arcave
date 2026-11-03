@@ -45,6 +45,8 @@ const (
 	demoRepoURL = demoRepoURLBase + "/" + demoObjectID + "/"
 	// demoImage stands in for the configured restic image.
 	demoImage = "restic/restic:0.19.1"
+	// demoPassword stands in for the password an encrypted store derives.
+	demoPassword = "demo-password"
 )
 
 // demoTCPTransport reaches the repositories over the TCP server.
@@ -148,7 +150,7 @@ func newHarnessOver(t *testing.T, transport Transport, opts Options) *harness {
 
 // defaultOptions is the wipe-mode configuration ApplyDefaults produces.
 func defaultOptions() Options {
-	return Options{Image: demoImage, Overwrite: "if-changed"}
+	return Options{Image: demoImage, Overwrite: "if-changed", Password: demoPassword}
 }
 
 // objectsUnder lists the names a prefix holds, relative to it.

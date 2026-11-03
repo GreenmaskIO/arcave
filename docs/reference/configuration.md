@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
+description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), encryption, snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
 keywords: [arcave configuration, config.yaml, snapshot backend, cdc, restic, storage, s3, azure, sftp, docker compose]
 ---
 
@@ -25,6 +25,9 @@ storage:
     type: directory
     directory:
         path: .arcave/storage
+encryption:
+    enabled: true
+    password: ${ARCAVE_PASSWORD?set ARCAVE_PASSWORD to the store password}
 snapshot:
     backend: cdc
 writable_layers:
@@ -261,6 +264,39 @@ unsupported storage.type "gcs" (supported: directory, s3, azure, ssh)
 ### Credentials
 
 Keep a secret out of the file by naming its environment variable — see [Interpolation](#interpolation). `arcave init` never writes one: it writes a template of the defaults and `--name`, with the `directory` storage, so a credential reaches the file only when you put it there.
+
+## `encryption`
+
+Encrypts everything arcave writes to the store, on the host, before it leaves it: records, compose specs, volume data, writable layers, images, restic repositories and session locks alike. Off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `encryption.enabled` | bool | `false` | Encrypt the store. |
+| `encryption.password` | string | `""` | **Secret.** Opens the store's key. Required with `enabled`, refused without it. |
+
+```yaml
+encryption:
+  enabled: true
+  password: ${ARCAVE_PASSWORD?set ARCAVE_PASSWORD to the store password}
+```
+
+[`arcave init --encrypt`](cli/init.md) writes exactly that block; the password itself stays in the environment.
+
+**The key lives in the store, under the password**, as restic keeps its own: the first command that opens an empty arcave project generates an [age](https://age-encryption.org) key, wraps it with the password (scrypt) and writes it to `projects/<project>/keys/<key-id>.age`. Every host sharing the store opens it with the same password, and nothing else needs copying between them. Each arcave project has its own key; every session and compose project of it shares it, so a fork copies encrypted objects as they are.
+
+**Lose the password and the store is lost.** There is no recovery key. Every object is a standard age file, so `age -d` decrypts one by hand with the key's identity.
+
+An encrypted store and an unencrypted one never mix, and arcave encrypts nothing in place. Each mismatch is refused before anything is stopped:
+
+```text
+open the store: the password opens no key of the store (check encryption.password, ARCAVE_PASSWORD by default)
+open the store: the store is not encrypted: the arcave project was written without encryption, and arcave does not encrypt it in place (set encryption.enabled: false, or point storage at an empty location)
+open the store: key 3f9c0a1b2c3d4e5f: the store is encrypted (set encryption.enabled: true and encryption.password)
+encryption.enabled needs encryption.password
+encryption.password is set but encryption.enabled is not
+```
+
+What encryption hides, and what it does not, is in [Limitations](limitations.md#encryption-hides-contents-not-shape).
 
 ## Interpolation
 

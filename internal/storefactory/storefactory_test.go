@@ -16,13 +16,16 @@ package storefactory
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"filippo.io/age"
 	"github.com/greenmaskio/storages"
+	"github.com/greenmaskio/storages/inmemory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -355,4 +358,64 @@ func TestSessionLock(t *testing.T) {
 		// Assert
 		require.ErrorIs(t, err, model.ErrInvalidSessionID)
 	})
+}
+
+func TestHoldsData(t *testing.T) {
+	tests := []struct {
+		name    string
+		objects []string
+		want    bool
+	}{
+		{name: "an empty arcave project", want: false},
+		{name: "keys alone", objects: []string{"keys/0123456789abcdef.age"}, want: false},
+		{name: "a session beside the keys", objects: []string{"keys/0123456789abcdef.age", "sessions/x.lock.json"}, want: true},
+		{name: "a file at the root", objects: []string{"stray.json"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			store := inmemory.New("")
+			for _, object := range tt.objects {
+				require.NoError(t, store.PutObject(t.Context(), object, strings.NewReader("x")))
+			}
+
+			// Act
+			got, err := HoldsData(t.Context(), store)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// Keys reads the arcave project as Root opened it, while Encrypt hides every object below it.
+func TestEncrypt(t *testing.T) {
+	// Arrange
+	plain := inmemory.New("")
+	identity, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+
+	// Act
+	store, err := Encrypt(plain, identity)
+	require.NoError(t, err)
+	require.NoError(t, store.PutObject(t.Context(), "sessions/s/session.json", strings.NewReader("secret")))
+	keys, err := Keys(plain)
+	require.NoError(t, err)
+
+	// Assert
+	raw := readObject(t, plain, "sessions/s/session.json")
+	assert.NotContains(t, raw, "secret")
+	assert.Equal(t, "secret", readObject(t, store, "sessions/s/session.json"))
+	assert.Equal(t, "keys", keys.Dirname())
+}
+
+func readObject(t *testing.T, store storages.Storager, key string) string {
+	t.Helper()
+	body, err := store.GetObject(t.Context(), key)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, body.Close()) })
+	data, err := io.ReadAll(body)
+	require.NoError(t, err)
+	return string(data)
 }

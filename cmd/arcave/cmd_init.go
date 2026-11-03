@@ -26,6 +26,7 @@ import (
 var (
 	configInitName     string
 	configInitOverride bool
+	configInitEncrypt  bool
 
 	configInitCmd = &cobra.Command{
 		Use:   "init",
@@ -45,6 +46,13 @@ func runConfigInit(cmd *cobra.Command, _ []string) error {
 
 	template := config.NewConfig()
 	template.Project.Name = configInitName
+	if configInitEncrypt {
+		// The form, never the password: a literal would land in a file next to the code.
+		template.Encryption = config.Encryption{
+			Enabled:  true,
+			Password: config.PasswordFromEnv,
+		}
+	}
 	svc, printer := newInitDependencies(projectRoot)
 	h := cli.NewConfigInitHandler(svc, printer)
 	return h.Init(cmd.Context(), template, configInitOverride)
@@ -56,8 +64,10 @@ func init() {
 		"Project name (default: current directory name)")
 	flags.BoolVar(&configInitOverride, "override", false,
 		"Overwrite an existing arcave configuration")
+	flags.BoolVar(&configInitEncrypt, "encrypt", false,
+		"Encrypt the store, with the password read from ARCAVE_PASSWORD")
 
-	// Neither flag is bound: the template takes --name directly, and --override is
+	// No flag is bound: the template takes --name and --encrypt directly, and --override is
 	// transient. The storage is the directory one at its default path.
 
 	rootCmd.AddCommand(configInitCmd)

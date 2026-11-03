@@ -20,8 +20,11 @@ arcave init [flags]
 |---|---|---|---|
 | `--name` | the project directory's name, normalised | `project.name` in the file written | The **storage tenant** the store is scoped by. |
 | `--override` | `false` | *(none)* | Overwrite an existing configuration. |
+| `--encrypt` | `false` | `encryption` in the file written | Encrypt the store, the password read from `ARCAVE_PASSWORD`. |
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
+
+`--encrypt` writes the [`encryption`](../configuration.md#encryption) block with `password: ${ARCAVE_PASSWORD?…}` — the reference, never a password. `init` opens no storage, so the key is created by the first command that does.
 
 `--name` names the storage tenant, not the compose project. The compose project is named per invocation with `-p/--project-name`, because one directory may hold several. The directory name is normalised into the tenant charset — `MyApp` becomes `myapp`, and characters outside `[a-z0-9_-]` are dropped.
 

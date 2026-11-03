@@ -29,10 +29,12 @@ import (
 	"slices"
 	"sync"
 
+	"filippo.io/age"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/azure"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/greenmaskio/storages/encrypted"
 	"github.com/greenmaskio/storages/s3"
 	"github.com/greenmaskio/storages/ssh"
 	"github.com/rs/zerolog/log"
@@ -60,6 +62,8 @@ const (
 	// sessionLockSuffix names a session's lock beside its tree.
 	sessionLockSuffix = ".lock.json"
 	namespaceCompose  = "compose"
+	// namespaceKeys holds an encrypted arcave project's data key, under its password.
+	namespaceKeys = "keys"
 )
 
 // New opens the store at <path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>,
@@ -232,6 +236,40 @@ func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (stora
 		return nil, fmt.Errorf("validate arcave project name: %w", err)
 	}
 	return joinKind(root, namespaceProjects, name.String())
+}
+
+// Keys descends from an arcave project store, as Root opened it, to keys/: the one
+// directory an encrypted arcave project keeps in plaintext.
+func Keys(arcaveProjectStore storages.Navigator) (storages.Storager, error) {
+	keys, err := arcaveProjectStore.SubStorage(namespaceKeys, true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root storage at %s: %w", namespaceKeys, err)
+	}
+	return keys, nil
+}
+
+// HoldsData reports whether an arcave project store holds anything besides keys/.
+func HoldsData(ctx context.Context, arcaveProjectStore storages.Navigator) (bool, error) {
+	files, dirs, err := arcaveProjectStore.ListDir(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list arcave project store: %w", err)
+	}
+	if len(files) > 0 {
+		return true, nil
+	}
+	return slices.ContainsFunc(dirs, func(dir storages.Storager) bool {
+		return dir.Dirname() != namespaceKeys
+	}), nil
+}
+
+// Encrypt wraps an arcave project store so that every object below it is an age file to
+// identity; keys/ is reached through Keys on the store as Root opened it.
+func Encrypt(arcaveProjectStore storages.Storager, identity *age.X25519Identity) (storages.Storager, error) {
+	store, err := encrypted.New(arcaveProjectStore, identity)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt arcave project store: %w", err)
+	}
+	return store, nil
 }
 
 // Session descends from an arcave project store to sessions/<id>.
