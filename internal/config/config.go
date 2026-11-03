@@ -408,11 +408,12 @@ func (g GC) Validate() error {
 	return nil
 }
 
-// Backends is one optional section per snapshot backend. The arms are pointers
-// so a project that never names a backend carries no section for it.
+// Backends is one section per snapshot backend. The cdc arm is a pointer so a
+// project that never names cdc carries no section for it; fullcopy is one key
+// with a default, and every project carries it.
 type Backends struct {
-	FullCopy *FullCopyBackend `yaml:"fullcopy,omitempty" mapstructure:"fullcopy"`
-	CDC      *CDCBackend      `yaml:"cdc,omitempty" mapstructure:"cdc"`
+	FullCopy FullCopyBackend `yaml:"fullcopy" mapstructure:"fullcopy"`
+	CDC      *CDCBackend     `yaml:"cdc,omitempty" mapstructure:"cdc"`
 }
 
 // FullCopyBackend configures the wholesale backend. Compression reaches only new
@@ -464,13 +465,11 @@ type CDCBackend struct {
 	NetworkMode string `yaml:"network_mode" mapstructure:"network_mode"`
 }
 
-// Validate checks the arms that are present. An absent arm is not an error: a
-// project that does not use a backend does not have to configure it.
+// Validate checks the arms that are present. An absent cdc arm is not an error: a
+// project that does not use cdc does not have to configure it.
 func (b Backends) Validate() error {
-	if b.FullCopy != nil {
-		if err := b.FullCopy.Validate(); err != nil {
-			return err
-		}
+	if err := b.FullCopy.Validate(); err != nil {
+		return err
 	}
 	if b.CDC == nil {
 		return nil
@@ -639,32 +638,11 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.GC.RestoredLayerGrace == nil {
 		c.GC.RestoredLayerGrace = utils.New(DefaultRestoredLayerGrace)
 	}
-	c.applyFullCopyDefaults()
+	// Whatever snapshot.backend says: a label may route a volume through fullcopy.
+	if c.Backends.FullCopy.Compression == "" {
+		c.Backends.FullCopy.Compression = CompressionZstd
+	}
 	c.applyCDCDefaults()
-}
-
-// applyFullCopyDefaults fills the fullcopy arm for a project that has one or names
-// fullcopy as its backend, as applyCDCDefaults does for cdc.
-func (c *Config) applyFullCopyDefaults() {
-	if c.Backends.FullCopy == nil && c.Snapshot.Backend != SnapshotBackendFullCopy {
-		return
-	}
-	fullCopy := FullCopyWithDefaults(c.Backends.FullCopy)
-	c.Backends.FullCopy = &fullCopy
-}
-
-// FullCopyWithDefaults resolves the backends.fullcopy section, absent section
-// included: a label may route a volume through fullcopy whatever snapshot.backend
-// says. ApplyDefaults and the DI root both read it through here.
-func FullCopyWithDefaults(configured *FullCopyBackend) FullCopyBackend {
-	fullCopy := FullCopyBackend{}
-	if configured != nil {
-		fullCopy = *configured
-	}
-	if fullCopy.Compression == "" {
-		fullCopy.Compression = CompressionZstd
-	}
-	return fullCopy
 }
 
 // applyCDCDefaults fills the cdc arm only for a project that has one or names cdc

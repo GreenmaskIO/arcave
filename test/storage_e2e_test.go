@@ -358,7 +358,7 @@ func writeStorageConfigWith(t *testing.T, projectRoot string, storage config.Sto
 	cfg.Storage = storage
 	cfg.Snapshot.Backend = backend.backend
 	if backend.compression != "" {
-		cfg.Backends.FullCopy = &config.FullCopyBackend{Compression: backend.compression}
+		cfg.Backends.FullCopy.Compression = backend.compression
 	}
 	data, err = yaml.Marshal(cfg)
 	require.NoError(t, err)

@@ -34,7 +34,7 @@ const (
 
 // The keys an archive is stored under, one per format.
 const (
-	archiveName     = "data.tar"
+	archiveNameTar  = "data.tar"
 	archiveNameZstd = "data.tar.zst"
 )
 
@@ -59,7 +59,7 @@ func (c Compression) archiveName() string {
 	if c == CompressionZstd {
 		return archiveNameZstd
 	}
-	return archiveName
+	return archiveNameTar
 }
 
 // Payload is what a fullcopy capture records: the format its archive is stored
@@ -68,35 +68,26 @@ type Payload struct {
 	Compression Compression `json:"compression"`
 }
 
-// DecodePayload reads back what a capture reported. A record that has been
-// through the store arrives as a map[string]any; one carrying no format is
-// CompressionNone, and one naming a format this backend cannot read is an error.
+// DecodePayload reads back what a capture reported — a map[string]any once it
+// has been through the store. No payload, or one naming no format, is CompressionNone.
 func DecodePayload(stored any) (Payload, error) {
-	var (
-		decoded     Payload
-		compression = CompressionNone
-		raw         []byte
-		err         error
-	)
-	switch stored := stored.(type) {
-	case Payload:
-		decoded = stored
-	case nil:
-	default:
-		if raw, err = json.Marshal(stored); err != nil {
+	var payload Payload
+	if stored != nil {
+		raw, err := json.Marshal(stored)
+		if err != nil {
 			return Payload{}, fmt.Errorf("re-encode fullcopy payload: %w", err)
 		}
-		if err = json.Unmarshal(raw, &decoded); err != nil {
+		if err := json.Unmarshal(raw, &payload); err != nil {
 			return Payload{}, fmt.Errorf("decode fullcopy payload: %w", err)
 		}
 	}
-	if decoded.Compression != "" {
-		compression = decoded.Compression
+	if payload.Compression == "" {
+		payload.Compression = CompressionNone
 	}
-	if err = compression.Validate(); err != nil {
+	if err := payload.Compression.Validate(); err != nil {
 		return Payload{}, err
 	}
-	return Payload{Compression: compression}, nil
+	return payload, nil
 }
 
 // newEncoder wraps w in the format's encoder; Close flushes it and leaves w open.

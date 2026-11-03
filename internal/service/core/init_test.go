@@ -160,7 +160,6 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	assert.Equal(t, "myproj", name)
 	assert.Equal(t, "myproj", saved.Project.Name)
 	assert.Equal(t, filepath.Join(".arcave", "storage"), saved.Storage.DirectoryPath())
-	require.NotNil(t, saved.Backends.FullCopy, "the template names the default backend's compression")
 	assert.Equal(t, config.CompressionZstd, saved.Backends.FullCopy.Compression)
 	cw.AssertExpectations(t)
 }

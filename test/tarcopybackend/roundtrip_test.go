@@ -167,7 +167,7 @@ func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 		cli:     cli,
 		engine:  engine,
 		store:   store,
-		factory: fullcopy.NewFactory(engine, fullcopy.Options{Compression: compression}),
+		factory: fullcopy.NewFactory(engine, compression),
 	}
 }
 

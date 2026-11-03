@@ -758,7 +758,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil)
 
 	docker := &fakeVolumeStreamer{payload: "live bytes"}
-	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker, fullcopy.Options{Compression: fullcopy.CompressionNone}))
+	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker, fullcopy.CompressionNone))
 	require.NoError(t, err)
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},

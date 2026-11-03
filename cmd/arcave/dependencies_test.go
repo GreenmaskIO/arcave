@@ -37,48 +37,11 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
-
-// newFullCopyOptions carries the config's token into the backend's format, an
-// absent section included: fullcopy is buildable whatever snapshot.backend says.
-func TestNewFullCopyOptions(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  config.FullCopyBackend
-		want fullcopy.Options
-	}{
-		{
-			name: "an absent section compresses with zstd",
-			cfg:  config.FullCopyWithDefaults(nil),
-			want: fullcopy.Options{Compression: fullcopy.CompressionZstd},
-		},
-		{
-			name: "an empty section compresses with zstd",
-			cfg:  config.FullCopyWithDefaults(&config.FullCopyBackend{}),
-			want: fullcopy.Options{Compression: fullcopy.CompressionZstd},
-		},
-		{
-			name: "none stores the tar as is",
-			cfg:  config.FullCopyBackend{Compression: config.CompressionNone},
-			want: fullcopy.Options{Compression: fullcopy.CompressionNone},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := newFullCopyOptions(tt.cfg)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
 
 // newCDCOptions is the translation that keeps internal/config free of any package
 // carrying a client: the config's own vocabulary in, the backend's own out.

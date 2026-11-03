@@ -66,7 +66,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 		{
 			name:        "none stores the tar as is",
 			compression: CompressionNone,
-			wantKey:     captureDir + archiveName,
+			wantKey:     captureDir + archiveNameTar,
 			wantStored: func(t *testing.T, stat model.SnapshotStat, object string) {
 				assert.Equal(t, tarStream, object)
 				assert.Equal(t, stat.SizeBytes, stat.StoredBytes, "the archive is stored whole")
@@ -136,7 +136,7 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			if tt.putErr != nil {
 				spec = refusingStore{Storager: store, err: tt.putErr}
 			}
-			snapshotter, err := NewFactory(docker, Options{Compression: tt.compression}).
+			snapshotter, err := NewFactory(docker, tt.compression).
 				New(model.BackendSpec{Store: spec, Volume: volume})
 			require.NoError(t, err)
 
@@ -200,7 +200,7 @@ func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 	docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).
 		Return(io.NopCloser(strings.NewReader(tarStream)), nil).Once()
 	named, other := newStore(t, "named"), newStore(t, "other")
-	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+	snapshotter, err := NewFactory(docker, CompressionZstd).
 		New(model.BackendSpec{Store: named, Volume: volume})
 	require.NoError(t, err)
 
@@ -225,7 +225,7 @@ func TestSnapshotter_Snapshot_ReportsTheTarBytes(t *testing.T) {
 	store := newStore(t, "savepoints")
 	recorder := &bytesRecorder{}
 	ctx := newBytesStepContext(recorder, "volume.capture")
-	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+	snapshotter, err := NewFactory(docker, CompressionZstd).
 		New(model.BackendSpec{Store: store, Volume: volume})
 	require.NoError(t, err)
 
@@ -275,7 +275,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 		},
 		{
 			name:       "an uncompressed archive reaches the volume verbatim",
-			seedKey:    captureDir + archiveName,
+			seedKey:    captureDir + archiveNameTar,
 			reqPayload: Payload{Compression: CompressionNone},
 			verify: func(t *testing.T, err error, restored string) {
 				require.NoError(t, err)
@@ -284,7 +284,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 		},
 		{
 			name:    "a record with no payload is uncompressed",
-			seedKey: captureDir + archiveName,
+			seedKey: captureDir + archiveNameTar,
 			verify: func(t *testing.T, err error, restored string) {
 				require.NoError(t, err)
 				assert.Equal(t, tarStream, restored)
@@ -333,7 +333,7 @@ func TestSnapshotter_Restore(t *testing.T) {
 					}).
 					Return(tt.writeErr).Once()
 			}
-			snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+			snapshotter, err := NewFactory(docker, CompressionZstd).
 				New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
@@ -353,7 +353,7 @@ func TestSnapshotter_Restore_RefusesAnUnknownCompression(t *testing.T) {
 	// Arrange
 	docker := &mockVolumeStreamer{}
 	store := newStore(t, "savepoints")
-	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+	snapshotter, err := NewFactory(docker, CompressionZstd).
 		New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
 	require.NoError(t, err)
 
@@ -411,7 +411,7 @@ func TestSnapshotter_Restore_ReportsTheTarBytes(t *testing.T) {
 			assert.NoError(t, err)
 		}).
 		Return(nil).Once()
-	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+	snapshotter, err := NewFactory(docker, CompressionZstd).
 		New(model.BackendSpec{Store: store, Volume: volume})
 	require.NoError(t, err)
 
@@ -451,12 +451,12 @@ func TestSnapshotter_Remove(t *testing.T) {
 		},
 		{
 			name:       "deletes the uncompressed archive of a record read back from the store",
-			seed:       []string{captureDir + archiveName},
+			seed:       []string{captureDir + archiveNameTar},
 			reqPayload: map[string]any{"compression": "none"},
 		},
 		{
 			name: "a record with no payload deletes the uncompressed archive",
-			seed: []string{captureDir + archiveName},
+			seed: []string{captureDir + archiveNameTar},
 		},
 		{
 			name:       "an archive already gone is not an error",
@@ -464,15 +464,15 @@ func TestSnapshotter_Remove(t *testing.T) {
 		},
 		{
 			name:       "only the format the payload names is deleted",
-			seed:       []string{captureDir + archiveName},
+			seed:       []string{captureDir + archiveNameTar},
 			reqPayload: Payload{Compression: CompressionZstd},
-			want:       []string{captureDir + archiveName},
+			want:       []string{captureDir + archiveNameTar},
 		},
 		{
 			name:       "an unknown format deletes nothing",
-			seed:       []string{captureDir + archiveName},
+			seed:       []string{captureDir + archiveNameTar},
 			reqPayload: map[string]any{"compression": "lz4"},
-			want:       []string{captureDir + archiveName},
+			want:       []string{captureDir + archiveNameTar},
 			wantErrIs:  errUnknownCompression,
 		},
 	}
@@ -486,7 +486,7 @@ func TestSnapshotter_Remove(t *testing.T) {
 			for _, key := range tt.seed {
 				require.NoError(t, store.PutObject(ctx, key, strings.NewReader("archive")))
 			}
-			snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+			snapshotter, err := NewFactory(docker, CompressionZstd).
 				New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
@@ -616,7 +616,7 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 				// Arrange
 				docker := &mockVolumeStreamer{}
 				store := newStore(t, "savepoints")
-				snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
+				snapshotter, err := NewFactory(docker, CompressionZstd).New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
 				require.NoError(t, err)
 
 				// Act
@@ -684,7 +684,7 @@ func TestFactory_New(t *testing.T) {
 			}
 
 			// Act
-			snapshotter, err := NewFactory(docker, Options{Compression: compression}).New(spec)
+			snapshotter, err := NewFactory(docker, compression).New(spec)
 
 			// Assert
 			if tt.wantErrIs != nil {

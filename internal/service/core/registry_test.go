@@ -68,7 +68,7 @@ func TestSnapshotBackendRegistry_New(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{}, fullcopy.Options{Compression: fullcopy.CompressionNone}))
+			registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{}, fullcopy.CompressionNone))
 			require.NoError(t, err)
 
 			// Act
@@ -134,7 +134,7 @@ func TestNewSnapshotBackendRegistry_DuplicateKind(t *testing.T) {
 	docker := &fakeVolumeStreamer{}
 
 	// Act
-	_, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker, fullcopy.Options{Compression: fullcopy.CompressionNone}), fullcopy.NewFactory(docker, fullcopy.Options{Compression: fullcopy.CompressionNone}))
+	_, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker, fullcopy.CompressionNone), fullcopy.NewFactory(docker, fullcopy.CompressionNone))
 
 	// Assert
 	require.ErrorIs(t, err, ErrBackendAlreadyRegistered)

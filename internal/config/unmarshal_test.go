@@ -270,7 +270,6 @@ func TestUnmarshal(t *testing.T) {
 			name: "a full-copy project compresses with zstd by default",
 			yaml: "snapshot:\n  backend: fullcopy\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.FullCopy)
 				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
 			},
 		},
@@ -278,22 +277,20 @@ func TestUnmarshal(t *testing.T) {
 			name: "an explicit compression is read back",
 			yaml: "backends:\n  fullcopy:\n    compression: none\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.FullCopy)
 				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
 			},
 		},
 		{
-			name: "a cdc project gets no fullcopy arm",
+			name: "a cdc project compresses a volume a label routes through fullcopy too",
 			yaml: "snapshot:\n  backend: cdc\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Nil(t, cfg.Backends.FullCopy)
+				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
 			},
 		},
 		{
 			name: "a fullcopy section under a cdc project is still honoured",
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  fullcopy:\n    compression: none\n",
 			verify: func(t *testing.T, cfg Config) {
-				require.NotNil(t, cfg.Backends.FullCopy)
 				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
 			},
 		},

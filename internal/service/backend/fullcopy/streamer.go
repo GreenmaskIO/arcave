@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"sync"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -56,24 +55,19 @@ type VolumeStreamer interface {
 }
 
 // Options is what every capture of one factory shares.
-type Options struct {
-	// Compression is the format a new capture stores its archive in. A restore
-	// and a remove read the format off the record instead.
-	Compression Compression
-}
 
 // Factory builds fullcopy snapshotters over one shared Docker engine.
 type Factory struct {
-	docker VolumeStreamer
-	opts   Options
+	docker      VolumeStreamer
+	compression Compression
 }
 
 // NewFactory builds the factory. Not New, so that building off it does not read
 // New(docker).New(spec) at every call site.
-func NewFactory(docker VolumeStreamer, opts Options) *Factory {
+func NewFactory(docker VolumeStreamer, compression Compression) *Factory {
 	return &Factory{
-		docker: docker,
-		opts:   opts,
+		docker:      docker,
+		compression: compression,
 	}
 }
 
@@ -86,14 +80,14 @@ func (s *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 	if spec.Store == nil {
 		return nil, errNoStore
 	}
-	if err := s.opts.Compression.Validate(); err != nil {
+	if err := s.compression.Validate(); err != nil {
 		return nil, err
 	}
 	return &Snapshotter{
 		volume:      spec.Volume,
 		store:       spec.Store,
 		docker:      s.docker,
-		compression: s.opts.Compression,
+		compression: s.compression,
 	}, nil
 }
 
@@ -154,35 +148,25 @@ func (s *Snapshotter) Snapshot(
 // bytes stored. The encoder writes into a pipe the store reads, so a failure on
 // either side unblocks the other, and the side that failed first is the error.
 func (s *Snapshotter) storeArchive(ctx context.Context, store storages.Writer, tarStream io.Reader) (int64, error) {
-	var (
-		pr, pw    = io.Pipe()
-		stored    = utils.NewCountingReader(pr)
-		firstOnce sync.Once
-		firstErr  error
-	)
-	// Recorded before the pipe closes, so the other side's echo of it never wins.
-	fail := func(err error) {
-		if err != nil {
-			firstOnce.Do(func() { firstErr = err })
-		}
-	}
+	pr, pw := io.Pipe()
+	stored := utils.NewCountingReader(pr)
+	// Whichever side fails first closes the pipe with its error, so the other
+	// side fails with the same cause.
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		err := s.encode(groupCtx, pw, tarStream)
-		fail(err)
 		//nolint:errcheck // the error travels to the store's read
 		pw.CloseWithError(err)
 		return err
 	})
 	group.Go(func() error {
 		err := store.PutObject(groupCtx, s.compression.archiveName(), stored)
-		fail(err)
 		//nolint:errcheck // the error travels to the encoder's write
 		pr.CloseWithError(err)
 		return err
 	})
 	if err := group.Wait(); err != nil {
-		return 0, firstErr
+		return 0, err
 	}
 	return stored.N(), nil
 }
