@@ -12,7 +12,7 @@ A config key is set in the environment as `ARCAVE_<KEY>`, with dots replaced by 
 
 A variable is read only for a key arcave already knows about — one a flag binds, or one your `.arcave/config.yaml` carries. A key that is in neither place is not read from the environment at all.
 
-These are bound to flags, so they work in any project:
+These are bound, so they work in any project — the first five to flags, the last to nothing but the environment:
 
 | Variable | Config key |
 |---|---|
@@ -21,6 +21,7 @@ These are bound to flags, so they work in any project:
 | `ARCAVE_COMPOSE_WAIT_TIMEOUT` | `compose.wait_timeout` |
 | `ARCAVE_COMPOSE_STOP_TIMEOUT` | `compose.stop_timeout` |
 | `ARCAVE_COMPOSE_PROGRESS` | `compose.progress` |
+| `ARCAVE_ENCRYPTION_KEY` | `encryption.key` |
 
 `ARCAVE_PROJECT_NAME` is read as `project.name`, which every config carries, **and** as the compose project — see below.
 
@@ -81,7 +82,7 @@ See [Output and exit codes](output.md).
 
 ## `ARCAVE_ENCRYPTION_KEY`
 
-The store key, by convention: the config [`arcave init --encrypt`](cli/init.md) writes reads `encryption.key` from it, and fails while it is unset. arcave reads it only through that `${ARCAVE_ENCRYPTION_KEY?…}` in the file, and `init --encrypt` to decide whether to generate a key. See [`encryption`](configuration.md#encryption).
+The store key, `encryption.key`: a secret [`arcave init --encrypt`](cli/init.md) never writes, so it is the one key bound to the environment with no flag and read whether or not the file carries it. A `key:` in the file is the fallback. `init --encrypt` reads it to decide whether to generate a key. See [`encryption`](configuration.md#encryption).
 
 ## Variables that are not arcave's
 

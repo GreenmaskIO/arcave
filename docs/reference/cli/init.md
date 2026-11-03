@@ -24,7 +24,7 @@ arcave init [flags]
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
-`--encrypt` writes the [`encryption`](../configuration.md#encryption) block with `key: ${ARCAVE_ENCRYPTION_KEY?…}` — the reference, never a key. While `ARCAVE_ENCRYPTION_KEY` is unset it generates a key and prints it once, on stderr; save it, since arcave keeps no copy:
+`--encrypt` writes the [`encryption`](../configuration.md#encryption) block with `enabled: true` and no key: the key is read from `ARCAVE_ENCRYPTION_KEY` and never written next to the code. While `ARCAVE_ENCRYPTION_KEY` is unset it generates a key and prints it once, on stderr; save it, since arcave keeps no copy:
 
 ```text title="stderr"
 Store key generated: save it, arcave cannot recover it.

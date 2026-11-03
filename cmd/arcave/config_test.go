@@ -29,6 +29,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
+// testStoreKey is a key the resolution carries as any string; only the store parses it.
+const testStoreKey = "AGE-SECRET-KEY-1TESTKEY"
+
 func TestResolveConfig(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -146,6 +149,33 @@ func TestResolveConfig(t *testing.T) {
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, 90*time.Second, cfg.Compose.WaitTimeout)
+			},
+		},
+		{
+			name:      "the store key reaches encryption.key from the environment with no line in the file",
+			file:      "encryption:\n  enabled: true\n",
+			env:       map[string]string{encryptionKeyEnv: testStoreKey},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, config.Encryption{Enabled: true, Key: testStoreKey}, cfg.Encryption)
+			},
+		},
+		{
+			name:      "an empty variable falls back to the key in the file",
+			file:      "encryption:\n  enabled: true\n  key: AGE-SECRET-KEY-1INFILE\n",
+			env:       map[string]string{encryptionKeyEnv: ""},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, "AGE-SECRET-KEY-1INFILE", cfg.Encryption.Key)
+			},
+		},
+		{
+			name:      "the store key in the environment beats one in the file",
+			file:      "encryption:\n  enabled: true\n  key: AGE-SECRET-KEY-1INFILE\n",
+			env:       map[string]string{encryptionKeyEnv: testStoreKey},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, testStoreKey, cfg.Encryption.Key)
 			},
 		},
 	}

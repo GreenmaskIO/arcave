@@ -40,10 +40,11 @@ func TestParseKey(t *testing.T) {
 		name    string
 		key     string
 		wantErr error
+		wantMsg string
 	}{
 		{name: "a generated key", key: newTestKey(t)},
 		{name: "a malformed key", key: malformed, wantErr: model.ErrInvalidStoreKey},
-		{name: "an empty key", key: "", wantErr: model.ErrInvalidStoreKey},
+		{name: "no key", key: "", wantErr: model.ErrInvalidStoreKey, wantMsg: "none set"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,6 +54,7 @@ func TestParseKey(t *testing.T) {
 			// Assert
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMsg)
 				assert.NotContains(t, err.Error(), malformed, "the key stays out of the error")
 				assert.Nil(t, identity)
 				return

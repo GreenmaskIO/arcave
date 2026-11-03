@@ -78,9 +78,9 @@ import (
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
 
-// encryptionMarkerSettle is how long a host that marks an arcave project encrypted waits
-// before it reads the marker back, as a session lock claim does.
-var encryptionMarkerSettle = sessionlock.DefaultSettle
+// storeAdmitter admits the arcave project's store for the encryption section. Package state
+// for one knob, the marker's settle, which the tests turn to 0.
+var storeAdmitter = storekey.NewAdmitter()
 
 // composeResourceObject is the resource kind of a compose event whose id names no kind of object.
 const composeResourceObject = "object"
@@ -532,8 +532,6 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	var (
 		plain    storages.Storager
 		identity *age.X25519Identity
-		marked   bool
-		torn     error
 		store    storages.Storager
 		password string
 		err      error
@@ -543,7 +541,7 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	}
 	markers := encryptionmarker.New(plain)
 	if !cfg.Encryption.Enabled {
-		if err = requirePlainStore(ctx, markers); err != nil {
+		if err = storeAdmitter.RequirePlain(ctx, markers); err != nil {
 			return openedArcaveProject{}, newStoreKeyError(err)
 		}
 		return openedArcaveProject{
@@ -555,17 +553,8 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
 		return openedArcaveProject{}, newStoreKeyError(err)
 	}
-	recipient := identity.Recipient().String()
-	switch marked, err = requireEncryptedStore(ctx, markers, recipient); {
-	case errors.Is(err, model.ErrInvalidEncryptionMarker):
-		torn = err
-	case err != nil:
+	if err = storeAdmitter.AdmitEncrypted(ctx, plain, markers, identity); err != nil {
 		return openedArcaveProject{}, newStoreKeyError(err)
-	}
-	if !marked {
-		if err = markEncryptedStore(ctx, plain, markers, recipient, torn); err != nil {
-			return openedArcaveProject{}, newStoreKeyError(err)
-		}
 	}
 	if store, err = storefactory.Encrypt(plain, identity); err != nil {
 		return openedArcaveProject{}, err
@@ -580,76 +569,11 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	}, nil
 }
 
-// requirePlainStore refuses an arcave project an encrypted host has marked: model.ErrStoreEncrypted.
-func requirePlainStore(ctx context.Context, markers *encryptionmarker.Repository) error {
-	_, found, err := markers.Get(ctx)
-	if err != nil {
-		return err
-	}
-	if found {
-		return model.ErrStoreEncrypted
-	}
-	return nil
-}
-
-// requireEncryptedStore reports whether the arcave project is marked for recipient, refusing
-// one marked for another; a marker no host wrote whole is model.ErrInvalidEncryptionMarker.
-func requireEncryptedStore(ctx context.Context, markers *encryptionmarker.Repository, recipient string) (bool, error) {
-	marker, found, err := markers.Get(ctx)
-	switch {
-	case err != nil:
-		return false, err
-	case !found:
-		return false, nil
-	case marker.Recipient != recipient:
-		return false, fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
-	}
-	return true, nil
-}
-
-// markEncryptedStore marks an empty arcave project for recipient — a torn marker over it
-// written again — refusing one holding data with torn, else model.ErrStoreUnencrypted, and
-// reads the marker back after the settle, so a host racing with another key is refused
-// before it writes anything.
-func markEncryptedStore(
-	ctx context.Context, plain storages.Navigator, markers *encryptionmarker.Repository, recipient string, torn error,
-) error {
-	holdsData, err := storefactory.HoldsData(ctx, plain, encryptionmarker.FileName)
-	if err != nil {
-		return err
-	}
-	if holdsData {
-		if torn != nil {
-			return torn
-		}
-		return model.ErrStoreUnencrypted
-	}
-	if err = markers.Put(ctx, model.NewEncryptionMarker(recipient)); err != nil {
-		return err
-	}
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-time.After(encryptionMarkerSettle):
-	}
-	marker, found, err := markers.Get(ctx)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return fmt.Errorf("%s did not read back", encryptionmarker.FileName)
-	}
-	if marker.Recipient != recipient {
-		return fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
-	}
-	return nil
-}
-
 // newStoreKeyError adds the fix to a store the encryption section does not open.
 func newStoreKeyError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrInvalidStoreKey), errors.Is(err, model.ErrWrongStoreKey):
-		return fmt.Errorf("open the store: %w (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)", err)
+		return fmt.Errorf("open the store: %w (check encryption.key, "+encryptionKeyEnv+" by default)", err)
 	case errors.Is(err, model.ErrStoreUnencrypted):
 		return fmt.Errorf("open the store: %w: the arcave project was written without encryption, "+
 			"and arcave does not encrypt it in place (set encryption.enabled: false, "+

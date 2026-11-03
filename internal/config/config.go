@@ -225,29 +225,13 @@ func (p Project) Validate() error {
 	return nil
 }
 
-// Encryption encrypts every object arcave writes to the store, to Key.
+// Encryption encrypts every object arcave writes to the store, to Key. A missing or
+// malformed Key is refused where the store opens, not here: init writes Enabled with no
+// Key, and a Key in the environment reaches a plain project too, where it is ignored.
 type Encryption struct {
 	Enabled bool `yaml:"enabled,omitempty" mapstructure:"enabled"`
 	// Key is the age identity every object is encrypted to. Secret.
 	Key string `yaml:"key,omitempty" mapstructure:"key"`
-}
-
-const (
-	// KeyEnv is the variable the key init writes is read from.
-	KeyEnv = "ARCAVE_ENCRYPTION_KEY"
-	// KeyFromEnv is the key init writes: read from KeyEnv, refused unset.
-	KeyFromEnv = "${" + KeyEnv + "?set " + KeyEnv + " to the store key}"
-)
-
-// Validate refuses encryption without a key, and a key that would do nothing.
-func (e Encryption) Validate() error {
-	switch {
-	case e.Enabled && e.Key == "":
-		return fmt.Errorf("%w: encryption.enabled needs encryption.key", ErrInvalid)
-	case !e.Enabled && e.Key != "":
-		return fmt.Errorf("%w: encryption.key is set but encryption.enabled is not", ErrInvalid)
-	}
-	return nil
 }
 
 // Common holds the settings every workflow shares.
@@ -738,9 +722,6 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Storage.Validate(); err != nil {
-		return err
-	}
-	if err := c.Encryption.Validate(); err != nil {
 		return err
 	}
 	if err := c.Snapshot.Validate(); err != nil {

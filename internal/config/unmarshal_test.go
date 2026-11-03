@@ -15,7 +15,6 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -492,14 +491,18 @@ func TestUnmarshal(t *testing.T) {
 			},
 		},
 		{
-			name:       "encryption without a key is rejected",
-			yaml:       "encryption:\n  enabled: true\n",
-			wantErrMsg: "encryption.enabled needs encryption.key",
+			name: "encryption without a key is the store's to refuse, not the config's",
+			yaml: "encryption:\n  enabled: true\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, Encryption{Enabled: true}, cfg.Encryption)
+			},
 		},
 		{
-			name:       "a key with encryption off is rejected",
-			yaml:       "encryption:\n  key: AGE-SECRET-KEY-1TEST\n",
-			wantErrMsg: "encryption.key is set but encryption.enabled is not",
+			name: "a key with encryption off is kept and ignored",
+			yaml: "encryption:\n  key: AGE-SECRET-KEY-1TEST\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, Encryption{Key: "AGE-SECRET-KEY-1TEST"}, cfg.Encryption)
+			},
 		},
 		{
 			name:       "an unknown key under backends is rejected",
@@ -575,9 +578,6 @@ func TestUnmarshal_DefaultsTheProjectNameFromTheDirectory(t *testing.T) {
 func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
 	t.Setenv("ARCAVE_IT_S3_SECRET", "s3cr3t")
 	t.Setenv("ARCAVE_IT_WAIT", "45s")
-	// Unset for the run, restored after it.
-	t.Setenv("ARCAVE_ENCRYPTION_KEY", "")
-	require.NoError(t, os.Unsetenv("ARCAVE_ENCRYPTION_KEY"))
 
 	tests := []struct {
 		name       string
@@ -628,11 +628,6 @@ func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
 				require.NotNil(t, cfg.Storage.S3)
 				assert.Empty(t, cfg.Storage.S3.Prefix)
 			},
-		},
-		{
-			name:       "the key init writes is refused while ARCAVE_ENCRYPTION_KEY is unset",
-			yaml:       "encryption:\n  enabled: true\n  key: " + KeyFromEnv + "\n",
-			wantErrMsg: "set ARCAVE_ENCRYPTION_KEY to the store key",
 		},
 		{
 			name:       "an unset required variable is an error",

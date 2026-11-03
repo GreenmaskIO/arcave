@@ -33,7 +33,7 @@ func TestNewInitTemplate(t *testing.T) {
 		want    config.Encryption
 	}{
 		{name: "a plain store"},
-		{name: "an encrypted store names the key's variable", encrypt: true, want: config.Encryption{Enabled: true, Key: config.KeyFromEnv}},
+		{name: "an encrypted store writes no key", encrypt: true, want: config.Encryption{Enabled: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

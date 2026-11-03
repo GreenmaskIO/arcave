@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package storekey generates and parses the store key encryption.key names, and derives the
-// restic password from it.
+// Package storekey generates and parses the store key encryption.key names, derives the
+// restic password from it, and admits an arcave project's store for it.
 package storekey
 
 import (
@@ -41,8 +41,12 @@ func NewKey() (string, error) {
 	return identity.String(), nil
 }
 
-// ParseKey parses a store key; a malformed one is model.ErrInvalidStoreKey, its text left out.
+// ParseKey parses a store key; none, or a malformed one, is model.ErrInvalidStoreKey, its
+// text left out.
 func ParseKey(key string) (*age.X25519Identity, error) {
+	if key == "" {
+		return nil, fmt.Errorf("%w: none set", model.ErrInvalidStoreKey)
+	}
 	identity, err := age.ParseX25519Identity(key)
 	if err != nil {
 		return nil, fmt.Errorf("%w: not an age X25519 identity", model.ErrInvalidStoreKey)

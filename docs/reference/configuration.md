@@ -27,7 +27,6 @@ storage:
         path: .arcave/storage
 encryption:
     enabled: true
-    key: ${ARCAVE_ENCRYPTION_KEY?set ARCAVE_ENCRYPTION_KEY to the store key}
 snapshot:
     backend: cdc
 writable_layers:
@@ -274,15 +273,18 @@ Encrypts everything arcave writes to the store, on the host, before it leaves it
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `encryption.enabled` | bool | `false` | Encrypt the store. |
-| `encryption.key` | string | `""` | **Secret.** The [age](https://age-encryption.org) identity every object is encrypted to, `AGE-SECRET-KEY-1…`. Required with `enabled`, refused without it. |
+| `encryption.key` | string | `""` | **Secret.** The [age](https://age-encryption.org) identity every object is encrypted to, `AGE-SECRET-KEY-1…`. Read from `ARCAVE_ENCRYPTION_KEY` in any project, file or no file. An encrypted store refuses to open without it; a plain one ignores it. |
 
 ```yaml
 encryption:
   enabled: true
-  key: ${ARCAVE_ENCRYPTION_KEY?set ARCAVE_ENCRYPTION_KEY to the store key}
 ```
 
-[`arcave init --encrypt`](cli/init.md) writes exactly that block and prints a newly generated key once on stderr; the key itself stays in the environment. `age-keygen` makes one just as well.
+```shell
+export ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…
+```
+
+[`arcave init --encrypt`](cli/init.md) writes exactly that block and prints a newly generated key once on stderr; the key itself stays in the environment, which beats a `key:` line in the file. `age-keygen` makes one just as well.
 
 **The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes into an empty arcave project. Every host sharing the store needs the same key in its config. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repository password is derived from the key.
 
@@ -295,8 +297,7 @@ open the store: invalid store key: not an age X25519 identity (check encryption.
 open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 open the store: the store is not encrypted: the arcave project was written without encryption, and arcave does not encrypt it in place (set encryption.enabled: false, or point storage at an empty location)
 open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
-encryption.enabled needs encryption.key
-encryption.key is set but encryption.enabled is not
+open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 ```
 
 What encryption hides, and what it does not, is in [Limitations](limitations.md#encryption-hides-contents-not-shape).

@@ -32,7 +32,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
-	"github.com/greenmaskio/storages/inmemory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -885,7 +884,7 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 // reads back with its key, a plain one plainly, and a section that does not fit the store is
 // refused with the fix, and writes nothing — a plain store is never encrypted in place.
 func TestOpenArcaveProjectStore(t *testing.T) {
-	useNoMarkerSettle(t)
+	useFastStoreAdmitter(t)
 	key := newTestStoreKey(t)
 	encrypted := func(t *testing.T, projectPath string) {
 		t.Helper()
@@ -936,6 +935,20 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			wantMsg:    "check encryption.key",
 		},
 		{
+			name:       "an encrypted store with encryption off and the key still exported",
+			stored:     encrypted,
+			encryption: config.Encryption{Key: key},
+			wantErr:    model.ErrStoreEncrypted,
+			wantMsg:    "set encryption.enabled: true",
+		},
+		{
+			name:       "an encrypted store with no key",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true},
+			wantErr:    model.ErrInvalidStoreKey,
+			wantMsg:    "none set (check encryption.key",
+		},
+		{
 			name:       "an encrypted store with a malformed key",
 			stored:     encrypted,
 			encryption: config.Encryption{Enabled: true, Key: "AGE-SECRET-KEY-1NOTAKEY"},
@@ -953,6 +966,15 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			stored: plain,
 			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
 				assert.Equal(t, cdc.DefaultPassword, opened.resticPassword)
+				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
+			},
+		},
+		{
+			name:       "a plain store with the key exported and encryption off",
+			stored:     plain,
+			encryption: config.Encryption{Key: key},
+			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
+				assert.Equal(t, cdc.DefaultPassword, opened.resticPassword, "the key is ignored")
 				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
 			},
 		},
@@ -1057,43 +1079,12 @@ func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Enc
 	return cfg
 }
 
-// A host whose marker another host's, with another key, overwrote within the settle is refused.
-func TestMarkEncryptedStore_LosesTheRace(t *testing.T) {
-	// Arrange
-	useNoMarkerSettle(t)
-	ours, err := storekey.ParseKey(newTestStoreKey(t))
-	require.NoError(t, err)
-	rival, err := storekey.ParseKey(newTestStoreKey(t))
-	require.NoError(t, err)
-	store := &rivalMarkerStore{Storager: inmemory.New(""), rival: rival.Recipient().String()}
-
-	// Act
-	err = markEncryptedStore(t.Context(), store, encryptionmarker.New(store), ours.Recipient().String(), nil)
-
-	// Assert
-	require.ErrorIs(t, err, model.ErrWrongStoreKey)
-	assert.ErrorContains(t, err, rival.Recipient().String())
-}
-
-// rivalMarkerStore lands a rival host's marker right after every marker written.
-type rivalMarkerStore struct {
-	storages.Storager
-	rival string
-}
-
-func (s *rivalMarkerStore) PutObject(ctx context.Context, key string, body io.Reader) error {
-	if err := s.Storager.PutObject(ctx, key, body); err != nil {
-		return err
-	}
-	return encryptionmarker.New(s.Storager).Put(ctx, model.NewEncryptionMarker(s.rival))
-}
-
-// useNoMarkerSettle reads an encryption marker back with no wait.
-func useNoMarkerSettle(t *testing.T) {
+// useFastStoreAdmitter admits the store with no settle on the marker's read-back.
+func useFastStoreAdmitter(t *testing.T) {
 	t.Helper()
-	settle := encryptionMarkerSettle
-	encryptionMarkerSettle = 0
-	t.Cleanup(func() { encryptionMarkerSettle = settle })
+	opener := storeAdmitter
+	storeAdmitter = storekey.NewAdmitter().SetSettle(0)
+	t.Cleanup(func() { storeAdmitter = opener })
 }
 
 func newTestStoreKey(t *testing.T) string {

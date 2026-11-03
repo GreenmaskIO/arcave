@@ -16,7 +16,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -51,7 +50,8 @@ func runConfigInit(cmd *cobra.Command, _ []string) error {
 		err       error
 	)
 	if configInitEncrypt {
-		if keyNotice, err = newInitKeyNotice(os.Getenv(config.KeyEnv)); err != nil {
+		// projectCfg carries the variable: setupViper binds encryption.key to it.
+		if keyNotice, err = newInitKeyNotice(projectCfg.Encryption.Key); err != nil {
 			return err
 		}
 	}
@@ -66,17 +66,13 @@ func runConfigInit(cmd *cobra.Command, _ []string) error {
 	return err
 }
 
-// newInitTemplate is the config init writes: the defaults, name, and under encrypt the
-// encryption block naming the key's variable — the form, never the key, which would land
-// in a file next to the code.
+// newInitTemplate is the config init writes: the defaults, the name, and under encrypt
+// encryption on with no key — the key stays in encryptionKeyEnv, never in the file.
 func newInitTemplate(name string, encrypt bool) config.Config {
 	template := config.NewConfig()
 	template.Project.Name = name
 	if encrypt {
-		template.Encryption = config.Encryption{
-			Enabled: true,
-			Key:     config.KeyFromEnv,
-		}
+		template.Encryption = config.Encryption{Enabled: true}
 	}
 	return template
 }
@@ -86,17 +82,17 @@ func newInitTemplate(name string, encrypt bool) config.Config {
 func newInitKeyNotice(envKey string) (string, error) {
 	if envKey != "" {
 		if _, err := storekey.ParseKey(envKey); err != nil {
-			return "", fmt.Errorf("%s: %w", config.KeyEnv, err)
+			return "", fmt.Errorf("%s: %w", encryptionKeyEnv, err)
 		}
 		return fmt.Sprintf("The store is encrypted to the key in %s: keep it, arcave cannot recover it.\n",
-			config.KeyEnv), nil
+			encryptionKeyEnv), nil
 	}
 	key, err := storekey.NewKey()
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Store key generated: save it, arcave cannot recover it.\n  export %s=%s\n",
-		config.KeyEnv, key), nil
+		encryptionKeyEnv, key), nil
 }
 
 func init() {
@@ -106,7 +102,7 @@ func init() {
 	flags.BoolVar(&configInitOverride, "override", false,
 		"Overwrite an existing arcave configuration")
 	flags.BoolVar(&configInitEncrypt, "encrypt", false,
-		"Encrypt the store to the key read from ARCAVE_ENCRYPTION_KEY, generating one when unset")
+		"Encrypt the store to the key read from "+encryptionKeyEnv+", generating one when unset")
 
 	// No flag is bound: the template takes --name and --encrypt directly, and --override is
 	// transient. The storage is the directory one at its default path.
