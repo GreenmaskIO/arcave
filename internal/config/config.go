@@ -46,11 +46,20 @@ var ErrInvalid = errors.New("invalid config")
 
 // The tokens snapshot.backend accepts.
 const (
-	// SnapshotBackendFullCopy stores each mount's tar stream verbatim.
+	// SnapshotBackendFullCopy stores each mount's tar stream whole, in the format
+	// backends.fullcopy.compression names.
 	SnapshotBackendFullCopy = string(model.SnapshotBackendFullCopy)
 	// SnapshotBackendCDC captures into a restic repository that outlives any one
 	// savepoint, writing only the chunks that changed.
 	SnapshotBackendCDC = string(model.SnapshotBackendCDC)
+)
+
+// The formats backends.fullcopy.compression accepts.
+const (
+	// CompressionZstd stores each archive under zstd at its default level. The default.
+	CompressionZstd = "zstd"
+	// CompressionNone stores each archive as the daemon hands it over.
+	CompressionNone = "none"
 )
 
 // The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
@@ -402,7 +411,26 @@ func (g GC) Validate() error {
 // Backends is one optional section per snapshot backend. The arms are pointers
 // so a project that never names a backend carries no section for it.
 type Backends struct {
-	CDC *CDCBackend `yaml:"cdc,omitempty" mapstructure:"cdc"`
+	FullCopy *FullCopyBackend `yaml:"fullcopy,omitempty" mapstructure:"fullcopy"`
+	CDC      *CDCBackend      `yaml:"cdc,omitempty" mapstructure:"cdc"`
+}
+
+// FullCopyBackend configures the wholesale backend. Compression reaches only new
+// captures: a restore reads the format off the record.
+type FullCopyBackend struct {
+	// Compression is zstd (the default) or none.
+	Compression string `yaml:"compression" mapstructure:"compression"`
+}
+
+// Validate rejects a format the backend cannot write.
+func (f FullCopyBackend) Validate() error {
+	switch f.Compression {
+	case CompressionZstd, CompressionNone:
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported backends.fullcopy.compression %q (supported: %s, %s)", ErrInvalid,
+			f.Compression, CompressionZstd, CompressionNone)
+	}
 }
 
 // CDCBackend configures the content-defined-chunking backend: which restic image
@@ -439,6 +467,11 @@ type CDCBackend struct {
 // Validate checks the arms that are present. An absent arm is not an error: a
 // project that does not use a backend does not have to configure it.
 func (b Backends) Validate() error {
+	if b.FullCopy != nil {
+		if err := b.FullCopy.Validate(); err != nil {
+			return err
+		}
+	}
 	if b.CDC == nil {
 		return nil
 	}
@@ -606,7 +639,32 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.GC.RestoredLayerGrace == nil {
 		c.GC.RestoredLayerGrace = utils.New(DefaultRestoredLayerGrace)
 	}
+	c.applyFullCopyDefaults()
 	c.applyCDCDefaults()
+}
+
+// applyFullCopyDefaults fills the fullcopy arm for a project that has one or names
+// fullcopy as its backend, as applyCDCDefaults does for cdc.
+func (c *Config) applyFullCopyDefaults() {
+	if c.Backends.FullCopy == nil && c.Snapshot.Backend != SnapshotBackendFullCopy {
+		return
+	}
+	fullCopy := FullCopyWithDefaults(c.Backends.FullCopy)
+	c.Backends.FullCopy = &fullCopy
+}
+
+// FullCopyWithDefaults resolves the backends.fullcopy section, absent section
+// included: a label may route a volume through fullcopy whatever snapshot.backend
+// says. ApplyDefaults and the DI root both read it through here.
+func FullCopyWithDefaults(configured *FullCopyBackend) FullCopyBackend {
+	fullCopy := FullCopyBackend{}
+	if configured != nil {
+		fullCopy = *configured
+	}
+	if fullCopy.Compression == "" {
+		fullCopy.Compression = CompressionZstd
+	}
+	return fullCopy
 }
 
 // applyCDCDefaults fills the cdc arm only for a project that has one or names cdc

@@ -181,7 +181,7 @@ func newDependencies(
 	// The one place a volume's Backend becomes an instance, and the only place
 	// that names the engine — through the seam its backend declares.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
-		fullcopy.NewFactory(engine),
+		fullcopy.NewFactory(engine, newFullCopyOptions(config.FullCopyWithDefaults(cfg.Backends.FullCopy))),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:         engine,
 			Transport:      cdcTransport.transport,
@@ -327,6 +327,11 @@ func resolveCDCNetwork(
 		}
 		return false, cfg.ContainerHost, nil
 	}
+}
+
+// newFullCopyOptions maps the config's compression token to the backend's format.
+func newFullCopyOptions(cfg config.FullCopyBackend) fullcopy.Options {
+	return fullcopy.Options{Compression: fullcopy.Compression(cfg.Compression)}
 }
 
 // newCDCOptions translates the backends.cdc section into the backend's own options.

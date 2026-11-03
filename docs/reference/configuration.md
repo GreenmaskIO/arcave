@@ -1,7 +1,7 @@
 ---
 title: Configuration
 description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
-keywords: [arcave configuration, config.yaml, snapshot backend, cdc, restic, storage, s3, azure, sftp, docker compose]
+keywords: [arcave configuration, config.yaml, snapshot backend, fullcopy, zstd, compression, cdc, restic, storage, s3, azure, sftp, docker compose]
 ---
 
 # Configuration
@@ -39,6 +39,8 @@ capture:
 rollback:
     leftover_volumes: overwrite
 backends:
+    fullcopy:
+        compression: zstd
     cdc:
         restore_mode: incremental
         overwrite: always
@@ -304,8 +306,8 @@ A rollback reads the backend out of the record it is applying, so changing this 
 
 | | `fullcopy` | `cdc` |
 |---|---|---|
-| How it captures a volume | One `data.tar` per volume per savepoint, streamed through the daemon | Content-defined chunking into a restic repository that outlives any one savepoint |
-| What a second savepoint costs | Full volume size, again | Only the chunks that changed |
+| How it captures a volume | One archive per volume per savepoint, streamed through the daemon and zstd-compressed | Content-defined chunking into a restic repository that outlives any one savepoint |
+| What a second savepoint costs | Full volume size again, compressed | Only the chunks that changed |
 | What it needs | Nothing beyond Docker | Pulls and runs `restic/restic` containers, which must reach a loopback port on your host |
 
 This key covers volumes only; writable layers are [`writable_layers`](#writable_layers). A label can pick another backend for one volume — see [Capture labels](capture_labels.md).
@@ -368,6 +370,18 @@ unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)
 ## `backends`
 
 One optional subsection per backend. A project that never uses a backend does not configure it, and an absent section is not an error — arcave resolves the defaults either way, because a rollback restores through the backend its record names.
+
+### `backends.fullcopy`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `compression` | string | `zstd` | `zstd` stores each volume's archive as `data.tar.zst`, at zstd's default level. `none` stores the tar as is, as `data.tar`. |
+
+The record names the format each capture was stored in, so changing this applies to new savepoints only: a rollback and a remove read each archive the way its record says. A savepoint's `size_bytes` is the tar, its `stored_bytes` what reached the store.
+
+```text
+unsupported backends.fullcopy.compression "gzip" (supported: zstd, none)
+```
 
 ### `backends.cdc`
 

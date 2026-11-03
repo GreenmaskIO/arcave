@@ -15,6 +15,7 @@
 package fullcopy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -34,87 +36,157 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The stream lands verbatim at <id>/<objectID>/data.tar of the store the spec
-// handed over, and the stat reports the bytes actually written.
-func TestSnapshotter_Snapshot(t *testing.T) {
-	const payload = "tar-stream-bytes"
-	volume := bindVolume("app", "/etc/cfg")
-	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
+const testSnapshotID model.SavepointID = "019e843e-1650-7000-8000-000000000000"
 
-	tests := []struct {
-		name       string
-		reader     io.ReadCloser
-		openErr    error
-		addressErr error
-		verify     func(t *testing.T, stat model.SnapshotStat, err error, store storages.Storager)
-	}{
+// tarStream stands in for the daemon's tar: repetitive enough that zstd shrinks it.
+var tarStream = strings.Repeat("tar-stream-bytes ", 256)
+
+// The stream lands at <id>/<objectID>/ under the key its format names, decodes
+// back to what the daemon handed over, and the stat counts the tar and the store
+// apart; a capture that cannot read its volume or write its archive reports nothing.
+func TestSnapshotter_Snapshot(t *testing.T) {
+	volume := bindVolume("app", "/etc/cfg")
+	captureDir := testSnapshotID.String() + "/" + volume.ObjectID + "/"
+	errStore := errors.New("store boom")
+
+	type testCase struct {
+		name        string
+		compression Compression
+		reader      io.ReadCloser // nil hands over tarStream
+		openErr     error
+		addressErr  error
+		putErr      error
+		wantKey     string
+		wantStored  func(t *testing.T, stat model.SnapshotStat, object string)
+		wantErrMsg  []string
+		wantErrIs   error
+		wantEmpty   bool
+	}
+	tests := []testCase{
 		{
-			name:   "the stream is stored verbatim",
-			reader: io.NopCloser(strings.NewReader(payload)),
-			verify: func(t *testing.T, stat model.SnapshotStat, err error, store storages.Storager) {
-				require.NoError(t, err)
-				assert.Equal(t, []string{archiveKey}, objectNames(t, store))
-				assert.Equal(t, payload, readObject(t, store, archiveKey))
-				assert.Equal(t, volume, stat.Volume, "the stat carries the unit it captured")
-				assert.Equal(t, model.SnapshotBackendFullCopy, stat.Type)
-				assert.Equal(t, int64(len(payload)), stat.SizeBytes)
-				assert.Equal(t, int64(len(payload)), stat.StoredBytes, "the archive is stored whole")
-				assert.Nil(t, stat.Payload, "a fullcopy archive is addressed by its key alone")
+			name:        "none stores the tar as is",
+			compression: CompressionNone,
+			wantKey:     captureDir + archiveName,
+			wantStored: func(t *testing.T, stat model.SnapshotStat, object string) {
+				assert.Equal(t, tarStream, object)
+				assert.Equal(t, stat.SizeBytes, stat.StoredBytes, "the archive is stored whole")
 			},
 		},
 		{
-			name:    "a volume that does not open stores nothing",
-			openErr: errors.New("export boom"),
-			verify: func(t *testing.T, _ model.SnapshotStat, err error, store storages.Storager) {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "export boom")
-				assert.Contains(t, err.Error(), "open docker volume /host/etc/cfg")
-				assert.Empty(t, objectNames(t, store), "nothing may be stored from a volume that did not open")
+			name:        "zstd stores the tar compressed",
+			compression: CompressionZstd,
+			wantKey:     captureDir + archiveNameZstd,
+			wantStored: func(t *testing.T, stat model.SnapshotStat, object string) {
+				assert.Equal(t, tarStream, decodeZstd(t, object))
+				assert.Equal(t, int64(len(object)), stat.StoredBytes, "stored is what reached the store")
+				assert.Less(t, stat.StoredBytes, stat.SizeBytes)
 			},
 		},
-		{
-			name:       "a volume whose mount source cannot be resolved stores nothing",
-			addressErr: errors.New("no such volume"),
-			verify: func(t *testing.T, _ model.SnapshotStat, err error, store storages.Storager) {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "resolve the mount source of volume volume-service-app-etc-cfg")
-				assert.Contains(t, err.Error(), "no such volume")
-				assert.Empty(t, objectNames(t, store))
+	}
+	for _, compression := range []Compression{CompressionNone, CompressionZstd} {
+		prefix := string(compression) + ": "
+		tests = append(tests,
+			testCase{
+				name:        prefix + "a volume that does not open stores nothing",
+				compression: compression,
+				openErr:     errors.New("export boom"),
+				wantErrMsg:  []string{"export boom", "open docker volume /host/etc/cfg"},
+				wantEmpty:   true,
 			},
-		},
-		{
-			name:   "a stream failing mid-copy surfaces as the archive write's error",
-			reader: io.NopCloser(failingReader{err: errors.New("stream boom")}),
-			verify: func(t *testing.T, _ model.SnapshotStat, err error, _ storages.Storager) {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "write archive")
-				assert.Contains(t, err.Error(), "stream boom")
+			testCase{
+				name:        prefix + "a volume whose mount source cannot be resolved stores nothing",
+				compression: compression,
+				addressErr:  errors.New("no such volume"),
+				wantErrMsg:  []string{"resolve the mount source of volume volume-service-app-etc-cfg", "no such volume"},
+				wantEmpty:   true,
 			},
-		},
+			testCase{
+				name:        prefix + "a stream failing mid-copy surfaces as the archive write's error",
+				compression: compression,
+				reader:      io.NopCloser(failingReader{err: errors.New("stream boom")}),
+				wantErrMsg:  []string{"write archive", "stream boom"},
+			},
+			testCase{
+				// The store reads nothing, so only the pipe's close unblocks the encoder.
+				name:        prefix + "a store refusing the archive fails the capture, wrapped",
+				compression: compression,
+				putErr:      errStore,
+				wantErrMsg:  []string{"write archive"},
+				wantErrIs:   errStore,
+				wantEmpty:   true,
+			},
+		)
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
+			reader := tt.reader
+			if reader == nil {
+				reader = io.NopCloser(strings.NewReader(tarStream))
+			}
 			docker := &mockVolumeStreamer{}
 			docker.On("ResolveMountSource", mock.Anything, volume).
 				Return(bindAddress("/etc/cfg"), tt.addressErr).Once()
 			if tt.addressErr == nil {
-				docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).Return(tt.reader, tt.openErr).Once()
+				docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).Return(reader, tt.openErr).Once()
 			}
 			store := newStore(t, "savepoints")
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
+			spec := storages.Storager(store)
+			if tt.putErr != nil {
+				spec = refusingStore{Storager: store, err: tt.putErr}
+			}
+			snapshotter, err := NewFactory(docker, Options{Compression: tt.compression}).
+				New(model.BackendSpec{Store: spec, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
-			stat, err := snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+			stat, err := snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: testSnapshotID})
 
 			// Assert
-			tt.verify(t, stat, err, store)
+			if tt.wantErrMsg != nil {
+				require.Error(t, err)
+				for _, msg := range tt.wantErrMsg {
+					assert.Contains(t, err.Error(), msg)
+				}
+				if tt.wantErrIs != nil {
+					assert.ErrorIs(t, err, tt.wantErrIs)
+				}
+				assert.Zero(t, stat, "a failed capture reports nothing")
+				if tt.wantEmpty {
+					assert.Empty(t, objectNames(t, store), "nothing may be stored by a failed capture")
+				}
+				docker.AssertExpectations(t)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []string{tt.wantKey}, objectNames(t, store))
+			assert.Equal(t, volume, stat.Volume, "the stat carries the unit it captured")
+			assert.Equal(t, model.SnapshotBackendFullCopy, stat.Type)
+			assert.Equal(t, int64(len(tarStream)), stat.SizeBytes, "size counts the tar")
+			assert.Zero(t, stat.ReusedBytes)
+			assert.Equal(t, Payload{Compression: tt.compression}, stat.Payload, "the record names the format")
+			tt.wantStored(t, stat, readObject(t, store, tt.wantKey))
 			docker.AssertExpectations(t)
 		})
 	}
 }
+
+// refusingStore refuses every object written under it, its sub-stores included.
+type refusingStore struct {
+	storages.Storager
+	err error
+}
+
+func (s refusingStore) SubStorage(subPath string, relative bool) (storages.Storager, error) {
+	sub, err := s.Storager.SubStorage(subPath, relative)
+	if err != nil {
+		return nil, err
+	}
+	return refusingStore{Storager: sub, err: s.err}, nil
+}
+
+func (s refusingStore) PutObject(context.Context, string, io.Reader) error { return s.err }
 
 // The root the spec named is the whole of what an instance writes to and reads
 // from. It is the only thing that tells a savepoint's instances from a
@@ -122,17 +194,18 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 	// Arrange
 	volume := bindVolume("app", "/etc/cfg")
-	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
+	archiveKey := testSnapshotID.String() + "/" + volume.ObjectID + "/" + archiveNameZstd
 	docker := &mockVolumeStreamer{}
 	docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
 	docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).
-		Return(io.NopCloser(strings.NewReader("tar-stream-bytes")), nil).Once()
+		Return(io.NopCloser(strings.NewReader(tarStream)), nil).Once()
 	named, other := newStore(t, "named"), newStore(t, "other")
-	snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: named, Volume: volume})
+	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+		New(model.BackendSpec{Store: named, Volume: volume})
 	require.NoError(t, err)
 
 	// Act
-	_, err = snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000"})
+	_, err = snapshotter.Snapshot(context.Background(), model.BackendSnapshotRequest{SnapshotID: testSnapshotID})
 
 	// Assert
 	require.NoError(t, err)
@@ -141,51 +214,99 @@ func TestSnapshotter_Snapshot_CapturesIntoTheStoreTheSpecNamed(t *testing.T) {
 	docker.AssertExpectations(t)
 }
 
-// The archive's content goes verbatim into the volume the record addresses.
-func TestSnapshotter_Restore(t *testing.T) {
-	const payload = "tar-stream-bytes"
+// A capture's progress counts the tar it read, not the bytes the encoder wrote.
+func TestSnapshotter_Snapshot_ReportsTheTarBytes(t *testing.T) {
+	// Arrange
 	volume := bindVolume("app", "/etc/cfg")
-	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
+	docker := &mockVolumeStreamer{}
+	docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
+	docker.On("OpenVolume", mock.Anything, bindAddress("/etc/cfg")).
+		Return(io.NopCloser(strings.NewReader(tarStream)), nil).Once()
+	store := newStore(t, "savepoints")
+	recorder := &bytesRecorder{}
+	ctx := newBytesStepContext(recorder, "volume.capture")
+	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+		New(model.BackendSpec{Store: store, Volume: volume})
+	require.NoError(t, err)
+
+	// Act
+	stat, err := snapshotter.Snapshot(ctx, model.BackendSnapshotRequest{SnapshotID: testSnapshotID})
+
+	// Assert
+	require.NoError(t, err)
+	require.NotEmpty(t, recorder.samples)
+	assert.Equal(t, int64(len(tarStream)), recorder.samples[len(recorder.samples)-1].Done)
+	assert.Equal(t, int64(len(tarStream)), stat.SizeBytes)
+	docker.AssertExpectations(t)
+}
+
+// The archive the payload names is decoded, and the tar alone reaches the volume.
+func TestSnapshotter_Restore(t *testing.T) {
+	volume := bindVolume("app", "/etc/cfg")
+	captureDir := testSnapshotID.String() + "/" + volume.ObjectID + "/"
 
 	tests := []struct {
 		name       string
-		seed       bool // whether the archive is in the store
+		seedKey    string // the key the archive is seeded under; empty seeds nothing
+		seed       func(t *testing.T) string
 		reqPayload any
 		writeErr   error
-		verify     func(t *testing.T, err error, restored string, docker *mockVolumeStreamer)
+		verify     func(t *testing.T, err error, restored string)
 	}{
 		{
-			name: "hands the stored stream to the volume verbatim",
-			seed: true,
-			verify: func(t *testing.T, err error, restored string, _ *mockVolumeStreamer) {
+			name:       "a zstd archive reaches the volume decoded",
+			seedKey:    captureDir + archiveNameZstd,
+			seed:       encodeZstd,
+			reqPayload: Payload{Compression: CompressionZstd},
+			verify: func(t *testing.T, err error, restored string) {
 				require.NoError(t, err)
-				assert.Equal(t, payload, restored)
+				assert.Equal(t, tarStream, restored)
 			},
 		},
 		{
-			name:       "an old-core record's payload is never interpreted",
-			seed:       true,
-			reqPayload: map[string]any{"size_bytes": float64(len(payload))},
-			verify: func(t *testing.T, err error, restored string, _ *mockVolumeStreamer) {
+			name:       "a payload read back from the store names its format the same",
+			seedKey:    captureDir + archiveNameZstd,
+			seed:       encodeZstd,
+			reqPayload: map[string]any{"compression": "zstd"},
+			verify: func(t *testing.T, err error, restored string) {
 				require.NoError(t, err)
-				assert.Equal(t, payload, restored)
+				assert.Equal(t, tarStream, restored)
 			},
 		},
 		{
-			name:     "a volume refusing the stream fails the restore, wrapped",
-			seed:     true,
-			writeErr: errors.New("import boom"),
-			verify: func(t *testing.T, err error, _ string, _ *mockVolumeStreamer) {
+			name:       "an uncompressed archive reaches the volume verbatim",
+			seedKey:    captureDir + archiveName,
+			reqPayload: Payload{Compression: CompressionNone},
+			verify: func(t *testing.T, err error, restored string) {
+				require.NoError(t, err)
+				assert.Equal(t, tarStream, restored)
+			},
+		},
+		{
+			name:    "a record with no payload is uncompressed",
+			seedKey: captureDir + archiveName,
+			verify: func(t *testing.T, err error, restored string) {
+				require.NoError(t, err)
+				assert.Equal(t, tarStream, restored)
+			},
+		},
+		{
+			name:       "a volume refusing the stream fails the restore, wrapped",
+			seedKey:    captureDir + archiveNameZstd,
+			seed:       encodeZstd,
+			reqPayload: Payload{Compression: CompressionZstd},
+			writeErr:   errors.New("import boom"),
+			verify: func(t *testing.T, err error, _ string) {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "write docker volume /host/etc/cfg")
 				assert.Contains(t, err.Error(), "import boom")
 			},
 		},
 		{
-			name: "a missing capture is a store error, not an empty restore",
-			verify: func(t *testing.T, err error, _ string, docker *mockVolumeStreamer) {
-				require.Error(t, err)
-				assert.ErrorIs(t, err, storages.ErrFileNotFound)
+			name:       "a missing capture is a store error, not an empty restore",
+			reqPayload: Payload{Compression: CompressionZstd},
+			verify: func(t *testing.T, err error, _ string) {
+				require.ErrorIs(t, err, storages.ErrFileNotFound)
 			},
 		},
 	}
@@ -198,26 +319,53 @@ func TestSnapshotter_Restore(t *testing.T) {
 			store := newStore(t, "savepoints")
 			ctx := context.Background()
 			docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
-			if tt.seed {
+			if tt.seedKey != "" {
+				object := tarStream
+				if tt.seed != nil {
+					object = tt.seed(t)
+				}
+				require.NoError(t, store.PutObject(ctx, tt.seedKey, strings.NewReader(object)))
+				// The reader is a stream: what it carries is read in Run, which is the assertion.
 				docker.On("WriteVolume", mock.Anything, bindAddress("/etc/cfg"), mock.Anything).
 					Run(func(args mock.Arguments) {
 						_, err := io.Copy(&restored, args.Get(2).(io.Reader))
 						assert.NoError(t, err)
 					}).
 					Return(tt.writeErr).Once()
-				require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(payload)))
 			}
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
+			snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+				New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
-			err = snapshotter.Restore(ctx, model.BackendRestoreRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000", Payload: tt.reqPayload})
+			err = snapshotter.Restore(ctx, model.BackendRestoreRequest{SnapshotID: testSnapshotID, Payload: tt.reqPayload})
 
 			// Assert
-			tt.verify(t, err, restored.String(), docker)
+			tt.verify(t, err, restored.String())
 			docker.AssertExpectations(t)
 		})
 	}
+}
+
+// A payload naming a format the backend cannot read fails before the store or
+// the daemon is reached.
+func TestSnapshotter_Restore_RefusesAnUnknownCompression(t *testing.T) {
+	// Arrange
+	docker := &mockVolumeStreamer{}
+	store := newStore(t, "savepoints")
+	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+		New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
+	require.NoError(t, err)
+
+	// Act
+	err = snapshotter.Restore(context.Background(), model.BackendRestoreRequest{
+		SnapshotID: testSnapshotID,
+		Payload:    map[string]any{"compression": "lz4"},
+	})
+
+	// Assert
+	require.ErrorIs(t, err, errUnknownCompression)
+	docker.AssertExpectations(t)
 }
 
 // bytesRecorder keeps the bytes of every sample the tracker reports.
@@ -231,20 +379,31 @@ func (r *bytesRecorder) Render(evt progress.Event) {
 	}
 }
 
-// The restore reports its bytes out of the size the request carries, the capture's own count.
-func TestSnapshotter_Restore_ReportsTheRequestedTotal(t *testing.T) {
+// newBytesStepContext opens a byte-measuring step whose clock moves an hour per
+// read, so the sampler sends every sample.
+func newBytesStepContext(recorder *bytesRecorder, kind progress.Kind) context.Context {
+	clock := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time {
+		clock = clock.Add(time.Hour)
+		return clock
+	}
+	ctx := progress.WithTracker(context.Background(), progress.New(recorder, now))
+	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "workflow"})
+	ctx, _ = progress.Run(ctx, progress.Step{Kind: kind}, progress.MeasureBytes)
+	return ctx
+}
+
+// The restore counts the decoded tar out of the size the request carries, the
+// capture's own count, so the bar ends where size_bytes says.
+func TestSnapshotter_Restore_ReportsTheTarBytes(t *testing.T) {
 	// Arrange
-	const payload = "tar-stream-bytes"
 	volume := bindVolume("app", "/etc/cfg")
-	archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
+	archiveKey := testSnapshotID.String() + "/" + volume.ObjectID + "/" + archiveNameZstd
 	docker := &mockVolumeStreamer{}
 	store := newStore(t, "savepoints")
 	recorder := &bytesRecorder{}
-	now := func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
-	ctx := progress.WithTracker(context.Background(), progress.New(recorder, now))
-	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "rollback"})
-	ctx, _ = progress.Run(ctx, progress.Step{Kind: "volume.restore"}, progress.MeasureBytes)
-	require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(payload)))
+	ctx := newBytesStepContext(recorder, "volume.restore")
+	require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(encodeZstd(t))))
 	docker.On("ResolveMountSource", mock.Anything, volume).Return(bindAddress("/etc/cfg"), nil).Once()
 	docker.On("WriteVolume", mock.Anything, bindAddress("/etc/cfg"), mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -252,58 +411,163 @@ func TestSnapshotter_Restore_ReportsTheRequestedTotal(t *testing.T) {
 			assert.NoError(t, err)
 		}).
 		Return(nil).Once()
-	snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
+	snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+		New(model.BackendSpec{Store: store, Volume: volume})
 	require.NoError(t, err)
 
 	// Act
 	err = snapshotter.Restore(ctx, model.BackendRestoreRequest{
-		SnapshotID: "019e843e-1650-7000-8000-000000000000",
-		SizeBytes:  int64(len(payload)),
+		SnapshotID: testSnapshotID,
+		Payload:    Payload{Compression: CompressionZstd},
+		SizeBytes:  int64(len(tarStream)),
 	})
 
 	// Assert
 	require.NoError(t, err)
 	require.NotEmpty(t, recorder.samples)
-	assert.Equal(t, int64(len(payload)), recorder.samples[0].Total)
+	last := recorder.samples[len(recorder.samples)-1]
+	assert.Equal(t, int64(len(tarStream)), last.Total)
+	assert.Equal(t, int64(len(tarStream)), last.Done)
 	docker.AssertExpectations(t)
 }
 
-// Removal is a sweep — an archive already gone is not an error — and the
-// payload of an old-core record is never interpreted.
+// Removal deletes the archive the payload names — an archive already gone is
+// not an error — and leaves an archive of another format alone.
 func TestSnapshotter_Remove(t *testing.T) {
-	const payload = "tar-stream-bytes"
+	volume := bindVolume("app", "/etc/cfg")
+	captureDir := testSnapshotID.String() + "/" + volume.ObjectID + "/"
 
 	tests := []struct {
 		name       string
-		seed       bool
+		seed       []string
 		reqPayload any
+		want       []string
+		wantErrIs  error
 	}{
-		{name: "deletes the archive", seed: true},
-		{name: "an archive already gone is not an error"},
-		{name: "an old-core record's payload is never interpreted", seed: true, reqPayload: map[string]any{"size_bytes": float64(len(payload))}},
+		{
+			name:       "deletes the zstd archive",
+			seed:       []string{captureDir + archiveNameZstd},
+			reqPayload: Payload{Compression: CompressionZstd},
+		},
+		{
+			name:       "deletes the uncompressed archive of a record read back from the store",
+			seed:       []string{captureDir + archiveName},
+			reqPayload: map[string]any{"compression": "none"},
+		},
+		{
+			name: "a record with no payload deletes the uncompressed archive",
+			seed: []string{captureDir + archiveName},
+		},
+		{
+			name:       "an archive already gone is not an error",
+			reqPayload: Payload{Compression: CompressionZstd},
+		},
+		{
+			name:       "only the format the payload names is deleted",
+			seed:       []string{captureDir + archiveName},
+			reqPayload: Payload{Compression: CompressionZstd},
+			want:       []string{captureDir + archiveName},
+		},
+		{
+			name:       "an unknown format deletes nothing",
+			seed:       []string{captureDir + archiveName},
+			reqPayload: map[string]any{"compression": "lz4"},
+			want:       []string{captureDir + archiveName},
+			wantErrIs:  errUnknownCompression,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			volume := bindVolume("app", "/etc/cfg")
 			docker := &mockVolumeStreamer{}
 			store := newStore(t, "savepoints")
 			ctx := context.Background()
-			if tt.seed {
-				archiveKey := "019e843e-1650-7000-8000-000000000000/" + volume.ObjectID + "/" + archiveName
-				require.NoError(t, store.PutObject(ctx, archiveKey, strings.NewReader(payload)))
+			for _, key := range tt.seed {
+				require.NoError(t, store.PutObject(ctx, key, strings.NewReader("archive")))
 			}
-			snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: volume})
+			snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).
+				New(model.BackendSpec{Store: store, Volume: volume})
 			require.NoError(t, err)
 
 			// Act
-			err = snapshotter.Remove(ctx, model.BackendRemoveRequest{SnapshotID: "019e843e-1650-7000-8000-000000000000", Payload: tt.reqPayload})
+			err = snapshotter.Remove(ctx, model.BackendRemoveRequest{SnapshotID: testSnapshotID, Payload: tt.reqPayload})
 
 			// Assert
-			assert.NoError(t, err)
-			assert.Empty(t, objectNames(t, store))
+			if tt.wantErrIs != nil {
+				require.ErrorIs(t, err, tt.wantErrIs)
+			} else {
+				require.NoError(t, err)
+			}
+			if tt.want == nil {
+				assert.Empty(t, objectNames(t, store))
+			} else {
+				assert.Equal(t, tt.want, objectNames(t, store))
+			}
 			docker.AssertExpectations(t)
+		})
+	}
+}
+
+// A payload carries the format, typed or as the store hands it back; none is
+// the format of a record that names no other.
+func TestDecodePayload(t *testing.T) {
+	tests := []struct {
+		name       string
+		stored     any
+		want       Payload
+		wantErrIs  error
+		wantErrMsg string
+	}{
+		{
+			name:   "a typed payload passes through",
+			stored: Payload{Compression: CompressionZstd},
+			want:   Payload{Compression: CompressionZstd},
+		},
+		{
+			name:   "a map read back from the store decodes",
+			stored: map[string]any{"compression": "zstd"},
+			want:   Payload{Compression: CompressionZstd},
+		},
+		{
+			name:   "no payload is none",
+			stored: nil,
+			want:   Payload{Compression: CompressionNone},
+		},
+		{
+			name:   "a payload naming no format is none",
+			stored: map[string]any{},
+			want:   Payload{Compression: CompressionNone},
+		},
+		{
+			name:       "a format that is not a string does not decode",
+			stored:     map[string]any{"compression": 5},
+			wantErrMsg: "decode fullcopy payload",
+		},
+		{
+			name:      "an unknown format is refused",
+			stored:    map[string]any{"compression": "lz4"},
+			wantErrIs: errUnknownCompression,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got, err := DecodePayload(tt.stored)
+
+			// Assert
+			if tt.wantErrIs != nil || tt.wantErrMsg != "" {
+				require.Error(t, err)
+				if tt.wantErrIs != nil {
+					assert.ErrorIs(t, err, tt.wantErrIs)
+				}
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				assert.Zero(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -352,7 +616,7 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 				// Arrange
 				docker := &mockVolumeStreamer{}
 				store := newStore(t, "savepoints")
-				snapshotter, err := NewFactory(docker).New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
+				snapshotter, err := NewFactory(docker, Options{Compression: CompressionZstd}).New(model.BackendSpec{Store: store, Volume: bindVolume("app", "/etc/cfg")})
 				require.NoError(t, err)
 
 				// Act
@@ -374,10 +638,11 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 // that building a backend contacts nothing.
 func TestFactory_New(t *testing.T) {
 	tests := []struct {
-		name      string
-		volume    model.Volume
-		noStore   bool
-		wantErrIs error
+		name        string
+		volume      model.Volume
+		noStore     bool
+		compression Compression
+		wantErrIs   error
 	}{
 		{
 			name:   "a bind volume and a store build a snapshotter",
@@ -397,6 +662,12 @@ func TestFactory_New(t *testing.T) {
 			noStore:   true,
 			wantErrIs: errNoStore,
 		},
+		{
+			name:        "a format the backend cannot write is refused",
+			volume:      bindVolume("app", "/etc/cfg"),
+			compression: "lz4",
+			wantErrIs:   errUnknownCompression,
+		},
 	}
 
 	for _, tt := range tests {
@@ -407,9 +678,13 @@ func TestFactory_New(t *testing.T) {
 			if !tt.noStore {
 				spec.Store = newStore(t, "savepoints")
 			}
+			compression := tt.compression
+			if compression == "" {
+				compression = CompressionZstd
+			}
 
 			// Act
-			snapshotter, err := NewFactory(docker).New(spec)
+			snapshotter, err := NewFactory(docker, Options{Compression: compression}).New(spec)
 
 			// Assert
 			if tt.wantErrIs != nil {
@@ -460,4 +735,29 @@ func readObject(t *testing.T, store storages.Storager, key string) string {
 	require.NoError(t, err)
 	require.NoError(t, data.Close())
 	return string(content)
+}
+
+// encodeZstd is tarStream as a zstd capture stores it.
+func encodeZstd(t *testing.T) string {
+	t.Helper()
+
+	var encoded bytes.Buffer
+	encoder, err := zstd.NewWriter(&encoded)
+	require.NoError(t, err)
+	_, err = io.WriteString(encoder, tarStream)
+	require.NoError(t, err)
+	require.NoError(t, encoder.Close())
+	return encoded.String()
+}
+
+// decodeZstd is the tar a zstd object holds.
+func decodeZstd(t *testing.T, object string) string {
+	t.Helper()
+
+	decoder, err := zstd.NewReader(strings.NewReader(object))
+	require.NoError(t, err)
+	defer decoder.Close()
+	decoded, err := io.ReadAll(decoder)
+	require.NoError(t, err)
+	return string(decoded)
 }

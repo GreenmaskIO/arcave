@@ -740,7 +740,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: vol, Type: model.SnapshotBackendFullCopy, SizeBytes: demoVolumeSize, Payload: "sp-payload"}},
+		Stats:     []model.SnapshotStat{{Volume: vol, Type: model.SnapshotBackendFullCopy, SizeBytes: demoVolumeSize, Payload: map[string]any{"compression": "none"}}},
 		Spec:      demoSpecRef(),
 	}
 	store := newDirStore(t)
@@ -758,7 +758,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil)
 
 	docker := &fakeVolumeStreamer{payload: "live bytes"}
-	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
+	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker, fullcopy.Options{Compression: fullcopy.CompressionNone}))
 	require.NoError(t, err)
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},

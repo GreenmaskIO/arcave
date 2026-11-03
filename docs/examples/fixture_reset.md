@@ -52,9 +52,9 @@ arcave savepoint create clean --description "seeded baseline — do not delete"
 ├── ✔ savepoint.capture clean  5.7s
 └── ✔ compose.start            3.6s
 
-Savepoint clean · 019e83ff · 18:36:40 · stored 317 MB
+Savepoint clean · 019e83ff · 18:36:40 · stored 273 MB
             count     size   stored
-  volumes       3  49.2 MB  49.2 MB
+  volumes       3  49.2 MB   4.7 MB
   layers        3   260 MB  40.6 KB
   images        3   1.1 GB   268 MB
 
@@ -166,7 +166,7 @@ arcave savepoint list
 ```text title="stdout"
 NAME            ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
 after-refactor  019e8488-3ac8-7000-8000-000000000000  2026-06-01 21:13  3        3       49.3 MB  -
-clean           019e83ff-30c0-7000-8000-000000000000  2026-06-01 18:36  3        3       317 MB   -
+clean           019e83ff-30c0-7000-8000-000000000000  2026-06-01 18:36  3        3       273 MB   -
 ```
 
 </TabItem>

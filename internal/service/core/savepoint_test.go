@@ -525,7 +525,7 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 		openErrFor:     "volume-service-app-etc-cfg",
 		failAfterClose: make(chan struct{}),
 	}
-	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker))
+	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker, fullcopy.Options{Compression: fullcopy.CompressionNone}))
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
@@ -863,7 +863,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil)
 
 	store := newDirStore(t)
-	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{payload: "pgdata bytes"}))
+	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(&fakeVolumeStreamer{payload: "pgdata bytes"}, fullcopy.Options{Compression: fullcopy.CompressionNone}))
 	require.NoError(t, err)
 	repo := savepointrepo.New(store)
 	svc := New(Deps{
