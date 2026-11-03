@@ -16,7 +16,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,6 +32,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/greenmaskio/storages/inmemory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +41,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/storekey"
@@ -877,106 +881,169 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 	assert.Nil(t, sink)
 }
 
-// The encryption section decides how an encrypted arcave project's store opens again: with its
-// password every object reads back, and a section that does not fit the store is refused with
-// the fix.
-func TestOpenArcaveProjectStore_EncryptedStore(t *testing.T) {
+// The encryption section decides how an arcave project's store opens again: an encrypted one
+// reads back with its key, a plain one plainly, and a section that does not fit the store is
+// refused with the fix, and writes nothing — a plain store is never encrypted in place.
+func TestOpenArcaveProjectStore(t *testing.T) {
+	useNoMarkerSettle(t)
+	key := newTestStoreKey(t)
+	encrypted := func(t *testing.T, projectPath string) {
+		t.Helper()
+		created, err := openArcaveProjectStore(t.Context(),
+			newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath)
+		require.NoError(t, err)
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
+		require.NoError(t, created.root.Close())
+	}
+	plain := func(t *testing.T, projectPath string) {
+		t.Helper()
+		created, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath)
+		require.NoError(t, err)
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
+		require.NoError(t, created.root.Close())
+	}
+	tornMarker := func(t *testing.T, projectPath string) {
+		t.Helper()
+		marker := filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName)
+		require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
+		require.NoError(t, os.WriteFile(marker, []byte(`{"version":1,"recip`), 0o644))
+	}
 	tests := []struct {
 		name       string
+		stored     func(t *testing.T, projectPath string)
 		encryption config.Encryption
 		wantErr    error
 		wantMsg    string
+		verify     func(t *testing.T, projectPath string, opened openedArcaveProject)
 	}{
-		{name: "the password it was created with", encryption: config.Encryption{Enabled: true, Password: "correct horse"}},
 		{
-			name:       "a wrong password",
-			encryption: config.Encryption{Enabled: true, Password: "wrong"},
-			wantErr:    model.ErrWrongPassword,
-			wantMsg:    "check encryption.password",
+			name:       "an encrypted store with the key it was created with",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true, Key: key},
+			verify: func(t *testing.T, projectPath string, opened openedArcaveProject) {
+				assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
+				assert.NotEqual(t, cdc.DefaultPassword, opened.resticPassword)
+				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), "sessions", "x", "session.json"))
+				require.NoError(t, err)
+				assert.NotContains(t, string(raw), "a secret")
+			},
 		},
 		{
-			name:    "encryption off",
+			name:       "an encrypted store with another key",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true, Key: newTestStoreKey(t)},
+			wantErr:    model.ErrWrongStoreKey,
+			wantMsg:    "check encryption.key",
+		},
+		{
+			name:       "an encrypted store with a malformed key",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true, Key: "AGE-SECRET-KEY-1NOTAKEY"},
+			wantErr:    model.ErrInvalidStoreKey,
+			wantMsg:    "check encryption.key",
+		},
+		{
+			name:    "an encrypted store with encryption off",
+			stored:  encrypted,
 			wantErr: model.ErrStoreEncrypted,
 			wantMsg: "set encryption.enabled: true",
+		},
+		{
+			name:   "a plain store with encryption off",
+			stored: plain,
+			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
+				assert.Equal(t, cdc.DefaultPassword, opened.resticPassword)
+				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
+			},
+		},
+		{
+			name:       "a plain store with encryption on",
+			stored:     plain,
+			encryption: config.Encryption{Enabled: true, Key: key},
+			wantErr:    model.ErrStoreUnencrypted,
+			wantMsg:    "point storage at an empty location",
+		},
+		{
+			name:       "an empty store under a torn marker is marked again",
+			stored:     tornMarker,
+			encryption: config.Encryption{Enabled: true, Key: key},
+			verify: func(t *testing.T, projectPath string, _ openedArcaveProject) {
+				identity, err := storekey.ParseKey(key)
+				require.NoError(t, err)
+				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName))
+				require.NoError(t, err)
+				assert.Contains(t, string(raw), identity.Recipient().String())
+			},
+		},
+		{
+			name:    "a torn marker refuses a plain host",
+			stored:  tornMarker,
+			wantErr: model.ErrInvalidEncryptionMarker,
+			wantMsg: "cut off marking",
+		},
+		{
+			name: "a torn marker over data is named, not read as plain data",
+			stored: func(t *testing.T, projectPath string) {
+				plain(t, projectPath)
+				tornMarker(t, projectPath)
+			},
+			encryption: config.Encryption{Enabled: true, Key: key},
+			wantErr:    model.ErrInvalidEncryptionMarker,
+			wantMsg:    "cut off marking",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			useFastStoreKeys(t)
 			projectPath := t.TempDir()
-			created, err := openArcaveProjectStore(t.Context(),
-				newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Password: "correct horse"}), projectPath)
-			require.NoError(t, err)
-			require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
-			require.NoError(t, created.root.Close())
+			tt.stored(t, projectPath)
+			before := listTree(t, arcaveProjectPath(projectPath))
 
 			// Act
 			opened, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath)
 
 			// Assert
 			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
+				require.ErrorIs(t, err, tt.wantErr)
 				assert.ErrorContains(t, err, tt.wantMsg)
+				if tt.encryption.Key != "" {
+					assert.NotContains(t, err.Error(), tt.encryption.Key)
+				}
+				assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "a refusal writes nothing")
 				return
 			}
 			require.NoError(t, err)
 			t.Cleanup(func() { assert.NoError(t, opened.root.Close()) })
-			assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
-			assert.NotEqual(t, cdc.DefaultPassword, opened.resticPassword)
-			assert.Equal(t, created.resticPassword, opened.resticPassword)
-			raw, err := os.ReadFile(filepath.Join(projectPath, ".arcave", "storage", "arcave",
-				"projects", "demo", "sessions", "x", "session.json"))
-			require.NoError(t, err)
-			assert.NotContains(t, string(raw), "a secret")
+			tt.verify(t, projectPath, opened)
 		})
 	}
 }
 
-// An unencrypted arcave project opens plainly, and is never encrypted in place: the refusal
-// writes no key, so it still opens plainly after.
-func TestOpenArcaveProjectStore_UnencryptedStore(t *testing.T) {
-	tests := []struct {
-		name       string
-		encryption config.Encryption
-		wantErr    error
-		wantMsg    string
-	}{
-		{name: "encryption off"},
-		{
-			name:       "encryption on",
-			encryption: config.Encryption{Enabled: true, Password: "correct horse"},
-			wantErr:    model.ErrStoreUnencrypted,
-			wantMsg:    "point storage at an empty location",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			useFastStoreKeys(t)
-			projectPath := t.TempDir()
-			plain := newEncryptionConfig(t, projectPath, config.Encryption{})
-			created, err := openArcaveProjectStore(t.Context(), plain, projectPath)
-			require.NoError(t, err)
-			require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
-			require.NoError(t, created.root.Close())
+// arcaveProjectPath is where the directory storage of newEncryptionConfig keeps the demo arcave project.
+func arcaveProjectPath(projectPath string) string {
+	return filepath.Join(projectPath, ".arcave", "storage", "arcave", "projects", "demo")
+}
 
-			// Act
-			opened, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath)
-
-			// Assert
-			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
-				assert.ErrorContains(t, err, tt.wantMsg)
-				assert.NoDirExists(t, filepath.Join(projectPath, ".arcave", "storage", "arcave", "projects", "demo", "keys"))
-				return
-			}
-			require.NoError(t, err)
-			t.Cleanup(func() { assert.NoError(t, opened.root.Close()) })
-			assert.Equal(t, cdc.DefaultPassword, opened.resticPassword)
-			assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
-		})
+// listTree is every file under root with its contents, as a refusal must leave it.
+func listTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	tree := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		tree[path] = string(data)
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return tree
 	}
+	require.NoError(t, err)
+	return tree
 }
 
 func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Encryption) config.Config {
@@ -990,13 +1057,50 @@ func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Enc
 	return cfg
 }
 
-// useFastStoreKeys opens the store keys with no settle, a cheap scrypt and no key kept from
-// another test.
-func useFastStoreKeys(t *testing.T) {
+// A host whose marker another host's, with another key, overwrote within the settle is refused.
+func TestMarkEncryptedStore_LosesTheRace(t *testing.T) {
+	// Arrange
+	useNoMarkerSettle(t)
+	ours, err := storekey.ParseKey(newTestStoreKey(t))
+	require.NoError(t, err)
+	rival, err := storekey.ParseKey(newTestStoreKey(t))
+	require.NoError(t, err)
+	store := &rivalMarkerStore{Storager: inmemory.New(""), rival: rival.Recipient().String()}
+
+	// Act
+	err = markEncryptedStore(t.Context(), store, encryptionmarker.New(store), ours.Recipient().String(), nil)
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrWrongStoreKey)
+	assert.ErrorContains(t, err, rival.Recipient().String())
+}
+
+// rivalMarkerStore lands a rival host's marker right after every marker written.
+type rivalMarkerStore struct {
+	storages.Storager
+	rival string
+}
+
+func (s *rivalMarkerStore) PutObject(ctx context.Context, key string, body io.Reader) error {
+	if err := s.Storager.PutObject(ctx, key, body); err != nil {
+		return err
+	}
+	return encryptionmarker.New(s.Storager).Put(ctx, model.NewEncryptionMarker(s.rival))
+}
+
+// useNoMarkerSettle reads an encryption marker back with no wait.
+func useNoMarkerSettle(t *testing.T) {
 	t.Helper()
-	opener, workFactor := storeKeys, storeKeyWorkFactor
-	storeKeys, storeKeyWorkFactor = storekey.NewOpener().SetSettle(0), 10
-	t.Cleanup(func() { storeKeys, storeKeyWorkFactor = opener, workFactor })
+	settle := encryptionMarkerSettle
+	encryptionMarkerSettle = 0
+	t.Cleanup(func() { encryptionMarkerSettle = settle })
+}
+
+func newTestStoreKey(t *testing.T) string {
+	t.Helper()
+	key, err := storekey.NewKey()
+	require.NoError(t, err)
+	return key
 }
 
 func readStoreObject(t *testing.T, store storages.Storager, key string) string {

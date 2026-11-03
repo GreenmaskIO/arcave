@@ -79,9 +79,9 @@ export ARCAVE_FORMAT=json
 
 See [Output and exit codes](output.md).
 
-## `ARCAVE_PASSWORD`
+## `ARCAVE_ENCRYPTION_KEY`
 
-The store password, by convention: the config [`arcave init --encrypt`](cli/init.md) writes reads `encryption.password` from it, and fails while it is unset. arcave itself reads it only through that `${ARCAVE_PASSWORD?…}` in the file. See [`encryption`](configuration.md#encryption).
+The store key, by convention: the config [`arcave init --encrypt`](cli/init.md) writes reads `encryption.key` from it, and fails while it is unset. arcave reads it only through that `${ARCAVE_ENCRYPTION_KEY?…}` in the file, and `init --encrypt` to decide whether to generate a key. See [`encryption`](configuration.md#encryption).
 
 ## Variables that are not arcave's
 

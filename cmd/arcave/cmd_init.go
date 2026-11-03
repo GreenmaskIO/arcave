@@ -16,11 +16,13 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/service/storekey"
 )
 
 var (
@@ -44,18 +46,57 @@ func runConfigInit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("project already initialized use --override")
 	}
 
-	template := config.NewConfig()
-	template.Project.Name = configInitName
+	var (
+		keyNotice string
+		err       error
+	)
 	if configInitEncrypt {
-		// The form, never the password: a literal would land in a file next to the code.
-		template.Encryption = config.Encryption{
-			Enabled:  true,
-			Password: config.PasswordFromEnv,
+		if keyNotice, err = newInitKeyNotice(os.Getenv(config.KeyEnv)); err != nil {
+			return err
 		}
 	}
 	svc, printer := newInitDependencies(projectRoot)
 	h := cli.NewConfigInitHandler(svc, printer)
-	return h.Init(cmd.Context(), template, configInitOverride)
+	if err = h.Init(cmd.Context(), newInitTemplate(configInitName, configInitEncrypt), configInitOverride); err != nil {
+		return err
+	}
+	if keyNotice != "" {
+		_, err = fmt.Fprint(cmd.ErrOrStderr(), keyNotice)
+	}
+	return err
+}
+
+// newInitTemplate is the config init writes: the defaults, name, and under encrypt the
+// encryption block naming the key's variable — the form, never the key, which would land
+// in a file next to the code.
+func newInitTemplate(name string, encrypt bool) config.Config {
+	template := config.NewConfig()
+	template.Project.Name = name
+	if encrypt {
+		template.Encryption = config.Encryption{
+			Enabled: true,
+			Key:     config.KeyFromEnv,
+		}
+	}
+	return template
+}
+
+// newInitKeyNotice is what init tells of the store key on stderr: a key it generates while
+// envKey is empty, else only a reminder, envKey refused when it is no store key.
+func newInitKeyNotice(envKey string) (string, error) {
+	if envKey != "" {
+		if _, err := storekey.ParseKey(envKey); err != nil {
+			return "", fmt.Errorf("%s: %w", config.KeyEnv, err)
+		}
+		return fmt.Sprintf("The store is encrypted to the key in %s: keep it, arcave cannot recover it.\n",
+			config.KeyEnv), nil
+	}
+	key, err := storekey.NewKey()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Store key generated: save it, arcave cannot recover it.\n  export %s=%s\n",
+		config.KeyEnv, key), nil
 }
 
 func init() {
@@ -65,7 +106,7 @@ func init() {
 	flags.BoolVar(&configInitOverride, "override", false,
 		"Overwrite an existing arcave configuration")
 	flags.BoolVar(&configInitEncrypt, "encrypt", false,
-		"Encrypt the store, with the password read from ARCAVE_PASSWORD")
+		"Encrypt the store to the key read from ARCAVE_ENCRYPTION_KEY, generating one when unset")
 
 	// No flag is bound: the template takes --name and --encrypt directly, and --override is
 	// transient. The storage is the directory one at its default path.

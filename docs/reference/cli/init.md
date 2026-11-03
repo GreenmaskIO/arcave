@@ -20,11 +20,18 @@ arcave init [flags]
 |---|---|---|---|
 | `--name` | the project directory's name, normalised | `project.name` in the file written | The **storage tenant** the store is scoped by. |
 | `--override` | `false` | *(none)* | Overwrite an existing configuration. |
-| `--encrypt` | `false` | `encryption` in the file written | Encrypt the store, the password read from `ARCAVE_PASSWORD`. |
+| `--encrypt` | `false` | `encryption` in the file written | Encrypt the store to the key read from `ARCAVE_ENCRYPTION_KEY`, generating one while it is unset. |
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
-`--encrypt` writes the [`encryption`](../configuration.md#encryption) block with `password: ${ARCAVE_PASSWORD?…}` — the reference, never a password. `init` opens no storage, so the key is created by the first command that does.
+`--encrypt` writes the [`encryption`](../configuration.md#encryption) block with `key: ${ARCAVE_ENCRYPTION_KEY?…}` — the reference, never a key. While `ARCAVE_ENCRYPTION_KEY` is unset it generates a key and prints it once, on stderr; save it, since arcave keeps no copy:
+
+```text title="stderr"
+Store key generated: save it, arcave cannot recover it.
+  export ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…
+```
+
+With the variable already set, it generates nothing and only reminds you to keep that key.
 
 `--name` names the storage tenant, not the compose project. The compose project is named per invocation with `-p/--project-name`, because one directory may hold several. The directory name is normalised into the tenant charset — `MyApp` becomes `myapp`, and characters outside `[a-z0-9_-]` are dropped.
 

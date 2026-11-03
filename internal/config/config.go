@@ -216,24 +216,27 @@ func (p Project) Validate() error {
 	return nil
 }
 
-// Encryption encrypts every object arcave writes to the store, with a key kept in the store
-// under Password.
+// Encryption encrypts every object arcave writes to the store, to Key.
 type Encryption struct {
 	Enabled bool `yaml:"enabled,omitempty" mapstructure:"enabled"`
-	// Password opens the arcave project's key. Secret.
-	Password string `yaml:"password,omitempty" mapstructure:"password"`
+	// Key is the age identity every object is encrypted to. Secret.
+	Key string `yaml:"key,omitempty" mapstructure:"key"`
 }
 
-// PasswordFromEnv is the password init writes: read from ARCAVE_PASSWORD, refused unset.
-const PasswordFromEnv = "${ARCAVE_PASSWORD?set ARCAVE_PASSWORD to the store password}"
+const (
+	// KeyEnv is the variable the key init writes is read from.
+	KeyEnv = "ARCAVE_ENCRYPTION_KEY"
+	// KeyFromEnv is the key init writes: read from KeyEnv, refused unset.
+	KeyFromEnv = "${" + KeyEnv + "?set " + KeyEnv + " to the store key}"
+)
 
-// Validate refuses encryption without a password, and a password that would do nothing.
+// Validate refuses encryption without a key, and a key that would do nothing.
 func (e Encryption) Validate() error {
 	switch {
-	case e.Enabled && e.Password == "":
-		return fmt.Errorf("%w: encryption.enabled needs encryption.password", ErrInvalid)
-	case !e.Enabled && e.Password != "":
-		return fmt.Errorf("%w: encryption.password is set but encryption.enabled is not", ErrInvalid)
+	case e.Enabled && e.Key == "":
+		return fmt.Errorf("%w: encryption.enabled needs encryption.key", ErrInvalid)
+	case !e.Enabled && e.Key != "":
+		return fmt.Errorf("%w: encryption.key is set but encryption.enabled is not", ErrInvalid)
 	}
 	return nil
 }

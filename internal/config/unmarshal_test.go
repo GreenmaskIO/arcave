@@ -453,20 +453,20 @@ func TestUnmarshal(t *testing.T) {
 		},
 		{
 			name: "the encryption section is read",
-			yaml: "encryption:\n  enabled: true\n  password: hunter2\n",
+			yaml: "encryption:\n  enabled: true\n  key: AGE-SECRET-KEY-1TEST\n",
 			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, Encryption{Enabled: true, Password: "hunter2"}, cfg.Encryption)
+				assert.Equal(t, Encryption{Enabled: true, Key: "AGE-SECRET-KEY-1TEST"}, cfg.Encryption)
 			},
 		},
 		{
-			name:       "encryption without a password is rejected",
+			name:       "encryption without a key is rejected",
 			yaml:       "encryption:\n  enabled: true\n",
-			wantErrMsg: "encryption.enabled needs encryption.password",
+			wantErrMsg: "encryption.enabled needs encryption.key",
 		},
 		{
-			name:       "a password with encryption off is rejected",
-			yaml:       "encryption:\n  password: hunter2\n",
-			wantErrMsg: "encryption.password is set but encryption.enabled is not",
+			name:       "a key with encryption off is rejected",
+			yaml:       "encryption:\n  key: AGE-SECRET-KEY-1TEST\n",
+			wantErrMsg: "encryption.key is set but encryption.enabled is not",
 		},
 		{
 			name:       "an unknown key under backends is rejected",
@@ -543,8 +543,8 @@ func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
 	t.Setenv("ARCAVE_IT_S3_SECRET", "s3cr3t")
 	t.Setenv("ARCAVE_IT_WAIT", "45s")
 	// Unset for the run, restored after it.
-	t.Setenv("ARCAVE_PASSWORD", "")
-	require.NoError(t, os.Unsetenv("ARCAVE_PASSWORD"))
+	t.Setenv("ARCAVE_ENCRYPTION_KEY", "")
+	require.NoError(t, os.Unsetenv("ARCAVE_ENCRYPTION_KEY"))
 
 	tests := []struct {
 		name       string
@@ -597,9 +597,9 @@ func TestUnmarshal_InterpolatesEnvVars(t *testing.T) {
 			},
 		},
 		{
-			name:       "the password init writes is refused while ARCAVE_PASSWORD is unset",
-			yaml:       "encryption:\n  enabled: true\n  password: " + PasswordFromEnv + "\n",
-			wantErrMsg: "set ARCAVE_PASSWORD to the store password",
+			name:       "the key init writes is refused while ARCAVE_ENCRYPTION_KEY is unset",
+			yaml:       "encryption:\n  enabled: true\n  key: " + KeyFromEnv + "\n",
+			wantErrMsg: "set ARCAVE_ENCRYPTION_KEY to the store key",
 		},
 		{
 			name:       "an unset required variable is an error",

@@ -42,6 +42,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
+	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -90,9 +92,6 @@ var storageServers = []struct {
 // through: cdc runs restic over its default stdio transport, into the same store.
 var storageE2EBackends = []string{config.SnapshotBackendFullCopy, config.SnapshotBackendCDC}
 
-// storageE2EPassword encrypts the rows run with encryption.
-const storageE2EPassword = "e2e correct horse"
-
 // TestStorageE2E_CoreWorkflow drives the built binary through the core workflow on
 // every storage backend and snapshot backend, with and without encryption: create,
 // list, rollback, fork, a rollback in the fork, remove and gc.
@@ -129,7 +128,9 @@ func runStorageE2E(t *testing.T, target storageTarget, backend string, encrypted
 	initArgs := []string{"init", "--name", arcaveProject}
 	if encrypted {
 		arcaveProject += "-encrypted"
-		env = append(slices.Clone(env), "ARCAVE_PASSWORD="+storageE2EPassword)
+		key, err := storekey.NewKey()
+		require.NoError(t, err)
+		env = append(slices.Clone(env), "ARCAVE_ENCRYPTION_KEY="+key)
 		initArgs = []string{"init", "--name", arcaveProject, "--encrypt"}
 	}
 	compose := newImageRollbackEnv(t)
@@ -383,7 +384,7 @@ type storageE2EGarbage struct {
 }
 
 // assertRecordEncrypted says whether savepoint's record is stored as an age file, unreadable
-// without the arcave project's key.
+// without the arcave project's key, and the arcave project marked encrypted.
 func assertRecordEncrypted(
 	t *testing.T, storage config.Storage, arcaveProject, composeProject string,
 	savepoint model.Savepoint, want bool,
@@ -404,6 +405,11 @@ func assertRecordEncrypted(
 
 	assert.Equal(t, want, bytes.HasPrefix(raw, []byte("age-encryption.org/v1\n")), "record %s", key)
 	assert.Equal(t, !want, bytes.Contains(raw, []byte(savepoint.ID.String())), "record %s", key)
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(arcaveProject))
+	require.NoError(t, err)
+	_, marked, err := encryptionmarker.New(arcaveProjectStore).Get(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, want, marked, "encryption marker of %s", arcaveProject)
 }
 
 func decode[T any](t *testing.T, out []byte) T {

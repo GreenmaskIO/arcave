@@ -27,6 +27,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"filippo.io/age"
@@ -62,8 +63,6 @@ const (
 	// sessionLockSuffix names a session's lock beside its tree.
 	sessionLockSuffix = ".lock.json"
 	namespaceCompose  = "compose"
-	// namespaceKeys holds an encrypted arcave project's data key, under its password.
-	namespaceKeys = "keys"
 )
 
 // New opens the store at <path>/arcave/projects/<project>/sessions/<session>/compose/<compose-project>,
@@ -238,32 +237,25 @@ func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (stora
 	return joinKind(root, namespaceProjects, name.String())
 }
 
-// Keys descends from an arcave project store, as Root opened it, to keys/: the one
-// directory an encrypted arcave project keeps in plaintext.
-func Keys(arcaveProjectStore storages.Navigator) (storages.Storager, error) {
-	keys, err := arcaveProjectStore.SubStorage(namespaceKeys, true)
-	if err != nil {
-		return nil, fmt.Errorf("re-root storage at %s: %w", namespaceKeys, err)
-	}
-	return keys, nil
-}
-
-// HoldsData reports whether an arcave project store holds anything besides keys/.
-func HoldsData(ctx context.Context, arcaveProjectStore storages.Navigator) (bool, error) {
+// HoldsData reports whether an arcave project store holds anything but the root objects named
+// and an object store's folder markers.
+func HoldsData(ctx context.Context, arcaveProjectStore storages.Navigator, except ...string) (bool, error) {
 	files, dirs, err := arcaveProjectStore.ListDir(ctx)
 	if err != nil {
 		return false, fmt.Errorf("list arcave project store: %w", err)
 	}
-	if len(files) > 0 {
-		return true, nil
-	}
-	return slices.ContainsFunc(dirs, func(dir storages.Storager) bool {
-		return dir.Dirname() != namespaceKeys
+	return len(dirs) > 0 || slices.ContainsFunc(files, func(file string) bool {
+		return !IsFolderMarker(file) && !slices.Contains(except, file)
 	}), nil
 }
 
-// Encrypt wraps an arcave project store so that every object below it is an age file to
-// identity; keys/ is reached through Keys on the store as Root opened it.
+// IsFolderMarker reports a listed name that is an object store's folder marker, not an object:
+// what a console-made prefix lists as, which no store can copy.
+func IsFolderMarker(name string) bool {
+	return name == "" || strings.HasSuffix(name, "/")
+}
+
+// Encrypt wraps an arcave project store so that every object below it is an age file to identity.
 func Encrypt(arcaveProjectStore storages.Storager, identity *age.X25519Identity) (storages.Storager, error) {
 	store, err := encrypted.New(arcaveProjectStore, identity)
 	if err != nil {

@@ -27,7 +27,7 @@ storage:
         path: .arcave/storage
 encryption:
     enabled: true
-    password: ${ARCAVE_PASSWORD?set ARCAVE_PASSWORD to the store password}
+    key: ${ARCAVE_ENCRYPTION_KEY?set ARCAVE_ENCRYPTION_KEY to the store key}
 snapshot:
     backend: cdc
 writable_layers:
@@ -272,28 +272,29 @@ Encrypts everything arcave writes to the store, on the host, before it leaves it
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `encryption.enabled` | bool | `false` | Encrypt the store. |
-| `encryption.password` | string | `""` | **Secret.** Opens the store's key. Required with `enabled`, refused without it. |
+| `encryption.key` | string | `""` | **Secret.** The [age](https://age-encryption.org) identity every object is encrypted to, `AGE-SECRET-KEY-1…`. Required with `enabled`, refused without it. |
 
 ```yaml
 encryption:
   enabled: true
-  password: ${ARCAVE_PASSWORD?set ARCAVE_PASSWORD to the store password}
+  key: ${ARCAVE_ENCRYPTION_KEY?set ARCAVE_ENCRYPTION_KEY to the store key}
 ```
 
-[`arcave init --encrypt`](cli/init.md) writes exactly that block; the password itself stays in the environment.
+[`arcave init --encrypt`](cli/init.md) writes exactly that block and prints a newly generated key once on stderr; the key itself stays in the environment. `age-keygen` makes one just as well.
 
-**The key lives in the store, under the password**, as restic keeps its own: the first command that opens an empty arcave project generates an [age](https://age-encryption.org) key, wraps it with the password (scrypt) and writes it to `projects/<project>/keys/<key-id>.age`. Every host sharing the store opens it with the same password, and nothing else needs copying between them. Each arcave project has its own key; every session and compose project of it shares it, so a fork copies encrypted objects as they are.
+**The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes into an empty arcave project. Every host sharing the store needs the same key in its config. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repository password is derived from the key.
 
-**Lose the password and the store is lost.** There is no recovery key. Every object is a standard age file, so `age -d` decrypts one by hand with the key's identity.
+**Lose the key and the store is lost**, as with age and restic. There is no recovery key. Every object is a standard age file, so `age -d -i` decrypts one by hand with the key.
 
 An encrypted store and an unencrypted one never mix, and arcave encrypts nothing in place. Each mismatch is refused before anything is stopped:
 
 ```text
-open the store: the password opens no key of the store (check encryption.password, ARCAVE_PASSWORD by default)
+open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 open the store: the store is not encrypted: the arcave project was written without encryption, and arcave does not encrypt it in place (set encryption.enabled: false, or point storage at an empty location)
-open the store: key 3f9c0a1b2c3d4e5f: the store is encrypted (set encryption.enabled: true and encryption.password)
-encryption.enabled needs encryption.password
-encryption.password is set but encryption.enabled is not
+open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
+encryption.enabled needs encryption.key
+encryption.key is set but encryption.enabled is not
 ```
 
 What encryption hides, and what it does not, is in [Limitations](limitations.md#encryption-hides-contents-not-shape).

@@ -44,8 +44,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
+	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
-	"github.com/greenmaskio/arcave/internal/repository/keyring"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
@@ -78,15 +78,12 @@ import (
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
 
+// encryptionMarkerSettle is how long a host that marks an arcave project encrypted waits
+// before it reads the marker back, as a session lock claim does.
+var encryptionMarkerSettle = sessionlock.DefaultSettle
+
 // composeResourceObject is the resource kind of a compose event whose id names no kind of object.
 const composeResourceObject = "object"
-
-// storeKeys keeps the keys this process opened: arcave mcp opens the store on every tool call,
-// and a key costs a second of scrypt to open.
-var storeKeys = storekey.NewOpener()
-
-// storeKeyWorkFactor is scrypt's cost for a key this process creates; age's default when 0.
-var storeKeyWorkFactor = 0
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
@@ -514,8 +511,8 @@ type openedArcaveProject struct {
 	resticPassword string
 }
 
-// openArcaveProjectStore opens the store root and descends to the arcave project: encrypted
-// under encryption.enabled, its key opened, or created on the arcave project's first use.
+// openArcaveProjectStore opens the store root and descends to the arcave project, encrypted to
+// encryption.key under encryption.enabled.
 func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (openedArcaveProject, error) {
 	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
@@ -533,23 +530,20 @@ func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath 
 
 func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Storager) (openedArcaveProject, error) {
 	var (
-		plain     storages.Storager
-		keysStore storages.Storager
-		key       model.StoreKey
-		identity  *age.X25519Identity
-		store     storages.Storager
-		password  string
-		err       error
+		plain    storages.Storager
+		identity *age.X25519Identity
+		marked   bool
+		torn     error
+		store    storages.Storager
+		password string
+		err      error
 	)
 	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
 		return openedArcaveProject{}, fmt.Errorf("initialise arcave project store: %w", err)
 	}
-	if keysStore, err = storefactory.Keys(plain); err != nil {
-		return openedArcaveProject{}, fmt.Errorf("initialise store keys: %w", err)
-	}
-	keys := keyring.New(keysStore).SetWorkFactor(storeKeyWorkFactor)
+	markers := encryptionmarker.New(plain)
 	if !cfg.Encryption.Enabled {
-		if err = storekey.RequireUnencrypted(ctx, keys); err != nil {
+		if err = requirePlainStore(ctx, markers); err != nil {
 			return openedArcaveProject{}, newStoreKeyError(err)
 		}
 		return openedArcaveProject{
@@ -558,19 +552,25 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 			resticPassword: cdc.DefaultPassword,
 		}, nil
 	}
-	holdsData := func(ctx context.Context) (bool, error) {
-		return storefactory.HoldsData(ctx, plain)
-	}
-	if key, err = storeKeys.Open(ctx, keys, holdsData, cfg.Encryption.Password); err != nil {
+	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
 		return openedArcaveProject{}, newStoreKeyError(err)
 	}
-	if identity, err = storekey.ParseIdentity(key); err != nil {
-		return openedArcaveProject{}, err
+	recipient := identity.Recipient().String()
+	switch marked, err = requireEncryptedStore(ctx, markers, recipient); {
+	case errors.Is(err, model.ErrInvalidEncryptionMarker):
+		torn = err
+	case err != nil:
+		return openedArcaveProject{}, newStoreKeyError(err)
+	}
+	if !marked {
+		if err = markEncryptedStore(ctx, plain, markers, recipient, torn); err != nil {
+			return openedArcaveProject{}, newStoreKeyError(err)
+		}
 	}
 	if store, err = storefactory.Encrypt(plain, identity); err != nil {
 		return openedArcaveProject{}, err
 	}
-	if password, err = storekey.NewResticPassword(key); err != nil {
+	if password, err = storekey.NewResticPassword(identity); err != nil {
 		return openedArcaveProject{}, err
 	}
 	return openedArcaveProject{
@@ -580,22 +580,87 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	}, nil
 }
 
+// requirePlainStore refuses an arcave project an encrypted host has marked: model.ErrStoreEncrypted.
+func requirePlainStore(ctx context.Context, markers *encryptionmarker.Repository) error {
+	_, found, err := markers.Get(ctx)
+	if err != nil {
+		return err
+	}
+	if found {
+		return model.ErrStoreEncrypted
+	}
+	return nil
+}
+
+// requireEncryptedStore reports whether the arcave project is marked for recipient, refusing
+// one marked for another; a marker no host wrote whole is model.ErrInvalidEncryptionMarker.
+func requireEncryptedStore(ctx context.Context, markers *encryptionmarker.Repository, recipient string) (bool, error) {
+	marker, found, err := markers.Get(ctx)
+	switch {
+	case err != nil:
+		return false, err
+	case !found:
+		return false, nil
+	case marker.Recipient != recipient:
+		return false, fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
+	}
+	return true, nil
+}
+
+// markEncryptedStore marks an empty arcave project for recipient — a torn marker over it
+// written again — refusing one holding data with torn, else model.ErrStoreUnencrypted, and
+// reads the marker back after the settle, so a host racing with another key is refused
+// before it writes anything.
+func markEncryptedStore(
+	ctx context.Context, plain storages.Navigator, markers *encryptionmarker.Repository, recipient string, torn error,
+) error {
+	holdsData, err := storefactory.HoldsData(ctx, plain, encryptionmarker.FileName)
+	if err != nil {
+		return err
+	}
+	if holdsData {
+		if torn != nil {
+			return torn
+		}
+		return model.ErrStoreUnencrypted
+	}
+	if err = markers.Put(ctx, model.NewEncryptionMarker(recipient)); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-time.After(encryptionMarkerSettle):
+	}
+	marker, found, err := markers.Get(ctx)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%s did not read back", encryptionmarker.FileName)
+	}
+	if marker.Recipient != recipient {
+		return fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
+	}
+	return nil
+}
+
 // newStoreKeyError adds the fix to a store the encryption section does not open.
 func newStoreKeyError(err error) error {
 	switch {
-	case errors.Is(err, model.ErrWrongPassword):
-		return fmt.Errorf("open the store: %w (check encryption.password, ARCAVE_PASSWORD by default)", err)
+	case errors.Is(err, model.ErrInvalidStoreKey), errors.Is(err, model.ErrWrongStoreKey):
+		return fmt.Errorf("open the store: %w (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)", err)
 	case errors.Is(err, model.ErrStoreUnencrypted):
 		return fmt.Errorf("open the store: %w: the arcave project was written without encryption, "+
 			"and arcave does not encrypt it in place (set encryption.enabled: false, "+
 			"or point storage at an empty location)", err)
-	case errors.Is(err, model.ErrAmbiguousStoreKey):
-		return fmt.Errorf("open the store: %w: a host that lost the race to create the first key "+
-			"left its key behind; delete the keys/<id>.age written later, which no data is encrypted to", err)
 	case errors.Is(err, model.ErrStoreEncrypted):
-		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.password)", err)
+		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.key)", err)
+	case errors.Is(err, model.ErrInvalidEncryptionMarker):
+		return fmt.Errorf("open the store: %w: an encrypted host was cut off marking the arcave project "+
+			"(open it with encryption.enabled: true and its key)", err)
 	default:
-		return fmt.Errorf("open the store key: %w", err)
+		return fmt.Errorf("open the arcave project store: %w", err)
 	}
 }
 
