@@ -502,6 +502,40 @@ func (c CDCBackend) validateTCP() error {
 	return nil
 }
 
+// IgnoredTCPKeys names the keys set that only the tcp transport reads, under any other.
+func (c CDCBackend) IgnoredTCPKeys() []string {
+	if c.Transport == CDCTransportTCP {
+		return nil
+	}
+	var keys []string
+	for _, key := range []struct {
+		name  string
+		value string
+	}{
+		{
+			name:  "backends.cdc.server_address",
+			value: c.ServerAddress,
+		},
+		{
+			name:  "backends.cdc.server_scheme",
+			value: c.ServerScheme,
+		},
+		{
+			name:  "backends.cdc.container_host",
+			value: c.ContainerHost,
+		},
+		{
+			name:  "backends.cdc.network_mode",
+			value: c.NetworkMode,
+		},
+	} {
+		if key.value != "" {
+			keys = append(keys, key.name)
+		}
+	}
+	return keys
+}
+
 // Log is the project's default logging configuration, persisted under the "log"
 // key in .arcave/config.yaml.
 type Log struct {

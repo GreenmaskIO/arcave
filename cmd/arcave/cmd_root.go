@@ -165,7 +165,19 @@ func initRoot(cmd *cobra.Command) error {
 	// this call would leave in logrus's own format on a stream arcave does not
 	// control.
 	utils.BridgeLogrus(logger, logger.GetLevel())
+	warnIgnoredCDCKeys(logger, projectCfg.Backends.CDC)
 	return nil
+}
+
+// warnIgnoredCDCKeys warns, once per run, of the tcp transport's keys set under another.
+func warnIgnoredCDCKeys(logger zerolog.Logger, cdc *config.CDCBackend) {
+	if cdc == nil {
+		return
+	}
+	if keys := cdc.IgnoredTCPKeys(); len(keys) > 0 {
+		logger.Warn().Strs("keys", keys).Str("transport", cdc.Transport).
+			Msg("backends.cdc keys ignored: they configure the tcp transport only")
+	}
 }
 
 // requireConfig guards every command that reads an existing project: the
