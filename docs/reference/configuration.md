@@ -284,7 +284,7 @@ encryption:
 export ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…
 ```
 
-[`arcave init --encrypt`](cli/init.md) writes exactly that block and prints a newly generated key once on stderr; the key itself stays in the environment, which beats a `key:` line in the file. `age-keygen` makes one just as well.
+To encrypt a store: make a key with `age-keygen`, export it as `ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…`, and set `encryption.enabled: true` in `.arcave/config.yaml`. [`arcave init`](cli/init.md) writes no `encryption` section; the key stays in the environment, which beats a `key:` line in the file.
 
 **The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes into an empty arcave project. Every host sharing the store needs the same key in its config. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repository password is derived from the key.
 

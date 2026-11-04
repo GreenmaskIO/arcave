@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -43,7 +44,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
-	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -148,13 +148,11 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	// Arrange
 	arcaveProject := storageE2EArcaveProject + "-" + backend.name
 	env := target.env
-	initArgs := []string{"init", "--name", arcaveProject}
 	if encrypted {
 		arcaveProject += "-encrypted"
-		key, err := storekey.NewKey()
+		identity, err := age.GenerateX25519Identity()
 		require.NoError(t, err)
-		env = append(slices.Clone(env), "ARCAVE_ENCRYPTION_KEY="+key)
-		initArgs = []string{"init", "--name", arcaveProject, "--encrypt"}
+		env = append(slices.Clone(env), "ARCAVE_ENCRYPTION_KEY="+identity.String())
 	}
 	compose := newImageRollbackEnv(t)
 	projectRoot := t.TempDir()
@@ -162,8 +160,8 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 		t.Helper()
 		return runArcave(t, projectRoot, env, append([]string{"-p", compose.project}, args...)...)
 	}
-	runArcave(t, projectRoot, env, initArgs...)
-	writeStorageConfigWith(t, projectRoot, target.file, backend)
+	runArcave(t, projectRoot, env, "init", "--name", arcaveProject)
+	writeStorageConfigWith(t, projectRoot, target.file, backend, encrypted)
 	compose.up(t, 1)
 	compose.write(t, compose.replicas(t)[0], "v1")
 
@@ -370,11 +368,14 @@ func writeStorageConfig(t *testing.T, projectRoot string, storage config.Storage
 	writeStorageConfigWith(t, projectRoot, storage, storageE2EBackend{
 		name:    backend,
 		backend: backend,
-	})
+	}, false)
 }
 
-// writeStorageConfigWith is writeStorageConfig for a row that also names fullcopy's compression.
-func writeStorageConfigWith(t *testing.T, projectRoot string, storage config.Storage, backend storageE2EBackend) {
+// writeStorageConfigWith is writeStorageConfig for a row that also names fullcopy's compression
+// and whether the store is encrypted.
+func writeStorageConfigWith(
+	t *testing.T, projectRoot string, storage config.Storage, backend storageE2EBackend, encrypted bool,
+) {
 	t.Helper()
 
 	file := config.Path(projectRoot)
@@ -384,6 +385,7 @@ func writeStorageConfigWith(t *testing.T, projectRoot string, storage config.Sto
 	require.NoError(t, yaml.Unmarshal(data, &cfg))
 	cfg.Storage = storage
 	cfg.Snapshot.Backend = backend.backend
+	cfg.Encryption = config.Encryption{Enabled: encrypted}
 	if backend.compression != "" {
 		cfg.Backends.FullCopy.Compression = backend.compression
 	}

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package storekey generates and parses the store key encryption.key names, derives the
-// restic password from it, and admits an arcave project's store for it.
+// Package storekey parses the store key encryption.key names, derives the restic password
+// from it, and admits an arcave project's store for it.
 package storekey
 
 import (
@@ -31,15 +31,6 @@ const (
 	resticPasswordSize = 32
 	resticInfo         = "arcave restic v1"
 )
-
-// NewKey generates a store key: an age X25519 identity, AGE-SECRET-KEY-1….
-func NewKey() (string, error) {
-	identity, err := age.GenerateX25519Identity()
-	if err != nil {
-		return "", fmt.Errorf("generate store key: %w", err)
-	}
-	return identity.String(), nil
-}
 
 // ParseKey parses a store key; none, or a malformed one, is model.ErrInvalidStoreKey, its
 // text left out.

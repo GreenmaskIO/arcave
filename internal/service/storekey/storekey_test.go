@@ -20,19 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"filippo.io/age"
+
 	"github.com/greenmaskio/arcave/internal/model"
 )
-
-func TestNewKey(t *testing.T) {
-	// Act
-	key, err := NewKey()
-
-	// Assert
-	require.NoError(t, err)
-	identity, err := ParseKey(key)
-	require.NoError(t, err)
-	assert.Equal(t, key, identity.String())
-}
 
 func TestParseKey(t *testing.T) {
 	const malformed = "AGE-SECRET-KEY-1NOTAKEY"
@@ -90,7 +81,7 @@ func TestNewResticPassword(t *testing.T) {
 
 func newTestKey(t *testing.T) string {
 	t.Helper()
-	key, err := NewKey()
+	identity, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
-	return key
+	return identity.String()
 }

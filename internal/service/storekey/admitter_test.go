@@ -34,7 +34,7 @@ import (
 
 const tornMarker = `{"version":1,"recip`
 
-func TestOpener_RequirePlain(t *testing.T) {
+func TestAdmitter_RequirePlain(t *testing.T) {
 	tests := []struct {
 		name    string
 		marker  string
@@ -65,7 +65,7 @@ func TestOpener_RequirePlain(t *testing.T) {
 	}
 }
 
-func TestOpener_AdmitEncrypted(t *testing.T) {
+func TestAdmitter_AdmitEncrypted(t *testing.T) {
 	identity, err := ParseKey(newTestKey(t))
 	require.NoError(t, err)
 	ours := identity.Recipient().String()
@@ -200,7 +200,7 @@ func (m *markersStub) Put(_ context.Context, marker model.EncryptionMarker) erro
 }
 
 // A host whose marker another host's, with another key, overwrote within the settle is refused.
-func TestOpener_AdmitEncrypted_LosesTheRace(t *testing.T) {
+func TestAdmitter_AdmitEncrypted_LosesTheRace(t *testing.T) {
 	// Arrange
 	ours, err := ParseKey(newTestKey(t))
 	require.NoError(t, err)

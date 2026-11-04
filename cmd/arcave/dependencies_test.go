@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/docker/cli/cli/flags"
 	composeprogress "github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
@@ -1082,16 +1083,16 @@ func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Enc
 // useFastStoreAdmitter admits the store with no settle on the marker's read-back.
 func useFastStoreAdmitter(t *testing.T) {
 	t.Helper()
-	opener := storeAdmitter
+	admitter := storeAdmitter
 	storeAdmitter = storekey.NewAdmitter().SetSettle(0)
-	t.Cleanup(func() { storeAdmitter = opener })
+	t.Cleanup(func() { storeAdmitter = admitter })
 }
 
 func newTestStoreKey(t *testing.T) string {
 	t.Helper()
-	key, err := storekey.NewKey()
+	identity, err := age.GenerateX25519Identity()
 	require.NoError(t, err)
-	return key
+	return identity.String()
 }
 
 func readStoreObject(t *testing.T, store storages.Storager, key string) string {

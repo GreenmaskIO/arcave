@@ -82,7 +82,7 @@ See [Output and exit codes](output.md).
 
 ## `ARCAVE_ENCRYPTION_KEY`
 
-The store key, `encryption.key`: a secret [`arcave init --encrypt`](cli/init.md) never writes, so it is the one key bound to the environment with no flag and read whether or not the file carries it. A `key:` in the file is the fallback. `init --encrypt` reads it to decide whether to generate a key. See [`encryption`](configuration.md#encryption).
+The store key, `encryption.key`: a secret [`arcave init`](cli/init.md) never writes, so it is the one key bound to the environment with no flag and read whether or not the file carries it. A `key:` in the file is the fallback. See [`encryption`](configuration.md#encryption).
 
 ## Variables that are not arcave's
 
