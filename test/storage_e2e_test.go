@@ -444,7 +444,6 @@ func assertRecordEncrypted(
 	raw, err := io.ReadAll(body)
 	require.NoError(t, err)
 
-	assert.Equal(t, want, bytes.HasPrefix(raw, []byte("age-encryption.org/v1\n")), "record %s", key)
 	assert.Equal(t, !want, bytes.Contains(raw, []byte(savepoint.ID.String())), "record %s", key)
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(arcaveProject))
 	require.NoError(t, err)

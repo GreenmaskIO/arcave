@@ -12,24 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package storekey parses the store key encryption.key names, derives the restic password
-// from it, and admits an arcave project's store for it.
+// Package storekey parses the store key encryption.key names and admits an arcave project's
+// store for it.
 package storekey
 
 import (
-	"crypto/hkdf"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
 	"filippo.io/age"
 
 	"github.com/greenmaskio/arcave/internal/model"
-)
-
-const (
-	resticPasswordSize = 32
-	resticInfo         = "arcave restic v1"
 )
 
 // ParseKey parses a store key; none, or a malformed one, is model.ErrInvalidStoreKey, its
@@ -43,13 +35,4 @@ func ParseKey(key string) (*age.X25519Identity, error) {
 		return nil, fmt.Errorf("%w: not an age X25519 identity", model.ErrInvalidStoreKey)
 	}
 	return identity, nil
-}
-
-// NewResticPassword derives the password of every restic repository encrypted to identity.
-func NewResticPassword(identity *age.X25519Identity) (string, error) {
-	derived, err := hkdf.Key(sha256.New, []byte(identity.String()), nil, resticInfo, resticPasswordSize)
-	if err != nil {
-		return "", fmt.Errorf("derive restic password: %w", err)
-	}
-	return hex.EncodeToString(derived), nil
 }

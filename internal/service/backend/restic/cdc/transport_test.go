@@ -51,13 +51,7 @@ func TestRunner_run_Stdio(t *testing.T) {
 		}).Return(nil).Once()
 	logs := &strings.Builder{}
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
-	r := runner{
-		containers: containers,
-		image:      demoImage,
-		password:   demoPassword,
-		objectID:   demoObjectID,
-		transport:  StdioTransport{Server: server},
-	}
+	r := runner{containers: containers, image: demoImage, objectID: demoObjectID, transport: StdioTransport{Server: server}}
 
 	// Act
 	_, err := r.run(ctx, resticCmd{args: []string{"backup", "/m", "--json"}, binds: []string{"vol:/m:ro"}})
@@ -72,11 +66,10 @@ func TestRunner_run_Stdio(t *testing.T) {
 	assert.Equal(t, []string{"backup", "/m", "--json"}, spec.Cmd)
 	assert.Equal(t, []model.OneShotFile{
 		{Path: "/run/arcave", Mode: fs.ModeDir | fs.ModeSticky | 0o777},
-		{Path: "/run/arcave/password", Mode: 0o444, Content: []byte(demoPassword)},
 		{Path: "/run/arcave/stdio.sh", Mode: 0o755, Content: stdioScript},
 	}, spec.Files)
 	assert.ElementsMatch(t,
-		[]string{"RESTIC_REPOSITORY=rclone:arcave", "RESTIC_PASSWORD_FILE=/run/arcave/password"}, spec.Env)
+		[]string{"RESTIC_REPOSITORY=rclone:arcave", "RESTIC_PASSWORD=" + resticPassword}, spec.Env)
 	assert.Equal(t, []string{"vol:/m:ro"}, spec.Binds)
 	assert.False(t, spec.HostNetwork)
 	require.NotNil(t, spec.Exec)
@@ -114,7 +107,7 @@ func TestSnapshotter_Snapshot_Stdio(t *testing.T) {
 	specs := runner.Specs()
 	require.Len(t, specs, 2)
 	for i, spec := range specs {
-		assert.True(t, isStdioSpec(spec, demoPassword), "run %d", i)
+		assert.True(t, isStdioSpec(spec), "run %d", i)
 	}
 	runner.AssertExpectations(t)
 }
@@ -123,7 +116,7 @@ func TestSnapshotter_Snapshot_Stdio(t *testing.T) {
 func TestInspector_ReadSnapshots_Stdio(t *testing.T) {
 	// Arrange
 	containers := &mockRunner{}
-	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"snapshots", "--json", "--no-lock"}, defaultPassword)).
+	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"snapshots", "--json", "--no-lock"})).
 		Run(respondWithOutput("[]\n", "")).Return(nil).Once()
 	inspector := NewInspector(containers, StdioTransport{Server: &mockServer{}}, Options{Image: demoImage})
 
@@ -140,7 +133,7 @@ func TestInspector_ReadSnapshots_Stdio(t *testing.T) {
 func TestPruner_Forget_Stdio(t *testing.T) {
 	// Arrange
 	containers := &mockRunner{}
-	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"prune"}, defaultPassword)).
+	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"prune"})).
 		Run(respondWithOutput("total prune:           3 blobs / 2.000 KiB\n", "")).Return(nil).Once()
 	pruner := NewPruner(containers, newStore(t), StdioTransport{Server: &mockServer{}}, Options{Image: demoImage})
 
@@ -154,20 +147,20 @@ func TestPruner_Forget_Stdio(t *testing.T) {
 	containers.AssertExpectations(t)
 }
 
-// matchStdio matches a stdio run of args in the demo image, its repository opened with password.
-func matchStdio(args []string, password string) any {
+// matchStdio matches a stdio run of args in the demo image.
+func matchStdio(args []string) any {
 	return mock.MatchedBy(func(spec model.OneShotSpec) bool {
-		return isStdioSpec(spec, password) && spec.Image == demoImage &&
+		return isStdioSpec(spec) && spec.Image == demoImage &&
 			slices.Equal(spec.Cmd, args)
 	})
 }
 
-// isStdioSpec reports whether spec reaches its repository over the exec bridge, with password as a file.
-func isStdioSpec(spec model.OneShotSpec, password string) bool {
+// isStdioSpec reports whether spec reaches its repository over the exec bridge.
+func isStdioSpec(spec model.OneShotSpec) bool {
 	return spec.Exec != nil &&
 		slices.Equal(spec.Exec.Cmd, []string{stdioScriptPath, "bridge"}) &&
 		slices.Equal(spec.Entrypoint, []string{stdioScriptPath, "entrypoint"}) &&
-		reflect.DeepEqual(spec.Files, newStdioFiles(password)) &&
+		reflect.DeepEqual(spec.Files, newStdioFiles()) &&
 		slices.Contains(spec.Env, "RESTIC_REPOSITORY="+stdioRepository) &&
 		!spec.HostNetwork
 }

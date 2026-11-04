@@ -63,10 +63,12 @@ func TestAdmitEncrypted(t *testing.T) {
 	tests := []struct {
 		name       string
 		marker     string
+		beside     string
 		wantErr    error
 		wantMarker string
 	}{
 		{name: "an empty project is marked", wantMarker: ours},
+		{name: "a project with objects but no marker is marked", beside: "sessions/x/session.json", wantMarker: ours},
 		{name: "a project marked for the key", marker: `{"recipient":"` + ours + `"}`, wantMarker: ours},
 		{
 			name:       "a project marked for another key",
@@ -81,6 +83,9 @@ func TestAdmitEncrypted(t *testing.T) {
 			store := inmemory.New("")
 			if tt.marker != "" {
 				require.NoError(t, store.PutObject(t.Context(), encryptionmarker.FileName, strings.NewReader(tt.marker)))
+			}
+			if tt.beside != "" {
+				require.NoError(t, store.PutObject(t.Context(), tt.beside, strings.NewReader("{}")))
 			}
 
 			// Act

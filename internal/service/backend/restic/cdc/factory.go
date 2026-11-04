@@ -35,9 +35,10 @@ import (
 // shared store.
 const NamespaceRepos = "restic"
 
-// defaultPassword opens every repository of a plain store. A constant, not a secret:
-// whoever can read such a store reads the volumes' data anyway.
-const defaultPassword = "arcave"
+// resticPassword opens every repository arcave creates. A constant, not a
+// secret: whoever can read the store can read .arcave too, and a lost password
+// would be lost data. A plain restic CLI opens the repository with it.
+const resticPassword = "arcave"
 
 // mountRoot is where the volume is mounted inside the restic container. The
 // object id nests under it, so a restore with --target / lands exactly in the
@@ -68,8 +69,6 @@ type Options struct {
 	Incremental bool
 	// Overwrite is restic's --overwrite argument, honoured only when Incremental.
 	Overwrite string
-	// Password opens every repository; empty takes defaultPassword.
-	Password string
 }
 
 // Dependencies is everything the factory is built over. A struct rather than a parameter

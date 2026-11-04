@@ -34,7 +34,7 @@ func TestParseKey(t *testing.T) {
 		wantMsg string
 	}{
 		{name: "a generated key", key: newTestKey(t)},
-		{name: "a malformed key", key: malformed, wantErr: model.ErrInvalidStoreKey},
+		{name: "a malformed key", key: malformed, wantErr: model.ErrInvalidStoreKey, wantMsg: "not an age X25519 identity"},
 		{name: "no key", key: "", wantErr: model.ErrInvalidStoreKey, wantMsg: "none set"},
 	}
 	for _, tt := range tests {
@@ -46,7 +46,9 @@ func TestParseKey(t *testing.T) {
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.ErrorContains(t, err, tt.wantMsg)
-				assert.NotContains(t, err.Error(), malformed, "the key stays out of the error")
+				if tt.key != "" {
+					assert.NotContains(t, err.Error(), tt.key, "the key stays out of the error")
+				}
 				assert.Nil(t, identity)
 				return
 			}
@@ -54,29 +56,6 @@ func TestParseKey(t *testing.T) {
 			assert.Equal(t, tt.key, identity.String())
 		})
 	}
-}
-
-func TestNewResticPassword(t *testing.T) {
-	// Arrange
-	key := newTestKey(t)
-	identity, err := ParseKey(key)
-	require.NoError(t, err)
-	other, err := ParseKey(newTestKey(t))
-	require.NoError(t, err)
-
-	// Act
-	password, err := NewResticPassword(identity)
-	again, againErr := NewResticPassword(identity)
-	otherPassword, otherErr := NewResticPassword(other)
-
-	// Assert
-	require.NoError(t, err)
-	require.NoError(t, againErr)
-	require.NoError(t, otherErr)
-	assert.Equal(t, password, again, "the password is derived, not drawn")
-	assert.NotEqual(t, password, otherPassword)
-	assert.NotContains(t, password, key)
-	assert.Len(t, password, 2*resticPasswordSize)
 }
 
 func newTestKey(t *testing.T) string {

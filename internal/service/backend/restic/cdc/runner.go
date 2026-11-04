@@ -113,14 +113,9 @@ func (r repositories) newRunner(objectID string) (runner, error) {
 	if r.transport == nil {
 		return runner{}, errNoTransport
 	}
-	password := r.options.Password
-	if password == "" {
-		password = defaultPassword
-	}
 	return runner{
 		containers: r.containers,
 		image:      r.options.Image,
-		password:   password,
 		objectID:   objectID,
 		transport:  r.transport,
 	}, nil
@@ -130,7 +125,6 @@ func (r repositories) newRunner(objectID string) (runner, error) {
 type runner struct {
 	containers ContainerRunner
 	image      string
-	password   string
 	objectID   string
 	transport  Transport
 }
@@ -187,12 +181,11 @@ func (r runner) exec(ctx context.Context, cmd resticCmd, stdout io.Writer) error
 
 	log.Debug().Strs("args", cmd.args).Msg("running restic")
 	err := r.containers.RunOneShot(ctx, r.transport.newOneShotSpec(r.objectID, resticRun{
-		image:    r.image,
-		password: r.password,
-		cmd:      cmd,
-		log:      log,
-		stdout:   stdout,
-		stderr:   stderr,
+		image:  r.image,
+		cmd:    cmd,
+		log:    log,
+		stdout: stdout,
+		stderr: stderr,
 	}))
 	// Flushed whatever the outcome: the last line of a failing run is the one
 	// worth having.

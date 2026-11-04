@@ -63,7 +63,7 @@ const (
 	blobKiB = 16384
 	// mutateKiB is what changes between two captures: the shape of a migration.
 	mutateKiB = 128
-	// resticPassword is the constant every unencrypted store's repository uses; a stock container
+	// resticPassword is the constant every arcave repository uses; a stock container
 	// opening one with it is part of the contract.
 	resticPassword = "arcave"
 )

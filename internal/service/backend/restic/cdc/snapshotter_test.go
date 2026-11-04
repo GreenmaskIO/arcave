@@ -136,9 +136,8 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 	for i, spec := range specs {
 		assert.Equal(t, demoImage, spec.Image, "run %d", i)
 		assert.ElementsMatch(t,
-			[]string{"RESTIC_REPOSITORY=" + demoRepoURL, "RESTIC_PASSWORD_FILE=/run/arcave/password"},
+			[]string{"RESTIC_REPOSITORY=" + demoRepoURL, "RESTIC_PASSWORD=" + resticPassword},
 			spec.Env, "run %d", i)
-		assert.Equal(t, newPasswordFiles(demoPassword), spec.Files, "run %d: the password is a file, not an env var", i)
 		assert.False(t, spec.HostNetwork, "run %d: tcp keeps off the host network unless told", i)
 	}
 	h.runner.AssertExpectations(t)

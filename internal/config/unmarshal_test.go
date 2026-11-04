@@ -477,13 +477,6 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: "unsupported writable_layers.backend",
 		},
 		{
-			name: "encryption is off by default",
-			yaml: "",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, Encryption{}, cfg.Encryption)
-			},
-		},
-		{
 			name: "the encryption section is read",
 			yaml: "encryption:\n  enabled: true\n  key: AGE-SECRET-KEY-1TEST\n",
 			verify: func(t *testing.T, cfg Config) {

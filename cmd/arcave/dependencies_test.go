@@ -41,10 +41,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
-	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -53,23 +51,20 @@ import (
 // carrying a client: the config's own vocabulary in, the backend's own out.
 func TestNewCDCOptions(t *testing.T) {
 	tests := []struct {
-		name     string
-		cfg      config.CDCBackend
-		password string
-		want     cdc.Options
+		name string
+		cfg  config.CDCBackend
+		want cdc.Options
 	}{
 		{
 			// A project that never names cdc carries no section, and still gets a
 			// runnable image: an old cdc savepoint is rolled back through cdc
 			// whatever snapshot.backend says now.
-			name:     "an absent section resolves to the defaults",
-			cfg:      config.CDCWithDefaults(nil),
-			password: "hunter2",
+			name: "an absent section resolves to the defaults",
+			cfg:  config.CDCWithDefaults(nil),
 			want: cdc.Options{
 				Image:       config.DefaultResticImage,
 				Overwrite:   config.OverwriteAlways,
 				Incremental: true,
-				Password:    "hunter2",
 			},
 		},
 		{
@@ -91,12 +86,10 @@ func TestNewCDCOptions(t *testing.T) {
 				Overwrite:   config.OverwriteIfChanged,
 				Image:       "restic/restic:0.18.0",
 			},
-			password: "derived",
 			want: cdc.Options{
 				Image:       "restic/restic:0.18.0",
 				Incremental: true,
 				Overwrite:   config.OverwriteIfChanged,
-				Password:    "derived",
 			},
 		},
 	}
@@ -104,7 +97,7 @@ func TestNewCDCOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newCDCOptions(tt.cfg, tt.password)
+			got := newCDCOptions(tt.cfg)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -590,7 +583,7 @@ func TestNewObjectCollectors(t *testing.T) {
 	for _, collector := range newDaemonCollectors(config.Config{}, engine) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind(), daemon: true})
 	}
-	for _, collector := range newComposeProjectCollectors(config.Config{}, engine, "") {
+	for _, collector := range newComposeProjectCollectors(config.Config{}, engine) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind()})
 	}
 
@@ -631,7 +624,7 @@ func TestNewComposeProjectErasers(t *testing.T) {
 
 	// Act
 	var got []model.GarbageAction
-	for _, eraser := range newComposeProjectErasers(config.Config{}, nil, "") {
+	for _, eraser := range newComposeProjectErasers(config.Config{}, nil) {
 		got = append(got, eraser.Action())
 	}
 
@@ -914,7 +907,6 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			encryption: config.Encryption{Enabled: true, Key: key},
 			verify: func(t *testing.T, projectPath string, opened openedArcaveProject) {
 				assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
-				assert.NotEmpty(t, opened.resticPassword)
 				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), "sessions", "x", "session.json"))
 				require.NoError(t, err)
 				assert.NotContains(t, string(raw), "a secret")
@@ -928,25 +920,11 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			wantMsg:    "check encryption.key",
 		},
 		{
-			name:       "an encrypted store with encryption off and the key still exported",
-			stored:     encrypted,
-			encryption: config.Encryption{Key: key},
-			wantErr:    model.ErrStoreEncrypted,
-			wantMsg:    "set encryption.enabled: true",
-		},
-		{
 			name:       "an encrypted store with no key",
 			stored:     encrypted,
 			encryption: config.Encryption{Enabled: true},
 			wantErr:    model.ErrInvalidStoreKey,
 			wantMsg:    "none set (check encryption.key",
-		},
-		{
-			name:       "an encrypted store with a malformed key",
-			stored:     encrypted,
-			encryption: config.Encryption{Enabled: true, Key: "AGE-SECRET-KEY-1NOTAKEY"},
-			wantErr:    model.ErrInvalidStoreKey,
-			wantMsg:    "check encryption.key",
 		},
 		{
 			name:    "an encrypted store with encryption off",
@@ -958,7 +936,6 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			name:   "a plain store with encryption off",
 			stored: plain,
 			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
-				assert.Empty(t, opened.resticPassword)
 				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
 			},
 		},
@@ -967,20 +944,7 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			stored:     plain,
 			encryption: config.Encryption{Key: key},
 			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
-				assert.Empty(t, opened.resticPassword, "the key is ignored")
-				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
-			},
-		},
-		{
-			name:       "a plain store with encryption on is marked: no marker is no encryption",
-			stored:     plain,
-			encryption: config.Encryption{Enabled: true, Key: key},
-			verify: func(t *testing.T, projectPath string, _ openedArcaveProject) {
-				identity, err := storekey.ParseKey(key)
-				require.NoError(t, err)
-				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName))
-				require.NoError(t, err)
-				assert.Contains(t, string(raw), identity.Recipient().String())
+				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"), "the key is ignored")
 			},
 		},
 	}

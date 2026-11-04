@@ -191,7 +191,7 @@ func newDependencies(
 			Runner:         engine,
 			Transport:      cdcTransport.transport,
 			RepositoryRoot: resticRoot,
-			Options:        newCDCOptions(cdcCfg, arcaveProject.resticPassword),
+			Options:        newCDCOptions(cdcCfg),
 		}),
 	)
 	if err != nil {
@@ -334,14 +334,12 @@ func resolveCDCNetwork(
 	}
 }
 
-// newCDCOptions translates the backends.cdc section into the backend's own options, with the
-// password the arcave project's repositories open with.
-func newCDCOptions(cfg config.CDCBackend, resticPassword string) cdc.Options {
+// newCDCOptions translates the backends.cdc section into the backend's own options.
+func newCDCOptions(cfg config.CDCBackend) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
-		Password:    resticPassword,
 	}
 }
 
@@ -503,8 +501,6 @@ type openedArcaveProject struct {
 	// root is what the caller closes.
 	root  storages.Storager
 	store storages.Storager
-	// resticPassword opens the restic repositories; empty on a plain store, where cdc uses its own.
-	resticPassword string
 }
 
 // openArcaveProjectStore opens the store root and descends to the arcave project, encrypted to
@@ -529,7 +525,6 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 		plain    storages.Storager
 		identity *age.X25519Identity
 		store    storages.Storager
-		password string
 		err      error
 	)
 	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
@@ -554,13 +549,9 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	if store, err = storefactory.Encrypt(plain, identity); err != nil {
 		return openedArcaveProject{}, err
 	}
-	if password, err = storekey.NewResticPassword(identity); err != nil {
-		return openedArcaveProject{}, err
-	}
 	return openedArcaveProject{
-		root:           root,
-		store:          store,
-		resticPassword: password,
+		root:  root,
+		store: store,
 	}, nil
 }
 
@@ -871,9 +862,9 @@ func newGCDependencies(
 		SessionLocker:            sessionLocker,
 		Inflight:                 inflightrepo.New(projectPath),
 		DaemonCollectors:         newDaemonCollectors(cfg, engine),
-		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine, arcaveProject.resticPassword),
+		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
 		DaemonErasers:            newDaemonErasers(engine),
-		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine, arcaveProject.resticPassword),
+		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
 		RestoredLayerGrace: utils.Value(cfg.GC.RestoredLayerGrace),
@@ -911,17 +902,14 @@ func newDaemonCollectors(cfg config.Config, engine *docker.Engine) []gc.DaemonCo
 }
 
 // newComposeProjectCollectors builds the collectors judging a compose project's store.
-func newComposeProjectCollectors(
-	cfg config.Config, engine *docker.Engine, resticPassword string,
-) []gc.ComposeProjectCollector {
+func newComposeProjectCollectors(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectCollector {
 	return []gc.ComposeProjectCollector{
 		savepointdir.New(),
 		ociimage.New(),
 		ociblob.New(cfg.Common.Concurrency),
 		resticrepo.New(engine, resticInspectorOpener{
-			cfg:            config.CDCWithDefaults(cfg.Backends.CDC),
-			resticPassword: resticPassword,
-			engine:         engine,
+			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
+			engine: engine,
 		}),
 	}
 }
@@ -934,17 +922,14 @@ func newDaemonErasers(engine *docker.Engine) []gc.DaemonEraser {
 }
 
 // newComposeProjectErasers builds the erasers carrying out the gc's actions in a compose project's store.
-func newComposeProjectErasers(
-	cfg config.Config, engine *docker.Engine, resticPassword string,
-) []gc.ComposeProjectEraser {
+func newComposeProjectErasers(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectEraser {
 	return []gc.ComposeProjectEraser{
 		eraser.NewTreeEraser(),
 		eraser.NewImageEraser(),
 		eraser.NewObjectEraser(),
 		eraser.NewForgetEraser(resticPrunerOpener{
-			cfg:            config.CDCWithDefaults(cfg.Backends.CDC),
-			resticPassword: resticPassword,
-			engine:         engine,
+			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
+			engine: engine,
 		}, cfg.Common.Concurrency),
 	}
 }
@@ -977,9 +962,8 @@ func openResticRepositories(
 
 // resticInspectorOpener serves one compose project's restic repositories to a cdc.Inspector.
 type resticInspectorOpener struct {
-	cfg            config.CDCBackend
-	resticPassword string
-	engine         *docker.Engine
+	cfg    config.CDCBackend
+	engine *docker.Engine
 }
 
 // Open opens the transport over store's repositories; the inspector's Close releases it.
@@ -989,7 +973,7 @@ func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigato
 		return nil, err
 	}
 	return resticInspector{
-		Inspector:          cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg, o.resticPassword)),
+		Inspector:          cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg)),
 		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
@@ -1002,9 +986,8 @@ type resticInspector struct {
 
 // resticPrunerOpener serves one compose project's restic repositories to a cdc.Pruner.
 type resticPrunerOpener struct {
-	cfg            config.CDCBackend
-	resticPassword string
-	engine         *docker.Engine
+	cfg    config.CDCBackend
+	engine *docker.Engine
 }
 
 // Open opens the transport over store's repositories; the pruner's Close releases it.
@@ -1014,7 +997,7 @@ func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) 
 		return nil, err
 	}
 	return resticPruner{
-		Pruner:             cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg, o.resticPassword)),
+		Pruner:             cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg)),
 		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
