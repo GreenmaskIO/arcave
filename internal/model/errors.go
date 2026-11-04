@@ -126,8 +126,6 @@ var (
 	ErrInvalidStoreKey = errors.New("invalid store key")
 	// ErrWrongStoreKey reports an encryption.key other than the one the arcave project is encrypted to.
 	ErrWrongStoreKey = errors.New("the store is encrypted to another key")
-	// ErrStoreUnencrypted reports an arcave project written without encryption, opened with it.
-	ErrStoreUnencrypted = errors.New("the store is not encrypted")
 	// ErrStoreEncrypted reports an encrypted arcave project, opened without encryption.
 	ErrStoreEncrypted = errors.New("the store is encrypted")
 	// ErrInvalidEncryptionMarker reports an encryption.json arcave did not write whole.

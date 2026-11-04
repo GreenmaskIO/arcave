@@ -108,7 +108,7 @@ On Docker Desktop for macOS, the `cdc` backend can't capture a host bind mount (
 - **Anything from whoever can write**: they can delete objects, or put one encrypted object under another's name.
 - **The host**: the key in `.arcave/config.yaml` when it is written there literally, the process environment, and the images in the Docker daemon — a writable layer holding a secret is encrypted in the store, not in the daemon.
 
-A lost key cannot be recovered, and an unencrypted store is not encrypted in place: start an encrypted one at an empty location.
+A lost key cannot be recovered, and an unencrypted store is not encrypted in place: switching encryption on over one marks it as encrypted and leaves what it held unreadable. Start an encrypted store at an empty location.
 
 ## SFTP storage does not check host keys
 

@@ -553,7 +553,7 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
 		return openedArcaveProject{}, newStoreKeyError(err)
 	}
-	if err = storeAdmitter.AdmitEncrypted(ctx, plain, markers, identity); err != nil {
+	if err = storeAdmitter.AdmitEncrypted(ctx, markers, identity); err != nil {
 		return openedArcaveProject{}, newStoreKeyError(err)
 	}
 	if store, err = storefactory.Encrypt(plain, identity); err != nil {
@@ -574,10 +574,6 @@ func newStoreKeyError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrInvalidStoreKey), errors.Is(err, model.ErrWrongStoreKey):
 		return fmt.Errorf("open the store: %w (check encryption.key, "+encryptionKeyEnv+" by default)", err)
-	case errors.Is(err, model.ErrStoreUnencrypted):
-		return fmt.Errorf("open the store: %w: the arcave project was written without encryption, "+
-			"and arcave does not encrypt it in place (set encryption.enabled: false, "+
-			"or point storage at an empty location)", err)
 	case errors.Is(err, model.ErrStoreEncrypted):
 		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.key)", err)
 	case errors.Is(err, model.ErrInvalidEncryptionMarker):

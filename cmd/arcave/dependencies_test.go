@@ -908,6 +908,13 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
 		require.NoError(t, os.WriteFile(marker, []byte(`{"version":1,"recip`), 0o644))
 	}
+	markedForKey := func(t *testing.T, projectPath string, _ openedArcaveProject) {
+		identity, err := storekey.ParseKey(key)
+		require.NoError(t, err)
+		raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName))
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), identity.Recipient().String())
+	}
 	tests := []struct {
 		name       string
 		stored     func(t *testing.T, projectPath string)
@@ -980,39 +987,22 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			},
 		},
 		{
-			name:       "a plain store with encryption on",
+			name:       "a plain store with encryption on is marked: no marker is no encryption",
 			stored:     plain,
 			encryption: config.Encryption{Enabled: true, Key: key},
-			wantErr:    model.ErrStoreUnencrypted,
-			wantMsg:    "point storage at an empty location",
+			verify:     markedForKey,
 		},
 		{
-			name:       "an empty store under a torn marker is marked again",
+			name:       "a torn marker is written again",
 			stored:     tornMarker,
 			encryption: config.Encryption{Enabled: true, Key: key},
-			verify: func(t *testing.T, projectPath string, _ openedArcaveProject) {
-				identity, err := storekey.ParseKey(key)
-				require.NoError(t, err)
-				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName))
-				require.NoError(t, err)
-				assert.Contains(t, string(raw), identity.Recipient().String())
-			},
+			verify:     markedForKey,
 		},
 		{
 			name:    "a torn marker refuses a plain host",
 			stored:  tornMarker,
 			wantErr: model.ErrInvalidEncryptionMarker,
 			wantMsg: "cut off marking",
-		},
-		{
-			name: "a torn marker over data is named, not read as plain data",
-			stored: func(t *testing.T, projectPath string) {
-				plain(t, projectPath)
-				tornMarker(t, projectPath)
-			},
-			encryption: config.Encryption{Enabled: true, Key: key},
-			wantErr:    model.ErrInvalidEncryptionMarker,
-			wantMsg:    "cut off marking",
 		},
 	}
 	for _, tt := range tests {

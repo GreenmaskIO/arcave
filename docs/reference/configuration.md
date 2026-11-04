@@ -290,12 +290,11 @@ To encrypt a store: make a key with `age-keygen`, export it as `ARCAVE_ENCRYPTIO
 
 **Lose the key and the store is lost**, as with age and restic. There is no recovery key. Every object is a standard age file, so `age -d -i` decrypts one by hand with the key.
 
-An encrypted store and an unencrypted one never mix, and arcave encrypts nothing in place. Each mismatch is refused before anything is stopped:
+**No marker is no encryption.** The first encrypted command marks the arcave project whatever it holds: arcave encrypts nothing in place, so an unencrypted project it is switched on over is marked and its data left unreadable. Start an encrypted store at an empty location. Every other mismatch is refused before anything is stopped:
 
 ```text
 open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
-open the store: the store is not encrypted: the arcave project was written without encryption, and arcave does not encrypt it in place (set encryption.enabled: false, or point storage at an empty location)
 open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
 open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 ```

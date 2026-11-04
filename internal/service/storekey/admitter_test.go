@@ -72,7 +72,6 @@ func TestAdmitter_AdmitEncrypted(t *testing.T) {
 	tests := []struct {
 		name       string
 		marker     string
-		data       bool
 		wantErr    error
 		wantMarker string
 	}{
@@ -81,13 +80,10 @@ func TestAdmitter_AdmitEncrypted(t *testing.T) {
 		{
 			name:       "a project marked for another key",
 			marker:     `{"version":1,"recipient":"age1other"}`,
-			data:       true,
 			wantErr:    model.ErrWrongStoreKey,
 			wantMarker: "age1other",
 		},
-		{name: "unmarked data", data: true, wantErr: model.ErrStoreUnencrypted},
-		{name: "a torn marker over an empty project is written again", marker: tornMarker, wantMarker: ours},
-		{name: "a torn marker over data", marker: tornMarker, data: true, wantErr: model.ErrInvalidEncryptionMarker},
+		{name: "a torn marker is written again", marker: tornMarker, wantMarker: ours},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,12 +92,9 @@ func TestAdmitter_AdmitEncrypted(t *testing.T) {
 			if tt.marker != "" {
 				require.NoError(t, store.PutObject(t.Context(), encryptionmarker.FileName, strings.NewReader(tt.marker)))
 			}
-			if tt.data {
-				require.NoError(t, store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
-			}
 
 			// Act
-			err := NewAdmitter().SetSettle(0).AdmitEncrypted(t.Context(), store, encryptionmarker.New(store), identity)
+			err := NewAdmitter().SetSettle(0).AdmitEncrypted(t.Context(), encryptionmarker.New(store), identity)
 
 			// Assert
 			if tt.wantErr != nil {
@@ -143,7 +136,7 @@ func TestAdmitter_AdmitEncrypted_MarkerRepository(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			err := NewAdmitter().SetSettle(0).AdmitEncrypted(t.Context(), inmemory.New(""), tt.markers, identity)
+			err := NewAdmitter().SetSettle(0).AdmitEncrypted(t.Context(), tt.markers, identity)
 
 			// Assert
 			require.ErrorIs(t, err, tt.wantErr)
@@ -161,7 +154,7 @@ func TestAdmitter_AdmitEncrypted_CancelledDuringSettle(t *testing.T) {
 	cancel(cause)
 
 	// Act: the stub writes whatever the context says, so the cancellation lands at the settle.
-	err = NewAdmitter().SetSettle(time.Hour).AdmitEncrypted(ctx, inmemory.New(""), &markersStub{}, identity)
+	err = NewAdmitter().SetSettle(time.Hour).AdmitEncrypted(ctx, &markersStub{}, identity)
 
 	// Assert
 	require.ErrorIs(t, err, cause)
@@ -209,7 +202,7 @@ func TestAdmitter_AdmitEncrypted_LosesTheRace(t *testing.T) {
 	store := &rivalMarkerStore{Storager: inmemory.New(""), rival: rival.Recipient().String()}
 
 	// Act
-	err = NewAdmitter().SetSettle(0).AdmitEncrypted(t.Context(), store, encryptionmarker.New(store), ours)
+	err = NewAdmitter().SetSettle(0).AdmitEncrypted(t.Context(), encryptionmarker.New(store), ours)
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrWrongStoreKey)

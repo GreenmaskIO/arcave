@@ -360,39 +360,6 @@ func TestSessionLock(t *testing.T) {
 	})
 }
 
-func TestHoldsData(t *testing.T) {
-	tests := []struct {
-		name    string
-		objects []string
-		except  []string
-		want    bool
-	}{
-		{name: "an empty arcave project", want: false},
-		{name: "an excepted object alone", objects: []string{"marker.json"}, except: []string{"marker.json"}, want: false},
-		{
-			name:    "a session beside an excepted object",
-			objects: []string{"marker.json", "sessions/x.lock.json"},
-			except:  []string{"marker.json"},
-			want:    true,
-		},
-		{name: "a file at the root", objects: []string{"stray.json"}, want: true},
-		{name: "a console-made folder marker alone", objects: []string{"", "sessions/"}, want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			store := &listingStore{Storager: inmemory.New(""), files: tt.objects}
-
-			// Act
-			got, err := HoldsData(t.Context(), store, tt.except...)
-
-			// Assert
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestEncrypt(t *testing.T) {
 	// Arrange
 	plain := inmemory.New("")
@@ -407,16 +374,6 @@ func TestEncrypt(t *testing.T) {
 	// Assert
 	assert.NotContains(t, readObject(t, plain, "sessions/s/session.json"), "secret")
 	assert.Equal(t, "secret", readObject(t, store, "sessions/s/session.json"))
-}
-
-// listingStore lists files as an object store would, folder markers included.
-type listingStore struct {
-	storages.Storager
-	files []string
-}
-
-func (s *listingStore) ListDir(context.Context) ([]string, []storages.Storager, error) {
-	return s.files, nil, nil
 }
 
 func readObject(t *testing.T, store storages.Storager, key string) string {

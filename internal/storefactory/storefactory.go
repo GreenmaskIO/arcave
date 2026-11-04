@@ -237,18 +237,6 @@ func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (stora
 	return joinKind(root, namespaceProjects, name.String())
 }
 
-// HoldsData reports whether an arcave project store holds anything but the root objects named
-// and an object store's folder markers.
-func HoldsData(ctx context.Context, arcaveProjectStore storages.Navigator, except ...string) (bool, error) {
-	files, dirs, err := arcaveProjectStore.ListDir(ctx)
-	if err != nil {
-		return false, fmt.Errorf("list arcave project store: %w", err)
-	}
-	return len(dirs) > 0 || slices.ContainsFunc(files, func(file string) bool {
-		return !IsFolderMarker(file) && !slices.Contains(except, file)
-	}), nil
-}
-
 // IsFolderMarker reports a listed name that is an object store's folder marker, not an object:
 // what a console-made prefix lists as, which no store can copy.
 func IsFolderMarker(name string) bool {
