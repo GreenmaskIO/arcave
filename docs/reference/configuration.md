@@ -81,7 +81,7 @@ Four sources, highest first:
 
 Only **bound** flags feed the config. `--project-name`, `--session`, `--config`, `--override`, `--dry-run`, `init --name` and `savepoint create --name` are unbound on purpose: they steer one run rather than describing the project. `init` binds none of its flags: it writes a template, and reads neither the environment nor the existing file.
 
-Which keys an environment variable can reach is narrower than it looks — [Environment variables](environment_variables.md) owns that.
+Every key has its variable, whether or not the file carries it — [Environment variables](environment_variables.md) owns that.
 
 ## `project`
 

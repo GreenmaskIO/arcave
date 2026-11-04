@@ -152,6 +152,14 @@ func TestResolveConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "a key the file does not carry is read from the environment",
+			env:  map[string]string{"ARCAVE_BACKENDS_CDC_RESTORE_MODE": config.RestoreModeWipe},
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, config.RestoreModeWipe, cfg.Backends.CDC.RestoreMode)
+			},
+		},
+		{
 			name:      "the store key reaches encryption.key from the environment with no line in the file",
 			file:      "encryption:\n  enabled: true\n",
 			env:       map[string]string{encryptionKeyEnv: testStoreKey},
@@ -244,9 +252,14 @@ func TestResolveWithoutFile(t *testing.T) {
 	tests := []struct {
 		name      string
 		file      string // .arcave/config.yaml body; empty means no file
+		env       map[string]string
 		wantFound bool
 	}{
 		{name: "no file", wantFound: false},
+		{
+			name: "another project's environment does not stop it",
+			env:  map[string]string{"ARCAVE_STORAGE_TYPE": config.StorageTypeS3},
+		},
 		{name: "a valid file is not read", file: "project:\n  name: other\n", wantFound: true},
 		{name: "an unparsable file does not stop it", file: "project: [\n", wantFound: true},
 		{name: "an unset variable does not stop it", file: "project:\n  name: ${ARCAVE_IT_UNSET_NAME}\n", wantFound: true},
@@ -257,6 +270,9 @@ func TestResolveWithoutFile(t *testing.T) {
 			root := t.TempDir()
 			if tt.file != "" {
 				writeConfig(t, root, tt.file)
+			}
+			for k, v := range tt.env {
+				t.Setenv(k, v)
 			}
 
 			// Act

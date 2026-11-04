@@ -41,7 +41,7 @@ import (
 // anything.
 var cfgViper = viper.New()
 
-// encryptionKeyEnv is the variable the store key is read from: ARCAVE_ + encryption.key.
+// encryptionKeyEnv is the environment variable encryption.key is read from.
 const encryptionKeyEnv = "ARCAVE_ENCRYPTION_KEY"
 
 // setupViper points viper at configPath and lets ARCAVE_<KEY> environment variables
@@ -52,13 +52,16 @@ func setupViper(v *viper.Viper, configPath string) {
 	v.SetEnvPrefix("ARCAVE")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
-	// AutomaticEnv reads only keys the file or a flag names; the store key has neither.
-	v.MustBindEnv("encryption.key")
 }
 
 // resolveConfig reads the config file (if present) and hands the merged sources to
 // config.Unmarshal, which owns the policy. found is false when the file is absent.
 func resolveConfig(v *viper.Viper, projectRoot string) (config.Config, bool, error) {
+	// AutomaticEnv reads a variable only for a key another source names; a bound key is read regardless.
+	for _, key := range config.Keys() {
+		v.MustBindEnv(key)
+	}
+
 	found := true
 	if err := v.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
