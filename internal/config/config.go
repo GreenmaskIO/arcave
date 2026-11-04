@@ -195,6 +195,7 @@ type Config struct {
 	Docker         Docker         `yaml:"docker,omitempty" mapstructure:"docker"`
 	Compose        Compose        `yaml:"compose" mapstructure:"compose"`
 	Storage        Storage        `yaml:"storage" mapstructure:"storage"`
+	Encryption     Encryption     `yaml:"encryption,omitempty" mapstructure:"encryption"`
 	Snapshot       Snapshot       `yaml:"snapshot" mapstructure:"snapshot"`
 	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
@@ -222,6 +223,15 @@ func (p Project) Validate() error {
 		return fmt.Errorf("%w: project.name: %w (set project.name explicitly)", ErrInvalid, err)
 	}
 	return nil
+}
+
+// Encryption encrypts every object arcave writes to the store, to Key. A missing or
+// malformed Key is refused where the store opens, not here: init writes Enabled with no
+// Key, and a Key in the environment reaches a plain project too, where it is ignored.
+type Encryption struct {
+	Enabled bool `yaml:"enabled,omitempty" mapstructure:"enabled"`
+	// Key is the age identity every object is encrypted to. Secret.
+	Key string `yaml:"key,omitempty" mapstructure:"key"`
 }
 
 // Common holds the settings every workflow shares.

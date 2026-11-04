@@ -41,6 +41,9 @@ import (
 // anything.
 var cfgViper = viper.New()
 
+// encryptionKeyEnv is the variable the store key is read from: ARCAVE_ + encryption.key.
+const encryptionKeyEnv = "ARCAVE_ENCRYPTION_KEY"
+
 // setupViper points viper at configPath and lets ARCAVE_<KEY> environment variables
 // override it, with dots mapped to underscores (ARCAVE_LOG_LEVEL feeds "log.level").
 func setupViper(v *viper.Viper, configPath string) {
@@ -49,6 +52,8 @@ func setupViper(v *viper.Viper, configPath string) {
 	v.SetEnvPrefix("ARCAVE")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	// AutomaticEnv reads only keys the file or a flag names; the store key has neither.
+	v.MustBindEnv("encryption.key")
 }
 
 // resolveConfig reads the config file (if present) and hands the merged sources to

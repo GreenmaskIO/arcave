@@ -16,14 +16,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/docker/cli/cli/flags"
 	composeprogress "github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/client"
@@ -868,4 +872,160 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 
 	// Assert
 	assert.Nil(t, sink)
+}
+
+// An encrypted store opens with its key and a plain one plainly; a section that does not fit
+// the store is refused with the fix and writes nothing.
+func TestOpenArcaveProjectStore(t *testing.T) {
+	key := newTestStoreKey(t)
+	encrypted := func(t *testing.T, projectPath string) {
+		t.Helper()
+		created, err := openArcaveProjectStore(t.Context(),
+			newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath)
+		require.NoError(t, err)
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
+		require.NoError(t, created.root.Close())
+	}
+	plain := func(t *testing.T, projectPath string) {
+		t.Helper()
+		created, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath)
+		require.NoError(t, err)
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
+		require.NoError(t, created.root.Close())
+	}
+	tests := []struct {
+		name       string
+		stored     func(t *testing.T, projectPath string)
+		encryption config.Encryption
+		wantErr    error
+		wantMsg    string
+		verify     func(t *testing.T, projectPath string, opened openedArcaveProject)
+	}{
+		{
+			name:       "an encrypted store with the key it was created with",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true, Key: key},
+			verify: func(t *testing.T, projectPath string, opened openedArcaveProject) {
+				assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
+				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), "sessions", "x", "session.json"))
+				require.NoError(t, err)
+				assert.NotContains(t, string(raw), "a secret")
+			},
+		},
+		{
+			name:       "an encrypted store with another key",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true, Key: newTestStoreKey(t)},
+			wantErr:    model.ErrWrongStoreKey,
+			wantMsg:    "check encryption.key",
+		},
+		{
+			name:       "an encrypted store with no key",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true},
+			wantErr:    model.ErrInvalidStoreKey,
+			wantMsg:    "none set (check encryption.key",
+		},
+		{
+			name:    "an encrypted store with encryption off",
+			stored:  encrypted,
+			wantErr: model.ErrStoreEncrypted,
+			wantMsg: "set encryption.enabled: true",
+		},
+		{
+			name:   "a plain store with encryption off",
+			stored: plain,
+			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
+				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
+			},
+		},
+		{
+			name:       "a plain store with the key exported and encryption off",
+			stored:     plain,
+			encryption: config.Encryption{Key: key},
+			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
+				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"), "the key is ignored")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			projectPath := t.TempDir()
+			tt.stored(t, projectPath)
+			before := listTree(t, arcaveProjectPath(projectPath))
+
+			// Act
+			opened, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMsg)
+				if tt.encryption.Key != "" {
+					assert.NotContains(t, err.Error(), tt.encryption.Key)
+				}
+				assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "a refusal writes nothing")
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, opened.root.Close()) })
+			tt.verify(t, projectPath, opened)
+		})
+	}
+}
+
+// arcaveProjectPath is where the directory storage of newEncryptionConfig keeps the demo arcave project.
+func arcaveProjectPath(projectPath string) string {
+	return filepath.Join(projectPath, ".arcave", "storage", "arcave", "projects", "demo")
+}
+
+// listTree is every file under root with its contents, as a refusal must leave it.
+func listTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	tree := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		tree[path] = string(data)
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return tree
+	}
+	require.NoError(t, err)
+	return tree
+}
+
+func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Encryption) config.Config {
+	t.Helper()
+	cfg := config.Config{
+		Project:    config.Project{Name: "demo"},
+		Encryption: encryption,
+	}
+	cfg.ApplyDefaults(projectPath)
+	require.NoError(t, cfg.Validate())
+	return cfg
+}
+
+func newTestStoreKey(t *testing.T) string {
+	t.Helper()
+	identity, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	return identity.String()
+}
+
+func readStoreObject(t *testing.T, store storages.Storager, key string) string {
+	t.Helper()
+	body, err := store.GetObject(t.Context(), key)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, body.Close()) })
+	data, err := io.ReadAll(body)
+	require.NoError(t, err)
+	return string(data)
 }

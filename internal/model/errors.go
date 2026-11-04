@@ -122,6 +122,13 @@ var (
 	// ErrComposeProjectAbsent reports a compose project the daemon holds no container of.
 	ErrComposeProjectAbsent = errors.New("no containers found")
 
+	// ErrInvalidStoreKey reports an encryption.key that is not an age X25519 identity.
+	ErrInvalidStoreKey = errors.New("invalid store key")
+	// ErrWrongStoreKey reports an encryption.key other than the one the arcave project is encrypted to.
+	ErrWrongStoreKey = errors.New("the store is encrypted to another key")
+	// ErrStoreEncrypted reports an encrypted arcave project, opened without encryption.
+	ErrStoreEncrypted = errors.New("the store is encrypted")
+
 	// ErrInvalidSortOrder reports a listing order other than asc or desc.
 	ErrInvalidSortOrder = errors.New("invalid sort order")
 

@@ -1,7 +1,7 @@
 ---
 title: Configuration
-description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
-keywords: [arcave configuration, config.yaml, snapshot backend, fullcopy, zstd, compression, cdc, restic, storage, s3, azure, sftp, docker compose]
+description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), encryption, snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
+keywords: [arcave configuration, config.yaml, snapshot backend, fullcopy, zstd, compression, cdc, restic, encryption, storage, s3, azure, sftp, docker compose]
 ---
 
 # Configuration
@@ -25,6 +25,8 @@ storage:
     type: directory
     directory:
         path: .arcave/storage
+encryption:
+    enabled: true
 snapshot:
     backend: cdc
 writable_layers:
@@ -263,6 +265,41 @@ unsupported storage.type "gcs" (supported: directory, s3, azure, ssh)
 ### Credentials
 
 Keep a secret out of the file by naming its environment variable — see [Interpolation](#interpolation). `arcave init` never writes one: it writes a template of the defaults and `--name`, with the `directory` storage, so a credential reaches the file only when you put it there.
+
+## `encryption`
+
+Encrypts everything arcave writes to the store, on the host, before it leaves it: records, compose specs, volume data, writable layers, images, restic repositories and session locks alike. Off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `encryption.enabled` | bool | `false` | Encrypt the store. |
+| `encryption.key` | string | `""` | **Secret.** The [age](https://age-encryption.org) identity every object is encrypted to, `AGE-SECRET-KEY-1…`. Read from `ARCAVE_ENCRYPTION_KEY` in any project, file or no file. An encrypted store refuses to open without it; a plain one ignores it. |
+
+```yaml
+encryption:
+  enabled: true
+```
+
+```shell
+export ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…
+```
+
+To encrypt a store: make a key with `age-keygen`, export it as `ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…`, and set `encryption.enabled: true` in `.arcave/config.yaml`. [`arcave init`](cli/init.md) writes no `encryption` section; the key stays in the environment, which beats a `key:` line in the file.
+
+**The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes into an empty arcave project. Every host sharing the store needs the same key in its config. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repositories go through the same layer; restic's own password stays the fixed one it has on a plain store.
+
+**Lose the key and the store is lost**, as with age and restic. There is no recovery key. Every object is a standard age file, so `age -d -i` decrypts one by hand with the key.
+
+**No marker is no encryption.** The first encrypted command marks the arcave project whatever it holds: arcave encrypts nothing in place, so an unencrypted project it is switched on over is marked and its data left unreadable. Start an encrypted store at an empty location. Every other mismatch is refused before anything is stopped:
+
+```text
+open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
+open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+```
+
+What encryption hides, and what it does not, is in [Limitations](limitations.md#encryption-hides-contents-not-shape).
 
 ## Interpolation
 
