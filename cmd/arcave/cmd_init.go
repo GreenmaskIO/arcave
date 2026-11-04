@@ -43,16 +43,11 @@ func runConfigInit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("project already initialized use --override")
 	}
 
+	template := config.NewConfig()
+	template.Project.Name = configInitName
 	svc, printer := newInitDependencies(projectRoot)
 	h := cli.NewConfigInitHandler(svc, printer)
-	return h.Init(cmd.Context(), newInitTemplate(configInitName), configInitOverride)
-}
-
-// newInitTemplate is the config init writes: the defaults and the name.
-func newInitTemplate(name string) config.Config {
-	template := config.NewConfig()
-	template.Project.Name = name
-	return template
+	return h.Init(cmd.Context(), template, configInitOverride)
 }
 
 func init() {
@@ -62,7 +57,8 @@ func init() {
 	flags.BoolVar(&configInitOverride, "override", false,
 		"Overwrite an existing arcave configuration")
 
-	// No flag is bound: --name goes to the template directly and --override is transient.
+	// Neither flag is bound: the template takes --name directly, and --override is
+	// transient. The storage is the directory one at its default path.
 
 	rootCmd.AddCommand(configInitCmd)
 }

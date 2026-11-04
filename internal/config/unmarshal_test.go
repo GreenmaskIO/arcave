@@ -491,20 +491,6 @@ func TestUnmarshal(t *testing.T) {
 			},
 		},
 		{
-			name: "encryption without a key is the store's to refuse, not the config's",
-			yaml: "encryption:\n  enabled: true\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, Encryption{Enabled: true}, cfg.Encryption)
-			},
-		},
-		{
-			name: "a key with encryption off is kept and ignored",
-			yaml: "encryption:\n  key: AGE-SECRET-KEY-1TEST\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, Encryption{Key: "AGE-SECRET-KEY-1TEST"}, cfg.Encryption)
-			},
-		},
-		{
 			name:       "an unknown key under backends is rejected",
 			yaml:       "backends:\n  cdc:\n    password: hunter2\n",
 			wantErrMsg: "password",

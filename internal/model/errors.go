@@ -128,8 +128,6 @@ var (
 	ErrWrongStoreKey = errors.New("the store is encrypted to another key")
 	// ErrStoreEncrypted reports an encrypted arcave project, opened without encryption.
 	ErrStoreEncrypted = errors.New("the store is encrypted")
-	// ErrInvalidEncryptionMarker reports an encryption.json arcave did not write whole.
-	ErrInvalidEncryptionMarker = errors.New("invalid encryption marker")
 
 	// ErrInvalidSortOrder reports a listing order other than asc or desc.
 	ErrInvalidSortOrder = errors.New("invalid sort order")

@@ -27,7 +27,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 
 	"filippo.io/age"
@@ -235,12 +234,6 @@ func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (stora
 		return nil, fmt.Errorf("validate arcave project name: %w", err)
 	}
 	return joinKind(root, namespaceProjects, name.String())
-}
-
-// IsFolderMarker reports a listed name that is an object store's folder marker, not an object:
-// what a console-made prefix lists as, which no store can copy.
-func IsFolderMarker(name string) bool {
-	return name == "" || strings.HasSuffix(name, "/")
 }
 
 // Encrypt wraps an arcave project store so that every object below it is an age file to identity.

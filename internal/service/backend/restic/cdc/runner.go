@@ -115,7 +115,7 @@ func (r repositories) newRunner(objectID string) (runner, error) {
 	}
 	password := r.options.Password
 	if password == "" {
-		password = DefaultPassword
+		password = defaultPassword
 	}
 	return runner{
 		containers: r.containers,

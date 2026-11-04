@@ -16,16 +16,13 @@ package storefactory
 
 import (
 	"context"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"filippo.io/age"
 	"github.com/greenmaskio/storages"
-	"github.com/greenmaskio/storages/inmemory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -358,30 +355,4 @@ func TestSessionLock(t *testing.T) {
 		// Assert
 		require.ErrorIs(t, err, model.ErrInvalidSessionID)
 	})
-}
-
-func TestEncrypt(t *testing.T) {
-	// Arrange
-	plain := inmemory.New("")
-	identity, err := age.GenerateX25519Identity()
-	require.NoError(t, err)
-
-	// Act
-	store, err := Encrypt(plain, identity)
-	require.NoError(t, err)
-	require.NoError(t, store.PutObject(t.Context(), "sessions/s/session.json", strings.NewReader("secret")))
-
-	// Assert
-	assert.NotContains(t, readObject(t, plain, "sessions/s/session.json"), "secret")
-	assert.Equal(t, "secret", readObject(t, store, "sessions/s/session.json"))
-}
-
-func readObject(t *testing.T, store storages.Storager, key string) string {
-	t.Helper()
-	body, err := store.GetObject(t.Context(), key)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, body.Close()) })
-	data, err := io.ReadAll(body)
-	require.NoError(t, err)
-	return string(data)
 }

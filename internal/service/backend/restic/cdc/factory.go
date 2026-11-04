@@ -35,10 +35,9 @@ import (
 // shared store.
 const NamespaceRepos = "restic"
 
-// DefaultPassword opens every repository of an unencrypted store. A constant, not a
-// secret: whoever can read such a store reads the volumes' data anyway. An encrypted
-// store derives its own from its key (Options.Password).
-const DefaultPassword = "arcave"
+// defaultPassword opens every repository of a plain store. A constant, not a secret:
+// whoever can read such a store reads the volumes' data anyway.
+const defaultPassword = "arcave"
 
 // mountRoot is where the volume is mounted inside the restic container. The
 // object id nests under it, so a restore with --target / lands exactly in the
@@ -69,7 +68,7 @@ type Options struct {
 	Incremental bool
 	// Overwrite is restic's --overwrite argument, honoured only when Incremental.
 	Overwrite string
-	// Password opens every repository; DefaultPassword when empty.
+	// Password opens every repository; empty takes defaultPassword.
 	Password string
 }
 

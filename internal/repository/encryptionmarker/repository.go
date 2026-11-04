@@ -41,8 +41,7 @@ func New(arcaveProjectStore storages.Storager) *Repository {
 	return &Repository{store: arcaveProjectStore}
 }
 
-// Get reads the marker; found is false when none stands, and one arcave did not write whole
-// is model.ErrInvalidEncryptionMarker.
+// Get reads the marker; found is false when none stands.
 func (r *Repository) Get(ctx context.Context) (marker model.EncryptionMarker, found bool, err error) {
 	body, err := r.store.GetObject(ctx, FileName)
 	if errors.Is(err, storages.ErrFileNotFound) {
@@ -59,10 +58,10 @@ func (r *Repository) Get(ctx context.Context) (marker model.EncryptionMarker, fo
 		return model.EncryptionMarker{}, false, fmt.Errorf("read %s: %w", FileName, err)
 	}
 	if err = json.Unmarshal(data, &marker); err != nil {
-		return model.EncryptionMarker{}, false, fmt.Errorf("%s: %w: %w", FileName, model.ErrInvalidEncryptionMarker, err)
+		return model.EncryptionMarker{}, false, fmt.Errorf("decode %s: %w", FileName, err)
 	}
-	if err = marker.Validate(); err != nil {
-		return model.EncryptionMarker{}, false, fmt.Errorf("%s: %w", FileName, err)
+	if marker.Recipient == "" {
+		return model.EncryptionMarker{}, false, fmt.Errorf("decode %s: no recipient", FileName)
 	}
 	return marker, true, nil
 }

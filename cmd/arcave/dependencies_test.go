@@ -64,12 +64,12 @@ func TestNewCDCOptions(t *testing.T) {
 			// whatever snapshot.backend says now.
 			name:     "an absent section resolves to the defaults",
 			cfg:      config.CDCWithDefaults(nil),
-			password: cdc.DefaultPassword,
+			password: "hunter2",
 			want: cdc.Options{
 				Image:       config.DefaultResticImage,
 				Overwrite:   config.OverwriteAlways,
 				Incremental: true,
-				Password:    cdc.DefaultPassword,
+				Password:    "hunter2",
 			},
 		},
 		{
@@ -590,7 +590,7 @@ func TestNewObjectCollectors(t *testing.T) {
 	for _, collector := range newDaemonCollectors(config.Config{}, engine) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind(), daemon: true})
 	}
-	for _, collector := range newComposeProjectCollectors(config.Config{}, engine, cdc.DefaultPassword) {
+	for _, collector := range newComposeProjectCollectors(config.Config{}, engine, "") {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind()})
 	}
 
@@ -631,7 +631,7 @@ func TestNewComposeProjectErasers(t *testing.T) {
 
 	// Act
 	var got []model.GarbageAction
-	for _, eraser := range newComposeProjectErasers(config.Config{}, nil, cdc.DefaultPassword) {
+	for _, eraser := range newComposeProjectErasers(config.Config{}, nil, "") {
 		got = append(got, eraser.Action())
 	}
 
@@ -881,11 +881,9 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 	assert.Nil(t, sink)
 }
 
-// The encryption section decides how an arcave project's store opens again: an encrypted one
-// reads back with its key, a plain one plainly, and a section that does not fit the store is
-// refused with the fix, and writes nothing — a plain store is never encrypted in place.
+// An encrypted store opens with its key and a plain one plainly; a section that does not fit
+// the store is refused with the fix and writes nothing.
 func TestOpenArcaveProjectStore(t *testing.T) {
-	useFastStoreAdmitter(t)
 	key := newTestStoreKey(t)
 	encrypted := func(t *testing.T, projectPath string) {
 		t.Helper()
@@ -902,19 +900,6 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
 		require.NoError(t, created.root.Close())
 	}
-	tornMarker := func(t *testing.T, projectPath string) {
-		t.Helper()
-		marker := filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName)
-		require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o755))
-		require.NoError(t, os.WriteFile(marker, []byte(`{"version":1,"recip`), 0o644))
-	}
-	markedForKey := func(t *testing.T, projectPath string, _ openedArcaveProject) {
-		identity, err := storekey.ParseKey(key)
-		require.NoError(t, err)
-		raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName))
-		require.NoError(t, err)
-		assert.Contains(t, string(raw), identity.Recipient().String())
-	}
 	tests := []struct {
 		name       string
 		stored     func(t *testing.T, projectPath string)
@@ -929,7 +914,7 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			encryption: config.Encryption{Enabled: true, Key: key},
 			verify: func(t *testing.T, projectPath string, opened openedArcaveProject) {
 				assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
-				assert.NotEqual(t, cdc.DefaultPassword, opened.resticPassword)
+				assert.NotEmpty(t, opened.resticPassword)
 				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), "sessions", "x", "session.json"))
 				require.NoError(t, err)
 				assert.NotContains(t, string(raw), "a secret")
@@ -973,7 +958,7 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			name:   "a plain store with encryption off",
 			stored: plain,
 			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
-				assert.Equal(t, cdc.DefaultPassword, opened.resticPassword)
+				assert.Empty(t, opened.resticPassword)
 				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
 			},
 		},
@@ -982,7 +967,7 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			stored:     plain,
 			encryption: config.Encryption{Key: key},
 			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
-				assert.Equal(t, cdc.DefaultPassword, opened.resticPassword, "the key is ignored")
+				assert.Empty(t, opened.resticPassword, "the key is ignored")
 				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
 			},
 		},
@@ -990,19 +975,13 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			name:       "a plain store with encryption on is marked: no marker is no encryption",
 			stored:     plain,
 			encryption: config.Encryption{Enabled: true, Key: key},
-			verify:     markedForKey,
-		},
-		{
-			name:       "a torn marker is written again",
-			stored:     tornMarker,
-			encryption: config.Encryption{Enabled: true, Key: key},
-			verify:     markedForKey,
-		},
-		{
-			name:    "a torn marker refuses a plain host",
-			stored:  tornMarker,
-			wantErr: model.ErrInvalidEncryptionMarker,
-			wantMsg: "cut off marking",
+			verify: func(t *testing.T, projectPath string, _ openedArcaveProject) {
+				identity, err := storekey.ParseKey(key)
+				require.NoError(t, err)
+				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), encryptionmarker.FileName))
+				require.NoError(t, err)
+				assert.Contains(t, string(raw), identity.Recipient().String())
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -1068,14 +1047,6 @@ func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Enc
 	cfg.ApplyDefaults(projectPath)
 	require.NoError(t, cfg.Validate())
 	return cfg
-}
-
-// useFastStoreAdmitter admits the store with no settle on the marker's read-back.
-func useFastStoreAdmitter(t *testing.T) {
-	t.Helper()
-	admitter := storeAdmitter
-	storeAdmitter = storekey.NewAdmitter().SetSettle(0)
-	t.Cleanup(func() { storeAdmitter = admitter })
 }
 
 func newTestStoreKey(t *testing.T) string {

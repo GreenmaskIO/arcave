@@ -123,7 +123,7 @@ func TestSnapshotter_Snapshot_Stdio(t *testing.T) {
 func TestInspector_ReadSnapshots_Stdio(t *testing.T) {
 	// Arrange
 	containers := &mockRunner{}
-	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"snapshots", "--json", "--no-lock"}, DefaultPassword)).
+	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"snapshots", "--json", "--no-lock"}, defaultPassword)).
 		Run(respondWithOutput("[]\n", "")).Return(nil).Once()
 	inspector := NewInspector(containers, StdioTransport{Server: &mockServer{}}, Options{Image: demoImage})
 
@@ -140,7 +140,7 @@ func TestInspector_ReadSnapshots_Stdio(t *testing.T) {
 func TestPruner_Forget_Stdio(t *testing.T) {
 	// Arrange
 	containers := &mockRunner{}
-	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"prune"}, DefaultPassword)).
+	containers.On("RunOneShot", mock.Anything, matchStdio([]string{"prune"}, defaultPassword)).
 		Run(respondWithOutput("total prune:           3 blobs / 2.000 KiB\n", "")).Return(nil).Once()
 	pruner := NewPruner(containers, newStore(t), StdioTransport{Server: &mockServer{}}, Options{Image: demoImage})
 

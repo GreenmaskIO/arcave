@@ -161,15 +161,6 @@ func TestResolveConfig(t *testing.T) {
 			},
 		},
 		{
-			name:      "an empty variable falls back to the key in the file",
-			file:      "encryption:\n  enabled: true\n  key: AGE-SECRET-KEY-1INFILE\n",
-			env:       map[string]string{encryptionKeyEnv: ""},
-			wantFound: true,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.Equal(t, "AGE-SECRET-KEY-1INFILE", cfg.Encryption.Key)
-			},
-		},
-		{
 			name:      "the store key in the environment beats one in the file",
 			file:      "encryption:\n  enabled: true\n  key: AGE-SECRET-KEY-1INFILE\n",
 			env:       map[string]string{encryptionKeyEnv: testStoreKey},

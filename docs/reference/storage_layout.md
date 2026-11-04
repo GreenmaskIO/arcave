@@ -27,7 +27,7 @@ An [encrypted](configuration.md#encryption) arcave project keeps a marker beside
 
 ```text
 projects/<project>/
-  encryption.json                              {"version": 1, "recipient": "age1…"}
+  encryption.json                              {"recipient": "age1…"}
   sessions/…                                   every object below is an age file
 ```
 

@@ -32,18 +32,17 @@ func TestRepository_Get(t *testing.T) {
 		stored    string
 		want      model.EncryptionMarker
 		wantFound bool
-		wantErr   error
+		wantErr   string
 	}{
 		{name: "no marker"},
 		{
 			name:      "a marker",
-			stored:    `{"version":1,"recipient":"age1recipient"}`,
-			want:      model.NewEncryptionMarker("age1recipient"),
+			stored:    `{"recipient":"age1recipient"}`,
+			want:      model.EncryptionMarker{Recipient: "age1recipient"},
 			wantFound: true,
 		},
-		{name: "a torn marker", stored: `{"version":1,"recip`, wantErr: model.ErrInvalidEncryptionMarker},
-		{name: "a later version", stored: `{"version":2,"recipient":"x"}`, wantErr: model.ErrInvalidEncryptionMarker},
-		{name: "no recipient", stored: `{"version":1}`, wantErr: model.ErrInvalidEncryptionMarker},
+		{name: "no json", stored: `{"recip`, wantErr: "decode encryption.json"},
+		{name: "no recipient", stored: `{}`, wantErr: "no recipient"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,8 +56,8 @@ func TestRepository_Get(t *testing.T) {
 			got, found, err := New(store).Get(t.Context())
 
 			// Assert
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
@@ -74,7 +73,7 @@ func TestRepository_Put(t *testing.T) {
 	repository := New(store)
 
 	// Act
-	err := repository.Put(t.Context(), model.NewEncryptionMarker("age1recipient"))
+	err := repository.Put(t.Context(), model.EncryptionMarker{Recipient: "age1recipient"})
 
 	// Assert
 	require.NoError(t, err)
@@ -83,5 +82,5 @@ func TestRepository_Put(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, body.Close()) })
 	raw, err := io.ReadAll(body)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"version":1,"recipient":"age1recipient"}`, string(raw))
+	assert.JSONEq(t, `{"recipient":"age1recipient"}`, string(raw))
 }

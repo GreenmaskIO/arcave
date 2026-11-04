@@ -78,10 +78,6 @@ import (
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
 
-// storeAdmitter admits the arcave project's store for the encryption section. Package state
-// for one knob, the marker's settle, which the tests turn to 0.
-var storeAdmitter = storekey.NewAdmitter()
-
 // composeResourceObject is the resource kind of a compose event whose id names no kind of object.
 const composeResourceObject = "object"
 
@@ -507,7 +503,7 @@ type openedArcaveProject struct {
 	// root is what the caller closes.
 	root  storages.Storager
 	store storages.Storager
-	// resticPassword opens the arcave project's restic repositories.
+	// resticPassword opens the restic repositories; empty on a plain store, where cdc uses its own.
 	resticPassword string
 }
 
@@ -541,19 +537,18 @@ func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Sto
 	}
 	markers := encryptionmarker.New(plain)
 	if !cfg.Encryption.Enabled {
-		if err = storeAdmitter.RequirePlain(ctx, markers); err != nil {
+		if err = storekey.RequirePlain(ctx, markers); err != nil {
 			return openedArcaveProject{}, newStoreKeyError(err)
 		}
 		return openedArcaveProject{
-			root:           root,
-			store:          plain,
-			resticPassword: cdc.DefaultPassword,
+			root:  root,
+			store: plain,
 		}, nil
 	}
 	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
 		return openedArcaveProject{}, newStoreKeyError(err)
 	}
-	if err = storeAdmitter.AdmitEncrypted(ctx, markers, identity); err != nil {
+	if err = storekey.AdmitEncrypted(ctx, markers, identity); err != nil {
 		return openedArcaveProject{}, newStoreKeyError(err)
 	}
 	if store, err = storefactory.Encrypt(plain, identity); err != nil {
@@ -576,9 +571,6 @@ func newStoreKeyError(err error) error {
 		return fmt.Errorf("open the store: %w (check encryption.key, "+encryptionKeyEnv+" by default)", err)
 	case errors.Is(err, model.ErrStoreEncrypted):
 		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.key)", err)
-	case errors.Is(err, model.ErrInvalidEncryptionMarker):
-		return fmt.Errorf("open the store: %w: an encrypted host was cut off marking the arcave project "+
-			"(open it with encryption.enabled: true and its key)", err)
 	default:
 		return fmt.Errorf("open the arcave project store: %w", err)
 	}

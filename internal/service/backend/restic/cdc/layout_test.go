@@ -165,7 +165,7 @@ func TestRepositories_newRunner(t *testing.T) {
 			name:      "tcp: a volume's repository",
 			transport: demoTCPTransport,
 			objectID:  demoObjectID,
-			want:      runner{image: demoImage, password: DefaultPassword, objectID: demoObjectID, transport: demoTCPTransport},
+			want:      runner{image: demoImage, password: defaultPassword, objectID: demoObjectID, transport: demoTCPTransport},
 		},
 		{
 			name:      "an encrypted store's own password",
@@ -180,7 +180,7 @@ func TestRepositories_newRunner(t *testing.T) {
 			name:      "stdio: a volume's repository",
 			transport: stdio,
 			objectID:  demoObjectID,
-			want:      runner{image: demoImage, password: DefaultPassword, objectID: demoObjectID, transport: stdio},
+			want:      runner{image: demoImage, password: defaultPassword, objectID: demoObjectID, transport: stdio},
 		},
 		{name: "stdio: a segment that is no volume's", transport: stdio, objectID: "..", wantErr: "no volume's repository"},
 		{name: "stdio: a segment holding a path", transport: stdio, objectID: "volume-named-db/config", wantErr: "no volume's repository"},

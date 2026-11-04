@@ -284,7 +284,8 @@ func recordKey(id model.SessionID) string {
 func rootKeys(files, except []string) []string {
 	var keys []string
 	for _, name := range files {
-		if storefactory.IsFolderMarker(name) || name == recordName || slices.Contains(except, name) {
+		// A name ending in "/" is an object store's folder marker, which no store can copy.
+		if name == "" || name == recordName || slices.Contains(except, name) || strings.HasSuffix(name, "/") {
 			continue
 		}
 		keys = append(keys, name)
