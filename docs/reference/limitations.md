@@ -97,7 +97,7 @@ If a rollback is killed partway through, arcave refuses every command that chang
 
 ## `cdc` and host bind mounts on macOS
 
-On Docker Desktop for macOS, the `cdc` backend can't capture a host bind mount (VirtioFS returns `EIO`). Named volumes are fine. Use a named volume, switch Docker Desktop's file sharing to gRPC FUSE, or use `fullcopy` for that project.
+On Docker Desktop for macOS with VirtioFS file sharing, the `cdc` backend can fail on a host bind mount (VirtioFS returns `EIO`). Named volumes are fine. Use a named volume, switch Docker Desktop's file sharing to gRPC FUSE, or use `fullcopy` for that project.
 
 ## Encryption hides contents, not shape
 
@@ -109,6 +109,10 @@ On Docker Desktop for macOS, the `cdc` backend can't capture a host bind mount (
 - **The host**: the key in `.arcave/config.yaml` when it is written there literally, the process environment, and the images in the Docker daemon — a writable layer holding a secret is encrypted in the store, not in the daemon.
 
 A lost key cannot be recovered, and an unencrypted store is not encrypted in place: switching encryption on over one marks it as encrypted and leaves what it held unreadable. Start an encrypted store at an empty location.
+
+## Podman is not supported yet
+
+arcave lets a Podman daemon through with a warning, but a savepoint on it fails by default. Getting past that makes a `fullcopy` rollback lose volume data, and on either backend a later rollback can fail and remove the project's containers. See [Requirements](requirements.md#docker-25-or-newer).
 
 ## SFTP storage does not check host keys
 

@@ -20,7 +20,7 @@ unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docke
 unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape
 ```
 
-Podman 6 exports that shape, so on Podman arcave captures volumes only: set [`capture.writable_layers` and `capture.images`](configuration.md#capture) to `false`.
+**Podman is not supported yet.** Podman 6 exports that shape, so a default `savepoint create` fails there and the services start again. Don't get past it by setting [`capture.writable_layers` and `capture.images`](configuration.md#capture) to `false`: a `fullcopy` rollback then brings volumes back empty and still reports success, and with either backend a rollback to a savepoint taken after an earlier rollback fails, removes the project's containers and leaves an `inconsistent` marker that refuses further commands.
 
 The daemon must also be **reachable** for `savepoint create` and `rollback`, which fail on their first look at the compose project. `init`, `savepoint list`, `savepoint remove` and the `session` commands reach no daemon:
 
@@ -89,10 +89,10 @@ Tested on macOS arm64, 2026-11-02, with arcave's integration suites and a smoke 
 | Docker Engine, rootless | 29.6.2, Ubuntu 26.04 in Lima | ✅ | ✅ | ✅ | |
 | Colima | 0.10.3, dockerd 29.5.2 | ✅ | ✅ | ✅ | |
 | OrbStack | 2.2.5, Engine 29.8.2 | ✅ | ✅ | ✅ | |
-| Podman, rootless and rootful | 6.1.4 | volumes only | ✅ volumes only | ✅ volumes only | its `docker save` writes no OCI layout: set `capture.writable_layers` and `capture.images` to `false` |
+| Podman | 6.1.4 | ❌ | ❌ | ❌ | [not supported yet](#docker-25-or-newer) |
 
 Speed of a first backup and a full restore of 1 GiB, in seconds — `stdio` against `tcp`. `stdio` is bound by
-how fast the engine streams a `docker exec`, `tcp` by its network:
+how fast the engine streams a `docker exec`, `tcp` by its network. The Podman rows measure the transport only:
 
 | Engine | backup, `stdio` / `tcp` | restore, `stdio` / `tcp` |
 |---|---|---|

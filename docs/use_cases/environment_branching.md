@@ -56,7 +56,7 @@ The session names and the git branch names are yours to keep in step. arcave doe
 * **A named line you can return to.** Each session keeps its own savepoints. `arcave rollback billing-wip` in `feature/new-billing` puts the environment back exactly as it stood, as many times as you like, and the other sessions never see that savepoint.
 * **A shared starting point.** Every fork from `baseline` starts with a copy of `main-baseline`, under the same name and id.
 * **It covers the whole environment.** Postgres, Redis, MinIO, the app container's writable layer, the images, and the compose spec itself. Switching back does not leave a cache holding the other branch's data, or a service running the other branch's image.
-* **No infrastructure to run.** No copy-on-write filesystem, no volume plugin, no storage appliance, no hosted service. Docker, and — for [`cdc`](../reference/configuration.md#snapshot) — permission to run a stock `restic` container and expose a loopback port to it.
+* **No infrastructure to run.** No copy-on-write filesystem, no volume plugin, no storage appliance, no hosted service. Docker, and — for [`cdc`](../reference/configuration.md#snapshot) — permission to run a stock `restic` container.
 
 ## Where the analogy stops
 

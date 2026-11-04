@@ -43,8 +43,14 @@ copy of a docker compose project's state:
 - each container's writable layer and the image it was built on;
 - the compose spec the project ran with, including its environment variables.
 
-Savepoints are stored **unencrypted** in the configured storage path. Anyone who can read
-that path can read the project's data and any secrets it holds.
+By default savepoints are stored **unencrypted** in the configured storage path. Anyone who
+can read that path can read the project's data and any secrets it holds.
+
+With [`encryption`](https://www.greenmask.io/docs/arcave/reference/configuration/#encryption)
+switched on, arcave encrypts every object, apart from one marker holding the public key, to
+your [age](https://age-encryption.org) key before it leaves the host. That protects the contents from whoever reads the store. Names and sizes
+stay visible, and the data stays unencrypted in Docker on the host; see
+[Limitations](https://www.greenmask.io/docs/arcave/reference/limitations/#encryption-hides-contents-not-shape).
 
 ## Security Considerations
 
@@ -61,9 +67,11 @@ trust.
 - Restrict the storage path to your user (`chmod 700`).
 - Keep secrets out of the compose file's `environment:`, or treat every savepoint as a
   secret.
-- `arcave session remove` and `arcave savepoint remove` delete records, but image blobs
-  shared between savepoints are not garbage-collected yet. Delete the storage path to
-  remove all data.
+- Keep the encryption key in `ARCAVE_ENCRYPTION_KEY`, not in `.arcave/config.yaml`. arcave
+  keeps no copy of it, and a store whose key is lost cannot be read.
+- `arcave savepoint remove` deletes a savepoint's record and its own data, but image data
+  shared between savepoints and `cdc` snapshots stay until `arcave gc` collects them.
+  `arcave session remove` deletes everything a session holds.
 
 ### Rollback
 

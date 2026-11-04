@@ -1,7 +1,7 @@
 ---
 title: Environment variables
-description: The ARCAVE_ variables arcave reads — which config keys they reach, the two different things ARCAVE_PROJECT_NAME names, ARCAVE_SESSION, ARCAVE_FORMAT and ARCAVE_PROGRESS.
-keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS, config keys, docker compose]
+description: The ARCAVE_ variables arcave reads — every config key has one — the two different things ARCAVE_PROJECT_NAME names, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS and ARCAVE_ENCRYPTION_KEY.
+keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS, ARCAVE_ENCRYPTION_KEY, config keys, docker compose]
 ---
 
 # Environment variables
