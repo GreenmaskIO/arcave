@@ -51,10 +51,12 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 		pinnedSession, projectCfg.Rollback.Policy()).MCPRun(cmd.Context())
 }
 
-// mcpServiceFactory wires the savepoint workflows for the compose project and session a tool
-// call named, "" being the current session, and returns the release that closes them.
-func mcpServiceFactory(ctx context.Context, project, sessionRef string) (cli.MCPService, func(), error) {
-	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(project))
+// mcpServiceFactory wires the savepoint workflows for a tool call's compose project and session
+// ("" is the current one), reaching the daemon only if needsDaemon, plus the release closing them.
+func mcpServiceFactory(
+	ctx context.Context, project, sessionRef string, needsDaemon bool,
+) (cli.MCPService, func(), error) {
+	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(project), needsDaemon)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init dependencies: %w", err)
 	}
@@ -80,7 +82,7 @@ func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(
 
 // mcpToolsServiceFactory wires the tools commands for the compose project a tool call named.
 func mcpToolsServiceFactory(ctx context.Context, project string) (cli.MCPToolsService, func(), error) {
-	deps, err := newToolsDependencies(projectCfg, model.DockerComposeProjectName(project))
+	deps, err := newToolsDependencies(ctx, projectCfg, model.DockerComposeProjectName(project))
 	if err != nil {
 		return nil, nil, fmt.Errorf("init tools dependencies: %w", err)
 	}

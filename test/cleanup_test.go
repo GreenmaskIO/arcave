@@ -27,6 +27,8 @@ import (
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // removeComposeProject drops everything a test left of project, images included. It goes
@@ -39,11 +41,7 @@ func removeComposeProject(t *testing.T, cli *client.Client, project string) {
 
 	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true, Filters: byProject})
 	if assert.NoError(t, err, "list containers of %s", project) {
-		for _, c := range containers {
-			// RemoveVolumes takes the replica's anonymous volumes with it.
-			assert.NoError(t, cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}),
-				"remove container %s", c.ID)
-		}
+		removeContainers(t, cli, containers)
 	}
 	volumes, err := cli.VolumeList(ctx, volume.ListOptions{Filters: byProject})
 	if assert.NoError(t, err, "list volumes of %s", project) {
@@ -55,14 +53,43 @@ func removeComposeProject(t *testing.T, cli *client.Client, project string) {
 	images, err := cli.ImageList(ctx, image.ListOptions{All: true})
 	if assert.NoError(t, err, "list images") {
 		for _, img := range images {
-			for _, tag := range img.RepoTags {
-				// A rollback's layer tags, and the images compose built for the project.
+			for _, repoTag := range img.RepoTags {
+				// A rollback's layer tags, and the images compose built for the project, as
+				// Docker spells them: Podman prefixes docker.io/.
+				tag := string(model.ImageRef(repoTag).Familiar())
 				if strings.HasPrefix(tag, "arcave/"+project+"-") || strings.HasPrefix(tag, project+"-") {
 					_, err := cli.ImageRemove(ctx, tag, image.RemoveOptions{PruneChildren: true})
 					assert.NoError(t, err, "remove image %s", tag)
 				}
 			}
 		}
+	}
+}
+
+// removeContainers removes every container, the replica's anonymous volumes with it, in
+// passes: Podman refuses to remove one whose ipc or pid namespace another still joins, and a
+// summary does not say which. It asserts what a pass that removes nothing leaves.
+func removeContainers(t *testing.T, cli *client.Client, containers []container.Summary) {
+	t.Helper()
+
+	pending := containers
+	for len(pending) > 0 {
+		var held []container.Summary
+		errs := map[string]error{}
+		for _, c := range pending {
+			if err := cli.ContainerRemove(context.Background(), c.ID,
+				container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+				held = append(held, c)
+				errs[c.ID] = err
+			}
+		}
+		if len(held) == len(pending) {
+			for _, c := range held {
+				assert.NoError(t, errs[c.ID], "remove container %s", c.ID)
+			}
+			return
+		}
+		pending = held
 	}
 }
 

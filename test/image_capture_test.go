@@ -86,7 +86,7 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	assert.Equal(t, "app", capture.Service)
 	assert.Equal(t, 1, capture.Replica)
 	assert.NotEmpty(t, capture.CommittedImageID)
-	assert.Equal(t, "busybox", capture.UpstreamImageRef)
+	assertSameImageRef(t, "busybox", capture.UpstreamImageRef)
 	assert.NotEmpty(t, capture.UpstreamImageID)
 	assert.Positive(t, capture.SizeBytes)
 
@@ -95,7 +95,12 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	// contract, and a test sharing the constant would not notice it change.
 	captureDir := filepath.Join(savepoint.ID.String(), "images", "app", "replicas", "1")
 	keys := storeKeys(t, env.store)
-	for _, name := range []string{"image.json", "index.json", "manifest.json", "oci-layout"} {
+	metadata := []string{"image.json", "index.json", "oci-layout"}
+	if !isPodman(t, env.daemon) {
+		// Docker's save carries its own manifest beside the OCI index; libpod's does not.
+		metadata = append(metadata, "manifest.json")
+	}
+	for _, name := range metadata {
 		assert.Contains(t, keys, filepath.Join(captureDir, name))
 	}
 	assert.Less(t, capture.StoredBytes, capture.SizeBytes,
@@ -113,7 +118,7 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	require.Len(t, savepoint.Images, 1)
 	upstream := savepoint.Images[0]
 	assert.Equal(t, capture.UpstreamImageID, upstream.ID)
-	assert.Contains(t, upstream.Refs, "busybox")
+	assertNamesImage(t, upstream.Refs, "busybox")
 	assert.True(t, upstream.Stored)
 	upstreamDir := filepath.Join("shared", "oci", "images", "sha256",
 		strings.TrimPrefix(upstream.ID.String(), "sha256:"))
@@ -149,6 +154,8 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
 	engine := dockerclient.NewEngine(daemonAPI)
+	profile := newRuntimeProfile(t, daemonAPI)
+	exporter := profile.exporter
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -167,15 +174,15 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		SessionLocker:      newStoreLocker(store, model.DefaultSession),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
-		ProjectAssembler:   composespec.NewAssembler(),
+		ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-tenant", project), engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-tenant", project), exporter, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		BackendRegistry:    mustRegistry(t, exporter),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
@@ -227,7 +234,7 @@ func newLayerOwner(arcaveProject, composeProject string) model.LayerOrigin {
 // newImageCopier is the image backend the DI root builds: both writable layer archivers, and
 // images deduplicated.
 func newImageCopier(
-	store storages.Navigator, origin model.LayerOrigin, engine *dockerclient.Engine, blobStore storages.Storager,
+	store storages.Navigator, origin model.LayerOrigin, engine exportEngine, blobStore storages.Storager,
 ) *imagecopy.Copier {
 	dedup := dedupcopy.New(blobStore)
 	return imagecopy.NewCopier(store, origin, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{

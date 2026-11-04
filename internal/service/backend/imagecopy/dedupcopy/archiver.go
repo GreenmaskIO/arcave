@@ -127,7 +127,7 @@ func (s *Archiver) storeMember(
 		return imagecopy.Member{Name: name, Kind: imagecopy.KindMetadata}, size, nil
 	}
 	return imagecopy.Member{}, 0, fmt.Errorf(
-		"%w: member %q is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape",
+		"%w: member %q is neither a blob nor metadata; a daemon older than Docker 25 exports this shape",
 		model.ErrUnsupportedImageArchive, name)
 }
 

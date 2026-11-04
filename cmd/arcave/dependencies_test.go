@@ -24,8 +24,11 @@ import (
 	"testing"
 	"time"
 
+	clicontext "github.com/docker/cli/cli/context"
+	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/flags"
 	composeprogress "github.com/docker/compose/v2/pkg/progress"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -37,8 +40,10 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -868,4 +873,166 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 
 	// Assert
 	assert.Nil(t, sink)
+}
+
+// The engine behind the daemon decides the profile whole: Podman is reached past its compat
+// API, held to no Docker version, and stamps its own defaults; Docker through the API itself.
+func TestNewRuntimeProfile(t *testing.T) {
+	api := &client.Client{}
+	info := system.Info{Name: "host-1", LoggingDriver: "json-file", DefaultRuntime: "runc"}
+	plain := dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2375"}}
+	libpod := docker.NewLibpod(api)
+	tests := []struct {
+		name     string
+		runtime  model.ContainerRuntime
+		endpoint dockercontext.Endpoint
+		want     runtimeProfile
+		wantErr  string
+	}{
+		{
+			name:     "docker",
+			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			endpoint: plain,
+			want: runtimeProfile{
+				api:            api,
+				minDaemonMajor: dedupcopy.MinDaemonMajor,
+				assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
+			},
+		},
+		{
+			name:    "docker behind TLS",
+			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			endpoint: dockercontext.Endpoint{
+				EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
+				TLSData:      &clicontext.TLSData{},
+			},
+			want: runtimeProfile{
+				api:            api,
+				minDaemonMajor: dedupcopy.MinDaemonMajor,
+				assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
+			},
+		},
+		{
+			name:     "podman",
+			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			endpoint: plain,
+			want: runtimeProfile{
+				api:            docker.NewPodmanAPI(api, libpod),
+				libpod:         &libpod,
+				minDaemonMajor: 0,
+				assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
+			},
+		},
+		{
+			name:    "podman behind TLS is refused",
+			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			endpoint: dockercontext.Endpoint{
+				EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
+				TLSData:      &clicontext.TLSData{},
+			},
+			wantErr: "podman behind TLS is not supported",
+		},
+		{
+			name:     "podman with TLS verification off is refused too",
+			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376", SkipTLSVerify: true}},
+			wantErr:  "podman behind TLS is not supported",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got, err := newRuntimeProfile(tt.runtime, info, api, tt.endpoint)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// The exporter is the engine itself, or Podman's over it where the profile holds libpod.
+func TestNewExportEngine(t *testing.T) {
+	engine := docker.NewEngine(nil)
+	libpod := docker.NewLibpod(&client.Client{})
+	tests := []struct {
+		name    string
+		profile runtimeProfile
+		want    exportEngine
+	}{
+		{name: "docker", profile: runtimeProfile{}, want: engine},
+		{name: "podman", profile: runtimeProfile{libpod: &libpod}, want: docker.NewPodmanEngine(engine, libpod)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := newExportEngine(tt.profile, engine)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// The tools commands reach the daemon first: one that does not answer fails the wiring, and
+// nothing is left open.
+func TestNewToolsDependencies_DaemonUnreachable(t *testing.T) {
+	// Arrange
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	ctx := zerolog.Nop().WithContext(context.Background())
+	cfg := config.Config{Docker: config.Docker{Host: "tcp://127.0.0.1:1"}}
+
+	// Act
+	deps, err := newToolsDependencies(ctx, cfg, "demo")
+
+	// Assert
+	require.ErrorContains(t, err, "read the daemon version")
+	assert.Nil(t, deps)
+}
+
+// savepoint list and remove reach no daemon: against one that does not answer they are
+// wired all the same, while a command that needs the daemon fails on its first request.
+func TestNewDependencies_DaemonAccess(t *testing.T) {
+	tests := []struct {
+		name        string
+		needsDaemon bool
+		wantErr     string
+	}{
+		{name: "no daemon"},
+		{name: "the daemon needed", needsDaemon: true, wantErr: "read the daemon version"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			t.Setenv("DOCKER_CONFIG", t.TempDir())
+			ctx := zerolog.Nop().WithContext(context.Background())
+			projectPath := t.TempDir()
+			cfg := config.Config{
+				Project: config.Project{Name: "app"},
+				Docker:  config.Docker{Host: "tcp://127.0.0.1:1"},
+				Storage: config.Storage{
+					Type:      config.StorageTypeDirectory,
+					Directory: &config.DirectoryStorage{Path: t.TempDir()},
+				},
+			}
+			cfg.ApplyDefaults(projectPath)
+
+			// Act
+			deps, err := newDependencies(ctx, projectPath, cfg, "", "demo", tt.needsDaemon)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, deps.Close(ctx)) })
+			assert.Equal(t, daemonDependencies{}, deps.daemon)
+			assert.NotNil(t, deps.service)
+		})
+	}
 }

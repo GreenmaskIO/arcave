@@ -39,16 +39,12 @@ services:
     command: ["sleep", "3600"]
     stop_signal: SIGKILL
     labels:
-      arcave.mounts.exclude: /src
+      arcave.mounts.exclude: /src,/scratch
       arcave.writable-layer.backend: fullcopy
     volumes:
       - %[2]s:/src
       - data:/data
-      - type: volume
-        target: /scratch
-        volume:
-          labels:
-            arcave.capture: "false"
+      - /scratch
   cache:
     image: busybox
     command: ["sleep", "3600"]
@@ -82,6 +78,14 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 			"printf %%s %[1]s > %[2]s && printf %%s %[1]s > /cache/marker", content, layerMarker))
 	}
 	stamp("original")
+	excluded := []model.SkippedVolume{
+		{Volume: env.project + "_cachedata", RawType: "volume", Reason: model.SkipReasonExcluded,
+			Detail: "arcave.capture=false on every service mounting it"},
+		{Service: "app", Target: "/src", RawType: "bind", Reason: model.SkipReasonExcluded,
+			Detail: "arcave.mounts.exclude=/src,/scratch on service app"},
+		{Service: "app", Replica: 1, Target: "/scratch", RawType: "volume", Reason: model.SkipReasonExcluded,
+			Detail: "arcave.mounts.exclude=/src,/scratch on service app"},
+	}
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "labelled"})
 	require.NoError(t, err)
@@ -92,14 +96,7 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 	assert.Equal(t, "app", savepoint.WritableLayers[0].Service)
 	assert.Equal(t, model.ImageBackendFullCopy, savepoint.WritableLayers[0].ImageBackend)
 	require.NotNil(t, savepoint.NotCovered)
-	assert.ElementsMatch(t, []model.SkippedVolume{
-		{Volume: env.project + "_cachedata", RawType: "volume", Reason: model.SkipReasonExcluded,
-			Detail: "arcave.capture=false on every service mounting it"},
-		{Service: "app", Target: "/src", RawType: "bind", Reason: model.SkipReasonExcluded,
-			Detail: "arcave.mounts.exclude=/src on service app"},
-		{Service: "app", Replica: 1, Target: "/scratch", RawType: "volume", Reason: model.SkipReasonExcluded,
-			Detail: "arcave.capture=false on the anonymous volume at /scratch of service app"},
-	}, savepoint.NotCovered.Mounts)
+	assert.ElementsMatch(t, excluded, savepoint.NotCovered.Mounts)
 	require.Len(t, savepoint.NotCovered.WritableLayers, 1)
 	assert.Equal(t, "cache", savepoint.NotCovered.WritableLayers[0].Service)
 	assert.Empty(t, savepoint.NotCovered.Images, "app keeps the busybox cache runs on")
@@ -108,7 +105,7 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 	spec, err := sprepo.New(env.store).LoadSpec(env.ctx, savepoint.ID)
 	require.NoError(t, err)
 	for _, line := range []string{
-		"io.arcave.capture.mount./src: false; origin=label; source=arcave.mounts.exclude=/src on service app",
+		"io.arcave.capture.mount./src: false; origin=label; source=arcave.mounts.exclude=/src,/scratch on service app",
 		"io.arcave.capture.mount./data: true; backend=fullcopy; origin=config",
 		"io.arcave.capture.writable-layer: true; backend=fullcopy; origin=config",
 	} {
@@ -132,8 +129,8 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 
 	// The daemon says what the rollback put back: the stamps beside the user's labels.
 	labels := env.labels(t, "app")
-	assert.Equal(t, "/src", labels[string(model.CaptureLabelMountsExclude)])
-	assert.Equal(t, "false; origin=label; source=arcave.mounts.exclude=/src on service app",
+	assert.Equal(t, "/src,/scratch", labels[string(model.CaptureLabelMountsExclude)])
+	assert.Equal(t, "false; origin=label; source=arcave.mounts.exclude=/src,/scratch on service app",
 		labels[string(model.NewMountStampLabel("/src"))])
 }
 

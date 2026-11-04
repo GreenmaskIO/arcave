@@ -251,13 +251,13 @@ The project is rebuilt from the compose spec the savepoint recorded, and savepoi
 unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer
 ```
 
-`savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on an engine that is not Docker or whose version arcave could not read:
+`savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on a daemon whose version arcave could not read:
 
 ```text
-unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape
+unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
 ```
 
-On Docker, the daemon is older than 25: upgrade it — see [Requirements](requirements.md#docker-25-or-newer). On Podman, which exports this shape whatever its version, capture the volumes alone: set [`capture.writable_layers` and `capture.images`](configuration.md#capture) to `false`.
+Either way the daemon is a Docker older than 25: upgrade it — see [Requirements](requirements.md#docker-25-or-newer-or-podman). Podman is not affected: arcave exports through its own API.
 
 ## `invalid capture policy label`
 

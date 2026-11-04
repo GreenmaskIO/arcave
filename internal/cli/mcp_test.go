@@ -46,7 +46,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "before-migration"}).
 		Return(savepoint, nil).Once()
 	released := false
-	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+	h := NewMCPHandler(func(context.Context, string, string, bool) (MCPService, func(), error) {
 		return svc, func() { released = true }, nil
 	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
@@ -59,6 +59,51 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	assert.Equal(t, savepoint, out)
 	assert.True(t, released, "what the call opened must not outlive it")
 	svc.AssertExpectations(t)
+}
+
+// Only the tools that read or delete in the store go without the daemon.
+func TestMCPHandler_openService_DaemonAccess(t *testing.T) {
+	refused := errors.New("refused")
+	tests := []struct {
+		name        string
+		call        func(h *MCPHandler) error
+		needsDaemon bool
+	}{
+		{name: "savepoint_create", needsDaemon: true, call: func(h *MCPHandler) error {
+			_, _, err := h.createSavepointMCP(context.Background(), nil, createInput{Project: "demo"})
+			return err
+		}},
+		{name: "rollback", needsDaemon: true, call: func(h *MCPHandler) error {
+			_, _, err := h.rollbackMCP(context.Background(), nil, rollbackInput{Project: "demo", Ref: "latest"})
+			return err
+		}},
+		{name: "savepoint_list", call: func(h *MCPHandler) error {
+			_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "demo"})
+			return err
+		}},
+		{name: "savepoint_remove", call: func(h *MCPHandler) error {
+			_, _, err := h.removeSavepointsMCP(context.Background(), nil, removeSavepointInput{Project: "demo", Refs: []string{"latest"}})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			var gotDaemon *bool
+			h := NewMCPHandler(func(_ context.Context, _, _ string, needsDaemon bool) (MCPService, func(), error) {
+				gotDaemon = &needsDaemon
+				return nil, nil, refused
+			}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
+
+			// Act
+			err := tt.call(h)
+
+			// Assert
+			require.ErrorIs(t, err, refused)
+			require.NotNil(t, gotDaemon, "the tool must open its service")
+			assert.Equal(t, tt.needsDaemon, *gotDaemon)
+		})
+	}
 }
 
 func TestMCPHandler_listSavepointsMCP(t *testing.T) {
@@ -104,7 +149,7 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 				Return(tt.svc, nil).Once()
 			var gotProject string
 			released := false
-			factory := func(_ context.Context, project, _ string) (MCPService, func(), error) {
+			factory := func(_ context.Context, project, _ string, _ bool) (MCPService, func(), error) {
 				gotProject = project
 				return svc, func() { released = true }, nil
 			}
@@ -126,7 +171,7 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 
 func TestMCPHandler_listSavepointsMCP_ABadSortIsRefused(t *testing.T) {
 	// Arrange: a factory that fails the test, so a refusal must come before anything is opened.
-	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+	h := NewMCPHandler(func(context.Context, string, string, bool) (MCPService, func(), error) {
 		t.Fatal("a bad sort must not open the store")
 		return nil, nil, nil
 	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
@@ -142,7 +187,7 @@ func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
 	// Arrange
 	wireErr := errors.New("no such project")
 	svc := &mockService{}
-	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+	h := NewMCPHandler(func(context.Context, string, string, bool) (MCPService, func(), error) {
 		return nil, nil, wireErr
 	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
@@ -173,7 +218,7 @@ func TestMCPHandler_openService_SessionPrecedence(t *testing.T) {
 			svc := &mockService{}
 			svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint(nil), nil).Once()
 			var gotSession string
-			factory := func(_ context.Context, _, session string) (MCPService, func(), error) {
+			factory := func(_ context.Context, _, session string, _ bool) (MCPService, func(), error) {
 				gotSession = session
 				return svc, func() {}, nil
 			}
@@ -194,7 +239,7 @@ func TestMCPHandler_ALockedProjectIsNamed(t *testing.T) {
 	// Arrange
 	svc := &mockService{}
 	svc.On("Rollback", mock.Anything, mock.Anything).Return(model.RollbackResult{}, model.ErrProjectLocked).Once()
-	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+	h := NewMCPHandler(func(context.Context, string, string, bool) (MCPService, func(), error) {
 		return svc, func() {}, nil
 	}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
@@ -494,10 +539,10 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				svc.On("GenerateCompose", mock.Anything, model.GenerateComposeRequest{AbsolutePaths: true}).
 					Return(model.GenerateComposeResponse{ComposeProject: "demo", Services: []string{"db"}, Spec: []byte("name: demo\n")}, nil).Once()
 			}, want: composeGenerateOutput{ComposeProject: "demo", Services: []string{"db"}, Spec: "name: demo\n"}},
-		{tool: "gc", args: map[string]any{"restored_layer_grace": "1h", "kinds": []string{"upstream-images"}},
+		{tool: "gc", args: map[string]any{"kinds": []string{"upstream-images"}},
 			setup: func(svc *mockService) {
 				svc.On("GarbageCollect", mock.Anything, model.GarbageCollectRequest{
-					DryRun: true, RestoredLayerGrace: utils.New(time.Hour), DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages},
+					DryRun: true, DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages},
 				}).
 					Return(gcResult, model.ErrGarbageCollectPartial).Once()
 			}, want: gcResult},
@@ -508,7 +553,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	for _, tt := range tests {
 		tt.setup(svc)
 	}
-	h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+	h := NewMCPHandler(func(context.Context, string, string, bool) (MCPService, func(), error) {
 		return svc, func() {}, nil
 	}, func(context.Context) (MCPSessionService, func(), error) {
 		return svc, func() {}, nil
@@ -660,7 +705,7 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 			if tt.wantServing {
 				svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint{}, nil).Once()
 			}
-			h := NewMCPHandler(func(context.Context, string, string) (MCPService, func(), error) {
+			h := NewMCPHandler(func(context.Context, string, string, bool) (MCPService, func(), error) {
 				return svc, func() {}, nil
 			}, nil, nil, nil, model.SessionID{}, model.LeftoverVolumesOverwrite)
 

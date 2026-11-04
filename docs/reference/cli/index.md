@@ -78,11 +78,11 @@ no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME
 
 ## What a command needs
 
-`savepoint create`, `savepoint list`, `savepoint remove` and `rollback` need three things:
+`savepoint create`, `savepoint list`, `savepoint remove` and `rollback` need:
 
 * **An initialised project.** Without `.arcave/config.yaml`: `config is not found: run 'arcave init' if not yet initialized`.
 * **A named compose project**, as above.
-* **A reachable Docker daemon.** The daemon is contacted while the command wires itself up, before any workflow starts, so an unreachable one fails `savepoint list` exactly as it fails `rollback`.
+* **A reachable daemon**, for `savepoint create` and `rollback` only. They contact it while they wire themselves up, before any workflow starts, and ask which engine it is. `savepoint list` and `savepoint remove` read and delete in the store alone and reach no daemon.
 
 The `session` commands need only the initialised project: they name no compose project and reach no daemon, `session create --from` included — a fork copies a session's savepoints and deploys nothing. `mcp` needs the initialised project; each tool call names its compose project. `tools generate-compose` needs a named compose project and a reachable daemon, and no initialised project: it opens no store. `gc` needs the initialised project and works on a session: it refuses `-p`. It reaches the daemon only for the `restored-layers` kind.
 

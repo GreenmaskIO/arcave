@@ -198,15 +198,25 @@ func requireProjectName() error {
 	return nil
 }
 
-// withDeps runs fn with the dependencies for the compose project -p named, released when fn
-// returns. It takes no lock: core.Service claims the project lock itself.
+// withDeps runs fn with the dependencies for the compose project -p named, the daemon
+// connected, released when fn returns. It takes no lock: core.Service does.
 func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
+	return withComposeProjectDeps(cmd, true, fn)
+}
+
+// withStoreDeps is withDeps for a command that reads and deletes in the store alone:
+// nothing that reaches the daemon is built.
+func withStoreDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
+	return withComposeProjectDeps(cmd, false, fn)
+}
+
+func withComposeProjectDeps(cmd *cobra.Command, needsDaemon bool, fn func(ctx context.Context, d *dependencies) error) error {
 	if err := requireProjectName(); err != nil {
 		return err
 	}
 
 	ctx := cmd.Context()
-	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(projectName))
+	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(projectName), needsDaemon)
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
@@ -225,7 +235,7 @@ func withToolsDeps(cmd *cobra.Command, fn func(ctx context.Context, d *toolsDepe
 	}
 
 	ctx := cmd.Context()
-	deps, err := newToolsDependencies(projectCfg, model.DockerComposeProjectName(projectName))
+	deps, err := newToolsDependencies(ctx, projectCfg, model.DockerComposeProjectName(projectName))
 	if err != nil {
 		return fmt.Errorf("init tools dependencies: %w", err)
 	}

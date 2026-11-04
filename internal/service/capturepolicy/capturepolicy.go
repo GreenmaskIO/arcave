@@ -30,8 +30,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// serviceLabelKeys are the labels a service may carry; volumeLabelKeys those a named or
-// anonymous volume may.
+// serviceLabelKeys are the labels a service may carry; volumeLabelKeys those a named
+// volume may.
 var (
 	serviceLabelKeys = []model.CaptureLabel{
 		model.CaptureLabelCapture, model.CaptureLabelVolumeBackend, model.CaptureLabelMountsExclude,
@@ -74,15 +74,14 @@ type serviceLabels struct {
 	imageCapture         *model.CaptureDecision
 }
 
-// volumeLabels is one volume's arcave.* labels, parsed; a nil field is unset.
+// volumeLabels is one named volume's arcave.* labels, parsed; a nil field is unset.
 type volumeLabels struct {
 	capture *model.CaptureDecision
 	backend *model.SnapshotBackendKind
 }
 
-// Resolve decides every resource of the introspected compose project from its labels and
-// defaults; a label arcave cannot act on is model.ErrInvalidCapturePolicy. arcave's own
-// io.arcave.* stamps are never read.
+// Resolve decides every resource of the compose project from its labels and defaults, a bind or
+// anonymous volume by its service's; a label it cannot act on is model.ErrInvalidCapturePolicy.
 func Resolve(
 	ctx context.Context, introspection model.IntrospectionResult, defaults CaptureDefaults,
 ) (model.CapturePolicy, error) {
@@ -106,12 +105,11 @@ func Resolve(
 			if !isMountOwnedByService(mount) {
 				continue
 			}
-			decision, err := labels.decideMount(ctx, mount, defaults)
-			if err != nil {
+			if err := refuseAnonymousVolumeLabels(mount, service.Name); err != nil {
 				return model.CapturePolicy{}, err
 			}
 			ref := model.MountRef{Service: service.Name, Replica: mount.Replica, Target: mount.Target}
-			capturePolicy.Mounts[ref] = decision
+			capturePolicy.Mounts[ref] = labels.decideMount(mount, defaults)
 		}
 	}
 
@@ -171,6 +169,24 @@ func findImageLabels(introspection model.IntrospectionResult, service model.Serv
 func isMountOwnedByService(mount model.ServiceVolume) bool {
 	isOwnType := mount.Type == model.VolumeTypeBind || mount.Type == model.VolumeTypeAnon
 	return isOwnType && mount.InheritedFrom == ""
+}
+
+// refuseAnonymousVolumeLabels refuses any arcave.* label on an anonymous volume's mount request.
+func refuseAnonymousVolumeLabels(mount model.ServiceVolume, serviceName string) error {
+	if mount.Type != model.VolumeTypeAnon || mount.Volume == nil {
+		return nil
+	}
+	labels := mount.Volume.Labels
+	for _, key := range slices.Sorted(maps.Keys(labels)) {
+		if !strings.HasPrefix(key, model.CaptureLabelPrefix) {
+			continue
+		}
+		return newInvalidLabelError("the anonymous volume at "+mount.Target+" of service "+serviceName,
+			model.CaptureLabel(key), labels[key],
+			fmt.Sprintf("not a label arcave reads here; name the target in the service's %smounts.* lists",
+				model.CaptureLabelPrefix))
+	}
+	return nil
 }
 
 // parseServiceLabels reads and checks a service's labels, its mount targets against
@@ -260,41 +276,25 @@ func (sl serviceLabels) decideWritableLayerAndImage(defaults CaptureDefaults) mo
 }
 
 // decideMount decides one bind or anonymous mount of the service, most specific first:
-// the anonymous volume's own label, the target lists, the service's defaults, the config.
-func (sl serviceLabels) decideMount(
-	ctx context.Context, mount model.ServiceVolume, defaults CaptureDefaults,
-) (model.VolumeDecision, error) {
-	var ownLabels volumeLabels
-	if mount.Type == model.VolumeTypeAnon && mount.Volume != nil {
-		var err error
-		where := "the anonymous volume at " + mount.Target + " of service " + sl.name
-		ownLabels, err = parseVolumeLabels(ctx, mount.Volume.Labels, where)
-		if err != nil {
-			return model.VolumeDecision{}, err
-		}
-	}
-
+// the target lists, the service's defaults, the config.
+func (sl serviceLabels) decideMount(mount model.ServiceVolume, defaults CaptureDefaults) model.VolumeDecision {
 	configDecision := newConfigDecision(defaults.SavepointCapture.BindVolumes, "volumes.bind")
 	if mount.Type == model.VolumeTypeAnon {
 		configDecision = newConfigDecision(defaults.SavepointCapture.AnonymousVolumes, "volumes.anonymous")
 	}
-	decision := model.VolumeDecision{CaptureDecision: sl.decideWithFallback(ownLabels.capture, configDecision)}
-	if ownLabels.capture == nil {
-		if listed, ok := sl.decideByTargetLists(mount.Target); ok {
-			decision.CaptureDecision = listed
-		}
+	capture, listed := sl.decideByTargetLists(mount.Target)
+	if !listed {
+		capture = sl.decideByService(configDecision)
 	}
 
-	decision.Backend = defaults.VolumeBackend
-	switch backend, listed := sl.findListedBackend(mount.Target); {
-	case ownLabels.backend != nil:
-		decision.Backend = *ownLabels.backend
-	case listed:
-		decision.Backend = backend
-	case sl.volumeBackend != nil:
-		decision.Backend = *sl.volumeBackend
+	backend, listed := sl.findListedBackend(mount.Target)
+	if !listed {
+		backend = defaults.VolumeBackend
+		if sl.volumeBackend != nil {
+			backend = *sl.volumeBackend
+		}
 	}
-	return decision, nil
+	return model.VolumeDecision{CaptureDecision: capture, Backend: backend}
 }
 
 // decideByTargetLists is what arcave.mounts.exclude and .include say of a target, if
@@ -321,18 +321,22 @@ func (sl serviceLabels) formatListSource(key model.CaptureLabel) string {
 	return formatLabelSource(key, sl.rawLabels[string(key)], "service "+sl.name)
 }
 
-// decideWithFallback is decision when set, else the service's arcave.capture, else configDecision.
+// decideWithFallback is decision when set, else what decideByService says.
 func (sl serviceLabels) decideWithFallback(
 	decision *model.CaptureDecision, configDecision model.CaptureDecision,
 ) model.CaptureDecision {
-	switch {
-	case decision != nil:
+	if decision != nil {
 		return *decision
-	case sl.capture != nil:
-		return *sl.capture
-	default:
-		return configDecision
 	}
+	return sl.decideByService(configDecision)
+}
+
+// decideByService is the service's arcave.capture, else configDecision.
+func (sl serviceLabels) decideByService(configDecision model.CaptureDecision) model.CaptureDecision {
+	if sl.capture != nil {
+		return *sl.capture
+	}
+	return configDecision
 }
 
 // decideNamed decides a named volume, most specific first: its own label, what the
@@ -441,7 +445,7 @@ func formatLabelSource(key model.CaptureLabel, value, where string) string {
 	return fmt.Sprintf("%s=%s on %s", key, value, where)
 }
 
-// parseVolumeLabels reads and checks a named or anonymous volume's labels.
+// parseVolumeLabels reads and checks a named volume's labels.
 func parseVolumeLabels(ctx context.Context, labels map[string]string, where string) (volumeLabels, error) {
 	if err := refuseUnknownLabels(ctx, labels, volumeLabelKeys, nil, where); err != nil {
 		return volumeLabels{}, err

@@ -30,7 +30,7 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin

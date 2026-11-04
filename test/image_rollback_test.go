@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +91,11 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	require.Len(t, res.WritableLayers, 1)
-	assert.Equal(t, fmt.Sprintf("arcave/%s-app-1-busybox:sp-%s", env.project, savepoint.ID), res.WritableLayers[0].Tag)
+	tag := model.ImageRef(res.WritableLayers[0].Tag)
+	tagged, ok := tag.RestoredLayerSavepoint()
+	require.True(t, ok, "%s is no restored layer tag", tag)
+	assert.Equal(t, savepoint.ID, tagged)
+	assert.True(t, strings.HasPrefix(string(tag), fmt.Sprintf("arcave/%s-app-1-busybox", env.project)), string(tag))
 
 	rebuilt := env.replicas(t)
 	require.Len(t, rebuilt, 1)
@@ -102,12 +107,12 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, restored.Config)
 	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID.String(), restored.Config.Labels[string(model.SystemLabelBaseImageID)])
-	assert.Equal(t, "busybox", restored.Config.Labels[string(model.SystemLabelBaseImageRef)])
+	assertSameImageRef(t, "busybox", restored.Config.Labels[string(model.SystemLabelBaseImageRef)])
 
 	next, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "on-the-layer"})
 	require.NoError(t, err)
 	require.Len(t, next.WritableLayers, 1)
-	assert.Equal(t, "busybox", next.WritableLayers[0].UpstreamImageRef)
+	assertSameImageRef(t, "busybox", next.WritableLayers[0].UpstreamImageRef)
 	assert.Equal(t, savepoint.WritableLayers[0].UpstreamImageID, next.WritableLayers[0].UpstreamImageID)
 	require.Len(t, next.Images, 1)
 	assert.True(t, next.Images[0].Stored)
@@ -115,6 +120,45 @@ func TestRollback_RestoresTheWritableLayer(t *testing.T) {
 	t.Logf("upstream %s: first capture stored %d of %d bytes, second stored %d",
 		next.Images[0].ID, savepoint.Images[0].StoredBytes,
 		savepoint.Images[0].SizeBytes, next.Images[0].StoredBytes)
+}
+
+// A second rollback to the same savepoint loads nothing: the layer is in the daemon, and
+// the same tag is put back on it, so the replica's image answers to one restored-layer
+// tag however often it is rolled back to.
+func TestRollback_AgainToTheSameSavepointPutsTheSameTagBack(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newImageRollbackEnv(t)
+	env.up(t, 1)
+	env.write(t, env.replicas(t)[0], "original")
+	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "with-layer"})
+	require.NoError(t, err)
+	require.Len(t, savepoint.WritableLayers, 1)
+	first, err := env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
+	require.NoError(t, err)
+	require.Len(t, first.WritableLayers, 1)
+	env.write(t, env.replicas(t)[0], "drifted again")
+
+	// Act
+	second, err := env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, second.WritableLayers, 1)
+	assert.Equal(t, first.WritableLayers[0].Tag, second.WritableLayers[0].Tag, "the tag names the savepoint alone")
+	assert.Equal(t, first.WritableLayers[0].ImageID, second.WritableLayers[0].ImageID, "the same layer, loaded once")
+	assert.Equal(t, "original", env.read(t, env.replicas(t)[0], layerMarker))
+
+	restored, err := env.daemon.ImageInspect(env.ctx, second.WritableLayers[0].ImageID.String())
+	require.NoError(t, err)
+	var tags []string
+	for _, ref := range restored.RepoTags {
+		if model.ImageRef(ref).IsRestoredLayerTag() {
+			tags = append(tags, string(model.ImageRef(ref).Familiar()))
+		}
+	}
+	assert.Equal(t, []string{second.WritableLayers[0].Tag}, tags, "one restored-layer tag, put twice")
 }
 
 func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
@@ -176,7 +220,9 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
 	engine := dockerclient.NewEngine(daemonAPI)
-	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
+	profile := newRuntimeProfile(t, daemonAPI)
+	exporter := profile.exporter
+	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -198,14 +244,14 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,
-		ProjectAssembler:   composespec.NewAssembler(),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-rollback-tenant", project), engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-rollback-tenant", project), exporter, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		BackendRegistry:    mustRegistry(t, exporter),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),

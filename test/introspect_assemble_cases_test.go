@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build fidelity
-
 package test
 
 import (
@@ -25,15 +23,14 @@ import (
 )
 
 // busyboxBase is what every busybox service of a want declares unless it says otherwise: what
-// the image gave (PATH) and what the daemon reports of its own (ipc, cgroup).
+// the image gave (PATH) and what the engine reports of its own (*engine, fidelityEngines).
 const busyboxBase = `
 x-base: &base
+  <<: *engine
   image: "{{busybox}}"
   command: [sleep, infinity]
   environment: {PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
   pull_policy: missing
-  ipc: private
-  cgroup: private
 `
 
 // defaultNetwork is the network compose creates for a project that declares none.
@@ -72,7 +69,8 @@ services:
 services:
   web: {image: "{{busybox}}", command: [sleep, infinity], scale: 2, volumes: [/cache]}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   web:
     <<: *base
@@ -80,6 +78,16 @@ services:
     networks: {default: null}
     volumes: [{type: volume, target: /cache, volume: {}}]
 ` + defaultNetwork,
+				// Podman reports a volume mounted with no options as none.
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  web:
+    <<: *base
+    scale: 2
+    networks: {default: null}
+    volumes: [{type: volume, target: /cache}]
+` + defaultNetwork,
+			},
 		},
 		{
 			name: "shared named volume",
@@ -102,7 +110,8 @@ volumes:
 		},
 		{
 			// H1: the daemon keeps the range on every replica and hands each a port of it.
-			name: "port range",
+			name:        "port range",
+			unsupported: map[model.ContainerRuntimeKind]string{model.ContainerRuntimePodman: "a published port range for replicas: strconv.Atoi parsing the range"},
 			compose: `
 services:
   web: {image: "{{busybox}}", command: [sleep, infinity], scale: 3, ports: ["127.0.0.1:18080-18082:80"]}
@@ -157,7 +166,8 @@ services:
   web:  {image: "{{busybox}}", command: [sleep, infinity], scale: 3, volumes: [/shared]}
   side: {image: "{{busybox}}", command: [sleep, infinity], volumes_from: [web]}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   web:
     <<: *base
@@ -171,6 +181,22 @@ services:
     volumes_from: [web]
     depends_on: {web: {condition: service_started, required: true}}
 ` + defaultNetwork,
+				// Podman reports a volume mounted with no options as none.
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  web:
+    <<: *base
+    scale: 3
+    networks: {default: null}
+    volumes: [{type: volume, target: /shared}]
+  side:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes_from: [web]
+    depends_on: {web: {condition: service_started, required: true}}
+` + defaultNetwork,
+			},
 		},
 		{
 			// H3: the spec takes the first replica and says so; pass 2 aligns the second with it.
@@ -188,7 +214,7 @@ services:
 ` + defaultNetwork,
 			warns: []string{`{"level":"warn","service":"web","fields":["mem_limit"],
 				"message":"replicas differ; the spec declares the first replica's"}`},
-			drift: func(r *model.IntrospectionResult) {
+			drift: func(r *model.IntrospectionResult, _ model.ContainerRuntimeKind) {
 				replica := r.Project.Services[0].Containers[1].Inspect.HostConfig
 				replica.Memory, replica.MemorySwap = 64<<20, 128<<20
 			},
@@ -222,7 +248,8 @@ services:
   db:  {image: "{{busybox}}", command: [sleep, infinity], ipc: shareable}
   app: {image: "{{busybox}}", command: [sleep, infinity], ipc: "service:db"}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   db:  {<<: *base, scale: 1, ipc: shareable, networks: {default: null}}
   app:
@@ -232,6 +259,18 @@ services:
     networks: {default: null}
     depends_on: {db: {condition: service_started, restart: true, required: true}}
 ` + defaultNetwork,
+				// shareable is Podman's own default, so it reads as undeclared.
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  db:  {<<: *base, scale: 1, networks: {default: null}}
+  app:
+    <<: *base
+    scale: 1
+    ipc: service:db
+    networks: {default: null}
+    depends_on: {db: {condition: service_started, restart: true, required: true}}
+` + defaultNetwork,
+			},
 		},
 		{
 			name: "pid service:",
@@ -270,10 +309,17 @@ services:
 services:
   app: {image: "{{busybox}}", command: [sleep, infinity], ipc: shareable}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app: {<<: *base, scale: 1, ipc: shareable, networks: {default: null}}
 ` + defaultNetwork,
+				// shareable is Podman's own default, so it reads as undeclared.
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, networks: {default: null}}
+` + defaultNetwork,
+			},
 		},
 		{
 			name: "pid host",
@@ -320,7 +366,21 @@ services:
 `,
 		},
 		{
-			name: "legacy links on bridge",
+			// A mode joining no network is Podman's own, and the daemon names no network for it.
+			name:        "network_mode pasta",
+			unsupported: map[model.ContainerRuntimeKind]string{model.ContainerRuntimeDocker: "pasta is Podman's network mode"},
+			compose: `
+services:
+  app: {image: "{{busybox}}", command: [sleep, infinity], network_mode: pasta}
+`,
+			want: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, network_mode: pasta}
+`,
+		},
+		{
+			name:        "legacy links on bridge",
+			unsupported: map[model.ContainerRuntimeKind]string{model.ContainerRuntimePodman: "link is not supported"},
 			compose: `
 services:
   db:  {image: "{{busybox}}", command: [sleep, infinity], network_mode: bridge}
@@ -345,7 +405,8 @@ services:
   db:  {image: "{{busybox}}", command: [sleep, infinity], volumes: [/var/lib/db]}
   app: {image: "{{busybox}}", command: [sleep, infinity], volumes_from: ["db:ro"]}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   db:
     <<: *base
@@ -359,6 +420,22 @@ services:
     volumes_from: [db]
     depends_on: {db: {condition: service_started, required: true}}
 ` + defaultNetwork,
+				// Podman reports a volume mounted with no options as none.
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  db:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes: [{type: volume, target: /var/lib/db}]
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes_from: [db]
+    depends_on: {db: {condition: service_started, required: true}}
+` + defaultNetwork,
+			},
 		},
 	}
 }
@@ -425,7 +502,8 @@ services:
 networks:
   back: {ipam: {config: [{subnet: 10.213.7.0/24}]}}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app: {<<: *base, scale: 1, networks: {back: {ipv4_address: 10.213.7.10}}}
 networks:
@@ -434,6 +512,14 @@ networks:
     driver: bridge
     ipam: {driver: default, config: [{subnet: 10.213.7.0/24, gateway: 10.213.7.1}]}
 `,
+				// Podman reports neither the address nor the pool (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, networks: {back: null}}
+networks:
+  back: {name: "{{project}}_back", driver: bridge, ipam: {driver: default}}
+`,
+			},
 		},
 		{
 			name: "aliases",
@@ -500,11 +586,18 @@ services:
     command: [sleep, infinity]
     networks: {default: {mac_address: "02:42:ac:11:00:42"}}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app: {<<: *base, scale: 1, networks: {default: {}}}
 ` + defaultNetwork,
-			drift: func(r *model.IntrospectionResult) {
+				// Podman reports an attachment declaring nothing as none.
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, networks: {default: null}}
+` + defaultNetwork,
+			},
+			drift: func(r *model.IntrospectionResult, _ model.ContainerRuntimeKind) {
 				r.Project.Services[0].Containers[0].Inspect.NetworkSettings.Networks[r.Project.Name+"_default"].MacAddress = ""
 			},
 		},
@@ -520,16 +613,27 @@ networks:
   front: {}
   back: {}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app: {<<: *base, scale: 1, networks: {front: {gw_priority: 10}, back: {}}}
 networks:
   front: {name: "{{project}}_front", driver: bridge, ipam: {driver: default}}
   back:  {name: "{{project}}_back", driver: bridge, ipam: {driver: default}}
 `,
+				// Podman keeps no gateway priority (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, networks: {front: null, back: null}}
+networks:
+  front: {name: "{{project}}_front", driver: bridge, ipam: {driver: default}}
+  back:  {name: "{{project}}_back", driver: bridge, ipam: {driver: default}}
+`,
+			},
 		},
 		{
-			name: "links and external_links",
+			name:        "links and external_links",
+			unsupported: map[model.ContainerRuntimeKind]string{model.ContainerRuntimePodman: "link is not supported"},
 			compose: `
 services:
   db:  {image: "{{busybox}}", command: [sleep, infinity], networks: [shared]}
@@ -619,11 +723,15 @@ services:
 		},
 		{
 			name: "random published port",
+			afterUp: func(t *testing.T, e *fidelityEnv) {
+				e.values["published"] = e.readPublishedPort(t, "app", "80/tcp")
+			},
 			compose: `
 services:
   app: {image: "{{busybox}}", command: [sleep, infinity], ports: ["127.0.0.1::80"]}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -631,6 +739,16 @@ services:
     networks: {default: null}
     ports: [{mode: ingress, host_ip: 127.0.0.1, target: 80, protocol: tcp}]
 ` + defaultNetwork,
+				// Podman reports the port it chose as if declared (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    ports: [{mode: ingress, host_ip: 127.0.0.1, target: 80, published: "{{published}}", protocol: tcp}]
+` + defaultNetwork,
+			},
 		},
 		{
 			name: "expose",
@@ -743,7 +861,8 @@ services:
 services:
   app: {image: "{{busybox}}", command: [sleep, infinity], sysctls: {net.core.somaxconn: 1024}}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -751,6 +870,12 @@ services:
     networks: {default: null}
     sysctls: {net.core.somaxconn: "1024"}
 ` + defaultNetwork,
+				// Podman reports no sysctls (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, networks: {default: null}}
+` + defaultNetwork,
+			},
 		},
 		{
 			name: "cap_add and cap_drop",
@@ -758,15 +883,26 @@ services:
 services:
   app: {image: "{{busybox}}", command: [sleep, infinity], cap_add: [NET_ADMIN], cap_drop: [MKNOD]}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
     scale: 1
     networks: {default: null}
-    cap_add: [CAP_NET_ADMIN]
-    cap_drop: [CAP_MKNOD]
+    cap_add: [NET_ADMIN]
+    cap_drop: [MKNOD]
 ` + defaultNetwork,
+				// MKNOD is outside Podman's default set, so nothing is dropped.
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    cap_add: [NET_ADMIN]
+` + defaultNetwork,
+			},
 		},
 		{
 			name: "security_opt",
@@ -871,6 +1007,7 @@ services:
 			want: `
 services:
   app:
+    <<: *engine
     image: "{{redis}}"
     entrypoint: [docker-entrypoint.sh]
     command: [redis-server]
@@ -878,14 +1015,12 @@ services:
     expose: [6379/tcp]
     working_dir: /data
     pull_policy: missing
-    ipc: private
-    cgroup: private
     scale: 1
     networks: {default: null}
     volumes: [{type: volume, target: /data}]
     healthcheck: {disable: true}
 ` + defaultNetwork,
-			drift: func(r *model.IntrospectionResult) {
+			drift: func(r *model.IntrospectionResult, _ model.ContainerRuntimeKind) {
 				// The spec declares the volume the image gave, so compose now asks for it.
 				replica := &r.Project.Services[0].Containers[0].Inspect
 				replica.HostConfig.Mounts = []mount.Mount{{Type: mount.TypeVolume, Target: "/data"}}
@@ -954,7 +1089,8 @@ services:
 services:
   app: {image: "{{busybox}}", command: [sleep, infinity], hostname: app-host, domainname: example.internal}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -963,6 +1099,16 @@ services:
     hostname: app-host
     domainname: example.internal
 ` + defaultNetwork,
+				// Podman drops the domainname on create (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    hostname: app-host
+` + defaultNetwork,
+			},
 		},
 		{
 			name: "tty and stdin_open",
@@ -989,7 +1135,8 @@ services:
     command: [sleep, infinity]
     logging: {driver: json-file, options: {max-size: 1m, max-file: "2"}}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -997,6 +1144,16 @@ services:
     networks: {default: null}
     logging: {driver: json-file, options: {max-size: 1m, max-file: "2"}}
 ` + defaultNetwork,
+				// libpod holds the size in its own spelling and no max-file (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    logging: {driver: json-file, options: {max-size: 1MB}}
+` + defaultNetwork,
+			},
 		},
 		{
 			// H5: compose mounts both as binds, which is all the daemon has to report.
@@ -1013,7 +1170,8 @@ secrets:
 configs:
   app_conf: {file: ./app.conf}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -1023,9 +1181,25 @@ services:
       - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {}}
       - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {}}
 ` + defaultNetwork,
+				// Podman reports the secret through the mount API and the config through the bind API (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes:
+      - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {propagation: private}}
+      - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {create_host_path: true}}
+` + defaultNetwork,
+			},
 			files: map[string]string{"token.txt": "s3cr3t\n", "app.conf": "key=value\n"},
-			drift: func(r *model.IntrospectionResult) {
-				// Declared as binds, they are asked for with empty bind options.
+			drift: func(r *model.IntrospectionResult, runtime model.ContainerRuntimeKind) {
+				// Declared as binds, Docker's are asked for with empty bind options; Podman's
+				// report the propagation either way.
+				if runtime == model.ContainerRuntimePodman {
+					return
+				}
 				host := r.Project.Services[0].Containers[0].Inspect.HostConfig
 				for i := range host.Mounts {
 					host.Mounts[i].BindOptions = &mount.BindOptions{}
@@ -1115,7 +1289,8 @@ services:
 volumes:
   data: {}
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -1125,6 +1300,18 @@ services:
 volumes:
   data: {name: "{{project}}_data", driver: local}
 ` + defaultNetwork,
+				// Podman keeps no nocopy (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes: [{type: volume, source: data, target: /etc}]
+volumes:
+  data: {name: "{{project}}_data", driver: local}
+` + defaultNetwork,
+			},
 		},
 		{
 			// Docker Desktop shares no host mount, so propagation is limited to the private modes.
@@ -1155,7 +1342,8 @@ services:
     command: [sleep, infinity]
     volumes: [{type: bind, source: ./data, target: /data, bind: {create_host_path: false}}]
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -1163,6 +1351,16 @@ services:
     networks: {default: null}
     volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {}}]
 ` + defaultNetwork,
+				// Podman reports its default propagation as declared (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {propagation: private}}]
+` + defaultNetwork,
+			},
 			files: map[string]string{"data/.keep": ""},
 		},
 		{
@@ -1199,7 +1397,8 @@ services:
     command: [sleep, infinity]
     volumes: [{type: tmpfs, target: /scratch, tmpfs: {size: 1048576, mode: 01777}}]
 `,
-			want: busyboxBase + `
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
 services:
   app:
     <<: *base
@@ -1207,6 +1406,16 @@ services:
     networks: {default: null}
     volumes: [{type: tmpfs, target: /scratch, tmpfs: {size: 1048576, mode: 1023}}]
 ` + defaultNetwork,
+				// Podman reports a long tmpfs mount in its tmpfs list (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    tmpfs: ["/scratch:size=1048576,mode=1777"]
+` + defaultNetwork,
+			},
 		},
 		{
 			// H4: an image VOLUME nobody declared arrives as an anonymous volume.
@@ -1218,6 +1427,7 @@ services:
 			want: `
 services:
   app:
+    <<: *engine
     image: "{{redis}}"
     entrypoint: [docker-entrypoint.sh]
     command: [redis-server]
@@ -1225,13 +1435,11 @@ services:
     expose: [6379/tcp]
     working_dir: /data
     pull_policy: missing
-    ipc: private
-    cgroup: private
     scale: 1
     networks: {default: null}
     volumes: [{type: volume, target: /data}]
 ` + defaultNetwork,
-			drift: func(r *model.IntrospectionResult) {
+			drift: func(r *model.IntrospectionResult, _ model.ContainerRuntimeKind) {
 				// The spec declares the volume the image gave, so compose now asks for it.
 				replica := &r.Project.Services[0].Containers[0].Inspect
 				replica.HostConfig.Mounts = []mount.Mount{{Type: mount.TypeVolume, Target: "/data"}}

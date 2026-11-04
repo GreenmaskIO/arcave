@@ -992,7 +992,6 @@ func coldStartDeps(t *testing.T, record model.Savepoint) (Deps, *mockSavepointRe
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
 	introspection := demoAbsentIntrospection()
-	introspection.Daemon.ServerVersion = "27.3.1"
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	locker := &mockLocker{}
@@ -1013,6 +1012,7 @@ func coldStartDeps(t *testing.T, record model.Savepoint) (Deps, *mockSavepointRe
 		Inflight:         &fakeInflight{},
 		Store:            newDirStore(t),
 		CaptureDefaults:  demoCaptureDefaults,
+		DaemonVersion:    "27.3.1",
 		MinDaemonMajor:   25,
 	}, repo, inspector
 }
@@ -1256,8 +1256,8 @@ func TestService_Rollback_ColdStartUnsupportedDaemonLoadsNothing(t *testing.T) {
 	// Arrange
 	record := demoColdRecord()
 	deps, repo, _ := coldStartDeps(t, record)
+	deps.DaemonVersion = "24.0.7"
 	introspection := demoAbsentIntrospection()
-	introspection.Daemon.ServerVersion = "24.0.7"
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	images := &mockImageBackend{}

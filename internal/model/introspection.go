@@ -18,11 +18,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
 )
 
@@ -304,11 +302,6 @@ type Project struct {
 // in one pass before anything is stopped. Daemon answers are verbatim.
 type IntrospectionResult struct {
 	Project Project
-	// Daemon is what `docker info` reports.
-	Daemon system.Info
-	// DaemonVersion is what `docker version` reports: its components name the
-	// engine, which `docker info` does not.
-	DaemonVersion types.Version
 	// Images are the images the compose project's containers run on and the base images those name
 	// by SystemLabelBaseImageID, keyed by id, verbatim.
 	Images map[ImageDigestID]image.InspectResponse

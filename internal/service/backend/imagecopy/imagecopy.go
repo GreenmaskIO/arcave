@@ -273,8 +273,8 @@ func (s *Copier) storeImage(
 }
 
 // RestoreWritableLayer loads one recorded writable layer's committed image back into the
-// daemon and tags it req.Tag. An image the daemon already holds is only tagged: a load costs the whole archive,
-// and the id in the record identifies it either way.
+// daemon and tags it req.Tag. An image the daemon already holds is only tagged: a load costs
+// the whole archive, and the id in the record identifies it either way.
 func (s *Copier) RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error) {
 	archiver, err := s.writableLayerArchiver(req.Layer.ImageBackend)
 	if err != nil {

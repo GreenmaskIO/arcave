@@ -138,7 +138,9 @@ type Deps struct {
 	ComposeProject model.DockerComposeProjectName
 	// Sessions checks, under the lock, that Session still exists.
 	Sessions sessionLookup
-	// MinDaemonMajor is the oldest Docker major a workflow runs on; 0 requires none.
+	// DaemonVersion is the version the engine reports; requireDaemon judges it.
+	DaemonVersion string
+	// MinDaemonMajor is the oldest major of that engine a workflow runs on; 0 requires none.
 	MinDaemonMajor int
 	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
 	Concurrency int
@@ -174,6 +176,7 @@ type Service struct {
 	session                 model.SessionID
 	composeProject          model.DockerComposeProjectName
 	sessions                sessionLookup
+	daemonVersion           string
 	minDaemonMajor          int
 	maxConcurrentOperations int
 	runnerInfo              heartbeat.RunnerInfo
@@ -204,6 +207,7 @@ func New(deps Deps) *Service {
 		session:                 deps.Session,
 		composeProject:          deps.ComposeProject,
 		sessions:                deps.Sessions,
+		daemonVersion:           deps.DaemonVersion,
 		minDaemonMajor:          deps.MinDaemonMajor,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		runnerInfo:              deps.RunnerInfo,

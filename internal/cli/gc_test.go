@@ -114,7 +114,6 @@ func TestGCOutputSchema_AcceptsADetail(t *testing.T) {
 
 // A request the service would refuse is refused before anything is opened.
 func TestValidateGarbageCollectRequest(t *testing.T) {
-	negative := -time.Hour
 
 	tests := []struct {
 		name    string
@@ -127,11 +126,6 @@ func TestValidateGarbageCollectRequest(t *testing.T) {
 		{
 			name:    "an unknown kind",
 			req:     model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}},
-			wantErr: model.ErrInvalidGarbageCollectRequest,
-		},
-		{
-			name:    "a negative grace",
-			req:     model.GarbageCollectRequest{DryRun: true, RestoredLayerGrace: &negative},
 			wantErr: model.ErrInvalidGarbageCollectRequest,
 		},
 	}

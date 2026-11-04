@@ -163,10 +163,6 @@ const (
 // moves at once.
 const DefaultConcurrency = 5
 
-// DefaultRestoredLayerGrace holds back a layer tag a rollback in another project directory sharing
-// the arcave project may have just put on, under a lock this one's gc cannot see.
-const DefaultRestoredLayerGrace = time.Hour
-
 // The tokens rollback.leftover_volumes accepts.
 const (
 	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
@@ -190,7 +186,6 @@ type Config struct {
 	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
 	Rollback       Rollback       `yaml:"rollback" mapstructure:"rollback"`
-	GC             GC             `yaml:"gc" mapstructure:"gc"`
 	// Backends holds the settings of the individual snapshot backends, one
 	// section per backend, present only for the backends a project configures.
 	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
@@ -381,22 +376,6 @@ func (r Rollback) Validate() error {
 // Policy returns the configured token as the policy a rollback request carries.
 func (r Rollback) Policy() model.LeftoverVolumesPolicy {
 	return model.LeftoverVolumesPolicy(r.LeftoverVolumes)
-}
-
-// GC configures garbage collection: how long a layer tag no container uses is held back.
-// What a gc looks for is the invocation's to narrow, never the config's.
-type GC struct {
-	// RestoredLayerGrace is how old an unused layer tag must be before it counts as garbage;
-	// DefaultRestoredLayerGrace when unset, while 0 counts every one.
-	RestoredLayerGrace *time.Duration `yaml:"restored_layer_grace" mapstructure:"restored_layer_grace"`
-}
-
-// Validate rejects a negative restored layer grace.
-func (g GC) Validate() error {
-	if grace := utils.Value(g.RestoredLayerGrace); grace < 0 {
-		return fmt.Errorf("%w: gc.restored_layer_grace %s is negative", ErrInvalid, grace)
-	}
-	return nil
 }
 
 // Backends is one optional section per snapshot backend. The arms are pointers
@@ -603,9 +582,6 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Rollback.LeftoverVolumes == "" {
 		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
 	}
-	if c.GC.RestoredLayerGrace == nil {
-		c.GC.RestoredLayerGrace = utils.New(DefaultRestoredLayerGrace)
-	}
 	c.applyCDCDefaults()
 }
 
@@ -685,9 +661,6 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Rollback.Validate(); err != nil {
-		return err
-	}
-	if err := c.GC.Validate(); err != nil {
 		return err
 	}
 	return c.Backends.Validate()

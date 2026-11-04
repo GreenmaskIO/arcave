@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -170,7 +171,9 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
 	engine := dockerclient.NewEngine(daemonAPI)
-	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
+	profile := newRuntimeProfile(t, daemonAPI)
+	exporter := profile.exporter
+	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -193,14 +196,14 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,
-		ProjectAssembler:   composespec.NewAssembler(),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          codec,
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), exporter, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		BackendRegistry:    mustRegistry(t, exporter),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
@@ -222,7 +225,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	return env
 }
 
-func mustRegistry(t *testing.T, engine *dockerclient.Engine) model.SnapshotBackendRegistry {
+func mustRegistry(t *testing.T, engine exportEngine) model.SnapshotBackendRegistry {
 	t.Helper()
 
 	registry, err := core.NewSnapshotBackendRegistry(fullcopy.NewFactory(engine))
@@ -336,7 +339,11 @@ func mountTargets(c container.InspectResponse) []string {
 func networkAliases(c container.InspectResponse) map[string][]string {
 	aliases := map[string][]string{}
 	for name, endpoint := range c.NetworkSettings.Networks {
-		aliases[name] = endpoint.Aliases
+		// The container's short id is no declared alias: Podman lists it, and it is another
+		// container's after a rebuild.
+		aliases[name] = slices.DeleteFunc(slices.Clone(endpoint.Aliases), func(alias string) bool {
+			return alias != "" && strings.HasPrefix(c.ID, alias)
+		})
 	}
 	return aliases
 }

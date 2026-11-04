@@ -145,7 +145,7 @@ Warnings (1)
 | `writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
 | `safety_snapshot_kept` | The id of the safety snapshot a successful rollback could not drop — the marker could not be cleared, the session's lock was no longer the rollback's, or the record could not be deleted. `arcave savepoint remove <id>` drops it. Omitted when it was dropped. |
 
-Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
+Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per savepoint under a row per replica. A rollback to the same savepoint again puts the same tag back. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
 
 ## Errors
 

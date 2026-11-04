@@ -30,20 +30,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-const (
-	// nanoCPUs is the unit HostConfig.NanoCPUs counts in; compose spells the same
-	// limit in whole CPUs.
-	nanoCPUs = 1e9
-	// defaultShmSize is the /dev/shm the daemon gives a container that asks for none.
-	defaultShmSize = 64 << 20
-	// desktopOperatingSystem is what `docker info` reports on Docker Desktop.
-	desktopOperatingSystem = "Docker Desktop"
-	// desktopStopTimeout is the stop timeout Docker Desktop stamps on every container
-	// created without one.
-	desktopStopTimeout = 1
-	// labelDisable is the security option the daemon adds where the host's namespaces are shared.
-	labelDisable = "label=disable"
-)
+// nanoCPUs is the unit HostConfig.NanoCPUs counts in; compose spells the same limit in
+// whole CPUs.
+const nanoCPUs = 1e9
 
 // newServiceConfig renders one service off its first replica. What the image
 // contributed is declared verbatim.
@@ -71,19 +60,20 @@ func (a assembly) newBaseConfig(svc model.Service) types.ServiceConfig {
 
 // applyReplica reads one replica's container into cfg.
 func (a assembly) applyReplica(cfg *types.ServiceConfig, service string, replica model.Container) {
-	a.applyContainerConfig(cfg, replica.Inspect)
+	applyContainerConfig(cfg, replica.Inspect)
 	a.applyImage(cfg, replica)
 	a.applyHostConfig(cfg, replica.Inspect)
 	cfg.Expose = unpublished(cfg.Expose, cfg.Ports)
-	applyNetworks(cfg, service, replica.Inspect, a.networkKeys)
+	applyNetworks(cfg, service, replica.Inspect, a.networkKeys, a.defaults.HostnameAliased)
 	a.applyLinks(cfg, replica)
 	dropSharedNetworkFields(cfg)
-	a.dropHostNetworkHostname(cfg)
+	normalize(cfg)
+	a.dropEngineDefaults(cfg, replica)
 	addSharedDependencies(cfg)
 }
 
 // applyContainerConfig reads the container's own declaration.
-func (a assembly) applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
+func applyContainerConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
 	config := inspect.Config
 	if config == nil {
 		return
@@ -104,7 +94,7 @@ func (a assembly) applyContainerConfig(cfg *types.ServiceConfig, inspect contain
 	if labels := userLabels(config.Labels); labels != nil {
 		cfg.Labels = labels
 	}
-	if config.StopTimeout != nil && !a.isDaemonStopTimeout(*config.StopTimeout) {
+	if config.StopTimeout != nil {
 		grace := types.Duration(time.Duration(*config.StopTimeout) * time.Second)
 		cfg.StopGracePeriod = &grace
 	}
@@ -123,7 +113,12 @@ func (a assembly) applyImage(cfg *types.ServiceConfig, replica model.Container) 
 	if ref != "" {
 		cfg.Image = ref
 	}
-	if inspect, found := a.introspection.Images[id]; found && isLocalImage(inspect) {
+	inspect, found := a.introspection.Images[id]
+	if !found {
+		return
+	}
+	cfg.Image = dropLatestOfBuiltImage(cfg.Image, inspect)
+	if isLocalImage(inspect) {
 		cfg.PullPolicy = pullPolicyNever
 	}
 }
@@ -138,25 +133,24 @@ func isLocalImage(inspect image.InspectResponse) bool {
 }
 
 // applyHostConfig reads what the container was created against the host with.
-// What the daemon fills in by itself is left out.
+// What the engine fills in by itself is left out by dropEngineDefaults.
 func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
 	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
 		return
 	}
 	hostConfig := inspect.HostConfig
-	daemon := a.introspection.Daemon
 
 	cfg.Ports = newPublishedPorts(hostConfig.PortBindings)
 	cfg.Restart = toRestartPolicy(hostConfig.RestartPolicy)
-	cfg.NetworkMode = declaredNetworkMode(string(hostConfig.NetworkMode), a.serviceByReplica, a.foreignNames)
-	cfg.Logging = newLogging(hostConfig.LogConfig, daemon.LoggingDriver)
+	cfg.NetworkMode = a.declaredNetworkMode(string(hostConfig.NetworkMode), inspect)
+	cfg.Logging = newLogging(hostConfig.LogConfig)
 	cfg.ExtraHosts = parseExtraHosts(hostConfig.ExtraHosts)
 	cfg.Tmpfs = toTmpfsList(hostConfig.Tmpfs, cfg.Volumes)
 
 	cfg.CapAdd = hostConfig.CapAdd
 	cfg.CapDrop = hostConfig.CapDrop
 	cfg.GroupAdd = hostConfig.GroupAdd
-	cfg.SecurityOpt = declaredSecurityOpt(hostConfig)
+	cfg.SecurityOpt = hostConfig.SecurityOpt
 	cfg.DNS = types.StringList(hostConfig.DNS)
 	cfg.DNSOpts = hostConfig.DNSOptions
 	cfg.DNSSearch = types.StringList(hostConfig.DNSSearch)
@@ -167,12 +161,8 @@ func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.In
 	cfg.Privileged = hostConfig.Privileged
 	cfg.ReadOnly = hostConfig.ReadonlyRootfs
 	cfg.Init = hostConfig.Init
-	if hostConfig.ShmSize != defaultShmSize {
-		cfg.ShmSize = types.UnitBytes(hostConfig.ShmSize)
-	}
-	if hostConfig.Runtime != daemon.DefaultRuntime {
-		cfg.Runtime = hostConfig.Runtime
-	}
+	cfg.ShmSize = types.UnitBytes(hostConfig.ShmSize)
+	cfg.Runtime = hostConfig.Runtime
 	cfg.Isolation = string(hostConfig.Isolation)
 	cfg.Ipc = declaredNamespace(string(hostConfig.IpcMode), a.serviceByReplica, a.foreignNames)
 	cfg.Pid = declaredNamespace(string(hostConfig.PidMode), a.serviceByReplica, a.foreignNames)
@@ -181,20 +171,7 @@ func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.In
 	cfg.Cgroup = string(hostConfig.CgroupnsMode)
 	cfg.OomScoreAdj = int64(hostConfig.OomScoreAdj)
 
-	applyResources(cfg, hostConfig.Resources)
-}
-
-// dropHostNetworkHostname clears the hostname a container in the host's network reports:
-// it is the host's own.
-func (a assembly) dropHostNetworkHostname(cfg *types.ServiceConfig) {
-	if container.NetworkMode(cfg.NetworkMode).IsHost() && cfg.Hostname == a.introspection.Daemon.Name {
-		cfg.Hostname = ""
-	}
-}
-
-// isDaemonStopTimeout reports a stop timeout the daemon stamped rather than the user declared.
-func (a assembly) isDaemonStopTimeout(seconds int) bool {
-	return a.introspection.Daemon.OperatingSystem == desktopOperatingSystem && seconds == desktopStopTimeout
+	applyResources(cfg, dropCPUQuotaOfNanoCPUs(hostConfig.Resources))
 }
 
 // applyResources carries the cgroup limits. Only a limit that was set is
@@ -213,8 +190,7 @@ func applyResources(cfg *types.ServiceConfig, resources container.Resources) {
 	cfg.Devices = newDevices(resources.Devices)
 	cfg.Ulimits = newUlimits(resources.Ulimits)
 
-	if resources.MemorySwap > 0 && resources.MemorySwap != 2*resources.Memory {
-		// Twice the memory is the swap the daemon gives a limit declared without one.
+	if resources.MemorySwap > 0 {
 		cfg.MemSwapLimit = types.UnitBytes(resources.MemorySwap)
 	}
 	if resources.MemorySwappiness != nil && *resources.MemorySwappiness >= 0 {
@@ -231,13 +207,19 @@ func applyResources(cfg *types.ServiceConfig, resources container.Resources) {
 	}
 }
 
-// applyNetworks attaches the service to the project's networks. A container in a
-// predefined network is described by network_mode, and compose refuses both.
-func applyNetworks(cfg *types.ServiceConfig, service string, inspect container.InspectResponse, networkKeys map[string]string) {
+// applyNetworks attaches the service to the project's networks, unless network_mode
+// describes it: compose refuses both.
+func applyNetworks(
+	cfg *types.ServiceConfig, service string, inspect container.InspectResponse, networkKeys map[string]string,
+	hostnameAliased bool,
+) {
 	if cfg.NetworkMode != "" || inspect.NetworkSettings == nil {
 		return
 	}
 	generated := []string{service, strings.TrimPrefix(inspect.Name, "/")}
+	if hostnameAliased && inspect.Config != nil && inspect.Config.Hostname != "" {
+		generated = append(generated, inspect.Config.Hostname)
+	}
 	attached := make(map[string]*types.ServiceNetworkConfig, len(inspect.NetworkSettings.Networks))
 	for name, endpoint := range inspect.NetworkSettings.Networks {
 		key, ok := networkKeys[name]
@@ -298,29 +280,39 @@ func declaredContainerName(name string, labels map[string]string) string {
 	return name
 }
 
-// declaredSecurityOpt drops the label=disable the daemon adds to a container sharing the
-// host's pid or ipc namespace, or a privileged one.
-func declaredSecurityOpt(hostConfig *container.HostConfig) []string {
-	if !hostConfig.PidMode.IsHost() && !hostConfig.IpcMode.IsHost() && !hostConfig.Privileged {
-		return hostConfig.SecurityOpt
+// declaredNetworkMode keeps only a mode the user could have written: a compose network's name,
+// or a bridge beside one, is the networks: section's; one joining no network (pasta, ns:) stays.
+func (a assembly) declaredNetworkMode(mode string, inspect container.InspectResponse) string {
+	if a.defaults.BridgeModeBesideNetworks && joinsKeyedNetwork(inspect, a.networkKeys) &&
+		(mode == "bridge" || mode == "default") {
+		return ""
 	}
-	declared := slices.DeleteFunc(slices.Clone(hostConfig.SecurityOpt), func(opt string) bool {
-		return opt == labelDisable
-	})
-	if len(declared) == 0 {
-		return nil
-	}
-	return declared
-}
-
-// declaredNetworkMode keeps only a mode the user could have written; a compose
-// network's name lands there too, and the networks: section already carries it.
-func declaredNetworkMode(mode string, serviceByReplica, foreignNames map[string]string) string {
 	if slices.Contains(predefinedNetworks, mode) ||
 		strings.HasPrefix(mode, types.ContainerPrefix) || strings.HasPrefix(mode, types.ServicePrefix) {
-		return declaredNamespace(mode, serviceByReplica, foreignNames)
+		return declaredNamespace(mode, a.serviceByReplica, a.foreignNames)
+	}
+	if joinsNoNetwork(inspect) {
+		return mode
 	}
 	return ""
+}
+
+// joinsNoNetwork reports a container attached to no network at all.
+func joinsNoNetwork(inspect container.InspectResponse) bool {
+	return inspect.NetworkSettings == nil || len(inspect.NetworkSettings.Networks) == 0
+}
+
+// joinsKeyedNetwork reports a container attached to a network the project keys.
+func joinsKeyedNetwork(inspect container.InspectResponse, networkKeys map[string]string) bool {
+	if inspect.NetworkSettings == nil {
+		return false
+	}
+	for name := range inspect.NetworkSettings.Networks {
+		if _, ok := networkKeys[name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // declaredNamespace turns compose's container:<id> back into what it resolved: the service:<name>
@@ -536,9 +528,9 @@ func toDuration(d time.Duration) *types.Duration {
 	return &converted
 }
 
-// newLogging renders newLogging:, unless it is the daemon's own driver with no options.
-func newLogging(from container.LogConfig, daemonDriver string) *types.LoggingConfig {
-	if from.Type == "" || (from.Type == daemonDriver && len(from.Config) == 0) {
+// newLogging renders logging:; the engine's own driver is dropEngineDefaults' to leave out.
+func newLogging(from container.LogConfig) *types.LoggingConfig {
+	if from.Type == "" {
 		return nil
 	}
 	return &types.LoggingConfig{Driver: from.Type, Options: from.Config}

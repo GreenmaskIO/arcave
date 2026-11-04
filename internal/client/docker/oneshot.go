@@ -168,9 +168,21 @@ func newOneShotConfig(spec model.OneShotSpec) (*container.Config, *container.Hos
 		// Tty stays false even with stdio: the framed stream is what lets stdout
 		// and stderr be told apart on the way back.
 	}
-	hostCfg := &container.HostConfig{Binds: spec.Binds}
+	var (
+		networkMode container.NetworkMode
+		logConfig   container.LogConfig
+	)
 	if spec.HostNetwork {
-		hostCfg.NetworkMode = network.NetworkHost
+		networkMode = network.NetworkHost
+	}
+	if spec.DiscardLog {
+		logConfig = container.LogConfig{Type: "none"}
+	}
+	hostCfg := &container.HostConfig{
+		Binds:       spec.Binds,
+		SecurityOpt: spec.SecurityOpt,
+		NetworkMode: networkMode,
+		LogConfig:   logConfig,
 	}
 	return cfg, hostCfg
 }
@@ -417,7 +429,10 @@ func startVolumeHolder(
 
 	created, err := api.ContainerCreate(ctx,
 		&container.Config{Image: volumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
-		&container.HostConfig{Binds: []string{src.Source + ":" + volumeHolderMount}},
+		&container.HostConfig{
+			Binds:       []string{src.Source + ":" + volumeHolderMount},
+			SecurityOpt: volumeSecurityOpt,
+		},
 		nil, nil, "")
 	if err != nil {
 		return "", fmt.Errorf("create %s container: %w", volumeToolsImage, err)

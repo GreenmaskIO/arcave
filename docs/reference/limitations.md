@@ -54,6 +54,8 @@ arcave rebuilds the project from what Docker reports, and Docker doesn't keep ev
 * An optional `depends_on` (`required: false`) becomes required.
 * A container gets a new MAC address.
 * A network's subnet may change, unless a service has a fixed address in it.
+* On Podman, what it does not store is not put back: `sysctls`, a fixed `ipv4_address`, `domainname`, a volume's `nocopy`, the `max-file` of a log, and a `cap_drop` of a capability Podman never grants are dropped. A long-syntax bind declaring no propagation comes back with `propagation: private`, Podman's default for it, and a long-syntax `tmpfs` comes back in the `tmpfs:` shorthand. A tag beside a digest (`postgres:16@sha256:…`) comes back as the digest alone, and a port published without a host port comes back fixed to the one Podman picked. What Podman set itself and reports as if declared — `oom_score_adj` and the `nofile`/`nproc` limits — is recorded as is.
+* A spec arcave assembles on one engine is that engine's: it carries defaults the other refuses or spells differently. A savepoint is rolled back on the engine it was taken on.
 
 Running `docker compose up` by hand after a rollback recreates the containers from your compose file, which drops the container files the rollback restored. Volume data stays.
 
@@ -74,7 +76,6 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 [`arcave gc`](cli/gc.md) deletes dead savepoint trees, the images and blobs no savepoint uses, the `cdc` snapshots of removed savepoints, and the layer tags no container uses. `arcave gc --dry-run` reports without deleting anything. Some space takes more than one run to come back:
 
 * **An unused image.** Its layers go on the run after the image.
-* **A recent layer tag.** A tag younger than `gc.restored_layer_grace`, an hour by default, waits for a later run.
 * **An interrupted prune.** If a `cdc` repository's `restic forget --prune` is cut short after the snapshots are forgotten, the next gc prunes that repository again.
 
 `arcave session remove` frees everything a session holds, `cdc` repositories included; `arcave session list --all` lists the trees a failed fork left, and `session remove <id>` deletes one. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, `arcave session remove baseline --force` empties it.
@@ -83,9 +84,13 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 
 The session's lock in the store is taken by writing it, waiting a second, and reading it back, because the stores arcave supports offer no write-if-absent. Two machines claiming it at the same moment can, rarely, both believe they hold it. For a capture that only costs a savepoint, but a gc that deletes could then remove a blob a capture on the other machine has just reused, and that savepoint would fail to roll back. Run `arcave gc` without `--dry-run` only while no other machine works in the session. `--dry-run` is safe anywhere.
 
+### gc is not kept out of a rollback's window from elsewhere
+
+A rollback loads its layers into the daemon and tags them before it creates the containers that run on them. The project lock keeps a gc in the same checkout out of that window, and the session's lock one in the same session on any host sharing the store. A gc in another checkout sharing `project.name`, or on another host in another session, is kept out by neither: it removes the tags, and the rollback fails at `Create` and goes back to its safety snapshot, or takes down what it created. No data is lost: the layers stay in the store, and running the rollback again passes. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
+
 ### Some layer tags gc never judges
 
-Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in Docker, and `arcave gc` removes it once no container uses it. gc only judges the tags of compose projects its session holds: a tag of a compose project no session holds any more, or one committed by an earlier arcave version, stays. List the tags with `docker image ls --filter 'reference=arcave/*'` and remove those by hand.
+Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in the daemon, and `arcave gc` removes it once no container uses it. gc only judges the tags of compose projects its session holds: a tag of a compose project no session holds any more, or one committed by an earlier arcave version, stays. List the tags with `docker image ls --filter 'reference=arcave/*'` and remove those by hand.
 
 ## An interrupted rollback is not finished for you
 
@@ -94,6 +99,10 @@ If a rollback is killed partway through, arcave refuses every command that chang
 ## A fork copies the whole session
 
 `session create --from` copies everything the source session holds, so it costs as much space and time as that session's `size_bytes`. Every other command that changes something in the project is refused until the copy is done; commands that only read still run.
+
+## Podman's image blobs are keyed by their compressed digest
+
+On Podman, arcave stores an image's layers as the compressed blobs Podman exports, and deduplicates them by that digest. A Podman release that compresses differently writes them again once; nothing is lost, the image id stays the same.
 
 ## `cdc` and host bind mounts on macOS
 

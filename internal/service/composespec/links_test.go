@@ -20,6 +20,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -87,7 +88,7 @@ func TestAssembly_DeclaredLinks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			links, external := newAssembly(linkedProject()).declaredLinks(tt.entries, 1)
+			links, external := newAssembly(linkedProject(), NewDockerDefaults(system.Info{})).declaredLinks(tt.entries, 1)
 
 			// Assert
 			assert.Equal(t, tt.wantLinks, links)
@@ -111,7 +112,7 @@ func TestNewServiceConfig_Links(t *testing.T) {
 	introspection.Project.Services[0] = app
 
 	// Act
-	cfg := newAssembly(introspection).newServiceConfig(app)
+	cfg := newAssembly(introspection, NewDockerDefaults(system.Info{})).newServiceConfig(app)
 
 	// Assert
 	assert.Equal(t, []string{"db:database"}, cfg.Links)

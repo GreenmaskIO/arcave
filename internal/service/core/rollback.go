@@ -114,7 +114,7 @@ func (s *Service) rollback(
 		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
 	}
-	if err := requireDaemon(ctx, introspection.Daemon, introspection.DaemonVersion, s.minDaemonMajor); err != nil {
+	if err := requireDaemon(ctx, s.daemonVersion, s.minDaemonMajor); err != nil {
 		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, fmt.Errorf("prepare: %w", preferInterrupt(ctx, err))
 	}
@@ -218,7 +218,10 @@ func (s *Service) rollbackLive(
 // prepareLive builds, ahead of the stop, the working set the safety snapshot captures and the
 // target the rollback builds; what the safety snapshot leaves out is logged as its own.
 func (s *Service) prepareLive(
-	ctx context.Context, req model.RollbackRequest, savepoint model.Savepoint, introspection model.IntrospectionResult,
+	ctx context.Context,
+	req model.RollbackRequest,
+	savepoint model.Savepoint,
+	introspection model.IntrospectionResult,
 ) (workingSet, rollbackTarget, error) {
 	safetyCtx := zerolog.Ctx(ctx).With().Bool("safety_snapshot", true).Logger().WithContext(ctx)
 	capturePolicy, err := s.newSafetySnapshotPolicy(safetyCtx, introspection, savepoint)

@@ -42,7 +42,7 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
+	return withStoreDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewSavepointRemoveHandler(d.service, d.printer)
 		return h.SavepointRemove(ctx, model.RemoveRequest{
 			Refs:         args,

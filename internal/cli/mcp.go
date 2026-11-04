@@ -41,9 +41,11 @@ type MCPService interface {
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
 }
 
-// MCPServiceFactory builds the workflows for one compose project in the session ref names, ""
-// being the current one, plus the release the tool call invokes on return.
-type MCPServiceFactory func(ctx context.Context, project, session string) (svc MCPService, release func(), err error)
+// MCPServiceFactory builds the workflows for one compose project in the named session ("" is the
+// current one) plus their release; needsDaemon is false for a tool that touches the store alone.
+type MCPServiceFactory func(
+	ctx context.Context, project, session string, needsDaemon bool,
+) (svc MCPService, release func(), err error)
 
 // MCPSessionService is the MCP adapter's view of the session commands.
 type MCPSessionService interface {
@@ -104,8 +106,10 @@ func NewMCPHandler(
 }
 
 // openService builds the workflows for project in session, else in the pinned or current session.
-func (h *MCPHandler) openService(ctx context.Context, project, session string) (MCPService, func(), error) {
-	svc, release, err := h.serviceFactory(ctx, project, cmp.Or(session, h.pinRef()))
+func (h *MCPHandler) openService(
+	ctx context.Context, project, session string, needsDaemon bool,
+) (MCPService, func(), error) {
+	svc, release, err := h.serviceFactory(ctx, project, cmp.Or(session, h.pinRef()), needsDaemon)
 	if err != nil {
 		return nil, nil, mcpError(err)
 	}
@@ -198,7 +202,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
-	svc, release, err := h.openService(ctx, in.Project, in.Session)
+	svc, release, err := h.openService(ctx, in.Project, in.Session, true)
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
@@ -250,7 +254,7 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 	if err != nil {
 		return nil, listOutput{}, err
 	}
-	svc, release, err := h.openService(ctx, in.Project, in.Session)
+	svc, release, err := h.openService(ctx, in.Project, in.Session, false)
 	if err != nil {
 		return nil, listOutput{}, err
 	}
@@ -282,7 +286,7 @@ type removeSavepointInput struct {
 
 // removeSavepoints deletes the selected savepoints and reports what went.
 func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResponse, error) {
-	svc, release, err := h.openService(ctx, in.Project, in.Session)
+	svc, release, err := h.openService(ctx, in.Project, in.Session, false)
 	if err != nil {
 		return nil, model.RemoveResponse{}, err
 	}
@@ -315,7 +319,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
-	svc, release, err := h.openService(ctx, in.Project, in.Session)
+	svc, release, err := h.openService(ctx, in.Project, in.Session, true)
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
@@ -356,31 +360,20 @@ func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	return nil, composeGenerateOutput{ComposeProject: generated.ComposeProject, Services: generated.Services, Spec: string(generated.Spec)}, nil
 }
 
-// gcInput is gc's input schema; dry_run left out is true, a grace left out keeps
-// gc.restored_layer_grace, kinds every one.
+// gcInput is gc's input schema; dry_run left out is true, kinds every one.
 type gcInput struct {
-	DryRun             *bool                   `json:"dry_run,omitempty" jsonschema:"default true: report only; false deletes"`
-	Session            string                  `json:"session,omitempty" jsonschema:"the session to look in, by name or id; default the pinned or current session"`
-	RestoredLayerGrace string                  `json:"restored_layer_grace,omitempty" jsonschema:"how old an unused layer tag must be to count as garbage, as a Go duration such as 1h"`
-	Kinds              []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
+	DryRun  *bool                   `json:"dry_run,omitempty" jsonschema:"default true: report only; false deletes"`
+	Session string                  `json:"session,omitempty" jsonschema:"the session to look in, by name or id; default the pinned or current session"`
+	Kinds   []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
 }
 
 // garbageCollectMCP finds the garbage in scope and, when dry_run is false, deletes it.
 func (h *MCPHandler) garbageCollectMCP(
 	ctx context.Context, _ *mcpsdk.CallToolRequest, in gcInput,
 ) (*mcpsdk.CallToolResult, model.GarbageCollectResult, error) {
-	var grace *time.Duration
-	if in.RestoredLayerGrace != "" {
-		parsed, err := parseToolDuration("restored_layer_grace", in.RestoredLayerGrace)
-		if err != nil {
-			return nil, model.GarbageCollectResult{}, err
-		}
-		grace = &parsed
-	}
 	req := model.GarbageCollectRequest{
-		DryRun:             in.DryRun == nil || *in.DryRun,
-		DataKinds:          in.Kinds,
-		RestoredLayerGrace: grace,
+		DryRun:    in.DryRun == nil || *in.DryRun,
+		DataKinds: in.Kinds,
 	}
 	if err := req.Validate(); err != nil {
 		return nil, model.GarbageCollectResult{}, err

@@ -1007,12 +1007,11 @@ func TestService_ListSavepoints(t *testing.T) {
 			// Arrange
 			repo := &mockSavepointRepo{}
 			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{demoRecord(), demoSafetySnapshot()}, nil).Once()
+			// No daemon collaborator at all: savepoint list runs where no daemon does.
 			svc := New(Deps{
 				SessionLocker: fakeSessionLocker{},
-				VolumeRemover: &mockVolumeRemover{},
-				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
-				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
-				Store: nil, CaptureDefaults: demoCaptureDefaults,
+				SavepointRepo: repo, Inflight: &fakeInflight{},
+				CaptureDefaults: demoCaptureDefaults,
 			})
 
 			// Act
@@ -1108,11 +1107,11 @@ func TestService_RemoveSavepoints(t *testing.T) {
 	require.NoError(t, store.PutObject(context.Background(),
 		record.ID.String()+"/volume-named-orphan/data.tar", strings.NewReader("orphan")))
 
+	// No daemon collaborator at all: savepoint remove runs where no daemon does.
 	svc := New(Deps{
 		SessionLocker: fakeSessionLocker{},
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
-		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
+		SavepointRepo: repo, ProjectLocker: locker,
+		BackendRegistry: registry, Inflight: &fakeInflight{},
 		Store: store, CaptureDefaults: demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())

@@ -44,7 +44,7 @@ func runSavepointList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
+	return withStoreDeps(cmd, func(ctx context.Context, d *dependencies) error {
 		h := cli.NewSavepointListHandler(d.service, d.printer)
 		return h.SavepointList(ctx, model.ListRequest{
 			IncludeSafetySnapshots: savepointListIncludeSafety,

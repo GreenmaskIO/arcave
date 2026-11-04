@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,10 +26,11 @@ import (
 	"time"
 
 	"github.com/docker/cli/cli/command"
+	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/api"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	composeprogress "github.com/docker/compose/v2/pkg/progress"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
@@ -81,24 +83,48 @@ const composeResourceObject = "object"
 type dependencies struct {
 	storeRoot           storages.Storager
 	composeProjectStore storages.Storager
-	progressWriter      io.WriteCloser
-	dockerCli           *command.DockerCli
-	dockerClient        client.APIClient
-	composeService      api.Compose
-	engine              *docker.Engine
-	composeRunner       *compose.Client
-	// cdcTransport is how cdc's containers reach their repositories, closed by Close.
-	cdcTransport openedCDCTransport
-	service      *core.Service
-	printer      resultPrinter
+	// daemon is zero when needsDaemon is false.
+	daemon  daemonDependencies
+	service *core.Service
+	printer resultPrinter
 }
 
-// newDependencies wires the savepoint workflows for the project rooted at projectPath, in the
-// session sessionRef resolves to on the store it opens. Every store arrives from storefactory
-// already rooted.
+// daemonDependencies is one connection to the daemon and what is built over it.
+type daemonDependencies struct {
+	progressWriter io.WriteCloser
+	// version is the version the engine reports; profile.minDaemonMajor judges it.
+	version string
+	engine  *docker.Engine
+	profile runtimeProfile
+	// exporter is how a volume and an image leave the daemon: engine itself, or Podman's over it.
+	exporter      exportEngine
+	inspector     *introspect.Inspector
+	composeRunner *compose.Client
+	// cdcTransport is how cdc's containers reach their repositories, closed by Close.
+	cdcTransport openedCDCTransport
+}
+
+// Close releases the cdc transport, the Docker engine and the progress writer, the writer
+// last so a line compose left unterminated is still emitted.
+func (d daemonDependencies) Close(ctx context.Context) {
+	d.cdcTransport.Close(ctx)
+	if d.engine != nil {
+		closeQuietly(ctx, "docker engine", d.engine)
+	}
+	if d.progressWriter != nil {
+		closeQuietly(ctx, "compose progress writer", d.progressWriter)
+	}
+}
+
+// newDependencies wires the savepoint workflows for the project at projectPath in the session
+// sessionRef resolves to; with needsDaemon false nothing that reaches the daemon is built.
 func newDependencies(
-	ctx context.Context, projectPath string, cfg config.Config,
-	sessionRef string, composeProject model.DockerComposeProjectName,
+	ctx context.Context,
+	projectPath string,
+	cfg config.Config,
+	sessionRef string,
+	composeProject model.DockerComposeProjectName,
+	needsDaemon bool,
 ) (*dependencies, error) {
 	// One unwind for every failure path: whatever is open is released newest first.
 	var opened partial
@@ -127,34 +153,6 @@ func newDependencies(
 		return nil, fmt.Errorf("initialise compose project store: %w", err)
 	}
 
-	// Where compose's own progress goes, on the logger initRoot resolved.
-	progressWriter, composeEvents := newProgressWriter(
-		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx))
-	opened.add("compose progress writer", progressWriter)
-
-	// One docker/cli instance is the single daemon connection both halves of
-	// client/docker are built over, so they cannot target different daemons. Its
-	// closers belong to the returned dependencies — never deferred here.
-	dockerCli, dockerClientAPI, err := newDockerClient(cfg.Docker, progressWriter)
-	if err != nil {
-		return nil, fmt.Errorf("initialise docker client: %w", err)
-	}
-	engine := docker.NewEngine(dockerClientAPI)
-	opened.add("docker engine", engine)
-
-	// Over the same daemon connection the engine uses.
-	inspector := introspect.NewInspector(dockerClientAPI, composeProject)
-	assembler := composespec.NewAssembler()
-	codec := composespec.NewCodec()
-
-	composeService := dockercompose.NewComposeService(dockerCli)
-	composeRunner := compose.NewClient(composeService, compose.Options{
-		WaitTimeout:     cfg.Compose.WaitTimeout,
-		StopTimeout:     cfg.Compose.StopTimeout,
-		Events:          composeEvents,
-		SinkFromContext: newComposeEventSink,
-	})
-
 	// The effective cdc section, defaults included even where the project carries
 	// no block: a rollback restores through the backend its record names, so cdc
 	// is wired whatever snapshot.backend says.
@@ -169,22 +167,19 @@ func newDependencies(
 		return nil, fmt.Errorf("initialise restic repository root: %w", err)
 	}
 
-	// Under tcp the server listens for the whole process, so a bad address fails up front.
-	cdcTransport, err := openCDCTransport(ctx, cdcCfg, engine, resticRoot)
-	if err != nil {
-		return nil, err
-	}
-	if cdcTransport.server != nil {
-		opened.add("restic server", cdcTransport.server)
+	var daemon daemonDependencies
+	if needsDaemon {
+		if daemon, err = openDaemon(ctx, cfg, composeProject, cdcCfg, resticRoot, &opened); err != nil {
+			return nil, err
+		}
 	}
 
-	// The one place a volume's Backend becomes an instance, and the only place
-	// that names the engine — through the seam its backend declares.
+	// Without the daemon a backend only removes, which reads the store alone.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
-		fullcopy.NewFactory(engine),
+		fullcopy.NewFactory(daemon.exporter),
 		cdc.NewFactory(cdc.Dependencies{
-			Runner:         engine,
-			Transport:      cdcTransport.transport,
+			Runner:         daemon.engine,
+			Transport:      daemon.cdcTransport.transport,
 			RepositoryRoot: resticRoot,
 			Options:        newCDCOptions(cdcCfg),
 		}),
@@ -193,13 +188,15 @@ func newDependencies(
 		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
 	}
 
-	origin := model.LayerOrigin{
-		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
-		ComposeProject: composeProject,
-	}
-	imageBackend, err := newImageBackend(composeProjectStore, origin, engine)
-	if err != nil {
-		return nil, err
+	var imageBackend *imagecopy.Copier
+	if needsDaemon {
+		origin := model.LayerOrigin{
+			ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
+			ComposeProject: composeProject,
+		}
+		if imageBackend, err = newImageBackend(composeProjectStore, origin, daemon.exporter); err != nil {
+			return nil, err
+		}
 	}
 
 	sessionLocker, err := newSessionLocker(arcaveProjectStore, session.ID)
@@ -214,18 +211,19 @@ func newDependencies(
 		ProjectLocker: lock.New(projectPath),
 		// The session's lock in the store, which the flock beside it cannot be across hosts.
 		SessionLocker:    sessionLocker,
-		ComposeInspector: inspector,
-		ProjectAssembler: assembler,
-		SpecCodec:        codec,
-		ComposeRunner:    composeRunner,
-		VolumeRemover:    engine,
+		ComposeInspector: daemon.inspector,
+		ProjectAssembler: daemon.profile.assembler,
+		SpecCodec:        composespec.NewCodec(),
+		ComposeRunner:    daemon.composeRunner,
+		VolumeRemover:    daemon.engine,
 		ImageBackend:     imageBackend,
-		MinDaemonMajor:   dedupcopy.MinDaemonMajor,
+		DaemonVersion:    daemon.version,
+		MinDaemonMajor:   daemon.profile.minDaemonMajor,
 		Concurrency:      cfg.Common.Concurrency,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
-		ContainerRebuilder: engine,
-		ImageLookup:        engine,
+		ContainerRebuilder: daemon.engine,
+		ImageLookup:        daemon.engine,
 		BackendRegistry:    backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:        inflightrepo.New(projectPath),
@@ -241,16 +239,140 @@ func newDependencies(
 	return &dependencies{
 		storeRoot:           storeRoot,
 		composeProjectStore: composeProjectStore,
-		progressWriter:      progressWriter,
-		dockerCli:           dockerCli,
-		dockerClient:        dockerClientAPI,
-		composeService:      composeService,
-		engine:              engine,
-		composeRunner:       composeRunner,
-		cdcTransport:        cdcTransport,
+		daemon:              daemon,
 		service:             svc,
 		printer:             loadRunOutput(),
 	}, nil
+}
+
+// openDaemon connects to the daemon, asks which engine it is, and builds over that one
+// connection everything a workflow reaches it through; what it opens goes on opened.
+func openDaemon(
+	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName,
+	cdcCfg config.CDCBackend, resticRoot storages.Storager, opened *partial,
+) (daemonDependencies, error) {
+	// Where compose's own progress goes, on the logger initRoot resolved.
+	progressWriter, composeEvents := newProgressWriter(
+		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx))
+	opened.add("compose progress writer", progressWriter)
+
+	// One connection for both halves of client/docker, so they cannot target different
+	// daemons; its closers belong to the returned dependencies, never deferred here.
+	dockerCli, dockerClientAPI, err := newDockerClient(cfg.Docker, progressWriter)
+	if err != nil {
+		return daemonDependencies{}, fmt.Errorf("initialise docker client: %w", err)
+	}
+	engine := docker.NewEngine(dockerClientAPI)
+	opened.add("docker engine", engine)
+
+	runtime, info, err := readEngine(ctx, dockerClientAPI)
+	if err != nil {
+		return daemonDependencies{}, err
+	}
+	profile, err := newRuntimeProfile(runtime, info, dockerClientAPI, dockerCli.DockerEndpoint())
+	if err != nil {
+		return daemonDependencies{}, err
+	}
+
+	composeService := dockercompose.NewComposeService(dockerCli)
+	composeRunner := compose.NewClient(composeService, compose.Options{
+		WaitTimeout:     cfg.Compose.WaitTimeout,
+		StopTimeout:     cfg.Compose.StopTimeout,
+		Events:          composeEvents,
+		SinkFromContext: newComposeEventSink,
+	})
+
+	// Under tcp the server listens for the whole process, so a bad address fails up front.
+	cdcTransport, err := openCDCTransport(ctx, cdcCfg, engine, resticRoot)
+	if err != nil {
+		return daemonDependencies{}, err
+	}
+	if cdcTransport.server != nil {
+		opened.add("restic server", cdcTransport.server)
+	}
+
+	return daemonDependencies{
+		progressWriter: progressWriter,
+		version:        runtime.Version,
+		engine:         engine,
+		profile:        profile,
+		exporter:       newExportEngine(profile, engine),
+		inspector:      introspect.NewInspector(profile.api, composeProject),
+		composeRunner:  composeRunner,
+		cdcTransport:   cdcTransport,
+	}, nil
+}
+
+// exportEngine is the part of the engine that differs by runtime: the volume
+// stream fullcopy reads and the image half imagecopy commits and saves through.
+type exportEngine interface {
+	fullcopy.VolumeStreamer
+	CommitContainer(ctx context.Context, containerID, comment string, labels map[string]string) (model.ImageDigestID, error)
+	SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error)
+	RemoveImage(ctx context.Context, imageID model.ImageDigestID) error
+	LoadImage(ctx context.Context, r io.Reader) error
+	TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error
+	ImageExists(ctx context.Context, imageID model.ImageDigestID) (bool, error)
+}
+
+// runtimeProfile is everything that differs by the engine behind the daemon.
+type runtimeProfile struct {
+	// api is what the compose project is introspected through.
+	api client.APIClient
+	// libpod is Podman's own API, which newExportEngine commits and saves through; nil on Docker.
+	libpod *docker.Libpod
+	// minDaemonMajor is the oldest version of the engine a workflow runs on; 0 requires none.
+	minDaemonMajor int
+	// assembler leaves out of a spec what the engine stamps by itself.
+	assembler *composespec.Assembler
+}
+
+// readEngine asks the daemon which engine it is and what `docker info` says of it.
+func readEngine(ctx context.Context, api client.APIClient) (model.ContainerRuntime, system.Info, error) {
+	runtime, err := docker.ReadRuntime(ctx, api)
+	if err != nil {
+		return model.ContainerRuntime{}, system.Info{}, err
+	}
+	info, err := api.Info(ctx)
+	if err != nil {
+		return model.ContainerRuntime{}, system.Info{}, fmt.Errorf("read the daemon info: %w", err)
+	}
+	return runtime, info, nil
+}
+
+// newRuntimeProfile chooses everything that differs by the engine behind the daemon; a Podman
+// daemon behind TLS (endpoint as the CLI resolved it) is refused, since libpod is reached plain.
+func newRuntimeProfile(
+	runtime model.ContainerRuntime, info system.Info, api client.APIClient, endpoint dockercontext.Endpoint,
+) (runtimeProfile, error) {
+	switch runtime.Kind {
+	case model.ContainerRuntimePodman:
+		if endpoint.TLSData != nil || endpoint.SkipTLSVerify {
+			return runtimeProfile{}, errors.New("podman behind TLS is not supported: arcave reaches libpod over plain http")
+		}
+		libpod := docker.NewLibpod(api)
+		return runtimeProfile{
+			api:            docker.NewPodmanAPI(api, libpod),
+			libpod:         &libpod,
+			minDaemonMajor: 0,
+			assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
+		}, nil
+	default:
+		return runtimeProfile{
+			api:            api,
+			minDaemonMajor: dedupcopy.MinDaemonMajor,
+			assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
+		}, nil
+	}
+}
+
+// newExportEngine is how a volume and an image leave the daemon: engine itself, or
+// Podman's over it where the profile holds libpod.
+func newExportEngine(profile runtimeProfile, engine *docker.Engine) exportEngine {
+	if profile.libpod == nil {
+		return engine
+	}
+	return docker.NewPodmanEngine(engine, *profile.libpod)
 }
 
 // openedCDCTransport is how cdc's containers reach one tree of repositories.
@@ -365,14 +487,10 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 	}
 }
 
-// Close releases the cdc transport, the Docker engine, the progress writer and
-// the store this root owns; only the store's error is returned. The progress
-// writer is closed after the engine, so a line compose left unterminated is
-// still emitted. dockerClient is not closed — the engine was built over it.
+// Close releases the daemon's half, then the store this root owns; only the store's
+// error is returned.
 func (d *dependencies) Close(ctx context.Context) error {
-	d.cdcTransport.Close(ctx)
-	closeQuietly(ctx, "docker engine", d.engine)
-	closeQuietly(ctx, "compose progress writer", d.progressWriter)
+	d.daemon.Close(ctx)
 	return d.storeRoot.Close()
 }
 
@@ -404,21 +522,36 @@ type toolsDependencies struct {
 }
 
 // newToolsDependencies wires the tools commands for composeProject over the daemon docker.* names.
-func newToolsDependencies(cfg config.Config, composeProject model.DockerComposeProjectName) (*toolsDependencies, error) {
+func newToolsDependencies(
+	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName,
+) (*toolsDependencies, error) {
 	// The gate newDependencies applies through storefactory, though no store is opened here.
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
 	}
+	var opened partial
+	defer func() { opened.releaseOnFailure(ctx) }()
+
 	// Nothing here runs compose, so the CLI's progress channel goes nowhere.
-	_, dockerClientAPI, err := newDockerClient(cfg.Docker, io.Discard)
+	dockerCli, dockerClientAPI, err := newDockerClient(cfg.Docker, io.Discard)
 	if err != nil {
 		return nil, fmt.Errorf("initialise docker client: %w", err)
 	}
+	opened.add("docker client", dockerClientAPI)
+	runtime, info, err := readEngine(ctx, dockerClientAPI)
+	if err != nil {
+		return nil, err
+	}
+	profile, err := newRuntimeProfile(runtime, info, dockerClientAPI, dockerCli.DockerEndpoint())
+	if err != nil {
+		return nil, err
+	}
 	svc := core.NewComposeFileService(core.ComposeFileDeps{
-		ComposeInspector: introspect.NewInspector(dockerClientAPI, composeProject),
-		ProjectAssembler: composespec.NewAssembler(),
+		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
+		ProjectAssembler: profile.assembler,
 		SpecCodec:        composespec.NewComposeFileCodec(),
 	})
+	opened.keep()
 	return &toolsDependencies{
 		dockerClient: dockerClientAPI,
 		service:      svc,
@@ -724,7 +857,7 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerC
 // newImageBackend builds the image backend over both archivers a writable layer may name;
 // images are always deduplicated, which needs a daemon of Docker 25 or newer.
 func newImageBackend(
-	composeProjectStore storages.Navigator, origin model.LayerOrigin, engine *docker.Engine,
+	composeProjectStore storages.Navigator, origin model.LayerOrigin, engine exportEngine,
 ) (*imagecopy.Copier, error) {
 	blobStore, err := composeProjectStore.SubStorage(dedupcopy.NamespaceBlobs, true)
 	if err != nil {
@@ -807,7 +940,6 @@ func newGCDependencies(
 		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
-		RestoredLayerGrace: utils.Value(cfg.GC.RestoredLayerGrace),
 	})
 	opened.keep()
 	return &gcDependencies{

@@ -68,6 +68,10 @@ const volumeToolsImage = "busybox"
 // at a path the image *does* carry copies the image's content into the volume.
 const volumeHolderMount = "/arcave-data"
 
+// volumeSecurityOpt runs a volume's holder, wipe and export unconfined by SELinux:
+// a bind relabelled :Z carries the service's own label, which no other container reads.
+var volumeSecurityOpt = []string{"label=disable"}
+
 // wipeMountPath is where the volume sits inside the wipe container. Absent from
 // the image for the same reason as volumeHolderMount.
 const wipeMountPath = "/data"
@@ -196,7 +200,8 @@ func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.Read
 		return nil, err
 	}
 
-	rc, _, err := e.api.CopyFromContainer(ctx, id, volumeHolderMount)
+	// "/." asks for the directory's contents, so no member carries the mount's name.
+	rc, _, err := e.api.CopyFromContainer(ctx, id, volumeHolderMount+"/.")
 	if err != nil {
 		removeVolumeHolder(ctx, e.api, id)
 		return nil, fmt.Errorf("export volume %s: %w", src.Source, err)
@@ -208,19 +213,17 @@ func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.Read
 }
 
 // WriteVolume clears the volume and extracts the tar back into it, the mirror of
-// OpenVolume. The archive's top entry is volumeHolderMount's basename, so it is
-// extracted at the container's root and the data lands back in the volume.
+// OpenVolume: members are relative to the mount and are extracted into it.
 func (e *Engine) WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error {
 	if err := e.WipeVolume(ctx, src); err != nil {
 		return fmt.Errorf("clear volume %s before restore: %w", src.Source, err)
 	}
 
 	return withVolumeHolder(ctx, e.api, src, func(id string) error {
-		// readOnly hides r's Close from the SDK: CopyToContainer passes the stream to
-		// net/http as the request body, and http.NewRequestWithContext type-asserts it
-		// to io.ReadCloser — so the transport would close the caller's stream, and the
-		// caller's own deferred Close would then fail with "file already closed".
-		if err := e.api.CopyToContainer(ctx, id, "/", readOnly{r}, container.CopyToContainerOptions{}); err != nil {
+		// NopCloser hides r's Close from net/http, which closes a request body it can:
+		// the caller's own deferred Close would then fail on a stream closed twice.
+		if err := e.api.CopyToContainer(ctx, id, volumeHolderMount, io.NopCloser(r),
+			container.CopyToContainerOptions{}); err != nil {
 			return fmt.Errorf("restore volume %s: %w", src.Source, err)
 		}
 		return nil
@@ -306,12 +309,6 @@ func matchMount(containers []container.Summary, replica int, target string) (mou
 	return mountInfo{}, false
 }
 
-// readOnly wraps a reader so that no io.Reader method set other than Read is
-// visible, even when the underlying value also implements io.Closer.
-type readOnly struct{ r io.Reader }
-
-func (ro readOnly) Read(p []byte) (int, error) { return ro.r.Read(p) }
-
 // wipeVolume removes every entry of a volume by running a throwaway root
 // container that mounts it. This is the only host-agnostic way to delete data a
 // service wrote as root: the daemon owns those files, and CopyToContainer only
@@ -325,7 +322,8 @@ func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error
 		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
 		Cmd: []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",
 			"-exec", "rm", "-rf", "{}", "+"},
-		Binds: []string{src.Source + ":" + wipeMountPath},
+		Binds:       []string{src.Source + ":" + wipeMountPath},
+		SecurityOpt: volumeSecurityOpt,
 	})
 }
 

@@ -86,6 +86,8 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
 	engine := dockerclient.NewEngine(daemonAPI)
+	profile := newRuntimeProfile(t, daemonAPI)
+	exporter := profile.exporter
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -104,15 +106,15 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		SessionLocker:      newStoreLocker(composeProjectStore, model.DefaultSession),
 		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
-		ProjectAssembler:   composespec.NewAssembler(),
+		ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), engine, blobStore),
+		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), exporter, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		BackendRegistry:    mustRegistry(t, exporter),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              composeProjectStore,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),

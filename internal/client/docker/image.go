@@ -110,9 +110,10 @@ func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 	if err != nil {
 		return fmt.Errorf("inspect image reference %s: %w", ref, err)
 	}
+	// A bare hex: Podman matches no container to a "sha256:" ancestor, Docker takes either.
 	containers, err := e.api.ContainerList(ctx, container.ListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("ancestor", inspect.ID)),
+		Filters: filters.NewArgs(filters.Arg("ancestor", strings.TrimPrefix(inspect.ID, "sha256:"))),
 	})
 	if err != nil {
 		return fmt.Errorf("list containers of image %s: %w", inspect.ID, err)
@@ -181,8 +182,8 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 	return true, nil
 }
 
-// ListLayerImages lists every arcave/…:sp-<id> tag the daemon holds, with the image it names
-// and the origin that image's labels name.
+// ListLayerImages lists every arcave/…:sp-<savepoint> tag the daemon holds, spelled
+// as Docker does, with the image it names and the origin that image's labels name.
 func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
 	summaries, err := e.api.ImageList(ctx, image.ListOptions{
 		Filters: filters.NewArgs(filters.Arg("reference", model.RestoredLayerTagNamespace+"/*")),
@@ -192,27 +193,16 @@ func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, erro
 	}
 	var tagged []model.TaggedImage
 	for _, summary := range summaries {
-		refs := slices.DeleteFunc(slices.Clone(summary.RepoTags), func(ref string) bool {
-			return !model.ImageRef(ref).IsRestoredLayerTag()
-		})
-		if len(refs) == 0 {
-			continue
-		}
-		// The list leaves out when the image was tagged, which is what a gc's grace reads.
-		inspect, err := e.api.ImageInspect(ctx, summary.ID)
-		if cerrdefs.IsNotFound(err) {
-			continue // removed since the list
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect arcave image %s: %w", summary.ID, err)
-		}
 		origin, _ := model.ParseLayerOrigin(summary.Labels)
-		for _, ref := range refs {
+		for _, ref := range summary.RepoTags {
+			familiar := model.ImageRef(ref).Familiar()
+			if !familiar.IsRestoredLayerTag() {
+				continue
+			}
 			tagged = append(tagged, model.TaggedImage{
-				Ref:      model.ImageRef(ref),
-				ImageID:  model.ImageDigestID(summary.ID),
-				Origin:   origin,
-				TaggedAt: inspect.Metadata.LastTagTime,
+				Ref:     familiar,
+				ImageID: model.ImageDigestID(summary.ID),
+				Origin:  origin,
 			})
 		}
 	}
@@ -221,7 +211,7 @@ func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, erro
 }
 
 // ListContainerImages lists what every container, running or not, was created from: the
-// reference it names and the image that resolved to.
+// reference it names, spelled as Docker does, and the image that resolved to.
 func (e *Engine) ListContainerImages(ctx context.Context) ([]model.ContainerImage, error) {
 	containers, err := e.api.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
@@ -231,7 +221,7 @@ func (e *Engine) ListContainerImages(ctx context.Context) ([]model.ContainerImag
 	for _, summary := range containers {
 		images = append(images, model.ContainerImage{
 			ContainerID: summary.ID,
-			Ref:         model.ImageRef(summary.Image),
+			Ref:         model.ImageRef(summary.Image).Familiar(),
 			ImageID:     model.ImageDigestID(summary.ImageID),
 		})
 	}

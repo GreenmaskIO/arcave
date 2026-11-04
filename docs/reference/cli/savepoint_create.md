@@ -183,7 +183,7 @@ Full shapes for every command are in [Output](../output.md).
 | The project has no volume to capture, or labels left every one out | `no stateful volumes found; nothing to capture` |
 | Two volumes render one object id | `two volumes address the same object id: service "app" at "/var/lib" and service "app-var" at "/lib" both address "volume-service-app-var-lib"; rename one of them` |
 | The savepoint directory already holds objects | `capture directory is not empty: 019e843e-1650-7000-8000-000000000000 holds 3 object(s), an interrupted run's remains; check what is there before removing it` |
-| An engine that is not Docker 25 or newer — Podman, or one whose version could not be read — exports an old archive shape | `capturing volumes: … unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape`. See [Requirements](../requirements.md). |
+| A daemon whose version could not be read exports the archive shape of a Docker older than 25 | `capturing volumes: … unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape`. See [Requirements](../requirements.md). |
 | An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The capture can't write its `heartbeat.json` for 25 minutes | `heartbeat lost` — the capture cancels itself and commits nothing; its directory is left for [`arcave gc`](gc.md). Check that the store is reachable and writable. |

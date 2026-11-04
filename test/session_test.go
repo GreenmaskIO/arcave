@@ -338,7 +338,9 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	engine := dockerclient.NewEngine(e.daemon)
-	inspector := introspect.NewInspector(e.daemon, model.DockerComposeProjectName(e.project))
+	profile := newRuntimeProfile(t, e.daemon)
+	exporter := profile.exporter
+	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(e.project))
 	runner := composeclient.NewClient(dockercompose.NewComposeService(cli), composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -358,14 +360,14 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(e.projectRoot),
 		ComposeInspector:   inspector,
-		ProjectAssembler:   composespec.NewAssembler(),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
 		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), engine, blobStore),
+		ImageBackend:       newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), exporter, blobStore),
 		ContainerRebuilder: engine,
 		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		BackendRegistry:    mustRegistry(t, exporter),
 		Inflight:           e.inflight,
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
