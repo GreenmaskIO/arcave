@@ -23,6 +23,8 @@ arcave init [flags]
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
+Encryption is switched on in the file, not by a flag: set [`encryption.enabled: true`](../configuration.md#encryption) and keep the key in `ARCAVE_ENCRYPTION_KEY`.
+
 `--name` names the storage tenant, not the compose project. The compose project is named per invocation with `-p/--project-name`, because one directory may hold several. The directory name is normalised into the tenant charset — `MyApp` becomes `myapp`, and characters outside `[a-z0-9_-]` are dropped.
 
 ## Output

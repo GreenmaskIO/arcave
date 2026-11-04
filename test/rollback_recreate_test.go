@@ -228,7 +228,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 func mustRegistry(t *testing.T, engine exportEngine) model.SnapshotBackendRegistry {
 	t.Helper()
 
-	registry, err := core.NewSnapshotBackendRegistry(fullcopy.NewFactory(engine))
+	registry, err := core.NewSnapshotBackendRegistry(fullcopy.NewFactory(engine, fullcopy.CompressionZstd))
 	require.NoError(t, err)
 	return registry
 }

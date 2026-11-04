@@ -29,10 +29,12 @@ import (
 	"slices"
 	"sync"
 
+	"filippo.io/age"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/azure"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/greenmaskio/storages/encrypted"
 	"github.com/greenmaskio/storages/s3"
 	"github.com/greenmaskio/storages/ssh"
 	"github.com/rs/zerolog/log"
@@ -232,6 +234,15 @@ func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (stora
 		return nil, fmt.Errorf("validate arcave project name: %w", err)
 	}
 	return joinKind(root, namespaceProjects, name.String())
+}
+
+// Encrypt wraps an arcave project store so that every object below it is an age file to identity.
+func Encrypt(arcaveProjectStore storages.Storager, identity *age.X25519Identity) (storages.Storager, error) {
+	store, err := encrypted.New(arcaveProjectStore, identity)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt arcave project store: %w", err)
+	}
+	return store, nil
 }
 
 // Session descends from an arcave project store to sessions/<id>.

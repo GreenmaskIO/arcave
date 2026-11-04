@@ -44,9 +44,9 @@ arcave savepoint create pre-migration --description "orders table, 1000 rows"
 ├── ✔ savepoint.capture pre-migration  5.2s
 └── ✔ compose.start                    3.6s
 
-Savepoint pre-migration · 019e843e · 19:41:12 · stored 317 MB
+Savepoint pre-migration · 019e843e · 19:41:12 · stored 273 MB
             count     size   stored
-  volumes       3  48.9 MB  48.9 MB
+  volumes       3  48.9 MB   4.7 MB
   layers        3   260 MB  40.6 KB
   images        3   1.1 GB   268 MB
 
@@ -60,9 +60,9 @@ Savepoint pre-migration · 019e843e · 19:41:12 · stored 317 MB
 INF savepoint.create[pre-migration] status=started
 INF savepoint.create[pre-migration]/compose.stop elapsed=205ms status=succeeded
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture items=0/3 status=started
-INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-named-arcave-demo_miniodata] bytes=24KB/24KB elapsed=369ms status=succeeded stored=24KB
-INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-anon-redis-1-data] bytes=6.1KB/6.1KB elapsed=402ms status=succeeded stored=6.1KB
-INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-named-arcave-demo_pgdata] bytes=49MB/49MB elapsed=909ms status=succeeded stored=49MB
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-named-arcave-demo_miniodata] bytes=24KB/24KB elapsed=369ms status=succeeded stored=2.1KB
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-anon-redis-1-data] bytes=6.1KB/6.1KB elapsed=402ms status=succeeded stored=251B
+INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-named-arcave-demo_pgdata] bytes=49MB/49MB elapsed=909ms status=succeeded stored=4.7MB
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.883s reused=493MB status=succeeded stored=165MB
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/layer.capture/layer[arcave-demo-postgres-1] bytes=159MB/159MB elapsed=2.446s reused=159MB status=succeeded stored=17KB
 INF savepoint.create[pre-migration]/compose.start msg=Healthy resource=container:arcave-demo-postgres-1 status=in_progress
@@ -91,7 +91,8 @@ INF savepoint.create[pre-migration] elapsed=10.194s status=succeeded
       },
       "type": "fullcopy",
       "size_bytes": 48843264,
-      "stored_bytes": 48843264
+      "stored_bytes": 4684365,
+      "payload": { "compression": "zstd" }
     },
     {
       "volume": {
@@ -103,7 +104,8 @@ INF savepoint.create[pre-migration] elapsed=10.194s status=succeeded
       },
       "type": "fullcopy",
       "size_bytes": 6144,
-      "stored_bytes": 6144
+      "stored_bytes": 251,
+      "payload": { "compression": "zstd" }
     },
     …
   ],

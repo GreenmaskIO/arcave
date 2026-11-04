@@ -78,34 +78,45 @@ func TestSnapshotter_RoundTrip(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			e := newEnv(t)
-			vol := tt.volume(t, e)
-			backend := e.backend(t, vol)
+	for _, compression := range []fullcopy.Compression{fullcopy.CompressionZstd, fullcopy.CompressionNone} {
+		for _, tt := range tests {
+			t.Run(string(compression)+" "+tt.name, func(t *testing.T) {
+				// Arrange
+				e := newEnv(t, compression)
+				vol := tt.volume(t, e)
+				backend := e.backend(t, vol)
 
-			stat, err := backend.Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
-			require.NoError(t, err)
-			captured := e.hash(t, vol)
-			require.Contains(t, captured, "/data/blob", "the volume must hold a file outside any subpath")
+				stat, err := backend.Snapshot(e.ctx, model.BackendSnapshotRequest{SnapshotID: idFirst})
+				require.NoError(t, err)
+				captured := e.hash(t, vol)
+				require.Contains(t, captured, "/data/blob", "the volume must hold a file outside any subpath")
 
-			assert.Positive(t, stat.SizeBytes, "an archive of a filled volume cannot be empty")
-			assert.Equal(t, stat.SizeBytes, stat.StoredBytes, "a fullcopy capture stores the whole archive")
+				require.Positive(t, stat.SizeBytes, "an archive of a filled volume cannot be empty")
+				require.Positive(t, stat.StoredBytes)
+				if compression == fullcopy.CompressionNone {
+					require.Equal(t, stat.SizeBytes, stat.StoredBytes, "an uncompressed capture stores the whole archive")
+				} else {
+					require.Less(t, stat.StoredBytes, stat.SizeBytes, "a zstd capture stores less than the tar")
+				}
 
-			e.mutate(t, vol)
-			e.addFile(t, vol, "extra")
-			require.NotEqual(t, captured, e.hash(t, vol), "the volume must actually diverge first")
+				e.mutate(t, vol)
+				e.addFile(t, vol, "extra")
+				require.NotEqual(t, captured, e.hash(t, vol), "the volume must actually diverge first")
 
-			// Act
-			err = backend.Restore(e.ctx, model.BackendRestoreRequest{SnapshotID: idFirst})
+				// Act
+				err = backend.Restore(e.ctx, model.BackendRestoreRequest{
+					SnapshotID: idFirst,
+					Payload:    stat.Payload,
+					SizeBytes:  stat.SizeBytes,
+				})
 
-			// Assert
-			require.NoError(t, err)
-			assert.Equal(t, captured, e.hash(t, vol),
-				"the volume must hash as it did at capture time — content, file set and modes")
-			assert.NotContains(t, e.hash(t, vol), "/data/extra", "the restore takes the added file away")
-		})
+				// Assert
+				require.NoError(t, err)
+				assert.Equal(t, captured, e.hash(t, vol),
+					"the volume must hash as it did at capture time — content, file set and modes")
+				assert.NotContains(t, e.hash(t, vol), "/data/extra", "the restore takes the added file away")
+			})
+		}
 	}
 }
 
@@ -115,7 +126,7 @@ func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	e := newEnv(t)
+	e := newEnv(t, fullcopy.CompressionZstd)
 	vol := namedVolume(itProject + "-never-created-" + randomSuffix(t))
 
 	// Act
@@ -138,7 +149,7 @@ type env struct {
 	factory *fullcopy.Factory
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 	t.Helper()
 
 	cli := newDaemonClient(t)
@@ -151,7 +162,7 @@ func newEnv(t *testing.T) *env {
 		cli:     cli,
 		engine:  engine,
 		store:   store,
-		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli, engine)),
+		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli, engine), compression),
 	}
 }
 

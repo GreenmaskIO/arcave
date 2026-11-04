@@ -46,11 +46,20 @@ var ErrInvalid = errors.New("invalid config")
 
 // The tokens snapshot.backend accepts.
 const (
-	// SnapshotBackendFullCopy stores each mount's tar stream verbatim.
+	// SnapshotBackendFullCopy stores each mount's tar stream whole, in the format
+	// backends.fullcopy.compression names.
 	SnapshotBackendFullCopy = string(model.SnapshotBackendFullCopy)
 	// SnapshotBackendCDC captures into a restic repository that outlives any one
 	// savepoint, writing only the chunks that changed.
 	SnapshotBackendCDC = string(model.SnapshotBackendCDC)
+)
+
+// The formats backends.fullcopy.compression accepts.
+const (
+	// CompressionZstd stores each archive under zstd at its default level. The default.
+	CompressionZstd = "zstd"
+	// CompressionNone stores each archive as the daemon hands it over.
+	CompressionNone = "none"
 )
 
 // The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
@@ -182,6 +191,7 @@ type Config struct {
 	Docker         Docker         `yaml:"docker,omitempty" mapstructure:"docker"`
 	Compose        Compose        `yaml:"compose" mapstructure:"compose"`
 	Storage        Storage        `yaml:"storage" mapstructure:"storage"`
+	Encryption     Encryption     `yaml:"encryption,omitempty" mapstructure:"encryption"`
 	Snapshot       Snapshot       `yaml:"snapshot" mapstructure:"snapshot"`
 	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
@@ -208,6 +218,15 @@ func (p Project) Validate() error {
 		return fmt.Errorf("%w: project.name: %w (set project.name explicitly)", ErrInvalid, err)
 	}
 	return nil
+}
+
+// Encryption encrypts every object arcave writes to the store, to Key. A missing or
+// malformed Key is refused where the store opens, not here: init writes Enabled with no
+// Key, and a Key in the environment reaches a plain project too, where it is ignored.
+type Encryption struct {
+	Enabled bool `yaml:"enabled,omitempty" mapstructure:"enabled"`
+	// Key is the age identity every object is encrypted to. Secret.
+	Key string `yaml:"key,omitempty" mapstructure:"key"`
 }
 
 // Common holds the settings every workflow shares.
@@ -378,10 +397,30 @@ func (r Rollback) Policy() model.LeftoverVolumesPolicy {
 	return model.LeftoverVolumesPolicy(r.LeftoverVolumes)
 }
 
-// Backends is one optional section per snapshot backend. The arms are pointers
-// so a project that never names a backend carries no section for it.
+// Backends is one section per snapshot backend. The cdc arm is a pointer so a
+// project that never names cdc carries no section for it; fullcopy is one key
+// with a default, and every project carries it.
 type Backends struct {
-	CDC *CDCBackend `yaml:"cdc,omitempty" mapstructure:"cdc"`
+	FullCopy FullCopyBackend `yaml:"fullcopy" mapstructure:"fullcopy"`
+	CDC      *CDCBackend     `yaml:"cdc,omitempty" mapstructure:"cdc"`
+}
+
+// FullCopyBackend configures the wholesale backend. Compression reaches only new
+// captures: a restore reads the format off the record.
+type FullCopyBackend struct {
+	// Compression is zstd (the default) or none.
+	Compression string `yaml:"compression" mapstructure:"compression"`
+}
+
+// Validate rejects a format the backend cannot write.
+func (f FullCopyBackend) Validate() error {
+	switch f.Compression {
+	case CompressionZstd, CompressionNone:
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported backends.fullcopy.compression %q (supported: %s, %s)", ErrInvalid,
+			f.Compression, CompressionZstd, CompressionNone)
+	}
 }
 
 // CDCBackend configures the content-defined-chunking backend: which restic image
@@ -415,9 +454,12 @@ type CDCBackend struct {
 	NetworkMode string `yaml:"network_mode" mapstructure:"network_mode"`
 }
 
-// Validate checks the arms that are present. An absent arm is not an error: a
-// project that does not use a backend does not have to configure it.
+// Validate checks the arms that are present. An absent cdc arm is not an error: a
+// project that does not use cdc does not have to configure it.
 func (b Backends) Validate() error {
+	if err := b.FullCopy.Validate(); err != nil {
+		return err
+	}
 	if b.CDC == nil {
 		return nil
 	}
@@ -581,6 +623,10 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	}
 	if c.Rollback.LeftoverVolumes == "" {
 		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
+	}
+	// Whatever snapshot.backend says: a label may route a volume through fullcopy.
+	if c.Backends.FullCopy.Compression == "" {
+		c.Backends.FullCopy.Compression = CompressionZstd
 	}
 	c.applyCDCDefaults()
 }

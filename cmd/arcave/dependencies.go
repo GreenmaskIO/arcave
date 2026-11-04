@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/docker/cli/cli/command"
 	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/flags"
@@ -44,6 +45,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
+	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
@@ -68,6 +70,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/sessionlock"
+	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -130,10 +133,11 @@ func newDependencies(
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	storeRoot, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
+	storeRoot, arcaveProjectStore := arcaveProject.root, arcaveProject.store
 	opened.add("store root", storeRoot)
 
 	sessions := sessionrepo.New(arcaveProjectStore)
@@ -176,7 +180,7 @@ func newDependencies(
 
 	// Without the daemon a backend only removes, which reads the store alone.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
-		fullcopy.NewFactory(daemon.exporter),
+		fullcopy.NewFactory(daemon.exporter, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:         daemon.engine,
 			Transport:      daemon.cdcTransport.transport,
@@ -572,13 +576,13 @@ type sessionDependencies struct {
 }
 
 func newSessionDependencies(ctx context.Context, projectPath string, cfg config.Config) (*sessionDependencies, error) {
-	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
-	svc := newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore))
+	svc := newSessionService(projectPath, arcaveProject.store, sessionrepo.New(arcaveProject.store))
 	return &sessionDependencies{
-		store:   root,
+		store:   arcaveProject.root,
 		service: svc,
 		printer: loadRunOutput(),
 	}, nil
@@ -624,21 +628,75 @@ func newRunnerInfo() heartbeat.RunnerInfo {
 	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
 }
 
-// openArcaveProjectStore opens the store root and descends to the arcave project; the root
-// is what the caller closes.
-func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (root, arcaveProjectStore storages.Storager, err error) {
-	root, err = storefactory.Root(ctx, cfg.Storage, projectPath)
+// openedArcaveProject is the arcave project's store as every workflow reads and writes it.
+type openedArcaveProject struct {
+	// root is what the caller closes.
+	root  storages.Storager
+	store storages.Storager
+}
+
+// openArcaveProjectStore opens the store root and descends to the arcave project, encrypted to
+// encryption.key under encryption.enabled.
+func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (openedArcaveProject, error) {
+	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialise store root: %w", err)
+		return openedArcaveProject{}, fmt.Errorf("initialise store root: %w", err)
 	}
-	arcaveProjectStore, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name))
+	arcaveProject, err := openArcaveProject(ctx, cfg, root)
 	if err != nil {
 		if closeErr := root.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("close store root")
 		}
-		return nil, nil, fmt.Errorf("initialise arcave project store: %w", err)
+		return openedArcaveProject{}, err
 	}
-	return root, arcaveProjectStore, nil
+	return arcaveProject, nil
+}
+
+func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Storager) (openedArcaveProject, error) {
+	var (
+		plain    storages.Storager
+		identity *age.X25519Identity
+		store    storages.Storager
+		err      error
+	)
+	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
+		return openedArcaveProject{}, fmt.Errorf("initialise arcave project store: %w", err)
+	}
+	markers := encryptionmarker.New(plain)
+	if !cfg.Encryption.Enabled {
+		if err = storekey.RequirePlain(ctx, markers); err != nil {
+			return openedArcaveProject{}, newStoreKeyError(err)
+		}
+		return openedArcaveProject{
+			root:  root,
+			store: plain,
+		}, nil
+	}
+	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
+		return openedArcaveProject{}, newStoreKeyError(err)
+	}
+	if err = storekey.AdmitEncrypted(ctx, markers, identity); err != nil {
+		return openedArcaveProject{}, newStoreKeyError(err)
+	}
+	if store, err = storefactory.Encrypt(plain, identity); err != nil {
+		return openedArcaveProject{}, err
+	}
+	return openedArcaveProject{
+		root:  root,
+		store: store,
+	}, nil
+}
+
+// newStoreKeyError adds the fix to a store the encryption section does not open.
+func newStoreKeyError(err error) error {
+	switch {
+	case errors.Is(err, model.ErrInvalidStoreKey), errors.Is(err, model.ErrWrongStoreKey):
+		return fmt.Errorf("open the store: %w (check encryption.key, "+encryptionKeyEnv+" by default)", err)
+	case errors.Is(err, model.ErrStoreEncrypted):
+		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.key)", err)
+	default:
+		return fmt.Errorf("open the arcave project store: %w", err)
+	}
 }
 
 // closeQuietly closes c and logs any error without failing the caller.
@@ -903,10 +961,11 @@ func newGCDependencies(
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
+	root, arcaveProjectStore := arcaveProject.root, arcaveProject.store
 	opened.add("store root", root)
 
 	sessions := sessionrepo.New(arcaveProjectStore)

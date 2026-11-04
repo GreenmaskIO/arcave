@@ -160,6 +160,7 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	assert.Equal(t, "myproj", name)
 	assert.Equal(t, "myproj", saved.Project.Name)
 	assert.Equal(t, filepath.Join(".arcave", "storage"), saved.Storage.DirectoryPath())
+	assert.Equal(t, config.CompressionZstd, saved.Backends.FullCopy.Compression)
 	cw.AssertExpectations(t)
 }
 
