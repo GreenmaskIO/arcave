@@ -30,6 +30,29 @@ init dependencies: read the daemon version: Cannot connect to the Docker daemon 
 
 Which daemon, and how to reach it, is the [`docker` config section](configuration.md#docker); left empty, it reads `DOCKER_HOST` and friends.
 
+### Connecting to Podman
+
+arcave reaches Podman through its Docker-compatible socket, named by `DOCKER_HOST` or `docker.host`. It does not read `CONTAINER_HOST` or `podman system connection`, so with neither set it looks for Docker's socket and fails as above.
+
+On Linux, rootless:
+
+```bash
+systemctl --user enable --now podman.socket
+export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
+```
+
+On Linux, rootful, the socket is `unix:///run/podman/podman.sock`, enabled with `sudo systemctl enable --now podman.socket`.
+
+On macOS, `podman machine start` prints the `DOCKER_HOST` to export when it does not serve Docker's default socket.
+
+Without systemd, start the service with no idle timeout, since one that exits while idle can cut a rollback short:
+
+```bash
+podman system service --time 0
+```
+
+arcave is tested on projects brought up by `docker compose` through this socket. `podman compose` is a wrapper that runs `docker-compose` when it is installed and `podman-compose` otherwise; `podman-compose` itself has not been tested, and neither has `DOCKER_HOST=ssh://` to a Podman host.
+
 ## Linux or macOS
 
 Released binaries:
@@ -87,7 +110,7 @@ Tested on macOS arm64, 2026-11-02, with arcave's integration suites and a smoke 
 | Docker Engine, rootless | 29.6.2, Ubuntu 26.04 in Lima | ✅ | ✅ | ✅ | |
 | Colima | 0.10.3, dockerd 29.5.2 | ✅ | ✅ | ✅ | |
 | OrbStack | 2.2.5, Engine 29.8.2 | ✅ | ✅ | ✅ | |
-| Podman, rootless and rootful | 6.1.4 | ✅ | ✅ | ✅ | retested 2026-11-03; what Podman does not store — `sysctls`, a fixed address, `domainname` — is not put back: see [Limitations](limitations.md) |
+| Podman, rootless and rootful | 6.1.4 | ✅ | ✅ | ✅ | retested 2026-11-03 on `podman machine`, older versions not tested; what Podman does not store — `sysctls`, a fixed address, `domainname` — is not put back: see [Limitations](limitations.md) |
 
 Speed of a first backup and a full restore of 1 GiB, in seconds — `stdio` against `tcp`. `stdio` is bound by
 how fast the engine streams a `docker exec`, `tcp` by its network. The Podman rows measure the transport only:

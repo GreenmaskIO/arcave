@@ -259,6 +259,14 @@ unsupported image archive format: member "…" is neither a blob nor metadata; a
 
 Either way the daemon is a Docker older than 25: upgrade it — see [Requirements](requirements.md#docker-25-or-newer-or-podman). Podman is not affected: arcave exports through its own API.
 
+## `Cannot connect to the Docker daemon`
+
+```text
+init dependencies: read the daemon version: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+```
+
+`savepoint create` and `rollback` reach no daemon at the address they were given. Start the daemon, or point `DOCKER_HOST` or [`docker.host`](configuration.md#docker) at the one you use. On Podman this is the usual first error, since arcave does not read `CONTAINER_HOST`: see [Connecting to Podman](requirements.md#connecting-to-podman).
+
 ## `invalid capture policy label`
 
 ```text

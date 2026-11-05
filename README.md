@@ -71,7 +71,7 @@ For more details, visit the [Documentation](https://www.greenmask.io/docs/arcave
 
 ## Requirements
 
-*   **Docker 25 or newer**, with the daemon reachable by the user running arcave.
+*   **Docker 25 or newer, or Podman**, with the daemon reachable by the user running arcave.
 *   **Linux or macOS.** There is no Windows build.
 
 The full list is in [Requirements](https://www.greenmask.io/docs/arcave/reference/requirements/?utm_source=github&utm_medium=repo&utm_campaign=oss).

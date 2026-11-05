@@ -71,7 +71,7 @@ The store key, `encryption.key`: a secret [`arcave init`](cli/init.md) never wri
 
 ## Variables that are not arcave's
 
-`DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` are read by the Docker client when the [`docker` section](configuration.md#docker) leaves the matching key empty, which is the default.
+`DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` are read by the Docker client when the [`docker` section](configuration.md#docker) leaves the matching key empty, which is the default. Podman's `CONTAINER_HOST` is not read: see [Connecting to Podman](requirements.md#connecting-to-podman).
 
 `ARCAVE_VERSION`, `ARCAVE_INSTALL_DIR` and `ARCAVE_BASE_URL` belong to the install script, not to the CLI.
 

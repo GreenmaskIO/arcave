@@ -55,7 +55,8 @@ arcave rebuilds the project from what Docker reports, and Docker doesn't keep ev
 * A container gets a new MAC address.
 * A network's subnet may change, unless a service has a fixed address in it.
 * On Podman, what it does not store is not put back: `sysctls`, a fixed `ipv4_address`, `domainname`, a volume's `nocopy`, the `max-file` of a log, and a `cap_drop` of a capability Podman never grants are dropped. A long-syntax bind declaring no propagation comes back with `propagation: private`, Podman's default for it, and a long-syntax `tmpfs` comes back in the `tmpfs:` shorthand. A tag beside a digest (`postgres:16@sha256:…`) comes back as the digest alone, and a port published without a host port comes back fixed to the one Podman picked. What Podman set itself and reports as if declared — `oom_score_adj` and the `nofile`/`nproc` limits — is recorded as is.
-* A spec arcave assembles on one engine is that engine's: it carries defaults the other refuses or spells differently. A savepoint is rolled back on the engine it was taken on.
+* Podman refuses `links:` when it creates a container (`link is not supported`), so a project declaring them does not run on it.
+* Nothing is guaranteed to work between Docker and Podman: Docker Engine, Docker Desktop, Colima and OrbStack are one side, Podman the other. arcave converts nothing and checks nothing. The spec it assembles on one carries defaults the other refuses or spells differently, so a rollback across can fail after the project has stopped, with compose's own error.
 
 Running `docker compose up` by hand after a rollback recreates the containers from your compose file, which drops the container files the rollback restored. Volume data stays.
 
@@ -118,10 +119,6 @@ On Docker Desktop for macOS with VirtioFS file sharing, the `cdc` backend can fa
 - **The host**: the key in `.arcave/config.yaml` when it is written there literally, the process environment, and the images in the Docker daemon — a writable layer holding a secret is encrypted in the store, not in the daemon.
 
 A lost key cannot be recovered, and an unencrypted store is not encrypted in place: switching encryption on over one marks it as encrypted and leaves what it held unreadable. Start an encrypted store at an empty location.
-
-## Podman is not supported yet
-
-arcave lets a Podman daemon through with a warning, but a savepoint on it fails by default. Getting past that makes a `fullcopy` rollback lose volume data, and on either backend a later rollback can fail and remove the project's containers. See [Requirements](requirements.md#docker-25-or-newer).
 
 ## SFTP storage does not check host keys
 
