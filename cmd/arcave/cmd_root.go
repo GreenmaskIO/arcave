@@ -22,7 +22,6 @@ import (
 
 	"github.com/charmbracelet/colorprofile"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/config"
@@ -190,91 +189,29 @@ func requireConfig() error {
 	return nil
 }
 
-// requireProjectName guards every command bound to a compose project.
-func requireProjectName() error {
+// requireComposeProject is the compose project -p names; a command bound to one gets its name here.
+func requireComposeProject() (model.DockerComposeProjectName, error) {
 	if projectName == "" {
-		return fmt.Errorf("no compose project named: pass -p/--project-name, or set %s", projectNameEnv)
+		return "", fmt.Errorf("no compose project named: pass -p/--project-name, or set %s", projectNameEnv)
 	}
-	return nil
-}
-
-// withDeps runs fn with the dependencies for the compose project -p named, the daemon
-// connected, released when fn returns. It takes no lock: core.Service does.
-func withDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
-	return withComposeProjectDeps(cmd, true, fn)
-}
-
-// withStoreDeps is withDeps for a command that reads and deletes in the store alone:
-// nothing that reaches the daemon is built.
-func withStoreDeps(cmd *cobra.Command, fn func(ctx context.Context, d *dependencies) error) error {
-	return withComposeProjectDeps(cmd, false, fn)
-}
-
-func withComposeProjectDeps(cmd *cobra.Command, needsDaemon bool, fn func(ctx context.Context, d *dependencies) error) error {
-	if err := requireProjectName(); err != nil {
-		return err
-	}
-
-	ctx := cmd.Context()
-	deps, err := newDependencies(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(projectName), needsDaemon)
-	if err != nil {
-		return fmt.Errorf("init dependencies: %w", err)
-	}
-	defer func() {
-		if err := deps.Close(ctx); err != nil {
-			log.Ctx(ctx).Error().Err(err).Msg("close all dependencies")
-		}
-	}()
-	return fn(ctx, deps)
-}
-
-// withToolsDeps runs fn on the tools dependencies of the compose project -p names.
-func withToolsDeps(cmd *cobra.Command, fn func(ctx context.Context, d *toolsDependencies) error) error {
-	if err := requireProjectName(); err != nil {
-		return err
-	}
-
-	ctx := cmd.Context()
-	deps, err := newToolsDependencies(ctx, projectCfg, model.DockerComposeProjectName(projectName))
-	if err != nil {
-		return fmt.Errorf("init tools dependencies: %w", err)
-	}
-	defer func() {
-		if err := deps.Close(); err != nil {
-			log.Ctx(ctx).Error().Err(err).Msg("close tools dependencies")
-		}
-	}()
-	return fn(ctx, deps)
+	return model.DockerComposeProjectName(projectName), nil
 }
 
 // resolveSession turns a --session value into the id of a session that exists, for a command that
-// opens no compose project's dependencies; "" is the current session, else the default.
+// opens no compose project; "" is the current session, else the default.
 func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
-	var record model.Session
-	err := withSessionDeps(ctx, func(d *sessionDependencies) error {
-		var err error
-		record, err = d.service.ResolveSession(ctx, ref)
-		return err
-	})
+	var opened closers
+	defer opened.release(ctx)
+
+	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
+	if err != nil {
+		return model.SessionID{}, fmt.Errorf("init session dependencies: %w", err)
+	}
+	record, err := svc.ResolveSession(ctx, ref)
 	if err != nil {
 		return model.SessionID{}, err
 	}
 	return record.ID, nil
-}
-
-// withSessionDeps runs fn over the session dependencies, which reach no daemon and
-// name no compose project.
-func withSessionDeps(ctx context.Context, fn func(d *sessionDependencies) error) error {
-	deps, err := newSessionDependencies(ctx, projectRoot, projectCfg)
-	if err != nil {
-		return fmt.Errorf("init session dependencies: %w", err)
-	}
-	defer func() {
-		if err := deps.Close(); err != nil {
-			log.Ctx(ctx).Error().Err(err).Msg("close session dependencies")
-		}
-	}()
-	return fn(deps)
 }
 
 func init() {

@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,7 +44,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
@@ -82,148 +82,171 @@ const resticShutdownTimeout = 5 * time.Second
 // composeResourceObject is the resource kind of a compose event whose id names no kind of object.
 const composeResourceObject = "object"
 
-// dependencies is the composition root's bag of per-command collaborators.
-type dependencies struct {
-	storeRoot           storages.Storager
-	composeProjectStore storages.Storager
-	// daemon is zero when needsDaemon is false.
-	daemon  daemonDependencies
-	service *core.Service
-	printer resultPrinter
+// closers is what a wiring has opened, released newest first.
+type closers struct {
+	releases []func(ctx context.Context)
 }
 
-// daemonDependencies is one connection to the daemon and what is built over it.
-type daemonDependencies struct {
-	progressWriter io.WriteCloser
-	// version is the version the engine reports; profile.minDaemonMajor judges it.
-	version string
-	engine  *docker.Engine
-	profile runtimeProfile
-	// exporter is how a volume and an image leave the daemon: engine itself, or Podman's over it.
-	exporter      exportEngine
-	inspector     *introspect.Inspector
-	composeRunner *compose.Client
-	// cdcTransport is how cdc's containers reach their repositories, closed by Close.
-	cdcTransport openedCDCTransport
+// add puts closer on the stack; a failure to close it is logged under name.
+func (c *closers) add(name string, closer io.Closer) {
+	c.addFunc(func(ctx context.Context) { closeQuietly(ctx, name, closer) })
 }
 
-// Close releases the cdc transport, the Docker engine and the progress writer, the writer
-// last so a line compose left unterminated is still emitted.
-func (d daemonDependencies) Close(ctx context.Context) {
-	d.cdcTransport.Close(ctx)
-	if d.engine != nil {
-		closeQuietly(ctx, "docker engine", d.engine)
-	}
-	if d.progressWriter != nil {
-		closeQuietly(ctx, "compose progress writer", d.progressWriter)
+// addFunc puts a release that reports its own failure on the stack.
+func (c *closers) addFunc(fn func(ctx context.Context)) {
+	c.releases = append(c.releases, fn)
+}
+
+// release runs the stack newest first.
+func (c *closers) release(ctx context.Context) {
+	for _, v := range slices.Backward(c.releases) {
+		v(ctx)
 	}
 }
 
-// newDependencies wires the savepoint workflows for the project at projectPath in the session
-// sessionRef resolves to; with needsDaemon false nothing that reaches the daemon is built.
-func newDependencies(
-	ctx context.Context,
-	projectPath string,
-	cfg config.Config,
-	sessionRef string,
-	composeProject model.DockerComposeProjectName,
-	needsDaemon bool,
-) (*dependencies, error) {
-	// One unwind for every failure path: whatever is open is released newest first.
-	var opened partial
-	defer func() { opened.releaseOnFailure(ctx) }()
+// sessionScope is the arcave project's store and the session a command works in.
+type sessionScope struct {
+	arcaveProjectStore storages.Storager
+	sessions           *sessionrepo.Repository
+	session            model.SessionID
+	sessionLocker      *sessionlock.Locker
+}
 
-	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
+// openSessionScope opens the arcave project's store and resolves sessionRef on it.
+func openSessionScope(
+	ctx context.Context, cfg config.Config, projectPath, sessionRef string, opened *closers,
+) (sessionScope, error) {
+	arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 	if err != nil {
-		return nil, err
+		return sessionScope{}, err
 	}
-	storeRoot, arcaveProjectStore := arcaveProject.root, arcaveProject.store
-	opened.add("store root", storeRoot)
-
 	sessions := sessionrepo.New(arcaveProjectStore)
 	session, err := newSessionService(projectPath, arcaveProjectStore, sessions).ResolveSession(ctx, sessionRef)
 	if err != nil {
-		return nil, fmt.Errorf("resolve session: %w", err)
+		return sessionScope{}, fmt.Errorf("resolve session: %w", err)
 	}
-
-	// One store for the whole compose project: savepoint records, fullcopy captures and a
-	// cdc repository root alike, rooted inside the session that they die with.
-	sessionStore, err := storefactory.Session(arcaveProjectStore, session.ID)
-	if err != nil {
-		return nil, fmt.Errorf("initialise session store: %w", err)
-	}
-	composeProjectStore, err := storefactory.ComposeProject(sessionStore, composeProject)
-	if err != nil {
-		return nil, fmt.Errorf("initialise compose project store: %w", err)
-	}
-
-	// The effective cdc section, defaults included even where the project carries
-	// no block: a rollback restores through the backend its record names, so cdc
-	// is wired whatever snapshot.backend says.
-	cdcCfg := config.CDCWithDefaults(cfg.Backends.CDC)
-
-	// The tree every cdc repository lives in — one directory per volume, named by
-	// its ObjectID, beside the compose project's savepoint directories. Resolved once and
-	// handed to both sides, so "the server serves exactly the tree cdc writes
-	// into" is visible in one place rather than kept by two call sites agreeing.
-	resticRoot, err := composeProjectStore.SubStorage(cdc.NamespaceRepos, true)
-	if err != nil {
-		return nil, fmt.Errorf("initialise restic repository root: %w", err)
-	}
-
-	var daemon daemonDependencies
-	if needsDaemon {
-		if daemon, err = openDaemon(ctx, cfg, composeProject, cdcCfg, resticRoot, &opened); err != nil {
-			return nil, err
-		}
-	}
-
-	// Without the daemon a backend only removes, which reads the store alone.
-	backendRegistry, err := core.NewSnapshotBackendRegistry(
-		fullcopy.NewFactory(daemon.exporter, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
-		cdc.NewFactory(cdc.Dependencies{
-			Runner:         daemon.engine,
-			Transport:      daemon.cdcTransport.transport,
-			RepositoryRoot: resticRoot,
-			Options:        newCDCOptions(cdcCfg),
-		}),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
-	}
-
-	var imageBackend *imagecopy.Copier
-	if needsDaemon {
-		origin := model.LayerOrigin{
-			ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
-			ComposeProject: composeProject,
-		}
-		if imageBackend, err = newImageBackend(composeProjectStore, origin, daemon.exporter); err != nil {
-			return nil, err
-		}
-	}
-
 	sessionLocker, err := newSessionLocker(arcaveProjectStore, session.ID)
 	if err != nil {
-		return nil, fmt.Errorf("open the session lock: %w", err)
+		return sessionScope{}, fmt.Errorf("open the session lock: %w", err)
+	}
+	return sessionScope{
+		arcaveProjectStore: arcaveProjectStore,
+		sessions:           sessions,
+		session:            session.ID,
+		sessionLocker:      sessionLocker,
+	}, nil
+}
+
+// composeProjectScope is one compose project's store inside its session.
+type composeProjectScope struct {
+	sessionScope
+	composeProject model.DockerComposeProjectName
+	// store holds savepoint records, fullcopy captures and a cdc repository root alike, rooted
+	// inside the session that they die with.
+	store storages.Storager
+	// resticRoot is the tree every cdc repository lives in — one directory per volume, named by
+	// its ObjectID, beside the savepoint directories. Resolved once and handed to both sides, so
+	// "the server serves exactly the tree cdc writes into" is visible in one place.
+	resticRoot storages.Storager
+}
+
+// openComposeProjectScope descends from the session to composeProject's store.
+func openComposeProjectScope(
+	ctx context.Context, cfg config.Config, projectPath, sessionRef string,
+	composeProject model.DockerComposeProjectName, opened *closers,
+) (composeProjectScope, error) {
+	scope, err := openSessionScope(ctx, cfg, projectPath, sessionRef, opened)
+	if err != nil {
+		return composeProjectScope{}, err
+	}
+	sessionStore, err := storefactory.Session(scope.arcaveProjectStore, scope.session)
+	if err != nil {
+		return composeProjectScope{}, fmt.Errorf("initialise session store: %w", err)
+	}
+	store, err := storefactory.ComposeProject(sessionStore, composeProject)
+	if err != nil {
+		return composeProjectScope{}, fmt.Errorf("initialise compose project store: %w", err)
+	}
+	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
+	if err != nil {
+		return composeProjectScope{}, fmt.Errorf("initialise restic repository root: %w", err)
+	}
+	return composeProjectScope{
+		sessionScope:   scope,
+		composeProject: composeProject,
+		store:          store,
+		resticRoot:     resticRoot,
+	}, nil
+}
+
+// openSavepointService wires every savepoint workflow for composeProject in the session sessionRef
+// resolves to, the daemon connected; what it opens goes on opened.
+func openSavepointService(
+	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
+	composeProject model.DockerComposeProjectName, opened *closers,
+) (*core.Service, error) {
+	scope, err := openComposeProjectScope(ctx, cfg, projectPath, sessionRef, composeProject, opened)
+	if err != nil {
+		return nil, err
+	}
+
+	// Where compose's own progress goes, on the logger initRoot resolved. On the stack before
+	// the engine, so it closes after: a line compose left unterminated is still emitted.
+	progressWriter, composeEvents := newProgressWriter(
+		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx),
+	)
+	opened.add("compose progress writer", progressWriter)
+
+	daemon, err := connectDaemon(cfg.Docker, progressWriter, opened)
+	if err != nil {
+		return nil, err
+	}
+	profile, err := readRuntimeProfile(ctx, daemon)
+	if err != nil {
+		return nil, err
+	}
+
+	// Under tcp the server listens for the whole process, so a bad address fails up front.
+	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(cfg.Backends.CDC), daemon.engine, scope.resticRoot)
+	if err != nil {
+		return nil, err
+	}
+	opened.addFunc(cdcTransport.Close)
+
+	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, profile.exporter, daemon.engine, cdcTransport.transport)
+	if err != nil {
+		return nil, err
+	}
+	origin := model.LayerOrigin{
+		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
+		ComposeProject: composeProject,
+	}
+	imageBackend, err := newImageBackend(scope.store, origin, profile.exporter)
+	if err != nil {
+		return nil, err
 	}
 
 	// One repository over the one store, so every record travels with its data. The
 	// locker is bound to the project root here, so the service never names a path.
-	svc := core.New(core.Deps{
-		SavepointRepo: sprepo.New(composeProjectStore),
+	return core.New(core.Deps{
+		SavepointRepo: sprepo.New(scope.store),
 		ProjectLocker: lock.New(projectPath),
 		// The session's lock in the store, which the flock beside it cannot be across hosts.
-		SessionLocker:    sessionLocker,
-		ComposeInspector: daemon.inspector,
-		ProjectAssembler: daemon.profile.assembler,
+		SessionLocker:    scope.sessionLocker,
+		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
+		ProjectAssembler: profile.assembler,
 		SpecCodec:        composespec.NewCodec(),
-		ComposeRunner:    daemon.composeRunner,
-		VolumeRemover:    daemon.engine,
-		ImageBackend:     imageBackend,
-		DaemonVersion:    daemon.version,
-		MinDaemonMajor:   daemon.profile.minDaemonMajor,
-		Concurrency:      cfg.Common.Concurrency,
+		ComposeRunner: compose.NewClient(dockercompose.NewComposeService(daemon.cli), compose.Options{
+			WaitTimeout:     cfg.Compose.WaitTimeout,
+			StopTimeout:     cfg.Compose.StopTimeout,
+			Events:          composeEvents,
+			SinkFromContext: newComposeEventSink,
+		}),
+		VolumeRemover:  daemon.engine,
+		ImageBackend:   imageBackend,
+		DaemonVersion:  profile.version,
+		MinDaemonMajor: profile.minDaemonMajor,
+		Concurrency:    cfg.Common.Concurrency,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: daemon.engine,
@@ -231,79 +254,86 @@ func newDependencies(
 		BackendRegistry:    backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:        inflightrepo.New(projectPath),
-		Store:           composeProjectStore,
+		Store:           scope.store,
 		CaptureDefaults: newCaptureDefaults(cfg),
-		Session:         session.ID,
+		Session:         scope.session,
 		ComposeProject:  composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
-		Sessions:   sessions,
+		Sessions:   scope.sessions,
 		RunnerInfo: newRunnerInfo(),
-	})
-	opened.keep()
-	return &dependencies{
-		storeRoot:           storeRoot,
-		composeProjectStore: composeProjectStore,
-		daemon:              daemon,
-		service:             svc,
-		printer:             loadRunOutput(),
-	}, nil
+	}), nil
 }
 
-// openDaemon connects to the daemon, asks which engine it is, and builds over that one
-// connection everything a workflow reaches it through; what it opens goes on opened.
-func openDaemon(
-	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName,
-	cdcCfg config.CDCBackend, resticRoot storages.Storager, opened *partial,
-) (daemonDependencies, error) {
-	// Where compose's own progress goes, on the logger initRoot resolved.
-	progressWriter, composeEvents := newProgressWriter(
-		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx))
-	opened.add("compose progress writer", progressWriter)
-
-	// One connection for both halves of client/docker, so they cannot target different
-	// daemons; its closers belong to the returned dependencies, never deferred here.
-	dockerCli, dockerClientAPI, err := newDockerClient(cfg.Docker, progressWriter)
+// openSavepointStoreService wires the savepoint workflows that read and delete in the store alone:
+// nothing that reaches the daemon is built.
+func openSavepointStoreService(
+	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
+	composeProject model.DockerComposeProjectName, opened *closers,
+) (*core.SavepointStoreService, error) {
+	scope, err := openComposeProjectScope(ctx, cfg, projectPath, sessionRef, composeProject, opened)
 	if err != nil {
-		return daemonDependencies{}, fmt.Errorf("initialise docker client: %w", err)
+		return nil, err
+	}
+	// Without the daemon a backend only removes, which reads the store alone.
+	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, nil, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewSavepointStoreService(core.SavepointStoreDeps{
+		SavepointRepo:   sprepo.New(scope.store),
+		ProjectLocker:   lock.New(projectPath),
+		SessionLocker:   scope.sessionLocker,
+		BackendRegistry: backendRegistry,
+		Inflight:        inflightrepo.New(projectPath),
+		Store:           scope.store,
+		Concurrency:     cfg.Common.Concurrency,
+		Session:         scope.session,
+		ComposeProject:  composeProject,
+		Sessions:        scope.sessions,
+	}), nil
+}
+
+// newBackendRegistry builds every volume backend: a rollback restores through the backend its
+// record names, so cdc is wired, its section's defaults included, whatever snapshot.backend says.
+func newBackendRegistry(
+	cfg config.Config, resticRoot storages.Storager,
+	streamer fullcopy.VolumeStreamer, runner cdc.VolumeRunner, transport cdc.Transport,
+) (*core.SnapshotBackendRegistry, error) {
+	backendRegistry, err := core.NewSnapshotBackendRegistry(
+		fullcopy.NewFactory(streamer, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
+		cdc.NewFactory(cdc.Dependencies{
+			Runner:         runner,
+			Transport:      transport,
+			RepositoryRoot: resticRoot,
+			Options:        newCDCOptions(config.CDCWithDefaults(cfg.Backends.CDC)),
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build snapshot backend registry: %w", err)
+	}
+	return backendRegistry, nil
+}
+
+// daemonConnection is one connection to the daemon, with no request sent over it yet.
+type daemonConnection struct {
+	// cli is what compose runs on, over api: both halves of client/docker reach one daemon.
+	cli    *command.DockerCli
+	api    client.APIClient
+	engine *docker.Engine
+}
+
+// connectDaemon builds the connection; its closer goes on opened.
+func connectDaemon(cfg config.Docker, progressOut io.Writer, opened *closers) (daemonConnection, error) {
+	dockerCli, dockerClientAPI, err := newDockerClient(cfg, progressOut)
+	if err != nil {
+		return daemonConnection{}, err
 	}
 	engine := docker.NewEngine(dockerClientAPI)
 	opened.add("docker engine", engine)
-
-	runtime, info, err := readEngine(ctx, dockerClientAPI)
-	if err != nil {
-		return daemonDependencies{}, err
-	}
-	profile, err := newRuntimeProfile(runtime, info, dockerClientAPI, dockerCli.DockerEndpoint())
-	if err != nil {
-		return daemonDependencies{}, err
-	}
-
-	composeService := dockercompose.NewComposeService(dockerCli)
-	composeRunner := compose.NewClient(composeService, compose.Options{
-		WaitTimeout:     cfg.Compose.WaitTimeout,
-		StopTimeout:     cfg.Compose.StopTimeout,
-		Events:          composeEvents,
-		SinkFromContext: newComposeEventSink,
-	})
-
-	// Under tcp the server listens for the whole process, so a bad address fails up front.
-	cdcTransport, err := openCDCTransport(ctx, cdcCfg, engine, resticRoot)
-	if err != nil {
-		return daemonDependencies{}, err
-	}
-	if cdcTransport.server != nil {
-		opened.add("restic server", cdcTransport.server)
-	}
-
-	return daemonDependencies{
-		progressWriter: progressWriter,
-		version:        runtime.Version,
-		engine:         engine,
-		profile:        profile,
-		exporter:       newExportEngine(profile, engine),
-		inspector:      introspect.NewInspector(profile.api, composeProject),
-		composeRunner:  composeRunner,
-		cdcTransport:   cdcTransport,
+	return daemonConnection{
+		cli:    dockerCli,
+		api:    dockerClientAPI,
+		engine: engine,
 	}, nil
 }
 
@@ -323,12 +353,23 @@ type exportEngine interface {
 type runtimeProfile struct {
 	// api is what the compose project is introspected through.
 	api client.APIClient
-	// libpod is Podman's own API, which newExportEngine commits and saves through; nil on Docker.
-	libpod *docker.Libpod
+	// exporter is how a volume and an image leave the daemon: the engine itself, or Podman's over it.
+	exporter exportEngine
+	// version is the version the engine reports; minDaemonMajor judges it.
+	version string
 	// minDaemonMajor is the oldest version of the engine a workflow runs on; 0 requires none.
 	minDaemonMajor int
 	// assembler leaves out of a spec what the engine stamps by itself.
 	assembler *composespec.Assembler
+}
+
+// readRuntimeProfile asks the daemon which engine it is and chooses the profile for it.
+func readRuntimeProfile(ctx context.Context, daemon daemonConnection) (runtimeProfile, error) {
+	runtime, info, err := readEngine(ctx, daemon.api)
+	if err != nil {
+		return runtimeProfile{}, err
+	}
+	return newRuntimeProfile(runtime, info, daemon.api, daemon.cli.DockerEndpoint(), daemon.engine)
 }
 
 // readEngine asks the daemon which engine it is and what `docker info` says of it.
@@ -347,7 +388,8 @@ func readEngine(ctx context.Context, api client.APIClient) (model.ContainerRunti
 // newRuntimeProfile chooses everything that differs by the engine behind the daemon; a Podman
 // daemon behind TLS (endpoint as the CLI resolved it) is refused, since libpod is reached plain.
 func newRuntimeProfile(
-	runtime model.ContainerRuntime, info system.Info, api client.APIClient, endpoint dockercontext.Endpoint,
+	runtime model.ContainerRuntime, info system.Info, api client.APIClient,
+	endpoint dockercontext.Endpoint, engine *docker.Engine,
 ) (runtimeProfile, error) {
 	switch runtime.Kind {
 	case model.ContainerRuntimePodman:
@@ -357,26 +399,20 @@ func newRuntimeProfile(
 		libpod := docker.NewLibpod(api)
 		return runtimeProfile{
 			api:            docker.NewPodmanAPI(api, libpod),
-			libpod:         &libpod,
+			exporter:       docker.NewPodmanEngine(engine, libpod),
+			version:        runtime.Version,
 			minDaemonMajor: 0,
 			assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
 		}, nil
 	default:
 		return runtimeProfile{
 			api:            api,
+			exporter:       engine,
+			version:        runtime.Version,
 			minDaemonMajor: dedupcopy.MinDaemonMajor,
 			assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
 		}, nil
 	}
-}
-
-// newExportEngine is how a volume and an image leave the daemon: engine itself, or
-// Podman's over it where the profile holds libpod.
-func newExportEngine(profile runtimeProfile, engine *docker.Engine) exportEngine {
-	if profile.libpod == nil {
-		return engine
-	}
-	return docker.NewPodmanEngine(engine, *profile.libpod)
 }
 
 // openedCDCTransport is how cdc's containers reach one tree of repositories.
@@ -464,40 +500,6 @@ func newCDCOptions(cfg config.CDCBackend) cdc.Options {
 	}
 }
 
-// partial tracks what a half-finished wiring has opened. releaseOnFailure is
-// deferred once and does nothing after keep, which the success path calls.
-type partial struct {
-	closers []namedCloser
-	kept    bool
-}
-
-type namedCloser struct {
-	name   string
-	closer io.Closer
-}
-
-func (p *partial) add(name string, closer io.Closer) {
-	p.closers = append(p.closers, namedCloser{name, closer})
-}
-
-func (p *partial) keep() { p.kept = true }
-
-func (p *partial) releaseOnFailure(ctx context.Context) {
-	if p.kept {
-		return
-	}
-	for i := len(p.closers) - 1; i >= 0; i-- {
-		closeQuietly(ctx, p.closers[i].name, p.closers[i].closer)
-	}
-}
-
-// Close releases the daemon's half, then the store this root owns; only the store's
-// error is returned.
-func (d *dependencies) Close(ctx context.Context) error {
-	d.daemon.Close(ctx)
-	return d.storeRoot.Close()
-}
-
 // shutdownResticServer stops server gracefully, on a deadline detached from ctx: restic
 // reads a severed connection as a repository error. A nil server is a no-op.
 func shutdownResticServer(ctx context.Context, server *echo.Echo) {
@@ -512,80 +514,41 @@ func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 	}
 }
 
-// newInitDependencies wires `arcave init`: somewhere to write the config, nothing
-// more. Nothing here holds a resource.
-func newInitDependencies(projectPath string) (*core.InitService, resultPrinter) {
-	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), loadRunOutput()
-}
-
-// toolsDependencies is what the tools commands run on: one daemon connection, no store.
-type toolsDependencies struct {
-	dockerClient client.APIClient
-	service      *core.ComposeFileService
-	printer      resultPrinter
-}
-
-// newToolsDependencies wires the tools commands for composeProject over the daemon docker.* names.
-func newToolsDependencies(
-	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName,
-) (*toolsDependencies, error) {
-	// The gate newDependencies applies through storefactory, though no store is opened here.
+// openComposeFileService wires the tools commands for composeProject over the daemon docker.*
+// names: one connection, no store.
+func openComposeFileService(
+	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
+) (*core.ComposeFileService, error) {
+	// The gate the savepoint services apply through storefactory, though no store is opened here.
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
 	}
-	var opened partial
-	defer func() { opened.releaseOnFailure(ctx) }()
-
 	// Nothing here runs compose, so the CLI's progress channel goes nowhere.
-	dockerCli, dockerClientAPI, err := newDockerClient(cfg.Docker, io.Discard)
-	if err != nil {
-		return nil, fmt.Errorf("initialise docker client: %w", err)
-	}
-	opened.add("docker client", dockerClientAPI)
-	runtime, info, err := readEngine(ctx, dockerClientAPI)
+	daemon, err := connectDaemon(cfg.Docker, io.Discard, opened)
 	if err != nil {
 		return nil, err
 	}
-	profile, err := newRuntimeProfile(runtime, info, dockerClientAPI, dockerCli.DockerEndpoint())
+	profile, err := readRuntimeProfile(ctx, daemon)
 	if err != nil {
 		return nil, err
 	}
-	svc := core.NewComposeFileService(core.ComposeFileDeps{
+	return core.NewComposeFileService(core.ComposeFileDeps{
 		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
 		ProjectAssembler: profile.assembler,
 		SpecCodec:        composespec.NewComposeFileCodec(),
-	})
-	opened.keep()
-	return &toolsDependencies{
-		dockerClient: dockerClientAPI,
-		service:      svc,
-		printer:      loadRunOutput(),
-	}, nil
+	}), nil
 }
 
-func (d *toolsDependencies) Close() error {
-	return d.dockerClient.Close()
-}
-
-// sessionDependencies is what the session commands run on: the arcave project's store
-// and nothing that reaches the daemon.
-type sessionDependencies struct {
-	store   storages.Storager
-	service *core.SessionService
-	printer resultPrinter
-}
-
-func newSessionDependencies(ctx context.Context, projectPath string, cfg config.Config) (*sessionDependencies, error) {
-	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
+// openSessionService wires the session commands: the arcave project's store and nothing that
+// reaches the daemon.
+func openSessionService(
+	ctx context.Context, projectPath string, cfg config.Config, opened *closers,
+) (*core.SessionService, error) {
+	arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 	if err != nil {
 		return nil, err
 	}
-	svc := newSessionService(projectPath, arcaveProject.store, sessionrepo.New(arcaveProject.store))
-	return &sessionDependencies{
-		store:   arcaveProject.root,
-		service: svc,
-		printer: loadRunOutput(),
-	}, nil
+	return newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore)), nil
 }
 
 // newSessionService wires the session commands over the arcave project's store.
@@ -606,10 +569,6 @@ func newSessionService(
 	})
 }
 
-func (d *sessionDependencies) Close() error {
-	return d.store.Close()
-}
-
 // newSessionLocker opens the lock of session id in the arcave project's store.
 func newSessionLocker(arcaveProjectStore storages.Navigator, id model.SessionID) (*sessionlock.Locker, error) {
 	store, key, err := storefactory.SessionLock(arcaveProjectStore, id)
@@ -628,63 +587,42 @@ func newRunnerInfo() heartbeat.RunnerInfo {
 	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
 }
 
-// openedArcaveProject is the arcave project's store as every workflow reads and writes it.
-type openedArcaveProject struct {
-	// root is what the caller closes.
-	root  storages.Storager
-	store storages.Storager
-}
-
-// openArcaveProjectStore opens the store root and descends to the arcave project, encrypted to
-// encryption.key under encryption.enabled.
-func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (openedArcaveProject, error) {
+// openArcaveProjectStore opens the store root, whose closer goes on opened, and descends to the
+// arcave project, encrypted to encryption.key under encryption.enabled.
+func openArcaveProjectStore(
+	ctx context.Context, cfg config.Config, projectPath string, opened *closers,
+) (storages.Storager, error) {
 	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
-		return openedArcaveProject{}, fmt.Errorf("initialise store root: %w", err)
+		return nil, fmt.Errorf("initialise store root: %w", err)
 	}
-	arcaveProject, err := openArcaveProject(ctx, cfg, root)
-	if err != nil {
-		if closeErr := root.Close(); closeErr != nil {
-			log.Error().Err(closeErr).Msg("close store root")
-		}
-		return openedArcaveProject{}, err
-	}
-	return arcaveProject, nil
+	opened.add("store root", root)
+	return openArcaveProject(ctx, cfg, root)
 }
 
-func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Storager) (openedArcaveProject, error) {
+func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Storager) (storages.Storager, error) {
 	var (
 		plain    storages.Storager
 		identity *age.X25519Identity
-		store    storages.Storager
 		err      error
 	)
 	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
-		return openedArcaveProject{}, fmt.Errorf("initialise arcave project store: %w", err)
+		return nil, fmt.Errorf("initialise arcave project store: %w", err)
 	}
 	markers := encryptionmarker.New(plain)
 	if !cfg.Encryption.Enabled {
 		if err = storekey.RequirePlain(ctx, markers); err != nil {
-			return openedArcaveProject{}, newStoreKeyError(err)
+			return nil, newStoreKeyError(err)
 		}
-		return openedArcaveProject{
-			root:  root,
-			store: plain,
-		}, nil
+		return plain, nil
 	}
 	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
-		return openedArcaveProject{}, newStoreKeyError(err)
+		return nil, newStoreKeyError(err)
 	}
 	if err = storekey.AdmitEncrypted(ctx, markers, identity); err != nil {
-		return openedArcaveProject{}, newStoreKeyError(err)
+		return nil, newStoreKeyError(err)
 	}
-	if store, err = storefactory.Encrypt(plain, identity); err != nil {
-		return openedArcaveProject{}, err
-	}
-	return openedArcaveProject{
-		root:  root,
-		store: store,
-	}, nil
+	return storefactory.Encrypt(plain, identity)
 }
 
 // newStoreKeyError adds the fix to a store the encryption section does not open.
@@ -944,74 +882,35 @@ func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 	}
 }
 
-// gcDependencies is what gc runs on: the arcave project's store and the daemon; arcave mcp
-// leaves its printer unused.
-type gcDependencies struct {
-	store   storages.Storager
-	engine  *docker.Engine
-	service *gc.GarbageCollector
-	printer resultPrinter
-}
-
-// newGCDependencies wires a gc over the session's compose projects, one collector per kind. The
-// daemon is only connected to here; whether it answers is the restored-layer collector's probe.
-func newGCDependencies(
-	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
-) (*gcDependencies, error) {
-	var opened partial
-	defer func() { opened.releaseOnFailure(ctx) }()
-
-	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
+// openGCService wires a gc over the session's compose projects, one collector per kind. The daemon
+// is only connected to here; whether it answers is the restored-layer collector's probe.
+func openGCService(
+	ctx context.Context, projectPath string, cfg config.Config, sessionRef string, opened *closers,
+) (*gc.GarbageCollector, error) {
+	scope, err := openSessionScope(ctx, cfg, projectPath, sessionRef, opened)
 	if err != nil {
 		return nil, err
-	}
-	root, arcaveProjectStore := arcaveProject.root, arcaveProject.store
-	opened.add("store root", root)
-
-	sessions := sessionrepo.New(arcaveProjectStore)
-	session, err := newSessionService(projectPath, arcaveProjectStore, sessions).ResolveSession(ctx, sessionRef)
-	if err != nil {
-		return nil, fmt.Errorf("resolve session: %w", err)
-	}
-	sessionLocker, err := newSessionLocker(arcaveProjectStore, session.ID)
-	if err != nil {
-		return nil, fmt.Errorf("open the session lock: %w", err)
 	}
 	// A docker.* the config gets wrong fails every command alike.
-	_, dockerClientAPI, err := newDockerClient(cfg.Docker, io.Discard)
+	daemon, err := connectDaemon(cfg.Docker, io.Discard, opened)
 	if err != nil {
 		return nil, err
 	}
-	engine := docker.NewEngine(dockerClientAPI)
-	opened.add("docker engine", engine)
-
-	service := gc.New(gc.Deps{
-		Store:                    arcaveProjectStore,
-		Session:                  session.ID,
-		Sessions:                 sessions,
+	return gc.New(gc.Deps{
+		Store:                    scope.arcaveProjectStore,
+		Session:                  scope.session,
+		Sessions:                 scope.sessions,
 		NewSavepoints:            newGCSavepointReader,
 		Locker:                   lock.New(projectPath),
-		SessionLocker:            sessionLocker,
+		SessionLocker:            scope.sessionLocker,
 		Inflight:                 inflightrepo.New(projectPath),
-		DaemonCollectors:         newDaemonCollectors(cfg, engine),
-		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
-		DaemonErasers:            newDaemonErasers(engine),
-		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
+		DaemonCollectors:         newDaemonCollectors(cfg, daemon.engine),
+		ComposeProjectCollectors: newComposeProjectCollectors(cfg, daemon.engine),
+		DaemonErasers:            newDaemonErasers(daemon.engine),
+		ComposeProjectErasers:    newComposeProjectErasers(cfg, daemon.engine),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
-	})
-	opened.keep()
-	return &gcDependencies{
-		store:   root,
-		engine:  engine,
-		service: service,
-		printer: loadRunOutput(),
-	}, nil
-}
-
-func (d *gcDependencies) Close(ctx context.Context) error {
-	closeQuietly(ctx, "docker engine", d.engine)
-	return d.store.Close()
+	}), nil
 }
 
 // newSavepointReader is the savepoint repository of a compose project's store, as a service
@@ -1072,7 +971,7 @@ type openedRestic struct {
 	openedCDCTransport
 }
 
-// openResticRepositories opens the transport over store's repositories, as newDependencies
+// openResticRepositories opens the transport over store's repositories, as openSavepointService
 // serves them to the cdc backend; the transport's Close releases it.
 func openResticRepositories(
 	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, store storages.Navigator,

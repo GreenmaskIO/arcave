@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -38,12 +39,14 @@ import (
 	"github.com/greenmaskio/storages/directory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
@@ -885,6 +888,7 @@ func TestNewRuntimeProfile(t *testing.T) {
 	api := &client.Client{}
 	info := system.Info{Name: "host-1", LoggingDriver: "json-file", DefaultRuntime: "runc"}
 	plain := dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2375"}}
+	engine := docker.NewEngine(api)
 	libpod := docker.NewLibpod(api)
 	tests := []struct {
 		name     string
@@ -899,6 +903,8 @@ func TestNewRuntimeProfile(t *testing.T) {
 			endpoint: plain,
 			want: runtimeProfile{
 				api:            api,
+				exporter:       engine,
+				version:        "29.8.2",
 				minDaemonMajor: dedupcopy.MinDaemonMajor,
 				assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
 			},
@@ -912,6 +918,8 @@ func TestNewRuntimeProfile(t *testing.T) {
 			},
 			want: runtimeProfile{
 				api:            api,
+				exporter:       engine,
+				version:        "29.8.2",
 				minDaemonMajor: dedupcopy.MinDaemonMajor,
 				assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
 			},
@@ -922,7 +930,8 @@ func TestNewRuntimeProfile(t *testing.T) {
 			endpoint: plain,
 			want: runtimeProfile{
 				api:            docker.NewPodmanAPI(api, libpod),
-				libpod:         &libpod,
+				exporter:       docker.NewPodmanEngine(engine, libpod),
+				version:        "6.1.4",
 				minDaemonMajor: 0,
 				assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
 			},
@@ -946,7 +955,7 @@ func TestNewRuntimeProfile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := newRuntimeProfile(tt.runtime, info, api, tt.endpoint)
+			got, err := newRuntimeProfile(tt.runtime, info, api, tt.endpoint, engine)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -959,106 +968,177 @@ func TestNewRuntimeProfile(t *testing.T) {
 	}
 }
 
-// The exporter is the engine itself, or Podman's over it where the profile holds libpod.
-func TestNewExportEngine(t *testing.T) {
-	engine := docker.NewEngine(nil)
-	libpod := docker.NewLibpod(&client.Client{})
-	tests := []struct {
-		name    string
-		profile runtimeProfile
-		want    exportEngine
-	}{
-		{name: "docker", profile: runtimeProfile{}, want: engine},
-		{name: "podman", profile: runtimeProfile{libpod: &libpod}, want: docker.NewPodmanEngine(engine, libpod)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := newExportEngine(tt.profile, engine)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// The tools commands reach the daemon first: one that does not answer fails the wiring, and
-// nothing is left open.
-func TestNewToolsDependencies_DaemonUnreachable(t *testing.T) {
+// The tools commands reach the daemon first: one that does not answer fails the wiring.
+func TestOpenComposeFileService_DaemonUnreachable(t *testing.T) {
 	// Arrange
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 	ctx := zerolog.Nop().WithContext(context.Background())
 	cfg := config.Config{Docker: config.Docker{Host: "tcp://127.0.0.1:1"}}
+	var opened closers
+	t.Cleanup(func() { opened.release(ctx) })
 
 	// Act
-	deps, err := newToolsDependencies(ctx, cfg, "demo")
+	svc, err := openComposeFileService(ctx, cfg, "demo", &opened)
 
 	// Assert
 	require.ErrorContains(t, err, "read the daemon version")
-	assert.Nil(t, deps)
+	assert.Nil(t, svc)
 }
 
-// savepoint list and remove reach no daemon: against one that does not answer they are
-// wired all the same, while a command that needs the daemon fails on its first request.
-func TestNewDependencies_DaemonAccess(t *testing.T) {
-	tests := []struct {
-		name        string
-		needsDaemon bool
-		wantErr     string
-	}{
-		{name: "no daemon"},
-		{name: "the daemon needed", needsDaemon: true, wantErr: "read the daemon version"},
+// newUnreachableDaemonConfig is a project over a directory store and a daemon that does not answer.
+func newUnreachableDaemonConfig(t *testing.T, projectPath string) config.Config {
+	t.Helper()
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	cfg := config.Config{
+		Project: config.Project{Name: "app"},
+		Docker:  config.Docker{Host: "tcp://127.0.0.1:1"},
+		Storage: config.Storage{
+			Type:      config.StorageTypeDirectory,
+			Directory: &config.DirectoryStorage{Path: t.TempDir()},
+		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			t.Setenv("DOCKER_CONFIG", t.TempDir())
-			ctx := zerolog.Nop().WithContext(context.Background())
-			projectPath := t.TempDir()
-			cfg := config.Config{
-				Project: config.Project{Name: "app"},
-				Docker:  config.Docker{Host: "tcp://127.0.0.1:1"},
-				Storage: config.Storage{
-					Type:      config.StorageTypeDirectory,
-					Directory: &config.DirectoryStorage{Path: t.TempDir()},
-				},
-			}
-			cfg.ApplyDefaults(projectPath)
+	cfg.ApplyDefaults(projectPath)
+	return cfg
+}
 
-			// Act
-			deps, err := newDependencies(ctx, projectPath, cfg, "", "demo", tt.needsDaemon)
+// savepoint list and remove reach no daemon: against one that does not answer a savepoint of
+// either backend is listed and removed, in a session of its own.
+func TestOpenSavepointStoreService(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	projectPath := t.TempDir()
+	cfg := newUnreachableDaemonConfig(t, projectPath)
 
-			// Assert
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			t.Cleanup(func() { assert.NoError(t, deps.Close(ctx)) })
-			assert.Equal(t, daemonDependencies{}, deps.daemon)
-			assert.NotNil(t, deps.service)
-		})
+	var opened closers
+	t.Cleanup(func() { opened.release(ctx) })
+	sessions, err := openSessionService(ctx, projectPath, cfg, &opened)
+	require.NoError(t, err)
+	_, err = sessions.CreateSession(ctx, model.CreateSessionRequest{Name: "exp"})
+	require.NoError(t, err)
+
+	scope, err := openComposeProjectScope(ctx, cfg, projectPath, "exp", "demo", &opened)
+	require.NoError(t, err)
+	savepoint := model.Savepoint{
+		ID: "019e843e-1650-7000-8000-000000000000",
+		Stats: []model.SnapshotStat{
+			{Volume: model.Volume{ObjectID: "volume-named-a", Backend: model.SnapshotBackendFullCopy}},
+			{Volume: model.Volume{ObjectID: "volume-named-b", Backend: model.SnapshotBackendCDC}},
+		},
+	}
+	require.NoError(t, sprepo.New(scope.store).SaveSavepoint(ctx, savepoint))
+
+	svc, err := openSavepointStoreService(ctx, projectPath, cfg, "exp", "demo", &opened)
+	require.NoError(t, err)
+
+	// Act
+	listed, listErr := svc.ListSavepoints(ctx, model.ListRequest{Sort: model.SortAsc})
+	removed, removeErr := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{savepoint.ID.String()}})
+	left, leftErr := svc.ListSavepoints(ctx, model.ListRequest{Sort: model.SortAsc})
+
+	// Assert
+	require.NoError(t, listErr)
+	require.NoError(t, removeErr)
+	require.NoError(t, leftErr)
+	require.Len(t, listed, 1)
+	assert.Equal(t, savepoint.ID, listed[0].ID)
+	require.Len(t, removed.Removed, 1)
+	assert.Equal(t, savepoint.ID, removed.Removed[0].ID)
+	assert.Empty(t, left)
+}
+
+// A workflow that needs the daemon fails on the wiring's first request.
+func TestOpenSavepointService_DaemonUnreachable(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	projectPath := t.TempDir()
+	cfg := newUnreachableDaemonConfig(t, projectPath)
+	var opened closers
+	t.Cleanup(func() { opened.release(ctx) })
+
+	// Act
+	svc, err := openSavepointService(ctx, projectPath, cfg, "", "demo", &opened)
+
+	// Assert
+	require.ErrorContains(t, err, "read the daemon version")
+	assert.Nil(t, svc)
+}
+
+// The name is gated before anything is opened, though the tools commands open no store.
+func TestOpenComposeFileService_RefusesABadName(t *testing.T) {
+	// Arrange
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	ctx := zerolog.Nop().WithContext(context.Background())
+	cfg := config.Config{Docker: config.Docker{Host: "tcp://127.0.0.1:1"}}
+	var opened closers
+
+	// Act
+	svc, err := openComposeFileService(ctx, cfg, "../x", &opened)
+
+	// Assert
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "read the daemon version")
+	assert.Nil(t, svc)
+	assert.Empty(t, opened.releases, "nothing is opened")
+}
+
+// A factory left out of the literal is no compile error: it would panic on the first tool call.
+func TestNewMCPFactories(t *testing.T) {
+	// Act
+	factories := reflect.ValueOf(newMCPFactories())
+
+	// Assert
+	for i := range factories.NumField() {
+		assert.False(t, factories.Field(i).IsNil(), factories.Type().Field(i).Name)
 	}
 }
 
-// An encrypted store opens with its key and a plain one plainly; a section that does not fit
-// the store is refused with the fix and writes nothing.
+// mockCloser is one thing a wiring opened.
+type mockCloser struct{ mock.Mock }
+
+func (m *mockCloser) Close() error { return m.Called().Error(0) }
+
+// The stack unwinds newest first, and a closer that fails stops none of the older ones.
+func TestClosers_release(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	store, engine, server := &mockCloser{}, &mockCloser{}, &mockCloser{}
+	mock.InOrder(
+		server.On("Close").Return(nil).Once(),
+		engine.On("Close").Return(errors.New("boom")).Once(),
+		store.On("Close").Return(nil).Once(),
+	)
+	var opened closers
+	opened.add("store", store)
+	opened.add("engine", engine)
+	opened.addFunc(func(context.Context) { assert.NoError(t, server.Close()) })
+
+	// Act
+	opened.release(ctx)
+
+	// Assert
+	store.AssertExpectations(t)
+	engine.AssertExpectations(t)
+	server.AssertExpectations(t)
+}
+
 func TestOpenArcaveProjectStore(t *testing.T) {
 	key := newTestStoreKey(t)
 	encrypted := func(t *testing.T, projectPath string) {
 		t.Helper()
+		var opened closers
+		defer opened.release(t.Context())
 		created, err := openArcaveProjectStore(t.Context(),
-			newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath)
+			newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath, &opened)
 		require.NoError(t, err)
-		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
-		require.NoError(t, created.root.Close())
+		require.NoError(t, created.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
 	}
 	plain := func(t *testing.T, projectPath string) {
 		t.Helper()
-		created, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath)
+		var opened closers
+		defer opened.release(t.Context())
+		created, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath, &opened)
 		require.NoError(t, err)
-		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
-		require.NoError(t, created.root.Close())
+		require.NoError(t, created.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
 	}
 	tests := []struct {
 		name       string
@@ -1066,14 +1146,14 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 		encryption config.Encryption
 		wantErr    error
 		wantMsg    string
-		verify     func(t *testing.T, projectPath string, opened openedArcaveProject)
+		verify     func(t *testing.T, projectPath string, store storages.Storager)
 	}{
 		{
 			name:       "an encrypted store with the key it was created with",
 			stored:     encrypted,
 			encryption: config.Encryption{Enabled: true, Key: key},
-			verify: func(t *testing.T, projectPath string, opened openedArcaveProject) {
-				assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
+			verify: func(t *testing.T, projectPath string, store storages.Storager) {
+				assert.Equal(t, "a secret", readStoreObject(t, store, "sessions/x/session.json"))
 				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), "sessions", "x", "session.json"))
 				require.NoError(t, err)
 				assert.NotContains(t, string(raw), "a secret")
@@ -1102,16 +1182,16 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 		{
 			name:   "a plain store with encryption off",
 			stored: plain,
-			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
-				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
+			verify: func(t *testing.T, _ string, store storages.Storager) {
+				assert.Equal(t, "{}", readStoreObject(t, store, "sessions/x/session.json"))
 			},
 		},
 		{
 			name:       "a plain store with the key exported and encryption off",
 			stored:     plain,
 			encryption: config.Encryption{Key: key},
-			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
-				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"), "the key is ignored")
+			verify: func(t *testing.T, _ string, store storages.Storager) {
+				assert.Equal(t, "{}", readStoreObject(t, store, "sessions/x/session.json"), "the key is ignored")
 			},
 		},
 	}
@@ -1122,8 +1202,11 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			tt.stored(t, projectPath)
 			before := listTree(t, arcaveProjectPath(projectPath))
 
+			var opened closers
+			t.Cleanup(func() { opened.release(context.Background()) })
+
 			// Act
-			opened, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath)
+			store, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath, &opened)
 
 			// Assert
 			if tt.wantErr != nil {
@@ -1136,8 +1219,7 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			t.Cleanup(func() { assert.NoError(t, opened.root.Close()) })
-			tt.verify(t, projectPath, opened)
+			tt.verify(t, projectPath, store)
 		})
 	}
 }

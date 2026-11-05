@@ -33,19 +33,26 @@ import (
 // serverVersion is the version arcave reports to the MCP host during initialise.
 const serverVersion = "0.1.0"
 
-// MCPService is the MCP adapter's view of the savepoint workflows.
+// MCPService is the MCP adapter's view of the savepoint workflows that reach the daemon.
 type MCPService interface {
 	CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error)
-	ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error)
-	RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error)
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
 }
 
 // MCPServiceFactory builds the workflows for one compose project in the named session ("" is the
-// current one) plus their release; needsDaemon is false for a tool that touches the store alone.
-type MCPServiceFactory func(
-	ctx context.Context, project, session string, needsDaemon bool,
-) (svc MCPService, release func(), err error)
+// current one) plus their release.
+type MCPServiceFactory func(ctx context.Context, project, session string) (svc MCPService, release func(), err error)
+
+// MCPSavepointStoreService is the MCP adapter's view of the savepoint workflows over the store alone.
+type MCPSavepointStoreService interface {
+	ListSavepoints(ctx context.Context, req model.ListRequest) ([]model.Savepoint, error)
+	RemoveSavepoints(ctx context.Context, req model.RemoveRequest) (model.RemoveResult, error)
+}
+
+// MCPSavepointStoreServiceFactory is MCPServiceFactory for the workflows over the store alone.
+type MCPSavepointStoreServiceFactory func(
+	ctx context.Context, project, session string,
+) (svc MCPSavepointStoreService, release func(), err error)
 
 // MCPSessionService is the MCP adapter's view of the session commands.
 type MCPSessionService interface {
@@ -78,13 +85,19 @@ type MCPGCService interface {
 // plus the release the tool call invokes on return.
 type MCPGCServiceFactory func(ctx context.Context, session string) (svc MCPGCService, release func(), err error)
 
+// MCPFactories builds what each family of tools runs on, once per tool call.
+type MCPFactories struct {
+	Service        MCPServiceFactory
+	SavepointStore MCPSavepointStoreServiceFactory
+	Session        MCPSessionServiceFactory
+	Tools          MCPToolsServiceFactory
+	GC             MCPGCServiceFactory
+}
+
 // MCPHandler serves arcave's savepoint and session workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
-	serviceFactory        MCPServiceFactory
-	sessionFactory        MCPSessionServiceFactory
-	toolsFactory          MCPToolsServiceFactory
-	gcFactory             MCPGCServiceFactory
+	factories             MCPFactories
 	pinnedSession         model.SessionID
 	leftoverVolumesPolicy model.LeftoverVolumesPolicy
 }
@@ -92,24 +105,29 @@ type MCPHandler struct {
 // NewMCPHandler builds the MCP adapter; pinnedSession is the session the server was started in, zero to
 // follow the current one, and leftoverVolumes is the project's rollback.leftover_volumes.
 func NewMCPHandler(
-	serviceFactory MCPServiceFactory, sessionFactory MCPSessionServiceFactory, toolsFactory MCPToolsServiceFactory,
-	gcFactory MCPGCServiceFactory, pinnedSession model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
+	factories MCPFactories, pinnedSession model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
 ) *MCPHandler {
 	return &MCPHandler{
-		serviceFactory:        serviceFactory,
-		sessionFactory:        sessionFactory,
-		toolsFactory:          toolsFactory,
-		gcFactory:             gcFactory,
+		factories:             factories,
 		pinnedSession:         pinnedSession,
 		leftoverVolumesPolicy: leftoverVolumes,
 	}
 }
 
 // openService builds the workflows for project in session, else in the pinned or current session.
-func (h *MCPHandler) openService(
-	ctx context.Context, project, session string, needsDaemon bool,
-) (MCPService, func(), error) {
-	svc, release, err := h.serviceFactory(ctx, project, cmp.Or(session, h.pinRef()), needsDaemon)
+func (h *MCPHandler) openService(ctx context.Context, project, session string) (MCPService, func(), error) {
+	svc, release, err := h.factories.Service(ctx, project, cmp.Or(session, h.pinRef()))
+	if err != nil {
+		return nil, nil, mcpError(err)
+	}
+	return svc, release, nil
+}
+
+// openSavepointStoreService is openService for a tool that reads or deletes in the store alone.
+func (h *MCPHandler) openSavepointStoreService(
+	ctx context.Context, project, session string,
+) (MCPSavepointStoreService, func(), error) {
+	svc, release, err := h.factories.SavepointStore(ctx, project, cmp.Or(session, h.pinRef()))
 	if err != nil {
 		return nil, nil, mcpError(err)
 	}
@@ -202,7 +220,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
-	svc, release, err := h.openService(ctx, in.Project, in.Session, true)
+	svc, release, err := h.openService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
@@ -254,7 +272,7 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 	if err != nil {
 		return nil, listOutput{}, err
 	}
-	svc, release, err := h.openService(ctx, in.Project, in.Session, false)
+	svc, release, err := h.openSavepointStoreService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, listOutput{}, err
 	}
@@ -286,7 +304,7 @@ type removeSavepointInput struct {
 
 // removeSavepoints deletes the selected savepoints and reports what went.
 func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResponse, error) {
-	svc, release, err := h.openService(ctx, in.Project, in.Session, false)
+	svc, release, err := h.openSavepointStoreService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, model.RemoveResponse{}, err
 	}
@@ -319,7 +337,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
-	svc, release, err := h.openService(ctx, in.Project, in.Session, true)
+	svc, release, err := h.openService(ctx, in.Project, in.Session)
 	if err != nil {
 		return nil, model.RollbackResponse{}, err
 	}
@@ -378,7 +396,7 @@ func (h *MCPHandler) garbageCollectMCP(
 	if err := req.Validate(); err != nil {
 		return nil, model.GarbageCollectResult{}, err
 	}
-	svc, release, err := h.gcFactory(ctx, cmp.Or(in.Session, h.pinRef()))
+	svc, release, err := h.factories.GC(ctx, cmp.Or(in.Session, h.pinRef()))
 	if err != nil {
 		return nil, model.GarbageCollectResult{}, mcpError(err)
 	}
@@ -551,7 +569,7 @@ func (h *MCPHandler) pinRef() string {
 
 // openSessionService builds the session commands for one tool call.
 func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService, func(), error) {
-	svc, release, err := h.sessionFactory(ctx)
+	svc, release, err := h.factories.Session(ctx)
 	if err != nil {
 		return nil, nil, mcpError(err)
 	}
@@ -560,7 +578,7 @@ func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService,
 
 // openToolsService builds the tools commands for project, for one tool call.
 func (h *MCPHandler) openToolsService(ctx context.Context, project string) (MCPToolsService, func(), error) {
-	svc, release, err := h.toolsFactory(ctx, project)
+	svc, release, err := h.factories.Tools(ctx, project)
 	if err != nil {
 		return nil, nil, mcpError(err)
 	}

@@ -326,7 +326,7 @@ func (e *sessionEnv) withComposeProject(t *testing.T) {
 }
 
 // in is the compose project as seen from session: a core.Service wired the way
-// newDependencies wires one, over the same project root, lock and marker.
+// openSavepointService wires one, over the same project root, lock and marker.
 func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv {
 	t.Helper()
 

@@ -152,86 +152,59 @@ type Deps struct {
 	HeartbeatStaleAfter time.Duration
 }
 
-// Service orchestrates arcave's savepoint workflows over one store root.
+// Service orchestrates arcave's savepoint workflows over one store root, the daemon's included:
+// the store's half is embedded, so a capture and a rollback read and drop savepoints through it.
 //
 // Every record travels with its data, in a repository over that one store. A
 // rollback's safety snapshot is an ordinary savepoint there, marked
 // model.SavepointLabelSafetySnapshot: hidden from a scanning selector, findable by id.
 type Service struct {
-	savepointRepo           savepointRepository
-	projectLocker           projectLocker
-	sessionLocker           model.SessionLocker
-	composeInspector        composeIntrospector
-	projectAssembler        projectAssembler
-	specCodec               specCodec
-	composeRunner           composeRunner
-	volumeRemover           volumeRemover
-	imageBackend            imageBackend
-	containerRebuilder      containerRebuilder
-	imageLookup             imageLookup
-	snapshotBackendRegistry model.SnapshotBackendRegistry
-	inflightMarker          inflightMarkers
-	store                   storages.Storager
-	captureDefaults         capturepolicy.CaptureDefaults
-	session                 model.SessionID
-	composeProject          model.DockerComposeProjectName
-	sessions                sessionLookup
-	daemonVersion           string
-	minDaemonMajor          int
-	maxConcurrentOperations int
-	runnerInfo              heartbeat.RunnerInfo
-	heartbeatInterval       time.Duration
-	heartbeatStaleAfter     time.Duration
+	*SavepointStoreService
+	composeInspector    composeIntrospector
+	projectAssembler    projectAssembler
+	specCodec           specCodec
+	composeRunner       composeRunner
+	volumeRemover       volumeRemover
+	imageBackend        imageBackend
+	containerRebuilder  containerRebuilder
+	imageLookup         imageLookup
+	captureDefaults     capturepolicy.CaptureDefaults
+	daemonVersion       string
+	minDaemonMajor      int
+	runnerInfo          heartbeat.RunnerInfo
+	heartbeatInterval   time.Duration
+	heartbeatStaleAfter time.Duration
 }
 
 func New(deps Deps) *Service {
-	if deps.Session.IsNil() {
-		deps.Session = model.DefaultSession
-	}
 	return &Service{
-		savepointRepo:           deps.SavepointRepo,
-		projectLocker:           deps.ProjectLocker,
-		sessionLocker:           deps.SessionLocker,
-		composeInspector:        deps.ComposeInspector,
-		projectAssembler:        deps.ProjectAssembler,
-		specCodec:               deps.SpecCodec,
-		composeRunner:           deps.ComposeRunner,
-		volumeRemover:           deps.VolumeRemover,
-		imageBackend:            deps.ImageBackend,
-		containerRebuilder:      deps.ContainerRebuilder,
-		imageLookup:             deps.ImageLookup,
-		snapshotBackendRegistry: deps.BackendRegistry,
-		inflightMarker:          deps.Inflight,
-		store:                   deps.Store,
-		captureDefaults:         deps.CaptureDefaults,
-		session:                 deps.Session,
-		composeProject:          deps.ComposeProject,
-		sessions:                deps.Sessions,
-		daemonVersion:           deps.DaemonVersion,
-		minDaemonMajor:          deps.MinDaemonMajor,
-		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
-		runnerInfo:              deps.RunnerInfo,
-		heartbeatInterval:       cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
-		heartbeatStaleAfter:     cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
+		SavepointStoreService: NewSavepointStoreService(SavepointStoreDeps{
+			SavepointRepo:   deps.SavepointRepo,
+			ProjectLocker:   deps.ProjectLocker,
+			SessionLocker:   deps.SessionLocker,
+			BackendRegistry: deps.BackendRegistry,
+			Inflight:        deps.Inflight,
+			Store:           deps.Store,
+			Session:         deps.Session,
+			ComposeProject:  deps.ComposeProject,
+			Sessions:        deps.Sessions,
+			Concurrency:     deps.Concurrency,
+		}),
+		composeInspector:    deps.ComposeInspector,
+		projectAssembler:    deps.ProjectAssembler,
+		specCodec:           deps.SpecCodec,
+		composeRunner:       deps.ComposeRunner,
+		volumeRemover:       deps.VolumeRemover,
+		imageBackend:        deps.ImageBackend,
+		containerRebuilder:  deps.ContainerRebuilder,
+		imageLookup:         deps.ImageLookup,
+		captureDefaults:     deps.CaptureDefaults,
+		daemonVersion:       deps.DaemonVersion,
+		minDaemonMajor:      deps.MinDaemonMajor,
+		runnerInfo:          deps.RunnerInfo,
+		heartbeatInterval:   cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
+		heartbeatStaleAfter: cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 	}
-}
-
-// locked runs a workflow with the project lock and the session's lock held, once its session is
-// known to still exist: one deleted since the command resolved it must not be written into again.
-// fn gets the session lock and its context.
-func locked[T any](
-	ctx context.Context, s *Service, operation model.SessionLockOperation,
-	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
-) (T, error) {
-	return withUnlock(ctx, s.projectLocker, func() (T, error) {
-		return withSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
-			if err := requireSession(ctx, s.sessions, s.session); err != nil {
-				var zero T
-				return zero, err
-			}
-			return fn(ctx, grantedLock)
-		})
-	})
 }
 
 // withSessionLock runs fn holding the session's lock in the store, and unlocks it however fn

@@ -15,7 +15,7 @@
 package main
 
 import (
-	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -33,10 +33,20 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewRollbackHandler(d.service, d.printer)
-		return h.Rollback(ctx, projectCfg, args[0])
-	})
+	composeProject, err := requireComposeProject()
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	var opened closers
+	defer opened.release(ctx)
+
+	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
+	if err != nil {
+		return fmt.Errorf("init dependencies: %w", err)
+	}
+	h := cli.NewRollbackHandler(svc, loadRunOutput())
+	return h.Rollback(ctx, projectCfg, args[0])
 }
 
 func init() {

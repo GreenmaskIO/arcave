@@ -21,6 +21,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/config"
+	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
+	"github.com/greenmaskio/arcave/internal/service/core"
 )
 
 var (
@@ -45,8 +47,7 @@ func runConfigInit(cmd *cobra.Command, _ []string) error {
 
 	template := config.NewConfig()
 	template.Project.Name = configInitName
-	svc, printer := newInitDependencies(projectRoot)
-	h := cli.NewConfigInitHandler(svc, printer)
+	h := cli.NewConfigInitHandler(core.NewInitService(projectRoot, cfgrepo.New(projectRoot)), loadRunOutput())
 	return h.Init(cmd.Context(), template, configInitOverride)
 }
 

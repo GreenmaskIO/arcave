@@ -81,7 +81,7 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (_ mo
 		return model.RollbackResult{}, err
 	}
 
-	return locked(ctx, s, model.SessionLockOperationRollback,
+	return locked(ctx, s.SavepointStoreService, model.SessionLockOperationRollback,
 		func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.RollbackResult, error) {
 			return s.rollback(ctx, grantedLock, req)
 		},
