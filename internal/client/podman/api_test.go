@@ -12,20 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package docker
+package podman
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,19 +45,15 @@ const compatInspect = `{
   "Config": {"Image": "postgres:16"}
 }`
 
-// newPodmanServer serves compatInspect and libpod's inspect, the latter answering libpodStatus.
-func newPodmanServer(t *testing.T, libpodStatus int, libpodBody string) *client.Client {
+// newCompatClient is a Docker client whose daemon answers compatInspect for c1.
+func newCompatClient(t *testing.T) *client.Client {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1.44/containers/c1/json":
-			_, _ = io.WriteString(w, compatInspect)
-		case "/v1.44/libpod/containers/c1/json":
-			w.WriteHeader(libpodStatus)
-			_, _ = io.WriteString(w, libpodBody)
-		default:
+		if r.URL.Path != "/v1.44/containers/c1/json" {
 			http.NotFound(w, r)
+			return
 		}
+		_, _ = io.WriteString(w, compatInspect)
 	}))
 	t.Cleanup(server.Close)
 	api, err := client.NewClientWithOpts(
@@ -66,29 +65,39 @@ func newPodmanServer(t *testing.T, libpodStatus int, libpodBody string) *client.
 	return api
 }
 
-// newPodmanAPI reaches libpod over api's own plain connection.
-func newPodmanAPI(api *client.Client) *PodmanAPI { return NewPodmanAPI(api, NewLibpod(api)) }
-
 // A volume at a subpath and a bind of the mount API come back as their mount requests,
 // and the log's size as its max-size; every other mount is left to Binds.
-func TestPodmanAPI_ContainerInspect(t *testing.T) {
+func TestAPI_ContainerInspect(t *testing.T) {
 	tests := []struct {
 		name        string
-		libpod      string
+		stored      libpodContainer
 		wantMounts  []mount.Mount
 		wantLogging map[string]string
 	}{
 		{
 			name: "a subpath and a log size",
-			libpod: `{
-  "Mounts": [
-    {"Type": "volume", "Name": "pgdata", "Destination": "/data", "RW": true},
-    {"Type": "volume", "Name": "pgdata", "Destination": "/sub", "RW": false, "SubPath": "sub"},
-    {"Type": "bind", "Source": "/tmp", "Destination": "/short", "Options": ["nosuid", "nodev", "rbind"], "RW": true, "Propagation": "rprivate"},
-    {"Type": "bind", "Source": "/srv", "Destination": "/long", "Options": ["bind", "nosuid"], "RW": false, "Propagation": "rshared"}
-  ],
-  "HostConfig": {"LogConfig": {"Type": "k8s-file", "Size": "1MB"}}
-}`,
+			stored: libpodContainer{
+				Mounts: []libpodMount{
+					{Type: "volume", Name: "pgdata", Destination: "/data", RW: true},
+					{Type: "volume", Name: "pgdata", Destination: "/sub", SubPath: "sub"},
+					{
+						Type:        "bind",
+						Source:      "/tmp",
+						Destination: "/short",
+						Options:     []string{"nosuid", "nodev", "rbind"},
+						RW:          true,
+						Propagation: "rprivate",
+					},
+					{
+						Type:        "bind",
+						Source:      "/srv",
+						Destination: "/long",
+						Options:     []string{"bind", "nosuid"},
+						Propagation: "rshared",
+					},
+				},
+				HostConfig: libpodHostConfig{LogConfig: libpodLogConfig{Size: "1MB"}},
+			},
 			wantMounts: []mount.Mount{{
 				Type:          mount.TypeVolume,
 				Source:        "pgdata",
@@ -105,14 +114,19 @@ func TestPodmanAPI_ContainerInspect(t *testing.T) {
 			wantLogging: map[string]string{"max-size": "1MB"},
 		},
 		{
-			name:   "neither: libpod reports no size as a negative one",
-			libpod: `{"Mounts": [{"Type": "volume", "Name": "pgdata", "Destination": "/data", "RW": true}], "HostConfig": {"LogConfig": {"Size": "-1B"}}}`,
+			name: "neither: libpod reports no size as a negative one",
+			stored: libpodContainer{
+				Mounts:     []libpodMount{{Type: "volume", Name: "pgdata", Destination: "/data", RW: true}},
+				HostConfig: libpodHostConfig{LogConfig: libpodLogConfig{Size: "-1B"}},
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			api := newPodmanAPI(newPodmanServer(t, http.StatusOK, tt.libpod))
+			libpod := &mockLibpod{}
+			libpod.On("inspectContainer", mock.Anything, "c1").Return(tt.stored, nil).Once()
+			api := NewAPI(newCompatClient(t), libpod)
 
 			// Act
 			got, err := api.ContainerInspect(context.Background(), "c1")
@@ -124,20 +138,44 @@ func TestPodmanAPI_ContainerInspect(t *testing.T) {
 				got.HostConfig.Binds)
 			assert.Equal(t, tt.wantMounts, got.HostConfig.Mounts)
 			assert.Equal(t, container.LogConfig{Type: "json-file", Config: tt.wantLogging}, got.HostConfig.LogConfig)
+			libpod.AssertExpectations(t)
 		})
 	}
 }
 
 // A container libpod cannot inspect fails the inspect with libpod's own message.
-func TestPodmanAPI_ContainerInspect_LibpodRefused(t *testing.T) {
+func TestAPI_ContainerInspect_LibpodRefused(t *testing.T) {
 	// Arrange
-	api := newPodmanAPI(newPodmanServer(t, http.StatusNotFound, `{"cause":"no such container"}`))
+	refused := errors.New(`libpod answered 404 Not Found: {"cause":"no such container"}`)
+	libpod := &mockLibpod{}
+	libpod.On("inspectContainer", mock.Anything, "c1").Return(libpodContainer{}, refused).Once()
+	api := NewAPI(newCompatClient(t), libpod)
 
 	// Act
-	_, err := api.ContainerInspect(context.Background(), "c1")
+	got, err := api.ContainerInspect(context.Background(), "c1")
 
 	// Assert
-	require.ErrorContains(t, err, `inspect container c1 through libpod: libpod answered 404 Not Found: {"cause":"no such container"}`)
+	require.EqualError(t, err,
+		`inspect container c1 through libpod: libpod answered 404 Not Found: {"cause":"no such container"}`)
+	assert.Equal(t, container.InspectResponse{}, got)
+	libpod.AssertExpectations(t)
+}
+
+// A container the compat API cannot inspect fails before libpod is asked, with the
+// daemon's own error, so a caller still reads a missing container off it.
+func TestAPI_ContainerInspect_CompatRefused(t *testing.T) {
+	// Arrange: no expectation, so any call to libpod fails the test.
+	libpod := &mockLibpod{}
+	api := NewAPI(newCompatClient(t), libpod)
+
+	// Act
+	got, err := api.ContainerInspect(context.Background(), "missing")
+
+	// Assert
+	require.Error(t, err)
+	assert.True(t, cerrdefs.IsNotFound(err), "the daemon's not-found must reach the caller as it is")
+	assert.Equal(t, container.InspectResponse{}, got)
+	libpod.AssertExpectations(t)
 }
 
 // libpod's size becomes max-size beside any other option, unless libpod reports none

@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package docker
+package podman
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"slices"
 
 	"github.com/docker/docker/api/types/container"
@@ -34,71 +32,39 @@ const mountAPIBindOption = "bind"
 // logMaxSizeOption is the log option Docker keeps the size libpod reports as LogConfig.Size in.
 const logMaxSizeOption = "max-size"
 
-// PodmanAPI is the Docker API of a Podman daemon, answering a container inspect as Docker
-// would: with the subpath mounts and log size compat drops and libpod keeps.
-type PodmanAPI struct {
-	client.APIClient
-	libpod Libpod
+// containerLibpod is what reading a container as libpod stores it takes.
+type containerLibpod interface {
+	inspectContainer(ctx context.Context, containerID string) (libpodContainer, error)
 }
 
-// NewPodmanAPI wraps api, connected to a Podman daemon, with libpod over the same connection.
-func NewPodmanAPI(api client.APIClient, libpod Libpod) *PodmanAPI {
-	return &PodmanAPI{
+// API is the Docker API of a Podman daemon, answering a container inspect as Docker
+// would: with the subpath mounts and log size compat drops and libpod keeps.
+type API struct {
+	client.APIClient
+	libpod containerLibpod
+}
+
+// NewAPI wraps api, connected to a Podman daemon, with libpod over the same connection.
+func NewAPI(api client.APIClient, libpod containerLibpod) *API {
+	return &API{
 		APIClient: api,
 		libpod:    libpod,
 	}
 }
 
-// libpodContainer is the part of libpod's container inspect compat leaves out.
-type libpodContainer struct {
-	Mounts     []libpodMount `json:"Mounts"`
-	HostConfig struct {
-		LogConfig struct {
-			Size string `json:"Size"`
-		} `json:"LogConfig"`
-	} `json:"HostConfig"`
-}
-
-// libpodMount is one mount as libpod reports it.
-type libpodMount struct {
-	Type        string   `json:"Type"`
-	Name        string   `json:"Name"`
-	Source      string   `json:"Source"`
-	Destination string   `json:"Destination"`
-	Options     []string `json:"Options"`
-	RW          bool     `json:"RW"`
-	Propagation string   `json:"Propagation"`
-	SubPath     string   `json:"SubPath"`
-}
-
 // ContainerInspect is the compat inspect with libpod's subpath and mount-API bind mounts
 // as mount requests, and its log size as the max-size option.
-func (p *PodmanAPI) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
-	inspect, err := p.APIClient.ContainerInspect(ctx, containerID)
+func (a *API) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
+	inspect, err := a.APIClient.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return container.InspectResponse{}, err
 	}
-	stored, err := readLibpodContainer(ctx, p.libpod, containerID)
+	stored, err := a.libpod.inspectContainer(ctx, containerID)
 	if err != nil {
 		return container.InspectResponse{}, fmt.Errorf("inspect container %s through libpod: %w", containerID, err)
 	}
 	applyLibpodRequest(&inspect, stored)
 	return inspect, nil
-}
-
-// readLibpodContainer reads libpod's own inspect of one container.
-func readLibpodContainer(ctx context.Context, libpod Libpod, containerID string) (libpodContainer, error) {
-	resp, err := callLibpod(ctx, libpod, http.MethodGet, nil, "containers", containerID, "json")
-	if err != nil {
-		return libpodContainer{}, err
-	}
-	//nolint:errcheck // the body is read whole below
-	defer resp.Body.Close()
-	var stored libpodContainer
-	if err := json.NewDecoder(resp.Body).Decode(&stored); err != nil {
-		return libpodContainer{}, fmt.Errorf("decode libpod's answer: %w", err)
-	}
-	return stored, nil
 }
 
 // applyLibpodRequest adds to inspect the subpath mounts and log size libpod reports.

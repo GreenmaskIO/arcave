@@ -58,19 +58,18 @@ const (
 	composeNumberLabel  = "com.docker.compose.container-number"
 )
 
-// volumeToolsImage is the throwaway image every volume operation runs, the volume
-// holder and the wipe alike: small, ubiquitous, and carrying the `find` the wipe
-// needs.
-const volumeToolsImage = "busybox"
+// VolumeToolsImage is the throwaway image every volume operation runs; it carries
+// the `find` the wipe needs.
+const VolumeToolsImage = "busybox"
 
 // volumeHolderMount is where a volume is mounted inside its holder. It is absent
 // from the image on purpose: starting a container with an empty volume mounted
 // at a path the image *does* carry copies the image's content into the volume.
 const volumeHolderMount = "/arcave-data"
 
-// volumeSecurityOpt runs a volume's holder, wipe and export unconfined by SELinux:
+// VolumeSecurityOpt runs a volume's holder, wipe and export unconfined by SELinux:
 // a bind relabelled :Z carries the service's own label, which no other container reads.
-var volumeSecurityOpt = []string{"label=disable"}
+var VolumeSecurityOpt = []string{"label=disable"}
 
 // wipeMountPath is where the volume sits inside the wipe container. Absent from
 // the image for the same reason as volumeHolderMount.
@@ -318,12 +317,12 @@ func matchMount(containers []container.Summary, replica int, target string) (mou
 // reusable one-shot container mechanism in oneshot.go, and exchanges no stdio.
 func wipeVolume(ctx context.Context, api dockerAPI, src model.MountSource) error {
 	return runOneShotContainer(ctx, api, model.OneShotSpec{
-		Image: volumeToolsImage,
+		Image: VolumeToolsImage,
 		// find -mindepth 1 clears hidden entries too; -exec ... + batches the removal.
 		Cmd: []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",
 			"-exec", "rm", "-rf", "{}", "+"},
 		Binds:       []string{src.Source + ":" + wipeMountPath},
-		SecurityOpt: volumeSecurityOpt,
+		SecurityOpt: VolumeSecurityOpt,
 	})
 }
 

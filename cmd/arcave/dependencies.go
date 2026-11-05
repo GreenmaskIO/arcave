@@ -42,6 +42,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
@@ -396,10 +397,10 @@ func newRuntimeProfile(
 		if endpoint.TLSData != nil || endpoint.SkipTLSVerify {
 			return runtimeProfile{}, errors.New("podman behind TLS is not supported: arcave reaches libpod over plain http")
 		}
-		libpod := docker.NewLibpod(api)
+		libpod := podman.NewLibpod(api)
 		return runtimeProfile{
-			api:            docker.NewPodmanAPI(api, libpod),
-			exporter:       docker.NewPodmanEngine(engine, libpod),
+			api:            podman.NewAPI(api, libpod),
+			exporter:       podman.NewEngine(engine, libpod),
 			version:        runtime.Version,
 			minDaemonMajor: 0,
 			assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),

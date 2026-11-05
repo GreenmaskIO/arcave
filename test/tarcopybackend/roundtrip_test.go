@@ -35,6 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
@@ -172,7 +173,7 @@ func newVolumeStreamer(t *testing.T, cli *client.Client, engine *dockerclient.En
 	runtime, err := dockerclient.ReadRuntime(context.Background(), cli)
 	require.NoError(t, err)
 	if runtime.Kind == model.ContainerRuntimePodman {
-		return dockerclient.NewPodmanEngine(engine, dockerclient.NewLibpod(cli))
+		return podmanclient.NewEngine(engine, podmanclient.NewLibpod(cli))
 	}
 	return engine
 }

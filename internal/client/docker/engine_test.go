@@ -269,7 +269,7 @@ func TestEngine_OpenVolume(t *testing.T) {
 	// Arrange
 	const payload = "tar-bytes"
 	api := &mockAPI{}
-	expectImagePresent(api, volumeToolsImage)
+	expectImagePresent(api, VolumeToolsImage)
 	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
 	copyOut := api.On("CopyFromContainer", mock.Anything, "holder-1", volumeHolderMount+"/.").
 		Return(io.NopCloser(strings.NewReader(payload)), container.PathStat{}, nil).Once()
@@ -307,7 +307,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 		tarMember{name: "sub/link", link: "marker"},
 	)
 	api := &mockAPI{}
-	expectImagePresent(api, volumeToolsImage)
+	expectImagePresent(api, VolumeToolsImage)
 	wipe := expectContainerRun(api, "wipe-1", "find")
 	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
 	var body io.Reader
@@ -348,7 +348,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 	// Arrange: no CopyToContainer expectation, so an extract fails the run.
 	api := &mockAPI{}
-	expectImagePresent(api, volumeToolsImage)
+	expectImagePresent(api, VolumeToolsImage)
 	expectContainerRun(api, "wipe-1", "find").exit(1)
 	api.On("ContainerLogs", mock.Anything, "wipe-1", mock.Anything).
 		Return(io.NopCloser(strings.NewReader("")), nil).Once()
@@ -396,7 +396,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			api := &mockAPI{}
 			var wipe *containerRun
 			if tt.wantErr == "" {
-				expectImagePresent(api, volumeToolsImage)
+				expectImagePresent(api, VolumeToolsImage)
 				wipe = expectContainerRun(api, "wipe-1", "find")
 			}
 			e := &Engine{api: api}
@@ -412,7 +412,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			}
 			require.NoError(t, err)
 			api.AssertExpectations(t)
-			assert.Equal(t, volumeToolsImage, wipe.cfg.Image)
+			assert.Equal(t, VolumeToolsImage, wipe.cfg.Image)
 			assert.EqualValues(t, []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",
 				"-exec", "rm", "-rf", "{}", "+"}, wipe.cfg.Cmd)
 			assert.Equal(t, tt.wantBinds, wipe.host.Binds)

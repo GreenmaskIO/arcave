@@ -45,21 +45,21 @@ func (e *Engine) CommitContainer(
 	resp, err := e.api.ContainerCommit(ctx, containerID, container.CommitOptions{
 		Pause:   false,
 		Comment: comment,
-		Changes: labelChanges(labels),
+		Changes: NewLabelChanges(labels),
 	})
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
-	imageID, err := model.ParseImageDigestID(withDigestAlgorithm(resp.ID))
+	imageID, err := model.ParseImageDigestID(WithDigestAlgorithm(resp.ID))
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
 	return imageID, nil
 }
 
-// withDigestAlgorithm spells a bare 64-hex image id, as Podman answers a commit
+// WithDigestAlgorithm spells a bare 64-hex image id, as Podman answers a commit
 // with, the way Docker does; anything else is left for the parse to judge.
-func withDigestAlgorithm(id string) string {
+func WithDigestAlgorithm(id string) string {
 	const bareHexLen = 64
 	isHex := func(r rune) bool { return '0' <= r && r <= '9' || 'a' <= r && r <= 'f' }
 	if len(id) != bareHexLen || strings.ContainsFunc(id, func(r rune) bool { return !isHex(r) }) {
@@ -68,9 +68,8 @@ func withDigestAlgorithm(id string) string {
 	return "sha256:" + id
 }
 
-// labelChanges renders labels as Dockerfile LABEL instructions, in key order so the
-// changes are deterministic.
-func labelChanges(labels map[string]string) []string {
+// NewLabelChanges renders labels as Dockerfile LABEL instructions, in key order.
+func NewLabelChanges(labels map[string]string) []string {
 	keys := slices.Sorted(maps.Keys(labels))
 	changes := make([]string, 0, len(keys))
 	for _, key := range keys {

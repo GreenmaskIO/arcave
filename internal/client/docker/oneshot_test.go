@@ -240,39 +240,64 @@ func TestRunOneShotContainer_Stdio(t *testing.T) {
 }
 
 // DiscardLog creates the container with no log driver; what it writes still reaches
-// the caller's stderr through the attach.
+// the caller's stderr through the attach, and a run that fails reports its exit status
+// though the daemon has no log to read back.
 func TestRunOneShotContainer_DiscardLog(t *testing.T) {
-	// Arrange
-	hj := newFakeHijack()
-	go func() {
-		_, _ = io.WriteString(hj.stderr, "tar: short read\n")
-		hj.closeOutput()
-	}()
-	api := &mockAPI{}
-	expectImagePresent(api, testImage)
-	api.On("ContainerCreate", mock.Anything,
-		mock.MatchedBy(func(cfg *container.Config) bool { return cfg.Image == testImage }),
-		&container.HostConfig{LogConfig: container.LogConfig{Type: "none"}}, mock.Anything, mock.Anything, "").
-		Return(container.CreateResponse{ID: oneShotID}, nil).Once()
-	api.On("ContainerAttach", mock.Anything, oneShotID,
-		container.AttachOptions{Stream: true, Stderr: true}).Return(hj.resp, nil).Once()
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil).Once()
-	api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
-		Return(newWaitStatus(0), (<-chan error)(make(chan error))).Once()
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil).Once()
-	var stderr bytes.Buffer
+	errNoLog := errors.New("configured logging driver does not support reading")
+	tests := []struct {
+		name     string
+		exitCode int64
+	}{
+		{name: "the run succeeds"},
+		{name: "the run fails and its log cannot be read back", exitCode: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			hj := newFakeHijack()
+			go func() {
+				_, _ = io.WriteString(hj.stderr, "tar: short read\n")
+				hj.closeOutput()
+			}()
+			api := &mockAPI{}
+			expectImagePresent(api, testImage)
+			api.On("ContainerCreate", mock.Anything,
+				mock.MatchedBy(func(cfg *container.Config) bool { return cfg.Image == testImage }),
+				&container.HostConfig{LogConfig: container.LogConfig{Type: "none"}}, mock.Anything, mock.Anything, "").
+				Return(container.CreateResponse{ID: oneShotID}, nil).Once()
+			api.On("ContainerAttach", mock.Anything, oneShotID,
+				container.AttachOptions{Stream: true, Stderr: true}).Return(hj.resp, nil).Once()
+			api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil).Once()
+			api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
+				Return(newWaitStatus(tt.exitCode), (<-chan error)(make(chan error))).Once()
+			if tt.exitCode != 0 {
+				api.On("ContainerLogs", mock.Anything, oneShotID,
+					container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "200"}).
+					Return(io.NopCloser(strings.NewReader("")), errNoLog).Once()
+			}
+			api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil).Once()
+			var stderr bytes.Buffer
 
-	// Act
-	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
-		Image:      testImage,
-		DiscardLog: true,
-		Stderr:     &stderr,
-	})
+			// Act
+			err := runOneShotContainer(context.Background(), api, model.OneShotSpec{
+				Image:      testImage,
+				DiscardLog: true,
+				Stderr:     &stderr,
+			})
 
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, "tar: short read\n", stderr.String())
-	api.AssertExpectations(t)
+			// Assert
+			assert.Equal(t, "tar: short read\n", stderr.String())
+			if tt.exitCode != 0 {
+				var exitErr *model.ContainerExitError
+				require.ErrorAs(t, err, &exitErr)
+				assert.Equal(t, tt.exitCode, exitErr.StatusCode)
+				assert.Equal(t, []string{"(logs unavailable: " + errNoLog.Error() + ")"}, exitErr.Output)
+			} else {
+				require.NoError(t, err)
+			}
+			api.AssertExpectations(t)
+		})
+	}
 }
 
 // A payload larger than any pipe buffer completes: the writer and the reader

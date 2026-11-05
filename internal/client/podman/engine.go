@@ -12,67 +12,84 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package docker
+package podman
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// commitFormatOCI is the format a layer is committed in: an OCI export keeps an OCI
+// image's config, so its id survives a save and a load.
+const commitFormatOCI = "oci"
+
+// exportFormatOCIArchive is the format an image is saved in.
+const exportFormatOCIArchive = "oci-archive"
+
+// volumeExportMount is where a volume sits inside its export container; absent from
+// the image, so nothing of the image is copied into an empty volume.
+const volumeExportMount = "/arcave-data"
+
+// maxExportStderrBytes bounds how much of a failed export's stderr its error carries.
+const maxExportStderrBytes = 8 << 10
+
 // volumeExportCmd archives the mount's contents with numeric owners kept, which
 // Podman's archive API rewrites to the container's user.
-var volumeExportCmd = []string{"tar", "-c", "-f", "-", "-C", volumeHolderMount, "."}
+var volumeExportCmd = []string{"tar", "-c", "-f", "-", "-C", volumeExportMount, "."}
 
-// PodmanEngine is the Engine for a Podman daemon: an image is committed and saved
-// through libpod, a volume exported by tar.
-type PodmanEngine struct {
-	*Engine
-	libpod Libpod
+// imageLibpod is what committing and saving an image through libpod takes.
+type imageLibpod interface {
+	commitContainer(ctx context.Context, commit libpodCommit) (string, error)
+	exportImage(ctx context.Context, imageID, format string) (io.ReadCloser, error)
 }
 
-// NewPodmanEngine extends engine, connected to a Podman daemon, with libpod over the
+// oneShotRunner is what exporting a volume takes; *docker.Engine satisfies it.
+type oneShotRunner interface {
+	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
+}
+
+// Engine is the docker.Engine for a Podman daemon: an image is committed and saved
+// through libpod, a volume exported by tar.
+type Engine struct {
+	*docker.Engine
+	// runner is the embedded engine, as the seam the volume export runs through.
+	runner oneShotRunner
+	libpod imageLibpod
+}
+
+// NewEngine extends engine, connected to a Podman daemon, with libpod over the
 // same connection.
-func NewPodmanEngine(engine *Engine, libpod Libpod) *PodmanEngine {
-	return &PodmanEngine{
+func NewEngine(engine *docker.Engine, libpod imageLibpod) *Engine {
+	return &Engine{
 		Engine: engine,
+		runner: engine,
 		libpod: libpod,
 	}
 }
 
 // CommitContainer commits a stopped container's writable layer through libpod in the OCI
 // format, so its id survives a save and a load; comment is dropped, OCI carries none.
-func (e *PodmanEngine) CommitContainer(
+func (e *Engine) CommitContainer(
 	ctx context.Context, containerID, _ string, labels map[string]string,
 ) (model.ImageDigestID, error) {
-	query := url.Values{
-		"container": {containerID},
-		"format":    {"oci"},
-		"pause":     {"false"},
-		"changes":   labelChanges(labels),
-	}
-	resp, err := callLibpod(ctx, e.libpod, http.MethodPost, query, "commit")
+	committed, err := e.libpod.commitContainer(ctx, libpodCommit{
+		Container: containerID,
+		Format:    commitFormatOCI,
+		Pause:     false,
+		Changes:   docker.NewLabelChanges(labels),
+	})
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
-	//nolint:errcheck // the body is read whole below
-	defer resp.Body.Close()
-	var committed struct {
-		ID string `json:"Id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&committed); err != nil {
-		return "", fmt.Errorf("commit container %s: decode libpod's answer: %w", containerID, err)
-	}
-	imageID, err := model.ParseImageDigestID(withDigestAlgorithm(committed.ID))
+	imageID, err := model.ParseImageDigestID(docker.WithDigestAlgorithm(committed))
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
 	}
@@ -81,18 +98,17 @@ func (e *PodmanEngine) CommitContainer(
 
 // SaveImage streams one image out as an OCI archive, through libpod. The caller
 // owns the stream and closes it.
-func (e *PodmanEngine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
-	resp, err := callLibpod(ctx, e.libpod, http.MethodGet, url.Values{"format": {"oci-archive"}},
-		"images", imageID.String(), "get")
+func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
+	archive, err := e.libpod.exportImage(ctx, imageID.String(), exportFormatOCIArchive)
 	if err != nil {
 		return nil, fmt.Errorf("save image %s: %w", imageID, err)
 	}
-	return resp.Body, nil
+	return archive, nil
 }
 
 // OpenVolume streams the volume out as a tar written inside a throwaway container,
 // owners and modes kept; closing the stream removes the container.
-func (e *PodmanEngine) OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error) {
+func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.ReadCloser, error) {
 	if src.Source == "" {
 		return nil, fmt.Errorf("cannot reach a %q volume with no source", src.Type)
 	}
@@ -101,12 +117,12 @@ func (e *PodmanEngine) OpenVolume(ctx context.Context, src model.MountSource) (i
 	var group errgroup.Group
 	group.Go(func() error {
 		// A log would hold the archive again, so tar's complaint is read off the attach.
-		stderr := &boundedBuffer{limit: maxContainerOutputBytes}
-		err := runOneShotContainer(ctx, e.api, model.OneShotSpec{
-			Image:       volumeToolsImage,
+		stderr := &boundedBuffer{limit: maxExportStderrBytes}
+		err := e.runner.RunOneShot(ctx, model.OneShotSpec{
+			Image:       docker.VolumeToolsImage,
 			Cmd:         volumeExportCmd,
-			Binds:       []string{src.Source + ":" + volumeHolderMount + ":ro"},
-			SecurityOpt: volumeSecurityOpt,
+			Binds:       []string{src.Source + ":" + volumeExportMount + ":ro"},
+			SecurityOpt: docker.VolumeSecurityOpt,
 			DiscardLog:  true,
 			Stdout:      pw,
 			Stderr:      stderr,

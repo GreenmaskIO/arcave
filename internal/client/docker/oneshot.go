@@ -423,30 +423,30 @@ func startVolumeHolder(
 	if src.Source == "" {
 		return "", fmt.Errorf("cannot reach a %q volume with no source", src.Type)
 	}
-	if err := ensureImage(ctx, api, volumeToolsImage); err != nil {
+	if err := ensureImage(ctx, api, VolumeToolsImage); err != nil {
 		return "", err
 	}
 
 	created, err := api.ContainerCreate(ctx,
-		&container.Config{Image: volumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
+		&container.Config{Image: VolumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
 		&container.HostConfig{
 			Binds:       []string{src.Source + ":" + volumeHolderMount},
-			SecurityOpt: volumeSecurityOpt,
+			SecurityOpt: VolumeSecurityOpt,
 		},
 		nil, nil, "")
 	if err != nil {
-		return "", fmt.Errorf("create %s container: %w", volumeToolsImage, err)
+		return "", fmt.Errorf("create %s container: %w", VolumeToolsImage, err)
 	}
 
 	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		removeVolumeHolder(ctx, api, created.ID)
-		return "", fmt.Errorf("start %s container: %w", volumeToolsImage, err)
+		return "", fmt.Errorf("start %s container: %w", VolumeToolsImage, err)
 	}
 	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
 	select {
 	case err := <-errCh:
 		removeVolumeHolder(ctx, api, created.ID)
-		return "", fmt.Errorf("wait for %s container: %w", volumeToolsImage, err)
+		return "", fmt.Errorf("wait for %s container: %w", VolumeToolsImage, err)
 	case <-statusCh:
 	}
 	return created.ID, nil
@@ -454,5 +454,5 @@ func startVolumeHolder(
 
 // removeVolumeHolder force-removes a volume holder, logging a failure.
 func removeVolumeHolder(ctx context.Context, api dockerAPI, containerID string) {
-	removeOneShotContainer(ctx, api, containerID, volumeToolsImage, "volume holder")
+	removeOneShotContainer(ctx, api, containerID, VolumeToolsImage, "volume holder")
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
@@ -61,11 +62,11 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 	require.NoError(t, err)
 	engine := dockerclient.NewEngine(api)
 	if runtime.Kind == model.ContainerRuntimePodman {
-		libpod := dockerclient.NewLibpod(api)
+		libpod := podmanclient.NewLibpod(api)
 		return runtimeProfile{
 			runtime:   runtime.Kind,
-			api:       dockerclient.NewPodmanAPI(api, libpod),
-			exporter:  dockerclient.NewPodmanEngine(engine, libpod),
+			api:       podmanclient.NewAPI(api, libpod),
+			exporter:  podmanclient.NewEngine(engine, libpod),
 			assembler: composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
 		}
 	}

@@ -44,6 +44,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
@@ -889,7 +890,7 @@ func TestNewRuntimeProfile(t *testing.T) {
 	info := system.Info{Name: "host-1", LoggingDriver: "json-file", DefaultRuntime: "runc"}
 	plain := dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2375"}}
 	engine := docker.NewEngine(api)
-	libpod := docker.NewLibpod(api)
+	libpod := podman.NewLibpod(api)
 	tests := []struct {
 		name     string
 		runtime  model.ContainerRuntime
@@ -929,8 +930,8 @@ func TestNewRuntimeProfile(t *testing.T) {
 			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: plain,
 			want: runtimeProfile{
-				api:            docker.NewPodmanAPI(api, libpod),
-				exporter:       docker.NewPodmanEngine(engine, libpod),
+				api:            podman.NewAPI(api, libpod),
+				exporter:       podman.NewEngine(engine, libpod),
 				version:        "6.1.4",
 				minDaemonMajor: 0,
 				assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
