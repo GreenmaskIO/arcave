@@ -1,4 +1,4 @@
-.PHONY: build demo-media test test-unit test-integration test-verbose test-fidelity test-storage lint clean generate-restic-api
+.PHONY: build demo-media docs-install docs-serve docs-build test test-unit test-integration test-verbose test-fidelity test-storage lint clean generate-restic-api
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
@@ -19,6 +19,19 @@ build:
 # scratch copy of examples/demo; TAPE=base-cycle records one.
 demo-media:
 	examples/demo/tapes/record.sh $(TAPE)
+
+# The docs/ tree rendered with the stock Docusaurus theme; the published site has its own
+# config and styles.
+DOCS_PREVIEW_DIR := tools/docs-preview
+
+docs-install:
+	npm --prefix $(DOCS_PREVIEW_DIR) ci
+
+docs-serve: docs-install
+	npm --prefix $(DOCS_PREVIEW_DIR) run start
+
+docs-build: docs-install
+	npm --prefix $(DOCS_PREVIEW_DIR) run build
 
 # Unit tests need no daemon; the integration suites under test/ need a reachable one.
 UNIT_PKGS := ./cmd/... ./internal/... ./pkg/...
