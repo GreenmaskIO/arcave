@@ -34,8 +34,8 @@ type layerDaemon interface {
 	ListContainerImages(ctx context.Context) ([]model.ContainerImage, error)
 }
 
-// Collector finds the arcave project's arcave/…:sp-<id> tags no container, running or
-// not, was created from.
+// Collector finds the arcave project's arcave/…:sp-<savepoint> tags no container,
+// running or not, was created from.
 type Collector struct {
 	daemon        layerDaemon
 	arcaveProject model.ArcaveProjectName
@@ -65,15 +65,14 @@ func (s *Collector) Probe(ctx context.Context) error {
 }
 
 // Find names every layer tag of the scope's compose projects no container uses, by reference or
-// by image, holding back one tagged within the scope's grace; a tag of no origin or of another
-// compose project is only counted.
+// by image; a tag of no origin or of another compose project is only counted.
 func (s *Collector) Find(ctx context.Context, scope gc.DaemonScope) (model.GarbageStat, error) {
 	var (
 		tagged               []model.TaggedImage
 		containers           []model.ContainerImage
 		usedRefs             = map[model.ImageRef]bool{}
 		usedImages           = map[model.ImageDigestID]bool{}
-		findings             = model.GarbageFindings{Ops: []model.GarbageOp{}}
+		ops                  = []model.GarbageOp{}
 		inUse                int
 		unattributed         int
 		otherComposeProjects int
@@ -103,45 +102,17 @@ func (s *Collector) Find(ctx context.Context, scope gc.DaemonScope) (model.Garba
 		case usedRefs[image.Ref] || usedImages[image.ImageID]:
 			inUse++
 			continue
-		case holdRecent(&findings, image, scope.Now, scope.RestoredLayerGrace):
-			// A rollback tags before its Create, and one in another project directory sharing
-			// the arcave project tags under a lock this gc cannot see.
-			continue
 		}
-		findings.Ops = append(findings.Ops, model.GarbageOp{
-			Action:       model.GarbageActionUntag,
-			Target:       string(image.Ref),
-			Reason:       model.GarbageReasonUnusedTag,
-			LastModified: image.TaggedAt,
+		ops = append(ops, model.GarbageOp{
+			Action: model.GarbageActionUntag,
+			Target: string(image.Ref),
+			Reason: model.GarbageReasonUnusedTag,
 		})
 	}
 	return model.DockerLayerTagStat{
-		GarbageFindings:      findings,
+		GarbageFindings:      model.GarbageFindings{Ops: ops},
 		InUse:                inUse,
 		Unattributed:         unattributed,
 		OtherComposeProjects: otherComposeProjects,
 	}, nil
-}
-
-// holdRecent keeps a tag out of the ops when it was tagged within the grace, or at no known
-// time while there is one, and reports whether it did.
-func holdRecent(findings *model.GarbageFindings, image model.TaggedImage, now time.Time, grace time.Duration) bool {
-	switch {
-	case grace <= 0:
-		return false
-	case image.TaggedAt.IsZero():
-		findings.Unjudged = append(findings.Unjudged, model.GarbageSkip{
-			Target: string(image.Ref),
-			Reason: model.GarbageReasonTagTimeUnknown,
-		})
-	case image.TaggedAt.After(now.Add(-grace)):
-		findings.Skipped = append(findings.Skipped, model.GarbageSkip{
-			Target:       string(image.Ref),
-			Reason:       model.GarbageReasonRecentlyTagged,
-			LastModified: image.TaggedAt,
-		})
-	default:
-		return false
-	}
-	return true
 }

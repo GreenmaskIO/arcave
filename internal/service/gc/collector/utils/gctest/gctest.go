@@ -101,6 +101,11 @@ func Reasons(skips []model.GarbageSkip) []model.GarbageReason {
 	return out
 }
 
+// RestoredLayerRef is repository's restored layer tag for savepoint, as a rollback puts it.
+func RestoredLayerRef(repository string, savepoint model.SavepointID) model.ImageRef {
+	return model.ImageRef(repository + ":" + model.RestoredLayerTagPrefix + savepoint.String())
+}
+
 // Digest is the image id of 64 chars.
 func Digest(char string) model.ImageDigestID {
 	return model.ImageDigestID("sha256:" + strings.Repeat(char, 64))

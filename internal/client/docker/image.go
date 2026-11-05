@@ -181,7 +181,7 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 	return true, nil
 }
 
-// ListLayerImages lists every arcave/…:sp-<id> tag the daemon holds, with the image it names
+// ListLayerImages lists every arcave/…:sp-<savepoint> tag the daemon holds, with the image it names
 // and the origin that image's labels name.
 func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
 	summaries, err := e.api.ImageList(ctx, image.ListOptions{
@@ -192,27 +192,15 @@ func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, erro
 	}
 	var tagged []model.TaggedImage
 	for _, summary := range summaries {
-		refs := slices.DeleteFunc(slices.Clone(summary.RepoTags), func(ref string) bool {
-			return !model.ImageRef(ref).IsRestoredLayerTag()
-		})
-		if len(refs) == 0 {
-			continue
-		}
-		// The list leaves out when the image was tagged, which is what a gc's grace reads.
-		inspect, err := e.api.ImageInspect(ctx, summary.ID)
-		if cerrdefs.IsNotFound(err) {
-			continue // removed since the list
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect arcave image %s: %w", summary.ID, err)
-		}
 		origin, _ := model.ParseLayerOrigin(summary.Labels)
-		for _, ref := range refs {
+		for _, ref := range summary.RepoTags {
+			if !model.ImageRef(ref).IsRestoredLayerTag() {
+				continue
+			}
 			tagged = append(tagged, model.TaggedImage{
-				Ref:      model.ImageRef(ref),
-				ImageID:  model.ImageDigestID(summary.ID),
-				Origin:   origin,
-				TaggedAt: inspect.Metadata.LastTagTime,
+				Ref:     model.ImageRef(ref),
+				ImageID: model.ImageDigestID(summary.ID),
+				Origin:  origin,
 			})
 		}
 	}

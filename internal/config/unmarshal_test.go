@@ -91,45 +91,14 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
-			name: "gc holds back a restored layer tagged within the hour by default",
-			yaml: "project:\n  name: myapp\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, utils.New(time.Hour), cfg.GC.RestoredLayerGrace)
-			},
-		},
-		{
-			name: "an explicit zero grace counts every restored layer",
-			yaml: "gc:\n  restored_layer_grace: 0s\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, utils.New(time.Duration(0)), cfg.GC.RestoredLayerGrace)
-			},
-		},
-		{
-			name: "the gc section is read",
-			yaml: "gc:\n  restored_layer_grace: 2h\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, utils.New(2*time.Hour), cfg.GC.RestoredLayerGrace)
-			},
-		},
-		{
-			name:       "gc names no kinds: the invocation narrows a run",
-			yaml:       "gc:\n  collect:\n    images: false\n",
-			wantErrMsg: "collect",
-		},
-		{
-			name:       "gc has no grace period: liveness is the savepoints' status",
+			name:       "gc has no section: liveness is the savepoints' status, and the invocation narrows a run",
 			yaml:       "gc:\n  grace_period: 24h\n",
-			wantErrMsg: "grace_period",
+			wantErrMsg: "has invalid keys: gc",
 		},
 		{
-			name:       "gc has no scope: it works on one session",
-			yaml:       "gc:\n  scope: project\n",
-			wantErrMsg: "scope",
-		},
-		{
-			name:       "a negative restored layer grace is rejected",
-			yaml:       "gc:\n  restored_layer_grace: -1h\n",
-			wantErrMsg: "gc.restored_layer_grace -1h0m0s is negative",
+			name:       "a config an earlier init wrote names the removed section",
+			yaml:       "gc:\n  restored_layer_grace: 1h0m0s\n",
+			wantErrMsg: "has invalid keys: gc",
 		},
 		{
 			name: "the compose section is read",

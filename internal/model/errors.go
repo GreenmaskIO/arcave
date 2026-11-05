@@ -140,8 +140,7 @@ var (
 	// ErrSessionLockNotHeld refuses to free a session lock the operation does not hold.
 	ErrSessionLockNotHeld = errors.New("session lock not held")
 
-	// ErrInvalidGarbageCollectRequest reports a gc request arcave cannot act on: an unknown
-	// kind, no kind at all, or a negative grace period.
+	// ErrInvalidGarbageCollectRequest reports a gc request arcave cannot act on: an unknown kind.
 	ErrInvalidGarbageCollectRequest = errors.New("invalid garbage collect request")
 	// ErrGarbageCollectPartial reports a gc in which a collector failed or left objects unjudged,
 	// or a deletion failed or never ran; the result still carries every report.
