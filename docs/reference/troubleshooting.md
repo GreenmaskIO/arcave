@@ -332,6 +332,17 @@ Under the default `backends.cdc.transport: stdio`, arcave copies a small shell s
 
 Build the image on one that carries a shell, or set `transport: tcp`, which runs the image's own entrypoint.
 
+## `open the store: …` on an encrypted store
+
+```text
+init dependencies: open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+init dependencies: open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+init dependencies: open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+init dependencies: open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
+```
+
+Each is refused before anything is stopped. Export the key the store was encrypted to as `ARCAVE_ENCRYPTION_KEY`, in the form `AGE-SECRET-KEY-1…`, and keep `encryption.enabled: true` in the config. A lost key can't be recovered. See [`encryption`](configuration.md#encryption).
+
 ## An unknown key fails the command
 
 ```text
@@ -358,9 +369,11 @@ An absolute `storage.directory.path` must already exist. Only a relative one mat
 mkdir -p /srv/arcave/myapp
 ```
 
-## An environment variable is ignored
+## An environment variable is ignored, or fails the command
 
-`ARCAVE_<KEY>` reaches a key a flag binds, or one your config file already carries. A `backends.cdc` key is the usual case to trip on: until the file declares the section, the variable is neither taken nor reported. See [Environment variables](environment_variables.md#which-keys-a-variable-reaches).
+`ARCAVE_<KEY>` reaches every config key, whether or not your config file carries it. A variable that seems ignored names no key: check the spelling, with dots replaced by underscores, as in `ARCAVE_BACKENDS_CDC_RESTORE_MODE`. A flag you passed also beats it.
+
+Its value is validated like the file's, so a stale or invalid one fails the command even if the file never mentions that key. Check `env | grep ARCAVE_`. See [Environment variables](environment_variables.md#which-keys-a-variable-reaches).
 
 ## JSON output is mixed with log lines
 

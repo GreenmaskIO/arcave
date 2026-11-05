@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), encryption, snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
+description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), encryption, snapshot, writable_layers, capture, rollback, gc, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
 keywords: [arcave configuration, config.yaml, snapshot backend, fullcopy, zstd, compression, cdc, restic, encryption, storage, s3, azure, sftp, docker compose]
 ---
 
@@ -40,6 +40,8 @@ capture:
         anonymous: true
 rollback:
     leftover_volumes: overwrite
+gc:
+    restored_layer_grace: 1h0m0s
 backends:
     fullcopy:
         compression: zstd
@@ -48,10 +50,6 @@ backends:
         overwrite: always
         image: restic/restic:0.19.1
         transport: stdio
-        server_address: 127.0.0.1:0
-        server_scheme: http
-        container_host: host.docker.internal
-        network_mode: auto
 log:
     format: text
 ```
@@ -286,7 +284,7 @@ export ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…
 
 To encrypt a store: make a key with `age-keygen`, export it as `ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…`, and set `encryption.enabled: true` in `.arcave/config.yaml`. [`arcave init`](cli/init.md) writes no `encryption` section; the key stays in the environment, which beats a `key:` line in the file.
 
-**The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes into an empty arcave project. Every host sharing the store needs the same key in its config. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repositories go through the same layer; restic's own password stays the fixed one it has on a plain store.
+**The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes. Every host sharing the store needs the same key. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repositories go through the same layer; restic's own password stays the fixed one it has on a plain store.
 
 **Lose the key and the store is lost**, as with age and restic. There is no recovery key. Every object is a standard age file, so `age -d -i` decrypts one by hand with the key.
 
@@ -345,7 +343,7 @@ A rollback reads the backend out of the record it is applying, so changing this 
 |---|---|---|
 | How it captures a volume | One archive per volume per savepoint, streamed through the daemon and zstd-compressed | Content-defined chunking into a restic repository that outlives any one savepoint |
 | What a second savepoint costs | Full volume size again, compressed | Only the chunks that changed |
-| What it needs | Nothing beyond Docker | Pulls and runs `restic/restic` containers, which must reach a loopback port on your host |
+| What it needs | Nothing beyond Docker | Pulls and runs `restic/restic` containers |
 
 This key covers volumes only; writable layers are [`writable_layers`](#writable_layers). A label can pick another backend for one volume — see [Capture labels](capture_labels.md).
 
@@ -477,4 +475,4 @@ Logs go to stderr; results go to stdout — as JSON when stdout is a pipe or `--
 
 ## Next step
 
-[Environment variables](environment_variables.md) — which of these keys `ARCAVE_<KEY>` can actually reach.
+[Environment variables](environment_variables.md) — the `ARCAVE_<KEY>` variable every key has, and the variables that are not config keys.

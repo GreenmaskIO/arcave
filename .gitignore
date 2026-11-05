@@ -55,3 +55,8 @@ skills-lock.json
 # build output of the progress example and the debugger
 /pkg/progress/examples/examples
 /cmd/arcave/__debug_bin*
+
+# docs preview
+tools/docs-preview/node_modules
+tools/docs-preview/build
+tools/docs-preview/.docusaurus

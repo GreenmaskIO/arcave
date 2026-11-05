@@ -56,7 +56,7 @@ How often you snapshot decides which [snapshot backend](../reference/configurati
 
 | | `fullcopy` | `cdc` |
 |---|---|---|
-| Cost per savepoint | Full size, every time | Only the chunks that changed |
+| Cost per savepoint | Full size, compressed, every time | Only the chunks that changed |
 | Good for | Occasional checkpoints, small volumes | Tight loops, large volumes, many savepoints |
 | Dependencies | None beyond Docker | Pulls and runs `restic/restic` containers |
 

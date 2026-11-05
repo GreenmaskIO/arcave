@@ -90,7 +90,7 @@ Tested on macOS arm64, 2026-11-02, with arcave's integration suites and a smoke 
 | Podman, rootless and rootful | 6.1.4 | ✅ | ✅ | ✅ | retested 2026-11-03; what Podman does not store — `sysctls`, a fixed address, `domainname` — is not put back: see [Limitations](limitations.md) |
 
 Speed of a first backup and a full restore of 1 GiB, in seconds — `stdio` against `tcp`. `stdio` is bound by
-how fast the engine streams a `docker exec`, `tcp` by its network:
+how fast the engine streams a `docker exec`, `tcp` by its network. The Podman rows measure the transport only:
 
 | Engine | backup, `stdio` / `tcp` | restore, `stdio` / `tcp` |
 |---|---|---|
