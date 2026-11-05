@@ -16,7 +16,7 @@ Finds what no live savepoint of a session keeps alive, and deletes it. The repor
 *What it shows:* three `cdc` savepoints, `savepoint rm --retain-recent 1`, `arcave gc --dry-run` reporting what the two removed ones left — their restic snapshots and image blobs — and `arcave gc` deleting it.
 
 ```text title="Synopsis"
-arcave gc [--dry-run] [--session <session>] [--kind <kind>…] [--restored-layer-grace <duration>] [flags]
+arcave gc [--dry-run] [--session <session>] [--kind <kind>…] [flags]
 ```
 
 gc deletes every kind of data it finds: savepoint directories, stored images and their layers, `cdc` snapshots, and the layer tags rollbacks left in Docker. gc asks nothing before it deletes: run `arcave gc --dry-run` first to see what will go.
@@ -29,7 +29,6 @@ gc stops nothing. It holds the project lock for its whole run, so it refuses to 
 |---|---|---|
 | `--dry-run` | `false` | Report the garbage without deleting it. |
 | `--kind` | every kind | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. Repeat the flag, or separate kinds with commas. |
-| `--restored-layer-grace` | `gc.restored_layer_grace` (`1h`) | How long ago a layer tag must have been tagged before it counts as garbage. `0` counts every unused tag. |
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
@@ -54,7 +53,7 @@ gc looks for five kinds of data. A savepoint's record is the root that keeps dat
 | `deduplicated-volumes` | A snapshot in a `cdc` backend's restic repository, which shares its data across savepoints, or data in a repository that no snapshot uses. | The savepoint the snapshot's `arcave-savepoint` tag names has no record. `savepoint remove` leaves a `cdc` savepoint's snapshots in place for gc to forget. A repository with no dead snapshot is pruned when restic's prune dry run says the prune would free something (`unpruned-data`): the data an earlier prune that was cut short left behind. |
 | `image-layers` | The layers and configs of stored images, shared by writable layers and upstream images alike. | No manifest still stored lists it. |
 | `upstream-images` | An image a service's `image:` names, stored once for every savepoint; its layers are `image-layers`. | No savepoint names it. |
-| `restored-layers` | A writable layer a rollback restored into the Docker daemon, tagged `arcave/…:sp-<id>`. | No container uses it, by reference or by image, running or stopped, and it was tagged longer ago than `--restored-layer-grace` (`1h` by default). Only layers this arcave project committed for a compose project of the session are judged. |
+| `restored-layers` | A writable layer a rollback restored into the Docker daemon, tagged `arcave/…:sp-<savepoint id>`. | No container uses it, by reference or by image, running or stopped. Only layers this arcave project committed for a compose project of the session are judged. |
 
 Each report names its `data_kind` and the `collector` that found it: how arcave looks for that kind of data in its store, such as `restic-repositories` for `deduplicated-volumes`.
 
@@ -68,7 +67,7 @@ An unused upstream image and its layers are not freed in the same run. The first
 
 A layer tag is matched by the labels its image carries: the arcave project and compose project the layer was committed under. A tag whose image carries neither, such as one committed by an earlier arcave version, is counted under `unattributed` and never judged. A tag of another compose project of the arcave project is counted under `other_compose_projects`: a gc of the session holding that compose project judges it. Remove a tag no session holds any more by hand.
 
-The project lock keeps out a capture in the same project directory, and the session's lock one on any host sharing the store. Neither covers the Docker daemon, which every session and store on the machine shares. A rollback tags the layers it loads before it creates the containers that use them, and takes its safety snapshot in between, so for that time the new tags are unused. A gc in the same project directory waits for the rollback's lock. A gc in another directory of the same arcave project doesn't: two checkouts sharing `project.name` and a daemon each have their own lock. That is what `gc.restored_layer_grace`, an hour by default, holds back: the tags such a rollback has just loaded. Pass `--restored-layer-grace 0` to judge every unused tag when no other checkout shares the daemon. A layer tag the daemon reports no tag time for is left unjudged as `tag-time-unknown` while a grace is set.
+The project lock keeps out a capture in the same project directory, and the session's lock one on any host sharing the store. Neither covers the Docker daemon, which every session and store on the machine shares. A rollback tags the layers it loads before it creates the containers that use them, and takes its safety snapshot in between, so for that time the new tags are unused. A gc in the same session waits for the rollback's lock, from any project directory or host. A gc of the same arcave project on the same daemon, in another session or over another store, doesn't: neither lock is shared, and gc judges an unused tag whenever it sees one. A rollback whose tags such a gc removed fails when it creates or rebuilds its containers and goes back to its safety snapshot, or takes down what it created; the layers stay in the store, and running the rollback again puts them back. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
 
 A session directory without `session.json`, which a failed fork leaves, belongs to no session, so gc doesn't report it. `arcave session list --all` lists it with its status, and `arcave session remove <id>` deletes it.
 
@@ -107,16 +106,13 @@ On a terminal, the summary adds the reports up by data kind, and its `Warnings` 
 └── ✔ gc.erase  0.0s
 
 Garbage collected · session 00000000-0000-0000-0000-000000000001
-  DATA                  FOUND  SIZE     DELETED  FREED
-  savepoint-data        0      0 B      0        0 B
-  deduplicated-volumes  0      0 B      0        0 B
-  image-layers          5      52.5 MB  5        52.5 MB
-  upstream-images       0      0 B      0        0 B
-  restored-layers       0      0 B      0        0 B
-  total                 5      52.5 MB  5        52.5 MB
-
-Warnings (1)
-  ! restored-layers: 2 objects held back
+  DATA                  FOUND  SIZE      DELETED  FREED
+  savepoint-data        0      0 B       0        0 B
+  deduplicated-volumes  0      0 B       0        0 B
+  image-layers          5      52.5 MB   5        52.5 MB
+  upstream-images       0      0 B       0        0 B
+  restored-layers       2      ?         2        ?
+  total                 7      52.5 MB+  7        ?
 ```
 
 </TabItem>
@@ -131,30 +127,37 @@ Warnings (1)
       "data_kind": "restored-layers",
       "collector": "docker-layer-tags",
       "summary": {
-        "found": 0,
-        "bytes": 0,
-        "skipped": 2,
+        "found": 2,
+        "bytes": null,
+        "skipped": 0,
         "unjudged": 0
       },
       "detail": {
-        "ops": [],
-        "skipped": [
+        "ops": [
           {
+            "action": "untag",
             "target": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000",
-            "reason": "recently-tagged",
-            "last_modified": "2026-10-31T09:32:30.14592126Z"
+            "bytes": null,
+            "reason": "unused-tag"
           },
           {
+            "action": "untag",
             "target": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
-            "reason": "recently-tagged",
-            "last_modified": "2026-10-31T09:32:31.344103927Z"
+            "bytes": null,
+            "reason": "unused-tag"
           }
         ],
         "in_use": 2,
         "unattributed": 21,
         "other_compose_projects": 0
       },
-      "deletion": { "not_run": 0 }
+      "deletion": {
+        "deleted": [
+          { "target": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000", "bytes": null },
+          { "target": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000", "bytes": null }
+        ],
+        "not_run": 0
+      }
     },
     …,
     {
@@ -194,15 +197,14 @@ Warnings (1)
     …
   ],
   "total": {
-    "found": 5,
+    "found": 7,
     "bytes": 52454335,
-    "bytes_complete": true,
-    "skipped": 2,
+    "bytes_complete": false,
+    "skipped": 0,
     "unjudged": 0,
     "aborted": 0,
     "failed": 0,
-    "deleted": 5,
-    "freed_bytes": 52454335
+    "deleted": 7
   }
 }
 ```
@@ -238,7 +240,6 @@ A target is relative to the compose project's directory in the store. A `restore
 |---|---|
 | A kind could not be judged, an object was left unjudged, a collector failed, or an op failed to delete or was not run | The full report is printed, then the command exits `1` with `garbage collection was partial`. |
 | An interrupted rollback is marked, and `--dry-run` is not passed | `rollback to savepoint 019e843e-… was interrupted (restoring)`. Nothing is read or deleted. |
-| `--restored-layer-grace` is negative | `invalid garbage collect request: negative restored layer grace -1h0m0s`. Nothing is opened first. |
 | `--kind` names a kind arcave does not know | `invalid garbage collect request: unknown kind "restic"`. Nothing is opened first. |
 | Another arcave command holds the project lock | The command fails at once, without reading anything. |
 | No daemon answers within 10 seconds | The `restored-layers` and `deduplicated-volumes` reports are `aborted` with the ping's error, whether or not `--kind` names them. The other kinds still run, and the run is partial: the full report is printed, then the command exits `1`. |
@@ -263,6 +264,6 @@ arcave gc
 arcave gc --session feat --kind upstream-images,image-layers
 ```
 
-```shell title="Every unused layer tag, however recent"
-arcave gc --dry-run --kind restored-layers --restored-layer-grace 0
+```shell title="The unused layer tags alone"
+arcave gc --dry-run --kind restored-layers
 ```

@@ -71,7 +71,7 @@ const (
 	GarbageCollectorKindOCIBlobs GarbageCollectorKind = "oci-blobs"
 	// GarbageCollectorKindOCIImages reads the stored upstream images' OCI manifests.
 	GarbageCollectorKindOCIImages GarbageCollectorKind = "oci-images"
-	// GarbageCollectorKindDockerLayerTags reads the daemon's arcave/…:sp-<id> tags.
+	// GarbageCollectorKindDockerLayerTags reads the daemon's arcave/…:sp-<savepoint> tags.
 	GarbageCollectorKindDockerLayerTags GarbageCollectorKind = "docker-layer-tags"
 )
 
@@ -113,11 +113,6 @@ const (
 	// GarbageReasonListedByUnreferenced holds back a blob only a manifest no record names
 	// lists: it goes once that manifest does.
 	GarbageReasonListedByUnreferenced GarbageReason = "listed-by-unreferenced"
-	// GarbageReasonRecentlyTagged holds back a layer tag younger than gc.restored_layer_grace.
-	GarbageReasonRecentlyTagged GarbageReason = "recently-tagged"
-	// GarbageReasonTagTimeUnknown leaves unjudged a layer tag the daemon gives no time for,
-	// under a restored layer grace.
-	GarbageReasonTagTimeUnknown GarbageReason = "tag-time-unknown"
 )
 
 // GarbageCollectRequest is one gc run.
@@ -125,20 +120,14 @@ type GarbageCollectRequest struct {
 	DryRun bool
 	// DataKinds narrow what the gc looks at; empty looks at every one.
 	DataKinds []GarbageDataKind
-	// RestoredLayerGrace is how old an unused layer tag must be to count as garbage; nil keeps the
-	// service's default.
-	RestoredLayerGrace *time.Duration
 }
 
-// Validate refuses an unknown data kind and a negative restored layer grace.
+// Validate refuses an unknown data kind.
 func (m GarbageCollectRequest) Validate() error {
 	for _, dataKind := range m.DataKinds {
 		if err := dataKind.Validate(); err != nil {
 			return err
 		}
-	}
-	if m.RestoredLayerGrace != nil && *m.RestoredLayerGrace < 0 {
-		return fmt.Errorf("%w: negative restored layer grace %s", ErrInvalidGarbageCollectRequest, *m.RestoredLayerGrace)
 	}
 	return nil
 }
@@ -149,8 +138,6 @@ type TaggedImage struct {
 	Ref     ImageRef
 	ImageID ImageDigestID
 	Origin  LayerOrigin
-	// TaggedAt is when the daemon last tagged the image; zero when it does not say.
-	TaggedAt time.Time
 }
 
 // ContainerImage is what one container, running or not, was created from.
@@ -311,7 +298,7 @@ func (m ResticRepositoryStat) newEstimateBytes() *int64 {
 	return &bytes
 }
 
-// DockerLayerTagStat is the daemon's arcave/…:sp-<id> tags no container runs on, of the layers the
+// DockerLayerTagStat is the daemon's arcave/…:sp-<savepoint> tags no container runs on, of the layers the
 // arcave project committed for the session's compose projects.
 type DockerLayerTagStat struct {
 	GarbageFindings

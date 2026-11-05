@@ -867,7 +867,6 @@ func newGCDependencies(
 		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
-		RestoredLayerGrace: utils.Value(cfg.GC.RestoredLayerGrace),
 	})
 	opened.keep()
 	return &gcDependencies{

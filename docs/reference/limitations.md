@@ -74,7 +74,6 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 [`arcave gc`](cli/gc.md) deletes dead savepoint trees, the images and blobs no savepoint uses, the `cdc` snapshots of removed savepoints, and the layer tags no container uses. `arcave gc --dry-run` reports without deleting anything. Some space takes more than one run to come back:
 
 * **An unused image.** Its layers go on the run after the image.
-* **A recent layer tag.** A tag younger than `gc.restored_layer_grace`, an hour by default, waits for a later run.
 * **An interrupted prune.** If a `cdc` repository's `restic forget --prune` is cut short after the snapshots are forgotten, the next gc prunes that repository again.
 
 `arcave session remove` frees everything a session holds, `cdc` repositories included; `arcave session list --all` lists the trees a failed fork left, and `session remove <id>` deletes one. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, `arcave session remove baseline --force` empties it.
@@ -82,6 +81,10 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 ### gc on a shared store
 
 The session's lock in the store is taken by writing it, waiting a second, and reading it back, because the stores arcave supports offer no write-if-absent. Two machines claiming it at the same moment can, rarely, both believe they hold it. For a capture that only costs a savepoint, but a gc that deletes could then remove a blob a capture on the other machine has just reused, and that savepoint would fail to roll back. Run `arcave gc` without `--dry-run` only while no other machine works in the session. `--dry-run` is safe anywhere.
+
+### gc is not kept out of a rollback's window from elsewhere
+
+A rollback loads its layers into the daemon and tags them before it creates the containers that run on them. The project lock keeps a gc in the same checkout out of that window, and the session's lock one in the same session on any host sharing the store. A gc of the same arcave project on the same daemon, in another session or over another store, is kept out by neither: it removes the tags, and the rollback fails when it creates or rebuilds its containers and goes back to its safety snapshot, or takes down what it created. No data is lost: the layers stay in the store, and running the rollback again passes. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
 
 ### Some layer tags gc never judges
 

@@ -175,8 +175,8 @@ const (
 		"The file carries every environment value the containers run with, secrets included."
 	descGC = "Report the garbage arcave left in one session's store and in the Docker daemon; with dry_run " +
 		"false, delete it. A deleted image's layers go on the next run; a removed savepoint's restic snapshots " +
-		"are forgotten and pruned; a restored layer tag goes once no container uses it and it is older than " +
-		"the grace. A busy project is refused: retry when its command finishes."
+		"are forgotten and pruned; a restored layer tag goes once no container uses it. " +
+		"A busy project is refused: retry when its command finishes."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +
@@ -356,31 +356,20 @@ func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	return nil, composeGenerateOutput{ComposeProject: generated.ComposeProject, Services: generated.Services, Spec: string(generated.Spec)}, nil
 }
 
-// gcInput is gc's input schema; dry_run left out is true, a grace left out keeps
-// gc.restored_layer_grace, kinds every one.
+// gcInput is gc's input schema; dry_run left out is true, kinds every one.
 type gcInput struct {
-	DryRun             *bool                   `json:"dry_run,omitempty" jsonschema:"default true: report only; false deletes"`
-	Session            string                  `json:"session,omitempty" jsonschema:"the session to look in, by name or id; default the pinned or current session"`
-	RestoredLayerGrace string                  `json:"restored_layer_grace,omitempty" jsonschema:"how old an unused layer tag must be to count as garbage, as a Go duration such as 1h"`
-	Kinds              []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
+	DryRun  *bool                   `json:"dry_run,omitempty" jsonschema:"default true: report only; false deletes"`
+	Session string                  `json:"session,omitempty" jsonschema:"the session to look in, by name or id; default the pinned or current session"`
+	Kinds   []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
 }
 
 // garbageCollectMCP finds the garbage in scope and, when dry_run is false, deletes it.
 func (h *MCPHandler) garbageCollectMCP(
 	ctx context.Context, _ *mcpsdk.CallToolRequest, in gcInput,
 ) (*mcpsdk.CallToolResult, model.GarbageCollectResult, error) {
-	var grace *time.Duration
-	if in.RestoredLayerGrace != "" {
-		parsed, err := parseToolDuration("restored_layer_grace", in.RestoredLayerGrace)
-		if err != nil {
-			return nil, model.GarbageCollectResult{}, err
-		}
-		grace = &parsed
-	}
 	req := model.GarbageCollectRequest{
-		DryRun:             in.DryRun == nil || *in.DryRun,
-		DataKinds:          in.Kinds,
-		RestoredLayerGrace: grace,
+		DryRun:    in.DryRun == nil || *in.DryRun,
+		DataKinds: in.Kinds,
 	}
 	if err := req.Validate(); err != nil {
 		return nil, model.GarbageCollectResult{}, err

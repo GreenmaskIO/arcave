@@ -17,7 +17,6 @@ package model
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -114,23 +113,19 @@ func TestGarbageDataKind_Validate(t *testing.T) {
 }
 
 func TestGarbageCollectRequest_Validate(t *testing.T) {
-	hour := time.Hour
-	negative := -time.Hour
-
 	tests := []struct {
 		name    string
 		req     GarbageCollectRequest
 		wantErr error
 	}{
 		{name: "nothing set", req: GarbageCollectRequest{DryRun: true}},
-		{name: "known data kinds and a grace", req: GarbageCollectRequest{DataKinds: []GarbageDataKind{GarbageDataKindImageLayers}, RestoredLayerGrace: &hour}},
+		{name: "known data kinds", req: GarbageCollectRequest{DataKinds: []GarbageDataKind{GarbageDataKindImageLayers}}},
 		{name: "an unknown data kind", req: GarbageCollectRequest{DataKinds: []GarbageDataKind{"blob"}}, wantErr: ErrInvalidGarbageCollectRequest},
 		{
 			name:    "session trees are not gc's: session list --all names them",
 			req:     GarbageCollectRequest{DataKinds: []GarbageDataKind{"session-tree"}},
 			wantErr: ErrInvalidGarbageCollectRequest,
 		},
-		{name: "a negative grace", req: GarbageCollectRequest{RestoredLayerGrace: &negative}, wantErr: ErrInvalidGarbageCollectRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

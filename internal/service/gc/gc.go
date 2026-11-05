@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -66,13 +65,9 @@ type Deps struct {
 	// an action none carries out is only reported.
 	DaemonErasers         []DaemonEraser
 	ComposeProjectErasers []ComposeProjectEraser
-	// RestoredLayerGrace is the restored layer grace of a request naming none.
-	RestoredLayerGrace time.Duration
 	// UnlistedNamespaces are the top-level directories of a compose project store its scope's
 	// listing leaves out: a backend's own, which its collector reads through the backend.
 	UnlistedNamespaces []string
-	// Now is the clock a scope is stamped with; nil is the wall clock.
-	Now func() time.Time
 }
 
 // GarbageCollector finds one session's garbage, and deletes what its erasers can.
@@ -88,16 +83,10 @@ type GarbageCollector struct {
 	composeProjectCollectors []ComposeProjectCollector
 	erasers                  eraserSet
 	unlisted                 []string
-	grace                    time.Duration
-	now                      func() time.Time
 }
 
 // New builds a GarbageCollector over deps.
 func New(deps Deps) *GarbageCollector {
-	now := deps.Now
-	if now == nil {
-		now = func() time.Time { return time.Now().Round(0) }
-	}
 	return &GarbageCollector{
 		store:                    deps.Store,
 		session:                  cmp.Or(deps.Session, model.DefaultSession),
@@ -110,8 +99,6 @@ func New(deps Deps) *GarbageCollector {
 		composeProjectCollectors: deps.ComposeProjectCollectors,
 		erasers:                  newEraserSet(deps.DaemonErasers, deps.ComposeProjectErasers),
 		unlisted:                 deps.UnlistedNamespaces,
-		grace:                    deps.RestoredLayerGrace,
-		now:                      now,
 	}
 }
 
@@ -209,7 +196,7 @@ func (s *GarbageCollector) reportGarbage(
 	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
 ) (model.GarbageCollectResult, error) {
 	inflightWarnings := s.readInflightWarnings(ctx)
-	found := s.findGarbage(ctx, req, collectors)
+	found := s.findGarbage(ctx, collectors)
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
@@ -230,7 +217,7 @@ func (s *GarbageCollector) deleteGarbage(
 	if err := s.requireNoInflight(ctx); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
-	found := s.findGarbage(ctx, req, collectors)
+	found := s.findGarbage(ctx, collectors)
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
@@ -282,20 +269,12 @@ func (s *GarbageCollector) readInflightWarnings(ctx context.Context) []string {
 
 // findGarbage runs the daemon collectors, then each compose project's.
 func (s *GarbageCollector) findGarbage(
-	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
+	ctx context.Context, collectors collectorSet,
 ) garbageFound {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindGCFind})
 	defer func() { step.End(context.Cause(ctx)) }()
-	grace := s.grace
-	if req.RestoredLayerGrace != nil {
-		grace = *req.RestoredLayerGrace
-	}
 	sessionStore, composeProjects, listErr := s.readComposeProjects(ctx)
-	daemonScope := DaemonScope{
-		ComposeProjects:    composeProjects,
-		Now:                s.now(),
-		RestoredLayerGrace: grace,
-	}
+	daemonScope := DaemonScope{ComposeProjects: composeProjects}
 	// The daemon's objects are judged against the compose projects: none read is no verdict.
 	daemonReports := collectors.runDaemonCollectors(ctx, daemonScope, listErr)
 	logGarbageFound(ctx, daemonReports)
