@@ -93,7 +93,12 @@ func TestUnmarshal(t *testing.T) {
 		{
 			name:       "gc has no section: liveness is the savepoints' status, and the invocation narrows a run",
 			yaml:       "gc:\n  grace_period: 24h\n",
-			wantErrMsg: "gc",
+			wantErrMsg: "has invalid keys: gc",
+		},
+		{
+			name:       "a config an earlier init wrote names the removed section",
+			yaml:       "gc:\n  restored_layer_grace: 1h0m0s\n",
+			wantErrMsg: "has invalid keys: gc",
 		},
 		{
 			name: "the compose section is read",

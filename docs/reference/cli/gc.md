@@ -67,7 +67,7 @@ An unused upstream image and its layers are not freed in the same run. The first
 
 A layer tag is matched by the labels its image carries: the arcave project and compose project the layer was committed under. A tag whose image carries neither, such as one committed by an earlier arcave version, is counted under `unattributed` and never judged. A tag of another compose project of the arcave project is counted under `other_compose_projects`: a gc of the session holding that compose project judges it. Remove a tag no session holds any more by hand.
 
-The project lock keeps out a capture in the same project directory, and the session's lock one on any host sharing the store. Neither covers the Docker daemon, which every session and store on the machine shares. A rollback tags the layers it loads before it creates the containers that use them, and takes its safety snapshot in between, so for that time the new tags are unused. A gc in the same project directory waits for the rollback's lock. A gc in another directory of the same arcave project, or on another host sharing the store but in another session, doesn't: each has its own lock, and gc judges an unused tag whenever it sees one. A rollback whose tags such a gc removed fails at its `Create` and goes back to its safety snapshot, or takes down what it created; the layers stay in the store, and running the rollback again puts them back. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
+The project lock keeps out a capture in the same project directory, and the session's lock one on any host sharing the store. Neither covers the Docker daemon, which every session and store on the machine shares. A rollback tags the layers it loads before it creates the containers that use them, and takes its safety snapshot in between, so for that time the new tags are unused. A gc in the same session waits for the rollback's lock, from any project directory or host. A gc of the same arcave project on the same daemon, in another session or over another store, doesn't: neither lock is shared, and gc judges an unused tag whenever it sees one. A rollback whose tags such a gc removed fails when it creates or rebuilds its containers and goes back to its safety snapshot, or takes down what it created; the layers stay in the store, and running the rollback again puts them back. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
 
 A session directory without `session.json`, which a failed fork leaves, belongs to no session, so gc doesn't report it. `arcave session list --all` lists it with its status, and `arcave session remove <id>` deletes it.
 
@@ -106,13 +106,13 @@ On a terminal, the summary adds the reports up by data kind, and its `Warnings` 
 └── ✔ gc.erase  0.0s
 
 Garbage collected · session 00000000-0000-0000-0000-000000000001
-  DATA                  FOUND  SIZE     DELETED  FREED
-  savepoint-data        0      0 B      0        0 B
-  deduplicated-volumes  0      0 B      0        0 B
-  image-layers          5      52.5 MB  5        52.5 MB
-  upstream-images       0      0 B      0        0 B
-  restored-layers       2      0 B      2        0 B
-  total                 7      52.5 MB  7        52.5 MB
+  DATA                  FOUND  SIZE      DELETED  FREED
+  savepoint-data        0      0 B       0        0 B
+  deduplicated-volumes  0      0 B       0        0 B
+  image-layers          5      52.5 MB   5        52.5 MB
+  upstream-images       0      0 B       0        0 B
+  restored-layers       2      ?         2        ?
+  total                 7      52.5 MB+  7        ?
 ```
 
 </TabItem>
@@ -128,7 +128,7 @@ Garbage collected · session 00000000-0000-0000-0000-000000000001
       "collector": "docker-layer-tags",
       "summary": {
         "found": 2,
-        "bytes": 0,
+        "bytes": null,
         "skipped": 0,
         "unjudged": 0
       },
@@ -137,13 +137,13 @@ Garbage collected · session 00000000-0000-0000-0000-000000000001
           {
             "action": "untag",
             "target": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000",
-            "bytes": 0,
+            "bytes": null,
             "reason": "unused-tag"
           },
           {
             "action": "untag",
             "target": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
-            "bytes": 0,
+            "bytes": null,
             "reason": "unused-tag"
           }
         ],
@@ -153,8 +153,8 @@ Garbage collected · session 00000000-0000-0000-0000-000000000001
       },
       "deletion": {
         "deleted": [
-          { "target": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000", "bytes": 0 },
-          { "target": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000", "bytes": 0 }
+          { "target": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000", "bytes": null },
+          { "target": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000", "bytes": null }
         ],
         "not_run": 0
       }
@@ -199,13 +199,12 @@ Garbage collected · session 00000000-0000-0000-0000-000000000001
   "total": {
     "found": 7,
     "bytes": 52454335,
-    "bytes_complete": true,
+    "bytes_complete": false,
     "skipped": 0,
     "unjudged": 0,
     "aborted": 0,
     "failed": 0,
-    "deleted": 7,
-    "freed_bytes": 52454335
+    "deleted": 7
   }
 }
 ```

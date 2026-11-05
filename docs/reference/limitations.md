@@ -86,7 +86,7 @@ The session's lock in the store is taken by writing it, waiting a second, and re
 
 ### gc is not kept out of a rollback's window from elsewhere
 
-A rollback loads its layers into the daemon and tags them before it creates the containers that run on them. The project lock keeps a gc in the same checkout out of that window, and the session's lock one in the same session on any host sharing the store. A gc in another checkout sharing `project.name`, or on another host in another session, is kept out by neither: it removes the tags, and the rollback fails at `Create` and goes back to its safety snapshot, or takes down what it created. No data is lost: the layers stay in the store, and running the rollback again passes. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
+A rollback loads its layers into the daemon and tags them before it creates the containers that run on them. The project lock keeps a gc in the same checkout out of that window, and the session's lock one in the same session on any host sharing the store. A gc of the same arcave project on the same daemon, in another session or over another store, is kept out by neither: it removes the tags, and the rollback fails when it creates or rebuilds its containers and goes back to its safety snapshot, or takes down what it created. No data is lost: the layers stay in the store, and running the rollback again passes. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
 
 ### Some layer tags gc never judges
 

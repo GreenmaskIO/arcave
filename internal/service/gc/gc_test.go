@@ -70,8 +70,7 @@ func mustParseSessionID(s string) model.SessionID {
 	return id
 }
 
-// newDeps is a gc over store's session; the collectors and the savepoint
-// readers are the test's.
+// newDeps is a gc over store's session; the collectors and the savepoint readers are the test's.
 func newDeps(
 	session model.SessionID, store storages.Navigator, sessions *mockSessions, locker *mockLocker, inflight *mockInflight,
 ) Deps {
@@ -551,32 +550,20 @@ func TestGarbageCollector_GarbageCollect_UncommittedTreesAreDead(t *testing.T) {
 
 // A request refused for what it asks stops before the lock.
 func TestGarbageCollector_GarbageCollect_InvalidRequest(t *testing.T) {
-	tests := []struct {
-		name string
-		req  model.GarbageCollectRequest
-	}{
-		{
-			name: "an unknown data kind",
-			req:  model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			locker := &mockLocker{}
-			blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
-			deps := newDeps(model.DefaultSession, inmemory.New(""), &mockSessions{}, locker, &mockInflight{})
-			deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
-			svc := New(deps)
+	// Arrange
+	locker := &mockLocker{}
+	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+	deps := newDeps(model.DefaultSession, inmemory.New(""), &mockSessions{}, locker, &mockInflight{})
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
+	svc := New(deps)
+	req := model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}}
 
-			// Act
-			_, err := svc.GarbageCollect(context.Background(), tt.req)
+	// Act
+	_, err := svc.GarbageCollect(context.Background(), req)
 
-			// Assert
-			require.ErrorIs(t, err, model.ErrInvalidGarbageCollectRequest)
-			locker.AssertNotCalled(t, "Acquire", mock.Anything)
-		})
-	}
+	// Assert
+	require.ErrorIs(t, err, model.ErrInvalidGarbageCollectRequest)
+	locker.AssertExpectations(t)
 }
 
 // The request's data kinds pick the collectors. No compose-project collector, no scope read.

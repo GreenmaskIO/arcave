@@ -196,7 +196,7 @@ func (s *GarbageCollector) reportGarbage(
 	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
 ) (model.GarbageCollectResult, error) {
 	inflightWarnings := s.readInflightWarnings(ctx)
-	found := s.findGarbage(ctx, req, collectors)
+	found := s.findGarbage(ctx, collectors)
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
@@ -217,7 +217,7 @@ func (s *GarbageCollector) deleteGarbage(
 	if err := s.requireNoInflight(ctx); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
-	found := s.findGarbage(ctx, req, collectors)
+	found := s.findGarbage(ctx, collectors)
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
@@ -269,7 +269,7 @@ func (s *GarbageCollector) readInflightWarnings(ctx context.Context) []string {
 
 // findGarbage runs the daemon collectors, then each compose project's.
 func (s *GarbageCollector) findGarbage(
-	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
+	ctx context.Context, collectors collectorSet,
 ) garbageFound {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindGCFind})
 	defer func() { step.End(context.Cause(ctx)) }()

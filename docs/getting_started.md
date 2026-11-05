@@ -66,8 +66,6 @@ capture:
         anonymous: true
 rollback:
     leftover_volumes: overwrite
-gc:
-    restored_layer_grace: 1h0m0s
 backends:
     fullcopy:
         compression: zstd
