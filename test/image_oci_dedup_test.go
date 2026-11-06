@@ -39,7 +39,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
@@ -85,9 +84,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	engine := dockerclient.NewEngine(daemonAPI)
 	profile := newRuntimeProfile(t, daemonAPI)
-	exporter := profile.exporter
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -110,11 +107,11 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
-		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), exporter, blobStore),
-		ContainerRebuilder: engine,
-		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, exporter),
+		VolumeRemover:      profile.engine,
+		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), profile.engine, blobStore),
+		ContainerRebuilder: profile.engine,
+		ImageLookup:        profile.engine,
+		BackendRegistry:    mustRegistry(t, profile.volumes),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              composeProjectStore,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),

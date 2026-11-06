@@ -1,0 +1,212 @@
+{
+    "Id": "12e99e3be23563aa3ac536cf56d1d3b9c393f9a0ea386c5a768e9b8f46c54a78",
+    "Created": "2026-11-06T08:54:41.836702593Z",
+    "Path": "sleep",
+    "Args": [
+        "1"
+    ],
+    "State": {
+        "Status": "created",
+        "Running": false,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 0,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "0001-01-01T00:00:00Z",
+        "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Image": "sha256:d2482869a6b838d3b4c9cad0c8085c06277909482771eb525d298fc3a7d07927",
+    "ResolvConfPath": "",
+    "HostnamePath": "",
+    "HostsPath": "",
+    "LogPath": "/var/home/core/.local/share/containers/storage/overlay-containers/12e99e3be23563aa3ac536cf56d1d3b9c393f9a0ea386c5a768e9b8f46c54a78/userdata/ctr.log",
+    "Name": "/arcave-fixture",
+    "RestartCount": 0,
+    "Driver": "overlay",
+    "Platform": "linux",
+    "MountLabel": "system_u:object_r:container_file_t:s0:c212,c749",
+    "ProcessLabel": "system_u:system_r:container_t:s0:c212,c749",
+    "AppArmorProfile": "",
+    "ExecIDs": [],
+    "HostConfig": {
+        "Binds": [
+            "/srv:/long:ro,rshared,bind",
+            "/tmp:/short:rw,rprivate,nosuid,nodev,rbind",
+            "arcave-fixture:/data:rw,rprivate,nosuid,nodev,rbind",
+            "arcave-fixture:/sub:ro,rprivate,nosuid,nodev,rbind"
+        ],
+        "ContainerIDFile": "",
+        "LogConfig": {
+            "Type": "json-file",
+            "Config": null
+        },
+        "NetworkMode": "bridge",
+        "PortBindings": {},
+        "RestartPolicy": {
+            "Name": "no",
+            "MaximumRetryCount": 0
+        },
+        "AutoRemove": false,
+        "VolumeDriver": "",
+        "VolumesFrom": null,
+        "ConsoleSize": [
+            0,
+            0
+        ],
+        "CapAdd": [],
+        "CapDrop": [],
+        "CgroupnsMode": "private",
+        "Dns": [],
+        "DnsOptions": null,
+        "DnsSearch": null,
+        "ExtraHosts": null,
+        "GroupAdd": null,
+        "IpcMode": "shareable",
+        "Cgroup": "",
+        "Links": null,
+        "OomScoreAdj": 0,
+        "PidMode": "private",
+        "Privileged": false,
+        "PublishAllPorts": false,
+        "ReadonlyRootfs": false,
+        "SecurityOpt": [],
+        "UTSMode": "private",
+        "UsernsMode": "",
+        "ShmSize": 65536000,
+        "Runtime": "oci",
+        "Isolation": "",
+        "CpuShares": 0,
+        "Memory": 0,
+        "NanoCpus": 0,
+        "CgroupParent": "user.slice",
+        "BlkioWeight": 0,
+        "BlkioWeightDevice": null,
+        "BlkioDeviceReadBps": null,
+        "BlkioDeviceWriteBps": null,
+        "BlkioDeviceReadIOps": null,
+        "BlkioDeviceWriteIOps": null,
+        "CpuPeriod": 0,
+        "CpuQuota": 0,
+        "CpuRealtimePeriod": 0,
+        "CpuRealtimeRuntime": 0,
+        "CpusetCpus": "",
+        "CpusetMems": "",
+        "Devices": [],
+        "DeviceCgroupRules": null,
+        "DeviceRequests": null,
+        "MemoryReservation": 0,
+        "MemorySwap": 0,
+        "MemorySwappiness": null,
+        "OomKillDisable": false,
+        "PidsLimit": 0,
+        "Ulimits": [],
+        "CpuCount": 0,
+        "CpuPercent": 0,
+        "IOMaximumIOps": 0,
+        "IOMaximumBandwidth": 0,
+        "MaskedPaths": null,
+        "ReadonlyPaths": null
+    },
+    "GraphDriver": {
+        "Data": {
+            "LowerDir": "/var/home/core/.local/share/containers/storage/overlay/5fd52269c992625c2e74dfe65906f9f32e7a75cc2f93bd21a154038ea095ed5e/diff",
+            "UpperDir": "/var/home/core/.local/share/containers/storage/overlay/927a5401335f317e5a2bb6f9e5ce3abd5aeab3904ff0a05d7073c336dd56e287/diff",
+            "WorkDir": "/var/home/core/.local/share/containers/storage/overlay/927a5401335f317e5a2bb6f9e5ce3abd5aeab3904ff0a05d7073c336dd56e287/work"
+        },
+        "Name": "overlay"
+    },
+    "SizeRootFs": 0,
+    "Mounts": [
+        {
+            "Type": "volume",
+            "Name": "arcave-fixture",
+            "Source": "/var/home/core/.local/share/containers/storage/volumes/arcave-fixture/_data",
+            "Destination": "/data",
+            "Driver": "local",
+            "Mode": "",
+            "RW": true,
+            "Propagation": "rprivate"
+        },
+        {
+            "Type": "volume",
+            "Name": "arcave-fixture",
+            "Source": "/var/home/core/.local/share/containers/storage/volumes/arcave-fixture/_data",
+            "Destination": "/sub",
+            "Driver": "local",
+            "Mode": "",
+            "RW": false,
+            "Propagation": "rprivate"
+        },
+        {
+            "Type": "bind",
+            "Source": "/srv",
+            "Destination": "/long",
+            "Mode": "",
+            "RW": false,
+            "Propagation": "rshared"
+        },
+        {
+            "Type": "bind",
+            "Source": "/tmp",
+            "Destination": "/short",
+            "Mode": "",
+            "RW": true,
+            "Propagation": "rprivate"
+        }
+    ],
+    "NetworkSettings": {
+        "SandboxID": "",
+        "SandboxKey": "",
+        "Ports": {},
+        "Networks": {
+            "podman": {
+                "IPAMConfig": null,
+                "Links": null,
+                "Aliases": [
+                    "12e99e3be235"
+                ],
+                "DriverOpts": null,
+                "GwPriority": 0,
+                "NetworkID": "2f259bab93aaaaa2542ba43ef33eb990d0999ee1b9924b557b7be53c0b7a1bb9",
+                "EndpointID": "",
+                "Gateway": "",
+                "IPAddress": "",
+                "MacAddress": "",
+                "IPPrefixLen": 0,
+                "IPv6Gateway": "",
+                "GlobalIPv6Address": "",
+                "GlobalIPv6PrefixLen": 0,
+                "DNSNames": null
+            }
+        }
+    },
+    "Config": {
+        "Hostname": "12e99e3be235",
+        "Domainname": "",
+        "User": "",
+        "AttachStdin": false,
+        "AttachStdout": false,
+        "AttachStderr": false,
+        "Tty": false,
+        "OpenStdin": false,
+        "StdinOnce": false,
+        "Env": [
+            "container=podman",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        ],
+        "Cmd": [
+            "sleep",
+            "1"
+        ],
+        "Image": "docker.io/library/busybox:latest",
+        "Volumes": null,
+        "WorkingDir": "/",
+        "Entrypoint": [],
+        "Labels": {},
+        "StopSignal": "15",
+        "StopTimeout": 10
+    }
+}

@@ -20,7 +20,7 @@ unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docke
 unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
 ```
 
-Podman, which names itself in `docker version`, is not held to Docker's floor: arcave commits and exports through Podman's own API, which writes the OCI layout, and reads a volume through a `tar` of its own, which keeps owners Podman's archive API would hand to root. Volumes, writable layers and images are all captured. Over `tcp://`, Podman is reached plain: arcave calls Podman's own API over http, so a Podman daemon behind TLS is refused.
+Podman, which names itself in `docker version`, is not held to Docker's floor: arcave commits and exports through Podman's own API, which writes the OCI layout, and reads a volume through a `tar` of its own, which keeps the owners Podman's archive API would rewrite to the container's user. Volumes, writable layers and images are all captured. A Podman daemon that reports no version is refused, since requests to its own API name it. A Podman daemon behind TLS is reached as a Docker one is: see [Podman behind TLS](#podman-behind-tls).
 
 The daemon must also be **reachable** for `savepoint create` and `rollback`, which ask it which engine it is before anything else. `init`, `savepoint list`, `savepoint remove` and the `session` commands reach no daemon:
 
@@ -50,6 +50,17 @@ Without systemd, start the service with no idle timeout, since one that exits wh
 ```bash
 podman system service --time 0
 ```
+
+#### Podman behind TLS
+
+Podman's API service terminates TLS itself; `--tls-client-ca` also requires a client certificate:
+
+```bash
+podman system service --time 0 --tls-cert server.pem --tls-key server-key.pem \
+  --tls-client-ca ca.pem tcp://0.0.0.0:8443
+```
+
+Point arcave at it as at a Docker daemon behind TLS: the [`docker` section](configuration.md#docker), a Docker context, or `DOCKER_HOST` with `DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH`. Podman's own API is reached over the same connection and certificates. Name the daemon `tcp://`: a context's `http://` or `https://` host is refused, since the Docker client cannot attach to a container over one.
 
 arcave is tested on projects brought up by `docker compose` through this socket. `podman compose` is a wrapper that runs `docker-compose` when it is installed and `podman-compose` otherwise; `podman-compose` itself has not been tested, and neither has `DOCKER_HOST=ssh://` to a Podman host.
 
@@ -110,7 +121,7 @@ Tested on macOS arm64, 2026-11-02, with arcave's integration suites and a smoke 
 | Docker Engine, rootless | 29.6.2, Ubuntu 26.04 in Lima | ✅ | ✅ | ✅ | |
 | Colima | 0.10.3, dockerd 29.5.2 | ✅ | ✅ | ✅ | |
 | OrbStack | 2.2.5, Engine 29.8.2 | ✅ | ✅ | ✅ | |
-| Podman, rootless and rootful | 6.1.4 | ✅ | ✅ | ✅ | retested 2026-11-03 on `podman machine`, older versions not tested; what Podman does not store — `sysctls`, a fixed address, `domainname` — is not put back: see [Limitations](limitations.md) |
+| Podman, rootless and rootful | 6.1.4 | ✅ | ✅ | ✅ | retested 2026-11-03 on `podman machine`, behind TLS and mutual TLS 2026-11-06, older versions not tested; what Podman does not store — `sysctls`, a fixed address, `domainname` — is not put back: see [Limitations](limitations.md) |
 
 Speed of a first backup and a full restore of 1 GiB, in seconds — `stdio` against `tcp`. `stdio` is bound by
 how fast the engine streams a `docker exec`, `tcp` by its network. The Podman rows measure the transport only:

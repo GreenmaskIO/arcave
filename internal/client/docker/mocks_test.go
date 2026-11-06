@@ -151,5 +151,3 @@ func (m *mockAPI) VolumeInspect(ctx context.Context, volumeID string) (volume.Vo
 func (m *mockAPI) VolumeRemove(ctx context.Context, volumeID string, force bool) error {
 	return m.Called(ctx, volumeID, force).Error(0)
 }
-
-func (m *mockAPI) Close() error { return m.Called().Error(0) }

@@ -74,7 +74,7 @@ func richResult() model.IntrospectionResult {
 func TestCodec_MarshalParse_RoundTrip(t *testing.T) {
 	// Arrange
 	codec := NewCodec()
-	assembled, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(context.Background(), richResult())
+	assembled, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), richResult())
 	require.NoError(t, err)
 
 	// Act
@@ -199,7 +199,7 @@ func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 		},
 	}}
 	codec := NewCodec()
-	assembled, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(context.Background(), introspection)
+	assembled, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), introspection)
 	require.NoError(t, err)
 
 	// Act

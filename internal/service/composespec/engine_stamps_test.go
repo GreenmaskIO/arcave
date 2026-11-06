@@ -30,16 +30,16 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-func TestNewDockerDefaults(t *testing.T) {
+func TestNewDockerStamps(t *testing.T) {
 	tests := []struct {
 		name string
 		info system.Info
-		want func(t *testing.T, got EngineDefaults)
+		want func(t *testing.T, got EngineStamps)
 	}{
 		{
 			name: "the runtime, log driver and host name are docker info's",
 			info: system.Info{Name: "build-1", DefaultRuntime: "runc", LoggingDriver: "json-file", OperatingSystem: "Ubuntu 24.04 LTS"},
-			want: func(t *testing.T, got EngineDefaults) {
+			want: func(t *testing.T, got EngineStamps) {
 				assert.Equal(t, []string{"runc"}, got.Runtimes)
 				assert.Equal(t, []string{"json-file"}, got.LogDrivers)
 				assert.Equal(t, "build-1", got.HostName)
@@ -50,7 +50,7 @@ func TestNewDockerDefaults(t *testing.T) {
 		{
 			name: "docker desktop stamps a one second stop timeout",
 			info: system.Info{OperatingSystem: desktopOperatingSystem},
-			want: func(t *testing.T, got EngineDefaults) {
+			want: func(t *testing.T, got EngineStamps) {
 				assert.Equal(t, desktopStopTimeout, got.StopTimeout)
 				assert.Nil(t, got.Runtimes, "no runtime docker info names none")
 				assert.Nil(t, got.LogDrivers, "no log driver docker info names none")
@@ -60,7 +60,7 @@ func TestNewDockerDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := NewDockerDefaults(tt.info)
+			got := NewDockerStamps(tt.info)
 
 			// Assert
 			tt.want(t, got)
@@ -68,27 +68,27 @@ func TestNewDockerDefaults(t *testing.T) {
 	}
 }
 
-func TestNewPodmanDefaults(t *testing.T) {
+func TestNewPodmanStamps(t *testing.T) {
 	tests := []struct {
 		name string
 		info system.Info
-		want func(t *testing.T, got EngineDefaults)
+		want func(t *testing.T, got EngineStamps)
 	}{
 		{
 			name: "podman keeps its own and adds what docker info names",
 			info: system.Info{Name: "podman-host", DefaultRuntime: "crun", LoggingDriver: "journald"},
-			want: func(t *testing.T, got EngineDefaults) {
+			want: func(t *testing.T, got EngineStamps) {
 				assert.Equal(t, []string{"oci", "crun"}, got.Runtimes)
 				assert.Equal(t, []string{"journald", "k8s-file", "journald"}, got.LogDrivers)
 				assert.Equal(t, "podman-host", got.HostName)
 				assert.Equal(t, 10, got.StopTimeout)
-				assert.True(t, got.HostnameAliased)
+				assert.True(t, got.Networking.HostnameAliased)
 			},
 		},
 		{
 			name: "docker info naming nothing leaves podman's own",
 			info: system.Info{},
-			want: func(t *testing.T, got EngineDefaults) {
+			want: func(t *testing.T, got EngineStamps) {
 				assert.Equal(t, []string{"oci"}, got.Runtimes)
 				assert.Equal(t, []string{"journald", "k8s-file"}, got.LogDrivers)
 				assert.Empty(t, got.HostName)
@@ -98,7 +98,7 @@ func TestNewPodmanDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := NewPodmanDefaults(tt.info)
+			got := NewPodmanStamps(tt.info)
 
 			// Assert
 			tt.want(t, got)
@@ -106,10 +106,10 @@ func TestNewPodmanDefaults(t *testing.T) {
 	}
 }
 
-func TestAssembly_dropEngineDefaults(t *testing.T) {
+func TestAssembly_dropEngineStamps(t *testing.T) {
 	grace := func(d time.Duration) *types.Duration { converted := types.Duration(d); return &converted }
 	env := func(pairs ...string) types.MappingWithEquals { return types.NewMappingWithEquals(pairs) }
-	defaults := EngineDefaults{
+	stamps := EngineStamps{
 		StopSignal:                 "SIGTERM",
 		StopTimeout:                10,
 		HealthTimeout:              30 * time.Second,
@@ -242,7 +242,7 @@ func TestAssembly_dropEngineDefaults(t *testing.T) {
 			cfg := tt.cfg
 
 			// Act
-			newAssembly(introspection, defaults).dropEngineDefaults(&cfg, replica)
+			newAssembly(introspection, stamps).dropEngineStamps(&cfg, replica)
 
 			// Assert
 			assert.Equal(t, tt.want, cfg)
@@ -251,7 +251,7 @@ func TestAssembly_dropEngineDefaults(t *testing.T) {
 }
 
 // An engine stamping nothing leaves every field as it is.
-func TestAssembly_dropEngineDefaults_NothingStamped(t *testing.T) {
+func TestAssembly_dropEngineStamps_NothingStamped(t *testing.T) {
 	// Arrange
 	cfg := types.ServiceConfig{
 		StopSignal:  "SIGTERM",
@@ -266,7 +266,7 @@ func TestAssembly_dropEngineDefaults_NothingStamped(t *testing.T) {
 	want := cfg
 
 	// Act
-	newAssembly(model.IntrospectionResult{}, EngineDefaults{}).dropEngineDefaults(&cfg, model.Container{})
+	newAssembly(model.IntrospectionResult{}, EngineStamps{}).dropEngineStamps(&cfg, model.Container{})
 
 	// Assert
 	assert.Equal(t, want, cfg)

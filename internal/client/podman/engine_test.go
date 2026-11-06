@@ -16,12 +16,14 @@ package podman
 
 import (
 	"context"
-	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -29,132 +31,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 )
-
-const podmanImageID = model.ImageDigestID("sha256:" + bareImageID)
-
-// A layer is committed through libpod in the OCI format, unpaused, its labels as LABEL
-// changes in key order, and libpod's bare id spelled as a digest; the comment is dropped.
-// A commit that fails names its container.
-func TestEngine_CommitContainer(t *testing.T) {
-	errRefused := errors.New(`libpod answered 500 Internal Server Error: {"cause":"no such container"}`)
-	tests := []struct {
-		name       string
-		comment    string
-		labels     map[string]string
-		wantCommit libpodCommit
-		committed  string
-		libpodErr  error
-		want       model.ImageDigestID
-		wantMsg    string
-		wantIs     error
-	}{
-		{
-			name:    "labels in key order, the comment dropped",
-			comment: "a comment OCI cannot carry",
-			labels:  map[string]string{"io.arcave.b": "2", "io.arcave.a": "one two"},
-			wantCommit: libpodCommit{
-				Container: "c1",
-				Format:    "oci",
-				Pause:     false,
-				Changes:   []string{`LABEL "io.arcave.a"="one two"`, `LABEL "io.arcave.b"="2"`},
-			},
-			committed: bareImageID,
-			want:      podmanImageID,
-		},
-		{
-			name: "libpod refuses",
-			wantCommit: libpodCommit{
-				Container: "c1",
-				Format:    "oci",
-				Pause:     false,
-				Changes:   []string{},
-			},
-			libpodErr: errRefused,
-			wantMsg:   `commit container c1: libpod answered 500 Internal Server Error: {"cause":"no such container"}`,
-			wantIs:    errRefused,
-		},
-		{
-			name: "an id that is no digest",
-			wantCommit: libpodCommit{
-				Container: "c1",
-				Format:    "oci",
-				Pause:     false,
-				Changes:   []string{},
-			},
-			committed: "not-an-id",
-			wantMsg:   "commit container c1: ",
-			wantIs:    model.ErrInvalidDigestID,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			libpod := &mockLibpod{}
-			libpod.On("commitContainer", mock.Anything, tt.wantCommit).Return(tt.committed, tt.libpodErr).Once()
-			e := &Engine{libpod: libpod}
-
-			// Act
-			got, err := e.CommitContainer(context.Background(), "c1", tt.comment, tt.labels)
-
-			// Assert
-			if tt.wantIs != nil {
-				require.ErrorContains(t, err, tt.wantMsg)
-				require.ErrorIs(t, err, tt.wantIs)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.Equal(t, tt.want, got)
-			libpod.AssertExpectations(t)
-		})
-	}
-}
-
-// An image is saved through libpod as an OCI archive, the stream handed on as it is; a
-// save libpod refuses names the image and carries libpod's own message.
-func TestEngine_SaveImage(t *testing.T) {
-	tests := []struct {
-		name      string
-		libpodErr error
-		wantMsg   string
-	}{
-		{name: "the archive streams back"},
-		{
-			name:      "libpod refuses",
-			libpodErr: errors.New(`libpod answered 404 Not Found: {"cause":"image not known"}`),
-			wantMsg:   "save image " + podmanImageID.String() + `: libpod answered 404 Not Found: {"cause":"image not known"}`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			libpod := &mockLibpod{}
-			exported := libpod.On("exportImage", mock.Anything, podmanImageID.String(), "oci-archive").Once()
-			if tt.libpodErr != nil {
-				exported.Return(nil, tt.libpodErr)
-			} else {
-				exported.Return(io.NopCloser(strings.NewReader("oci-archive-bytes")), nil)
-			}
-			e := &Engine{libpod: libpod}
-
-			// Act
-			archive, err := e.SaveImage(context.Background(), podmanImageID)
-
-			// Assert
-			libpod.AssertExpectations(t)
-			if tt.libpodErr != nil {
-				require.EqualError(t, err, tt.wantMsg)
-				require.ErrorIs(t, err, tt.libpodErr)
-				assert.Nil(t, archive)
-				return
-			}
-			require.NoError(t, err)
-			defer archive.Close()
-			got, err := io.ReadAll(archive)
-			require.NoError(t, err)
-			assert.Equal(t, "oci-archive-bytes", string(got))
-		})
-	}
-}
 
 // isVolumeExportSpec reports whether spec is the export of demo_pgdata, whole: a tar of
 // the volume mounted read-only, unconfined, keeping no log, its output the caller's.
@@ -170,10 +46,46 @@ func isVolumeExportSpec(spec model.OneShotSpec) bool {
 	}, spec)
 }
 
-// A volume comes out as the tar a container of arcave's own writes, since Podman's archive
-// API hands every file to root; a tar that fails fails the stream's last read with its
-// stderr, cut at maxExportStderrBytes.
+// A volume leaves through the export's own container, not the embedded engine's archive API.
 func TestEngine_OpenVolume(t *testing.T) {
+	// Arrange
+	created := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/containers/create"):
+			body, _ := io.ReadAll(r.Body)
+			created <- string(body)
+			http.Error(w, "refused", http.StatusInternalServerError)
+		case strings.Contains(r.URL.Path, "/images/"):
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.Error(w, "refused", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+	api, err := client.NewClientWithOpts(
+		client.WithHost("tcp://"+strings.TrimPrefix(server.URL, "http://")),
+		client.WithHTTPClient(server.Client()),
+		client.WithVersion("1.44"),
+	)
+	require.NoError(t, err)
+	e := NewEngine(docker.NewEngine(api))
+
+	// Act
+	rc, openErr := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
+
+	// Assert
+	require.NoError(t, openErr)
+	_, readErr := io.ReadAll(rc)
+	require.NoError(t, rc.Close())
+	require.ErrorContains(t, readErr, "export volume demo_pgdata: ")
+	require.Len(t, created, 1, "the export must ask for its own container")
+	assert.Contains(t, <-created, `"Cmd":["tar","-c","-f","-","-C","/arcave-data","."]`)
+}
+
+// A volume comes out as the tar a container of arcave's own writes; a tar that fails fails the
+// stream's last read with its stderr, cut at maxExportStderrBytes.
+func TestEngine_OpenVolume_Stream(t *testing.T) {
 	tests := []struct {
 		name       string
 		runErr     error
@@ -181,6 +93,11 @@ func TestEngine_OpenVolume(t *testing.T) {
 		wantSuffix string
 	}{
 		{name: "the archive streams out"},
+		{
+			name:       "a tar that fails saying nothing",
+			runErr:     &model.ContainerExitError{Image: "busybox", StatusCode: 1},
+			wantSuffix: "export volume demo_pgdata: busybox container exited with status 1",
+		},
 		{
 			name:       "a tar that fails",
 			runErr:     &model.ContainerExitError{Image: "busybox", StatusCode: 1},
@@ -205,10 +122,10 @@ func TestEngine_OpenVolume(t *testing.T) {
 					_, _ = io.WriteString(spec.Stderr, tt.stderr)
 				}).Return(tt.runErr).Once()
 			e := &Engine{runner: runner}
+			rc, err := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
+			require.NoError(t, err)
 
 			// Act
-			rc, openErr := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
-			require.NoError(t, openErr)
 			got, readErr := io.ReadAll(rc)
 			closeErr := rc.Close()
 
@@ -243,16 +160,16 @@ func TestEngine_OpenVolume_ClosedEarly(t *testing.T) {
 			close(stopped)
 		}).Return(context.Canceled).Once()
 	e := &Engine{runner: runner}
+	rc, err := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
+	require.NoError(t, err)
+	_, err = rc.Read(make([]byte, 16))
+	require.NoError(t, err)
 
 	// Act
-	rc, openErr := e.OpenVolume(context.Background(), model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"})
-	require.NoError(t, openErr)
-	_, readErr := rc.Read(make([]byte, 16))
 	closed := make(chan error, 1)
 	go func() { closed <- rc.Close() }()
 
 	// Assert
-	require.NoError(t, readErr)
 	select {
 	case closeErr := <-closed:
 		require.NoError(t, closeErr)
@@ -282,17 +199,14 @@ func TestEngine_OpenVolume_NoSource(t *testing.T) {
 	runner.AssertExpectations(t)
 }
 
-// NewEngine extends the engine it is given and runs the volume export through it.
 func TestNewEngine(t *testing.T) {
 	// Arrange
 	engine := docker.NewEngine(nil)
-	libpod := &mockLibpod{}
 
 	// Act
-	e := NewEngine(engine, libpod)
+	e := NewEngine(engine)
 
 	// Assert
 	assert.Same(t, engine, e.Engine)
 	assert.Same(t, engine, e.runner)
-	assert.Same(t, libpod, e.libpod)
 }

@@ -18,30 +18,59 @@ import (
 	"context"
 	"io"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// mockLibpod is a test double for libpod (the imageLibpod and containerLibpod seams).
+// mockLibpod is a test double for libpod.Client (the libpodAPI seam).
 type mockLibpod struct {
 	mock.Mock
 }
 
-func (m *mockLibpod) inspectContainer(ctx context.Context, containerID string) (libpodContainer, error) {
+func (m *mockLibpod) InspectContainer(ctx context.Context, containerID string) (libpod.Container, error) {
 	args := m.Called(ctx, containerID)
-	return args.Get(0).(libpodContainer), args.Error(1)
+	return args.Get(0).(libpod.Container), args.Error(1)
 }
 
-func (m *mockLibpod) commitContainer(ctx context.Context, commit libpodCommit) (string, error) {
-	args := m.Called(ctx, commit)
+func (m *mockLibpod) CommitContainer(ctx context.Context, options libpod.CommitOptions) (string, error) {
+	args := m.Called(ctx, options)
 	return args.String(0), args.Error(1)
 }
 
-func (m *mockLibpod) exportImage(ctx context.Context, imageID, format string) (io.ReadCloser, error) {
+func (m *mockLibpod) ExportImage(ctx context.Context, imageID, format string) (io.ReadCloser, error) {
 	args := m.Called(ctx, imageID, format)
 	archive, _ := args.Get(0).(io.ReadCloser)
 	return archive, args.Error(1)
+}
+
+// mockCompatAPI is a test double for the Docker API of the daemon; a call it does not
+// answer panics on the nil client it embeds.
+type mockCompatAPI struct {
+	client.APIClient
+	mock.Mock
+}
+
+func (m *mockCompatAPI) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
+	args := m.Called(ctx, containerID)
+	return args.Get(0).(container.InspectResponse), args.Error(1)
+}
+
+func (m *mockCompatAPI) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
+	return m.Called(ctx, containerID, options).Error(0)
+}
+
+func (m *mockCompatAPI) ContainerCreate(
+	ctx context.Context, config *container.Config, hostConfig *container.HostConfig,
+	networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string,
+) (container.CreateResponse, error) {
+	args := m.Called(ctx, config, hostConfig, networkingConfig, platform, containerName)
+	return args.Get(0).(container.CreateResponse), args.Error(1)
 }
 
 // mockOneShotRunner is a test double for the engine a volume export runs its container through.

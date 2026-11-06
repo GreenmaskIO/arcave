@@ -16,7 +16,7 @@ package test
 
 import (
 	"context"
-	"io"
+	"os"
 	"slices"
 	"testing"
 
@@ -27,28 +27,21 @@ import (
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 )
 
-// exportEngine is how volumes and images leave the daemon: engine itself, or Podman's.
-type exportEngine interface {
-	fullcopy.VolumeStreamer
-	CommitContainer(ctx context.Context, containerID, comment string, labels map[string]string) (model.ImageDigestID, error)
-	SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error)
-	RemoveImage(ctx context.Context, imageID model.ImageDigestID) error
-	LoadImage(ctx context.Context, r io.Reader) error
-	TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error
-	ImageExists(ctx context.Context, imageID model.ImageDigestID) (bool, error)
-}
-
 // runtimeProfile is what arcave's DI root chooses by the engine behind the daemon.
 type runtimeProfile struct {
 	runtime model.ContainerRuntimeKind
-	// api is what a compose project is introspected through.
-	api       client.APIClient
-	exporter  exportEngine
+	// api is the daemon's Docker API, answering as Docker would.
+	api client.APIClient
+	// engine is what a workflow reaches the daemon through, over api.
+	engine *dockerclient.Engine
+	// volumes is how a volume leaves the daemon.
+	volumes   fullcopy.VolumeStreamer
 	assembler *composespec.Assembler
 }
 
@@ -60,22 +53,37 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 	require.NoError(t, err)
 	info, err := api.Info(context.Background())
 	require.NoError(t, err)
-	engine := dockerclient.NewEngine(api)
 	if runtime.Kind == model.ContainerRuntimePodman {
-		libpod := podmanclient.NewLibpod(api)
+		libpodClient := newLibpodClient(t, api, runtime.Version)
+		podmanAPI := podmanclient.NewAPI(api, libpodClient)
+		engine := dockerclient.NewEngine(podmanAPI)
 		return runtimeProfile{
 			runtime:   runtime.Kind,
-			api:       podmanclient.NewAPI(api, libpod),
-			exporter:  podmanclient.NewEngine(engine, libpod),
-			assembler: composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
+			api:       podmanAPI,
+			engine:    engine,
+			volumes:   podmanclient.NewEngine(engine),
+			assembler: composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 		}
 	}
+	engine := dockerclient.NewEngine(api)
 	return runtimeProfile{
 		runtime:   runtime.Kind,
 		api:       api,
-		exporter:  engine,
-		assembler: composespec.NewAssembler(composespec.NewDockerDefaults(info)),
+		engine:    engine,
+		volumes:   engine,
+		assembler: composespec.NewAssembler(composespec.NewDockerStamps(info)),
 	}
+}
+
+// newLibpodClient reaches libpod over api, whose daemon is Podman of version.
+func newLibpodClient(t *testing.T, api *client.Client, version string) *libpod.Client {
+	t.Helper()
+	libpodClient, err := libpod.NewClient(api, libpod.Options{
+		Version: version,
+		UseTLS:  os.Getenv(client.EnvOverrideCertPath) != "",
+	})
+	require.NoError(t, err)
+	return libpodClient
 }
 
 // isPodman reports whether api's daemon is Podman.

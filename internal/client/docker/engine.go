@@ -103,26 +103,10 @@ type dockerAPI interface {
 	Ping(ctx context.Context) (types.Ping, error)
 	VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error)
 	VolumeRemove(ctx context.Context, volumeID string, force bool) error
-	Close() error
 }
 
-// Engine is arcave's volume I/O against the Docker daemon: it streams a
-// volume's contents out (OpenVolume) and wipes-and-extracts a stream back in
-// (WriteVolume), through a throwaway container of its own rather than through
-// whichever service happens to mount the volume. These are the operations that
-// have no Compose-level equivalent, so they go through the Docker API — see
-// ComposeRunner for the lifecycle half.
-//
-// It does not resolve that connection: the composition root builds one client
-// from the config and hands the same one to Engine and to the compose service
-// ComposeRunner drives, so targeting a single daemon is a property of the
-// construction rather than a contract this package has to keep. Resolution lives
-// there because it is where a failure can still be reported — docker/cli answers
-// an unresolvable endpoint with os.Exit(1).
-//
-// One Engine is created per command at the DI root and injected into both
-// snapshot backends; it is concurrency-safe, and its Close belongs to whoever
-// created it.
+// Engine is arcave's volume and image I/O through the Docker API, the operations compose has no equivalent for.
+// It is concurrency-safe, and the connection stays its creator's to close.
 type Engine struct {
 	// api is the resolved daemon connection. A test sets it directly, standing in
 	// for the client the composition root would have built.
@@ -133,9 +117,6 @@ type Engine struct {
 func NewEngine(api dockerAPI) *Engine {
 	return &Engine{api: api}
 }
-
-// Close releases the daemon connection.
-func (e *Engine) Close() error { return e.api.Close() }
 
 // Ping checks that the daemon answers.
 func (e *Engine) Ping(ctx context.Context) error {

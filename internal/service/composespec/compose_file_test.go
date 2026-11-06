@@ -65,7 +65,7 @@ func TestWithRelativeBinds(t *testing.T) {
 func TestComposeFileCodec_MarshalParse(t *testing.T) {
 	// Arrange
 	codec := NewComposeFileCodec()
-	project, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(context.Background(), richResult())
+	project, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), richResult())
 	require.NoError(t, err)
 	require.NotEmpty(t, project.WorkingDir)
 	service := project.Services["db"]

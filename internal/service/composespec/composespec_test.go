@@ -84,7 +84,7 @@ func TestAssembler_Assemble(t *testing.T) {
 	}}
 
 	// Act
-	project, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(context.Background(), introspection)
+	project, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), introspection)
 
 	// Assert
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 			}}
 
 			// Act
-			project, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(context.Background(), introspection)
+			project, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), introspection)
 
 			// Assert
 			require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		defaults EngineDefaults
+		stamps   EngineStamps
 		inspect  network.Inspect
 		wantOpts types.Options
 		wantIPv4 *bool
@@ -218,25 +218,25 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 			wantOpts: types.Options{"com.docker.network.bridge.name": "br-demo"},
 		},
 		{
-			name:     "an engine stamping the families: IPv4 on and IPv6 off are its own",
-			defaults: NewPodmanDefaults(system.Info{}),
-			inspect:  network.Inspect{EnableIPv4: true},
+			name:    "an engine stamping the families: IPv4 on and IPv6 off are its own",
+			stamps:  NewPodmanStamps(system.Info{}),
+			inspect: network.Inspect{EnableIPv4: true},
 		},
 		{
 			name:     "an engine stamping the families: IPv6 on is declared",
-			defaults: NewPodmanDefaults(system.Info{}),
+			stamps:   NewPodmanStamps(system.Info{}),
 			inspect:  network.Inspect{EnableIPv4: true, EnableIPv6: true},
 			wantIPv6: enabled(true),
 		},
 		{
 			name:     "an engine stamping the families: IPv4 off is declared",
-			defaults: NewPodmanDefaults(system.Info{}),
+			stamps:   NewPodmanStamps(system.Info{}),
 			inspect:  network.Inspect{},
 			wantIPv4: enabled(false),
 		},
 		{
 			name:     "an engine stamping none: both are declared",
-			defaults: NewDockerDefaults(system.Info{}),
+			stamps:   NewDockerStamps(system.Info{}),
 			inspect:  network.Inspect{EnableIPv4: true},
 			wantIPv4: enabled(true),
 			wantIPv6: enabled(false),
@@ -255,7 +255,7 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 			}}
 
 			// Act
-			project, err := NewAssembler(tt.defaults).Assemble(context.Background(), introspection)
+			project, err := NewAssembler(tt.stamps).Assemble(context.Background(), introspection)
 
 			// Assert
 			require.NoError(t, err)
@@ -294,7 +294,7 @@ func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 	}}
 
 	// Act
-	project, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(context.Background(), introspection)
+	project, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), introspection)
 
 	// Assert
 	require.NoError(t, err)
@@ -374,7 +374,7 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 					}}}},
 				},
 			}}
-			assembler := NewAssembler(NewDockerDefaults(system.Info{}))
+			assembler := NewAssembler(NewDockerStamps(system.Info{}))
 
 			// Act
 			project, err := assembler.Assemble(context.Background(), introspection)
@@ -395,7 +395,7 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 
 func TestAssembler_Assemble_NoServices(t *testing.T) {
 	// Act
-	_, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(context.Background(), model.IntrospectionResult{Project: model.Project{Name: "demo"}})
+	_, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), model.IntrospectionResult{Project: model.Project{Name: "demo"}})
 
 	// Assert
 	require.Error(t, err)
@@ -436,7 +436,7 @@ func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 			ctx := zerolog.New(&logs).WithContext(context.Background())
 
 			// Act
-			_, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(ctx, introspection)
+			_, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(ctx, introspection)
 
 			// Assert
 			require.NoError(t, err)
@@ -499,7 +499,7 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 			ctx := zerolog.New(&logs).WithContext(context.Background())
 
 			// Act
-			project, err := NewAssembler(NewDockerDefaults(system.Info{})).Assemble(ctx, introspection)
+			project, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(ctx, introspection)
 
 			// Assert
 			require.NoError(t, err)

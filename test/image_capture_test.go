@@ -153,9 +153,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	engine := dockerclient.NewEngine(daemonAPI)
 	profile := newRuntimeProfile(t, daemonAPI)
-	exporter := profile.exporter
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -178,11 +176,11 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
-		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-tenant", project), exporter, blobStore),
-		ContainerRebuilder: engine,
-		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, exporter),
+		VolumeRemover:      profile.engine,
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-image-tenant", project), profile.engine, blobStore),
+		ContainerRebuilder: profile.engine,
+		ImageLookup:        profile.engine,
+		BackendRegistry:    mustRegistry(t, profile.volumes),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
@@ -234,7 +232,7 @@ func newLayerOwner(arcaveProject, composeProject string) model.LayerOrigin {
 // newImageCopier is the image backend the DI root builds: both writable layer archivers, and
 // images deduplicated.
 func newImageCopier(
-	store storages.Navigator, origin model.LayerOrigin, engine exportEngine, blobStore storages.Storager,
+	store storages.Navigator, origin model.LayerOrigin, engine *dockerclient.Engine, blobStore storages.Storager,
 ) *imagecopy.Copier {
 	dedup := dedupcopy.New(blobStore)
 	return imagecopy.NewCopier(store, origin, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{

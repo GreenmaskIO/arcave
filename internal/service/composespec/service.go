@@ -64,11 +64,11 @@ func (a assembly) applyReplica(cfg *types.ServiceConfig, service string, replica
 	a.applyImage(cfg, replica)
 	a.applyHostConfig(cfg, replica.Inspect)
 	cfg.Expose = unpublished(cfg.Expose, cfg.Ports)
-	applyNetworks(cfg, service, replica.Inspect, a.networkKeys, a.defaults.HostnameAliased)
+	applyNetworks(cfg, service, replica.Inspect, a.networkKeys, a.engineStamps.Networking.HostnameAliased)
 	a.applyLinks(cfg, replica)
 	dropSharedNetworkFields(cfg)
 	normalize(cfg)
-	a.dropEngineDefaults(cfg, replica)
+	a.dropEngineStamps(cfg, replica)
 	addSharedDependencies(cfg)
 }
 
@@ -133,7 +133,7 @@ func isLocalImage(inspect image.InspectResponse) bool {
 }
 
 // applyHostConfig reads what the container was created against the host with.
-// What the engine fills in by itself is left out by dropEngineDefaults.
+// What the engine fills in by itself is left out by dropEngineStamps.
 func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
 	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
 		return
@@ -283,7 +283,7 @@ func declaredContainerName(name string, labels map[string]string) string {
 // declaredNetworkMode keeps only a mode the user could have written: a compose network's name,
 // or a bridge beside one, is the networks: section's; one joining no network (pasta, ns:) stays.
 func (a assembly) declaredNetworkMode(mode string, inspect container.InspectResponse) string {
-	if a.defaults.BridgeModeBesideNetworks && joinsKeyedNetwork(inspect, a.networkKeys) &&
+	if a.engineStamps.Networking.BridgeModeBesideNetworks && joinsKeyedNetwork(inspect, a.networkKeys) &&
 		(mode == "bridge" || mode == "default") {
 		return ""
 	}
@@ -528,7 +528,7 @@ func toDuration(d time.Duration) *types.Duration {
 	return &converted
 }
 
-// newLogging renders logging:; the engine's own driver is dropEngineDefaults' to leave out.
+// newLogging renders logging:; the engine's own driver is dropEngineStamps' to leave out.
 func newLogging(from container.LogConfig) *types.LoggingConfig {
 	if from.Type == "" {
 		return nil

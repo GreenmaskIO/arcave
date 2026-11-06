@@ -46,7 +46,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "before-migration"}).
 		Return(savepoint, nil).Once()
 	released := false
-	h := NewMCPHandler(MCPFactories{Service: func(context.Context, string, string) (MCPService, func(), error) {
+	h := NewMCPHandler(MCPFactories{Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
 		return svc, func() { released = true }, nil
 	}}, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
@@ -172,7 +172,7 @@ func TestMCPHandler_openService(t *testing.T) {
 			// Arrange
 			var gotService, gotSavepointStore string
 			h := NewMCPHandler(MCPFactories{
-				Service: func(_ context.Context, _, session string) (MCPService, func(), error) {
+				Savepoint: func(_ context.Context, _, session string) (MCPSavepointService, func(), error) {
 					gotService = session
 					return &mockService{}, func() {}, nil
 				},
@@ -183,11 +183,11 @@ func TestMCPHandler_openService(t *testing.T) {
 			}, tt.pin, model.LeftoverVolumesOverwrite)
 
 			// Act
-			_, _, serviceErr := h.openService(context.Background(), "demo", tt.session)
+			_, _, savepointErr := h.openSavepointService(context.Background(), "demo", tt.session)
 			_, _, savepointStoreErr := h.openSavepointStoreService(context.Background(), "demo", tt.session)
 
 			// Assert
-			require.NoError(t, serviceErr)
+			require.NoError(t, savepointErr)
 			require.NoError(t, savepointStoreErr)
 			assert.Equal(t, tt.want, gotService)
 			assert.Equal(t, tt.want, gotSavepointStore)
@@ -199,7 +199,7 @@ func TestMCPHandler_ALockedProjectIsNamed(t *testing.T) {
 	// Arrange
 	svc := &mockService{}
 	svc.On("Rollback", mock.Anything, mock.Anything).Return(model.RollbackResult{}, model.ErrProjectLocked).Once()
-	h := NewMCPHandler(MCPFactories{Service: func(context.Context, string, string) (MCPService, func(), error) {
+	h := NewMCPHandler(MCPFactories{Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
 		return svc, func() {}, nil
 	}}, model.SessionID{}, model.LeftoverVolumesOverwrite)
 
@@ -514,7 +514,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		tt.setup(svc)
 	}
 	h := NewMCPHandler(MCPFactories{
-		Service: func(context.Context, string, string) (MCPService, func(), error) {
+		Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
 			return svc, func() {}, nil
 		},
 		SavepointStore: func(context.Context, string, string) (MCPSavepointStoreService, func(), error) {
@@ -674,7 +674,7 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 				svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint{}, nil).Once()
 			}
 			h := NewMCPHandler(MCPFactories{
-				Service: func(context.Context, string, string) (MCPService, func(), error) {
+				Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
 					return svc, func() {}, nil
 				},
 				SavepointStore: func(context.Context, string, string) (MCPSavepointStoreService, func(), error) {

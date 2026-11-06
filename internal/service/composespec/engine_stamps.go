@@ -39,9 +39,9 @@ const (
 	podmanBridgeNetwork = "podman"
 )
 
-// EngineDefaults is what an engine stamps on a container its compose file did not ask
+// EngineStamps is what an engine stamps on a container its compose file did not ask
 // for. A zero field is one the engine does not stamp.
-type EngineDefaults struct {
+type EngineStamps struct {
 	// StopSignal, WorkingDir and HealthTimeout are stamped only where the image sets none.
 	StopSignal    string
 	StopTimeout   int
@@ -71,10 +71,17 @@ type EngineDefaults struct {
 	MemorySwapOfMemory int64
 	// SharedNamespaceSecurityOpt is added beside the host's pid or ipc namespace, or privileged.
 	SharedNamespaceSecurityOpt string
+	// Networking is how the engine treats networks, read where they are assembled.
+	Networking EngineNetworking
+}
+
+// EngineNetworking is how an engine's networks behave past what a compose file asks for;
+// a zero field is an engine that does not.
+type EngineNetworking struct {
 	// HostnameAliased reports an engine aliasing a container by its hostname in every network.
 	HostnameAliased bool
-	// NetworkIPFamilies reports an engine stamping IPv4 on and IPv6 off on a network declaring neither.
-	NetworkIPFamilies bool
+	// StampedIPFamilies reports an engine stamping IPv4 on and IPv6 off on a network declaring neither.
+	StampedIPFamilies bool
 	// BridgeNetwork is the engine's own network a network_mode: bridge container joins, when
 	// it is not named bridge.
 	BridgeNetwork string
@@ -83,14 +90,14 @@ type EngineDefaults struct {
 	BridgeModeBesideNetworks bool
 }
 
-// NewDockerDefaults is what Docker stamps, on this daemon as `docker info` reports it:
+// NewDockerStamps is what Docker stamps, on this daemon as `docker info` reports it:
 // its runtime, log driver and host name, and Docker Desktop's stop timeout.
-func NewDockerDefaults(info system.Info) EngineDefaults {
+func NewDockerStamps(info system.Info) EngineStamps {
 	stopTimeout := 0
 	if info.OperatingSystem == desktopOperatingSystem {
 		stopTimeout = desktopStopTimeout
 	}
-	return EngineDefaults{
+	return EngineStamps{
 		StopTimeout:                stopTimeout,
 		Runtimes:                   nonEmpty(info.DefaultRuntime),
 		LogDrivers:                 nonEmpty(info.LoggingDriver),
@@ -101,10 +108,10 @@ func NewDockerDefaults(info system.Info) EngineDefaults {
 	}
 }
 
-// NewPodmanDefaults is what Podman stamps, on this daemon as `docker info` reports it:
+// NewPodmanStamps is what Podman stamps, on this daemon as `docker info` reports it:
 // its runtime and log driver beside Podman's own, and its host name.
-func NewPodmanDefaults(info system.Info) EngineDefaults {
-	return EngineDefaults{
+func NewPodmanStamps(info system.Info) EngineStamps {
+	return EngineStamps{
 		StopSignal:      "SIGTERM",
 		StopTimeout:     10,
 		HealthTimeout:   30 * time.Second,
@@ -125,10 +132,12 @@ func NewPodmanDefaults(info system.Info) EngineDefaults {
 		TmpfsOptions:               []string{"rprivate", "nosuid", "nodev", "tmpcopyup"},
 		MemorySwapOfMemory:         2,
 		SharedNamespaceSecurityOpt: labelDisable,
-		HostnameAliased:            true,
-		NetworkIPFamilies:          true,
-		BridgeNetwork:              podmanBridgeNetwork,
-		BridgeModeBesideNetworks:   true,
+		Networking: EngineNetworking{
+			HostnameAliased:          true,
+			StampedIPFamilies:        true,
+			BridgeNetwork:            podmanBridgeNetwork,
+			BridgeModeBesideNetworks: true,
+		},
 	}
 }
 
@@ -141,54 +150,54 @@ func nonEmpty(values ...string) []string {
 	return kept
 }
 
-// dropEngineDefaults takes out of cfg what the engine stamped on the container by itself.
-func (a assembly) dropEngineDefaults(cfg *types.ServiceConfig, replica model.Container) {
-	defaults := a.defaults
+// dropEngineStamps takes out of cfg what the engine stamped on the container by itself.
+func (a assembly) dropEngineStamps(cfg *types.ServiceConfig, replica model.Container) {
+	stamps := a.engineStamps
 	image := a.upstreamConfig(replica)
 
-	cfg.Environment = dropEngineEnvironment(cfg.Environment, defaults, replica.Inspect, image.Env, cfg.Tty)
-	if defaults.WorkingDir != "" && cfg.WorkingDir == defaults.WorkingDir && image.WorkingDir == "" {
+	cfg.Environment = dropEngineEnvironment(cfg.Environment, stamps, replica.Inspect, image.Env, cfg.Tty)
+	if stamps.WorkingDir != "" && cfg.WorkingDir == stamps.WorkingDir && image.WorkingDir == "" {
 		cfg.WorkingDir = ""
 	}
-	// A default is the engine's only where the image sets none: a value equal to it over
+	// A stamp is the engine's only where the image sets none: a value equal to it over
 	// the image's own is the compose file's.
-	if defaults.StopSignal != "" && cfg.StopSignal == defaults.StopSignal && image.StopSignal == "" {
+	if stamps.StopSignal != "" && cfg.StopSignal == stamps.StopSignal && image.StopSignal == "" {
 		cfg.StopSignal = ""
 	}
-	if defaults.StopTimeout > 0 && cfg.StopGracePeriod != nil &&
-		time.Duration(*cfg.StopGracePeriod) == time.Duration(defaults.StopTimeout)*time.Second {
+	if stamps.StopTimeout > 0 && cfg.StopGracePeriod != nil &&
+		time.Duration(*cfg.StopGracePeriod) == time.Duration(stamps.StopTimeout)*time.Second {
 		cfg.StopGracePeriod = nil
 	}
-	if defaults.HealthTimeout > 0 && cfg.HealthCheck != nil && cfg.HealthCheck.Timeout != nil &&
-		time.Duration(*cfg.HealthCheck.Timeout) == defaults.HealthTimeout &&
+	if stamps.HealthTimeout > 0 && cfg.HealthCheck != nil && cfg.HealthCheck.Timeout != nil &&
+		time.Duration(*cfg.HealthCheck.Timeout) == stamps.HealthTimeout &&
 		(image.Healthcheck == nil || image.Healthcheck.Timeout == 0) {
 		cfg.HealthCheck.Timeout = nil
 	}
-	if slices.Contains(defaults.Runtimes, cfg.Runtime) {
+	if slices.Contains(stamps.Runtimes, cfg.Runtime) {
 		cfg.Runtime = ""
 	}
-	cfg.Pid = dropDefault(cfg.Pid, defaults.PidMode)
-	cfg.Uts = dropDefault(cfg.Uts, defaults.UtsMode)
-	cfg.Ipc = dropDefault(cfg.Ipc, defaults.IpcMode)
-	if defaults.ShmSize > 0 && int64(cfg.ShmSize) == defaults.ShmSize {
+	cfg.Pid = dropStamped(cfg.Pid, stamps.PidMode)
+	cfg.Uts = dropStamped(cfg.Uts, stamps.UtsMode)
+	cfg.Ipc = dropStamped(cfg.Ipc, stamps.IpcMode)
+	if stamps.ShmSize > 0 && int64(cfg.ShmSize) == stamps.ShmSize {
 		cfg.ShmSize = 0
 	}
-	if slices.Contains(defaults.CgroupParents, cfg.CgroupParent) {
+	if slices.Contains(stamps.CgroupParents, cfg.CgroupParent) {
 		cfg.CgroupParent = ""
 	}
-	if cfg.Logging != nil && len(cfg.Logging.Options) == 0 && slices.Contains(defaults.LogDrivers, cfg.Logging.Driver) {
+	if cfg.Logging != nil && len(cfg.Logging.Options) == 0 && slices.Contains(stamps.LogDrivers, cfg.Logging.Driver) {
 		cfg.Logging = nil
 	}
-	if container.NetworkMode(cfg.NetworkMode).IsHost() && cfg.Hostname == defaults.HostName {
+	if container.NetworkMode(cfg.NetworkMode).IsHost() && cfg.Hostname == stamps.HostName {
 		cfg.Hostname = ""
 	}
-	cfg.Tmpfs = dropTmpfsOptions(cfg.Tmpfs, defaults.TmpfsOptions)
-	if defaults.MemorySwapOfMemory > 0 && cfg.MemLimit > 0 &&
-		int64(cfg.MemSwapLimit) == defaults.MemorySwapOfMemory*int64(cfg.MemLimit) {
+	cfg.Tmpfs = dropTmpfsOptions(cfg.Tmpfs, stamps.TmpfsOptions)
+	if stamps.MemorySwapOfMemory > 0 && cfg.MemLimit > 0 &&
+		int64(cfg.MemSwapLimit) == stamps.MemorySwapOfMemory*int64(cfg.MemLimit) {
 		cfg.MemSwapLimit = 0
 	}
 	if cfg.Pid == "host" || cfg.Ipc == "host" || cfg.Privileged {
-		cfg.SecurityOpt = dropValue(cfg.SecurityOpt, defaults.SharedNamespaceSecurityOpt)
+		cfg.SecurityOpt = dropValue(cfg.SecurityOpt, stamps.SharedNamespaceSecurityOpt)
 	}
 }
 
@@ -208,7 +217,7 @@ func (a assembly) upstreamConfig(replica model.Container) dockerspec.DockerOCIIm
 // dropEngineEnvironment drops the variables the engine set itself; one the image sets is
 // the image's, and stays. nil when nothing is left.
 func dropEngineEnvironment(
-	environment types.MappingWithEquals, defaults EngineDefaults, inspect container.InspectResponse,
+	environment types.MappingWithEquals, stamps EngineStamps, inspect container.InspectResponse,
 	imageEnv []string, tty bool,
 ) types.MappingWithEquals {
 	if len(environment) == 0 {
@@ -219,22 +228,22 @@ func dropEngineEnvironment(
 	if inspect.Config != nil {
 		hostname = inspect.Config.Hostname
 	}
-	isDefault := func(key, value string) bool {
-		if fixed, ok := defaults.EnvFixed[key]; ok && value == fixed {
+	isStamped := func(key, value string) bool {
+		if fixed, ok := stamps.EnvFixed[key]; ok && value == fixed {
 			return true
 		}
-		if slices.Contains(defaults.EnvFromHostname, key) && value == hostname {
+		if slices.Contains(stamps.EnvFromHostname, key) && value == hostname {
 			return true
 		}
-		if under, ok := defaults.EnvUnderTTY[key]; ok && tty && value == under {
+		if under, ok := stamps.EnvUnderTTY[key]; ok && tty && value == under {
 			return true
 		}
-		return slices.Contains(defaults.EnvUnlessImage[key], value)
+		return slices.Contains(stamps.EnvUnlessImage[key], value)
 	}
 
 	kept := types.MappingWithEquals{}
 	for key, value := range environment {
-		if _, inImage := image[key]; !inImage && value != nil && isDefault(key, *value) {
+		if _, inImage := image[key]; !inImage && value != nil && isStamped(key, *value) {
 			continue
 		}
 		kept[key] = value
@@ -245,8 +254,8 @@ func dropEngineEnvironment(
 	return kept
 }
 
-// dropDefault is value unless it is the engine's non-empty default.
-func dropDefault(value, engine string) string {
+// dropStamped is value unless it is the engine's non-empty stamp.
+func dropStamped(value, engine string) string {
 	if engine != "" && value == engine {
 		return ""
 	}

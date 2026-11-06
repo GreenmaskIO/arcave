@@ -52,7 +52,7 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 // newMCPFactories is what every family of tools is built by, for one tool call each.
 func newMCPFactories() cli.MCPFactories {
 	return cli.MCPFactories{
-		Service:        mcpServiceFactory,
+		Savepoint:      mcpSavepointServiceFactory,
 		SavepointStore: mcpSavepointStoreServiceFactory,
 		Session:        mcpSessionServiceFactory,
 		Tools:          mcpToolsServiceFactory,
@@ -60,9 +60,11 @@ func newMCPFactories() cli.MCPFactories {
 	}
 }
 
-// mcpServiceFactory wires the savepoint workflows for a tool call's compose project and session
-// ("" is the current one), the daemon connected, plus the release closing them.
-func mcpServiceFactory(ctx context.Context, project, sessionRef string) (cli.MCPService, func(), error) {
+// mcpSavepointServiceFactory wires the savepoint workflows for a tool call's compose project and
+// session ("" is the current one), the daemon connected, plus the release closing them.
+func mcpSavepointServiceFactory(
+	ctx context.Context, project, sessionRef string,
+) (cli.MCPSavepointService, func(), error) {
 	var opened closers
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(project), &opened)
 	if err != nil {
@@ -72,8 +74,8 @@ func mcpServiceFactory(ctx context.Context, project, sessionRef string) (cli.MCP
 	return svc, func() { opened.release(ctx) }, nil
 }
 
-// mcpSavepointStoreServiceFactory is mcpServiceFactory for a tool that reads or deletes in the
-// store alone: nothing that reaches the daemon is built.
+// mcpSavepointStoreServiceFactory is mcpSavepointServiceFactory for a tool that reads or deletes
+// in the store alone: nothing that reaches the daemon is built.
 func mcpSavepointStoreServiceFactory(
 	ctx context.Context, project, sessionRef string,
 ) (cli.MCPSavepointStoreService, func(), error) {

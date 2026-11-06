@@ -132,7 +132,7 @@ func TestNewServiceConfig(t *testing.T) {
 	}}
 
 	// Act
-	cfg := newAssembly(introspection, NewDockerDefaults(system.Info{})).newServiceConfig(richService())
+	cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(richService())
 
 	// Assert
 	assert.Equal(t, "postgres:16", cfg.Image)
@@ -185,7 +185,7 @@ func TestNewServiceConfig(t *testing.T) {
 
 func TestNewServiceConfig_Volumes(t *testing.T) {
 	// Act
-	cfg := newAssembly(model.IntrospectionResult{}, NewDockerDefaults(system.Info{})).newServiceConfig(richService())
+	cfg := newAssembly(model.IntrospectionResult{}, NewDockerStamps(system.Info{})).newServiceConfig(richService())
 
 	// Assert
 	require.Len(t, cfg.Volumes, 3)
@@ -273,26 +273,26 @@ const (
 func TestNewServiceConfig_PodmanBridgeMode(t *testing.T) {
 	tests := []struct {
 		name         string
-		defaults     EngineDefaults
+		stamps       EngineStamps
 		networks     map[string]*network.EndpointSettings
 		wantMode     string
 		wantNetworks []string
 	}{
 		{
 			name:         "beside a project network",
-			defaults:     NewPodmanDefaults(system.Info{}),
+			stamps:       NewPodmanStamps(system.Info{}),
 			networks:     map[string]*network.EndpointSettings{"demo_back": {}},
 			wantNetworks: []string{"back"},
 		},
 		{
 			name:     "with no project network",
-			defaults: NewPodmanDefaults(system.Info{}),
+			stamps:   NewPodmanStamps(system.Info{}),
 			networks: map[string]*network.EndpointSettings{"podman": {}},
 			wantMode: "bridge",
 		},
 		{
 			name:     "bridge beside a network on Docker, which reports the mode as declared",
-			defaults: NewDockerDefaults(system.Info{}),
+			stamps:   NewDockerStamps(system.Info{}),
 			networks: map[string]*network.EndpointSettings{"demo_back": {}},
 			wantMode: "bridge",
 		},
@@ -312,7 +312,7 @@ func TestNewServiceConfig_PodmanBridgeMode(t *testing.T) {
 			}
 
 			// Act
-			cfg := newAssembly(introspection, tt.defaults).newServiceConfig(service)
+			cfg := newAssembly(introspection, tt.stamps).newServiceConfig(service)
 
 			// Assert
 			assert.Equal(t, tt.wantMode, cfg.NetworkMode)
@@ -358,7 +358,7 @@ func TestAssembly_declaredNetworkMode(t *testing.T) {
 			a := assembly{
 				serviceByReplica: map[string]string{dbReplicaID: "db"},
 				networkKeys:      map[string]string{"demo_back": "back"},
-				defaults:         EngineDefaults{BridgeModeBesideNetworks: !tt.docker},
+				engineStamps:     EngineStamps{Networking: EngineNetworking{BridgeModeBesideNetworks: !tt.docker}},
 			}
 			inspect := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
 				Networks: tt.networks,
@@ -448,7 +448,7 @@ func TestNewServiceConfig_SharedNamespaces(t *testing.T) {
 	introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{app, db}}}
 
 	// Act
-	cfg := newAssembly(introspection, NewDockerDefaults(system.Info{})).newServiceConfig(app)
+	cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(app)
 
 	// Assert
 	assert.Equal(t, "service:db", cfg.NetworkMode)
@@ -547,7 +547,7 @@ func TestNewServiceConfig_Image(t *testing.T) {
 			}
 
 			// Act
-			cfg := newAssembly(introspection, NewDockerDefaults(system.Info{})).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
 
 			// Assert
 			assert.Equal(t, tt.want, cfg.Image)
@@ -570,7 +570,7 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 		{
 			name: "the daemon's runtime, log driver and shm size are left out",
 			info: system.Info{DefaultRuntime: "runc", LoggingDriver: "json-file"},
-			host: container.HostConfig{Runtime: "runc", ShmSize: NewDockerDefaults(system.Info{}).ShmSize,
+			host: container.HostConfig{Runtime: "runc", ShmSize: NewDockerStamps(system.Info{}).ShmSize,
 				LogConfig: container.LogConfig{Type: "json-file"}},
 			verify: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Empty(t, cfg.Runtime)
@@ -633,7 +633,7 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 			}
 
 			// Act
-			cfg := newAssembly(introspection, NewDockerDefaults(tt.info)).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(tt.info)).newServiceConfig(svc)
 
 			// Assert
 			tt.verify(t, cfg)
@@ -729,10 +729,10 @@ func TestNewServiceConfig_DaemonAdditions(t *testing.T) {
 			introspection := model.IntrospectionResult{
 				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
 			}
-			defaults := NewDockerDefaults(system.Info{Name: "docker-desktop"})
+			stamps := NewDockerStamps(system.Info{Name: "docker-desktop"})
 
 			// Act
-			cfg := newAssembly(introspection, defaults).newServiceConfig(svc)
+			cfg := newAssembly(introspection, stamps).newServiceConfig(svc)
 
 			// Assert
 			tt.verify(t, cfg)
@@ -784,7 +784,7 @@ func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 			}}
 
 			// Act
-			cfg := newAssembly(introspection, NewDockerDefaults(system.Info{})).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
 
 			// Assert
 			require.Contains(t, cfg.Networks, "default")
@@ -833,7 +833,7 @@ func TestNewServiceConfig_VolumesFrom(t *testing.T) {
 			introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{svc}}}
 
 			// Act
-			cfg := newAssembly(introspection, NewDockerDefaults(system.Info{})).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
 
 			// Assert
 			var targets []string
@@ -894,11 +894,11 @@ func TestToRestartPolicy(t *testing.T) {
 func TestNewServiceConfig_HostnameAlias(t *testing.T) {
 	tests := []struct {
 		name        string
-		defaults    EngineDefaults
+		stamps      EngineStamps
 		wantAliases []string
 	}{
-		{name: "docker", defaults: NewDockerDefaults(system.Info{}), wantAliases: []string{"db-primary", "primary"}},
-		{name: "podman", defaults: NewPodmanDefaults(system.Info{}), wantAliases: []string{"primary"}},
+		{name: "docker", stamps: NewDockerStamps(system.Info{}), wantAliases: []string{"db-primary", "primary"}},
+		{name: "podman", stamps: NewPodmanStamps(system.Info{}), wantAliases: []string{"primary"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -915,7 +915,7 @@ func TestNewServiceConfig_HostnameAlias(t *testing.T) {
 			}
 
 			// Act
-			cfg := newAssembly(introspection, tt.defaults).newServiceConfig(service)
+			cfg := newAssembly(introspection, tt.stamps).newServiceConfig(service)
 
 			// Assert
 			require.Contains(t, cfg.Networks, "back")
@@ -966,7 +966,7 @@ func TestNewServiceConfig_PodmanDefaultOverImage(t *testing.T) {
 			}
 
 			// Act
-			cfg := newAssembly(introspection, NewPodmanDefaults(system.Info{})).newServiceConfig(service)
+			cfg := newAssembly(introspection, NewPodmanStamps(system.Info{})).newServiceConfig(service)
 
 			// Assert
 			assert.Equal(t, tt.wantStopSignal, cfg.StopSignal)
@@ -981,13 +981,13 @@ func TestNewServiceConfig_PodmanDefaultOverImage(t *testing.T) {
 func TestNewServiceConfig_PodmanDefaults(t *testing.T) {
 	grace := func(d time.Duration) *types.Duration { converted := types.Duration(d); return &converted }
 	tests := []struct {
-		name     string
-		defaults EngineDefaults
-		want     func(t *testing.T, cfg types.ServiceConfig)
+		name   string
+		stamps EngineStamps
+		want   func(t *testing.T, cfg types.ServiceConfig)
 	}{
 		{
-			name:     "podman",
-			defaults: NewPodmanDefaults(system.Info{}),
+			name:   "podman",
+			stamps: NewPodmanStamps(system.Info{}),
 			want: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Equal(t, types.NewMappingWithEquals([]string{"PATH=/bin", "MODE=prod"}), cfg.Environment)
 				assert.Empty(t, cfg.WorkingDir)
@@ -1004,8 +1004,8 @@ func TestNewServiceConfig_PodmanDefaults(t *testing.T) {
 			},
 		},
 		{
-			name:     "docker",
-			defaults: NewDockerDefaults(system.Info{}),
+			name:   "docker",
+			stamps: NewDockerStamps(system.Info{}),
 			want: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Equal(t, types.NewMappingWithEquals([]string{
 					"PATH=/bin", "MODE=prod", "container=podman", "HOME=/root", "HOSTNAME=db-primary",
@@ -1056,7 +1056,7 @@ func TestNewServiceConfig_PodmanDefaults(t *testing.T) {
 			}
 
 			// Act
-			cfg := newAssembly(introspection, tt.defaults).newServiceConfig(service)
+			cfg := newAssembly(introspection, tt.stamps).newServiceConfig(service)
 
 			// Assert
 			tt.want(t, cfg)

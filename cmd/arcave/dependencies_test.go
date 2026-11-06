@@ -16,10 +16,13 @@ package main
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"io"
 	"io/fs"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,6 +48,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/client/podman"
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
@@ -121,6 +125,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     config.Docker
+		env     map[string]string
 		wantErr string
 		verify  func(t *testing.T, got *flags.ClientOptions)
 	}{
@@ -143,11 +148,12 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name: "tls settings expand to the three pem paths",
-			cfg:  config.Docker{Host: "tcp://10.0.0.1:2376", CertPath: "/certs", TLSVerify: true},
+			cfg:  config.Docker{Host: "tcp://10.0.0.1:2376", CertPath: "/certs"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
 				assert.True(t, got.TLSVerify)
 				require.NotNil(t, got.TLSOptions)
+				assert.False(t, got.TLSOptions.InsecureSkipVerify, "a certificate is verified unless asked otherwise")
 				assert.Equal(t, "/certs/ca.pem", got.TLSOptions.CAFile)
 				assert.Equal(t, "/certs/cert.pem", got.TLSOptions.CertFile)
 				assert.Equal(t, "/certs/key.pem", got.TLSOptions.KeyFile)
@@ -155,7 +161,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name: "explicit files override the cert path per file",
-			cfg:  config.Docker{CertPath: "/certs", CAFile: "/etc/ca.pem", KeyFile: "/etc/key.pem", TLSVerify: true},
+			cfg:  config.Docker{CertPath: "/certs", CAFile: "/etc/ca.pem", KeyFile: "/etc/key.pem"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				require.NotNil(t, got.TLSOptions)
 				assert.Equal(t, "/etc/ca.pem", got.TLSOptions.CAFile, "explicit CAFile wins")
@@ -175,29 +181,6 @@ func TestNewDockerClientOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "tls verify off carries no tls config",
-			cfg:  config.Docker{TLSVerify: false},
-			verify: func(t *testing.T, got *flags.ClientOptions) {
-				assert.False(t, got.TLS)
-				assert.Nil(t, got.TLSOptions)
-			},
-		},
-		{
-			// Cert material is enough to turn TLS on: a caller who names a cert path
-			// wants an encrypted connection even if they never asked to verify the
-			// daemon's certificate, so TLS is enabled and only TLSVerify stays off.
-			name: "a cert path alone enables tls with verify off",
-			cfg:  config.Docker{CertPath: "/certs"},
-			verify: func(t *testing.T, got *flags.ClientOptions) {
-				assert.True(t, got.TLS, "cert material enables TLS")
-				assert.False(t, got.TLSVerify, "verify stays off unless asked for")
-				require.NotNil(t, got.TLSOptions)
-				assert.Equal(t, "/certs/ca.pem", got.TLSOptions.CAFile)
-				assert.Equal(t, "/certs/cert.pem", got.TLSOptions.CertFile)
-				assert.Equal(t, "/certs/key.pem", got.TLSOptions.KeyFile)
-			},
-		},
-		{
 			// The rule this replaced was the inverse: the raw SDK client could not
 			// resolve a context, so one was refused without a host. docker/cli can.
 			name: "a context alone is enough",
@@ -208,24 +191,21 @@ func TestNewDockerClientOptions(t *testing.T) {
 			},
 		},
 		{
-			// tls_verify with no cert material is the public-CA case: verify the
-			// daemon against the system roots, present no client certificate.
-			name: "tls verify alone enables tls with no cert material",
-			cfg:  config.Docker{TLSVerify: true},
+			name: "skip_tls_verify alone turns tls on, with no cert material",
+			cfg:  config.Docker{Host: "tcp://10.0.0.1:2376", SkipTLSVerify: true},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
-				assert.True(t, got.TLSVerify)
+				assert.False(t, got.TLSVerify)
 				require.NotNil(t, got.TLSOptions)
+				assert.True(t, got.TLSOptions.InsecureSkipVerify)
 				assert.Empty(t, got.TLSOptions.CAFile)
-				assert.Empty(t, got.TLSOptions.CertFile)
-				assert.Empty(t, got.TLSOptions.KeyFile)
 			},
 		},
 		{
 			// A CA to verify against, but no client certificate — still a complete
 			// config, because cert/key are a pair that is simply absent here.
 			name: "a ca file alone verifies without a client certificate",
-			cfg:  config.Docker{CAFile: "/etc/ca.pem", TLSVerify: true},
+			cfg:  config.Docker{CAFile: "/etc/ca.pem"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
 				require.NotNil(t, got.TLSOptions)
@@ -260,10 +240,59 @@ func TestNewDockerClientOptions(t *testing.T) {
 			cfg:     config.Docker{Host: "unix:///d.sock", Context: "remote"},
 			wantErr: "mutually exclusive",
 		},
+		{
+			name: "the environment alone turns tls on, with the three pem paths",
+			env:  map[string]string{client.EnvOverrideHost: "tcp://h:1", client.EnvTLSVerify: "1", client.EnvOverrideCertPath: "/env-certs"},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.True(t, got.TLS)
+				assert.True(t, got.TLSVerify)
+				require.NotNil(t, got.TLSOptions)
+				assert.Equal(t, "/env-certs/ca.pem", got.TLSOptions.CAFile)
+				assert.Equal(t, "/env-certs/cert.pem", got.TLSOptions.CertFile)
+				assert.Equal(t, "/env-certs/key.pem", got.TLSOptions.KeyFile)
+			},
+		},
+		{
+			name: "a cert path in the environment alone keeps tls off",
+			env:  map[string]string{client.EnvOverrideHost: "tcp://h:1", client.EnvOverrideCertPath: "/env-certs"},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.False(t, got.TLS)
+				assert.Nil(t, got.TLSOptions)
+			},
+		},
+		{
+			name:    "the environment's verify with no cert path is refused",
+			env:     map[string]string{client.EnvOverrideHost: "tcp://h:1", client.EnvTLSVerify: "1"},
+			wantErr: "DOCKER_TLS_VERIFY is set but DOCKER_CERT_PATH is not",
+		},
+		{
+			name: "a stale verify with no tcp host changes nothing",
+			env:  map[string]string{client.EnvTLSVerify: "1"},
+			verify: func(t *testing.T, got *flags.ClientOptions) {
+				assert.False(t, got.TLS)
+				assert.Nil(t, got.TLSOptions)
+			},
+		},
+		{
+			name: "half a client pair in the config stays refused beside the environment",
+			cfg:  config.Docker{CertFile: "/etc/cert.pem"},
+			env: map[string]string{
+				client.EnvOverrideHost: "tcp://h:1", client.EnvTLSVerify: "1", client.EnvOverrideCertPath: "/env-certs",
+			},
+			wantErr: "docker.key_file is missing",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			t.Setenv(client.EnvOverrideHost, "")
+			t.Setenv(client.EnvTLSVerify, "")
+			t.Setenv(client.EnvOverrideCertPath, "")
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
 			// Act
 			got, err := newDockerClientOptions(tt.cfg)
 
@@ -278,9 +307,86 @@ func TestNewDockerClientOptions(t *testing.T) {
 	}
 }
 
+// DOCKER_TLS_VERIFY brings DOCKER_CERT_PATH in beside a tcp DOCKER_HOST the config does not
+// override; any file the config names keeps it out, and no certificate at all is refused.
+func TestWithDockerTLSEnv(t *testing.T) {
+	const tcpHost = "tcp://h:1"
+	tests := []struct {
+		name    string
+		cfg     config.Docker
+		host    string
+		verify  string
+		path    string
+		want    config.Docker
+		wantErr string
+	}{
+		{name: "an empty environment changes nothing", cfg: config.Docker{CAFile: "/cfg/ca.pem"}, host: tcpHost, want: config.Docker{CAFile: "/cfg/ca.pem"}},
+		{name: "both variables", host: tcpHost, verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
+		{name: "any value of DOCKER_TLS_VERIFY counts", host: tcpHost, verify: "0", path: "/env", want: config.Docker{CertPath: "/env"}},
+		{name: "a cert path with no DOCKER_TLS_VERIFY is not taken", host: tcpHost, path: "/env"},
+		{name: "DOCKER_TLS_VERIFY with no certificate is refused", host: tcpHost, verify: "1", wantErr: "DOCKER_TLS_VERIFY is set but DOCKER_CERT_PATH is not"},
+		{name: "no certificate is fine under skip_tls_verify", cfg: config.Docker{SkipTLSVerify: true}, host: tcpHost, verify: "1", want: config.Docker{SkipTLSVerify: true}},
+		{
+			name:   "skip_tls_verify keeps the cert path for its client certificate",
+			cfg:    config.Docker{SkipTLSVerify: true},
+			host:   tcpHost,
+			verify: "1",
+			path:   "/env",
+			want:   config.Docker{SkipTLSVerify: true, CertPath: "/env"},
+		},
+		{name: "no DOCKER_HOST: not taken", verify: "1", path: "/env"},
+		{name: "a socket DOCKER_HOST: not taken", host: "unix:///d.sock", verify: "1", path: "/env"},
+		{name: "an ssh DOCKER_HOST: not taken", host: "ssh://u@h", verify: "1", path: "/env"},
+		{name: "a DOCKER_HOST docker/cli cannot parse: not taken", host: "http://h:1", verify: "1", path: "/env"},
+		{name: "a DOCKER_HOST with no scheme is tcp", host: "h:1", verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
+		{name: "a DOCKER_HOST of a port alone is tcp", host: ":2376", verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
+		{name: "a DOCKER_HOST with spaces around it is tcp", host: " tcp://h:1 ", verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
+		{name: "a DOCKER_HOST with no scheme and no certificate is refused", host: "h:1", verify: "1", wantErr: "DOCKER_TLS_VERIFY is set but DOCKER_CERT_PATH is not"},
+		{
+			name:   "the config names a host: not taken",
+			cfg:    config.Docker{Host: "tcp://plain:2375"},
+			host:   tcpHost,
+			verify: "1",
+			path:   "/env",
+			want:   config.Docker{Host: "tcp://plain:2375"},
+		},
+		{
+			name:   "the config names a context: not taken",
+			cfg:    config.Docker{Context: "remote"},
+			host:   tcpHost,
+			verify: "1",
+			path:   "/env",
+			want:   config.Docker{Context: "remote"},
+		},
+		{name: "the config's cert path wins", cfg: config.Docker{CertPath: "/cfg"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{CertPath: "/cfg"}},
+		{name: "a ca file in the config keeps it out", cfg: config.Docker{CAFile: "/cfg/ca.pem"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{CAFile: "/cfg/ca.pem"}},
+		{name: "a client cert in the config keeps it out", cfg: config.Docker{CertFile: "/cfg/c.pem"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{CertFile: "/cfg/c.pem"}},
+		{name: "a client key in the config keeps it out", cfg: config.Docker{KeyFile: "/cfg/k.pem"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{KeyFile: "/cfg/k.pem"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			t.Setenv(client.EnvOverrideHost, tt.host)
+			t.Setenv(client.EnvTLSVerify, tt.verify)
+			t.Setenv(client.EnvOverrideCertPath, tt.path)
+
+			// Act
+			got, err := withDockerTLSEnv(tt.cfg)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // newDockerTLSOptions honours docker's two-part TLS model: a cert_file/key_file pair
-// (mutual TLS) that must be supplied together, and ca_file/tls_verify governing
-// server verification independently. The useTLS return is what keeps an all-empty
+// (mutual TLS) that must be supplied together, and ca_file governing server
+// verification independently, which only skip_tls_verify turns off. The useTLS return is what keeps an all-empty
 // config off TLS entirely, so it is asserted alongside the resolved paths.
 func TestNewDockerTLSOptions(t *testing.T) {
 	tests := []struct {
@@ -291,6 +397,7 @@ func TestNewDockerTLSOptions(t *testing.T) {
 		wantCAFile  string
 		wantCert    string
 		wantKeyFile string
+		wantSkip    bool
 	}{
 		{
 			name:       "an empty config leaves tls off",
@@ -298,9 +405,10 @@ func TestNewDockerTLSOptions(t *testing.T) {
 			wantUseTLS: false,
 		},
 		{
-			name:       "tls verify alone turns tls on with no cert material",
-			cfg:        config.Docker{TLSVerify: true},
+			name:       "skip_tls_verify alone turns tls on with no cert material",
+			cfg:        config.Docker{SkipTLSVerify: true},
 			wantUseTLS: true,
+			wantSkip:   true,
 		},
 		{
 			name:       "a ca file alone verifies without a client certificate",
@@ -362,6 +470,7 @@ func TestNewDockerTLSOptions(t *testing.T) {
 				return
 			}
 			require.NotNil(t, opts)
+			assert.Equal(t, tt.wantSkip, opts.InsecureSkipVerify)
 			assert.Equal(t, tt.wantCAFile, opts.CAFile)
 			assert.Equal(t, tt.wantCert, opts.CertFile)
 			assert.Equal(t, tt.wantKeyFile, opts.KeyFile)
@@ -552,8 +661,8 @@ func TestNewDaemonCollectors_DaemonDoesNotAnswer(t *testing.T) {
 	// Arrange
 	_, dockerClientAPI, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = dockerClientAPI.Close() })
 	engine := docker.NewEngine(dockerClientAPI)
-	t.Cleanup(func() { _ = engine.Close() })
 	collectors := newDaemonCollectors(config.Config{}, engine)
 
 	// Act
@@ -573,8 +682,8 @@ func TestNewObjectCollectors(t *testing.T) {
 	// Arrange
 	_, dockerClientAPI, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = dockerClientAPI.Close() })
 	engine := docker.NewEngine(dockerClientAPI)
-	t.Cleanup(func() { _ = engine.Close() })
 	type resolution struct {
 		collector model.GarbageCollectorKind
 		daemon    bool
@@ -883,14 +992,24 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 	assert.Nil(t, sink)
 }
 
-// The engine behind the daemon decides the profile whole: Podman is reached past its compat
-// API, held to no Docker version, and stamps its own defaults; Docker through the API itself.
+// The engine decides the profile whole: Podman is reached past its compat API, over TLS as the
+// endpoint is, held to no Docker version, with its own defaults; Docker through the API itself.
 func TestNewRuntimeProfile(t *testing.T) {
-	api := &client.Client{}
+	api, err := client.NewClientWithOpts(client.WithHost("tcp://10.0.0.5:2376"))
+	require.NoError(t, err)
 	info := system.Info{Name: "host-1", LoggingDriver: "json-file", DefaultRuntime: "runc"}
 	plain := dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2375"}}
-	engine := docker.NewEngine(api)
-	libpod := podman.NewLibpod(api)
+	dockerEngine := docker.NewEngine(api)
+	libpodPlain, err := libpod.NewClient(api, libpod.Options{Version: "6.1.4"})
+	require.NoError(t, err)
+	libpodTLS, err := libpod.NewClient(api, libpod.Options{
+		Version: "6.1.4",
+		UseTLS:  true,
+	})
+	require.NoError(t, err)
+	podmanEngine := func(libpodClient *libpod.Client) *docker.Engine {
+		return docker.NewEngine(podman.NewAPI(api, libpodClient))
+	}
 	tests := []struct {
 		name     string
 		runtime  model.ContainerRuntime
@@ -904,10 +1023,11 @@ func TestNewRuntimeProfile(t *testing.T) {
 			endpoint: plain,
 			want: runtimeProfile{
 				api:            api,
-				exporter:       engine,
+				engine:         dockerEngine,
+				volumes:        dockerEngine,
 				version:        "29.8.2",
 				minDaemonMajor: dedupcopy.MinDaemonMajor,
-				assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
+				assembler:      composespec.NewAssembler(composespec.NewDockerStamps(info)),
 			},
 		},
 		{
@@ -919,10 +1039,11 @@ func TestNewRuntimeProfile(t *testing.T) {
 			},
 			want: runtimeProfile{
 				api:            api,
-				exporter:       engine,
+				engine:         dockerEngine,
+				volumes:        dockerEngine,
 				version:        "29.8.2",
 				minDaemonMajor: dedupcopy.MinDaemonMajor,
-				assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
+				assembler:      composespec.NewAssembler(composespec.NewDockerStamps(info)),
 			},
 		},
 		{
@@ -930,41 +1051,165 @@ func TestNewRuntimeProfile(t *testing.T) {
 			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: plain,
 			want: runtimeProfile{
-				api:            podman.NewAPI(api, libpod),
-				exporter:       podman.NewEngine(engine, libpod),
+				api:            podman.NewAPI(api, libpodPlain),
+				engine:         podmanEngine(libpodPlain),
+				volumes:        podman.NewEngine(podmanEngine(libpodPlain)),
 				version:        "6.1.4",
 				minDaemonMajor: 0,
-				assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
+				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 			},
 		},
 		{
-			name:    "podman behind TLS is refused",
+			name:     "podman reporting no version is refused",
+			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman},
+			endpoint: plain,
+			wantErr:  "reach libpod: no Podman version",
+		},
+		{
+			name:    "podman behind TLS reaches libpod over TLS",
 			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: dockercontext.Endpoint{
 				EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
 				TLSData:      &clicontext.TLSData{},
 			},
-			wantErr: "podman behind TLS is not supported",
+			want: runtimeProfile{
+				api:            podman.NewAPI(api, libpodTLS),
+				engine:         podmanEngine(libpodTLS),
+				volumes:        podman.NewEngine(podmanEngine(libpodTLS)),
+				version:        "6.1.4",
+				minDaemonMajor: 0,
+				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
+			},
 		},
 		{
-			name:     "podman with TLS verification off is refused too",
+			name:    "podman behind an https:// host of a context is refused",
+			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			endpoint: dockercontext.Endpoint{
+				EndpointMeta: dockercontext.EndpointMeta{Host: "https://10.0.0.5:2376"},
+				TLSData:      &clicontext.TLSData{},
+			},
+			wantErr: "name it tcp://",
+		},
+		{
+			name:     "podman behind an http:// host of a context is refused",
+			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
+			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "http://10.0.0.5:2375"}},
+			wantErr:  "name it tcp://",
+		},
+		{
+			name:     "docker behind an http:// host of a context is not refused",
+			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "http://10.0.0.5:2375"}},
+			want: runtimeProfile{
+				api:            api,
+				engine:         dockerEngine,
+				volumes:        dockerEngine,
+				version:        "29.8.2",
+				minDaemonMajor: dedupcopy.MinDaemonMajor,
+				assembler:      composespec.NewAssembler(composespec.NewDockerStamps(info)),
+			},
+		},
+		{
+			name:     "podman with TLS verification off reaches libpod over TLS too",
 			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376", SkipTLSVerify: true}},
-			wantErr:  "podman behind TLS is not supported",
+			want: runtimeProfile{
+				api:            podman.NewAPI(api, libpodTLS),
+				engine:         podmanEngine(libpodTLS),
+				volumes:        podman.NewEngine(podmanEngine(libpodTLS)),
+				version:        "6.1.4",
+				minDaemonMajor: 0,
+				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := newRuntimeProfile(tt.runtime, info, api, tt.endpoint, engine)
+			got, err := newRuntimeProfile(tt.runtime, info, api, tt.endpoint)
 
 			// Assert
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
+				assert.Equal(t, runtimeProfile{}, got)
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// The endpoint the client resolved decides how libpod is reached: a daemon behind TLS over
+// https, a plain one over http.
+func TestReadRuntimeProfile(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/version"):
+			_, _ = io.WriteString(w, `{"Version":"6.1.4","Components":[{"Name":"Podman Engine","Version":"6.1.4"}]}`)
+		case strings.HasSuffix(r.URL.Path, "/info"):
+			_, _ = io.WriteString(w, `{}`)
+		}
+	})
+	tests := []struct {
+		name    string
+		newCase func(t *testing.T) config.Docker
+		wantTLS bool
+	}{
+		{
+			name: "a plain daemon",
+			newCase: func(t *testing.T) config.Docker {
+				t.Helper()
+				server := httptest.NewServer(handler)
+				t.Cleanup(server.Close)
+				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "http://")}
+			},
+		},
+		{
+			name: "a daemon behind TLS",
+			newCase: func(t *testing.T) config.Docker {
+				t.Helper()
+				server := httptest.NewTLSServer(handler)
+				t.Cleanup(server.Close)
+				caFile := filepath.Join(t.TempDir(), "ca.pem")
+				caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+				require.NoError(t, os.WriteFile(caFile, caPEM, 0o600))
+				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), CAFile: caFile}
+			},
+			wantTLS: true,
+		},
+		{
+			name: "a daemon behind TLS under skip_tls_verify, with no certificate",
+			newCase: func(t *testing.T) config.Docker {
+				t.Helper()
+				server := httptest.NewTLSServer(handler)
+				t.Cleanup(server.Close)
+				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), SkipTLSVerify: true}
+			},
+			wantTLS: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			t.Setenv("DOCKER_CONFIG", t.TempDir())
+			opened := &closers{}
+			defer opened.release(context.Background())
+			daemon, err := connectDaemon(tt.newCase(t), io.Discard, opened)
+			require.NoError(t, err)
+			libpodClient, err := libpod.NewClient(daemon.api, libpod.Options{
+				Version: "6.1.4",
+				UseTLS:  tt.wantTLS,
+			})
+			require.NoError(t, err)
+
+			// Act
+			got, err := readRuntimeProfile(context.Background(), daemon)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, podman.NewAPI(daemon.api, libpodClient), got.api)
 		})
 	}
 }
@@ -1062,6 +1307,39 @@ func TestOpenSavepointService_DaemonUnreachable(t *testing.T) {
 	// Assert
 	require.ErrorContains(t, err, "read the daemon version")
 	assert.Nil(t, svc)
+}
+
+// A gc reads no profile: a daemon that does not answer is its collectors' probe, not the wiring's failure.
+func TestOpenGCService_DaemonUnreachable(t *testing.T) {
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	projectPath := t.TempDir()
+	cfg := newUnreachableDaemonConfig(t, projectPath)
+	var opened closers
+	t.Cleanup(func() { opened.release(ctx) })
+
+	// Act
+	svc, err := openGCService(ctx, projectPath, cfg, "", &opened)
+
+	// Assert
+	require.NoError(t, err)
+	assert.NotNil(t, svc)
+}
+
+// The client goes on the stack: nothing else closes the connection.
+func TestConnectDaemon(t *testing.T) {
+	// Arrange
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	var opened closers
+	t.Cleanup(func() { opened.release(context.Background()) })
+
+	// Act
+	daemon, err := connectDaemon(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard, &opened)
+
+	// Assert
+	require.NoError(t, err)
+	assert.NotNil(t, daemon.api)
+	assert.Len(t, opened.releases, 1)
 }
 
 // The name is gated before anything is opened, though the tools commands open no store.

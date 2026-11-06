@@ -57,16 +57,16 @@ var predefinedNetworks = []string{"host", "none", "bridge", "default"}
 // Assembler turns an introspection result into a compose project, leaving out what its
 // engine stamps by itself.
 type Assembler struct {
-	defaults EngineDefaults
+	engineStamps EngineStamps
 }
 
-// NewAssembler builds an Assembler leaving out what defaults names.
-func NewAssembler(defaults EngineDefaults) *Assembler { return &Assembler{defaults: defaults} }
+// NewAssembler builds an Assembler leaving out what stamps names.
+func NewAssembler(stamps EngineStamps) *Assembler { return &Assembler{engineStamps: stamps} }
 
 // assembly is what rendering one service reads beyond the service itself.
 type assembly struct {
 	introspection model.IntrospectionResult
-	defaults      EngineDefaults
+	engineStamps  EngineStamps
 	networkKeys   map[string]string
 	known         map[string]bool
 	// healthchecked are the services whose first replica runs a healthcheck.
@@ -81,12 +81,12 @@ type assembly struct {
 	foreignNames map[string]string
 }
 
-func newAssembly(introspection model.IntrospectionResult, defaults EngineDefaults) assembly {
+func newAssembly(introspection model.IntrospectionResult, engineStamps EngineStamps) assembly {
 	a := assembly{
 		introspection: introspection,
-		defaults:      defaults,
+		engineStamps:  engineStamps,
 		networkKeys: networkKeys(introspection.Project.Networks, introspection.Project.Services,
-			defaults.BridgeNetwork),
+			engineStamps.Networking.BridgeNetwork),
 		known:            make(map[string]bool, len(introspection.Project.Services)),
 		healthchecked:    map[string]bool{},
 		serviceByReplica: map[string]string{},
@@ -122,7 +122,7 @@ func (s *Assembler) Assemble(ctx context.Context, introspection model.Introspect
 		return nil, fmt.Errorf("compose project %q has no services to act on", introspection.Project.Name)
 	}
 
-	a := newAssembly(introspection, s.defaults)
+	a := newAssembly(introspection, s.engineStamps)
 	a.warnOnMissingContainers(ctx)
 	workingDir, files := projectOrigin(introspection.Project.Services)
 	return &types.Project{
@@ -132,7 +132,7 @@ func (s *Assembler) Assemble(ctx context.Context, introspection model.Introspect
 		Services:     a.newServices(ctx),
 		Volumes:      newVolumes(introspection.Project.Volumes),
 		Networks: newNetworks(introspection.Project.Networks, a.networkKeys,
-			staticAddressNetworks(introspection.Project.Services), s.defaults.NetworkIPFamilies),
+			staticAddressNetworks(introspection.Project.Services), s.engineStamps.Networking.StampedIPFamilies),
 	}, nil
 }
 

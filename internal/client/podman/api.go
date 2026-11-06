@@ -12,17 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package podman reaches a Podman daemon where its Docker API falls short: an API answering
+// as Docker's, over libpod's own, and the engine of package docker with a volume export of its own.
 package podman
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"slices"
+	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-units"
+
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 )
 
 // mountAPIBindOption is the option libpod reports a bind of the mount API with; the bind
@@ -32,20 +40,27 @@ const mountAPIBindOption = "bind"
 // logMaxSizeOption is the log option Docker keeps the size libpod reports as LogConfig.Size in.
 const logMaxSizeOption = "max-size"
 
-// containerLibpod is what reading a container as libpod stores it takes.
-type containerLibpod interface {
-	inspectContainer(ctx context.Context, containerID string) (libpodContainer, error)
+// errUnsupportedCommitOptions refuses what a commit through libpod would lose.
+var errUnsupportedCommitOptions = errors.New("a commit through libpod takes no reference, author or config")
+
+// errUnsupportedSaveOptions refuses a save libpod's one-image export cannot serve.
+var errUnsupportedSaveOptions = errors.New("a save through libpod takes one image and no options")
+
+// libpodAPI is what compat cannot do for API; *libpod.Client satisfies it.
+type libpodAPI interface {
+	InspectContainer(ctx context.Context, containerID string) (libpod.Container, error)
+	CommitContainer(ctx context.Context, options libpod.CommitOptions) (string, error)
+	ExportImage(ctx context.Context, imageID, format string) (io.ReadCloser, error)
 }
 
-// API is the Docker API of a Podman daemon, answering a container inspect as Docker
-// would: with the subpath mounts and log size compat drops and libpod keeps.
+// API is the Docker API of a Podman daemon, answering as Docker would: inspect, commit and save reach libpod.
 type API struct {
 	client.APIClient
-	libpod containerLibpod
+	libpod libpodAPI
 }
 
 // NewAPI wraps api, connected to a Podman daemon, with libpod over the same connection.
-func NewAPI(api client.APIClient, libpod containerLibpod) *API {
+func NewAPI(api client.APIClient, libpod libpodAPI) *API {
 	return &API{
 		APIClient: api,
 		libpod:    libpod,
@@ -59,27 +74,60 @@ func (a *API) ContainerInspect(ctx context.Context, containerID string) (contain
 	if err != nil {
 		return container.InspectResponse{}, err
 	}
-	stored, err := a.libpod.inspectContainer(ctx, containerID)
+	stored, err := a.libpod.InspectContainer(ctx, containerID)
 	if err != nil {
 		return container.InspectResponse{}, fmt.Errorf("inspect container %s through libpod: %w", containerID, err)
 	}
-	applyLibpodRequest(&inspect, stored)
-	return inspect, nil
+	return withLibpodRequest(inspect, stored), nil
 }
 
-// applyLibpodRequest adds to inspect the subpath mounts and log size libpod reports.
-func applyLibpodRequest(inspect *container.InspectResponse, stored libpodContainer) {
-	if inspect.ContainerJSONBase == nil {
-		return
+// ContainerCommit commits a container's writable layer through libpod as OCI, whose id survives a
+// save and a load; the comment is dropped, OCI carries none. The id is libpod's, a bare hex.
+func (a *API) ContainerCommit(
+	ctx context.Context, containerID string, options container.CommitOptions,
+) (container.CommitResponse, error) {
+	if options.Reference != "" || options.Author != "" || options.Config != nil {
+		return container.CommitResponse{}, errUnsupportedCommitOptions
 	}
-	hostConfig := inspect.HostConfig
-	hostConfig.Mounts = append(hostConfig.Mounts, newMountRequests(stored.Mounts)...)
-	applyLogSize(&hostConfig.LogConfig, stored.HostConfig.LogConfig.Size)
+	committed, err := a.libpod.CommitContainer(ctx, libpod.CommitOptions{
+		Container: containerID,
+		Format:    libpod.CommitFormatOCI,
+		Pause:     options.Pause,
+		Changes:   options.Changes,
+	})
+	if err != nil {
+		return container.CommitResponse{}, err
+	}
+	return container.CommitResponse{ID: committed}, nil
 }
 
-// newMountRequests are the mount requests compat drops: a volume mounted at a subpath, and
-// a bind of the mount API, marked bind where the bind API's carries rbind.
-func newMountRequests(mounts []libpodMount) []mount.Mount {
+// ImageSave streams one image out as an OCI archive, through libpod; the caller closes the stream.
+func (a *API) ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (io.ReadCloser, error) {
+	if len(imageIDs) != 1 || len(opts) != 0 {
+		return nil, errUnsupportedSaveOptions
+	}
+	return a.libpod.ExportImage(ctx, imageIDs[0], libpod.ExportFormatOCIArchive)
+}
+
+// withLibpodRequest is inspect with the mount requests and log size libpod reports, and
+// without the binds those requests replace.
+func withLibpodRequest(inspect container.InspectResponse, stored libpod.Container) container.InspectResponse {
+	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+		return inspect
+	}
+	requests := newMountRequests(stored.Mounts)
+	hostConfig := *inspect.HostConfig
+	hostConfig.Binds = withoutRequestedBinds(hostConfig.Binds, requests)
+	hostConfig.Mounts = slices.Concat(hostConfig.Mounts, requests)
+	hostConfig.LogConfig = withLogSize(hostConfig.LogConfig, stored.HostConfig.LogConfig.Size)
+	base := *inspect.ContainerJSONBase
+	base.HostConfig = &hostConfig
+	inspect.ContainerJSONBase = &base
+	return inspect
+}
+
+// newMountRequests are the mount requests compat drops: a volume at a subpath and a bind of the mount API.
+func newMountRequests(mounts []libpod.Mount) []mount.Mount {
 	var requests []mount.Mount
 	for _, stored := range mounts {
 		switch {
@@ -104,14 +152,28 @@ func newMountRequests(mounts []libpodMount) []mount.Mount {
 	return requests
 }
 
-// applyLogSize sets the size libpod reports as logConfig's max-size, which compat
+// withoutRequestedBinds is binds without an entry whose target a request covers: Docker repeats
+// no mount request there, and Podman refuses a create that does. An entry naming no target stays.
+func withoutRequestedBinds(binds []string, requests []mount.Mount) []string {
+	return slices.DeleteFunc(slices.Clone(binds), func(bind string) bool {
+		fields := strings.Split(bind, ":")
+		return len(fields) > 1 && slices.ContainsFunc(requests, func(request mount.Mount) bool {
+			return request.Target == fields[1]
+		})
+	})
+}
+
+// withLogSize is logConfig with the size libpod reports as its max-size, which compat
 // drops; libpod reports none as a negative size.
-func applyLogSize(logConfig *container.LogConfig, size string) {
+func withLogSize(logConfig container.LogConfig, size string) container.LogConfig {
 	if bytes, err := units.RAMInBytes(size); err != nil || bytes <= 0 {
-		return
+		return logConfig
 	}
-	if logConfig.Config == nil {
-		logConfig.Config = map[string]string{}
+	options := maps.Clone(logConfig.Config)
+	if options == nil {
+		options = map[string]string{}
 	}
-	logConfig.Config[logMaxSizeOption] = size
+	options[logMaxSizeOption] = size
+	logConfig.Config = options
+	return logConfig
 }

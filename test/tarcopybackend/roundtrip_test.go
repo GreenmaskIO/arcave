@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
@@ -36,6 +37,7 @@ import (
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
@@ -163,19 +165,24 @@ func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 		cli:     cli,
 		engine:  engine,
 		store:   store,
-		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli, engine), compression),
+		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli), compression),
 	}
 }
 
 // newVolumeStreamer is the streamer arcave's DI root builds for the daemon cli answers as.
-func newVolumeStreamer(t *testing.T, cli *client.Client, engine *dockerclient.Engine) fullcopy.VolumeStreamer {
+func newVolumeStreamer(t *testing.T, cli *client.Client) fullcopy.VolumeStreamer {
 	t.Helper()
 	runtime, err := dockerclient.ReadRuntime(context.Background(), cli)
 	require.NoError(t, err)
 	if runtime.Kind == model.ContainerRuntimePodman {
-		return podmanclient.NewEngine(engine, podmanclient.NewLibpod(cli))
+		libpodClient, err := libpod.NewClient(cli, libpod.Options{
+			Version: runtime.Version,
+			UseTLS:  os.Getenv(client.EnvOverrideCertPath) != "",
+		})
+		require.NoError(t, err)
+		return podmanclient.NewEngine(dockerclient.NewEngine(podmanclient.NewAPI(cli, libpodClient)))
 	}
-	return engine
+	return dockerclient.NewEngine(cli)
 }
 
 // backend builds the instance under test, as the registry does.

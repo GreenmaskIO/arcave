@@ -27,13 +27,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// commitFormatOCI is the format a layer is committed in: an OCI export keeps an OCI
-// image's config, so its id survives a save and a load.
-const commitFormatOCI = "oci"
-
-// exportFormatOCIArchive is the format an image is saved in.
-const exportFormatOCIArchive = "oci-archive"
-
 // volumeExportMount is where a volume sits inside its export container; absent from
 // the image, so nothing of the image is copied into an empty volume.
 const volumeExportMount = "/arcave-data"
@@ -45,65 +38,24 @@ const maxExportStderrBytes = 8 << 10
 // Podman's archive API rewrites to the container's user.
 var volumeExportCmd = []string{"tar", "-c", "-f", "-", "-C", volumeExportMount, "."}
 
-// imageLibpod is what committing and saving an image through libpod takes.
-type imageLibpod interface {
-	commitContainer(ctx context.Context, commit libpodCommit) (string, error)
-	exportImage(ctx context.Context, imageID, format string) (io.ReadCloser, error)
-}
-
-// oneShotRunner is what exporting a volume takes; *docker.Engine satisfies it.
+// oneShotRunner runs a volume's export container; *docker.Engine satisfies it.
 type oneShotRunner interface {
 	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
 }
 
-// Engine is the docker.Engine for a Podman daemon: an image is committed and saved
-// through libpod, a volume exported by tar.
+// Engine is the docker.Engine for a Podman daemon, whose archive API rewrites every
+// owner: a volume is exported by tar instead.
 type Engine struct {
 	*docker.Engine
-	// runner is the embedded engine, as the seam the volume export runs through.
 	runner oneShotRunner
-	libpod imageLibpod
 }
 
-// NewEngine extends engine, connected to a Podman daemon, with libpod over the
-// same connection.
-func NewEngine(engine *docker.Engine, libpod imageLibpod) *Engine {
+// NewEngine extends engine, connected to a Podman daemon.
+func NewEngine(engine *docker.Engine) *Engine {
 	return &Engine{
 		Engine: engine,
 		runner: engine,
-		libpod: libpod,
 	}
-}
-
-// CommitContainer commits a stopped container's writable layer through libpod in the OCI
-// format, so its id survives a save and a load; comment is dropped, OCI carries none.
-func (e *Engine) CommitContainer(
-	ctx context.Context, containerID, _ string, labels map[string]string,
-) (model.ImageDigestID, error) {
-	committed, err := e.libpod.commitContainer(ctx, libpodCommit{
-		Container: containerID,
-		Format:    commitFormatOCI,
-		Pause:     false,
-		Changes:   docker.NewLabelChanges(labels),
-	})
-	if err != nil {
-		return "", fmt.Errorf("commit container %s: %w", containerID, err)
-	}
-	imageID, err := model.ParseImageDigestID(docker.WithDigestAlgorithm(committed))
-	if err != nil {
-		return "", fmt.Errorf("commit container %s: %w", containerID, err)
-	}
-	return imageID, nil
-}
-
-// SaveImage streams one image out as an OCI archive, through libpod. The caller
-// owns the stream and closes it.
-func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error) {
-	archive, err := e.libpod.exportImage(ctx, imageID.String(), exportFormatOCIArchive)
-	if err != nil {
-		return nil, fmt.Errorf("save image %s: %w", imageID, err)
-	}
-	return archive, nil
 }
 
 // OpenVolume streams the volume out as a tar written inside a throwaway container,
@@ -160,8 +112,7 @@ func (v *volumeExport) Close() error {
 	return nil
 }
 
-// boundedBuffer keeps the first limit bytes written to it and drops the rest,
-// never failing a write.
+// boundedBuffer keeps the first limit bytes written to it and drops the rest, never failing a write.
 type boundedBuffer struct {
 	limit int
 	buf   bytes.Buffer

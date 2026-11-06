@@ -30,6 +30,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/flags"
+	dockeropts "github.com/docker/cli/opts"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	composeprogress "github.com/docker/compose/v2/pkg/progress"
 	"github.com/docker/docker/api/types/system"
@@ -43,6 +44,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/client/podman"
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
@@ -192,7 +194,7 @@ func openSavepointService(
 	}
 
 	// Where compose's own progress goes, on the logger initRoot resolved. On the stack before
-	// the engine, so it closes after: a line compose left unterminated is still emitted.
+	// the client, so it closes after: a line compose left unterminated is still emitted.
 	progressWriter, composeEvents := newProgressWriter(
 		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx),
 	)
@@ -208,13 +210,13 @@ func openSavepointService(
 	}
 
 	// Under tcp the server listens for the whole process, so a bad address fails up front.
-	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(cfg.Backends.CDC), daemon.engine, scope.resticRoot)
+	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(cfg.Backends.CDC), profile.engine, scope.resticRoot)
 	if err != nil {
 		return nil, err
 	}
 	opened.addFunc(cdcTransport.Close)
 
-	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, profile.exporter, daemon.engine, cdcTransport.transport)
+	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, profile.volumes, profile.engine, cdcTransport.transport)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +224,7 @@ func openSavepointService(
 		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
 		ComposeProject: composeProject,
 	}
-	imageBackend, err := newImageBackend(scope.store, origin, profile.exporter)
+	imageBackend, err := newImageBackend(scope.store, origin, profile.engine)
 	if err != nil {
 		return nil, err
 	}
@@ -243,15 +245,15 @@ func openSavepointService(
 			Events:          composeEvents,
 			SinkFromContext: newComposeEventSink,
 		}),
-		VolumeRemover:  daemon.engine,
+		VolumeRemover:  profile.engine,
 		ImageBackend:   imageBackend,
 		DaemonVersion:  profile.version,
 		MinDaemonMajor: profile.minDaemonMajor,
 		Concurrency:    cfg.Common.Concurrency,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
-		ContainerRebuilder: daemon.engine,
-		ImageLookup:        daemon.engine,
+		ContainerRebuilder: profile.engine,
+		ImageLookup:        profile.engine,
 		BackendRegistry:    backendRegistry,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
 		Inflight:        inflightrepo.New(projectPath),
@@ -317,10 +319,9 @@ func newBackendRegistry(
 
 // daemonConnection is one connection to the daemon, with no request sent over it yet.
 type daemonConnection struct {
-	// cli is what compose runs on, over api: both halves of client/docker reach one daemon.
-	cli    *command.DockerCli
-	api    client.APIClient
-	engine *docker.Engine
+	// cli is what compose runs on, over api, so compose and the engine reach one daemon.
+	cli *command.DockerCli
+	api client.APIClient
 }
 
 // connectDaemon builds the connection; its closer goes on opened.
@@ -329,33 +330,21 @@ func connectDaemon(cfg config.Docker, progressOut io.Writer, opened *closers) (d
 	if err != nil {
 		return daemonConnection{}, err
 	}
-	engine := docker.NewEngine(dockerClientAPI)
-	opened.add("docker engine", engine)
+	opened.add("docker client", dockerClientAPI)
 	return daemonConnection{
-		cli:    dockerCli,
-		api:    dockerClientAPI,
-		engine: engine,
+		cli: dockerCli,
+		api: dockerClientAPI,
 	}, nil
-}
-
-// exportEngine is the part of the engine that differs by runtime: the volume
-// stream fullcopy reads and the image half imagecopy commits and saves through.
-type exportEngine interface {
-	fullcopy.VolumeStreamer
-	CommitContainer(ctx context.Context, containerID, comment string, labels map[string]string) (model.ImageDigestID, error)
-	SaveImage(ctx context.Context, imageID model.ImageDigestID) (io.ReadCloser, error)
-	RemoveImage(ctx context.Context, imageID model.ImageDigestID) error
-	LoadImage(ctx context.Context, r io.Reader) error
-	TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error
-	ImageExists(ctx context.Context, imageID model.ImageDigestID) (bool, error)
 }
 
 // runtimeProfile is everything that differs by the engine behind the daemon.
 type runtimeProfile struct {
-	// api is what the compose project is introspected through.
+	// api is the daemon's Docker API, answering as Docker would; introspection and engine read through it.
 	api client.APIClient
-	// exporter is how a volume and an image leave the daemon: the engine itself, or Podman's over it.
-	exporter exportEngine
+	// engine is what a workflow reaches the daemon through, but for a volume's stream.
+	engine *docker.Engine
+	// volumes is how a volume leaves the daemon: engine itself, or Podman's export over it.
+	volumes fullcopy.VolumeStreamer
 	// version is the version the engine reports; minDaemonMajor judges it.
 	version string
 	// minDaemonMajor is the oldest version of the engine a workflow runs on; 0 requires none.
@@ -370,7 +359,7 @@ func readRuntimeProfile(ctx context.Context, daemon daemonConnection) (runtimePr
 	if err != nil {
 		return runtimeProfile{}, err
 	}
-	return newRuntimeProfile(runtime, info, daemon.api, daemon.cli.DockerEndpoint(), daemon.engine)
+	return newRuntimeProfile(runtime, info, daemon.api, daemon.cli.DockerEndpoint())
 }
 
 // readEngine asks the daemon which engine it is and what `docker info` says of it.
@@ -386,34 +375,54 @@ func readEngine(ctx context.Context, api client.APIClient) (model.ContainerRunti
 	return runtime, info, nil
 }
 
-// newRuntimeProfile chooses everything that differs by the engine behind the daemon; a Podman
-// daemon behind TLS (endpoint as the CLI resolved it) is refused, since libpod is reached plain.
+// newRuntimeProfile chooses everything that differs by the engine behind the daemon; libpod
+// is reached over TLS when the endpoint, as the CLI resolved it, is.
 func newRuntimeProfile(
-	runtime model.ContainerRuntime, info system.Info, api client.APIClient,
-	endpoint dockercontext.Endpoint, engine *docker.Engine,
+	runtime model.ContainerRuntime, info system.Info, api client.APIClient, endpoint dockercontext.Endpoint,
 ) (runtimeProfile, error) {
 	switch runtime.Kind {
 	case model.ContainerRuntimePodman:
-		if endpoint.TLSData != nil || endpoint.SkipTLSVerify {
-			return runtimeProfile{}, errors.New("podman behind TLS is not supported: arcave reaches libpod over plain http")
+		if isHTTPHost(endpoint.Host) {
+			return runtimeProfile{}, fmt.Errorf("docker endpoint %q: the Docker client cannot attach to a container over an http:// or https:// host, which a Podman volume export needs: name it tcp://", endpoint.Host)
 		}
-		libpod := podman.NewLibpod(api)
+		libpodClient, err := libpod.NewClient(api, libpod.Options{
+			Version: runtime.Version,
+			UseTLS:  isTLSEndpoint(endpoint),
+		})
+		if err != nil {
+			return runtimeProfile{}, fmt.Errorf("reach libpod: %w", err)
+		}
+		podmanAPI := podman.NewAPI(api, libpodClient)
+		engine := docker.NewEngine(podmanAPI)
 		return runtimeProfile{
-			api:            podman.NewAPI(api, libpod),
-			exporter:       podman.NewEngine(engine, libpod),
+			api:            podmanAPI,
+			engine:         engine,
+			volumes:        podman.NewEngine(engine),
 			version:        runtime.Version,
 			minDaemonMajor: 0,
-			assembler:      composespec.NewAssembler(composespec.NewPodmanDefaults(info)),
+			assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 		}, nil
 	default:
+		engine := docker.NewEngine(api)
 		return runtimeProfile{
 			api:            api,
-			exporter:       engine,
+			engine:         engine,
+			volumes:        engine,
 			version:        runtime.Version,
 			minDaemonMajor: dedupcopy.MinDaemonMajor,
-			assembler:      composespec.NewAssembler(composespec.NewDockerDefaults(info)),
+			assembler:      composespec.NewAssembler(composespec.NewDockerStamps(info)),
 		}, nil
 	}
+}
+
+// isHTTPHost reports whether host, which only a context can spell so, names http or https.
+func isHTTPHost(host string) bool {
+	return strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://")
+}
+
+// isTLSEndpoint reports whether endpoint carries TLS settings, which the client applies to a tcp host.
+func isTLSEndpoint(endpoint dockercontext.Endpoint) bool {
+	return endpoint.TLSData != nil || endpoint.SkipTLSVerify
 }
 
 // openedCDCTransport is how cdc's containers reach one tree of repositories.
@@ -426,10 +435,15 @@ type openedCDCTransport struct {
 // Close stops the tcp transport's server, if any.
 func (o openedCDCTransport) Close(ctx context.Context) { shutdownResticServer(ctx, o.server) }
 
+// hostLoopbackReader is what choosing the tcp transport's network asks the daemon.
+type hostLoopbackReader interface {
+	HostLoopbackShared(ctx context.Context) (bool, error)
+}
+
 // openCDCTransport opens backends.cdc.transport over resticRoot: a stream server
 // under stdio, a listening server and the URL base to dial it at under tcp.
 func openCDCTransport(
-	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, resticRoot storages.Storager,
+	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader, resticRoot storages.Storager,
 ) (openedCDCTransport, error) {
 	switch cfg.Transport {
 	case config.CDCTransportStdio:
@@ -439,7 +453,7 @@ func openCDCTransport(
 			},
 		}, nil
 	case config.CDCTransportTCP:
-		return openTCPTransport(ctx, cfg, engine, resticRoot)
+		return openTCPTransport(ctx, cfg, daemon, resticRoot)
 	default:
 		return openedCDCTransport{}, fmt.Errorf("unsupported backends.cdc.transport %q", cfg.Transport)
 	}
@@ -448,9 +462,9 @@ func openCDCTransport(
 // openTCPTransport starts the server restic containers dial, and names the URL base
 // they dial it at.
 func openTCPTransport(
-	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, resticRoot storages.Storager,
+	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader, resticRoot storages.Storager,
 ) (openedCDCTransport, error) {
-	hostNetwork, containerHost, err := resolveCDCNetwork(ctx, cfg, engine)
+	hostNetwork, containerHost, err := resolveCDCNetwork(ctx, cfg, daemon)
 	if err != nil {
 		return openedCDCTransport{}, err
 	}
@@ -473,7 +487,7 @@ func openTCPTransport(
 // the host their repository URL names. Auto probes the daemon, but mispicks
 // host networking for a remote Linux daemon — bridge is the escape hatch there.
 func resolveCDCNetwork(
-	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine,
+	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader,
 ) (hostNetwork bool, containerHost string, err error) {
 	switch cfg.NetworkMode {
 	case config.NetworkModeHost:
@@ -481,7 +495,7 @@ func resolveCDCNetwork(
 	case config.NetworkModeBridge:
 		return false, cfg.ContainerHost, nil
 	default: // config.NetworkModeAuto — Validate admits nothing else.
-		shared, err := engine.HostLoopbackShared(ctx)
+		shared, err := daemon.HostLoopbackShared(ctx)
 		if err != nil {
 			return false, "", fmt.Errorf("resolve backends.cdc.network_mode %q: %w", cfg.NetworkMode, err)
 		}
@@ -656,22 +670,50 @@ func newDockerClientOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 	}
 	opts.Context = cfg.Context
 
-	tlsOpts, useTLS, err := newDockerTLSOptions(cfg)
+	resolved, err := withDockerTLSEnv(cfg)
+	if err != nil {
+		return nil, err
+	}
+	tlsOpts, useTLS, err := newDockerTLSOptions(resolved)
 	if err != nil {
 		return nil, err
 	}
 	if useTLS {
 		opts.TLS = true
-		opts.TLSVerify = cfg.TLSVerify
+		opts.TLSVerify = !resolved.SkipTLSVerify
 		opts.TLSOptions = tlsOpts
 	}
 	return opts, nil
 }
 
-// newDockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions
-// and reports whether any TLS material was configured (all-empty means "read the
-// environment"). cert_file/key_file are a mutual-TLS pair, checked here because
-// docker/cli would surface a half-set one only as an opaque handshake failure.
+// withDockerTLSEnv takes the cert path from DOCKER_CERT_PATH under DOCKER_TLS_VERIFY, only beside
+// a tcp DOCKER_HOST the config does not override and with no TLS file named in the config. The
+// variable with no certificate to verify against is refused: it would stay plain http.
+func withDockerTLSEnv(cfg config.Docker) (config.Docker, error) {
+	if cfg.Host != "" || cfg.Context != "" || !isTCPHost(os.Getenv(client.EnvOverrideHost)) {
+		return cfg, nil
+	}
+	if os.Getenv(client.EnvTLSVerify) == "" || cfg.CertPath != "" || cfg.CAFile != "" || cfg.CertFile != "" || cfg.KeyFile != "" {
+		return cfg, nil
+	}
+	certPath := os.Getenv(client.EnvOverrideCertPath)
+	if certPath == "" && !cfg.SkipTLSVerify {
+		return config.Docker{}, errors.New(client.EnvTLSVerify + " is set but " + client.EnvOverrideCertPath + " is not, so the daemon would be reached over plain http: set it, or docker.ca_file or docker.cert_path")
+	}
+	cfg.CertPath = certPath
+	return cfg, nil
+}
+
+// isTCPHost reports whether docker/cli reads host as tcp, as it does one with no scheme. One it
+// cannot parse is no tcp host: docker/cli refuses it itself.
+func isTCPHost(host string) bool {
+	parsed, err := dockeropts.ParseHost(false, host)
+	return err == nil && strings.HasPrefix(parsed, "tcp://")
+}
+
+// newDockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions and reports
+// whether any TLS material was configured. A half-set cert_file/key_file pair is refused here:
+// docker/cli would surface it only as an opaque handshake failure.
 func newDockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
 	caFile := tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem")
 	certFile := tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem")
@@ -685,20 +727,20 @@ func newDockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
 	}
 
 	// keyFile is not tested: the switch above leaves the pair either both set or both empty.
-	if caFile == "" && certFile == "" && !cfg.TLSVerify {
+	if caFile == "" && certFile == "" && !cfg.SkipTLSVerify {
 		return nil, false, nil
 	}
 
 	return &tlsconfig.Options{
-		CAFile:   caFile,
-		CertFile: certFile,
-		KeyFile:  keyFile,
+		CAFile:             caFile,
+		CertFile:           certFile,
+		KeyFile:            keyFile,
+		InsecureSkipVerify: cfg.SkipTLSVerify,
 	}, true, nil
 }
 
 // tlsFile resolves one TLS file path the way the docker CLI does: an explicit
-// path wins, then CertPath/name (DOCKER_CERT_PATH); neither set leaves it empty,
-// so docker/cli reads the environment rather than a bogus path.
+// path wins, then CertPath/name; neither set leaves it empty.
 func tlsFile(explicit, certPath, name string) string {
 	if explicit != "" {
 		return explicit
@@ -854,7 +896,7 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerC
 // newImageBackend builds the image backend over both archivers a writable layer may name;
 // images are always deduplicated, which needs a daemon of Docker 25 or newer.
 func newImageBackend(
-	composeProjectStore storages.Navigator, origin model.LayerOrigin, engine exportEngine,
+	composeProjectStore storages.Navigator, origin model.LayerOrigin, engine *docker.Engine,
 ) (*imagecopy.Copier, error) {
 	blobStore, err := composeProjectStore.SubStorage(dedupcopy.NamespaceBlobs, true)
 	if err != nil {
@@ -883,6 +925,17 @@ func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 	}
 }
 
+// gcDaemon is all a gc asks of the daemon. Nothing it reads differs by engine, so it runs over the
+// client itself; a call added here must depend on nothing podman.API changes.
+type gcDaemon interface {
+	Ping(ctx context.Context) error
+	ListLayerImages(ctx context.Context) ([]model.TaggedImage, error)
+	ListContainerImages(ctx context.Context) ([]model.ContainerImage, error)
+	RemoveImageRef(ctx context.Context, ref model.ImageRef) error
+	RunOneShot(ctx context.Context, spec model.OneShotSpec) error
+	HostLoopbackShared(ctx context.Context) (bool, error)
+}
+
 // openGCService wires a gc over the session's compose projects, one collector per kind. The daemon
 // is only connected to here; whether it answers is the restored-layer collector's probe.
 func openGCService(
@@ -897,6 +950,7 @@ func openGCService(
 	if err != nil {
 		return nil, err
 	}
+	engine := docker.NewEngine(daemon.api)
 	return gc.New(gc.Deps{
 		Store:                    scope.arcaveProjectStore,
 		Session:                  scope.session,
@@ -905,10 +959,10 @@ func openGCService(
 		Locker:                   lock.New(projectPath),
 		SessionLocker:            scope.sessionLocker,
 		Inflight:                 inflightrepo.New(projectPath),
-		DaemonCollectors:         newDaemonCollectors(cfg, daemon.engine),
-		ComposeProjectCollectors: newComposeProjectCollectors(cfg, daemon.engine),
-		DaemonErasers:            newDaemonErasers(daemon.engine),
-		ComposeProjectErasers:    newComposeProjectErasers(cfg, daemon.engine),
+		DaemonCollectors:         newDaemonCollectors(cfg, engine),
+		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
+		DaemonErasers:            newDaemonErasers(engine),
+		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
 	}), nil
@@ -926,41 +980,41 @@ func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
 }
 
 // newDaemonCollectors builds the collectors judging the daemon.
-func newDaemonCollectors(cfg config.Config, engine *docker.Engine) []gc.DaemonCollector {
+func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []gc.DaemonCollector {
 	return []gc.DaemonCollector{
-		layertag.New(engine, model.ArcaveProjectName(cfg.Project.Name)),
+		layertag.New(daemon, model.ArcaveProjectName(cfg.Project.Name)),
 	}
 }
 
 // newComposeProjectCollectors builds the collectors judging a compose project's store.
-func newComposeProjectCollectors(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectCollector {
+func newComposeProjectCollectors(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectCollector {
 	return []gc.ComposeProjectCollector{
 		savepointdir.New(),
 		ociimage.New(),
 		ociblob.New(cfg.Common.Concurrency),
-		resticrepo.New(engine, resticInspectorOpener{
+		resticrepo.New(daemon, resticInspectorOpener{
 			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
-			engine: engine,
+			daemon: daemon,
 		}),
 	}
 }
 
 // newDaemonErasers builds the erasers carrying out the gc's actions on the daemon.
-func newDaemonErasers(engine *docker.Engine) []gc.DaemonEraser {
+func newDaemonErasers(daemon gcDaemon) []gc.DaemonEraser {
 	return []gc.DaemonEraser{
-		eraser.NewTagEraser(engine),
+		eraser.NewTagEraser(daemon),
 	}
 }
 
 // newComposeProjectErasers builds the erasers carrying out the gc's actions in a compose project's store.
-func newComposeProjectErasers(cfg config.Config, engine *docker.Engine) []gc.ComposeProjectEraser {
+func newComposeProjectErasers(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectEraser {
 	return []gc.ComposeProjectEraser{
 		eraser.NewTreeEraser(),
 		eraser.NewImageEraser(),
 		eraser.NewObjectEraser(),
 		eraser.NewForgetEraser(resticPrunerOpener{
 			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
-			engine: engine,
+			daemon: daemon,
 		}, cfg.Common.Concurrency),
 	}
 }
@@ -975,13 +1029,13 @@ type openedRestic struct {
 // openResticRepositories opens the transport over store's repositories, as openSavepointService
 // serves them to the cdc backend; the transport's Close releases it.
 func openResticRepositories(
-	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, store storages.Navigator,
+	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader, store storages.Navigator,
 ) (openedRestic, error) {
 	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
 	if err != nil {
 		return openedRestic{}, fmt.Errorf("open restic repository root: %w", err)
 	}
-	transport, err := openCDCTransport(ctx, cfg, engine, resticRoot)
+	transport, err := openCDCTransport(ctx, cfg, daemon, resticRoot)
 	if err != nil {
 		return openedRestic{}, err
 	}
@@ -994,17 +1048,17 @@ func openResticRepositories(
 // resticInspectorOpener serves one compose project's restic repositories to a cdc.Inspector.
 type resticInspectorOpener struct {
 	cfg    config.CDCBackend
-	engine *docker.Engine
+	daemon gcDaemon
 }
 
 // Open opens the transport over store's repositories; the inspector's Close releases it.
 func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
-	served, err := openResticRepositories(ctx, o.cfg, o.engine, store)
+	served, err := openResticRepositories(ctx, o.cfg, o.daemon, store)
 	if err != nil {
 		return nil, err
 	}
 	return resticInspector{
-		Inspector:          cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg)),
+		Inspector:          cdc.NewInspector(o.daemon, served.transport, newCDCOptions(o.cfg)),
 		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
@@ -1018,17 +1072,17 @@ type resticInspector struct {
 // resticPrunerOpener serves one compose project's restic repositories to a cdc.Pruner.
 type resticPrunerOpener struct {
 	cfg    config.CDCBackend
-	engine *docker.Engine
+	daemon gcDaemon
 }
 
 // Open opens the transport over store's repositories; the pruner's Close releases it.
 func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
-	served, err := openResticRepositories(ctx, o.cfg, o.engine, store)
+	served, err := openResticRepositories(ctx, o.cfg, o.daemon, store)
 	if err != nil {
 		return nil, err
 	}
 	return resticPruner{
-		Pruner:             cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg)),
+		Pruner:             cdc.NewPruner(o.daemon, served.root, served.transport, newCDCOptions(o.cfg)),
 		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
