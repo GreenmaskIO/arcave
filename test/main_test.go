@@ -31,6 +31,9 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+
+	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // testResource matches what a test names after its compose project, arcave-<kind>-<suffix>,
@@ -60,6 +63,7 @@ func TestMain(m *testing.M) {
 		os.Exit(m.Run())
 	}
 	defer func() { _ = cli.Close() }()
+	disableReaperOnPodman(cli)
 	before, err := daemonResources(cli)
 	if err != nil {
 		os.Exit(m.Run())
@@ -98,6 +102,22 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+}
+
+// ryukDisabled is the variable testcontainers reads before it starts its reaper.
+const ryukDisabled = "TESTCONTAINERS_RYUK_DISABLED"
+
+// disableReaperOnPodman turns testcontainers' reaper off on Podman, whose machine socket the
+// reaper cannot mount; every test removes its own containers in t.Cleanup.
+func disableReaperOnPodman(cli *client.Client) {
+	if _, set := os.LookupEnv(ryukDisabled); set {
+		return
+	}
+	runtime, err := dockerclient.ReadRuntime(context.Background(), cli)
+	if err != nil || runtime.Kind != model.ContainerRuntimePodman {
+		return
+	}
+	_ = os.Setenv(ryukDisabled, "true")
 }
 
 // ownResource reports whether name is a test resource of this process.

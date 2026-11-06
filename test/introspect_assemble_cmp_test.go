@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build fidelity
-
 package test
 
 import (
 	"cmp"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -50,6 +49,78 @@ func specOptions() gocmp.Options {
 		cmpopts.EquateEmpty(),
 		gocmp.FilterPath(isSetField, cmpopts.SortSlices(lessByString)),
 	}
+}
+
+// recreatedByRuntime are what an engine changes between two creations of one compose project
+// beyond normalizeIntrospection: on Podman, a named volume's creation time.
+func recreatedByRuntime(runtime model.ContainerRuntimeKind) gocmp.Options {
+	if runtime != model.ContainerRuntimePodman {
+		return nil
+	}
+	return gocmp.Options{cmpopts.IgnoreFields(volume.Volume{}, "CreatedAt")}
+}
+
+// restampedByRuntime reports an engine whose containers carry, created anew, what
+// normalizeIntrospection then drops: HOSTNAME set to the id, the short ids of the containers
+// joining a namespace among its owner's aliases, the ids in its volumes-from annotation, bind
+// options in no fixed order, and an anonymous volume's mount request, exec option and z mode,
+// which it keeps only when compose created the volume through the mount API.
+func restampedByRuntime(runtime model.ContainerRuntimeKind) bool {
+	return runtime == model.ContainerRuntimePodman
+}
+
+// dropHostnameEnv drops the HOSTNAME Podman sets to the container's own hostname.
+func dropHostnameEnv(env []string, hostname string) []string {
+	if env == nil {
+		return nil
+	}
+	return slices.DeleteFunc(slices.Clone(env), func(entry string) bool { return entry == "HOSTNAME="+hostname })
+}
+
+// isBareVolumeRequest reports a request for a volume with no options at all.
+func isBareVolumeRequest(request mount.Mount) bool {
+	return request.Type == mount.TypeVolume && request.Source == "" && request.VolumeOptions == nil
+}
+
+// volumesFromAnnotation spells the container ids of Podman's volumes-from annotation as replicas.
+func (n normalizer) volumesFromAnnotation(annotations map[string]string) map[string]string {
+	const key = "io.podman.annotations.volumes-from"
+	entries, ok := annotations[key]
+	if !ok {
+		return annotations
+	}
+	renamed := maps.Clone(annotations)
+	renamed[key] = strings.Join(n.entries(strings.Split(entries, ",")), ",")
+	return renamed
+}
+
+// isReplicaID reports a prefix of a replica's id, as an engine aliases a container by.
+func (n normalizer) isReplicaID(alias string) bool {
+	for id := range n.ids {
+		if alias != "" && strings.HasPrefix(id, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+// sortBindOptions spells each bind's options sorted, without the rw and exec Podman reports for some.
+func sortBindOptions(binds []string) []string {
+	if binds == nil {
+		return nil
+	}
+	sorted := make([]string, len(binds))
+	for i, bind := range binds {
+		parts := strings.SplitN(bind, ":", 3)
+		if len(parts) < 3 {
+			sorted[i] = bind
+			continue
+		}
+		options := slices.DeleteFunc(strings.Split(parts[2], ","), func(option string) bool { return option == "rw" || option == "exec" })
+		slices.Sort(options)
+		sorted[i] = parts[0] + ":" + parts[1] + ":" + strings.Join(options, ",")
+	}
+	return sorted
 }
 
 // isSetField reports a slice field named in setFields.
@@ -87,34 +158,33 @@ var anonVolumeName = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var (
 	ignoredContainerFields = cmpopts.IgnoreFields(container.ContainerJSONBase{},
 		"ID", "Created", "State", "ResolvConfPath", "HostnamePath", "HostsPath", "LogPath",
-		"RestartCount", "GraphDriver", "ExecIDs")
+		"RestartCount", "GraphDriver", "ExecIDs", "MountLabel", "ProcessLabel")
 	ignoredSandboxFields = cmpopts.IgnoreFields(container.NetworkSettings{},
 		"NetworkSettingsBase.SandboxID", "NetworkSettingsBase.SandboxKey")
 	ignoredEndpointFields = cmpopts.IgnoreFields(network.EndpointSettings{},
 		"EndpointID", "NetworkID")
 	ignoredNetworkFields = cmpopts.IgnoreFields(network.Inspect{}, "ID", "Created", "Containers")
-	// The daemon's own `docker info` reports the daemon, not the compose project.
-	ignoredDaemon = cmpopts.IgnoreFields(model.IntrospectionResult{}, "Daemon")
 )
 
 // introspectionOptions compare two introspections of one compose project created twice;
 // declaredMACs are the MAC addresses its compose file pins.
-func introspectionOptions(declaredMACs map[string]bool) gocmp.Options {
+func introspectionOptions(declaredMACs map[string]bool, runtime model.ContainerRuntimeKind) gocmp.Options {
 	return gocmp.Options{
 		cmpopts.EquateEmpty(),
 		ignoredContainerFields, ignoredSandboxFields, ignoredEndpointFields,
-		ignoredNetworkFields, ignoredDaemon,
+		ignoredNetworkFields,
 		gocmp.Transformer("replicaIdentity", func(res model.IntrospectionResult) model.IntrospectionResult {
-			return normalizeIntrospection(res, declaredMACs)
+			return normalizeIntrospection(res, declaredMACs, restampedByRuntime(runtime))
 		}),
 	}
 }
 
 // normalizeIntrospection renames container ids and anonymous volumes to service#replica
 // identities and drops what the daemon allocated rather than the compose file declared.
-func normalizeIntrospection(res model.IntrospectionResult, declaredMACs map[string]bool) model.IntrospectionResult {
+func normalizeIntrospection(res model.IntrospectionResult, declaredMACs map[string]bool, restamped bool) model.IntrospectionResult {
 	n := newNormalizer(res)
 	n.declaredMACs = declaredMACs
+	n.restamped = restamped
 	out := res
 	out.Project.Services = make([]model.Service, len(res.Project.Services))
 	for i, svc := range res.Project.Services {
@@ -155,6 +225,8 @@ type normalizer struct {
 	static map[string]bool
 	// declaredMACs are compared; any other MAC address was generated.
 	declaredMACs map[string]bool
+	// restamped is an engine restampedByRuntime names.
+	restamped bool
 }
 
 func newNormalizer(res model.IntrospectionResult) normalizer {
@@ -232,8 +304,13 @@ func (n normalizer) inspect(in container.InspectResponse) container.InspectRespo
 			// compose writes these out of maps, in no fixed order.
 			host.ExtraHosts = sortedOrNil(host.ExtraHosts)
 			host.Links = sortedOrNil(host.Links)
-			host.Binds = sortedOrNil(host.Binds)
 			host.Mounts = slices.Clone(host.Mounts)
+			if n.restamped {
+				host.Binds = sortBindOptions(host.Binds)
+				host.Mounts = slices.DeleteFunc(host.Mounts, isBareVolumeRequest)
+				host.Annotations = n.volumesFromAnnotation(host.Annotations)
+			}
+			host.Binds = sortedOrNil(host.Binds)
 			slices.SortFunc(host.Mounts, func(a, b mount.Mount) int { return cmp.Compare(a.Target, b.Target) })
 			host.Ulimits = slices.Clone(host.Ulimits)
 			slices.SortFunc(host.Ulimits, func(a, b *container.Ulimit) int { return cmp.Compare(a.Name, b.Name) })
@@ -245,6 +322,9 @@ func (n normalizer) inspect(in container.InspectResponse) container.InspectRespo
 		cfg := *in.Config
 		cfg.Hostname = n.hostname(cfg.Hostname)
 		cfg.Labels = comparableLabels(cfg.Labels)
+		if n.restamped {
+			cfg.Env = dropHostnameEnv(cfg.Env, in.Config.Hostname)
+		}
 		cfg.Env = sortedOrNil(cfg.Env)
 		out.Config = &cfg
 	}
@@ -254,6 +334,9 @@ func (n normalizer) inspect(in container.InspectResponse) container.InspectRespo
 		m.Source = hostPath(m.Source)
 		if anonVolumeName.MatchString(in.Mounts[i].Name) {
 			m.Source = ""
+			if n.restamped {
+				m.Mode = ""
+			}
 		}
 		out.Mounts[i] = m
 	}
@@ -287,7 +370,7 @@ func (n normalizer) networkSettings(id string, in container.NetworkSettings) *co
 			return strings.HasPrefix(id, dns)
 		})
 		e.Aliases = slices.DeleteFunc(slices.Clone(e.Aliases), func(alias string) bool {
-			return strings.HasPrefix(id, alias)
+			return strings.HasPrefix(id, alias) || n.restamped && n.isReplicaID(alias)
 		})
 		e.Links = sortedOrNil(e.Links)
 		if !n.static[name] {

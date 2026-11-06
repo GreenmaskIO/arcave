@@ -54,14 +54,19 @@ var daemonNetworkOptions = []string{enableIPv4Option, enableIPv6Option}
 // network_mode, never by a networks: entry.
 var predefinedNetworks = []string{"host", "none", "bridge", "default"}
 
-// Assembler turns an introspection result into a compose project.
-type Assembler struct{}
+// Assembler turns an introspection result into a compose project, leaving out what its
+// engine stamps by itself.
+type Assembler struct {
+	engineStamps EngineStamps
+}
 
-func NewAssembler() *Assembler { return &Assembler{} }
+// NewAssembler builds an Assembler leaving out what stamps names.
+func NewAssembler(stamps EngineStamps) *Assembler { return &Assembler{engineStamps: stamps} }
 
 // assembly is what rendering one service reads beyond the service itself.
 type assembly struct {
 	introspection model.IntrospectionResult
+	engineStamps  EngineStamps
 	networkKeys   map[string]string
 	known         map[string]bool
 	// healthchecked are the services whose first replica runs a healthcheck.
@@ -76,10 +81,12 @@ type assembly struct {
 	foreignNames map[string]string
 }
 
-func newAssembly(introspection model.IntrospectionResult) assembly {
+func newAssembly(introspection model.IntrospectionResult, engineStamps EngineStamps) assembly {
 	a := assembly{
-		introspection:    introspection,
-		networkKeys:      networkKeys(introspection.Project.Networks, introspection.Project.Services),
+		introspection: introspection,
+		engineStamps:  engineStamps,
+		networkKeys: networkKeys(introspection.Project.Networks, introspection.Project.Services,
+			engineStamps.Networking.BridgeNetwork),
 		known:            make(map[string]bool, len(introspection.Project.Services)),
 		healthchecked:    map[string]bool{},
 		serviceByReplica: map[string]string{},
@@ -110,12 +117,12 @@ func newAssembly(introspection model.IntrospectionResult) assembly {
 }
 
 // Assemble builds the compose spec of the introspected compose project.
-func (*Assembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
+func (s *Assembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
 	if len(introspection.Project.Services) == 0 {
 		return nil, fmt.Errorf("compose project %q has no services to act on", introspection.Project.Name)
 	}
 
-	a := newAssembly(introspection)
+	a := newAssembly(introspection, s.engineStamps)
 	a.warnOnMissingContainers(ctx)
 	workingDir, files := projectOrigin(introspection.Project.Services)
 	return &types.Project{
@@ -124,7 +131,8 @@ func (*Assembler) Assemble(ctx context.Context, introspection model.Introspectio
 		ComposeFiles: files,
 		Services:     a.newServices(ctx),
 		Volumes:      newVolumes(introspection.Project.Volumes),
-		Networks:     newNetworks(introspection.Project.Networks, a.networkKeys, staticAddressNetworks(introspection.Project.Services)),
+		Networks: newNetworks(introspection.Project.Networks, a.networkKeys,
+			staticAddressNetworks(introspection.Project.Services), s.engineStamps.Networking.StampedIPFamilies),
 	}, nil
 }
 
@@ -219,7 +227,7 @@ func newVolumes(introspected []model.NamedVolume) types.Volumes {
 		volumes[volume.Key] = types.VolumeConfig{
 			Name:       volume.Name,
 			Driver:     volume.Driver,
-			DriverOpts: volume.DriverOpts,
+			DriverOpts: dropDerivedDriverOpts(volume.DriverOpts),
 			Labels:     userLabels(volume.Labels),
 		}
 	}
@@ -228,12 +236,14 @@ func newVolumes(introspected []model.NamedVolume) types.Volumes {
 
 // newNetworks renders the newNetworks: section, foreign ones keyed by docker name and external.
 // Address pools are declared only where a container holds a static address.
-func newNetworks(introspected []model.Network, keys map[string]string, static map[string]bool) types.Networks {
+func newNetworks(
+	introspected []model.Network, keys map[string]string, static map[string]bool, ipFamiliesStamped bool,
+) types.Networks {
 	owned := make(map[string]bool, len(introspected))
 	networks := make(types.Networks, len(keys))
 	for _, projectNetwork := range introspected {
 		owned[projectNetwork.Key] = true
-		networks[projectNetwork.Key] = types.NetworkConfig{
+		declared := types.NetworkConfig{
 			Name:       projectNetwork.Name,
 			Driver:     projectNetwork.Inspect.Driver,
 			DriverOpts: networkOptions(projectNetwork.Inspect.Options),
@@ -244,6 +254,10 @@ func newNetworks(introspected []model.Network, keys map[string]string, static ma
 			EnableIPv6: declaredIPFamily(projectNetwork.Inspect.Options, enableIPv6Option, projectNetwork.Inspect.EnableIPv6),
 			Labels:     userLabels(projectNetwork.Inspect.Labels),
 		}
+		if ipFamiliesStamped {
+			declared = dropStampedIPFamilies(declared)
+		}
+		networks[projectNetwork.Key] = declared
 	}
 	for name, key := range keys {
 		if !owned[key] {
@@ -265,6 +279,18 @@ func networkOptions(options map[string]string) types.Options {
 		return nil
 	}
 	return kept
+}
+
+// dropStampedIPFamilies drops the IP families an engine stamps on a network that declared
+// none: IPv4 on, IPv6 off.
+func dropStampedIPFamilies(network types.NetworkConfig) types.NetworkConfig {
+	if network.EnableIPv4 != nil && *network.EnableIPv4 {
+		network.EnableIPv4 = nil
+	}
+	if network.EnableIPv6 != nil && !*network.EnableIPv6 {
+		network.EnableIPv6 = nil
+	}
+	return network
 }
 
 // declaredIPFamily is the declared enable_ipv4 or enable_ipv6, or nil for one the daemon defaulted.
@@ -320,9 +346,9 @@ func hasStaticAddress(endpoint *network.EndpointSettings) bool {
 	return endpoint.IPAMConfig.IPv4Address != "" || endpoint.IPAMConfig.IPv6Address != ""
 }
 
-// networkKeys maps a network's docker name to its key in the project. A network
-// the project does not own carries no compose label, so it keys under its name.
-func networkKeys(introspected []model.Network, services []model.Service) map[string]string {
+// networkKeys maps a network's docker name to its key in the project: a foreign network
+// keys under its name, the engine's own bridge network under none.
+func networkKeys(introspected []model.Network, services []model.Service, bridgeNetwork string) map[string]string {
 	keys := make(map[string]string, len(introspected))
 	for _, n := range introspected {
 		keys[n.Name] = n.Key
@@ -333,7 +359,7 @@ func networkKeys(introspected []model.Network, services []model.Service) map[str
 				continue
 			}
 			for name := range replica.Inspect.NetworkSettings.Networks {
-				if _, ok := keys[name]; !ok && !slices.Contains(predefinedNetworks, name) {
+				if _, ok := keys[name]; !ok && !slices.Contains(predefinedNetworks, name) && name != bridgeNetwork {
 					keys[name] = name
 				}
 			}

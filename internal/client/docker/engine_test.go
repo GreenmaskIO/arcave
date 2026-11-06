@@ -15,6 +15,8 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -261,16 +263,15 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 	}
 }
 
-// The whole volume comes out through a container of arcave's own, mounted at
-// volumeHolderMount — no service container is involved. The container outlives the
-// call: it goes away only once the caller closes the stream copied out of it.
+// The volume comes out as the contents of volumeHolderMount in a container of arcave's own,
+// removed only once the caller closes the stream.
 func TestEngine_OpenVolume(t *testing.T) {
 	// Arrange
 	const payload = "tar-bytes"
 	api := &mockAPI{}
-	expectImagePresent(api, volumeToolsImage)
+	expectImagePresent(api, VolumeToolsImage)
 	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
-	copyOut := api.On("CopyFromContainer", mock.Anything, "holder-1", volumeHolderMount).
+	copyOut := api.On("CopyFromContainer", mock.Anything, "holder-1", volumeHolderMount+"/.").
 		Return(io.NopCloser(strings.NewReader(payload)), container.PathStat{}, nil).Once()
 	removed := make(chan struct{})
 	holder.remove.Run(func(mock.Arguments) { close(removed) })
@@ -295,32 +296,51 @@ func TestEngine_OpenVolume(t *testing.T) {
 	assert.Equal(t, map[string]string{oneShotLabel: "true"}, holder.cfg.Labels)
 }
 
-// A restore clears the volume before extracting into it, and extracts at the
-// container's root: the archive's top entry is volumeHolderMount's own basename, so
-// no path arithmetic decides where the data lands.
+// A restore clears the volume before extracting into it, and extracts into the
+// mount itself, byte for byte as the backend wrote them, never closing the caller's stream.
 func TestEngine_WriteVolume(t *testing.T) {
 	// Arrange
+	archive := newTar(t,
+		tarMember{name: "./", dir: true},
+		tarMember{name: "./marker", body: "hi"},
+		tarMember{name: "sub/f", body: "f"},
+		tarMember{name: "sub/link", link: "marker"},
+	)
 	api := &mockAPI{}
-	expectImagePresent(api, volumeToolsImage)
+	expectImagePresent(api, VolumeToolsImage)
 	wipe := expectContainerRun(api, "wipe-1", "find")
 	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
-	extract := api.On("CopyToContainer", mock.Anything, "holder-1", "/", mock.Anything, mock.Anything).
+	var body io.Reader
+	extract := api.On("CopyToContainer", mock.Anything, "holder-1", volumeHolderMount, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { body = args.Get(3).(io.Reader) }).
 		Return(nil).Once()
 	// The wipe must be finished before a byte is written back, or the restore
 	// deletes itself.
 	mock.InOrder(wipe.remove, holder.create, extract, holder.remove)
 	e := &Engine{api: api}
 
+	source := &closeCounter{Reader: bytes.NewReader(archive)}
+
 	// Act
 	err := e.WriteVolume(context.Background(),
 		model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
-		strings.NewReader("payload"))
+		source)
 
 	// Assert
 	require.NoError(t, err)
+	// The body net/http gets closes without reaching the caller's stream.
+	closer, closable := body.(io.Closer)
+	require.True(t, closable)
+	require.NoError(t, closer.Close())
+	assert.Zero(t, source.closed, "the SDK must not close the caller's stream")
+	extracted, err := io.ReadAll(body)
+	require.NoError(t, err)
 	api.AssertExpectations(t)
+	assert.Equal(t, archive, extracted)
 	assert.Equal(t, []string{"demo_pgdata:" + wipeMountPath}, wipe.host.Binds, "the wipe binds the volume it clears")
+	assert.Equal(t, []string{"label=disable"}, wipe.host.SecurityOpt, "a :Z bind stays writable")
 	assert.Equal(t, []string{"demo_pgdata:" + volumeHolderMount}, holder.host.Binds)
+	assert.Equal(t, []string{"label=disable"}, holder.host.SecurityOpt, "a :Z bind stays readable")
 }
 
 // A volume the daemon refuses to clear stops the restore before the stream is
@@ -328,7 +348,7 @@ func TestEngine_WriteVolume(t *testing.T) {
 func TestEngine_WriteVolume_AFailedWipeWritesNothing(t *testing.T) {
 	// Arrange: no CopyToContainer expectation, so an extract fails the run.
 	api := &mockAPI{}
-	expectImagePresent(api, volumeToolsImage)
+	expectImagePresent(api, VolumeToolsImage)
 	expectContainerRun(api, "wipe-1", "find").exit(1)
 	api.On("ContainerLogs", mock.Anything, "wipe-1", mock.Anything).
 		Return(io.NopCloser(strings.NewReader("")), nil).Once()
@@ -376,7 +396,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			api := &mockAPI{}
 			var wipe *containerRun
 			if tt.wantErr == "" {
-				expectImagePresent(api, volumeToolsImage)
+				expectImagePresent(api, VolumeToolsImage)
 				wipe = expectContainerRun(api, "wipe-1", "find")
 			}
 			e := &Engine{api: api}
@@ -392,7 +412,7 @@ func TestEngine_WipeVolume(t *testing.T) {
 			}
 			require.NoError(t, err)
 			api.AssertExpectations(t)
-			assert.Equal(t, volumeToolsImage, wipe.cfg.Image)
+			assert.Equal(t, VolumeToolsImage, wipe.cfg.Image)
 			assert.EqualValues(t, []string{"find", wipeMountPath, "-mindepth", "1", "-maxdepth", "1",
 				"-exec", "rm", "-rf", "{}", "+"}, wipe.cfg.Cmd)
 			assert.Equal(t, tt.wantBinds, wipe.host.Binds)
@@ -542,4 +562,42 @@ func assertClosed(t *testing.T, done <-chan struct{}, msg string) {
 	default:
 		t.Fatal(msg)
 	}
+}
+
+type tarMember struct {
+	name string
+	body string
+	dir  bool
+	link string
+}
+
+// closeCounter is a reader counting the Closes it got.
+type closeCounter struct {
+	io.Reader
+	closed int
+}
+
+func (c *closeCounter) Close() error {
+	c.closed++
+	return nil
+}
+
+func newTar(t *testing.T, members ...tarMember) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, member := range members {
+		hdr := &tar.Header{Name: member.name, Mode: 0o644, Size: int64(len(member.body)), Typeflag: tar.TypeReg}
+		switch {
+		case member.dir:
+			hdr.Typeflag, hdr.Mode = tar.TypeDir, 0o755
+		case member.link != "":
+			hdr.Typeflag, hdr.Linkname = tar.TypeSymlink, member.link
+		}
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err := tw.Write([]byte(member.body))
+		require.NoError(t, err)
+	}
+	require.NoError(t, tw.Close())
+	return buf.Bytes()
 }

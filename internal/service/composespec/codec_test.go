@@ -23,6 +23,7 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -73,7 +74,7 @@ func richResult() model.IntrospectionResult {
 func TestCodec_MarshalParse_RoundTrip(t *testing.T) {
 	// Arrange
 	codec := NewCodec()
-	assembled, err := NewAssembler().Assemble(context.Background(), richResult())
+	assembled, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), richResult())
 	require.NoError(t, err)
 
 	// Act
@@ -198,7 +199,7 @@ func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 		},
 	}}
 	codec := NewCodec()
-	assembled, err := NewAssembler().Assemble(context.Background(), introspection)
+	assembled, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), introspection)
 	require.NoError(t, err)
 
 	// Act

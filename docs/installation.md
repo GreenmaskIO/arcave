@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install the arcave CLI via the install script, a pre-built binary from GitHub releases, or from source. Requires Docker 25 or newer; no Compose plugin or docker CLI.
+description: Install the arcave CLI via the install script, a pre-built binary from GitHub releases, or from source. Requires Docker 25 or newer, or Podman; no Compose plugin or docker CLI.
 keywords: [install arcave, arcave binary, arcave cli, docker compose, go install, Open-Source, Greenmask]
 ---
 
@@ -8,7 +8,7 @@ keywords: [install arcave, arcave binary, arcave cli, docker compose, go install
 
 ## Prerequisites
 
-* **Docker 25 or newer**, with the daemon reachable by the user running arcave. See [Requirements](reference/requirements.md).
+* **Docker 25 or newer, or Podman**, with the daemon reachable by the user running arcave. See [Requirements](reference/requirements.md).
 * Nothing else from Docker: arcave talks to the daemon and drives compose as libraries, so it needs neither the `docker` CLI nor the Compose plugin.
 * For the [`cdc` backend](reference/configuration.md#snapshot) only: the ability to pull and run `restic/restic` containers.
 

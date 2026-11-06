@@ -189,24 +189,32 @@ func newImageCaptures(introspection model.IntrospectionResult, containers []mode
 		}) {
 			continue
 		}
-		imageToCapture := model.Image{ID: ref.UpstreamImageID}
-		if ref.UpstreamImageRef != "" {
-			imageToCapture.Refs = []string{ref.UpstreamImageRef}
-		}
 		inspect, existsInDaemon := introspection.Images[ref.UpstreamImageID]
-		if existsInDaemon {
-			for _, tag := range inspect.RepoTags {
-				if !slices.Contains(imageToCapture.Refs, tag) {
-					imageToCapture.Refs = append(imageToCapture.Refs, tag)
-				}
-			}
-			imageToCapture.RepoDigests = inspect.RepoDigests
-			imageToCapture.SizeBytes = inspect.Size
-		}
 		reqs = append(reqs, model.ImageCaptureRequest{
-			Image:          imageToCapture,
+			Image: model.Image{
+				ID:          ref.UpstreamImageID,
+				Refs:        newImageRefs(ref.UpstreamImageRef, inspect.RepoTags),
+				RepoDigests: inspect.RepoDigests,
+				SizeBytes:   inspect.Size,
+			},
 			ExistsInDaemon: existsInDaemon,
 		})
 	}
 	return reqs
+}
+
+// newImageRefs is the container's own ref, then every tag of its image not already named,
+// each spelled as Docker does: Podman prefixes docker.io/.
+func newImageRefs(containerRef string, repoTags []string) []string {
+	var refs []string
+	if containerRef != "" {
+		refs = []string{containerRef}
+	}
+	for _, repoTag := range repoTags {
+		tag := string(model.ImageRef(repoTag).Familiar())
+		if !slices.Contains(refs, tag) {
+			refs = append(refs, tag)
+		}
+	}
+	return refs
 }

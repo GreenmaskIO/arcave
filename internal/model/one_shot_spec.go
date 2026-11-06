@@ -36,11 +36,17 @@ type OneShotSpec struct {
 	Files []OneShotFile
 	// Binds are "source:target" mounts: a volume name or a host path.
 	Binds []string
+	// SecurityOpt are the daemon's --security-opt entries, "label=disable" among them.
+	SecurityOpt []string
 
 	// HostNetwork runs the container in the daemon host's network namespace
 	// instead of a bridge — how a container reaches a server bound on the host
 	// loopback when no name for the host resolves (native Linux daemons).
 	HostNetwork bool
+
+	// DiscardLog keeps the daemon from logging the run, for output too large to keep
+	// twice; a failure then carries only what the attach's stderr gave the caller.
+	DiscardLog bool
 
 	// Stdin, when set, is streamed to the container's stdin, which is then
 	// half-closed so the process sees EOF. Stdout and Stderr receive the

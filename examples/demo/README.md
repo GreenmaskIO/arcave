@@ -118,7 +118,7 @@ docker images 'arcave/*'              # the tags a rollback created; remove them
   in `docker-compose.yaml`.
 - Rollback is **destructive**: every volume it restores ends up exactly as the
   savepoint recorded it, so a change made after the savepoint is gone for good.
-- After a rollback each container runs on an `arcave/…:sp-<savepoint-id>` tag
+- After a rollback each container runs on an `arcave/…:sp-<savepoint-id>-<rollback-id>` tag
   holding its restored writable layer. A later `docker compose up` that
   recreates the containers puts them back on the compose file's images and drops
   those layers; roll back again to restore them.

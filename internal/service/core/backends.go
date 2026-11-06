@@ -21,9 +21,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -51,23 +49,6 @@ var (
 	}
 )
 
-// newBackends builds one backend per volume, all rooted at the one store, in
-// input order. All up front: an unregistered backend fails before any byte moves.
-func (s *Service) newBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
-	backends := make([]model.VolumeSnapshotBackend, len(volumes))
-	for i, volume := range volumes {
-		backend, err := s.snapshotBackendRegistry.New(model.BackendSpec{
-			Store:  s.store,
-			Volume: volume,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("building %s backend for volume %s: %w", volume.Backend, volume.ObjectID, err)
-		}
-		backends[i] = backend
-	}
-	return backends, nil
-}
-
 // captureVolumes takes one capture per backend under id, its stats indexed alike with backends;
 // on error what the fan-out wrote is left for a later gc.
 func (s *Service) captureVolumes(
@@ -92,9 +73,6 @@ func (s *Service) captureVolumes(
 	}
 	return stats, nil
 }
-
-// errStillCommitted is a drop that failed before it uncommitted the record: the savepoint stands.
-var errStillCommitted = errors.New("savepoint still committed")
 
 // performSavepoint captures a fresh savepoint under a heartbeat and commits its record last,
 // once grantedLock still holds the lock; on failure it returns a zero savepoint. killed are the
@@ -257,100 +235,6 @@ func (s *Service) restoreVolumes(
 		})
 }
 
-// dropSavepoint uncommits the record first, then drops the data it named.
-// Reversing that leaves a savepoint that still lists but is half gone, so the
-// order is pinned by a test.
-//
-// It is also what a failed capture wants: Delete is idempotent — a namespace
-// with no record is already uncommitted — so one function serves both.
-//
-// The sweep runs whatever the backends reported: it is what reclaims an archive a
-// capture that died mid-fan-out left behind, which no stat names.
-func (s *Service) dropSavepoint(
-	ctx context.Context,
-	savepoint model.Savepoint,
-	backends []model.VolumeSnapshotBackend,
-) error {
-	if err := s.savepointRepo.DeleteSavepoint(ctx, savepoint.ID); err != nil {
-		return fmt.Errorf("%w: uncommit savepoint %s: %w", errStillCommitted, savepoint.ID, err)
-	}
-
-	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, volumeRemove,
-		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			if err := backend.Remove(ctx, model.BackendRemoveRequest{
-				SnapshotID: savepoint.ID,
-				Payload:    savepoint.Stats[i].Payload,
-			}); err != nil {
-				return fmt.Errorf("remove capture: %w", err)
-			}
-			return nil
-		})
-
-	sweepErr := s.sweepTree(ctx, savepoint.ID)
-	if sweepErr != nil {
-		sweepErr = fmt.Errorf("remove capture directory %s: %w", savepoint.ID, sweepErr)
-	}
-	return errors.Join(removeErr, sweepErr)
-}
-
-// forEachBackend runs fn over every backend concurrently and waits for all of them.
-// fn gets its slice index and a context whose step counts the volume's bytes.
-func (s *Service) forEachBackend(
-	ctx context.Context,
-	snapshotID model.SavepointID,
-	backends []model.VolumeSnapshotBackend,
-	op volumeOp,
-	fn func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error,
-) error {
-	if err := snapshotID.Validate(); err != nil {
-		return fmt.Errorf("validate savepoint id: %w", err)
-	}
-	if len(backends) == 0 {
-		return nil
-	}
-
-	// Before the group: the batch reports the group's cancellation, so it opens outside it.
-	ctx, batch := progress.Batch(ctx, progress.Step{Kind: op.kind}, len(backends))
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(s.maxConcurrentOperations)
-	for i, backend := range backends {
-		eg.Go(func() error {
-			opCtx := volumeOpContext(egCtx, backend, snapshotID, op.name)
-			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindVolume, ID: backend.Volume().ObjectID},
-				progress.MeasureBytes)
-			log := zerolog.Ctx(opCtx)
-
-			started := time.Now()
-			log.Debug().Msg("volume operation started")
-			if err := fn(opCtx, i, backend); err != nil {
-				err = fmt.Errorf("%s %s: %w", op.name, backend.Volume().ObjectID, err)
-				step.End(err)
-				return err
-			}
-			step.End(nil)
-			log.Debug().Dur("duration", time.Since(started)).Msg("volume operation finished")
-			return nil
-		})
-	}
-	err := eg.Wait()
-	batch.End(err)
-	return err
-}
-
-// volumeOpContext attributes every line the operation logs.
-func volumeOpContext(
-	ctx context.Context, backend model.VolumeSnapshotBackend, snapshotID model.SavepointID, opName string,
-) context.Context {
-	volume := backend.Volume()
-	return zerolog.Ctx(ctx).With().
-		Str("volume", volume.ObjectID).
-		Str("backend", string(volume.Backend)).
-		Str("snapshot_id", snapshotID.String()).
-		Str("op", opName).
-		Logger().
-		WithContext(ctx)
-}
-
 // requireEmptyTree refuses an id whose capture directory already holds objects: an
 // interrupted run's remains, possibly the last copy of what it captured.
 func (s *Service) requireEmptyTree(ctx context.Context, id model.SavepointID) error {
@@ -361,16 +245,6 @@ func (s *Service) requireEmptyTree(ctx context.Context, id model.SavepointID) er
 	if len(objects) > 0 {
 		return fmt.Errorf("%w: %s holds %d object(s), an interrupted run's remains; check what is there before removing it",
 			errCaptureDirectoryNotEmpty, id, len(objects))
-	}
-	return nil
-}
-
-// sweepTree drops a whole capture directory — the one storage key the service
-// addresses itself; everything below it is the backends'. An absent tree is not
-// an error.
-func (s *Service) sweepTree(ctx context.Context, id model.SavepointID) error {
-	if err := s.store.DeleteAll(ctx, id.String()); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
-		return err
 	}
 	return nil
 }

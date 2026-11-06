@@ -39,7 +39,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
@@ -85,7 +84,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(cli)
-	engine := dockerclient.NewEngine(daemonAPI)
+	profile := newRuntimeProfile(t, daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -104,15 +103,15 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		SessionLocker:      newStoreLocker(composeProjectStore, model.DefaultSession),
 		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project)),
-		ProjectAssembler:   composespec.NewAssembler(),
+		ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
-		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), engine, blobStore),
-		ContainerRebuilder: engine,
-		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		VolumeRemover:      profile.engine,
+		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), profile.engine, blobStore),
+		ContainerRebuilder: profile.engine,
+		ImageLookup:        profile.engine,
+		BackendRegistry:    mustRegistry(t, profile.volumes),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              composeProjectStore,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),

@@ -251,13 +251,21 @@ The project is rebuilt from the compose spec the savepoint recorded, and savepoi
 unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer
 ```
 
-`savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on an engine that is not Docker or whose version arcave could not read:
+`savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on a daemon whose version arcave could not read:
 
 ```text
-unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape
+unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
 ```
 
-On Docker, the daemon is older than 25: upgrade it — see [Requirements](requirements.md#docker-25-or-newer). Podman exports this shape whatever its version and is [not supported yet](requirements.md#docker-25-or-newer). Leaving container files and images out of the capture gets past this error, but a `fullcopy` rollback then loses volume data and later rollbacks can fail, so don't use that as a way around it.
+Either way the daemon is a Docker older than 25: upgrade it — see [Requirements](requirements.md#docker-25-or-newer-or-podman). Podman is not affected: arcave exports through its own API.
+
+## `Cannot connect to the Docker daemon`
+
+```text
+init dependencies: read the daemon version: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+```
+
+`savepoint create` and `rollback` reach no daemon at the address they were given. Start the daemon, or point `DOCKER_HOST` or [`docker.host`](configuration.md#docker) at the one you use. On Podman this is the usual first error, since arcave does not read `CONTAINER_HOST`: see [Connecting to Podman](requirements.md#connecting-to-podman).
 
 ## `invalid capture policy label`
 

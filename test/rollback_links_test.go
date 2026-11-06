@@ -67,6 +67,9 @@ func TestRollback_KeepsALinkToARebuiltReplica(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			env := newImageRollbackEnv(t)
+			if isPodman(t, env.daemon) {
+				t.Skip("link is not supported: Podman refuses links: on create")
+			}
 			env.upDocument(t, fmt.Sprintf(linkedReplicasSpec, env.project, tt.replicas))
 			require.Empty(t, env.danglingLinks(t, "client-1"))
 			if tt.remove != 0 {

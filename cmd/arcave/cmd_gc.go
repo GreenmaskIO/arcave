@@ -15,11 +15,9 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
@@ -60,23 +58,15 @@ func runGC(cmd *cobra.Command, _ []string) error {
 	if err := cli.ValidateGarbageCollectRequest(req); err != nil {
 		return err
 	}
-	return withGCDeps(cmd.Context(), func(ctx context.Context, d *gcDependencies) error {
-		return cli.NewGCHandler(d.service, d.printer).GarbageCollect(ctx, req)
-	})
-}
+	ctx := cmd.Context()
+	var opened closers
+	defer opened.release(ctx)
 
-// withGCDeps runs fn over the gc dependencies, released when fn returns.
-func withGCDeps(ctx context.Context, fn func(ctx context.Context, d *gcDependencies) error) error {
-	deps, err := newGCDependencies(ctx, projectRoot, projectCfg, sessionRef)
+	svc, err := openGCService(ctx, projectRoot, projectCfg, sessionRef, &opened)
 	if err != nil {
 		return fmt.Errorf("init gc dependencies: %w", err)
 	}
-	defer func() {
-		if err := deps.Close(ctx); err != nil {
-			log.Ctx(ctx).Error().Err(err).Msg("close gc dependencies")
-		}
-	}()
-	return fn(ctx, deps)
+	return cli.NewGCHandler(svc, loadRunOutput()).GarbageCollect(ctx, req)
 }
 
 func init() {

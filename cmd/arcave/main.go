@@ -32,8 +32,8 @@ const exitInterrupted = 130
 var errInterruptedAgain = errors.New("interrupted again: exited before cleaning up")
 
 // main executes the command tree. Config resolution and logger setup happen in
-// rootCmd's PersistentPreRunE (cmd_root.go); each command builds the dependencies
-// it needs via newDependencies (dependencies.go) and releases them on return.
+// rootCmd's PersistentPreRunE (cmd_root.go); each command builds the service it
+// needs through an open…Service (dependencies.go) and releases it on return.
 func main() {
 	ctx, stop := notifyInterrupt()
 	// A panic takes the live tree down first, or the terminal is left without its cursor.

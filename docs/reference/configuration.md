@@ -116,9 +116,11 @@ How arcave reaches the daemon. Honoured by both halves of the Docker client, so 
 | `docker.ca_file` | string | `""` | Override the CA file on its own. |
 | `docker.cert_file` | string | `""` | Override the certificate file on its own. |
 | `docker.key_file` | string | `""` | Override the key file on its own. |
-| `docker.tls_verify` | bool | `false` | Verify the daemon's TLS certificate. |
+| `docker.skip_tls_verify` | bool | `false` | Turn TLS on and accept any certificate the daemon presents. For test stands only: a connection to the wrong daemon goes unnoticed. |
 
-The three `*_file` keys exist for certificates that do not follow the `cert_path` naming convention.
+The three `*_file` keys exist for certificates that do not follow the `cert_path` naming convention. `docker.cert_path` needs all three files in its directory; for a daemon that asks for no client certificate, set `docker.ca_file`. Any of these files turns TLS on, and the daemon's certificate is then verified. A Docker context carries its own TLS settings, and these keys do not apply to it.
+
+With no `docker.host` or `docker.context`, empty TLS keys beside a `tcp://` or schemeless `DOCKER_HOST` fall back to `DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH`: see [Variables that are not arcave's](environment_variables.md#variables-that-are-not-arcaves). The same keys reach a Podman daemon behind TLS.
 
 `docker.host` and `docker.context` both name a daemon, so set at most one; a client certificate needs both halves. These are checked when a command connects, not when the config is read:
 

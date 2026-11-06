@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build fidelity
-
 package test
 
 import (
@@ -21,10 +19,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,10 +37,11 @@ import (
 	"github.com/docker/compose/v2/pkg/api"
 	dockercompose "github.com/docker/compose/v2/pkg/compose"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
-	gocmp "github.com/google/go-cmp/cmp"
+	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,10 +55,50 @@ import (
 
 // The images every case runs on, pinned so their environment and command hold still under the test.
 const (
-	fidelityBusybox = "busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
-	fidelityAlpine  = "alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8"
-	fidelityRedis   = "redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499"
+	busyboxDigest = "@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+	alpineDigest  = "@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8"
+	redisDigest   = "@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499"
+
+	fidelityBusybox = "busybox:1.37" + busyboxDigest
+	fidelityAlpine  = "alpine:3.22" + alpineDigest
+	fidelityRedis   = "redis:7-alpine" + redisDigest
 )
+
+// fidelityEngine is what a want says of the engine it runs on: the images as that engine
+// stores them, and facts, the *engine anchor every service of a want merges.
+type fidelityEngine struct {
+	busybox, alpine, redis string
+	facts                  string
+}
+
+// fidelityEngines holds each engine's own truth, stated whole; no comparison relaxes it.
+var fidelityEngines = map[model.ContainerRuntimeKind]fidelityEngine{
+	model.ContainerRuntimeDocker: {
+		busybox: fidelityBusybox,
+		alpine:  fidelityAlpine,
+		redis:   fidelityRedis,
+		facts: `
+x-engine: &engine
+  ipc: private
+  cgroup: private
+`,
+	},
+	// Podman stores no tag beside a digest, and stamps each container started with the
+	// oom_score_adj and rlimits of its API process, read from a probe (readEngineStamps).
+	model.ContainerRuntimePodman: {
+		busybox: "busybox" + busyboxDigest,
+		alpine:  "alpine" + alpineDigest,
+		redis:   "redis" + redisDigest,
+		facts: `
+x-engine: &engine
+  cgroup: private
+  oom_score_adj: {{oom_score_adj}}
+  ulimits:
+    nofile: {soft: {{nofile_soft}}, hard: {{nofile_hard}}}
+    nproc: {soft: {{nproc_soft}}, hard: {{nproc_hard}}}
+`,
+	},
+}
 
 // fidelityCase is one compose capability: the file a user wrote, and the spec arcave must
 // assemble from the compose project that file created.
@@ -67,99 +109,23 @@ type fidelityCase struct {
 	compose      string
 	files        map[string]string
 	composeFiles []string
-	want         string
+	// want is the spec on every engine; wants, one per engine, where their specs differ in
+	// more than fidelityEngines says. A case names exactly one of the two.
+	want  string
+	wants map[model.ContainerRuntimeKind]string
 	// warns are the warnings Assemble logs, one JSON record each.
 	warns []string
 	// setup runs before the compose project is created; afterUp once it runs.
 	setup   func(t *testing.T, e *fidelityEnv)
 	afterUp func(t *testing.T, e *fidelityEnv)
 	// drift applies to R1 what pass 2 is expected to change, ahead of the comparison with R2.
-	drift func(r *model.IntrospectionResult)
-	// knownDefect names the BACKLOG.md row a pass is known to fail on; the pass then asserts
-	// the failure, so the case turns red once the defect is fixed.
+	drift func(r *model.IntrospectionResult, runtime model.ContainerRuntimeKind)
+	// unsupported names, by engine, why that engine refuses to create the case's compose
+	// project at all; the case is skipped there.
+	unsupported map[model.ContainerRuntimeKind]string
+	// knownDefect names the BACKLOG.md row a pass is known to fail on, keyed by the pass or by
+	// <runtime>/<pass>; the pass asserts the failure, so the case turns red once it is fixed.
 	knownDefect map[string]string
-}
-
-func TestIntrospectAssemble(t *testing.T) {
-	groups := []struct {
-		name  string
-		cases []fidelityCase
-	}{
-		{name: "replicas", cases: replicaCases()},
-		{name: "namespace", cases: namespaceCases()},
-		{name: "networks", cases: networkCases()},
-		{name: "ports", cases: portCases()},
-		{name: "runtime", cases: runtimeCases()},
-		{name: "volumes", cases: volumeCases()},
-		{name: "dependencies", cases: dependencyCases()},
-		{name: "build", cases: buildCases()},
-		{name: "provenance", cases: provenanceCases()},
-	}
-	for _, group := range groups {
-		t.Run(group.name, func(t *testing.T) {
-			for _, tc := range group.cases {
-				t.Run(tc.name, func(t *testing.T) { runFidelityCase(t, tc) })
-			}
-		})
-	}
-}
-
-// runFidelityCase brings the case's compose project up from its file, assembles a spec from
-// the running containers, compares it with want, then brings it up again from that spec.
-func runFidelityCase(t *testing.T, tc fidelityCase) {
-	e := newFidelityEnv(t)
-	e.writeFiles(t, tc)
-	if tc.setup != nil {
-		tc.setup(t, e)
-	}
-	source := e.load(t, tc)
-	e.build(t, source)
-	e.up(t, tc, source)
-	if tc.afterUp != nil {
-		tc.afterUp(t, e)
-	}
-
-	r1 := e.introspect(t)
-	specA, warns := e.assemble(t, r1)
-
-	t.Run("pass1", func(t *testing.T) {
-		defer func() {
-			if t.Failed() {
-				t.Logf("spec A:\n%s", e.marshal(t, specA))
-			}
-		}()
-		// The project is named per run; a want names it only through the placeholder.
-		want, err := e.codec.Parse(e.ctx, []byte(e.render("name: {{project}}\n"+tc.want)))
-		require.NoError(t, err, "want must parse")
-		delete(want.Extensions, "x-base")
-		if want.Extensions[originExtension] == nil {
-			assert.Equal(t, source.WorkingDir, specA.WorkingDir, "working_dir of the origin")
-			assert.Equal(t, source.ComposeFiles, specA.ComposeFiles, "compose_files of the origin")
-			want.WorkingDir, want.ComposeFiles = specA.WorkingDir, specA.ComposeFiles
-			want.Extensions = specA.Extensions
-		}
-
-		diff := gocmp.Diff(want, specA, specOptions())
-
-		e.expect(t, tc, "pass1", diff, "spec A against want (-want +A)")
-		assert.Equal(t, normalizeWarnings(t, tc.warns), warns, "warnings")
-	})
-
-	t.Run("pass2", func(t *testing.T) {
-		e.down(t, source)
-		// compose writes into the project it creates, so it gets a copy of A.
-		e.up(t, tc, e.reparse(t, specA))
-		r2 := e.introspect(t)
-		specB, _ := e.assemble(t, r2)
-		if tc.drift != nil {
-			tc.drift(&r1)
-		}
-
-		specDiff := gocmp.Diff(specA, specB, specOptions())
-		resDiff := gocmp.Diff(r1, r2, introspectionOptions(declaredMACs(source)))
-
-		e.expect(t, tc, "pass2", specDiff+resDiff, "spec A against spec B, then R1 against R2 (-1 +2)")
-	})
 }
 
 // fidelityEnv is one compose project, driven the way cmd/arcave drives it.
@@ -172,8 +138,12 @@ type fidelityEnv struct {
 	inspector *introspect.Inspector
 	assembler *composespec.Assembler
 	codec     *composespec.Codec
-	project   string
-	dir       string
+	// runtime is the engine behind the daemon, which decides the want a case is held to.
+	runtime model.ContainerRuntimeKind
+	// values fill the placeholders of a want known only once something runs.
+	values  map[string]string
+	project string
+	dir     string
 	// volumes are every volume an introspection saw: a Down leaves the anonymous ones behind.
 	volumes map[string]bool
 	// outsideContainers and outsideNetworks are what a case created beside the compose project.
@@ -199,6 +169,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 	require.NoError(t, dockerCLI.Initialize(flags.NewClientOptions()))
 	composeService := dockercompose.NewComposeService(dockerCLI)
 	logs := &syncBuffer{}
+	profile := newRuntimeProfile(t, daemon)
 	e := &fidelityEnv{
 		ctx:     zerolog.New(logs).WithContext(context.Background()),
 		logs:    logs,
@@ -207,14 +178,20 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 		runner: composeclient.NewClient(composeService, composeclient.Options{
 			WaitTimeout: 90 * time.Second, StopTimeout: 2 * time.Second,
 		}),
-		inspector: introspect.NewInspector(daemon, model.DockerComposeProjectName(project)),
-		assembler: composespec.NewAssembler(),
+		inspector: introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
+		assembler: profile.assembler,
 		codec:     composespec.NewCodec(),
+		runtime:   profile.runtime,
 		project:   project,
 		dir:       t.TempDir(),
 		volumes:   map[string]bool{},
+		values:    map[string]string{},
 	}
 	t.Cleanup(func() { e.cleanup(t) })
+	if e.runtime == model.ContainerRuntimePodman {
+		e.values, err = readEngineStamps(e.ctx, daemon)
+		require.NoError(t, err, "read what the engine stamps")
+	}
 	return e
 }
 
@@ -223,10 +200,17 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 // outside the project, the project, the outside networks, then every volume.
 func (e *fidelityEnv) cleanup(t *testing.T) {
 	ctx := context.Background()
+	// One a replica joins goes after the project on Podman, which refuses to remove it first.
+	var joined []string
 	for _, id := range e.outsideContainers {
-		assert.NoError(t, e.daemon.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}), "remove container %s", id)
+		if err := e.daemon.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil {
+			joined = append(joined, id)
+		}
 	}
 	removeComposeProject(t, e.daemon, e.project)
+	for _, id := range joined {
+		assert.NoError(t, e.daemon.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}), "remove container %s", id)
+	}
 	for _, id := range e.outsideNetworks {
 		assert.NoError(t, e.daemon.NetworkRemove(ctx, id), "remove network %s", id)
 	}
@@ -246,6 +230,26 @@ func (e *fidelityEnv) render(document string) string {
 		"{{alpine}}", fidelityAlpine,
 		"{{redis}}", fidelityRedis,
 	).Replace(document)
+}
+
+// renderWant is the spec the case holds this engine to, with the engine's facts ahead of it.
+func (e *fidelityEnv) renderWant(tc fidelityCase) string {
+	engine := fidelityEngines[e.runtime]
+	want, ok := tc.wants[e.runtime]
+	if !ok {
+		want = tc.want
+	}
+	pairs := []string{
+		"{{project}}", e.project,
+		"{{dir}}", e.dir,
+		"{{busybox}}", engine.busybox,
+		"{{alpine}}", engine.alpine,
+		"{{redis}}", engine.redis,
+	}
+	for name, value := range e.values {
+		pairs = append(pairs, "{{"+name+"}}", value)
+	}
+	return strings.NewReplacer(pairs...).Replace("name: {{project}}\n" + engine.facts + want)
 }
 
 func (e *fidelityEnv) writeFiles(t *testing.T, tc fidelityCase) {
@@ -358,7 +362,11 @@ func (e *fidelityEnv) marshal(t *testing.T, project *types.Project) []byte {
 func (e *fidelityEnv) expect(t *testing.T, tc fidelityCase, pass, diff, what string) {
 	t.Helper()
 
-	if row, ok := tc.knownDefect[pass]; ok {
+	row, ok := tc.knownDefect[string(e.runtime)+"/"+pass]
+	if !ok {
+		row, ok = tc.knownDefect[pass]
+	}
+	if ok {
 		assert.NotEmpty(t, diff, "%s: the known defect (BACKLOG.md: %s) no longer shows; flip the case", what, row)
 		t.Logf("known defect, BACKLOG.md: %s\n%s", row, diff)
 		return
@@ -410,6 +418,17 @@ func (e *fidelityEnv) updateMemory(t *testing.T, service string, replica int, by
 	require.NoError(t, err, "update %s", name)
 }
 
+// readPublishedPort is the host port the daemon gave service's first replica for port.
+func (e *fidelityEnv) readPublishedPort(t *testing.T, service string, port nat.Port) string {
+	t.Helper()
+
+	inspect, err := e.daemon.ContainerInspect(e.ctx, strings.Join([]string{e.project, service, "1"}, "-"))
+	require.NoError(t, err)
+	bindings := inspect.NetworkSettings.Ports[port]
+	require.NotEmpty(t, bindings, "no binding of %s", port)
+	return bindings[0].HostPort
+}
+
 // runOutsideContainer starts a container outside the compose project, named <project>-<name>,
 // on network when one is named.
 func (e *fidelityEnv) runOutsideContainer(t *testing.T, name, network string) {
@@ -448,4 +467,118 @@ func (e *fidelityEnv) createOutsideNetwork(t *testing.T, name string) {
 	created, err := e.daemon.NetworkCreate(e.ctx, e.project+"-"+name, network.CreateOptions{})
 	require.NoError(t, err)
 	e.outsideNetworks = append(e.outsideNetworks, created.ID)
+}
+
+// engineStamps caches readEngineStamps: every container of a run gets the same.
+var engineStamps struct {
+	once   sync.Once
+	values map[string]string
+	err    error
+}
+
+// readEngineStamps reads, off a probe it starts, the oom_score_adj and rlimits the engine
+// stamps on a container asking for none: its API process's, so the host's. Only a started
+// container reports them.
+func readEngineStamps(ctx context.Context, daemon *client.Client) (map[string]string, error) {
+	engineStamps.once.Do(func() {
+		engineStamps.values, engineStamps.err = runStampProbe(ctx, daemon)
+	})
+	return maps.Clone(engineStamps.values), engineStamps.err
+}
+
+func runStampProbe(ctx context.Context, daemon *client.Client) (map[string]string, error) {
+	pull, err := daemon.ImagePull(ctx, fidelityBusybox, image.PullOptions{})
+	if err != nil {
+		return nil, err
+	}
+	//nolint:errcheck // the pull is over once the stream is read; the create below is the check
+	defer pull.Close()
+	if _, err := io.Copy(io.Discard, pull); err != nil {
+		return nil, err
+	}
+	created, err := daemon.ContainerCreate(ctx,
+		&container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}}, nil, nil, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	//nolint:errcheck // a probe left behind fails nothing the run checks
+	defer daemon.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
+	if err := daemon.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		return nil, err
+	}
+	inspect, err := daemon.ContainerInspect(ctx, created.ID)
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]string{"oom_score_adj": strconv.Itoa(inspect.HostConfig.OomScoreAdj)}
+	for _, limit := range inspect.HostConfig.Ulimits {
+		name := strings.ToLower(strings.TrimPrefix(limit.Name, "RLIMIT_"))
+		values[name+"_soft"] = strconv.FormatInt(limit.Soft, 10)
+		values[name+"_hard"] = strconv.FormatInt(limit.Hard, 10)
+	}
+	return values, nil
+}
+
+// fidelityGroups are the catalog's cases by the capability they exercise.
+func fidelityGroups() []fidelityGroup {
+	return []fidelityGroup{
+		{name: "replicas", cases: replicaCases()},
+		{name: "namespace", cases: namespaceCases()},
+		{name: "networks", cases: networkCases()},
+		{name: "ports", cases: portCases()},
+		{name: "runtime", cases: runtimeCases()},
+		{name: "volumes", cases: volumeCases()},
+		{name: "dependencies", cases: dependencyCases()},
+		{name: "build", cases: buildCases()},
+		{name: "provenance", cases: provenanceCases()},
+	}
+}
+
+// fidelityGroup is one capability's cases.
+type fidelityGroup struct {
+	name  string
+	cases []fidelityCase
+}
+
+// wantPlaceholders are what a want may name; composePlaceholders what its compose project may.
+var (
+	composePlaceholders = []string{"project", "dir", "busybox", "alpine", "redis"}
+	wantPlaceholders    = []string{
+		"project", "dir", "busybox", "alpine", "redis", "published",
+		"oom_score_adj", "nofile_soft", "nofile_hard", "nproc_soft", "nproc_hard",
+	}
+	placeholder = regexp.MustCompile(`{{(\w+)}}`)
+)
+
+// Every case states what every engine it runs on must assemble, so none is one engine's by
+// omission. Needs no daemon, so it runs with the rest of ./test/, outside the fidelity tag.
+func TestFidelityCases_Complete(t *testing.T) {
+	for _, group := range fidelityGroups() {
+		t.Run(group.name, func(t *testing.T) {
+			for _, tc := range group.cases {
+				t.Run(tc.name, func(t *testing.T) {
+					assert.NotEqual(t, tc.want == "", len(tc.wants) == 0, "exactly one of want and wants")
+					assertPlaceholders(t, composePlaceholders, tc.compose)
+					assertPlaceholders(t, wantPlaceholders, tc.want)
+					for runtime := range fidelityEngines {
+						want, stated := tc.wants[runtime]
+						_, unsupported := tc.unsupported[runtime]
+						if len(tc.wants) > 0 {
+							assert.NotEqual(t, stated, unsupported, "%s: a want, or why the engine refuses the case", runtime)
+						}
+						assertPlaceholders(t, wantPlaceholders, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+// assertPlaceholders asserts document names only the known placeholders.
+func assertPlaceholders(t *testing.T, known []string, document string) {
+	t.Helper()
+
+	for _, match := range placeholder.FindAllStringSubmatch(document, -1) {
+		assert.Contains(t, known, match[1], "unknown placeholder")
+	}
 }

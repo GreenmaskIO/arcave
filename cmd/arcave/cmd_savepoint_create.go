@@ -15,8 +15,8 @@
 package main
 
 import (
-	"context"
 	"errors"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -43,10 +43,20 @@ func runSavepointCreate(cmd *cobra.Command, args []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewSavepointCreateHandler(d.service, d.printer)
-		return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription)
-	})
+	composeProject, err := requireComposeProject()
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	var opened closers
+	defer opened.release(ctx)
+
+	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
+	if err != nil {
+		return fmt.Errorf("init dependencies: %w", err)
+	}
+	h := cli.NewSavepointCreateHandler(svc, loadRunOutput())
+	return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription)
 }
 
 // savepointCreateResolveName reconciles the optional positional name with

@@ -15,7 +15,7 @@
 package main
 
 import (
-	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -40,11 +40,21 @@ var (
 )
 
 func runToolsGenerateCompose(cmd *cobra.Command, _ []string) error {
-	return withToolsDeps(cmd, func(ctx context.Context, d *toolsDependencies) error {
-		h := cli.NewToolsGenerateComposeHandler(d.service, d.printer)
-		return h.GenerateCompose(ctx, model.GenerateComposeRequest{AbsolutePaths: toolsGenerateComposeAbsolutePaths},
-			toolsGenerateComposeOutput, toolsGenerateComposeForce)
-	})
+	composeProject, err := requireComposeProject()
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	var opened closers
+	defer opened.release(ctx)
+
+	svc, err := openComposeFileService(ctx, projectCfg, composeProject, &opened)
+	if err != nil {
+		return fmt.Errorf("init tools dependencies: %w", err)
+	}
+	h := cli.NewToolsGenerateComposeHandler(svc, loadRunOutput())
+	return h.GenerateCompose(ctx, model.GenerateComposeRequest{AbsolutePaths: toolsGenerateComposeAbsolutePaths},
+		toolsGenerateComposeOutput, toolsGenerateComposeForce)
 }
 
 func init() {

@@ -31,13 +31,11 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/compose/v2/pkg/api"
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/rs/zerolog"
@@ -64,8 +62,6 @@ type dockerAPI interface {
 	VolumeInspect(ctx context.Context, name string) (volume.Volume, error)
 	NetworkList(ctx context.Context, opts network.ListOptions) ([]network.Summary, error)
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
-	Info(ctx context.Context) (system.Info, error)
-	ServerVersion(ctx context.Context) (dockertypes.Version, error)
 }
 
 // Inspector reports the one compose project it is constructed with.
@@ -118,15 +114,6 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	}
 	markInherited(services, referenced)
 
-	info, err := s.api.Info(ctx)
-	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon info: %w", err)
-	}
-	version, err := s.api.ServerVersion(ctx)
-	if err != nil {
-		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon version: %w", err)
-	}
-
 	return model.IntrospectionResult{
 		Project: model.Project{
 			Name:     s.composeProject.String(),
@@ -134,11 +121,9 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 			Volumes:  s.newNamedVolumes(services, volumeIndex),
 			Networks: networks,
 		},
-		Daemon:        info,
-		DaemonVersion: version,
-		Images:        images,
-		Volumes:       volumeIndex,
-		Referenced:    referenced,
+		Images:     images,
+		Volumes:    volumeIndex,
+		Referenced: referenced,
 	}, nil
 }
 

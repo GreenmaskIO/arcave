@@ -24,6 +24,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -176,4 +177,24 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 			assert.Equal(t, tt.want, logs.String() != "")
 		})
 	}
+}
+
+// Podman tags an image docker.io/library/…: the refs keep Docker's spelling, the one the
+// container's own already carries named once.
+func TestNewImageCaptures_PodmanRepoTags(t *testing.T) {
+	// Arrange
+	introspection := demoIntrospectionWithContainers()
+	upstream := introspection.Images[demoUpstreamID]
+	upstream.RepoTags = []string{"docker.io/library/" + demoBaseImage, "registry:5000/mirror/postgres:16"}
+	introspection.Images[demoUpstreamID] = upstream
+	containers := []model.ContainerRef{
+		{Service: demoService, Replica: 1, UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage},
+	}
+
+	// Act
+	got := newImageCaptures(introspection, containers)
+
+	// Assert
+	require.Len(t, got, 1)
+	assert.Equal(t, []string{demoBaseImage, "registry:5000/mirror/postgres:16"}, got[0].Image.Refs)
 }

@@ -14,15 +14,17 @@
 
 package model
 
-// ResolveUpstream is the image c's compose file named: its own image, or its layer's labels
-// on an arcave tag. ok is false for a layer carrying no labels or a container with no config.
+// ResolveUpstream is the image c's compose file named: its own image, spelled as Docker does,
+// or its layer's labels on an arcave tag. ok is false for a layer carrying no labels or a
+// container with no config.
 func ResolveUpstream(res IntrospectionResult, c Container) (id ImageDigestID, ref string, ok bool) {
 	if c.Inspect.Config == nil {
 		return "", "", false
 	}
-	name := c.Inspect.Config.Image
-	if !ImageRef(name).IsRestoredLayerTag() {
-		return c.ImageID(), name, true
+	// Familiar: Podman reports docker.io/library/postgres:16 for the postgres:16 a file names.
+	name := ImageRef(c.Inspect.Config.Image).Familiar()
+	if !name.IsRestoredLayerTag() {
+		return c.ImageID(), string(name), true
 	}
 	return labelledUpstream(res, c.ImageID())
 }

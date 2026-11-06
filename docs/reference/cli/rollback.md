@@ -145,7 +145,7 @@ Warnings (1)
 | `writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
 | `safety_snapshot_kept` | The id of the safety snapshot a successful rollback could not drop — the marker could not be cleared, the session's lock was no longer the rollback's, or the record could not be deleted. `arcave savepoint remove <id>` drops it. Omitted when it was dropped. |
 
-Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per replica and one tag per savepoint. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
+Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per savepoint under a row per replica. A rollback to the same savepoint again puts the same tag back. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
 
 ## Errors
 
@@ -158,7 +158,7 @@ Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<bas
 | `latest` or a name, with an empty store | `finding savepoint "latest": no savepoints exist` |
 | The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 019e843e-1650-7000-8000-000000000000`. The project is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
 | The Docker daemon is older than 25 | `prepare: unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer` — before anything is stopped. |
-| An engine that is not Docker 25 or newer, on a running project | `pre-rollback safety snapshot failed, nothing changed: capturing volumes: … unsupported image archive format: …`. The services are started again. Podman is [not supported yet](../requirements.md#docker-25-or-newer). |
+| A Docker daemon older than 25 whose version arcave could not read, on a running project | `pre-rollback safety snapshot failed, nothing changed: capturing volumes: … unsupported image archive format: …`. The services are started again. |
 | A stored layer the Docker daemon will not take | `restore the savepoint's writable layers: …` — raised **before** anything is stopped. |
 | A service would be rebuilt on an image the savepoint does not hold and the daemon lacks | `image is neither in the savepoint nor in the daemon: service app runs on myapp:latest` — before anything is stopped. Pull or build the image, then roll back again. |
 | The project is not running, its named volumes survive, and `rollback.leftover_volumes` is `refuse` | `compose project is not running but its volumes survive: myapp_pgdata`. Nothing is created. |

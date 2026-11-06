@@ -15,6 +15,9 @@
 package composespec
 
 import (
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,7 +132,7 @@ func TestNewServiceConfig(t *testing.T) {
 	}}
 
 	// Act
-	cfg := newAssembly(introspection).newServiceConfig(richService())
+	cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(richService())
 
 	// Assert
 	assert.Equal(t, "postgres:16", cfg.Image)
@@ -182,7 +185,7 @@ func TestNewServiceConfig(t *testing.T) {
 
 func TestNewServiceConfig_Volumes(t *testing.T) {
 	// Act
-	cfg := newAssembly(model.IntrospectionResult{}).newServiceConfig(richService())
+	cfg := newAssembly(model.IntrospectionResult{}, NewDockerStamps(system.Info{})).newServiceConfig(richService())
 
 	// Assert
 	require.Len(t, cfg.Volumes, 3)
@@ -264,26 +267,108 @@ const (
 	vpnID       = "5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d"
 )
 
-func TestDeclaredNetworkMode(t *testing.T) {
-	replicas := map[string]string{dbReplicaID: "db"}
+// Podman answers bridge for a container in a compose network: the spec declares
+// the network, not the mode, and a bridge with no project network stays. Only on
+// Podman is a network named podman the daemon's own.
+func TestNewServiceConfig_PodmanBridgeMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		stamps       EngineStamps
+		networks     map[string]*network.EndpointSettings
+		wantMode     string
+		wantNetworks []string
+	}{
+		{
+			name:         "beside a project network",
+			stamps:       NewPodmanStamps(system.Info{}),
+			networks:     map[string]*network.EndpointSettings{"demo_back": {}},
+			wantNetworks: []string{"back"},
+		},
+		{
+			name:     "with no project network",
+			stamps:   NewPodmanStamps(system.Info{}),
+			networks: map[string]*network.EndpointSettings{"podman": {}},
+			wantMode: "bridge",
+		},
+		{
+			name:     "bridge beside a network on Docker, which reports the mode as declared",
+			stamps:   NewDockerStamps(system.Info{}),
+			networks: map[string]*network.EndpointSettings{"demo_back": {}},
+			wantMode: "bridge",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			service := richService()
+			service.Containers[0].Inspect.HostConfig.NetworkMode = "bridge"
+			service.Containers[0].Inspect.NetworkSettings.Networks = tt.networks
+			introspection := model.IntrospectionResult{
+				Project: model.Project{
+					Name:     "demo",
+					Services: []model.Service{service},
+					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+				},
+			}
+
+			// Act
+			cfg := newAssembly(introspection, tt.stamps).newServiceConfig(service)
+
+			// Assert
+			assert.Equal(t, tt.wantMode, cfg.NetworkMode)
+			assert.ElementsMatch(t, tt.wantNetworks, slices.Collect(maps.Keys(cfg.Networks)))
+		})
+	}
+}
+
+func TestAssembly_declaredNetworkMode(t *testing.T) {
+	var (
+		projectNetwork = map[string]*network.EndpointSettings{"demo_back": {}}
+		otherNetwork   = map[string]*network.EndpointSettings{"bridge": {}}
+	)
 	tests := []struct {
 		name string
 		mode string
-		want string
+		// networks is what the container joins; nil joins none.
+		networks map[string]*network.EndpointSettings
+		// docker is an engine that never answers bridge beside a project network.
+		docker bool
+		want   string
 	}{
-		{name: "a compose network is not a mode", mode: "demo_back", want: ""},
-		{name: "default", mode: "default", want: "default"},
-		{name: "bridge", mode: "bridge", want: "bridge"},
-		{name: "host", mode: "host", want: "host"},
-		{name: "none", mode: "none", want: "none"},
-		{name: "a replica of the project", mode: "container:" + dbReplicaID, want: "service:db"},
-		{name: "another container", mode: "container:abc", want: "container:abc"},
-		{name: "another service", mode: "service:db", want: "service:db"},
+		{name: "a compose network is not a mode", mode: "demo_back", networks: projectNetwork, want: ""},
+		{name: "default", mode: "default", networks: otherNetwork, want: "default"},
+		{name: "bridge", mode: "bridge", networks: otherNetwork, want: "bridge"},
+		{name: "host", mode: "host", networks: otherNetwork, want: "host"},
+		{name: "none", mode: "none", networks: otherNetwork, want: "none"},
+		{name: "bridge beside a project network, as Podman answers", mode: "bridge", networks: projectNetwork, want: ""},
+		{name: "default beside a project network", mode: "default", networks: projectNetwork, want: ""},
+		{name: "bridge beside a project network, as Docker answers", mode: "bridge", networks: projectNetwork, docker: true, want: "bridge"},
+		{name: "host beside a project network stays", mode: "host", networks: projectNetwork, want: "host"},
+		{name: "a replica of the project", mode: "container:" + dbReplicaID, networks: otherNetwork, want: "service:db"},
+		{name: "another container", mode: "container:abc", networks: otherNetwork, want: "container:abc"},
+		{name: "another service", mode: "service:db", networks: otherNetwork, want: "service:db"},
+		{name: "Podman's pasta, joining no network", mode: "pasta", want: "pasta"},
+		{name: "a namespace path, joining no network", mode: "ns:/run/netns/x", want: "ns:/run/netns/x"},
+		{name: "no mode at all", mode: "", want: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, declaredNetworkMode(tt.mode, replicas, nil))
+			// Arrange
+			a := assembly{
+				serviceByReplica: map[string]string{dbReplicaID: "db"},
+				networkKeys:      map[string]string{"demo_back": "back"},
+				engineStamps:     EngineStamps{Networking: EngineNetworking{BridgeModeBesideNetworks: !tt.docker}},
+			}
+			inspect := container.InspectResponse{NetworkSettings: &container.NetworkSettings{
+				Networks: tt.networks,
+			}}
+
+			// Act
+			got := a.declaredNetworkMode(tt.mode, inspect)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -363,7 +448,7 @@ func TestNewServiceConfig_SharedNamespaces(t *testing.T) {
 	introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{app, db}}}
 
 	// Act
-	cfg := newAssembly(introspection).newServiceConfig(app)
+	cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(app)
 
 	// Assert
 	assert.Equal(t, "service:db", cfg.NetworkMode)
@@ -428,6 +513,12 @@ func TestNewServiceConfig_Image(t *testing.T) {
 			want:   "app:dev", wantPolicy: pullPolicyNever,
 		},
 		{
+			name:    "an image compose built under a bare name loses the :latest the engine tagged it with",
+			running: upstreamID, ref: "demo-app:latest",
+			images: map[model.ImageDigestID]image.InspectResponse{upstreamID: labelled(map[string]string{api.ProjectLabel: "demo"})},
+			want:   "demo-app", wantPolicy: pullPolicyNever,
+		},
+		{
 			name:    "an image compose built is never pulled, though the containerd store digests it",
 			running: upstreamID, ref: "demo-app",
 			images: map[model.ImageDigestID]image.InspectResponse{upstreamID: {
@@ -456,7 +547,7 @@ func TestNewServiceConfig_Image(t *testing.T) {
 			}
 
 			// Act
-			cfg := newAssembly(introspection).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
 
 			// Assert
 			assert.Equal(t, tt.want, cfg.Image)
@@ -471,15 +562,15 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		daemon system.Info
+		info   system.Info
 		host   container.HostConfig
 		stop   *int
 		verify func(t *testing.T, cfg types.ServiceConfig)
 	}{
 		{
-			name:   "the daemon's runtime, log driver and shm size are left out",
-			daemon: system.Info{DefaultRuntime: "runc", LoggingDriver: "json-file"},
-			host: container.HostConfig{Runtime: "runc", ShmSize: defaultShmSize,
+			name: "the daemon's runtime, log driver and shm size are left out",
+			info: system.Info{DefaultRuntime: "runc", LoggingDriver: "json-file"},
+			host: container.HostConfig{Runtime: "runc", ShmSize: NewDockerStamps(system.Info{}).ShmSize,
 				LogConfig: container.LogConfig{Type: "json-file"}},
 			verify: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Empty(t, cfg.Runtime)
@@ -488,8 +579,8 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 			},
 		},
 		{
-			name:   "what differs from the daemon's is declared",
-			daemon: system.Info{DefaultRuntime: "runc", LoggingDriver: "json-file"},
+			name: "what differs from the daemon's is declared",
+			info: system.Info{DefaultRuntime: "runc", LoggingDriver: "json-file"},
 			host: container.HostConfig{Runtime: "runsc", ShmSize: 128 << 20,
 				LogConfig: container.LogConfig{Type: "local"}},
 			verify: func(t *testing.T, cfg types.ServiceConfig) {
@@ -499,8 +590,8 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 			},
 		},
 		{
-			name:   "the daemon's log driver with options is declared",
-			daemon: system.Info{LoggingDriver: "json-file"},
+			name: "the daemon's log driver with options is declared",
+			info: system.Info{LoggingDriver: "json-file"},
 			host: container.HostConfig{LogConfig: container.LogConfig{
 				Type: "json-file", Config: map[string]string{"max-size": "10m"},
 			}},
@@ -509,17 +600,17 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 			},
 		},
 		{
-			name:   "Docker Desktop's stop timeout is left out",
-			daemon: system.Info{OperatingSystem: desktopOperatingSystem},
-			stop:   stopTimeout(desktopStopTimeout),
+			name: "Docker Desktop's stop timeout is left out",
+			info: system.Info{OperatingSystem: desktopOperatingSystem},
+			stop: stopTimeout(desktopStopTimeout),
 			verify: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Nil(t, cfg.StopGracePeriod)
 			},
 		},
 		{
-			name:   "one second elsewhere is a declaration",
-			daemon: system.Info{OperatingSystem: "Ubuntu 24.04 LTS"},
-			stop:   stopTimeout(1),
+			name: "one second elsewhere is a declaration",
+			info: system.Info{OperatingSystem: "Ubuntu 24.04 LTS"},
+			stop: stopTimeout(1),
 			verify: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Equal(t, grace(time.Second), cfg.StopGracePeriod)
 			},
@@ -539,11 +630,10 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 			}}}
 			introspection := model.IntrospectionResult{
 				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
-				Daemon:  tt.daemon,
 			}
 
 			// Act
-			cfg := newAssembly(introspection).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(tt.info)).newServiceConfig(svc)
 
 			// Assert
 			tt.verify(t, cfg)
@@ -590,6 +680,13 @@ func TestNewServiceConfig_DaemonAdditions(t *testing.T) {
 			},
 		},
 		{
+			name: "the label=disable the daemon adds beside a privileged container",
+			host: container.HostConfig{Privileged: true, SecurityOpt: []string{labelDisable}},
+			verify: func(t *testing.T, cfg types.ServiceConfig) {
+				assert.Nil(t, cfg.SecurityOpt)
+			},
+		},
+		{
 			name:   "the host's hostname in the host's network",
 			host:   container.HostConfig{NetworkMode: "host"},
 			config: container.Config{Hostname: "docker-desktop"},
@@ -631,11 +728,11 @@ func TestNewServiceConfig_DaemonAdditions(t *testing.T) {
 			}}}
 			introspection := model.IntrospectionResult{
 				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
-				Daemon:  system.Info{Name: "docker-desktop"},
 			}
+			stamps := NewDockerStamps(system.Info{Name: "docker-desktop"})
 
 			// Act
-			cfg := newAssembly(introspection).newServiceConfig(svc)
+			cfg := newAssembly(introspection, stamps).newServiceConfig(svc)
 
 			// Assert
 			tt.verify(t, cfg)
@@ -687,7 +784,7 @@ func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 			}}
 
 			// Act
-			cfg := newAssembly(introspection).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
 
 			// Assert
 			require.Contains(t, cfg.Networks, "default")
@@ -736,7 +833,7 @@ func TestNewServiceConfig_VolumesFrom(t *testing.T) {
 			introspection := model.IntrospectionResult{Project: model.Project{Name: "demo", Services: []model.Service{svc}}}
 
 			// Act
-			cfg := newAssembly(introspection).newServiceConfig(svc)
+			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
 
 			// Assert
 			var targets []string
@@ -788,6 +885,181 @@ func TestToRestartPolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, toRestartPolicy(tt.policy))
+		})
+	}
+}
+
+// Podman aliases a container by its hostname itself: there the hostname is not declared,
+// or a rebuild would carry it twice. Docker adds no such alias, so one there is the user's.
+func TestNewServiceConfig_HostnameAlias(t *testing.T) {
+	tests := []struct {
+		name        string
+		stamps      EngineStamps
+		wantAliases []string
+	}{
+		{name: "docker", stamps: NewDockerStamps(system.Info{}), wantAliases: []string{"db-primary", "primary"}},
+		{name: "podman", stamps: NewPodmanStamps(system.Info{}), wantAliases: []string{"primary"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			service := richService()
+			endpoint := service.Containers[0].Inspect.NetworkSettings.Networks["demo_back"]
+			endpoint.Aliases = append(endpoint.Aliases, "db-primary")
+			introspection := model.IntrospectionResult{
+				Project: model.Project{
+					Name:     "demo",
+					Services: []model.Service{service},
+					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+				},
+			}
+
+			// Act
+			cfg := newAssembly(introspection, tt.stamps).newServiceConfig(service)
+
+			// Assert
+			require.Contains(t, cfg.Networks, "back")
+			assert.Equal(t, tt.wantAliases, cfg.Networks["back"].Aliases)
+		})
+	}
+}
+
+// A value equal to Podman's default stays when the image sets its own: the compose
+// file asked for it over the image's.
+func TestNewServiceConfig_PodmanDefaultOverImage(t *testing.T) {
+	tests := []struct {
+		name            string
+		image           dockerspec.DockerOCIImageConfig
+		wantStopSignal  string
+		wantTimeoutKept bool
+	}{
+		{
+			name: "the image sets none",
+		},
+		{
+			name: "the image sets its own",
+			image: dockerspec.DockerOCIImageConfig{
+				ImageConfig: ocispec.ImageConfig{StopSignal: "SIGINT"},
+				Healthcheck: &dockerspec.HealthcheckConfig{Timeout: 5 * time.Second},
+			},
+			wantStopSignal:  "SIGTERM",
+			wantTimeoutKept: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			service := richService()
+			inspect := &service.Containers[0].Inspect
+			inspect.Config.StopSignal = "15"
+			inspect.Config.Healthcheck.Timeout = 30 * time.Second
+			inspect.Image = "sha256:" + strings.Repeat("c", 64)
+			introspection := model.IntrospectionResult{
+				Project: model.Project{
+					Name:     "demo",
+					Services: []model.Service{service},
+					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+				},
+				Images: map[model.ImageDigestID]image.InspectResponse{
+					model.ImageDigestID(inspect.Image): {ID: inspect.Image, Config: &tt.image},
+				},
+			}
+
+			// Act
+			cfg := newAssembly(introspection, NewPodmanStamps(system.Info{})).newServiceConfig(service)
+
+			// Assert
+			assert.Equal(t, tt.wantStopSignal, cfg.StopSignal)
+			require.NotNil(t, cfg.HealthCheck)
+			assert.Equal(t, tt.wantTimeoutKept, cfg.HealthCheck.Timeout != nil)
+		})
+	}
+}
+
+// What Podman stamps on every container is its own default and leaves the spec; the
+// same values on Docker were declared and stay.
+func TestNewServiceConfig_PodmanDefaults(t *testing.T) {
+	grace := func(d time.Duration) *types.Duration { converted := types.Duration(d); return &converted }
+	tests := []struct {
+		name   string
+		stamps EngineStamps
+		want   func(t *testing.T, cfg types.ServiceConfig)
+	}{
+		{
+			name:   "podman",
+			stamps: NewPodmanStamps(system.Info{}),
+			want: func(t *testing.T, cfg types.ServiceConfig) {
+				assert.Equal(t, types.NewMappingWithEquals([]string{"PATH=/bin", "MODE=prod"}), cfg.Environment)
+				assert.Empty(t, cfg.WorkingDir)
+				assert.Empty(t, cfg.StopSignal)
+				assert.Nil(t, cfg.StopGracePeriod)
+				assert.Empty(t, cfg.Runtime)
+				assert.Empty(t, cfg.Pid)
+				assert.Empty(t, cfg.Uts)
+				assert.Empty(t, cfg.Ipc)
+				assert.Zero(t, cfg.ShmSize)
+				assert.Empty(t, cfg.CgroupParent)
+				assert.Nil(t, cfg.Logging)
+				assert.Equal(t, map[string]*types.UlimitsConfig{"nofile": {Soft: 1024, Hard: 2048}}, cfg.Ulimits)
+			},
+		},
+		{
+			name:   "docker",
+			stamps: NewDockerStamps(system.Info{}),
+			want: func(t *testing.T, cfg types.ServiceConfig) {
+				assert.Equal(t, types.NewMappingWithEquals([]string{
+					"PATH=/bin", "MODE=prod", "container=podman", "HOME=/root", "HOSTNAME=db-primary",
+				}), cfg.Environment)
+				assert.Equal(t, "/", cfg.WorkingDir)
+				assert.Equal(t, "SIGTERM", cfg.StopSignal)
+				assert.Equal(t, grace(10*time.Second), cfg.StopGracePeriod)
+				assert.Equal(t, "private", cfg.Pid)
+				assert.Equal(t, "private", cfg.Uts)
+				assert.Equal(t, types.UnitBytes(65536000), cfg.ShmSize)
+				assert.Equal(t, map[string]*types.UlimitsConfig{"nofile": {Soft: 1024, Hard: 2048}}, cfg.Ulimits)
+				assert.Equal(t, "oci", cfg.Runtime)
+				assert.Equal(t, "shareable", cfg.Ipc)
+				assert.Equal(t, "user.slice", cfg.CgroupParent)
+				assert.Equal(t, &types.LoggingConfig{Driver: "journald"}, cfg.Logging)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			stopTimeout := 10
+			service := richService()
+			inspect := &service.Containers[0].Inspect
+			inspect.Config.Env = []string{"PATH=/bin", "MODE=prod", "container=podman", "HOME=/root", "HOSTNAME=db-primary"}
+			inspect.Config.WorkingDir = "/"
+			inspect.Config.StopSignal = "15"
+			inspect.Config.StopTimeout = &stopTimeout
+			inspect.Image = "sha256:" + strings.Repeat("c", 64)
+			host := inspect.HostConfig
+			host.Runtime, host.PidMode, host.UTSMode, host.IpcMode = "oci", "private", "private", "shareable"
+			host.ShmSize = 65536000
+			host.CgroupParent = "user.slice"
+			host.LogConfig = container.LogConfig{Type: "journald"}
+			host.Ulimits = []*container.Ulimit{{Name: "RLIMIT_NOFILE", Soft: 1024, Hard: 2048}}
+			introspection := model.IntrospectionResult{
+				Project: model.Project{
+					Name:     "demo",
+					Services: []model.Service{service},
+					Networks: []model.Network{{Key: "back", Name: "demo_back"}},
+				},
+				Images: map[model.ImageDigestID]image.InspectResponse{
+					model.ImageDigestID(inspect.Image): {
+						ID:     inspect.Image,
+						Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Env: []string{"PATH=/bin"}}},
+					},
+				},
+			}
+
+			// Act
+			cfg := newAssembly(introspection, tt.stamps).newServiceConfig(service)
+
+			// Assert
+			tt.want(t, cfg)
 		})
 	}
 }

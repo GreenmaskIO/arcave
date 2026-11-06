@@ -25,12 +25,10 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/compose/v2/pkg/api"
-	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
@@ -66,7 +64,6 @@ func TestInspector_Introspect(t *testing.T) {
 	daemon.expectVolumes(ownedVolume(ownedName, "pgdata"), ownedVolume("demo_orphan", "orphan"))
 	daemon.expectNetworks(network.Summary{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}})
 	daemon.expectImage(testImageID, nil)
-	daemon.expectInfo()
 	inspector := NewInspector(daemon, composeProject)
 
 	// Act
@@ -177,7 +174,6 @@ func TestInspector_Introspect_Referenced(t *testing.T) {
 			daemon.expectVolumes()
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
-			daemon.expectInfo()
 
 			// Act
 			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -199,7 +195,6 @@ func TestInspector_Introspect_JoinsTheTwoVolumeLevels(t *testing.T) {
 	daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
 	daemon.expectNetworks()
 	daemon.expectImage(testImageID, nil)
-	daemon.expectInfo()
 
 	// Act
 	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -284,7 +279,6 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
-			daemon.expectInfo()
 			if tt.mount.Type == mount.TypeVolume && tt.mount.Name != ownedName {
 				daemon.On("VolumeInspect", mock.Anything, tt.mount.Name).
 					Return(volume.Volume{Name: tt.mount.Name, Labels: tt.labels}, nil).Once()
@@ -405,7 +399,6 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 			daemon.expectVolumes(ownedVolume(ownedName, "pgdata"))
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
-			daemon.expectInfo()
 
 			// Act
 			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -434,7 +427,6 @@ func TestInspector_Introspect_DesktopBindSource(t *testing.T) {
 	daemon.expectVolumes()
 	daemon.expectNetworks()
 	daemon.expectImage(testImageID, nil)
-	daemon.expectInfo()
 
 	// Act
 	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -460,7 +452,6 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	daemon.expectVolumes()
 	daemon.expectNetworks()
 	daemon.expectImage(testImageID, nil)
-	daemon.expectInfo()
 
 	// Act
 	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -536,7 +527,6 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 			}
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
-			daemon.expectInfo()
 			var logs bytes.Buffer
 			ctx := zerolog.New(&logs).WithContext(context.Background())
 
@@ -622,7 +612,6 @@ func TestInspector_Introspect_InheritedMounts(t *testing.T) {
 			}
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
-			daemon.expectInfo()
 
 			// Act
 			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -724,7 +713,6 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 			daemon.expectContainers(tt.containers...)
 			daemon.expectVolumes(ownedVolume("demo_pgdata", "pgdata"))
 			daemon.expectNetworks()
-			daemon.expectInfo()
 
 			// Act
 			introspection, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -848,31 +836,6 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 					Return(image.InspectResponse{}, daemonErr).Once()
 			},
 		},
-		{
-			name:    "reading daemon info",
-			wantMsg: `read docker daemon info`,
-			setup: func(daemon *mockDockerAPI) {
-				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
-				daemon.expectVolumes()
-				daemon.expectInspect("c-db-1")
-				daemon.expectNetworks()
-				daemon.expectImage(testImageID, nil)
-				daemon.On("Info", mock.Anything).Return(system.Info{}, daemonErr).Once()
-			},
-		},
-		{
-			name:    "reading daemon version",
-			wantMsg: `read docker daemon version`,
-			setup: func(daemon *mockDockerAPI) {
-				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
-				daemon.expectVolumes()
-				daemon.expectInspect("c-db-1")
-				daemon.expectNetworks()
-				daemon.expectImage(testImageID, nil)
-				daemon.On("Info", mock.Anything).Return(system.Info{}, nil).Once()
-				daemon.On("ServerVersion", mock.Anything).Return(dockertypes.Version{}, daemonErr).Once()
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -962,7 +925,6 @@ func TestInspector_Introspect_Images(t *testing.T) {
 				daemon.On("ImageInspect", mock.Anything, id.String()).
 					Return(image.InspectResponse{}, cerrdefs.ErrNotFound).Once()
 			}
-			daemon.expectInfo()
 
 			// Act
 			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
@@ -1031,7 +993,6 @@ func TestInspector_Introspect_Volumes(t *testing.T) {
 			}
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
-			daemon.expectInfo()
 
 			want := make(map[string]volume.Volume, len(tt.want))
 			for _, v := range tt.want {
@@ -1047,29 +1008,6 @@ func TestInspector_Introspect_Volumes(t *testing.T) {
 			daemon.AssertExpectations(t)
 		})
 	}
-}
-
-func TestInspector_Introspect_Daemon(t *testing.T) {
-	// Arrange
-	info := system.Info{ID: "daemon-1", ServerVersion: "28.5.2", Driver: "overlay2"}
-	version := dockertypes.Version{Version: "28.5.2", Components: []dockertypes.ComponentVersion{{Name: "Engine", Version: "28.5.2"}}}
-	daemon := &mockDockerAPI{}
-	daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
-	daemon.expectInspect("c-db-1")
-	daemon.expectVolumes()
-	daemon.expectNetworks()
-	daemon.expectImage(testImageID, nil)
-	daemon.On("Info", mock.Anything).Return(info, nil).Once()
-	daemon.On("ServerVersion", mock.Anything).Return(version, nil).Once()
-
-	// Act
-	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, info, got.Daemon)
-	assert.Equal(t, version, got.DaemonVersion)
-	daemon.AssertExpectations(t)
 }
 
 // replica is one container of the compose project: its summary and its inspect agree on the mounts.
@@ -1164,11 +1102,6 @@ func (m *mockDockerAPI) expectImage(id model.ImageDigestID, labels map[string]st
 	m.On("ImageInspect", mock.Anything, id.String()).Return(imageInspect(id, labels), nil).Once()
 }
 
-func (m *mockDockerAPI) expectInfo() {
-	m.On("Info", mock.Anything).Return(system.Info{ID: "daemon"}, nil).Once()
-	m.On("ServerVersion", mock.Anything).Return(dockertypes.Version{Version: "29.0.0"}, nil).Once()
-}
-
 func (m *mockDockerAPI) expectVolumes(volumes ...volume.Volume) {
 	listed := make([]*volume.Volume, 0, len(volumes))
 	for i := range volumes {
@@ -1214,16 +1147,6 @@ func (m *mockDockerAPI) ImageInspect(
 ) (image.InspectResponse, error) {
 	args := m.Called(ctx, imageID)
 	return args.Get(0).(image.InspectResponse), args.Error(1)
-}
-
-func (m *mockDockerAPI) Info(ctx context.Context) (system.Info, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(system.Info), args.Error(1)
-}
-
-func (m *mockDockerAPI) ServerVersion(ctx context.Context) (dockertypes.Version, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(dockertypes.Version), args.Error(1)
 }
 
 func TestContainerName(t *testing.T) {

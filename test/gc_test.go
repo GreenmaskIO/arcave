@@ -244,7 +244,7 @@ func TestGC_DryRun_StaysInItsSession(t *testing.T) {
 	assert.Equal(t, []string{deadTree.String()}, targetsOf(opsByKind(inFeat)[model.GarbageDataKindSavepointData]))
 }
 
-// newGarbageCollector wires a gc over session the way newGCDependencies does, running kinds.
+// newGarbageCollector wires a gc over session the way openGCService does, running kinds.
 func (e *sessionEnv) newGarbageCollector(
 	t *testing.T, session model.SessionID, engine *dockerclient.Engine, kinds ...model.GarbageDataKind,
 ) *gc.GarbageCollector {

@@ -34,7 +34,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
@@ -326,7 +325,7 @@ func (e *sessionEnv) withComposeProject(t *testing.T) {
 }
 
 // in is the compose project as seen from session: a core.Service wired the way
-// newDependencies wires one, over the same project root, lock and marker.
+// openSavepointService wires one, over the same project root, lock and marker.
 func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv {
 	t.Helper()
 
@@ -337,8 +336,8 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	engine := dockerclient.NewEngine(e.daemon)
-	inspector := introspect.NewInspector(e.daemon, model.DockerComposeProjectName(e.project))
+	profile := newRuntimeProfile(t, e.daemon)
+	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(e.project))
 	runner := composeclient.NewClient(dockercompose.NewComposeService(cli), composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -358,14 +357,14 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(e.projectRoot),
 		ComposeInspector:   inspector,
-		ProjectAssembler:   composespec.NewAssembler(),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          composespec.NewCodec(),
 		ComposeRunner:      runner,
-		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), engine, blobStore),
-		ContainerRebuilder: engine,
-		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		VolumeRemover:      profile.engine,
+		ImageBackend:       newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), profile.engine, blobStore),
+		ContainerRebuilder: profile.engine,
+		ImageLookup:        profile.engine,
+		BackendRegistry:    mustRegistry(t, profile.volumes),
 		Inflight:           e.inflight,
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
