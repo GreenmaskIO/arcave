@@ -17,8 +17,10 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
+	"iter"
 	"net"
 	"slices"
 	"strings"
@@ -26,11 +28,11 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -48,9 +50,9 @@ func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
 	api.On("ImageInspect", mock.Anything, scratchImage).
-		Return(image.InspectResponse{}, cerrdefs.ErrNotFound)
+		Return(client.ImageInspectResult{}, cerrdefs.ErrNotFound)
 	pulled := &countingReader{ReadCloser: io.NopCloser(strings.NewReader(`{"status":"done"}`))}
-	api.On("ImagePull", mock.Anything, scratchImage, image.PullOptions{}).Return(io.ReadCloser(pulled), nil)
+	api.On("ImagePull", mock.Anything, scratchImage, client.ImagePullOptions{}).Return(client.ImagePullResponse(pulled), nil)
 	expectOneShotRun(api, 0)
 
 	// Act
@@ -71,13 +73,13 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	// The daemon frames log output with stdcopy whenever the container has no TTY,
 	// which every one-shot run is; feeding raw bytes here would hide exactly the
 	// framing bug the demux fixes.
-	_, _ = io.WriteString(stdcopy.NewStdWriter(&framed, stdcopy.Stderr), "rm: permission denied\n")
+	_, _ = io.WriteString(newStdWriter(&framed, stdcopy.Stderr), "rm: permission denied\n")
 
 	api := &mockAPI{}
 	expectImagePresent(api, scratchImage)
 	expectOneShotRun(api, 137)
 	api.On("ContainerLogs", mock.Anything, oneShotID, mock.Anything).
-		Return(io.NopCloser(bytes.NewReader(framed.Bytes())), nil)
+		Return(client.ContainerLogsResult(io.NopCloser(bytes.NewReader(framed.Bytes()))), nil)
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: scratchImage})
@@ -95,7 +97,7 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	assert.NotContains(t, err.Error(), "\x01", "the stdcopy header must be demultiplexed away")
 
 	// The read is bounded at the daemon.
-	opts := api.Calls[callIndex(api, "ContainerLogs")].Arguments.Get(2).(container.LogsOptions)
+	opts := api.Calls[callIndex(api, "ContainerLogs")].Arguments.Get(2).(client.ContainerLogsOptions)
 	assert.Equal(t, "200", opts.Tail, "the log read must be bounded at the daemon")
 }
 
@@ -103,8 +105,8 @@ func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
 	expectImagePresent(api, scratchImage)
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{}, errors.New("boom"))
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{}, errors.New("boom"))
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: scratchImage})
@@ -120,10 +122,10 @@ func TestRunOneShotContainer_RemovesContainerOnStartFailure(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
 	expectImagePresent(api, scratchImage)
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{ID: oneShotID}, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(errors.New("no such image"))
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(errors.New("no such image"))
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: scratchImage})
@@ -314,11 +316,11 @@ func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
 
 	api := &mockAPI{}
 	expectImagePresent(api, scratchImage)
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{ID: oneShotID}, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil)
 	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var stdout bytes.Buffer
@@ -370,7 +372,7 @@ func TestEngine_RunOneShot(t *testing.T) {
 	cfg := createdConfig(t, api)
 	assert.Equal(t, spec.Cmd, []string(cfg.Cmd))
 	assert.Equal(t, spec.Env, cfg.Env)
-	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
+	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(1).(client.ContainerCreateOptions).HostConfig
 	assert.Equal(t, spec.Binds, hostCfg.Binds)
 	assert.Empty(t, hostCfg.NetworkMode, "the default network is the daemon's, never named")
 }
@@ -389,27 +391,27 @@ func TestEngine_RunOneShot_HostNetwork(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	api.AssertExpectations(t)
-	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
+	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(1).(client.ContainerCreateOptions).HostConfig
 	assert.Equal(t, network.NetworkHost, string(hostCfg.NetworkMode))
 }
 
 // expectImagePresent makes the daemon report ref as already pulled.
 func expectImagePresent(api *mockAPI, ref string) {
-	api.On("ImageInspect", mock.Anything, ref).Return(image.InspectResponse{}, nil)
+	api.On("ImageInspect", mock.Anything, ref).Return(client.ImageInspectResult{}, nil)
 }
 
 // expectOneShotRun drives one throwaway container through to the given exit status.
 func expectOneShotRun(api *mockAPI, exitCode int64) {
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{ID: oneShotID}, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil)
 
 	status := make(chan container.WaitResponse, 1)
 	status <- container.WaitResponse{StatusCode: exitCode}
-	api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
-		Return((<-chan container.WaitResponse)(status), (<-chan error)(make(chan error)))
+	api.On("ContainerWait", mock.Anything, oneShotID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning}).
+		Return(client.ContainerWaitResult{Result: status, Error: make(chan error)})
 
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 }
 
 // createdConfig returns the container.Config the run handed to ContainerCreate.
@@ -418,7 +420,7 @@ func createdConfig(t *testing.T, api *mockAPI) *container.Config {
 
 	i := callIndex(api, "ContainerCreate")
 	require.NotEqual(t, -1, i, "ContainerCreate was never called")
-	return api.Calls[i].Arguments.Get(1).(*container.Config)
+	return api.Calls[i].Arguments.Get(1).(client.ContainerCreateOptions).Config
 }
 
 // callIndex reports where method first appears in the recorded calls, or -1.
@@ -443,6 +445,26 @@ type errReader struct{ err error }
 
 func (r *errReader) Read([]byte) (int, error) { return 0, r.err }
 
+// stdWriter frames each write the way the daemon multiplexes a non-tty container's
+// output: an 8-byte header naming the stream and the payload's length, then the payload.
+type stdWriter struct {
+	w      io.Writer
+	stream stdcopy.StdType
+}
+
+func newStdWriter(w io.Writer, stream stdcopy.StdType) io.Writer {
+	return stdWriter{w: w, stream: stream}
+}
+
+func (s stdWriter) Write(p []byte) (int, error) {
+	header := [8]byte{0: byte(s.stream)}
+	binary.BigEndian.PutUint32(header[4:], uint32(len(p)))
+	if _, err := s.w.Write(append(header[:], p...)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 // countingReader records whether its stream was read to EOF.
 type countingReader struct {
 	io.ReadCloser
@@ -457,12 +479,19 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// JSONMessages and Wait make countingReader a pull response; the run only drains it.
+func (c *countingReader) JSONMessages(context.Context) iter.Seq2[jsonstream.Message, error] {
+	return func(func(jsonstream.Message, error) bool) {}
+}
+
+func (c *countingReader) Wait(context.Context) error { return nil }
+
 // fakeHijack stands in for the daemon side of an attached container, with no
 // daemon in sight: whatever runOneShotContainer writes as stdin comes out of stdinR, and
 // whatever the test writes to stdout/stderr is framed exactly the way the daemon
 // multiplexes the two back over one connection.
 type fakeHijack struct {
-	resp types.HijackedResponse
+	resp client.ContainerAttachResult
 
 	// stdinR is the container's end of stdin — what the "process" reads.
 	stdinR *io.PipeReader
@@ -480,12 +509,12 @@ func newFakeHijack() *fakeHijack {
 
 	f := &fakeHijack{
 		stdinR:      stdinR,
-		stdout:      stdcopy.NewStdWriter(outW, stdcopy.Stdout),
-		stderr:      stdcopy.NewStdWriter(outW, stdcopy.Stderr),
+		stdout:      newStdWriter(outW, stdcopy.Stdout),
+		stderr:      newStdWriter(outW, stdcopy.Stderr),
 		outW:        outW,
 		closedWrite: make(chan struct{}),
 	}
-	f.resp = types.NewHijackedResponse(&fakeConn{r: outR, w: stdinW, hj: f}, "")
+	f.resp = client.ContainerAttachResult{HijackedResponse: client.NewHijackedResponse(&fakeConn{r: outR, w: stdinW, hj: f}, "")}
 	return f
 }
 

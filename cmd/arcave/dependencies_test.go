@@ -19,15 +19,15 @@ import (
 	"io"
 	"net"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/progress"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -369,56 +369,57 @@ func TestNewDockerTLSOptions(t *testing.T) {
 // Compose's progress is what turns a two-minute health-check wait from a hang
 // into something a user can watch, so every channel must reach the library — and
 // none of them may reach stdout, which carries arcave's JSON.
-func TestNewProgressWriter(t *testing.T) {
+func TestNewProgress(t *testing.T) {
 	tests := []struct {
-		name     string
-		mode     string
-		wantMode string
-		wantOut  io.Writer // nil means "the adapter", which has no comparable value
+		name       string
+		mode       string
+		wantStream io.Writer // nil means "the adapter", which is the processor as well
 	}{
-		{
-			name: "log folds compose's events into arcave's own log",
-			mode: config.ProgressLog, wantMode: progress.ModeJSON,
-		},
-		{
-			// ModeAuto, not ModeTTY: compose then redraws on a terminal and falls
-			// back to plain lines in a pipe, where ModeTTY would spray ANSI escapes
-			// into a log file.
-			name: "tty hands the terminal back to compose's own renderer",
-			mode: config.ProgressTTY, wantMode: progress.ModeAuto, wantOut: os.Stderr,
-		},
-		{
-			name: "quiet discards the stream as well as the UI",
-			mode: config.ProgressQuiet, wantMode: progress.ModeQuiet, wantOut: io.Discard,
-		},
-		{
-			name: "an unset channel is the log",
-			mode: "", wantMode: progress.ModeJSON,
-		},
+		{name: "log folds compose's events into arcave's own log", mode: config.ProgressLog},
+		{name: "tty hands stderr back to compose's own renderer", mode: config.ProgressTTY, wantStream: os.Stderr},
+		{name: "quiet discards the stream as well as the events", mode: config.ProgressQuiet, wantStream: io.Discard},
+		{name: "an unset channel is the log", mode: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Arrange: progress.Mode is the library's global, so it is restored.
-			original := progress.Mode
-			t.Cleanup(func() { progress.Mode = original })
-
 			// Act
-			out := newProgressWriter(tt.mode, zerolog.Nop())
+			events, stream := newProgress(tt.mode, zerolog.Nop())
 
 			// Assert
-			assert.Equal(t, tt.wantMode, progress.Mode)
-			if tt.wantOut == nil {
-				assert.IsType(t, &compose.ProgressLogger{}, out)
+			require.NotNil(t, events)
+			if tt.wantStream == nil {
+				require.IsType(t, &compose.ProgressLogger{}, stream)
+				assert.Same(t, stream, events, "one adapter takes both the events and the plain lines")
 				return
 			}
+			assert.NotEqual(t, reflect.TypeFor[*compose.ProgressLogger](), reflect.TypeOf(events),
+				"compose renders its own events here")
 			// The streams arcave does not own are wrapped so Close cannot reach
 			// them — closing os.Stderr would take the process's error stream down
 			// with it.
-			assert.Equal(t, nopWriteCloser{tt.wantOut}, out)
-			assert.NoError(t, out.Close())
+			assert.Equal(t, nopWriteCloser{tt.wantStream}, stream)
+			assert.NoError(t, stream.Close())
 		})
 	}
+}
+
+// The compose service is built over the CLI without reaching the daemon, so a
+// stopped one does not fail the commands that never run compose.
+func TestNewComposeService(t *testing.T) {
+	// Arrange
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+	dockerCli, apiClient, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
+	events, stream := newProgress(config.ProgressLog, zerolog.Nop())
+
+	// Act
+	service, err := newComposeService(dockerCli, events, stream)
+
+	// Assert
+	require.NoError(t, err)
+	assert.NotNil(t, service)
 }
 
 // A host resolves to an endpoint whether or not anything is listening on it:

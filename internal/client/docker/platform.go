@@ -19,7 +19,8 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 )
 
 // desktopOperatingSystem is how Docker Desktop names itself in the daemon's
@@ -30,11 +31,11 @@ const desktopOperatingSystem = "Docker Desktop"
 // shares this process's loopback: true only when arcave and a native Linux
 // daemon run on one kernel. Docker Desktop and any remote daemon answer false.
 func (e *Engine) HostLoopbackShared(ctx context.Context) (bool, error) {
-	info, err := e.api.Info(ctx)
+	info, err := e.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return false, fmt.Errorf("read docker daemon info: %w", err)
 	}
-	return sharesHostLoopback(runtime.GOOS, info), nil
+	return sharesHostLoopback(runtime.GOOS, info.Info), nil
 }
 
 // sharesHostLoopback needs the OperatingSystem check even under the GOOS guard:

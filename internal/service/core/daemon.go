@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/system"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"

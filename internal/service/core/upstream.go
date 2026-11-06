@@ -18,14 +18,15 @@ import (
 	"context"
 	"slices"
 
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/image"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// composeImageLabel is the id of the image compose created a container from.
+// composeImageLabel is the image compose created a container from: its id, or, on the containerd
+// image store, the digest of the platform manifest it runs (compose 5.5 and later).
 const composeImageLabel = "com.docker.compose.image"
 
 // dockerManifestList is Docker's own media type for a multi-platform index, the older

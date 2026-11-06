@@ -21,6 +21,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
+	"go.yaml.in/yaml/v4"
 )
 
 // specFilename names the artifact in compose's own error messages.
@@ -52,7 +53,7 @@ func (s *Codec) Marshal(project *types.Project) ([]byte, error) {
 
 	stamped := *project
 	stamped.Extensions = withOrigin(project.Extensions, project.WorkingDir, project.ComposeFiles)
-	spec, err := stamped.MarshalYAML()
+	spec, err := yaml.Dump(&stamped, yaml.WithV3Defaults(), yaml.WithIndent(2), yaml.WithLineWidth(-1))
 	if err != nil {
 		return nil, fmt.Errorf("render compose spec: %w", err)
 	}

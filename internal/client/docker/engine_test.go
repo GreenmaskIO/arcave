@@ -18,13 +18,14 @@ import (
 	"context"
 	"errors"
 	"io"
-	"slices"
+	"maps"
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -155,8 +156,8 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			name:   "a named volume is its docker name, and no container is looked for",
 			volume: namedVolume("demo_pgdata"),
 			arrange: func(api *mockAPI) {
-				api.On("VolumeInspect", mock.Anything, "demo_pgdata").
-					Return(volume.Volume{Name: "demo_pgdata"}, nil).Once()
+				api.On("VolumeInspect", mock.Anything, "demo_pgdata", client.VolumeInspectOptions{}).
+					Return(client.VolumeInspectResult{Volume: volume.Volume{Name: "demo_pgdata"}}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 		},
@@ -172,8 +173,8 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			name:   "a named volume the daemon does not have is refused before anything creates it",
 			volume: namedVolume("demo_pgdata"),
 			arrange: func(api *mockAPI) {
-				api.On("VolumeInspect", mock.Anything, "demo_pgdata").
-					Return(volume.Volume{}, errors.New("no such volume")).Once()
+				api.On("VolumeInspect", mock.Anything, "demo_pgdata", client.VolumeInspectOptions{}).
+					Return(client.VolumeInspectResult{}, errors.New("no such volume")).Once()
 			},
 			wantErr: "does not exist",
 		},
@@ -182,8 +183,8 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			volume: anonVolume("db", target),
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "db")).
-					Return([]container.Summary{{ID: "pg-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
-						{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}}, nil).Once()
+					Return(client.ContainerListResult{Items: []container.Summary{{ID: "pg-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
+						{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}}}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "9f2c0a"},
 		},
@@ -195,12 +196,12 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			},
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "worker")).
-					Return([]container.Summary{
+					Return(client.ContainerListResult{Items: []container.Summary{
 						{ID: "worker-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
 							{Type: mount.TypeVolume, Name: "a1", Destination: "/cache"}}},
 						{ID: "worker-2", Labels: map[string]string{composeNumberLabel: "2"}, Mounts: []container.MountPoint{
 							{Type: mount.TypeVolume, Name: "a2", Destination: "/cache"}}},
-					}, nil).Once()
+					}}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "a2"},
 		},
@@ -212,8 +213,8 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			},
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "app")).
-					Return([]container.Summary{{ID: "app-1", Mounts: []container.MountPoint{
-						{Type: mount.TypeBind, Source: "/host/cfg", Destination: "/etc/cfg"}}}}, nil).Once()
+					Return(client.ContainerListResult{Items: []container.Summary{{ID: "app-1", Mounts: []container.MountPoint{
+						{Type: mount.TypeBind, Source: "/host/cfg", Destination: "/etc/cfg"}}}}}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
 		},
@@ -222,7 +223,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			volume: anonVolume("db", target),
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "db")).
-					Return([]container.Summary{}, nil).Once()
+					Return(client.ContainerListResult{}, nil).Once()
 			},
 			wantErr: "no container for service",
 		},
@@ -270,8 +271,8 @@ func TestEngine_OpenVolume(t *testing.T) {
 	api := &mockAPI{}
 	expectImagePresent(api, scratchImage)
 	scratch := expectContainerRun(api, "scratch-1", scratchCmd[0])
-	copyOut := api.On("CopyFromContainer", mock.Anything, "scratch-1", scratchMount).
-		Return(io.NopCloser(strings.NewReader(payload)), container.PathStat{}, nil).Once()
+	copyOut := api.On("CopyFromContainer", mock.Anything, "scratch-1", client.CopyFromContainerOptions{SourcePath: scratchMount}).
+		Return(client.CopyFromContainerResult{Content: io.NopCloser(strings.NewReader(payload))}, nil).Once()
 	removed := make(chan struct{})
 	scratch.remove.Run(func(mock.Arguments) { close(removed) })
 	mock.InOrder(scratch.create, copyOut, scratch.remove)
@@ -304,8 +305,9 @@ func TestEngine_WriteVolume(t *testing.T) {
 	expectImagePresent(api, scratchImage)
 	wipe := expectContainerRun(api, "wipe-1", "find")
 	scratch := expectContainerRun(api, "scratch-1", scratchCmd[0])
-	extract := api.On("CopyToContainer", mock.Anything, "scratch-1", "/", mock.Anything, mock.Anything).
-		Return(nil).Once()
+	extract := api.On("CopyToContainer", mock.Anything, "scratch-1", mock.MatchedBy(func(opts client.CopyToContainerOptions) bool {
+		return opts.DestinationPath == "/"
+	})).Return(nil).Once()
 	// The wipe must be finished before a byte is written back, or the restore
 	// deletes itself.
 	mock.InOrder(wipe.remove, scratch.create, extract, scratch.remove)
@@ -480,17 +482,17 @@ func expectContainerRun(api *mockAPI, id, verb string) *containerRun {
 	run := &containerRun{status: make(chan container.WaitResponse, 1)}
 	run.status <- container.WaitResponse{}
 
-	run.create = api.On("ContainerCreate", mock.Anything, matchCommand(verb),
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{ID: id}, nil).Once().
+	run.create = api.On("ContainerCreate", mock.Anything, matchCommand(verb)).
+		Return(client.ContainerCreateResult{ID: id}, nil).Once().
 		Run(func(args mock.Arguments) {
-			run.cfg = args.Get(1).(*container.Config)
-			run.host = args.Get(2).(*container.HostConfig)
+			opts := args.Get(1).(client.ContainerCreateOptions)
+			run.cfg = opts.Config
+			run.host = opts.HostConfig
 		})
-	api.On("ContainerStart", mock.Anything, id, container.StartOptions{}).Return(nil).Once()
-	api.On("ContainerWait", mock.Anything, id, container.WaitConditionNotRunning).
-		Return((<-chan container.WaitResponse)(run.status), (<-chan error)(make(chan error))).Once()
-	run.remove = api.On("ContainerRemove", mock.Anything, id, container.RemoveOptions{Force: true}).
+	api.On("ContainerStart", mock.Anything, id, client.ContainerStartOptions{}).Return(nil).Once()
+	api.On("ContainerWait", mock.Anything, id, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning}).
+		Return(client.ContainerWaitResult{Result: run.status, Error: make(chan error)}).Once()
+	run.remove = api.On("ContainerRemove", mock.Anything, id, client.ContainerRemoveOptions{Force: true}).
 		Return(nil).Once()
 	return run
 }
@@ -498,8 +500,8 @@ func expectContainerRun(api *mockAPI, id, verb string) *containerRun {
 // matchCommand matches a container by the command it runs, which is what tells
 // the wipe container and the scratch container of one restore apart.
 func matchCommand(verb string) any {
-	return mock.MatchedBy(func(cfg *container.Config) bool {
-		return len(cfg.Cmd) > 0 && cfg.Cmd[0] == verb
+	return mock.MatchedBy(func(opts client.ContainerCreateOptions) bool {
+		return opts.Config != nil && len(opts.Config.Cmd) > 0 && opts.Config.Cmd[0] == verb
 	})
 }
 
@@ -507,18 +509,9 @@ func matchCommand(verb string) any {
 // carries: finding a service's container by compose's own labels is the whole
 // contract of that call, so it is asserted rather than widened away.
 func matchComposeLabels(project, service string) any {
-	return mock.MatchedBy(func(opts container.ListOptions) bool {
-		want := []string{composeProjectLabel + "=" + project, composeServiceLabel + "=" + service}
-		got := opts.Filters.Get("label")
-		if !opts.All || len(got) != len(want) {
-			return false
-		}
-		for _, w := range want {
-			if !slices.Contains(got, w) {
-				return false
-			}
-		}
-		return true
+	return mock.MatchedBy(func(opts client.ContainerListOptions) bool {
+		want := client.Filters{}.Add("label", composeProjectLabel+"="+project, composeServiceLabel+"="+service)
+		return opts.All && maps.EqualFunc(opts.Filters, want, maps.Equal)
 	})
 }
 

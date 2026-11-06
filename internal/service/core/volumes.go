@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/docker/docker/api/types/mount"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"

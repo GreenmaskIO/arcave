@@ -748,7 +748,7 @@ func TestNewReplicaPairs(t *testing.T) {
 func TestRetargetImages_LowestRecordedReplica(t *testing.T) {
 	// Arrange
 	project := &types.Project{Name: demoProject, Services: types.Services{
-		demoService: {Name: demoService, Image: demoBaseImage},
+		demoService: {Name: demoService, ContainerSpec: types.ContainerSpec{Image: demoBaseImage}},
 	}}
 	restored := []model.WritableLayerRestoreResult{
 		{Service: demoService, Replica: 3, Tag: demoRestoredTag(3)},
@@ -934,7 +934,7 @@ func TestService_requireImages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			project := &types.Project{Services: types.Services{"db": {Name: "db", Image: "local:1", PullPolicy: tt.policy}}}
+			project := &types.Project{Services: types.Services{"db": {Name: "db", ContainerSpec: types.ContainerSpec{Image: "local:1", PullPolicy: tt.policy}}}}
 			lookup := &mockImageLookup{}
 			if tt.present != nil {
 				lookup.On("ImageRefExists", mock.Anything, "local:1").Return(*tt.present, nil).Once()

@@ -30,15 +30,13 @@ import (
 	"github.com/compose-spec/compose-go/v2/format"
 	"github.com/compose-spec/compose-go/v2/types"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -57,13 +55,13 @@ var anonVolumeName = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // dockerAPI is the slice of the Docker SDK this package needs.
 type dockerAPI interface {
-	ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error)
-	ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error)
-	VolumeList(ctx context.Context, opts volume.ListOptions) (volume.ListResponse, error)
-	VolumeInspect(ctx context.Context, name string) (volume.Volume, error)
-	NetworkList(ctx context.Context, opts network.ListOptions) ([]network.Summary, error)
-	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
-	Info(ctx context.Context) (system.Info, error)
+	ContainerList(ctx context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error)
+	ContainerInspect(ctx context.Context, id string, opts client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	VolumeList(ctx context.Context, opts client.VolumeListOptions) (client.VolumeListResult, error)
+	VolumeInspect(ctx context.Context, name string, opts client.VolumeInspectOptions) (client.VolumeInspectResult, error)
+	NetworkList(ctx context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error)
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	Info(ctx context.Context, opts client.InfoOptions) (client.SystemInfoResult, error)
 }
 
 // Inspector reports the one compose project it is constructed with.
@@ -116,7 +114,7 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	}
 	markInherited(services, referenced)
 
-	info, err := s.api.Info(ctx)
+	info, err := s.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon info: %w", err)
 	}
@@ -128,7 +126,7 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 			Volumes:  s.newNamedVolumes(services, volumeIndex),
 			Networks: networks,
 		},
-		Daemon:     info,
+		Daemon:     info.Info,
 		Images:     images,
 		Volumes:    volumeIndex,
 		Referenced: referenced,
@@ -136,31 +134,35 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 }
 
 // replicas lists the compose project's containers, stopped ones included, without the one-off
-// containers `docker compose run` leaves behind. None means never started or taken down, not an error.
+// containers `docker compose run` leaves behind and the ones compose runs on a service's behalf.
+// None means never started or taken down, not an error.
 func (s *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
-	summaries, err := s.api.ContainerList(ctx, container.ListOptions{
+	listed, err := s.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: s.newProjectFilter(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list containers: %w", err)
 	}
-	return keepProjectContainers(summaries), nil
+	return keepProjectContainers(listed.Items), nil
 }
 
 // newProjectFilter selects what compose stamped with this compose project's name.
-func (s *Inspector) newProjectFilter() filters.Args {
-	return filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+s.composeProject.String()))
+func (s *Inspector) newProjectFilter() client.Filters {
+	return client.Filters{}.Add("label", api.ProjectLabel+"="+s.composeProject.String())
 }
 
-// keepProjectContainers drops the one-off containers.
+// keepProjectContainers drops the containers that are no replica of a service: the one-off ones,
+// the ephemeral lifecycle-hook runners (a failed pre_start one carries no container number and
+// would otherwise be read as a replica) and the relays compose deploys for a provider service.
 // Filtered here, not in the daemon query: a compose too old to set the label would drop the compose project.
 func keepProjectContainers(summaries []container.Summary) []container.Summary {
 	kept := make([]container.Summary, 0, len(summaries))
 	for _, summary := range summaries {
-		if summary.Labels[api.OneoffLabel] != "True" {
-			kept = append(kept, summary)
+		if summary.Labels[api.OneoffLabel] == "True" || summary.Labels[api.HookLabel] != "" || summary.Labels[api.RelayLabel] != "" {
+			continue
 		}
+		kept = append(kept, summary)
 	}
 	return kept
 }
@@ -168,17 +170,15 @@ func keepProjectContainers(summaries []container.Summary) []container.Summary {
 // readOwnedVolumes are the project's own named volumes, keyed by docker name: the volume index
 // the rest of the pass adds to.
 func (s *Inspector) readOwnedVolumes(ctx context.Context) (map[string]volume.Volume, error) {
-	listed, err := s.api.VolumeList(ctx, volume.ListOptions{
+	listed, err := s.api.VolumeList(ctx, client.VolumeListOptions{
 		Filters: s.newProjectFilter(),
 	})
 	if err != nil {
 		return nil, err
 	}
-	volumeIndex := make(map[string]volume.Volume, len(listed.Volumes))
-	for _, v := range listed.Volumes {
-		if v != nil {
-			volumeIndex[v.Name] = *v
-		}
+	volumeIndex := make(map[string]volume.Volume, len(listed.Items))
+	for _, v := range listed.Items {
+		volumeIndex[v.Name] = v
 	}
 	return volumeIndex, nil
 }
@@ -280,10 +280,11 @@ func (s *Inspector) replicaMounts(
 func (s *Inspector) readContainers(ctx context.Context, group []container.Summary) ([]model.Container, error) {
 	containers := make([]model.Container, 0, len(group))
 	for _, summary := range group {
-		inspect, err := s.api.ContainerInspect(ctx, summary.ID)
+		inspected, err := s.api.ContainerInspect(ctx, summary.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %s: %w", summary.ID, err)
 		}
+		inspect := inspected.Container
 		containers = append(containers, model.Container{
 			ID:      summary.ID,
 			Name:    containerName(summary.Names),
@@ -408,12 +409,12 @@ func (s *Inspector) volume(ctx context.Context, name string, volumeIndex map[str
 	if known, ok := volumeIndex[name]; ok {
 		return known, nil
 	}
-	inspected, err := s.api.VolumeInspect(ctx, name)
+	inspected, err := s.api.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
 	if err != nil {
 		return volume.Volume{}, fmt.Errorf("inspect volume %q: %w", name, err)
 	}
-	volumeIndex[name] = inspected
-	return inspected, nil
+	volumeIndex[name] = inspected.Volume
+	return inspected.Volume, nil
 }
 
 // declaredMount is one mount as requested, through the mount API (mountRequest) or the bind API
@@ -428,7 +429,7 @@ type declaredMount struct {
 // labels are the container's as listed: Docker Desktop's own show there, not in the inspect.
 func newDeclaredMounts(inspect container.InspectResponse, labels map[string]string) map[string]declaredMount {
 	declared := map[string]declaredMount{}
-	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+	if inspect.HostConfig == nil {
 		return declared
 	}
 	hostSources := parseDesktopBindSources(labels)
@@ -582,19 +583,23 @@ func mountedVolumeNames(services []model.Service) []string {
 	return names
 }
 
-// readNetworks reports the project's readNetworks, sorted by key.
+// readNetworks reports the project's networks, sorted by key, without the bridge compose creates
+// for a provider service's relay: it is no network the project declares.
 func (s *Inspector) readNetworks(ctx context.Context) ([]model.Network, error) {
-	summaries, err := s.api.NetworkList(ctx, network.ListOptions{Filters: s.newProjectFilter()})
+	listed, err := s.api.NetworkList(ctx, client.NetworkListOptions{Filters: s.newProjectFilter()})
 	if err != nil {
 		return nil, err
 	}
 
-	networks := make([]model.Network, 0, len(summaries))
-	for _, summary := range summaries {
+	networks := make([]model.Network, 0, len(listed.Items))
+	for _, summary := range listed.Items {
+		if summary.Labels[api.RelayNetworkLabel] != "" {
+			continue
+		}
 		networks = append(networks, model.Network{
 			Key:     summary.Labels[api.NetworkLabel],
 			Name:    summary.Name,
-			Inspect: summary,
+			Inspect: network.Inspect{Network: summary.Network},
 		})
 	}
 	slices.SortFunc(networks, func(a, b model.Network) int {
@@ -619,7 +624,7 @@ func (s *Inspector) readImages(
 		if err != nil {
 			return nil, fmt.Errorf("inspect image %s: %w", id, err)
 		}
-		images[id] = inspect
+		images[id] = inspect.InspectResponse
 	}
 
 	// Look for a base label on container images only, not on the base images found here.
@@ -637,7 +642,7 @@ func containerImageIDs(services []model.Service) ([]model.ImageDigestID, error) 
 	var ids []model.ImageDigestID
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
-			id, err := model.ParseImageDigestID(containerImage(replica.Inspect))
+			id, err := model.ParseImageDigestID(replica.Inspect.Image)
 			if err != nil {
 				return nil, fmt.Errorf("image of container %s: %w", replica.ID, err)
 			}
@@ -647,14 +652,6 @@ func containerImageIDs(services []model.Service) ([]model.ImageDigestID, error) 
 		}
 	}
 	return ids, nil
-}
-
-// containerImage is the id of the image a container runs on, empty if the daemon gave none.
-func containerImage(inspect container.InspectResponse) string {
-	if inspect.ContainerJSONBase == nil {
-		return ""
-	}
-	return inspect.Image
 }
 
 // baseImage adds to the index the base image named by the label on image id. A base image is
@@ -678,7 +675,7 @@ func (s *Inspector) baseImage(
 	if err != nil {
 		return fmt.Errorf("inspect base image %s of image %s: %w", base, id, err)
 	}
-	images[base] = inspect
+	images[base] = inspect.InspectResponse
 	return nil
 }
 
@@ -702,16 +699,14 @@ func (s *Inspector) readReferenced(
 ) (map[string]container.InspectResponse, error) {
 	referenced := map[string]container.InspectResponse{}
 	for _, ref := range foreignReferences(services) {
-		inspect, err := s.api.ContainerInspect(ctx, ref)
+		inspected, err := s.api.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 		if cerrdefs.IsNotFound(err) {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %s: %w", ref, err)
 		}
-		if inspect.ContainerJSONBase != nil {
-			referenced[inspect.ID] = inspect
-		}
+		referenced[inspected.Container.ID] = inspected.Container
 	}
 	return referenced, nil
 }
@@ -734,7 +729,7 @@ func foreignReferences(services []model.Service) []string {
 	}
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
-			if replica.Inspect.ContainerJSONBase == nil || replica.Inspect.HostConfig == nil {
+			if replica.Inspect.HostConfig == nil {
 				continue
 			}
 			hostConfig := replica.Inspect.HostConfig
@@ -793,7 +788,7 @@ func mountingReplica(svc model.Service, mount model.ServiceVolume) (model.Contai
 // inheritedFrom is the id of the volumes_from source mounting the same data at target as the
 // container does; empty when none does.
 func inheritedFrom(inspect container.InspectResponse, target string, sources map[string]container.InspectResponse) string {
-	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+	if inspect.HostConfig == nil {
 		return ""
 	}
 	at := slices.IndexFunc(inspect.Mounts, func(m container.MountPoint) bool { return m.Destination == target })
@@ -804,7 +799,7 @@ func inheritedFrom(inspect container.InspectResponse, target string, sources map
 	for _, entry := range inspect.HostConfig.VolumesFrom {
 		ref, _, _ := strings.Cut(entry, ":")
 		source, ok := sources[ref]
-		if ok && source.ContainerJSONBase != nil && slices.ContainsFunc(source.Mounts, func(m container.MountPoint) bool {
+		if ok && slices.ContainsFunc(source.Mounts, func(m container.MountPoint) bool {
 			return m.Type == ownMount.Type && m.Name == ownMount.Name && m.Source == ownMount.Source && m.Destination == ownMount.Destination
 		}) {
 			return source.ID

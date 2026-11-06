@@ -29,12 +29,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/inmemory"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,7 +130,7 @@ func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not exist")
 	assert.Empty(t, objectNames(t, e.store), "nothing may be stored for a volume that is not there")
-	_, inspectErr := e.cli.VolumeInspect(context.Background(), vol.Named.VolumeName)
+	_, inspectErr := e.cli.VolumeInspect(context.Background(), vol.Named.VolumeName, client.VolumeInspectOptions{})
 	assert.Error(t, inspectErr, "the refused capture must not have created the volume it refused")
 }
 
@@ -281,9 +280,9 @@ func newDaemonClient(t *testing.T) *client.Client {
 	if testing.Short() {
 		t.Skip("skipping the fullcopy backend volume-level test in short mode")
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background()); err != nil {
+	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
 		_ = cli.Close()
 		t.Skip("skipping the fullcopy backend volume-level test: no reachable docker daemon: " + err.Error())
 	}
@@ -305,9 +304,9 @@ func randomSuffix(t *testing.T) string {
 func createVolume(t *testing.T, cli *client.Client, name string) {
 	t.Helper()
 
-	_, err := cli.VolumeCreate(context.Background(), volume.CreateOptions{Name: name})
+	_, err := cli.VolumeCreate(context.Background(), client.VolumeCreateOptions{Name: name})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cli.VolumeRemove(context.Background(), name, true) })
+	t.Cleanup(func() { _, _ = cli.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true}) })
 }
 
 // createLabelledContainer creates — never starts — a container carrying
@@ -335,8 +334,8 @@ func createSubpathContainer(t *testing.T, cli *client.Client, service, name, tar
 func createHolder(t *testing.T, cli *client.Client, service, name string, host *container.HostConfig) {
 	t.Helper()
 
-	created, err := cli.ContainerCreate(context.Background(),
-		&container.Config{
+	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image: busyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
@@ -344,10 +343,12 @@ func createHolder(t *testing.T, cli *client.Client, service, name string, host *
 				"com.docker.compose.service": service,
 			},
 		},
-		host, nil, nil, name+"-holder")
+		HostConfig: host,
+		Name:       name + "-holder",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
 }
 

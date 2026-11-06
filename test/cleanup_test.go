@@ -19,13 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -35,30 +30,31 @@ func removeComposeProject(t *testing.T, cli *client.Client, project string) {
 	t.Helper()
 
 	ctx := context.Background()
-	byProject := filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+project))
+	byProject := client.Filters{}.Add("label", api.ProjectLabel+"="+project)
 
-	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true, Filters: byProject})
+	containers, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: byProject})
 	if assert.NoError(t, err, "list containers of %s", project) {
-		for _, c := range containers {
+		for _, c := range containers.Items {
 			// RemoveVolumes takes the replica's anonymous volumes with it.
-			assert.NoError(t, cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}),
-				"remove container %s", c.ID)
+			_, err := cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+			assert.NoError(t, err, "remove container %s", c.ID)
 		}
 	}
-	volumes, err := cli.VolumeList(ctx, volume.ListOptions{Filters: byProject})
+	volumes, err := cli.VolumeList(ctx, client.VolumeListOptions{Filters: byProject})
 	if assert.NoError(t, err, "list volumes of %s", project) {
-		for _, v := range volumes.Volumes {
-			assert.NoError(t, cli.VolumeRemove(ctx, v.Name, true), "remove volume %s", v.Name)
+		for _, v := range volumes.Items {
+			_, err := cli.VolumeRemove(ctx, v.Name, client.VolumeRemoveOptions{Force: true})
+			assert.NoError(t, err, "remove volume %s", v.Name)
 		}
 	}
 	removeProjectNetworks(t, cli, project)
-	images, err := cli.ImageList(ctx, image.ListOptions{All: true})
+	images, err := cli.ImageList(ctx, client.ImageListOptions{All: true})
 	if assert.NoError(t, err, "list images") {
-		for _, img := range images {
+		for _, img := range images.Items {
 			for _, tag := range img.RepoTags {
 				// A rollback's layer tags, and the images compose built for the project.
 				if strings.HasPrefix(tag, "arcave/"+project+"-") || strings.HasPrefix(tag, project+"-") {
-					_, err := cli.ImageRemove(ctx, tag, image.RemoveOptions{PruneChildren: true})
+					_, err := cli.ImageRemove(ctx, tag, client.ImageRemoveOptions{PruneChildren: true})
 					assert.NoError(t, err, "remove image %s", tag)
 				}
 			}
@@ -73,13 +69,14 @@ func removeProjectNetworks(t *testing.T, cli *client.Client, project string) {
 	t.Helper()
 
 	ctx := context.Background()
-	networks, err := cli.NetworkList(ctx, network.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+project)),
+	networks, err := cli.NetworkList(ctx, client.NetworkListOptions{
+		Filters: client.Filters{}.Add("label", api.ProjectLabel+"="+project),
 	})
 	if !assert.NoError(t, err, "list networks of %s", project) {
 		return
 	}
-	for _, n := range networks {
-		assert.NoError(t, cli.NetworkRemove(ctx, n.ID), "remove network %s", n.Name)
+	for _, n := range networks.Items {
+		_, err := cli.NetworkRemove(ctx, n.ID, client.NetworkRemoveOptions{})
+		assert.NoError(t, err, "remove network %s", n.Name)
 	}
 }

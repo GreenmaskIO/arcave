@@ -24,8 +24,8 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
 	"github.com/rs/zerolog"
 )
 
@@ -57,7 +57,7 @@ type dockerComposeAPI interface {
 }
 
 // Client runs the project's lifecycle, the compose project to act on passed per call. It
-// calls compose/v2 as a library, so the host needs no docker CLI.
+// calls compose/v5 as a library, so the host needs no docker CLI.
 type Client struct {
 	api          dockerComposeAPI
 	opts         Options
@@ -121,7 +121,6 @@ func (c *Client) Create(ctx context.Context, project *types.Project) error {
 		Inherit:              false,
 		RemoveOrphans:        true,
 		QuietPull:            true,
-		AssumeYes:            true,
 	})
 }
 

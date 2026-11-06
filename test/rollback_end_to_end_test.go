@@ -23,8 +23,8 @@ import (
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -202,7 +202,8 @@ func (e *imageRollbackEnv) down(t *testing.T) {
 	for _, svc := range res.Project.Services {
 		for _, v := range svc.Volumes {
 			if v.Type == model.VolumeTypeAnon && v.VolumeName != "" && v.InheritedFrom == "" {
-				assert.NoError(t, e.daemon.VolumeRemove(e.ctx, v.VolumeName, false), "remove volume %s", v.VolumeName)
+				_, err := e.daemon.VolumeRemove(e.ctx, v.VolumeName, client.VolumeRemoveOptions{})
+				assert.NoError(t, err, "remove volume %s", v.VolumeName)
 			}
 		}
 	}
@@ -223,8 +224,9 @@ func TestRollback_RenumbersAroundAMissingFirstReplica(t *testing.T) {
 	for number, c := range env.workers(t) {
 		env.stamp(t, c.ID, fmt.Sprintf("replica-%d", number))
 	}
-	require.NoError(t, env.daemon.ContainerRemove(env.ctx, env.workers(t)[1].ID,
-		container.RemoveOptions{Force: true, RemoveVolumes: true}))
+	_, err := env.daemon.ContainerRemove(env.ctx, env.workers(t)[1].ID,
+		client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	require.NoError(t, err)
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "no-first"})
 	require.NoError(t, err)
@@ -254,12 +256,13 @@ func TestRollback_RenumbersAroundAMissingFirstReplica(t *testing.T) {
 func (e *imageRollbackEnv) externalVolume(t *testing.T, name, script string) {
 	t.Helper()
 
-	_, err := e.daemon.VolumeCreate(e.ctx, volume.CreateOptions{Name: name})
+	_, err := e.daemon.VolumeCreate(e.ctx, client.VolumeCreateOptions{Name: name})
 	require.NoError(t, err)
 	busybox(t, dockerclient.NewEngine(e.daemon), name, script)
 	t.Cleanup(func() {
 		removeComposeProject(t, e.daemon, e.project)
-		assert.NoError(t, e.daemon.VolumeRemove(context.Background(), name, true), "remove volume %s", name)
+		_, err := e.daemon.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true})
+		assert.NoError(t, err, "remove volume %s", name)
 	})
 }
 

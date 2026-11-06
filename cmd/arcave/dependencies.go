@@ -26,14 +26,15 @@ import (
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/api"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/compose/v2/pkg/progress"
-	"github.com/docker/docker/client"
+	"github.com/docker/cli/cli/streams"
+	"github.com/docker/compose/v5/cmd/display"
+	"github.com/docker/compose/v5/pkg/api"
+	dockercompose "github.com/docker/compose/v5/pkg/compose"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/storages"
 	"github.com/labstack/echo/v4"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -126,7 +127,7 @@ func newDependencies(
 	}
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
-	progressWriter := newProgressWriter(cfg.Compose.Progress, *log.Ctx(ctx))
+	progressEvents, progressWriter := newProgress(cfg.Compose.Progress, *log.Ctx(ctx))
 	opened.add("compose progress writer", progressWriter)
 
 	// One docker/cli instance is the single daemon connection both halves of
@@ -144,7 +145,10 @@ func newDependencies(
 	assembler := composespec.NewAssembler()
 	codec := composespec.NewCodec()
 
-	composeService := dockercompose.NewComposeService(dockerCli)
+	composeService, err := newComposeService(dockerCli, progressEvents, progressWriter)
+	if err != nil {
+		return nil, fmt.Errorf("initialise compose: %w", err)
+	}
 	composeRunner := compose.NewClient(composeService, compose.Options{
 		WaitTimeout: cfg.Compose.WaitTimeout,
 		StopTimeout: cfg.Compose.StopTimeout,
@@ -530,24 +534,40 @@ type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
 
-// newProgressWriter translates compose.progress into the library's global
-// render mode (progress.Mode) plus the writer compose renders on. The destination
-// is always stderr or nothing — stdout carries arcave's JSON — and the default
+// newProgress translates compose.progress into the processor compose reports its
+// events to plus the stream it writes its few plain lines on. The destination is
+// always stderr or nothing — stdout carries arcave's JSON — and the default
 // re-emits compose's events as arcave log records, so the run speaks one format.
-func newProgressWriter(mode string, logger zerolog.Logger) io.WriteCloser {
+func newProgress(mode string, logger zerolog.Logger) (api.EventProcessor, io.WriteCloser) {
 	switch mode {
 	case config.ProgressQuiet:
 		// Discarding the stream too covers the warnings compose writes outside the UI.
-		progress.Mode = progress.ModeQuiet
-		return nopWriteCloser{io.Discard}
+		return display.Quiet(), nopWriteCloser{io.Discard}
 	case config.ProgressTTY:
-		// ModeAuto, not ModeTTY: compose falls back to plain lines in a pipe.
-		progress.Mode = progress.ModeAuto
-		return nopWriteCloser{os.Stderr}
+		// compose's own choice for --progress auto: the live view on a terminal,
+		// plain lines in a pipe.
+		if streams.NewOut(os.Stderr).IsTerminal() {
+			return display.Full(os.Stderr, os.Stderr, true), nopWriteCloser{os.Stderr}
+		}
+		return display.Plain(os.Stderr), nopWriteCloser{os.Stderr}
 	default:
-		progress.Mode = progress.ModeJSON
-		return compose.NewProgressLogger(logger)
+		logger := compose.NewProgressLogger(logger)
+		return logger, logger
 	}
+}
+
+// newComposeService builds the compose library over dockerCli, never touching
+// stdout: events go to progress, compose's plain lines to stream, stdin is empty,
+// and a prompt — a volume whose configuration changed, for one — is answered yes
+// without being printed, since arcave runs non-interactively.
+func newComposeService(
+	dockerCli command.Cli, progress api.EventProcessor, stream io.Writer,
+) (api.Compose, error) {
+	return dockercompose.NewComposeService(dockerCli,
+		dockercompose.WithStreams(io.Discard, stream, strings.NewReader("")),
+		dockercompose.WithPrompt(dockercompose.AlwaysOkPrompt()),
+		dockercompose.WithEventProcessor(progress),
+	)
 }
 
 // newDockerClient resolves cfg into the one docker/cli instance both halves of

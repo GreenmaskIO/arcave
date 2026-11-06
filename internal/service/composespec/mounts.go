@@ -108,7 +108,7 @@ func newBindOptions(from *model.BindMount) *types.ServiceVolumeBind {
 	if from == nil {
 		return bind
 	}
-	bind.CreateHostPath = from.CreateHostPath
+	bind.CreateHostPath = types.OptOut(from.CreateHostPath)
 	bind.SELinux = from.SELinux
 	bind.Recursive = from.Recursive
 	if from.Propagation != defaultBindPropagation {

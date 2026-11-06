@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/mock"
@@ -141,8 +141,8 @@ func demoContainerName(n int) string {
 // demoContainerInspect is a replica running on demoBaseImage.
 func demoContainerInspect() container.InspectResponse {
 	return container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{Image: demoUpstreamID.String()},
-		Config:            &container.Config{Image: demoBaseImage},
+		Image:  demoUpstreamID.String(),
+		Config: &container.Config{Image: demoBaseImage},
 	}
 }
 
@@ -269,7 +269,7 @@ var (
 	demoAssembled  = &types.Project{Name: demoProject}
 	demoSpec       = &types.Project{Name: demoProject}
 	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{
-		demoService: {Name: demoService, Image: demoBaseImage},
+		demoService: {Name: demoService, ContainerSpec: types.ContainerSpec{Image: demoBaseImage}},
 	}}
 	demoSpecBytes       = []byte("name: demo\n")
 	demoTargetSpecBytes = []byte("name: demo\nservices: {db: {image: postgres:16}}\n")

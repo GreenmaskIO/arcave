@@ -15,6 +15,7 @@
 package composespec
 
 import (
+	"net/netip"
 	"slices"
 	"sort"
 	"strconv"
@@ -22,10 +23,10 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/go-connections/nat"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -59,13 +60,17 @@ func (a assembly) newServiceConfig(svc model.Service) types.ServiceConfig {
 func (a assembly) newBaseConfig(svc model.Service) types.ServiceConfig {
 	scale := len(svc.Containers)
 	return types.ServiceConfig{
-		Name:       svc.Name,
-		Image:      svc.Image,
-		Labels:     userLabels(svc.Labels),
-		Scale:      &scale,
-		DependsOn:  a.parseDependsOn(svc.Labels[api.DependenciesLabel]),
-		PullPolicy: pullPolicyMissing,
-		Volumes:    newServiceVolumes(ownVolumes(declaredVolumes(svc))),
+		Name:  svc.Name,
+		Scale: &scale,
+		ContainerSpec: types.ContainerSpec{
+			Image:      svc.Image,
+			Labels:     userLabels(svc.Labels),
+			PullPolicy: pullPolicyMissing,
+			Volumes:    newServiceVolumes(ownVolumes(declaredVolumes(svc))),
+		},
+		WorkloadSpec: types.WorkloadSpec{
+			DependsOn: a.parseDependsOn(svc.Labels[api.DependenciesLabel]),
+		},
 	}
 }
 
@@ -140,7 +145,7 @@ func isLocalImage(inspect image.InspectResponse) bool {
 // applyHostConfig reads what the container was created against the host with.
 // What the daemon fills in by itself is left out.
 func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
-	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+	if inspect.HostConfig == nil {
 		return
 	}
 	hostConfig := inspect.HostConfig
@@ -157,7 +162,7 @@ func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.In
 	cfg.CapDrop = hostConfig.CapDrop
 	cfg.GroupAdd = hostConfig.GroupAdd
 	cfg.SecurityOpt = declaredSecurityOpt(hostConfig)
-	cfg.DNS = types.StringList(hostConfig.DNS)
+	cfg.DNS = addrStrings(hostConfig.DNS)
 	cfg.DNSOpts = hostConfig.DNSOptions
 	cfg.DNSSearch = types.StringList(hostConfig.DNSSearch)
 	cfg.VolumesFrom = declaredVolumesFrom(hostConfig.VolumesFrom, a.serviceByReplica)
@@ -251,9 +256,9 @@ func applyNetworks(cfg *types.ServiceConfig, service string, inspect container.I
 			GatewayPriority: endpoint.GwPriority,
 		}
 		if endpoint.IPAMConfig != nil {
-			attachment.Ipv4Address = endpoint.IPAMConfig.IPv4Address
-			attachment.Ipv6Address = endpoint.IPAMConfig.IPv6Address
-			attachment.LinkLocalIPs = endpoint.IPAMConfig.LinkLocalIPs
+			attachment.Ipv4Address = addrString(endpoint.IPAMConfig.IPv4Address)
+			attachment.Ipv6Address = addrString(endpoint.IPAMConfig.IPv6Address)
+			attachment.LinkLocalIPs = addrStrings(endpoint.IPAMConfig.LinkLocalIPs)
 		}
 		if endpoint.IPAMConfig == nil && isEmptyAttachment(attachment) {
 			// compose creates the endpoint of a nil entry without an IPAM config, and of an
@@ -428,14 +433,26 @@ func declaredAliases(aliases []string, containerID string, generated []string) [
 	return kept
 }
 
+// addrStrings renders a list of addresses; nil when there are none.
+func addrStrings(addrs []netip.Addr) []string {
+	if len(addrs) == 0 {
+		return nil
+	}
+	rendered := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		rendered = append(rendered, addrString(addr))
+	}
+	return rendered
+}
+
 // toExposedPorts renders EXPOSE, sorted so one compose project renders one spec.
-func toExposedPorts(set nat.PortSet) types.StringOrNumberList {
+func toExposedPorts(set network.PortSet) types.StringOrNumberList {
 	if len(set) == 0 {
 		return nil
 	}
 	exposed := make([]string, 0, len(set))
 	for port := range set {
-		exposed = append(exposed, string(port))
+		exposed = append(exposed, port.String())
 	}
 	sort.Strings(exposed)
 	return exposed
@@ -462,19 +479,18 @@ func unpublished(expose types.StringOrNumberList, ports []types.ServicePortConfi
 
 // newPublishedPorts renders the ports: section from the bindings, not from the running
 // container: an empty published port asks for a random one and must not be pinned.
-func newPublishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
+func newPublishedPorts(bindings network.PortMap) []types.ServicePortConfig {
 	published := make([]types.ServicePortConfig, 0, len(bindings))
 	for port, hosts := range bindings {
-		target, err := strconv.ParseUint(port.Port(), 10, 32)
-		if err != nil {
+		if !port.IsValid() {
 			continue
 		}
 		for _, host := range hosts {
 			published = append(published, types.ServicePortConfig{
-				Target:    uint32(target),
-				Protocol:  port.Proto(),
-				Published: host.HostPort,
-				HostIP:    host.HostIP,
+				Target:    uint32(port.Num()),
+				Protocol:  string(port.Proto()),
+				Published: publishedPort(host.HostPort),
+				HostIP:    addrString(host.HostIP),
 			})
 		}
 	}
@@ -488,6 +504,15 @@ func newPublishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
 		return published[i].Published < published[j].Published
 	})
 	return published
+}
+
+// publishedPort is the host port a binding asked for; compose 5 asks for a random one as "0",
+// which the spec spells as none.
+func publishedPort(hostPort string) string {
+	if hostPort == "0" {
+		return ""
+	}
+	return hostPort
 }
 
 // toRestartPolicy renders the restart: shorthand; docker's "no" is compose's default.

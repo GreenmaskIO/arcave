@@ -18,20 +18,20 @@ package test
 
 import (
 	"cmp"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/go-connections/nat"
+	"github.com/docker/compose/v5/pkg/api"
 	gocmp "github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -85,14 +85,14 @@ var anonVolumeName = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // The introspection fields the daemon issues anew for every container and network it
 // creates; with normalizeIntrospection, the closed list pass 2 normalizes away.
 var (
-	ignoredContainerFields = cmpopts.IgnoreFields(container.ContainerJSONBase{},
+	ignoredContainerFields = cmpopts.IgnoreFields(container.InspectResponse{},
 		"ID", "Created", "State", "ResolvConfPath", "HostnamePath", "HostsPath", "LogPath",
-		"RestartCount", "GraphDriver", "ExecIDs")
+		"RestartCount", "GraphDriver", "Storage", "ExecIDs")
 	ignoredSandboxFields = cmpopts.IgnoreFields(container.NetworkSettings{},
-		"NetworkSettingsBase.SandboxID", "NetworkSettingsBase.SandboxKey")
+		"SandboxID", "SandboxKey")
 	ignoredEndpointFields = cmpopts.IgnoreFields(network.EndpointSettings{},
 		"EndpointID", "NetworkID")
-	ignoredNetworkFields = cmpopts.IgnoreFields(network.Inspect{}, "ID", "Created", "Containers")
+	ignoredNetworkFields = cmpopts.IgnoreFields(network.Inspect{}, "Network.ID", "Network.Created", "Containers")
 	// The daemon's own `docker info` reports the daemon, not the compose project.
 	ignoredDaemon = cmpopts.IgnoreFields(model.IntrospectionResult{}, "Daemon")
 )
@@ -102,6 +102,8 @@ var (
 func introspectionOptions(declaredMACs map[string]bool) gocmp.Options {
 	return gocmp.Options{
 		cmpopts.EquateEmpty(),
+		// The SDK's addresses and ports are values with unexported fields, equal by ==.
+		cmpopts.EquateComparable(netip.Addr{}, netip.Prefix{}, network.Port{}),
 		ignoredContainerFields, ignoredSandboxFields, ignoredEndpointFields,
 		ignoredNetworkFields, ignoredDaemon,
 		gocmp.Transformer("replicaIdentity", func(res model.IntrospectionResult) model.IntrospectionResult {
@@ -177,11 +179,11 @@ func newNormalizer(res model.IntrospectionResult) normalizer {
 					}
 				}
 			}
-			if c.Inspect.ContainerJSONBase != nil && c.Inspect.HostConfig != nil {
+			if c.Inspect.HostConfig != nil {
 				for port, bindings := range c.Inspect.HostConfig.PortBindings {
 					for _, b := range bindings {
-						if b.HostPort == "" || strings.Contains(b.HostPort, "-") {
-							n.randomPorts[string(port)] = true
+						if b.HostPort == "" || b.HostPort == "0" || strings.Contains(b.HostPort, "-") {
+							n.randomPorts[port.String()] = true
 						}
 					}
 				}
@@ -220,26 +222,22 @@ func (n normalizer) container(c model.Container) model.Container {
 
 func (n normalizer) inspect(in container.InspectResponse) container.InspectResponse {
 	out := in
-	if in.ContainerJSONBase != nil {
-		base := *in.ContainerJSONBase
-		if base.HostConfig != nil {
-			host := *base.HostConfig
-			host.NetworkMode = container.NetworkMode(n.namespace(string(host.NetworkMode)))
-			host.IpcMode = container.IpcMode(n.namespace(string(host.IpcMode)))
-			host.PidMode = container.PidMode(n.namespace(string(host.PidMode)))
-			host.VolumesFrom = n.entries(host.VolumesFrom)
-			host.Binds = n.binds(host.Binds)
-			// compose writes these out of maps, in no fixed order.
-			host.ExtraHosts = sortedOrNil(host.ExtraHosts)
-			host.Links = sortedOrNil(host.Links)
-			host.Binds = sortedOrNil(host.Binds)
-			host.Mounts = slices.Clone(host.Mounts)
-			slices.SortFunc(host.Mounts, func(a, b mount.Mount) int { return cmp.Compare(a.Target, b.Target) })
-			host.Ulimits = slices.Clone(host.Ulimits)
-			slices.SortFunc(host.Ulimits, func(a, b *container.Ulimit) int { return cmp.Compare(a.Name, b.Name) })
-			base.HostConfig = &host
-		}
-		out.ContainerJSONBase = &base
+	if in.HostConfig != nil {
+		host := *in.HostConfig
+		host.NetworkMode = container.NetworkMode(n.namespace(string(host.NetworkMode)))
+		host.IpcMode = container.IpcMode(n.namespace(string(host.IpcMode)))
+		host.PidMode = container.PidMode(n.namespace(string(host.PidMode)))
+		host.VolumesFrom = n.entries(host.VolumesFrom)
+		host.Binds = n.binds(host.Binds)
+		// compose writes these out of maps, in no fixed order.
+		host.ExtraHosts = sortedOrNil(host.ExtraHosts)
+		host.Links = sortedOrNil(host.Links)
+		host.Binds = sortedOrNil(host.Binds)
+		host.Mounts = slices.Clone(host.Mounts)
+		slices.SortFunc(host.Mounts, func(a, b mount.Mount) int { return cmp.Compare(a.Target, b.Target) })
+		host.Ulimits = slices.Clone(host.Ulimits)
+		slices.SortFunc(host.Ulimits, func(a, b *container.Ulimit) int { return cmp.Compare(a.Name, b.Name) })
+		out.HostConfig = &host
 	}
 	if in.Config != nil {
 		cfg := *in.Config
@@ -266,9 +264,9 @@ func (n normalizer) inspect(in container.InspectResponse) container.InspectRespo
 
 func (n normalizer) networkSettings(id string, in container.NetworkSettings) *container.NetworkSettings {
 	out := in
-	out.Ports = nat.PortMap{}
+	out.Ports = network.PortMap{}
 	for port, bindings := range in.Ports {
-		if n.randomPorts[string(port)] {
+		if n.randomPorts[port.String()] {
 			bindings = slices.Clone(bindings)
 			for i := range bindings {
 				bindings[i].HostPort = ""
@@ -291,16 +289,16 @@ func (n normalizer) networkSettings(id string, in container.NetworkSettings) *co
 		})
 		e.Links = sortedOrNil(e.Links)
 		if !n.static[name] {
-			e.Gateway, e.IPv6Gateway = "", ""
+			e.Gateway, e.IPv6Gateway = netip.Addr{}, netip.Addr{}
 		}
 		if !hasStaticIPv4(endpoint) {
-			e.IPAddress, e.IPPrefixLen = "", 0
+			e.IPAddress, e.IPPrefixLen = netip.Addr{}, 0
 		}
 		if !hasStaticIPv6(endpoint) {
-			e.GlobalIPv6Address, e.GlobalIPv6PrefixLen = "", 0
+			e.GlobalIPv6Address, e.GlobalIPv6PrefixLen = netip.Addr{}, 0
 		}
-		if !n.declaredMACs[e.MacAddress] {
-			e.MacAddress = ""
+		if !n.declaredMACs[e.MacAddress.String()] {
+			e.MacAddress = nil
 		}
 		out.Networks[name] = &e
 	}
@@ -308,11 +306,11 @@ func (n normalizer) networkSettings(id string, in container.NetworkSettings) *co
 }
 
 func hasStaticIPv4(e *network.EndpointSettings) bool {
-	return e.IPAMConfig != nil && e.IPAMConfig.IPv4Address != ""
+	return e.IPAMConfig != nil && e.IPAMConfig.IPv4Address.IsValid()
 }
 
 func hasStaticIPv6(e *network.EndpointSettings) bool {
-	return e.IPAMConfig != nil && e.IPAMConfig.IPv6Address != ""
+	return e.IPAMConfig != nil && e.IPAMConfig.IPv6Address.IsValid()
 }
 
 func (n normalizer) namedVolume(v model.NamedVolume) model.NamedVolume {
@@ -421,11 +419,11 @@ func declaredMACs(project *types.Project) map[string]bool {
 	macs := map[string]bool{}
 	for _, svc := range project.Services {
 		if svc.MacAddress != "" {
-			macs[svc.MacAddress] = true
+			macs[strings.ToLower(svc.MacAddress)] = true
 		}
 		for _, attachment := range svc.Networks {
 			if attachment != nil && attachment.MacAddress != "" {
-				macs[attachment.MacAddress] = true
+				macs[strings.ToLower(attachment.MacAddress)] = true
 			}
 		}
 	}

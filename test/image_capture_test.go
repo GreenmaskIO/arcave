@@ -26,9 +26,8 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -147,7 +146,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	composeService := dockercompose.NewComposeService(cli)
+	composeService := newComposeService(t, cli)
 	engine := dockerclient.NewEngine(daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,

@@ -35,7 +35,7 @@ const (
 
 // stampedProject is one service, app, carrying the stamps given.
 func stampedProject(labels types.Labels) *types.Project {
-	return &types.Project{Services: types.Services{"app": {Name: "app", Labels: labels}}}
+	return &types.Project{Services: types.Services{"app": {Name: "app", ContainerSpec: types.ContainerSpec{Labels: labels}}}}
 }
 
 func TestFindCapturePolicyDrift(t *testing.T) {

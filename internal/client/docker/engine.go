@@ -19,7 +19,7 @@
 //   - Engine (engine.go) moves a volume's bytes in and out of the volume
 //     itself, through a throwaway container of its own.
 //   - ComposeRunner (loader.go) stops and starts the project's services,
-//     through the compose library (github.com/docker/compose/v2), since the
+//     through the compose library (github.com/docker/compose/v5), since the
 //     Docker API itself has no Compose equivalent.
 //
 // Both reach the daemon through Go libraries — arcave shells out to nothing, so it
@@ -37,15 +37,8 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -75,28 +68,28 @@ const wipeMountPath = "/data"
 // consumer-side, so a test can drive Engine with a mock instead of a daemon.
 // *client.Client (and so docker/cli's client.APIClient) satisfies it.
 type dockerAPI interface {
-	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
-	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
-	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
-	ContainerAttach(ctx context.Context, containerID string, options container.AttachOptions) (types.HijackedResponse, error)
-	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
-	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
-	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
-	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, container.PathStat, error)
-	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error
-	ContainerCommit(ctx context.Context, containerID string, options container.CommitOptions) (container.CommitResponse, error)
-	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (image.InspectResponse, error)
-	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
-	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
-	ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (io.ReadCloser, error)
-	ImageLoad(ctx context.Context, input io.Reader, opts ...client.ImageLoadOption) (image.LoadResponse, error)
-	ImageTag(ctx context.Context, source, target string) error
-	ImageRemove(ctx context.Context, imageID string, options image.RemoveOptions) ([]image.DeleteResponse, error)
-	Info(ctx context.Context) (system.Info, error)
-	Ping(ctx context.Context) (types.Ping, error)
-	VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error)
-	VolumeRemove(ctx context.Context, volumeID string, force bool) error
+	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error)
+	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
+	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
+	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
+	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
+	ContainerCommit(ctx context.Context, containerID string, options client.ContainerCommitOptions) (client.ContainerCommitResult, error)
+	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
+	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
+	ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (client.ImageSaveResult, error)
+	ImageLoad(ctx context.Context, input io.Reader, opts ...client.ImageLoadOption) (client.ImageLoadResult, error)
+	ImageTag(ctx context.Context, options client.ImageTagOptions) (client.ImageTagResult, error)
+	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
+	Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error)
+	Ping(ctx context.Context, options client.PingOptions) (client.PingResult, error)
+	VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error)
+	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 	Close() error
 }
 
@@ -133,7 +126,7 @@ func (e *Engine) Close() error { return e.api.Close() }
 
 // Ping checks that the daemon answers.
 func (e *Engine) Ping(ctx context.Context) error {
-	if _, err := e.api.Ping(ctx); err != nil {
+	if _, err := e.api.Ping(ctx, client.PingOptions{}); err != nil {
 		return fmt.Errorf("ping docker daemon: %w", err)
 	}
 	return nil
@@ -158,7 +151,7 @@ func (e *Engine) RunOneShot(ctx context.Context, spec model.OneShotSpec) error {
 func (e *Engine) ResolveMountSource(ctx context.Context, volume model.Volume) (model.MountSource, error) {
 	if src, ok := volume.MountSource(); ok {
 		if src.Type == model.MountSourceVolume {
-			if _, err := e.api.VolumeInspect(ctx, src.Source); err != nil {
+			if _, err := e.api.VolumeInspect(ctx, src.Source, client.VolumeInspectOptions{}); err != nil {
 				return model.MountSource{}, fmt.Errorf(
 					"docker volume %q does not exist (bring the project up once to create it): %w", src.Source, err)
 			}
@@ -193,12 +186,12 @@ func (e *Engine) OpenVolume(ctx context.Context, src model.MountSource) (io.Read
 		return nil, err
 	}
 
-	rc, _, err := e.api.CopyFromContainer(ctx, id, scratchMount)
+	copied, err := e.api.CopyFromContainer(ctx, id, client.CopyFromContainerOptions{SourcePath: scratchMount})
 	if err != nil {
 		remove()
 		return nil, fmt.Errorf("export volume %s: %w", src.Source, err)
 	}
-	return closeAfter{ReadCloser: rc, after: remove}, nil
+	return closeAfter{ReadCloser: copied.Content, after: remove}, nil
 }
 
 // WriteVolume clears the volume and extracts the tar back into it, the mirror of
@@ -214,7 +207,7 @@ func (e *Engine) WriteVolume(ctx context.Context, src model.MountSource, r io.Re
 		// net/http as the request body, and http.NewRequestWithContext type-asserts it
 		// to io.ReadCloser — so the transport would close the caller's stream, and the
 		// caller's own deferred Close would then fail with "file already closed".
-		if err := e.api.CopyToContainer(ctx, id, "/", readOnly{r}, container.CopyToContainerOptions{}); err != nil {
+		if _, err := e.api.CopyToContainer(ctx, id, client.CopyToContainerOptions{DestinationPath: "/", Content: readOnly{r}}); err != nil {
 			return fmt.Errorf("restore volume %s: %w", src.Source, err)
 		}
 		return nil
@@ -236,7 +229,7 @@ func (e *Engine) RemoveVolume(ctx context.Context, name string) error {
 	if name == "" {
 		return fmt.Errorf("cannot remove a volume with no name")
 	}
-	if err := e.api.VolumeRemove(ctx, name, false); err != nil {
+	if _, err := e.api.VolumeRemove(ctx, name, client.VolumeRemoveOptions{}); err != nil {
 		return fmt.Errorf("remove volume %s: %w", name, err)
 	}
 	return nil
@@ -268,15 +261,15 @@ type mountInfo struct {
 func findServiceMount(
 	ctx context.Context, api dockerAPI, projectName, service string, replica int, target string,
 ) (mountInfo, error) {
-	filter := filters.NewArgs(
-		filters.Arg("label", composeProjectLabel+"="+projectName),
-		filters.Arg("label", composeServiceLabel+"="+service),
+	filter := client.Filters{}.Add("label",
+		composeProjectLabel+"="+projectName,
+		composeServiceLabel+"="+service,
 	)
-	containers, err := api.ContainerList(ctx, container.ListOptions{All: true, Filters: filter})
+	containers, err := api.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: filter})
 	if err != nil {
 		return mountInfo{}, fmt.Errorf("list containers for service %q: %w", service, err)
 	}
-	mount, ok := matchMount(containers, replica, target)
+	mount, ok := matchMount(containers.Items, replica, target)
 	if !ok {
 		return mountInfo{}, fmt.Errorf("no container for service %q replica %d in project %q mounts %q (is the project created?)",
 			service, replica, projectName, target)

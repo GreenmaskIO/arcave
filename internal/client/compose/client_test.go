@@ -24,7 +24,8 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -373,7 +374,7 @@ func TestClient_Start_HealthCheckDisabled(t *testing.T) {
 	running := func(service string) api.ContainerSummary {
 		return api.ContainerSummary{Name: "demo-" + service + "-1", Service: service, State: "running"}
 	}
-	withHealth := func(c api.ContainerSummary, health string) api.ContainerSummary {
+	withHealth := func(c api.ContainerSummary, health container.HealthStatus) api.ContainerSummary {
 		c.Health = health
 		return c
 	}
@@ -509,8 +510,8 @@ func fixtureProject() *types.Project {
 		WorkingDir:   "/work",
 		ComposeFiles: []string{"/work/a.yml", "/work/b.yml"},
 		Services: types.Services{
-			"db":  {Image: "postgres:16"},
-			"app": {Image: "busybox"},
+			"db":  {ContainerSpec: types.ContainerSpec{Image: "postgres:16"}},
+			"app": {ContainerSpec: types.ContainerSpec{Image: "busybox"}},
 		},
 	}
 }
@@ -536,8 +537,8 @@ func disabledHealthProject(check *types.HealthCheckConfig) *types.Project {
 	return &types.Project{
 		Name: "demo",
 		Services: types.Services{
-			"web": {Name: "web", Image: "busybox", HealthCheck: check},
-			"db":  {Name: "db", Image: "postgres:16"},
+			"web": {Name: "web", ContainerSpec: types.ContainerSpec{Image: "busybox"}, WorkloadSpec: types.WorkloadSpec{HealthCheck: check}},
+			"db":  {Name: "db", ContainerSpec: types.ContainerSpec{Image: "postgres:16"}},
 		},
 	}
 }
@@ -547,11 +548,16 @@ func oneShotProject() *types.Project {
 	return &types.Project{
 		Name: "demo",
 		Services: types.Services{
-			"migrate": {Name: "migrate", Image: "busybox"},
+			"migrate": {Name: "migrate", ContainerSpec: types.ContainerSpec{Image: "busybox"}},
 			"web": {
-				Name: "web", Image: "busybox", HealthCheck: &types.HealthCheckConfig{Disable: true},
-				DependsOn: types.DependsOnConfig{
-					"migrate": {Condition: types.ServiceConditionCompletedSuccessfully, Required: true},
+				Name: "web", ContainerSpec: types.ContainerSpec{
+					Image: "busybox",
+				},
+				WorkloadSpec: types.WorkloadSpec{
+					HealthCheck: &types.HealthCheckConfig{Disable: true},
+					DependsOn: types.DependsOnConfig{
+						"migrate": {Condition: types.ServiceConditionCompletedSuccessfully, Required: true},
+					},
 				},
 			},
 		},

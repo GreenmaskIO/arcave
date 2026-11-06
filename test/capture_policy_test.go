@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -203,8 +203,9 @@ func TestRollback_KeepsAGapWithoutALayer(t *testing.T) {
 	for number, c := range env.workers(t) {
 		env.stamp(t, c.ID, fmt.Sprintf("replica-%d", number))
 	}
-	require.NoError(t, env.daemon.ContainerRemove(env.ctx, env.workers(t)[2].ID,
-		container.RemoveOptions{Force: true, RemoveVolumes: true}))
+	_, err := env.daemon.ContainerRemove(env.ctx, env.workers(t)[2].ID,
+		client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	require.NoError(t, err)
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "gap-no-layer"})
 	require.NoError(t, err)

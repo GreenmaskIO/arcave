@@ -31,12 +31,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/inmemory"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -386,9 +385,9 @@ func newDaemonClient(t *testing.T) *client.Client {
 	if testing.Short() {
 		t.Skip("skipping the cdc backend volume-level test in short mode")
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background()); err != nil {
+	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
 		_ = cli.Close()
 		t.Skip("skipping the cdc backend volume-level test: no reachable docker daemon: " + err.Error())
 	}
@@ -423,9 +422,9 @@ func randomSuffix(t *testing.T) string {
 func createVolume(t *testing.T, cli *client.Client, name string) {
 	t.Helper()
 
-	_, err := cli.VolumeCreate(context.Background(), volume.CreateOptions{Name: name})
+	_, err := cli.VolumeCreate(context.Background(), client.VolumeCreateOptions{Name: name})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cli.VolumeRemove(context.Background(), name, true) })
+	t.Cleanup(func() { _, _ = cli.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true}) })
 }
 
 // createLabelledContainer creates — never starts — a container carrying compose's
@@ -433,8 +432,8 @@ func createVolume(t *testing.T, cli *client.Client, name string) {
 func createLabelledContainer(t *testing.T, cli *client.Client, service, name, target string) {
 	t.Helper()
 
-	created, err := cli.ContainerCreate(context.Background(),
-		&container.Config{
+	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image: busyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
@@ -442,11 +441,12 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service, name, ta
 				"com.docker.compose.service": service,
 			},
 		},
-		&container.HostConfig{Binds: []string{name + ":" + target}},
-		nil, nil, name+"-holder")
+		HostConfig: &container.HostConfig{Binds: []string{name + ":" + target}},
+		Name:       name + "-holder",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
 }
 
@@ -457,8 +457,8 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service, name, ta
 func createSubpathContainer(t *testing.T, cli *client.Client, service, name, target, subpath string) {
 	t.Helper()
 
-	created, err := cli.ContainerCreate(context.Background(),
-		&container.Config{
+	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image: busyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
@@ -466,16 +466,17 @@ func createSubpathContainer(t *testing.T, cli *client.Client, service, name, tar
 				"com.docker.compose.service": service,
 			},
 		},
-		&container.HostConfig{Mounts: []mount.Mount{{
+		HostConfig: &container.HostConfig{Mounts: []mount.Mount{{
 			Type:          mount.TypeVolume,
 			Source:        name,
 			Target:        target,
 			VolumeOptions: &mount.VolumeOptions{Subpath: subpath},
 		}}},
-		nil, nil, name+"-holder")
+		Name: name + "-holder",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
 }
 

@@ -24,15 +24,15 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/pkg/api"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -63,7 +63,7 @@ func TestInspector_Introspect(t *testing.T) {
 	)
 	daemon.expectInspect("c-db-1", "c-app-1")
 	daemon.expectVolumes(ownedVolume(ownedName, "pgdata"), ownedVolume("demo_orphan", "orphan"))
-	daemon.expectNetworks(network.Summary{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}})
+	daemon.expectNetworks(network.Summary{Network: network.Network{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}}})
 	daemon.expectImage(testImageID, nil)
 	daemon.expectInfo()
 	inspector := NewInspector(daemon, composeProject)
@@ -94,7 +94,7 @@ func TestInspector_Introspect(t *testing.T) {
 	}, got.Project.Volumes[1].UsedBy, "users sort by (service, target)")
 
 	assert.Equal(t, []model.Network{{Key: "back", Name: "demo_back",
-		Inspect: network.Inspect{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}}}},
+		Inspect: network.Inspect{Network: network.Network{Name: "demo_back", Labels: map[string]string{api.NetworkLabel: "back"}}}}},
 		got.Project.Networks)
 	daemon.AssertExpectations(t)
 }
@@ -109,7 +109,7 @@ func TestInspector_Introspect_Referenced(t *testing.T) {
 		r.HostConfig = &h
 		return r
 	}
-	vpn := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"}}
+	vpn := container.InspectResponse{ID: vpnID, Name: "/vpn"}
 
 	tests := []struct {
 		name     string
@@ -474,6 +474,62 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
+// The containers compose runs on a service's behalf carry the service's labels but are no
+// replica of it: a pre_start hook runner (a failed one keeps no container number) and the relay
+// standing in for a provider service. The relay's own bridge is no network the project declares.
+func TestInspector_Introspect_DropsHookAndRelayContainers(t *testing.T) {
+	hook := func(id string, number int) container.Summary {
+		c := summary(id, "web", "nginx:1", number)
+		c.Labels[api.HookLabel] = "pre_start"
+		return c
+	}
+	numberless := func(c container.Summary) container.Summary {
+		delete(c.Labels, api.ContainerNumberLabel)
+		return c
+	}
+	relay := summary("c-model-relay", "model", "alpine/socat", 1)
+	relay.Labels[api.RelayLabel] = "routes-hash"
+
+	tests := []struct {
+		name   string
+		listed []container.Summary
+	}{
+		{name: "a numbered hook runner", listed: []container.Summary{hook("c-web-hook", 1)}},
+		{name: "a failed hook runner with no number", listed: []container.Summary{numberless(hook("c-web-hook", 1))}},
+		{name: "a relay", listed: []container.Summary{relay}},
+		{name: "all of them", listed: []container.Summary{hook("c-web-hook", 1), numberless(hook("c-web-hook-2", 1)), relay}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			replica := summary("c-web-1", "web", "nginx:1", 1)
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(append([]container.Summary{replica}, tt.listed...)...)
+			daemon.expectInspect("c-web-1")
+			daemon.expectVolumes()
+			daemon.expectNetworks(
+				network.Summary{Network: network.Network{Name: "demo_default", Labels: map[string]string{api.NetworkLabel: "default"}}},
+				network.Summary{Network: network.Network{Name: "demo_model-relay", Labels: map[string]string{api.RelayNetworkLabel: "true"}}},
+			)
+			daemon.expectImage(testImageID, nil)
+			daemon.expectInfo()
+
+			// Act
+			got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			require.Len(t, got.Project.Services, 1, "no service is read off a hook or a relay")
+			require.Len(t, got.Project.Services[0].Containers, 1, "only the replica is one")
+			assert.Equal(t, "c-web-1", got.Project.Services[0].Containers[0].ID)
+			require.Len(t, got.Project.Networks, 1, "the relay's bridge is not the project's")
+			assert.Equal(t, "default", got.Project.Networks[0].Key)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
 func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 	anon := func(name string) volume.Volume {
 		return volume.Volume{Name: name, Labels: map[string]string{anonymousVolumeLabel: ""}}
@@ -569,8 +625,9 @@ func TestInspector_Introspect_InheritedMounts(t *testing.T) {
 		return r
 	}
 	vpn := container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"},
-		Mounts:            []container.MountPoint{vpnBind},
+		ID:     vpnID,
+		Name:   "/vpn",
+		Mounts: []container.MountPoint{vpnBind},
 	}
 
 	tests := []struct {
@@ -762,7 +819,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 			setup: func(daemon *mockDockerAPI) {
 				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
 				daemon.On("VolumeList", mock.Anything, mock.Anything).
-					Return(volume.ListResponse{}, daemonErr).Once()
+					Return([]volume.Volume(nil), daemonErr).Once()
 			},
 		},
 		{
@@ -1089,8 +1146,9 @@ func mountPoint(t mount.Type, name, source, destination string, readOnly bool) c
 // inspected is what `docker container inspect` reports for one container.
 func inspected(id, imageID string, mounts ...container.MountPoint) container.InspectResponse {
 	return container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{ID: id, Image: imageID},
-		Mounts:            mounts,
+		ID:     id,
+		Image:  imageID,
+		Mounts: mounts,
 	}
 }
 
@@ -1110,11 +1168,14 @@ func ownedVolume(name, key string) volume.Volume {
 	}}
 }
 
+// mockDockerAPI answers with the payloads the SDK wraps in its …Result types, so an expectation
+// reads as what the daemon reported. The inspect and info calls carry no options the package
+// sets, so they are matched by what they name alone.
 type mockDockerAPI struct{ mock.Mock }
 
 func (m *mockDockerAPI) expectContainers(summaries ...container.Summary) {
-	m.On("ContainerList", mock.Anything, mock.MatchedBy(func(opts container.ListOptions) bool {
-		return opts.All && len(opts.Filters.Get("label")) == 1
+	m.On("ContainerList", mock.Anything, mock.MatchedBy(func(opts client.ContainerListOptions) bool {
+		return opts.All && len(opts.Filters["label"]) == 1
 	})).Return(summaries, nil).Once()
 }
 
@@ -1152,55 +1213,55 @@ func (m *mockDockerAPI) expectInfo() {
 }
 
 func (m *mockDockerAPI) expectVolumes(volumes ...volume.Volume) {
-	listed := make([]*volume.Volume, 0, len(volumes))
-	for i := range volumes {
-		listed = append(listed, &volumes[i])
-	}
-	m.On("VolumeList", mock.Anything, mock.Anything).
-		Return(volume.ListResponse{Volumes: listed}, nil).Once()
+	m.On("VolumeList", mock.Anything, mock.Anything).Return(volumes, nil).Once()
 }
 
 func (m *mockDockerAPI) expectNetworks(summaries ...network.Summary) {
 	m.On("NetworkList", mock.Anything, mock.Anything).Return(summaries, nil).Once()
 }
 
-func (m *mockDockerAPI) ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error) {
+func (m *mockDockerAPI) ContainerList(ctx context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error) {
 	args := m.Called(ctx, opts)
 	summaries, _ := args.Get(0).([]container.Summary)
-	return summaries, args.Error(1)
+	return client.ContainerListResult{Items: summaries}, args.Error(1)
 }
 
-func (m *mockDockerAPI) ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error) {
+func (m *mockDockerAPI) ContainerInspect(
+	ctx context.Context, id string, _ client.ContainerInspectOptions,
+) (client.ContainerInspectResult, error) {
 	args := m.Called(ctx, id)
-	return args.Get(0).(container.InspectResponse), args.Error(1)
+	return client.ContainerInspectResult{Container: args.Get(0).(container.InspectResponse)}, args.Error(1)
 }
 
-func (m *mockDockerAPI) VolumeList(ctx context.Context, opts volume.ListOptions) (volume.ListResponse, error) {
+func (m *mockDockerAPI) VolumeList(ctx context.Context, opts client.VolumeListOptions) (client.VolumeListResult, error) {
 	args := m.Called(ctx, opts)
-	return args.Get(0).(volume.ListResponse), args.Error(1)
+	volumes, _ := args.Get(0).([]volume.Volume)
+	return client.VolumeListResult{Items: volumes}, args.Error(1)
 }
 
-func (m *mockDockerAPI) VolumeInspect(ctx context.Context, name string) (volume.Volume, error) {
+func (m *mockDockerAPI) VolumeInspect(
+	ctx context.Context, name string, _ client.VolumeInspectOptions,
+) (client.VolumeInspectResult, error) {
 	args := m.Called(ctx, name)
-	return args.Get(0).(volume.Volume), args.Error(1)
+	return client.VolumeInspectResult{Volume: args.Get(0).(volume.Volume)}, args.Error(1)
 }
 
-func (m *mockDockerAPI) NetworkList(ctx context.Context, opts network.ListOptions) ([]network.Summary, error) {
+func (m *mockDockerAPI) NetworkList(ctx context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error) {
 	args := m.Called(ctx, opts)
 	summaries, _ := args.Get(0).([]network.Summary)
-	return summaries, args.Error(1)
+	return client.NetworkListResult{Items: summaries}, args.Error(1)
 }
 
 func (m *mockDockerAPI) ImageInspect(
 	ctx context.Context, imageID string, _ ...client.ImageInspectOption,
-) (image.InspectResponse, error) {
+) (client.ImageInspectResult, error) {
 	args := m.Called(ctx, imageID)
-	return args.Get(0).(image.InspectResponse), args.Error(1)
+	return client.ImageInspectResult{InspectResponse: args.Get(0).(image.InspectResponse)}, args.Error(1)
 }
 
-func (m *mockDockerAPI) Info(ctx context.Context) (system.Info, error) {
+func (m *mockDockerAPI) Info(ctx context.Context, _ client.InfoOptions) (client.SystemInfoResult, error) {
 	args := m.Called(ctx)
-	return args.Get(0).(system.Info), args.Error(1)
+	return client.SystemInfoResult{Info: args.Get(0).(system.Info)}, args.Error(1)
 }
 
 func TestContainerName(t *testing.T) {

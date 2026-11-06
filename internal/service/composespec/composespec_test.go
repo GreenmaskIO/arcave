@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/netip"
 	"strconv"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,14 +71,16 @@ func TestAssembler_Assemble(t *testing.T) {
 			Key:  "back",
 			Name: "demo_back",
 			Inspect: network.Inspect{
-				Driver:   "bridge",
-				Internal: true,
-				Options:  map[string]string{"com.docker.network.bridge.name": "br-demo"},
-				IPAM: network.IPAM{
-					Driver: "default",
-					Config: []network.IPAMConfig{{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"}},
+				Network: network.Network{
+					Driver:   "bridge",
+					Internal: true,
+					Options:  map[string]string{"com.docker.network.bridge.name": "br-demo"},
+					IPAM: network.IPAM{
+						Driver: "default",
+						Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix("172.28.0.0/16"), Gateway: netip.MustParseAddr("172.28.0.1")}},
+					},
+					Labels: map[string]string{api.NetworkLabel: "back"},
 				},
-				Labels: map[string]string{api.NetworkLabel: "back"},
 			},
 		}},
 	}}
@@ -123,7 +126,7 @@ func TestAssembler_Assemble(t *testing.T) {
 func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 	pools := network.IPAM{
 		Driver: "default",
-		Config: []network.IPAMConfig{{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"}},
+		Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix("172.28.0.0/16"), Gateway: netip.MustParseAddr("172.28.0.1")}},
 	}
 
 	tests := []struct {
@@ -138,14 +141,14 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 		},
 		{
 			name:     "a static IPv4 address keeps the pool it came from",
-			endpoint: &network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: "172.28.0.10"}},
+			endpoint: &network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr("172.28.0.10")}},
 			want: types.IPAMConfig{Driver: "default", Config: []*types.IPAMPool{
 				{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"},
 			}},
 		},
 		{
 			name:     "a static IPv6 address keeps the pool too",
-			endpoint: &network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{IPv6Address: "fd00::10"}},
+			endpoint: &network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{IPv6Address: netip.MustParseAddr("fd00::10")}},
 			want: types.IPAMConfig{Driver: "default", Config: []*types.IPAMPool{
 				{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"},
 			}},
@@ -157,7 +160,7 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 			// Arrange
 			replica := func(id string, endpoint *network.EndpointSettings) model.Container {
 				return model.Container{Name: id, Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{ID: id},
+					ID: id,
 					NetworkSettings: &container.NetworkSettings{
 						Networks: map[string]*network.EndpointSettings{"demo_back": endpoint},
 					},
@@ -173,7 +176,7 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 						replica("demo-web-2", tt.endpoint),
 					},
 				}},
-				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{IPAM: pools}}},
+				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{Network: network.Network{IPAM: pools}}}},
 			}}
 
 			// Act
@@ -198,20 +201,25 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 	}{
 		{
 			name: "the options the daemon writes for a defaulted family are no declaration",
-			inspect: network.Inspect{EnableIPv4: true, Options: map[string]string{
-				enableIPv4Option: "true", enableIPv6Option: "false",
+			inspect: network.Inspect{Network: network.Network{
+				EnableIPv4: true,
+				Options: map[string]string{
+					enableIPv4Option: "true", enableIPv6Option: "false",
+				},
 			}},
 		},
 		{
 			name:     "a declared family carries no option, and is declared",
-			inspect:  network.Inspect{EnableIPv4: true, EnableIPv6: true},
+			inspect:  network.Inspect{Network: network.Network{EnableIPv4: true, EnableIPv6: true}},
 			wantIPv4: enabled(true),
 			wantIPv6: enabled(true),
 		},
 		{
 			name: "a driver option of the user's stays",
-			inspect: network.Inspect{Options: map[string]string{
-				"com.docker.network.bridge.name": "br-demo", enableIPv4Option: "true", enableIPv6Option: "false",
+			inspect: network.Inspect{Network: network.Network{
+				Options: map[string]string{
+					"com.docker.network.bridge.name": "br-demo", enableIPv4Option: "true", enableIPv6Option: "false",
+				},
 			}},
 			wantOpts: types.Options{"com.docker.network.bridge.name": "br-demo"},
 		},
@@ -223,7 +231,7 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 			introspection := model.IntrospectionResult{Project: model.Project{
 				Name: "demo",
 				Services: []model.Service{{Name: "app", Containers: []model.Container{{
-					Inspect: container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{ID: "c1"}},
+					Inspect: container.InspectResponse{ID: "c1"},
 				}}}},
 				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: tt.inspect}},
 			}}
@@ -253,7 +261,7 @@ func TestAssembler_Assemble_ForeignNetwork(t *testing.T) {
 			Containers: []model.Container{{
 				Name: "demo-app-1",
 				Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{ID: "abc"},
+					ID: "abc",
 					NetworkSettings: &container.NetworkSettings{
 						Networks: map[string]*network.EndpointSettings{
 							"demo_back": {Aliases: []string{"app", "front"}},
@@ -339,12 +347,12 @@ func TestAssembler_Assemble_DependsOn(t *testing.T) {
 						Containers: []model.Container{{Name: "demo-app-1"}},
 					},
 					{Name: "db", Image: "busybox", Containers: []model.Container{{Name: "demo-db-1", Inspect: container.InspectResponse{
-						ContainerJSONBase: &container.ContainerJSONBase{ID: "db-id"},
-						Config:            &container.Config{Healthcheck: &container.HealthConfig{Test: []string{"CMD", "true"}}},
+						ID:     "db-id",
+						Config: &container.Config{Healthcheck: &container.HealthConfig{Test: []string{"CMD", "true"}}},
 					}}}},
 					{Name: "cache", Image: "busybox", Containers: []model.Container{{Name: "demo-cache-1", Inspect: container.InspectResponse{
-						ContainerJSONBase: &container.ContainerJSONBase{ID: "cache-id"},
-						Config:            &container.Config{Healthcheck: &container.HealthConfig{Test: []string{"NONE"}}},
+						ID:     "cache-id",
+						Config: &container.Config{Healthcheck: &container.HealthConfig{Test: []string{"NONE"}}},
 					}}}},
 				},
 			}}
@@ -376,6 +384,52 @@ func TestAssembler_Assemble_NoServices(t *testing.T) {
 	assert.Contains(t, err.Error(), `"demo"`)
 }
 
+// ServiceConfig embeds ContainerSpec and WorkloadSpec: a difference is named by the compose key
+// of the field, never by the struct that carries it.
+func TestDivergentFields(t *testing.T) {
+	base := func() types.ServiceConfig {
+		return types.ServiceConfig{
+			Name:          "web",
+			Restart:       "always",
+			ContainerName: "demo-web-1",
+			ContainerSpec: types.ContainerSpec{Image: "nginx:1", Hostname: "aaaa"},
+			WorkloadSpec:  types.WorkloadSpec{Expose: types.StringOrNumberList{"80"}},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(cfg *types.ServiceConfig)
+		want   []string
+	}{
+		{name: "identical configs differ in nothing", mutate: func(*types.ServiceConfig) {}},
+		{name: "a ServiceConfig field", mutate: func(cfg *types.ServiceConfig) { cfg.Restart = "no" }, want: []string{"restart"}},
+		{name: "a ContainerSpec field", mutate: func(cfg *types.ServiceConfig) { cfg.Image = "nginx:2" }, want: []string{"image"}},
+		{name: "a WorkloadSpec field", mutate: func(cfg *types.ServiceConfig) { cfg.Expose = nil }, want: []string{"expose"}},
+		{
+			name: "the per-replica fields are not differences",
+			mutate: func(cfg *types.ServiceConfig) {
+				cfg.ContainerName = "demo-web-2"
+				cfg.Hostname = "bbbb"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			other := base()
+			tt.mutate(&other)
+
+			// Act
+			got := divergentFields(base(), other)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 	tests := []struct {
 		name string
@@ -391,9 +445,9 @@ func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 			// Arrange
 			replica := func(id string, number int, env []string) model.Container {
 				return model.Container{ID: id, Number: number, Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{
-						ID: id, Name: "/demo-web-" + strconv.Itoa(number), HostConfig: &container.HostConfig{},
-					},
+					ID:         id,
+					Name:       "/demo-web-" + strconv.Itoa(number),
+					HostConfig: &container.HostConfig{},
 					Config: &container.Config{Image: "nginx:1", Env: env, Hostname: id[:12], Labels: map[string]string{
 						api.ProjectLabel: "demo", api.ServiceLabel: "web", api.ContainerNumberLabel: strconv.Itoa(number),
 					}},
@@ -442,7 +496,8 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 		{
 			name: "a container outside the project is declared by name",
 			referenced: map[string]container.InspectResponse{vpnID: {
-				ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"},
+				ID:   vpnID,
+				Name: "/vpn",
 			}},
 			want: "container:vpn",
 		},
@@ -454,11 +509,11 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 			// Arrange
 			replica := func(id string) model.Container {
 				return model.Container{ID: id, Number: 1, Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{
-						ID: id, Name: "/demo-app-1", HostConfig: &container.HostConfig{
-							NetworkMode: container.NetworkMode("container:" + vpnID),
-							IpcMode:     container.IpcMode("container:" + vpnID),
-						},
+					ID:   id,
+					Name: "/demo-app-1",
+					HostConfig: &container.HostConfig{
+						NetworkMode: container.NetworkMode("container:" + vpnID),
+						IpcMode:     container.IpcMode("container:" + vpnID),
 					},
 					Config: &container.Config{Image: "busybox"},
 				}}

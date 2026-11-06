@@ -1,0 +1,26 @@
+name: markers-integration
+
+services:
+  db:
+    image: postgres:16
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - type: bind
+        source: ./cfg
+        target: /etc/postgresql/conf.d
+        x-io-arcave-backup: false
+      - type: volume
+        target: /var/lib/postgresql/scratch
+        x-io-arcave-backup: true
+      # A marker on a mount of a named volume decides nothing: the volume is
+      # decided on its volumes: entry below.
+      - type: volume
+        source: assets
+        target: /srv/assets
+        x-io-arcave-backup: false
+
+volumes:
+  pgdata:
+    labels:
+      io.arcave.backup: "false"
+  assets:

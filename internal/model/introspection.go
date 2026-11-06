@@ -18,11 +18,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/api/types/volume"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/api/types/volume"
 )
 
 // VolumeType is arcave's classification of a mount: a refinement of the compose
@@ -213,9 +213,6 @@ type Container struct {
 // ImageID is the id of the image the container runs on; empty when the daemon
 // reported none or one that is no digest.
 func (m Container) ImageID() ImageDigestID {
-	if m.Inspect.ContainerJSONBase == nil {
-		return ""
-	}
 	id, err := ParseImageDigestID(m.Inspect.Image)
 	if err != nil {
 		return ""

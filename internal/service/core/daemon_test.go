@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/system"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

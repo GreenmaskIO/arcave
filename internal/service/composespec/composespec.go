@@ -19,14 +19,15 @@ package composespec
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -144,7 +145,7 @@ func (a assembly) warnOnMissingContainers(ctx context.Context) {
 	var warned []string
 	for _, svc := range a.introspection.Project.Services {
 		for _, replica := range svc.Containers {
-			if replica.Inspect.ContainerJSONBase == nil || replica.Inspect.HostConfig == nil {
+			if replica.Inspect.HostConfig == nil {
 				continue
 			}
 			hostConfig := replica.Inspect.HostConfig
@@ -275,22 +276,54 @@ func declaredIPFamily(options map[string]string, defaulted string, enabled bool)
 	return &enabled
 }
 
-// newIPAM carries the driver, and the pools verbatim only when withPools: a static address needs
-// the pool it was allocated from, while pinning an auto-assigned one risks an overlap on create.
+// newIPAM carries the driver and its options, and the pools verbatim only when withPools: a static
+// address needs the pool it was allocated from, while pinning an auto-assigned one risks an overlap
+// on create.
 func newIPAM(from network.IPAM, withPools bool) types.IPAMConfig {
 	config := types.IPAMConfig{Driver: from.Driver}
+	if len(from.Options) > 0 {
+		config.Options = types.Options(from.Options)
+	}
 	if !withPools {
 		return config
 	}
 	for _, pool := range from.Config {
 		config.Config = append(config.Config, &types.IPAMPool{
-			Subnet:             pool.Subnet,
-			Gateway:            pool.Gateway,
-			IPRange:            pool.IPRange,
-			AuxiliaryAddresses: types.Mapping(pool.AuxAddress),
+			Subnet:             prefixString(pool.Subnet),
+			Gateway:            addrString(pool.Gateway),
+			IPRange:            prefixString(pool.IPRange),
+			AuxiliaryAddresses: auxAddresses(pool.AuxAddress),
 		})
 	}
 	return config
+}
+
+// addrString and prefixString render an address the daemon reports, empty for the one it left
+// unset, which is how the spec says "none".
+func addrString(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return ""
+	}
+	return addr.String()
+}
+
+func prefixString(prefix netip.Prefix) string {
+	if !prefix.IsValid() {
+		return ""
+	}
+	return prefix.String()
+}
+
+// auxAddresses renders a pool's aux_addresses; nil when it has none.
+func auxAddresses(from map[string]netip.Addr) types.Mapping {
+	if len(from) == 0 {
+		return nil
+	}
+	mapping := make(types.Mapping, len(from))
+	for host, addr := range from {
+		mapping[host] = addrString(addr)
+	}
+	return mapping
 }
 
 // staticAddressNetworks are the docker names of the networks in which any replica holds a
@@ -317,7 +350,7 @@ func hasStaticAddress(endpoint *network.EndpointSettings) bool {
 	if endpoint == nil || endpoint.IPAMConfig == nil {
 		return false
 	}
-	return endpoint.IPAMConfig.IPv4Address != "" || endpoint.IPAMConfig.IPv6Address != ""
+	return endpoint.IPAMConfig.IPv4Address.IsValid() || endpoint.IPAMConfig.IPv6Address.IsValid()
 }
 
 // networkKeys maps a network's docker name to its key in the project. A network

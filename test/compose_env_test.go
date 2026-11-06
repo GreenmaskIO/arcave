@@ -18,14 +18,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/pkg/api"
+	dockercompose "github.com/docker/compose/v5/pkg/compose"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
@@ -43,6 +45,19 @@ type composeEnv struct {
 	daemon  *client.Client
 	logs    *syncBuffer
 	project string
+}
+
+// newComposeService builds compose over cli the way arcave does, but quiet: no events, nothing
+// on stdout, every prompt answered yes.
+func newComposeService(t *testing.T, cli command.Cli) api.Compose {
+	t.Helper()
+
+	service, err := dockercompose.NewComposeService(cli,
+		dockercompose.WithStreams(io.Discard, io.Discard, strings.NewReader("")),
+		dockercompose.WithPrompt(dockercompose.AlwaysOkPrompt()),
+	)
+	require.NoError(t, err)
+	return service
 }
 
 // newComposeEnv names the compose project arcave-<kind>-it-<suffix>, stops it within stopTimeout and
@@ -63,7 +78,7 @@ func newComposeEnv(t *testing.T, kind string, stopTimeout time.Duration) *compos
 	logs := &syncBuffer{}
 	env := &composeEnv{
 		ctx: zerolog.New(logs).WithContext(context.Background()),
-		compose: composeclient.NewClient(dockercompose.NewComposeService(cli), composeclient.Options{
+		compose: composeclient.NewClient(newComposeService(t, cli), composeclient.Options{
 			WaitTimeout: 90 * time.Second, StopTimeout: stopTimeout,
 		}),
 		engine:  dockerclient.NewEngine(daemonAPI),

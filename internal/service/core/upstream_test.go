@@ -18,9 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -72,8 +72,8 @@ func TestNewContainerRefs(t *testing.T) {
 			introspection.Project.Services = []model.Service{{Name: demoService, Containers: []model.Container{{
 				ID: demoContainerID, Number: 1,
 				Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{Image: tt.image.String()},
-					Config:            &container.Config{Image: tt.ref},
+					Image:  tt.image.String(),
+					Config: &container.Config{Image: tt.ref},
 				},
 			}}}}
 			introspection.Images = map[model.ImageDigestID]image.InspectResponse{
@@ -147,6 +147,12 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 		want      bool
 	}{
 		{name: "the image compose created it from", composeID: runningID.String()},
+		// compose 5.5+ labels its platform manifest; on the containerd store a single-platform
+		// image's id is that same manifest.
+		{
+			name: "the platform manifest of a single-platform image", composeID: runningID.String(),
+			mediaType: ocispec.MediaTypeImageManifest,
+		},
 		{name: "another image", composeID: otherID, mediaType: ocispec.MediaTypeImageManifest, want: true},
 		{name: "a manifest of the index it runs on", composeID: otherID, mediaType: ocispec.MediaTypeImageIndex},
 		{name: "a manifest of a docker manifest list", composeID: otherID, mediaType: dockerManifestList},
@@ -158,7 +164,7 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 				ID:     "c1",
 				Labels: map[string]string{composeImageLabel: tt.composeID},
 				Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{Image: runningID.String()},
+					Image: runningID.String(),
 				},
 			}
 			inspect := image.InspectResponse{}

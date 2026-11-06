@@ -1,0 +1,20 @@
+name: demo
+
+services:
+  db:
+    image: postgres:16
+    volumes:
+      # Unquoted, so compose types it as a YAML bool rather than a string.
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql/data
+        x-io-arcave-backup: true
+      - type: bind
+        source: ./cfg
+        target: /etc/cfg
+        x-io-arcave-backup: false
+
+volumes:
+  pgdata:
+    labels:
+      io.arcave.backup: "false"

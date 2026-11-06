@@ -44,9 +44,11 @@ func TestWithRelativeBinds(t *testing.T) {
 			// Arrange
 			project := &types.Project{Name: "demo", WorkingDir: tt.dir, Services: types.Services{"app": {
 				Name: "app",
-				Volumes: []types.ServiceVolumeConfig{
-					{Type: types.VolumeTypeBind, Source: tt.source, Target: "/conf"},
-					{Type: types.VolumeTypeVolume, Source: "/srv/demo/named", Target: "/data"},
+				ContainerSpec: types.ContainerSpec{
+					Volumes: []types.ServiceVolumeConfig{
+						{Type: types.VolumeTypeBind, Source: tt.source, Target: "/conf"},
+						{Type: types.VolumeTypeVolume, Source: "/srv/demo/named", Target: "/data"},
+					},
 				},
 			}}}
 
@@ -92,9 +94,11 @@ func TestComposeFileCodec_Marshal_RelativeBinds(t *testing.T) {
 	// Arrange
 	codec := NewComposeFileCodec()
 	project := &types.Project{Name: "demo", WorkingDir: "/srv/demo", Services: types.Services{"app": {
-		Name:    "app",
-		Image:   "busybox",
-		Volumes: []types.ServiceVolumeConfig{{Type: types.VolumeTypeBind, Source: "/srv/demo/conf", Target: "/conf"}},
+		Name: "app",
+		ContainerSpec: types.ContainerSpec{
+			Image:   "busybox",
+			Volumes: []types.ServiceVolumeConfig{{Type: types.VolumeTypeBind, Source: "/srv/demo/conf", Target: "/conf"}},
+		},
 	}}}
 
 	// Act

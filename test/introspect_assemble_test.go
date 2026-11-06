@@ -33,13 +33,10 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/api"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/pkg/api"
 	gocmp "github.com/google/go-cmp/cmp"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -197,7 +194,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, dockerCLI.Initialize(flags.NewClientOptions()))
-	composeService := dockercompose.NewComposeService(dockerCLI)
+	composeService := newComposeService(t, dockerCLI)
 	logs := &syncBuffer{}
 	e := &fidelityEnv{
 		ctx:     zerolog.New(logs).WithContext(context.Background()),
@@ -224,14 +221,16 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 func (e *fidelityEnv) cleanup(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range e.outsideContainers {
-		assert.NoError(t, e.daemon.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}), "remove container %s", id)
+		_, err := e.daemon.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+		assert.NoError(t, err, "remove container %s", id)
 	}
 	removeComposeProject(t, e.daemon, e.project)
 	for _, id := range e.outsideNetworks {
-		assert.NoError(t, e.daemon.NetworkRemove(ctx, id), "remove network %s", id)
+		_, err := e.daemon.NetworkRemove(ctx, id, client.NetworkRemoveOptions{})
+		assert.NoError(t, err, "remove network %s", id)
 	}
 	for name := range e.volumes {
-		if err := e.daemon.VolumeRemove(ctx, name, true); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := e.daemon.VolumeRemove(ctx, name, client.VolumeRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			assert.NoError(t, err, "remove volume %s", name)
 		}
 	}
@@ -404,8 +403,8 @@ func (e *fidelityEnv) updateMemory(t *testing.T, service string, replica int, by
 	t.Helper()
 
 	name := strings.Join([]string{e.project, service, strconv.Itoa(replica)}, "-")
-	_, err := e.daemon.ContainerUpdate(e.ctx, name, container.UpdateConfig{
-		Resources: container.Resources{Memory: bytes, MemorySwap: -1},
+	_, err := e.daemon.ContainerUpdate(e.ctx, name, client.ContainerUpdateOptions{
+		Resources: &container.Resources{Memory: bytes, MemorySwap: -1},
 	})
 	require.NoError(t, err, "update %s", name)
 }
@@ -419,12 +418,15 @@ func (e *fidelityEnv) runOutsideContainer(t *testing.T, name, network string) {
 	if network != "" {
 		hostConfig.NetworkMode = container.NetworkMode(network)
 	}
-	created, err := e.daemon.ContainerCreate(e.ctx,
-		&container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}},
-		hostConfig, nil, nil, e.project+"-"+name)
+	created, err := e.daemon.ContainerCreate(e.ctx, client.ContainerCreateOptions{
+		Config:     &container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}},
+		HostConfig: hostConfig,
+		Name:       e.project + "-" + name,
+	})
 	require.NoError(t, err)
 	e.outsideContainers = append(e.outsideContainers, created.ID)
-	require.NoError(t, e.daemon.ContainerStart(e.ctx, created.ID, container.StartOptions{}))
+	_, err = e.daemon.ContainerStart(e.ctx, created.ID, client.ContainerStartOptions{})
+	require.NoError(t, err)
 }
 
 // createOutsideVolume creates a volume outside the compose project, named <project>-<name>,
@@ -433,7 +435,7 @@ func (e *fidelityEnv) createOutsideVolume(t *testing.T, name, script string) {
 	t.Helper()
 
 	volumeName := e.project + "-" + name
-	_, err := e.daemon.VolumeCreate(e.ctx, volume.CreateOptions{Name: volumeName})
+	_, err := e.daemon.VolumeCreate(e.ctx, client.VolumeCreateOptions{Name: volumeName})
 	require.NoError(t, err)
 	e.volumes[volumeName] = true
 	if script != "" {
@@ -445,7 +447,7 @@ func (e *fidelityEnv) createOutsideVolume(t *testing.T, name, script string) {
 func (e *fidelityEnv) createOutsideNetwork(t *testing.T, name string) {
 	t.Helper()
 
-	created, err := e.daemon.NetworkCreate(e.ctx, e.project+"-"+name, network.CreateOptions{})
+	created, err := e.daemon.NetworkCreate(e.ctx, e.project+"-"+name, client.NetworkCreateOptions{})
 	require.NoError(t, err)
 	e.outsideNetworks = append(e.outsideNetworks, created.ID)
 }

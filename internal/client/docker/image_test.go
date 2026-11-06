@@ -23,9 +23,9 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -36,15 +36,15 @@ import (
 func TestEngine_CommitContainer(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{
-		Pause:   false,
+	api.On("ContainerCommit", mock.Anything, "c0ffee", client.ContainerCommitOptions{
+		NoPause: true,
 		Comment: "arcave savepoint 019e7044-8800-7000-8000-000000000000",
 		Changes: []string{
 			`LABEL "io.arcave.base-image-id"="sha256:bbbb"`,
 			`LABEL "io.arcave.base-image-ref"="postgres:16"`,
 		},
 	}).
-		Return(container.CommitResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil).Once()
+		Return(client.ContainerCommitResult{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -62,8 +62,8 @@ func TestEngine_CommitContainer(t *testing.T) {
 func TestEngine_CommitContainer_RefusesAnAnswerThatIsNotADigest(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false, Changes: []string{}}).
-		Return(container.CommitResponse{ID: "postgres:16"}, nil).Once()
+	api.On("ContainerCommit", mock.Anything, "c0ffee", client.ContainerCommitOptions{NoPause: true, Changes: []string{}}).
+		Return(client.ContainerCommitResult{ID: "postgres:16"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -79,7 +79,7 @@ func TestEngine_CommitContainer_ReportsTheDaemonsRefusal(t *testing.T) {
 	wantErr := errors.New("no such container")
 	api := &mockAPI{}
 	api.On("ContainerCommit", mock.Anything, "gone", mock.Anything).
-		Return(container.CommitResponse{}, wantErr).Once()
+		Return(client.ContainerCommitResult{}, wantErr).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -96,7 +96,7 @@ func TestEngine_SaveImage(t *testing.T) {
 	const archive = "save-archive-bytes"
 	api := &mockAPI{}
 	api.On("ImageSave", mock.Anything, []string{"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}).
-		Return(io.NopCloser(strings.NewReader(archive)), nil).Once()
+		Return(client.ImageSaveResult(io.NopCloser(strings.NewReader(archive))), nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -114,8 +114,8 @@ func TestEngine_SaveImage(t *testing.T) {
 func TestEngine_RemoveImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", image.RemoveOptions{}).
-		Return([]image.DeleteResponse{{Deleted: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, nil).Once()
+	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", client.ImageRemoveOptions{}).
+		Return(client.ImageRemoveResult{Items: []image.DeleteResponse{{Deleted: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -130,7 +130,7 @@ func TestEngine_RemoveImage_ReportsTheDaemonsRefusal(t *testing.T) {
 	// Arrange
 	wantErr := errors.New("image is being used by stopped container")
 	api := &mockAPI{}
-	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", image.RemoveOptions{}).
+	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", client.ImageRemoveOptions{}).
 		Return(nil, wantErr).Once()
 	e := &Engine{api: api}
 
@@ -187,17 +187,17 @@ func TestEngine_RemoveImageRef(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
 			calls := []*mock.Call{
-				api.On("ImageInspect", mock.Anything, ref).Return(image.InspectResponse{ID: imageID}, tt.inspectErr).Once(),
+				api.On("ImageInspect", mock.Anything, ref).Return(client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID}}, tt.inspectErr).Once(),
 			}
 			if tt.inspectErr == nil {
-				calls = append(calls, api.On("ContainerList", mock.Anything, container.ListOptions{
+				calls = append(calls, api.On("ContainerList", mock.Anything, client.ContainerListOptions{
 					All:     true,
-					Filters: filters.NewArgs(filters.Arg("ancestor", imageID)),
-				}).Return(tt.containers, nil).Once())
+					Filters: client.Filters{}.Add("ancestor", imageID),
+				}).Return(client.ContainerListResult{Items: tt.containers}, nil).Once())
 			}
 			if tt.wantRemove {
-				calls = append(calls, api.On("ImageRemove", mock.Anything, ref, image.RemoveOptions{PruneChildren: true}).
-					Return([]image.DeleteResponse{{Untagged: ref}}, tt.removeErr).Once())
+				calls = append(calls, api.On("ImageRemove", mock.Anything, ref, client.ImageRemoveOptions{PruneChildren: true}).
+					Return(client.ImageRemoveResult{Items: []image.DeleteResponse{{Untagged: ref}}}, tt.removeErr).Once())
 			}
 			mock.InOrder(calls...)
 			e := &Engine{api: api}
@@ -231,7 +231,7 @@ func TestEngine_LoadImage(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, archive, string(read))
 		}).
-		Return(image.LoadResponse{Body: body}, nil).Once()
+		Return(client.ImageLoadResult(body), nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -248,7 +248,7 @@ func TestEngine_LoadImage_ReportsTheDaemonsRefusal(t *testing.T) {
 	// Arrange
 	wantErr := errors.New("unexpected EOF")
 	api := &mockAPI{}
-	api.On("ImageLoad", mock.Anything, mock.Anything).Return(image.LoadResponse{}, wantErr).Once()
+	api.On("ImageLoad", mock.Anything, mock.Anything).Return(nil, wantErr).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -262,7 +262,10 @@ func TestEngine_LoadImage_ReportsTheDaemonsRefusal(t *testing.T) {
 func TestEngine_TagImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ImageTag", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000").Return(nil).Once()
+	api.On("ImageTag", mock.Anything, client.ImageTagOptions{
+		Source: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Target: "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
+	}).Return(nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -292,7 +295,7 @@ func TestEngine_ImageExists(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
 			api.On("ImageInspect", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").
-				Return(image.InspectResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, tt.inspectErr).Once()
+				Return(client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, tt.inspectErr).Once()
 			e := &Engine{api: api}
 
 			// Act
@@ -334,7 +337,7 @@ func TestEngine_ListLayerImages(t *testing.T) {
 	// Arrange
 	const layerRef = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000001"
 	api := &mockAPI{}
-	api.On("ImageList", mock.Anything, mock.Anything).Return([]image.Summary{
+	api.On("ImageList", mock.Anything, mock.Anything).Return(client.ImageListResult{Items: []image.Summary{
 		{
 			ID: "sha256:aaaa", RepoTags: []string{layerRef, "postgres:16"},
 			Labels: map[string]string{string(model.SystemLabelArcaveProject): "app", string(model.SystemLabelComposeProject): "demo"},
@@ -342,13 +345,13 @@ func TestEngine_ListLayerImages(t *testing.T) {
 		{ID: "sha256:bbbb", RepoTags: []string{"arcave/demo-db-2:sp-019e843e-1650-7000-8000-000000000001"}},
 		{ID: "sha256:cccc", RepoTags: []string{"arcave/demo-db-3:sp-019e843e-1650-7000-8000-000000000001"}},
 		{ID: "sha256:dddd", RepoTags: []string{"busybox:latest"}},
-	}, nil).Once()
+	}}, nil).Once()
 	taggedAt := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	api.On("ImageInspect", mock.Anything, "sha256:aaaa").
-		Return(image.InspectResponse{Metadata: image.Metadata{LastTagTime: taggedAt}}, nil).Once()
-	api.On("ImageInspect", mock.Anything, "sha256:bbbb").Return(image.InspectResponse{}, nil).Once()
+		Return(client.ImageInspectResult{InspectResponse: image.InspectResponse{Metadata: image.Metadata{LastTagTime: taggedAt}}}, nil).Once()
+	api.On("ImageInspect", mock.Anything, "sha256:bbbb").Return(client.ImageInspectResult{}, nil).Once()
 	api.On("ImageInspect", mock.Anything, "sha256:cccc").
-		Return(image.InspectResponse{}, cerrdefs.ErrNotFound).Once()
+		Return(client.ImageInspectResult{}, cerrdefs.ErrNotFound).Once()
 	e := &Engine{api: api}
 
 	// Act
