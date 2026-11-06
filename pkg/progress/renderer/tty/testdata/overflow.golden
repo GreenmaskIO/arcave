@@ -1,0 +1,6 @@
+⠋ album.backup summer                     0.7s
+├── … 2 more finished
+└── ⠋ cdn.upload  0/3 ✘1                  0.1s
+    ├── ✘ file raw.dng  unable to upload  0.0s
+    │     error: 403 forbidden
+    └── ⠋ file cover.jpg  uploading       0.1s

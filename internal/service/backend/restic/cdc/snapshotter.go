@@ -93,13 +93,12 @@ func (s *Snapshotter) Snapshot(
 	}
 
 	return model.SnapshotStat{
-		Volume: s.volume,
-		Type:   model.SnapshotBackendCDC,
-		Payload: Payload{
-			SnapshotObjectID:    summary.SnapshotID,
-			DataAdded:           summary.DataAdded,
-			TotalBytesProcessed: summary.TotalBytesProcessed,
-		},
+		Volume:      s.volume,
+		Type:        model.SnapshotBackendCDC,
+		SizeBytes:   summary.TotalBytesProcessed,
+		StoredBytes: summary.DataAddedPacked,
+		ReusedBytes: max(summary.TotalBytesProcessed-summary.DataAdded, 0),
+		Payload:     Payload{SnapshotObjectID: summary.SnapshotID},
 	}, nil
 }
 
@@ -197,7 +196,7 @@ func (s *Snapshotter) openResticRunner(ctx context.Context) (runner, error) {
 
 // newRunner is the runner to this instance's repository, without clearing its locks.
 func (s *Snapshotter) newRunner() (runner, error) {
-	return newRepositories(s.deps.Runner, s.deps.RepoURLBase, s.deps.Options).newRunner(s.volume.ObjectID)
+	return newRepositories(s.deps.Runner, s.deps.Transport, s.deps.Options).newRunner(s.volume.ObjectID)
 }
 
 // mountSource resolves what the restic container mounts to see the volume.

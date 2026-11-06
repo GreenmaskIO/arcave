@@ -14,6 +14,13 @@
 
 package model
 
+import (
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+)
+
 // SkipReason says why a mount is not a unit of backup. Its values are the wire
 // contract an agent matches on; the prose goes to SkippedVolume.Detail.
 type SkipReason string
@@ -54,6 +61,136 @@ type NotCovered struct {
 func (m NotCovered) IsEmpty() bool {
 	return len(m.Mounts) == 0 && len(m.ServicesWithoutVolumes) == 0 && len(m.KilledContainers) == 0 &&
 		len(m.ReplicaGaps) == 0 && len(m.UnresolvedImages) == 0 && len(m.WritableLayers) == 0 && len(m.Images) == 0
+}
+
+// Notice is one thing a savepoint does not hold, for a reader: what it is, and what to change
+// when there is something to.
+type Notice struct {
+	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"`
+	// Severe marks a notice that puts the data at risk; a reader lists it first.
+	Severe bool `json:"severe,omitempty"`
+}
+
+// Notices spells out what is left out, one notice per entry: the severe first, then in the order
+// of the fields.
+func (m NotCovered) Notices() []Notice {
+	var notices []Notice
+	for _, killed := range m.KilledContainers {
+		notices = append(notices, Notice{
+			Message: fmt.Sprintf("%s was killed at the stop deadline: its volumes may hold a crash state",
+				formatReplica(killed.Service, killed.Replica, formatShortID(killed.Container))),
+			Hint:   "raise compose.stop_timeout or the service's stop_grace_period",
+			Severe: true,
+		})
+	}
+	for _, gap := range m.ReplicaGaps {
+		notices = append(notices, Notice{
+			Message: fmt.Sprintf("%s: replica %s gone, only %s held",
+				gap.Service, formatInts(gap.Missing), formatInts(gap.Replicas)),
+			Severe: true,
+		})
+	}
+	for _, skipped := range m.Mounts {
+		notices = append(notices, newMountNotice(skipped))
+	}
+	for _, service := range m.ServicesWithoutVolumes {
+		message := fmt.Sprintf("%s has no volumes: only its writable layer is held", service)
+		// A layer left out says so below; what is held of the service is then not this notice's to say.
+		if slices.ContainsFunc(m.WritableLayers, func(layer SkippedWritableLayer) bool { return layer.Service == service }) {
+			message = fmt.Sprintf("%s has no volumes", service)
+		}
+		notices = append(notices, Notice{
+			Message: message,
+		})
+	}
+	for _, unresolved := range m.UnresolvedImages {
+		notices = append(notices, Notice{
+			Message: fmt.Sprintf("%s runs on an image arcave cannot name%s: only its writable layer brings it back",
+				formatReplica(unresolved.Service, unresolved.Replica, unresolved.Container), formatParens(unresolved.Image)),
+		})
+	}
+	for _, layer := range m.WritableLayers {
+		notices = append(notices, Notice{
+			Message: fmt.Sprintf("%s: writable layer left out%s, a rollback creates it fresh from its image",
+				formatReplica(layer.Service, layer.Replica, layer.Container), formatBy(layer.Detail)),
+		})
+	}
+	for _, image := range m.Images {
+		notices = append(notices, Notice{
+			Message: fmt.Sprintf("%s: image %sleft out%s", image.Service, formatSpaced(image.Image), formatBy(image.Detail)),
+		})
+	}
+	return notices
+}
+
+// newMountNotice says what a skipped mount is and why; an excluded one names the label or key.
+func newMountNotice(skipped SkippedVolume) Notice {
+	name := "volume " + skipped.Volume
+	if skipped.Volume == "" {
+		name = formatReplica(skipped.Service, skipped.Replica, "mount") + " " + skipped.Target
+	}
+	if skipped.Reason != SkipReasonExcluded {
+		return Notice{Message: fmt.Sprintf("%s is not held: %s", name, skipped.Detail)}
+	}
+	hint := skipped.Detail + " leaves it out"
+	if skipped.Detail == "" {
+		hint = "an " + CaptureLabelCapture.String() + "=false or " + CaptureLabelMountsExclude.String() + " label leaves it out"
+	}
+	return Notice{
+		Message: name + " is left out",
+		Hint:    hint,
+	}
+}
+
+// formatReplica names a replica as service-replica, a bare fallback when no service is known.
+func formatReplica(service string, replica int, fallback string) string {
+	switch {
+	case service == "":
+		return fallback
+	case replica == 0:
+		return service
+	default:
+		return service + "-" + strconv.Itoa(replica)
+	}
+}
+
+// formatShortID cuts a container id to the 12 characters docker shows.
+func formatShortID(id string) string {
+	const shortIDLength = 12
+	if len(id) > shortIDLength {
+		return id[:shortIDLength]
+	}
+	return id
+}
+
+func formatInts(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Itoa(value))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatParens(s string) string {
+	if s == "" {
+		return ""
+	}
+	return " (" + s + ")"
+}
+
+func formatBy(source string) string {
+	if source == "" {
+		return ""
+	}
+	return " by " + source
+}
+
+func formatSpaced(s string) string {
+	if s == "" {
+		return ""
+	}
+	return s + " "
 }
 
 // SkippedVolume is a mount the backup decision did not take. Not deduplicated:

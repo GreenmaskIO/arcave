@@ -31,6 +31,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // archiveName is the whole save archive, stored verbatim.
@@ -49,7 +50,7 @@ func (s *Archiver) Store(
 	ctx context.Context, dst storages.Writer, imageID model.ImageDigestID, archive io.Reader,
 ) (imagecopy.StoredSize, error) {
 	counted := utils.NewCountingReader(archive)
-	if err := dst.PutObject(ctx, archiveName, counted); err != nil {
+	if err := dst.PutObject(ctx, archiveName, progress.NewReader(ctx, counted, 0)); err != nil {
 		return imagecopy.StoredSize{}, fmt.Errorf("write image archive: %w", err)
 	}
 

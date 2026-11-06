@@ -35,6 +35,8 @@ const (
 	demoService    = "db"
 	demoTarget     = "/data"
 	demoVolumeName = "demo_db"
+	// demoVolumeSize is the size demoRecord's capture reported.
+	demoVolumeSize = 4096
 )
 
 // demoCaptureDefaults are the backends every test Service captures by, every kind captured.
@@ -68,8 +70,13 @@ func demoRecord() model.Savepoint {
 		ID:        "019e843e-1650-7000-8000-000000000000",
 		Name:      "sp",
 		CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}},
-		Spec:      demoSpecRef(),
+		Stats: []model.SnapshotStat{{
+			Volume:    demoVolume(),
+			Type:      model.SnapshotBackendFullCopy,
+			SizeBytes: demoVolumeSize,
+			Payload:   "sp-payload",
+		}},
+		Spec: demoSpecRef(),
 	}
 }
 

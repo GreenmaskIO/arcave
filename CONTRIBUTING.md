@@ -116,7 +116,8 @@ tests run without a daemon, a filesystem or a network.
 
 - Exported identifiers have a one- or two-line doc comment starting with their name.
 - A comment says what the code does, and why only when that isn't obvious.
-- A user-facing change updates `README.md` or `docs/` in the same pull request.
+- A user-facing change updates `README.md` or `docs/` in the same pull request. Preview `docs/` with `make docs-serve` (live reload on http://localhost:3000) or `make docs-build`, which needs Node.js 20 or newer, fails on broken Markdown links and only warns on links to other products of the site, such as `/docs/greenmask/`.
+- A change to `internal/service/printer/text/testdata/*.golden` updates the Terminal tabs of the pages `grep -rl 'groupId="output"' docs` lists.
 
 ## Using AI agents
 

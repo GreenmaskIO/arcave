@@ -122,6 +122,13 @@ var (
 	// ErrComposeProjectAbsent reports a compose project the daemon holds no container of.
 	ErrComposeProjectAbsent = errors.New("no containers found")
 
+	// ErrInvalidStoreKey reports an encryption.key that is not an age X25519 identity.
+	ErrInvalidStoreKey = errors.New("invalid store key")
+	// ErrWrongStoreKey reports an encryption.key other than the one the arcave project is encrypted to.
+	ErrWrongStoreKey = errors.New("the store is encrypted to another key")
+	// ErrStoreEncrypted reports an encrypted arcave project, opened without encryption.
+	ErrStoreEncrypted = errors.New("the store is encrypted")
+
 	// ErrInvalidSortOrder reports a listing order other than asc or desc.
 	ErrInvalidSortOrder = errors.New("invalid sort order")
 
@@ -133,8 +140,7 @@ var (
 	// ErrSessionLockNotHeld refuses to free a session lock the operation does not hold.
 	ErrSessionLockNotHeld = errors.New("session lock not held")
 
-	// ErrInvalidGarbageCollectRequest reports a gc request arcave cannot act on: an unknown
-	// kind, no kind at all, or a negative grace period.
+	// ErrInvalidGarbageCollectRequest reports a gc request arcave cannot act on: an unknown kind.
 	ErrInvalidGarbageCollectRequest = errors.New("invalid garbage collect request")
 	// ErrGarbageCollectPartial reports a gc in which a collector failed or left objects unjudged,
 	// or a deletion failed or never ran; the result still carries every report.

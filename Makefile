@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-integration test-verbose test-fidelity test-storage lint clean generate-restic-api
+.PHONY: build demo-media docs-install docs-serve docs-build test test-unit test-integration test-verbose test-fidelity test-storage lint clean generate-restic-api
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
@@ -15,8 +15,26 @@ LDFLAGS := -X main.version=$(ARCAVE_VERSION) -X main.commit=$(ARCAVE_COMMIT) -X 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/arcave ./cmd/arcave
 
+# The docs' terminal recordings (docs/assets/demo/), re-recorded with vhs against a
+# scratch copy of examples/demo; TAPE=base-cycle records one.
+demo-media:
+	examples/demo/tapes/record.sh $(TAPE)
+
+# The docs/ tree rendered with the stock Docusaurus theme; the published site has its own
+# config and styles.
+DOCS_PREVIEW_DIR := tools/docs-preview
+
+docs-install:
+	npm --prefix $(DOCS_PREVIEW_DIR) ci
+
+docs-serve: docs-install
+	npm --prefix $(DOCS_PREVIEW_DIR) run start
+
+docs-build: docs-install
+	npm --prefix $(DOCS_PREVIEW_DIR) run build
+
 # Unit tests need no daemon; the integration suites under test/ need a reachable one.
-UNIT_PKGS := ./cmd/... ./internal/...
+UNIT_PKGS := ./cmd/... ./internal/... ./pkg/...
 INTEGRATION_PKGS := ./test/...
 # Concurrent tests per integration package: the daemon's disk, not the CPU, is the bound.
 INTEGRATION_PARALLEL := 4

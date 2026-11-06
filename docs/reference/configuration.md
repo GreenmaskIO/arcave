@@ -1,7 +1,7 @@
 ---
 title: Configuration
-description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), snapshot, writable_layers, capture, rollback, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
-keywords: [arcave configuration, config.yaml, snapshot backend, cdc, restic, storage, s3, azure, sftp, docker compose]
+description: Every key of .arcave/config.yaml — project, common, docker, compose, storage (directory, s3, azure, ssh), encryption, snapshot, writable_layers, capture, rollback, gc, backends and log — with its default, its validation rule, ${VAR} interpolation and the precedence between flags, environment and file.
+keywords: [arcave configuration, config.yaml, snapshot backend, fullcopy, zstd, compression, cdc, restic, encryption, storage, s3, azure, sftp, docker compose]
 ---
 
 # Configuration
@@ -25,6 +25,8 @@ storage:
     type: directory
     directory:
         path: .arcave/storage
+encryption:
+    enabled: true
 snapshot:
     backend: cdc
 writable_layers:
@@ -39,16 +41,14 @@ capture:
 rollback:
     leftover_volumes: overwrite
 backends:
+    fullcopy:
+        compression: zstd
     cdc:
         restore_mode: incremental
         overwrite: always
         image: restic/restic:0.19.1
-        server_address: 127.0.0.1:0
-        server_scheme: http
-        container_host: host.docker.internal
-        network_mode: auto
+        transport: stdio
 log:
-    level: info
     format: text
 ```
 
@@ -77,7 +77,7 @@ Four sources, highest first:
 
 Only **bound** flags feed the config. `--project-name`, `--session`, `--config`, `--override`, `--dry-run`, `init --name` and `savepoint create --name` are unbound on purpose: they steer one run rather than describing the project. `init` binds none of its flags: it writes a template, and reads neither the environment nor the existing file.
 
-Which keys an environment variable can reach is narrower than it looks — [Environment variables](environment_variables.md) owns that.
+Every key has its variable, whether or not the file carries it — [Environment variables](environment_variables.md) owns that.
 
 ## `project`
 
@@ -135,7 +135,7 @@ How patient arcave is with the project, and how loudly compose reports its own p
 |---|---|---|---|
 | `compose.wait_timeout` | `--wait-timeout` | `2m0s` | How long to wait for services to become healthy after a start. |
 | `compose.stop_timeout` | `--stop-timeout` | `10s` | The least time a container gets to exit on its own before it is killed; a service's `stop_grace_period` raises it. |
-| `compose.progress` | `--progress` | `log` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
+| `compose.progress` | `--compose-progress` | `log` | Where compose's own progress goes: `log`, `tty` or `quiet`. |
 
 **`wait_timeout` must be positive.** "Wait forever" is not on offer: it is exactly the failure this bound exists to turn into an error, since a crash-looping container with `restart: always` would otherwise hold a savepoint open indefinitely.
 
@@ -157,7 +157,7 @@ compose.stop_timeout must not be negative, got -1s
 | `tty` | Compose's own redrawing renderer, at the cost of a second format on stderr. |
 | `quiet` | Nothing but arcave's own log lines. |
 
-All three keep compose off stdout, which carries the JSON result and nothing else.
+All three keep compose off stdout, which carries the result and nothing else.
 
 ```text
 unsupported compose.progress "loud" (supported: log, tty, quiet)
@@ -262,6 +262,41 @@ unsupported storage.type "gcs" (supported: directory, s3, azure, ssh)
 
 Keep a secret out of the file by naming its environment variable — see [Interpolation](#interpolation). `arcave init` never writes one: it writes a template of the defaults and `--name`, with the `directory` storage, so a credential reaches the file only when you put it there.
 
+## `encryption`
+
+Encrypts everything arcave writes to the store, on the host, before it leaves it: records, compose specs, volume data, writable layers, images, restic repositories and session locks alike. Off by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `encryption.enabled` | bool | `false` | Encrypt the store. |
+| `encryption.key` | string | `""` | **Secret.** The [age](https://age-encryption.org) identity every object is encrypted to, `AGE-SECRET-KEY-1…`. Read from `ARCAVE_ENCRYPTION_KEY` in any project, file or no file. An encrypted store refuses to open without it; a plain one ignores it. |
+
+```yaml
+encryption:
+  enabled: true
+```
+
+```shell
+export ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…
+```
+
+To encrypt a store: make a key with `age-keygen`, export it as `ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…`, and set `encryption.enabled: true` in `.arcave/config.yaml`. [`arcave init`](cli/init.md) writes no `encryption` section; the key stays in the environment, which beats a `key:` line in the file.
+
+**The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes. Every host sharing the store needs the same key. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repositories go through the same layer; restic's own password stays the fixed one it has on a plain store.
+
+**Lose the key and the store is lost**, as with age and restic. There is no recovery key. Every object is a standard age file, so `age -d -i` decrypts one by hand with the key.
+
+**No marker is no encryption.** The first encrypted command marks the arcave project whatever it holds: arcave encrypts nothing in place, so an unencrypted project it is switched on over is marked and its data left unreadable. Start an encrypted store at an empty location. Every other mismatch is refused before anything is stopped:
+
+```text
+open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
+open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+```
+
+What encryption hides, and what it does not, is in [Limitations](limitations.md#encryption-hides-contents-not-shape).
+
 ## Interpolation
 
 Any string value may name an environment variable, expanded when the config is read:
@@ -304,9 +339,9 @@ A rollback reads the backend out of the record it is applying, so changing this 
 
 | | `fullcopy` | `cdc` |
 |---|---|---|
-| How it captures a volume | One `data.tar` per volume per savepoint, streamed through the daemon | Content-defined chunking into a restic repository that outlives any one savepoint |
-| What a second savepoint costs | Full volume size, again | Only the chunks that changed |
-| What it needs | Nothing beyond Docker | Pulls and runs `restic/restic` containers, which must reach a loopback port on your host |
+| How it captures a volume | One archive per volume per savepoint, streamed through the daemon and zstd-compressed | Content-defined chunking into a restic repository that outlives any one savepoint |
+| What a second savepoint costs | Full volume size again, compressed | Only the chunks that changed |
+| What it needs | Nothing beyond Docker | Pulls and runs `restic/restic` containers |
 
 This key covers volumes only; writable layers are [`writable_layers`](#writable_layers). A label can pick another backend for one volume — see [Capture labels](capture_labels.md).
 
@@ -358,16 +393,21 @@ compose project is not running but its volumes survive: myapp_pgdata
 unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)
 ```
 
-## `gc`
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `gc.restored_layer_grace` | duration | `1h` | How long ago an unused layer tag must have been tagged before [`arcave gc`](cli/gc.md) counts it as garbage: a rollback in another checkout sharing `project.name` and the daemon may have just loaded it. `0` counts every unused tag. No other kind has a grace: gc judges by the savepoints' status, never by age. |
-`--restored-layer-grace` overrides it for one run. What gc looks at is not configured: it looks at every kind of data, and `--kind` narrows one run.
-
 ## `backends`
 
 One optional subsection per backend. A project that never uses a backend does not configure it, and an absent section is not an error — arcave resolves the defaults either way, because a rollback restores through the backend its record names.
+
+### `backends.fullcopy`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `compression` | string | `zstd` | `zstd` stores each volume's archive as `data.tar.zst`, at zstd's default level. `none` stores the tar as is, as `data.tar`. |
+
+The record names the format each capture was stored in, so changing this applies to new savepoints only: a rollback and a remove read each archive the way its record says. A savepoint's `size_bytes` is the tar, its `stored_bytes` what reached the store.
+
+```text
+unsupported backends.fullcopy.compression "gzip" (supported: zstd, none)
+```
 
 ### `backends.cdc`
 
@@ -375,17 +415,27 @@ One optional subsection per backend. A project that never uses a backend does no
 |---|---|---|---|
 | `restore_mode` | string | `incremental` | `incremental` writes over the live data, sending only what differs and deleting what the savepoint does not carry. `wipe` clears the mount and writes it back whole. |
 | `overwrite` | string | `always` | Governs an incremental restore only. `always` rewrites every file the savepoint carries; `if-changed` compares content and rewrites only what differs. |
-| `image` | string | `restic/restic:0.19.1` | The restic image every one-shot container runs. `--delete`/`--overwrite` need restic 0.17 or newer. |
-| `server_address` | string | `127.0.0.1:0` | What arcave's restic server binds. Must be `host:port`. |
-| `server_scheme` | string | `http` | The scheme the container fetches the repository over: `http`, or `https` for a TLS proxy in front of it. |
-| `container_host` | string | `host.docker.internal` | That server's hostname **as the container sees it**, on the bridge path. Ignored under host networking. |
-| `network_mode` | string | `auto` | How a restic container reaches the server: `auto`, `host` or `bridge`. |
+| `image` | string | `restic/restic:0.19.1` | The restic image every one-shot container runs. `--delete`/`--overwrite` need restic 0.17 or newer; under `stdio` it needs a shell too, see below the table. |
+| `transport` | string | `stdio` | How a restic container reaches its repository: `stdio`, over the Docker API, or `tcp`, over a loopback server. |
+| `server_address` | string | `127.0.0.1:0` | `tcp` only. What arcave's restic server binds. Must be `host:port`. |
+| `server_scheme` | string | `http` | `tcp` only. The scheme the container fetches the repository over: `http`, or `https` for a TLS proxy in front of it. |
+| `container_host` | string | `host.docker.internal` | `tcp` only. That server's hostname **as the container sees it**, on the bridge path. Ignored under host networking. |
+| `network_mode` | string | `auto` | `tcp` only. How a restic container reaches the server: `auto`, `host` or `bridge`. |
 
 With the defaults, a restore writes over the live data and rewrites every file the savepoint carries — `overwrite: if-changed` is what turns that into a comparison.
 
+**What `transport` decides.** restic in its container needs a way to its repository, which arcave keeps in your storage.
+
+| Value | Behaviour |
+|---|---|
+| `stdio` | arcave serves the repository over a `docker exec` stream into the restic container. Nothing listens, no port is opened, and no network setting matters, so it works with any daemon arcave reaches, a remote `DOCKER_HOST` included. The default. Every byte goes through the daemon's `docker exec` stream, so a full restore runs slower than over `tcp` wherever the engine's network is faster than that stream — see the [measured speeds](requirements.md#container-engines). |
+| `tcp` | arcave runs a restic server on your loopback for the duration of a command, and the container dials it. Configured by the four keys below `transport`, which are read and checked only under it; the way to the network's speed, and the alternative wherever `stdio` does not run. |
+
+Under `stdio` a custom `image` must ship `/bin/sh`, `mkfifo` and `cat`: arcave copies a small shell script into each restic container, which starts restic, is restic's relay to its repository, and is the bridge arcave serves the repository through with `docker exec`. The default image, Alpine with busybox, does; a distroless or `scratch` restic image does not, and fails on the first command.
+
 **Why port `0`.** The kernel picks the port. A fixed one would collide between two arcave processes — a CLI run and an `arcave mcp` server, or two projects — and would be a predictable address on your loopback for anything else on the machine.
 
-**What `network_mode` decides.** A restic container has to reach a server on your host loopback, and how it does that differs per platform.
+**What `network_mode` decides.** Under `tcp`, a restic container has to reach a server on your host loopback, and how it does that differs per platform.
 
 | Value | Behaviour |
 |---|---|
@@ -399,6 +449,7 @@ On Docker Desktop for macOS the `cdc` backend cannot capture a **host bind mount
 
 ```text
 unsupported backends.cdc.restore_mode "partial" (supported: wipe, incremental)
+unsupported backends.cdc.transport "ssh" (supported: stdio, tcp)
 unsupported backends.cdc.overwrite "never" (supported: if-changed, always)
 backends.cdc.server_address "127.0.0.1" is not a host:port address: …
 unsupported backends.cdc.network_mode "none" (supported: auto, host, bridge)
@@ -408,7 +459,7 @@ unsupported backends.cdc.network_mode "none" (supported: auto, host, bridge)
 
 | Key | Flag | Default | Description |
 |---|---|---|---|
-| `log.level` | `--log-level` | `info` | `debug`, `info` or `warn`. |
+| `log.level` | `--log-level` | `warn` above the live tree, else `info` | `debug`, `info` or `warn`. Unset unless you set it: `arcave init` writes none. |
 | `log.format` | `--log-format` | `text` | `text` or `json`. |
 
 Both are checked when a command starts, and an unknown value fails it rather than silencing the log:
@@ -418,8 +469,8 @@ set log level: get logger: log level trace: unknown log level
 set log level: get logger: log format yaml: unknown log format
 ```
 
-Logs go to stderr; results go to stdout as JSON. `--log-format json` makes the whole stderr stream machine-readable, which is what a CI job or an agent wants.
+Logs go to stderr; results go to stdout — as JSON when stdout is a pipe or `--format json` asks, as text on a terminal (see [Output](output.md#result-format)). `--log-format json` makes the whole stderr stream machine-readable, which is what a CI job or an agent wants.
 
 ## Next step
 
-[Environment variables](environment_variables.md) — which of these keys `ARCAVE_<KEY>` can actually reach.
+[Environment variables](environment_variables.md) — the `ARCAVE_<KEY>` variable every key has, and the variables that are not config keys.

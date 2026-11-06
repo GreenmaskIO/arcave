@@ -1,0 +1,8 @@
+✘ album.backup summer               0.7s
+├── ✘ cdn.upload  1/4 ✘1 ⊘2         0.6s
+│   └── ✘ file raw.dng  450KB  unable to upload  0.2s
+│         error: 403 forbidden
+└── ✔ album.rollback                0.1s
+    └── ✔ cdn.purge  1/1            0.1s
+        └── ✔ file beach.jpg        0.1s
+              ! purge failed, the file stays on the CDN: edge timeout

@@ -200,7 +200,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	restore := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	start := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
 	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	removeSafety := safetyBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
@@ -272,7 +272,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	target := matchRetargetedImage(demoService, demoRestoredTag(1))
 	create := runner.On("Create", mock.Anything, target).Return(nil).Once()
 	restoreVolume := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	start := runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
 	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	removeSafety := safetyBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
@@ -361,7 +361,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 		model.ReplicaIdentity{Name: demoContainerName(2), Number: 2}, demoRestoredTag(2)).
 		Return("rebuilt", nil).Once()
 	restoreVolume := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
 	repo.On("DeleteSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
 	safetyBackend.On("Remove", mock.Anything, mock.Anything).Return(nil).Once()
@@ -429,7 +429,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	// The spec goes to the rebuild untouched: nothing was retargeted.
 	runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
 	repo.On("DeleteSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
 	safetyBackend.On("Remove", mock.Anything, mock.Anything).Return(nil).Once()

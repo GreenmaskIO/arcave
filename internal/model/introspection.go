@@ -302,6 +302,9 @@ type IntrospectionResult struct {
 	Project Project
 	// Daemon is what `docker info` reports.
 	Daemon system.Info
+	// DaemonVersion is what `docker version` reports: its components name the
+	// engine, which `docker info` does not.
+	DaemonVersion system.VersionResponse
 	// Images are the images the compose project's containers run on and the base images those name
 	// by SystemLabelBaseImageID, keyed by id, verbatim.
 	Images map[ImageDigestID]image.InspectResponse

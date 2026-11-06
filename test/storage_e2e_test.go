@@ -18,13 +18,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
 
+	"filippo.io/age"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -40,6 +43,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -84,8 +88,36 @@ var storageServers = []struct {
 	{name: config.StorageTypeSSH, start: startSSHStorage},
 }
 
+// storageE2EBackend is one snapshot backend a storage server is driven through.
+type storageE2EBackend struct {
+	name    string
+	backend string
+	// compression is backends.fullcopy.compression; empty keeps the default, zstd.
+	compression string
+}
+
+// storageE2EBackends are the snapshot backends each storage server is driven
+// through: fullcopy under its default zstd and uncompressed, and cdc over its
+// default stdio transport, into the same store.
+var storageE2EBackends = []storageE2EBackend{
+	{
+		name:    config.SnapshotBackendFullCopy,
+		backend: config.SnapshotBackendFullCopy,
+	},
+	{
+		name:        config.SnapshotBackendFullCopy + "-" + config.CompressionNone,
+		backend:     config.SnapshotBackendFullCopy,
+		compression: config.CompressionNone,
+	},
+	{
+		name:    config.SnapshotBackendCDC,
+		backend: config.SnapshotBackendCDC,
+	},
+}
+
 // TestStorageE2E_CoreWorkflow drives the built binary through the core workflow on
-// every storage backend: create, list, rollback, fork and remove.
+// every storage backend and snapshot backend, with and without encryption: create,
+// list, rollback, fork, a rollback in the fork, remove and gc.
 func TestStorageE2E_CoreWorkflow(t *testing.T) {
 	t.Parallel()
 
@@ -93,50 +125,91 @@ func TestStorageE2E_CoreWorkflow(t *testing.T) {
 		t.Run(server.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Arrange
-			compose := newImageRollbackEnv(t)
 			target := server.start(t)
-			projectRoot := t.TempDir()
-			run := func(args ...string) []byte {
-				t.Helper()
-				return runArcave(t, projectRoot, target.env, append([]string{"-p", compose.project}, args...)...)
+			for _, backend := range storageE2EBackends {
+				for _, encrypted := range []bool{false, true} {
+					name := backend.name
+					if encrypted {
+						name += "-encrypted"
+					}
+					t.Run(name, func(t *testing.T) {
+						t.Parallel()
+						runStorageE2E(t, target, backend, encrypted)
+					})
+				}
 			}
-			runArcave(t, projectRoot, target.env, "init", "--name", storageE2EArcaveProject)
-			writeStorageConfig(t, projectRoot, target.file)
-			compose.up(t, 1)
-			compose.write(t, compose.replicas(t)[0], "v1")
-
-			// Act
-			sp1 := decode[model.Savepoint](t, run("savepoint", "create", "sp1"))
-			compose.write(t, compose.replicas(t)[0], "v2")
-			sp2 := decode[model.Savepoint](t, run("savepoint", "create", "sp2"))
-			listed := decode[[]model.Savepoint](t, run("savepoint", "list"))
-			ascending := decode[[]model.Savepoint](t, run("savepoint", "list", "--sort", "asc"))
-			rolledBack := decode[model.RollbackResponse](t, run("rollback", "sp1"))
-			replica := compose.replicas(t)[0]
-			volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
-			withSafety := decode[[]model.Savepoint](t, run("savepoint", "list", "--include-safety-snapshots"))
-			fork := decode[model.Session](t, run("session", "create", "--name", "fork", "--from", model.DefaultSessionName))
-			inFork := decode[[]model.Savepoint](t, run("--session", "fork", "savepoint", "list"))
-			removed := decode[model.RemoveResponse](t, run("savepoint", "remove", sp2.ID.String()))
-			afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
-
-			// Assert
-			assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(listed), "newest first by default")
-			assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(ascending))
-			assert.Equal(t, sp1.ID, rolledBack.RolledBackTo.ID)
-			assert.Equal(t, "v1", volumeAfter, "the volume is back at sp1")
-			assert.Equal(t, "v1", layerAfter, "the writable layer is back at sp1")
-			assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(withSafety), "the safety snapshot is dropped")
-			assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(inFork), "the fork holds the copied savepoints")
-			assert.Equal(t, []model.SavepointID{sp2.ID}, savepointIDs(removed.Removed))
-			assert.Equal(t, []string{"sp1"}, savepointNames(afterRemove))
-
-			assertRecord(t, target.storage, compose.project, model.DefaultSession, sp1.ID, true)
-			assertRecord(t, target.storage, compose.project, model.DefaultSession, sp2.ID, false)
-			assertRecord(t, target.storage, compose.project, fork.ID, sp2.ID, true)
 		})
 	}
+}
+
+// runStorageE2E is one row of TestStorageE2E_CoreWorkflow: its own arcave project,
+// so its sessions are its own, on a store it shares with the other rows.
+func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend, encrypted bool) {
+	// Arrange
+	arcaveProject := storageE2EArcaveProject + "-" + backend.name
+	env := target.env
+	if encrypted {
+		arcaveProject += "-encrypted"
+		identity, err := age.GenerateX25519Identity()
+		require.NoError(t, err)
+		env = append(slices.Clone(env), "ARCAVE_ENCRYPTION_KEY="+identity.String())
+	}
+	compose := newImageRollbackEnv(t)
+	projectRoot := t.TempDir()
+	run := func(args ...string) []byte {
+		t.Helper()
+		return runArcave(t, projectRoot, env, append([]string{"-p", compose.project}, args...)...)
+	}
+	runArcave(t, projectRoot, env, "init", "--name", arcaveProject)
+	writeStorageConfigWith(t, projectRoot, target.file, backend, encrypted)
+	compose.up(t, 1)
+	compose.write(t, compose.replicas(t)[0], "v1")
+
+	// Act
+	sp1 := decode[model.Savepoint](t, run("savepoint", "create", "sp1"))
+	compose.write(t, compose.replicas(t)[0], "v2")
+	sp2 := decode[model.Savepoint](t, run("savepoint", "create", "sp2"))
+	listed := decode[[]model.Savepoint](t, run("savepoint", "list"))
+	ascending := decode[[]model.Savepoint](t, run("savepoint", "list", "--sort", "asc"))
+	rolledBack := decode[model.RollbackResponse](t, run("rollback", "sp1"))
+	replica := compose.replicas(t)[0]
+	volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
+	withSafety := decode[[]model.Savepoint](t, run("savepoint", "list", "--include-safety-snapshots"))
+	fork := decode[model.Session](t, run("session", "create", "--name", "fork", "--from", model.DefaultSessionName))
+	inFork := decode[[]model.Savepoint](t, run("--session", "fork", "savepoint", "list"))
+	run("--session", "fork", "rollback", "sp2")
+	volumeInFork := compose.read(t, compose.replicas(t)[0], volumeMarker)
+	removed := decode[model.RemoveResponse](t, run("savepoint", "remove", sp2.ID.String()))
+	afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
+	// runArcave fails on a partial gc's non-zero exit.
+	collected := decode[storageE2EGarbage](t, runArcave(t, projectRoot, env, "gc"))
+	afterGC := decode[[]model.Savepoint](t, run("savepoint", "list"))
+
+	// Assert
+	assert.Equal(t, []model.SnapshotBackendKind{model.SnapshotBackendKind(backend.backend)}, statKinds(sp1),
+		"the volume went through the configured backend")
+	if backend.backend == config.SnapshotBackendFullCopy {
+		assert.Equal(t, []any{wantCompression(backend)}, statCompressions(sp1), "the record names the configured format")
+	}
+	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(listed), "newest first by default")
+	assert.Equal(t, []string{"sp1", "sp2"}, savepointNames(ascending))
+	assert.Equal(t, sp1.ID, rolledBack.RolledBackTo.ID)
+	assert.Equal(t, "v1", volumeAfter, "the volume is back at sp1")
+	assert.Equal(t, "v1", layerAfter, "the writable layer is back at sp1")
+	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(withSafety), "the safety snapshot is dropped")
+	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(inFork), "the fork holds the copied savepoints")
+	assert.Equal(t, "v2", volumeInFork, "the fork's copy of sp2 restores")
+	assert.Equal(t, []model.SavepointID{sp2.ID}, savepointIDs(removed.Removed))
+	assert.Equal(t, []string{"sp1"}, savepointNames(afterRemove))
+	for _, report := range collected.Reports {
+		assert.Zero(t, report.Summary.Unjudged, "%s judges every object through the store as written", report.Collector)
+	}
+	assert.Equal(t, []string{"sp1"}, savepointNames(afterGC), "gc keeps what a record names")
+
+	assertRecord(t, target.storage, arcaveProject, compose.project, model.DefaultSession, sp1.ID, true)
+	assertRecord(t, target.storage, arcaveProject, compose.project, model.DefaultSession, sp2.ID, false)
+	assertRecord(t, target.storage, arcaveProject, compose.project, fork.ID, sp2.ID, true)
+	assertRecordEncrypted(t, target.storage, arcaveProject, compose.project, sp1, encrypted)
 }
 
 func startDirectoryStorage(t *testing.T) storageTarget {
@@ -287,8 +360,22 @@ func runArcave(t *testing.T, projectRoot string, env []string, args ...string) [
 	return out
 }
 
-// writeStorageConfig points the project's config.yaml at storage, keeping what init wrote.
-func writeStorageConfig(t *testing.T, projectRoot string, storage config.Storage) {
+// writeStorageConfig points the project's config.yaml at storage and backend,
+// keeping what init wrote.
+func writeStorageConfig(t *testing.T, projectRoot string, storage config.Storage, backend string) {
+	t.Helper()
+
+	writeStorageConfigWith(t, projectRoot, storage, storageE2EBackend{
+		name:    backend,
+		backend: backend,
+	}, false)
+}
+
+// writeStorageConfigWith is writeStorageConfig for a row that also names fullcopy's compression
+// and whether the store is encrypted.
+func writeStorageConfigWith(
+	t *testing.T, projectRoot string, storage config.Storage, backend storageE2EBackend, encrypted bool,
+) {
 	t.Helper()
 
 	file := config.Path(projectRoot)
@@ -297,6 +384,11 @@ func writeStorageConfig(t *testing.T, projectRoot string, storage config.Storage
 	var cfg config.Config
 	require.NoError(t, yaml.Unmarshal(data, &cfg))
 	cfg.Storage = storage
+	cfg.Snapshot.Backend = backend.backend
+	cfg.Encryption = config.Encryption{Enabled: encrypted}
+	if backend.compression != "" {
+		cfg.Backends.FullCopy.Compression = backend.compression
+	}
 	data, err = yaml.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(file, data, 0o600))
@@ -304,7 +396,8 @@ func writeStorageConfig(t *testing.T, projectRoot string, storage config.Storage
 
 // assertRecord says whether the store holds id's commit marker in the session's compose project.
 func assertRecord(
-	t *testing.T, storage config.Storage, composeProject string, session model.SessionID, id model.SavepointID, want bool,
+	t *testing.T, storage config.Storage, arcaveProject, composeProject string,
+	session model.SessionID, id model.SavepointID, want bool,
 ) {
 	t.Helper()
 
@@ -312,13 +405,51 @@ func assertRecord(
 	root, err := storefactory.Root(ctx, storage, t.TempDir())
 	require.NoError(t, err)
 	defer func() { _ = root.Close() }()
-	key := path.Join("projects", storageE2EArcaveProject, "sessions", session.String(),
+	key := path.Join("projects", arcaveProject, "sessions", session.String(),
 		"compose", composeProject, id.String(), "savepoint.json")
 
 	exists, err := root.Exists(ctx, key)
 
 	require.NoError(t, err)
 	assert.Equal(t, want, exists, "record %s", key)
+}
+
+// storageE2EGarbage is what the e2e reads of a gc result.
+type storageE2EGarbage struct {
+	Reports []struct {
+		Collector string `json:"collector"`
+		Summary   struct {
+			Unjudged int `json:"unjudged"`
+		} `json:"summary"`
+	} `json:"reports"`
+}
+
+// assertRecordEncrypted says whether savepoint's record is stored as an age file, unreadable
+// without the arcave project's key, and the arcave project marked encrypted.
+func assertRecordEncrypted(
+	t *testing.T, storage config.Storage, arcaveProject, composeProject string,
+	savepoint model.Savepoint, want bool,
+) {
+	t.Helper()
+
+	ctx := context.Background()
+	root, err := storefactory.Root(ctx, storage, t.TempDir())
+	require.NoError(t, err)
+	defer func() { _ = root.Close() }()
+	key := path.Join("projects", arcaveProject, "sessions", model.DefaultSession.String(),
+		"compose", composeProject, savepoint.ID.String(), "savepoint.json")
+	body, err := root.GetObject(ctx, key)
+	require.NoError(t, err)
+	defer func() { _ = body.Close() }()
+	raw, err := io.ReadAll(body)
+	require.NoError(t, err)
+
+	assert.Equal(t, !want, bytes.Contains(raw, []byte(savepoint.ID.String())), "record %s", key)
+	arcaveProjectStore, err := storefactory.ArcaveProject(root, model.ArcaveProjectName(arcaveProject))
+	require.NoError(t, err)
+	_, marked, err := encryptionmarker.New(arcaveProjectStore).Get(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, want, marked, "encryption marker of %s", arcaveProject)
 }
 
 func decode[T any](t *testing.T, out []byte) T {
@@ -335,6 +466,32 @@ func savepointNames(savepoints []model.Savepoint) []string {
 		names[i] = savepoint.Name
 	}
 	return names
+}
+
+// wantCompression is the format a fullcopy row's record names.
+func wantCompression(backend storageE2EBackend) string {
+	if backend.compression == "" {
+		return config.CompressionZstd
+	}
+	return backend.compression
+}
+
+// statCompressions is the format each fullcopy stat's payload names, as decoded from JSON.
+func statCompressions(savepoint model.Savepoint) []any {
+	compressions := make([]any, len(savepoint.Stats))
+	for i, stat := range savepoint.Stats {
+		payload, _ := stat.Payload.(map[string]any)
+		compressions[i] = payload["compression"]
+	}
+	return compressions
+}
+
+func statKinds(savepoint model.Savepoint) []model.SnapshotBackendKind {
+	kinds := make([]model.SnapshotBackendKind, len(savepoint.Stats))
+	for i, stat := range savepoint.Stats {
+		kinds[i] = stat.Type
+	}
+	return kinds
 }
 
 func savepointIDs(savepoints []model.Savepoint) []model.SavepointID {

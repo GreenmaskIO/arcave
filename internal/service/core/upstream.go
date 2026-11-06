@@ -65,7 +65,7 @@ func newLayerCaptures(
 			})
 			continue
 		}
-		zerolog.Ctx(ctx).Warn().Str("service", ref.Service).Int("replica", ref.Replica).Str("reason", decision.Source).
+		zerolog.Ctx(ctx).Info().Str("service", ref.Service).Int("replica", ref.Replica).Str("reason", decision.Source).
 			Msg("writable layer is not captured; a rollback to this savepoint creates the container fresh from its image")
 		skipped = append(skipped, model.SkippedWritableLayer{
 			Service:   ref.Service,
@@ -102,7 +102,7 @@ func imageCaptureContainers(
 			continue
 		}
 		reported[ref.Service] = true
-		zerolog.Ctx(ctx).Warn().Str("service", ref.Service).Str("image", ref.UpstreamImageRef).
+		zerolog.Ctx(ctx).Info().Str("service", ref.Service).Str("image", ref.UpstreamImageRef).
 			Str("reason", decision.Source).Msg("image is not captured")
 		skipped = append(skipped, model.SkippedImage{
 			Service: ref.Service,
@@ -124,7 +124,7 @@ func resolveUpstream(ctx context.Context, introspection model.IntrospectionResul
 
 	id, ref, ok := model.ResolveUpstream(introspection, container)
 	if !ok {
-		zerolog.Ctx(ctx).Warn().Str("container", container.ID).Str("image", container.Inspect.Config.Image).
+		zerolog.Ctx(ctx).Info().Str("container", container.ID).Str("image", container.Inspect.Config.Image).
 			Msg("the writable layer names no image it was taken over; only the writable layer is captured")
 	}
 	return id, ref

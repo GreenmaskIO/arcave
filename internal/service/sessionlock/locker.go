@@ -25,6 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // Timing is how a Locker waits for and keeps a lock.
@@ -210,6 +211,7 @@ func (s *Locker) claimWhenFree(
 		deadline  = s.elapsed().Add(s.timing.Wait)
 		seen      *observedSessionLock
 		seenSince time.Time
+		warned    = map[model.OperationID]bool{}
 	)
 	for {
 		current, found, err := s.store.Read(ctx)
@@ -224,6 +226,12 @@ func (s *Locker) claimWhenFree(
 				revision: current.Revision,
 			}
 			if seen == nil || *seen != view {
+				// A new holder is worth a warning; its renewals, and this run's own late claim, are not.
+				if !warned[view.holder] && view.holder != opID {
+					warned[view.holder] = true
+					progress.Current(ctx).Warn(fmt.Sprintf("waiting: held by %s on %s (pid %d)",
+						current.Operation, current.Host, current.PID))
+				}
 				seen, seenSince = &view, seenAt
 			}
 			if seenAt.Sub(seenSince) < s.timing.TTL {

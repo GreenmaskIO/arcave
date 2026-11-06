@@ -21,7 +21,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -56,7 +55,6 @@ func (m *mockCollector) expectNames(dataKind model.GarbageDataKind) {
 }
 
 var (
-	gcNow = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	// noTrees matches the savepoint trees of a compose project store holding none.
 	noTrees   = mock.MatchedBy(func(savepoints []model.SavepointID) bool { return len(savepoints) == 0 })
 	gcSession = mustParseSessionID("019e843e-1650-7000-8000-00000000000a")
@@ -72,8 +70,7 @@ func mustParseSessionID(s string) model.SessionID {
 	return id
 }
 
-// newDeps is a gc over store's session, stamped at gcNow; the collectors and the savepoint
-// readers are the test's.
+// newDeps is a gc over store's session; the collectors and the savepoint readers are the test's.
 func newDeps(
 	session model.SessionID, store storages.Navigator, sessions *mockSessions, locker *mockLocker, inflight *mockInflight,
 ) Deps {
@@ -84,7 +81,6 @@ func newDeps(
 		Locker:        locker,
 		SessionLocker: fakeSessionLocker{},
 		Inflight:      inflight,
-		Now:           func() time.Time { return gcNow },
 	}
 }
 
@@ -298,7 +294,7 @@ func TestGarbageCollector_GarbageCollect(t *testing.T) {
 	}}}, nil).Once()
 	tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
 	tags.On("Find", mock.Anything, DaemonScope{
-		ComposeProjects: []model.DockerComposeProjectName{"demo"}, Now: gcNow,
+		ComposeProjects: []model.DockerComposeProjectName{"demo"},
 	}).Return(model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 	locker := newHeldLocker()
 	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, locker, inflight)
@@ -554,46 +550,28 @@ func TestGarbageCollector_GarbageCollect_UncommittedTreesAreDead(t *testing.T) {
 
 // A request refused for what it asks stops before the lock.
 func TestGarbageCollector_GarbageCollect_InvalidRequest(t *testing.T) {
-	tests := []struct {
-		name string
-		req  model.GarbageCollectRequest
-	}{
-		{
-			name: "a negative restored layer grace",
-			req:  model.GarbageCollectRequest{DryRun: true, RestoredLayerGrace: utils.New(-time.Hour)},
-		},
-		{
-			name: "an unknown data kind",
-			req:  model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			locker := &mockLocker{}
-			blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
-			deps := newDeps(model.DefaultSession, inmemory.New(""), &mockSessions{}, locker, &mockInflight{})
-			deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
-			svc := New(deps)
+	// Arrange
+	locker := &mockLocker{}
+	blobs := newMockComposeProjectCollector(model.GarbageDataKindImageLayers)
+	deps := newDeps(model.DefaultSession, inmemory.New(""), &mockSessions{}, locker, &mockInflight{})
+	deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
+	svc := New(deps)
+	req := model.GarbageCollectRequest{DryRun: true, DataKinds: []model.GarbageDataKind{"restic"}}
 
-			// Act
-			_, err := svc.GarbageCollect(context.Background(), tt.req)
+	// Act
+	_, err := svc.GarbageCollect(context.Background(), req)
 
-			// Assert
-			require.ErrorIs(t, err, model.ErrInvalidGarbageCollectRequest)
-			locker.AssertNotCalled(t, "Acquire", mock.Anything)
-		})
-	}
+	// Assert
+	require.ErrorIs(t, err, model.ErrInvalidGarbageCollectRequest)
+	locker.AssertExpectations(t)
 }
 
-// The request's data kinds pick the collectors, and its grace replaces the service's; left out,
-// every collector runs with the service's grace. No compose-project collector, no scope read.
-func TestGarbageCollector_GarbageCollect_SelectsDataKindsAndGrace(t *testing.T) {
+// The request's data kinds pick the collectors. No compose-project collector, no scope read.
+func TestGarbageCollector_GarbageCollect_SelectsDataKinds(t *testing.T) {
 	tests := []struct {
 		name      string
 		req       model.GarbageCollectRequest
 		wantKinds []model.GarbageDataKind
-		wantGrace time.Duration
 		// readsScopes is whether the compose projects' scopes are read.
 		readsScopes bool
 	}{
@@ -604,15 +582,13 @@ func TestGarbageCollector_GarbageCollect_SelectsDataKindsAndGrace(t *testing.T) 
 				model.GarbageDataKindRestoredLayers, model.GarbageDataKindSavepointData, model.GarbageDataKindUpstreamImages,
 				model.GarbageDataKindImageLayers, model.GarbageDataKindDeduplicatedVolumes,
 			},
-			wantGrace:   time.Hour,
 			readsScopes: true,
 		},
 		{
-			name: "restored layers alone, with a grace of zero",
+			name: "restored layers alone",
 			req: model.GarbageCollectRequest{
-				DryRun:             true,
-				RestoredLayerGrace: utils.New(time.Duration(0)),
-				DataKinds:          []model.GarbageDataKind{model.GarbageDataKindRestoredLayers},
+				DryRun:    true,
+				DataKinds: []model.GarbageDataKind{model.GarbageDataKindRestoredLayers},
 			},
 			wantKinds: []model.GarbageDataKind{model.GarbageDataKindRestoredLayers},
 		},
@@ -639,10 +615,8 @@ func TestGarbageCollector_GarbageCollect_SelectsDataKindsAndGrace(t *testing.T) 
 				demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint(nil), nil).Once()
 				readers = append(readers, demoSavepoints)
 			}
-			grace := time.Duration(-1)
 			tags := newMockDaemonCollector(model.GarbageDataKindRestoredLayers)
-			tags.On("Find", mock.Anything, mock.Anything).
-				Run(func(args mock.Arguments) { grace = args.Get(1).(DaemonScope).RestoredLayerGrace }).
+			tags.On("Find", mock.Anything, forComposeProjects("demo")).
 				Return(model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Maybe()
 			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, newHeldLocker(), newNoMarker())
 			deps.NewSavepoints = newSavepointsInOrder(t, readers...)
@@ -653,7 +627,6 @@ func TestGarbageCollector_GarbageCollect_SelectsDataKindsAndGrace(t *testing.T) 
 				newEmptyCollector(model.GarbageDataKindImageLayers, model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}),
 				newEmptyCollector(model.GarbageDataKindDeduplicatedVolumes, model.ResticRepositoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}),
 			}
-			deps.RestoredLayerGrace = time.Hour
 			svc := New(deps)
 
 			// Act
@@ -666,9 +639,6 @@ func TestGarbageCollector_GarbageCollect_SelectsDataKindsAndGrace(t *testing.T) 
 				kinds = append(kinds, report.DataKind)
 			}
 			assert.Equal(t, tt.wantKinds, kinds, "the daemon collectors run first, then the compose-project ones in their order")
-			if slices.Contains(tt.wantKinds, model.GarbageDataKindRestoredLayers) {
-				assert.Equal(t, tt.wantGrace, grace)
-			}
 			demoSavepoints.AssertExpectations(t)
 		})
 	}
@@ -744,10 +714,7 @@ func TestGarbageCollector_GarbageCollect_ProbeFails(t *testing.T) {
 				model.GarbageDataKindDeduplicatedVolumes: "connection refused",
 			}, aborted)
 			assert.Equal(t, 2, result.Total.Aborted)
-			assert.Equal(t, []string{
-				"restored-layers is not judged: connection refused",
-				"deduplicated-volumes is not judged: connection refused",
-			}, result.Warnings)
+			assert.Empty(t, result.Warnings, "the aborted reports say it")
 			tags.AssertExpectations(t)
 			restic.AssertExpectations(t)
 			blobs.AssertExpectations(t)

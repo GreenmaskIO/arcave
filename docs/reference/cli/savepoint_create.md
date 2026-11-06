@@ -4,6 +4,9 @@ description: Capture an application-consistent savepoint of a Docker Compose pro
 keywords: [arcave savepoint create, volume capture, writable layer, compose spec, docker compose]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # arcave savepoint create
 
 Captures a savepoint: every stateful volume, every container's writable layer, the images the services run on, and the compose spec of the project.
@@ -40,7 +43,32 @@ A name is unique within the compose project and session: `savepoint create` refu
 
 ## Output
 
-The savepoint record, as JSON on stdout.
+On a terminal, the final tree of the steps on stderr and a summary of what was captured on stdout; in a script, or with `--format json`, the savepoint record as JSON on stdout. The summary's `size` is what the savepoint holds and `stored` what it added to the store; its `Warnings` spell out `not_covered` and any image not stored.
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stderr + stdout"
+✔ savepoint.create before-migration       7.1s
+├── ✔ project.introspect                  0.1s
+├── ✔ compose.stop                        0.2s
+├── ✔ savepoint.capture before-migration  3.6s
+└── ✔ compose.start                       2.2s
+
+Savepoint before-migration · 019e843e · 19:41:12 · stored 173 MB
+            count     size   stored
+  volumes       1  40.9 MB   3.9 MB
+  layers        2   163 MB  20.6 KB
+  images        2   671 MB   169 MB
+
+Warnings (1)
+  ! app has no volumes: only its writable layer is held
+
+  roll back:  arcave -p myapp rollback before-migration
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
 
 ```json title="stdout"
 {
@@ -63,28 +91,56 @@ The savepoint record, as JSON on stdout.
         }
       },
       "type": "fullcopy",
-      "payload": { "size_bytes": 41172480 }
+      "size_bytes": 40863232,
+      "stored_bytes": 3919032,
+      "payload": { "compression": "zstd" }
     }
   ],
   "writable_layers": [
     {
       "service": "app",
       "replica": 1,
-      "container_id": "3f1a9c0b2e77…",
+      "container_id": "1886b4bf7a8a88a70845594686adddfd78aad8ce96a2ecab4e4468a4c98db8ca",
       "container_name": "myapp-app-1",
-      "committed_image_id": "sha256:aaaa…",
+      "committed_image_id": "sha256:f68cd146c87c7e1e7606d02065a872eed3eafafa97ca55b8836c2785445b72da",
       "imagebackend": "dedupcopy",
-      "upstream_image_id": "sha256:bbbb…",
+      "upstream_image_id": "sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5",
       "upstream_image_ref": "myapp:latest",
-      "size_bytes": 83887104,
-      "stored_bytes": 214016
+      "size_bytes": 4096126,
+      "stored_bytes": 3807
+    },
+    {
+      "service": "db",
+      "replica": 1,
+      "container_id": "22c7d216e10d814dfaba822285cd82e0d59d118ba6c1a941e170a5c4a7f3fc1f",
+      "container_name": "myapp-db-1",
+      "committed_image_id": "sha256:6b3f960b737dff8f5ac90b9538610413cafe14be340f3635dc4cbb279ddc3035",
+      "imagebackend": "dedupcopy",
+      "upstream_image_id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+      "upstream_image_ref": "postgres:16",
+      "size_bytes": 158913382,
+      "stored_bytes": 16783
     }
   ],
   "images": [
     {
-      "id": "sha256:bbbb…",
+      "id": "sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5",
       "refs": ["myapp:latest"],
-      "size_bytes": 83673088,
+      "repo_digests": [
+        "myapp@sha256:39c1995c80982badee967125886cce5097338509b7f56d05105e8ccbd3375ec5"
+      ],
+      "size_bytes": 13580222,
+      "stored_bytes": 4097189,
+      "stored": true
+    },
+    {
+      "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+      "refs": ["postgres:16"],
+      "repo_digests": [
+        "postgres@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
+      ],
+      "size_bytes": 657586103,
+      "stored_bytes": 164698711,
       "stored": true
     }
   ],
@@ -95,12 +151,15 @@ The savepoint record, as JSON on stdout.
 }
 ```
 
+</TabItem>
+</Tabs>
+
 | Field | Meaning |
 |---|---|
 | `id` | A UUIDv7 in canonical form, assigned at capture. What `rollback` and `savepoint remove` take. |
 | `name`, `description` | What you passed, or empty strings. |
 | `created_at` | RFC3339Nano. |
-| `stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `payload` is the backend's own bookkeeping. |
+| `stats` | One entry per captured volume, keyed by `volume.object_id` — see [Storage layout](../storage_layout.md#object-ids). `volume.type` is `named`, `bind` or `anon`; `volume.backend` and `type` are `fullcopy` or `cdc`. `size_bytes` is the volume's size, `stored_bytes` what this capture added to the store; `payload` is the backend's own bookkeeping. |
 | `writable_layers` | One entry per container whose writable layer was committed. `imagebackend` is `dedupcopy` or `fullcopy`; `size_bytes` is the committed image's size, `stored_bytes` what it added to the store after deduplication. |
 | `images` | One entry per distinct image the services run on, stored once however many savepoints and replicas name it. `stored_bytes` is what this savepoint added, omitted when the image was already stored; `stored: false` means only its identity could be recorded. |
 | `spec` | The compose spec committed beside the record. `format` is always `compose-yaml`. |
@@ -125,7 +184,7 @@ Full shapes for every command are in [Output](../output.md).
 | The project has no volume to capture, or labels left every one out | `no stateful volumes found; nothing to capture` |
 | Two volumes render one object id | `two volumes address the same object id: service "app" at "/var/lib" and service "app-var" at "/lib" both address "volume-service-app-var-lib"; rename one of them` |
 | The savepoint directory already holds objects | `capture directory is not empty: 019e843e-1650-7000-8000-000000000000 holds 3 object(s), an interrupted run's remains; check what is there before removing it` |
-| A daemon whose version could not be read exports an old archive shape | `capturing volumes: … unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape`. See [Requirements](../requirements.md). |
+| An engine that is not Docker 25 or newer — Podman, or one whose version could not be read — exports an old archive shape | `capturing volumes: … unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape`. Podman is [not supported yet](../requirements.md#docker-25-or-newer). |
 | An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The capture can't write its `heartbeat.json` for 25 minutes | `heartbeat lost` — the capture cancels itself and commits nothing; its directory is left for [`arcave gc`](gc.md). Check that the store is reachable and writable. |

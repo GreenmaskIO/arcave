@@ -32,7 +32,7 @@ if ! { ./run-migration.sh && ./run-tests.sh; }; then
 fi
 ```
 
-Because every command prints JSON on stdout and logs on stderr, `jq -r .id` is enough — there is no output to scrape.
+When stdout is a pipe, as it is here, every command prints its result as JSON and its logs on stderr, so `jq -r .id` is enough — there is no output to scrape. On a terminal, with the live tree drawn, the result is text; `--format json` asks for JSON there too.
 
 ## Why this is a checkpoint, not a backup
 
@@ -50,16 +50,18 @@ Rather than teaching an agent to shell out and parse output, run the MCP server:
 arcave mcp
 ```
 
-It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child process, no port and no network configuration. Ten tools appear in the agent's tool list. Four work on savepoints:
+It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child process, no port and no network configuration. Twelve tools appear in the agent's tool list. Four work on savepoints:
 
 | Tool | What it does |
 |---|---|
 | `savepoint_create` | Capture the environment. Takes `project`, and optionally `session`, `name`, `description`, `wait_timeout`. |
 | `savepoint_list` | List savepoints, newest first. Takes `project`, optionally `session`, `include_safety_snapshots`, `sort` (`desc` or `asc`). |
-| `savepoint_remove` | Delete by `ids`, or by `retain_recent` / `retain_for` / `before_date`. Takes `project`, optionally `session`. Supports `dry_run`. |
+| `savepoint_remove` | Delete by `refs` — ids or names — or by `retain_recent` / `retain_for` / `before_date`. Takes `project`, optionally `session`. Supports `dry_run`. |
 | `rollback` | Restore to `ref` — an id, a name, or `latest`. Takes `project`, optionally `session`, `wait_timeout`. |
 
 Every savepoint tool takes `project` explicitly: one server serves many compose projects, and the agent names the one it means per call. `session` picks the [session](../sessions.md) for that call only; without it the tool works in the current one.
+
+Two more keep the store and the project in view: `gc` reclaims the space removed savepoints held — it only reports unless `dry_run` is `false` — and `compose_generate` returns a compose file rebuilt from the running project.
 
 The other six manage sessions: `session_list`, `session_create`, `session_remove`, `session_current`, `session_set` and `session_unset`. An agent can fork its own session from `baseline` with `session_create` and keep its checkpoints there, apart from yours. `arcave mcp --session <name>` pins the server to one session instead; a pinned server refuses `session_set` and `session_unset`.
 
@@ -100,7 +102,7 @@ arcave savepoint create attempt-7 --wait-timeout 5m
 arcave --log-format json savepoint create attempt-7
 ```
 
-`--log-format json` turns the whole stderr stream into records, so an agent parses progress instead of picking prose out of it.
+`--log-format json` turns the whole stderr stream into records, one per step event, so an agent parses progress instead of picking prose out of it. An agent that reads stdout anyway can take `--progress json` instead: every step event as a JSON line on stdout, and the result as the last line — see [Progress](../reference/output.md#progress).
 
 ## What this is not
 

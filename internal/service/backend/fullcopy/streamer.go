@@ -14,7 +14,8 @@
 
 // Package fullcopy captures a volume wholesale: one tar archive per volume per
 // snapshot, under <snapshotID>/<objectID>/, streamed through the Docker engine
-// and stored verbatim so ownership and permissions survive a restore.
+// and stored zstd-compressed (data.tar.zst) or as is (data.tar), so ownership
+// and permissions survive a restore. The record's payload names the format.
 //
 // The volume is mounted directly and streamed through a container of arcave's
 // own, so a service container is never involved and a mount's subpath never
@@ -36,20 +37,12 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
-
-// archiveName is the one object a capture consists of.
-const archiveName = "data.tar"
 
 // errNoStore refuses a spec carrying no root. This backend keeps its captures in
 // the tree it was handed, so without one there is nowhere to write.
 var errNoStore = errors.New("backend spec carries no store")
-
-// Payload is a capture's SnapshotStat payload. The size_bytes json tag matches
-// the old core's records, so they read back without a migration.
-type Payload struct {
-	SizeBytes int64 `json:"size_bytes"`
-}
 
 // VolumeStreamer is what the backend needs from the Docker engine: the mount
 // source of a volume, a stream of the whole volume out, and the same stream wiped and
@@ -60,14 +53,22 @@ type VolumeStreamer interface {
 	WriteVolume(ctx context.Context, src model.MountSource, r io.Reader) error
 }
 
+// Options is what every capture of one factory shares.
+
 // Factory builds fullcopy snapshotters over one shared Docker engine.
 type Factory struct {
-	docker VolumeStreamer
+	docker      VolumeStreamer
+	compression Compression
 }
 
 // NewFactory builds the factory. Not New, so that building off it does not read
 // New(docker).New(spec) at every call site.
-func NewFactory(docker VolumeStreamer) *Factory { return &Factory{docker: docker} }
+func NewFactory(docker VolumeStreamer, compression Compression) *Factory {
+	return &Factory{
+		docker:      docker,
+		compression: compression,
+	}
+}
 
 func (*Factory) Kind() model.SnapshotBackendKind { return model.SnapshotBackendFullCopy }
 
@@ -78,34 +79,46 @@ func (s *Factory) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, erro
 	if spec.Store == nil {
 		return nil, errNoStore
 	}
-	return &Snapshotter{volume: spec.Volume, store: spec.Store, docker: s.docker}, nil
+	if err := s.compression.Validate(); err != nil {
+		return nil, err
+	}
+	return &Snapshotter{
+		volume:      spec.Volume,
+		store:       spec.Store,
+		docker:      s.docker,
+		compression: s.compression,
+	}, nil
 }
 
 // Snapshotter captures one volume into one root.
 type Snapshotter struct {
-	volume model.Volume
-	store  storages.Navigator
-	docker VolumeStreamer
+	volume      model.Volume
+	store       storages.Navigator
+	docker      VolumeStreamer
+	compression Compression
 }
 
 func (s *Snapshotter) Volume() model.Volume { return s.volume }
 
-// Snapshot streams the whole volume out and stores it verbatim.
+// Snapshot streams the whole volume out and stores it in the factory's format.
+// SizeBytes counts the tar stream, StoredBytes what reached the store.
 func (s *Snapshotter) Snapshot(
 	ctx context.Context, req model.BackendSnapshotRequest,
 ) (model.SnapshotStat, error) {
-	captureStore, err := s.captureStore(req.SnapshotID)
-	if err != nil {
+	var (
+		captureStore storages.Storager
+		src          model.MountSource
+		archive      io.ReadCloser
+		err          error
+	)
+	if captureStore, err = s.captureStore(req.SnapshotID); err != nil {
+		return model.SnapshotStat{}, err
+	}
+	if src, err = s.mountSource(ctx); err != nil {
 		return model.SnapshotStat{}, err
 	}
 
-	src, err := s.mountSource(ctx)
-	if err != nil {
-		return model.SnapshotStat{}, err
-	}
-
-	archive, err := s.docker.OpenVolume(ctx, src)
-	if err != nil {
+	if archive, err = s.docker.OpenVolume(ctx, src); err != nil {
 		return model.SnapshotStat{}, fmt.Errorf("open docker volume %s: %w", src.Source, err)
 	}
 	defer func() {
@@ -114,34 +127,51 @@ func (s *Snapshotter) Snapshot(
 		}
 	}()
 
-	// The counter sits in the stream, so the size reported is the size
-	// actually written.
-	counted := utils.NewCountingReader(archive)
-	if err := captureStore.PutObject(ctx, archiveName, counted); err != nil {
+	// Both counters sit in the stream: the tar's ahead of the encoder, the
+	// store's behind it.
+	size := utils.NewCountingReader(archive)
+	encoded := newEncoder(ctx, s.compression, progress.NewReader(ctx, size, 0))
+	defer func() {
+		if err := encoded.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("close encoder")
+		}
+	}()
+	stored := utils.NewCountingReader(encoded)
+	if err := captureStore.PutObject(ctx, s.compression.archiveName(), stored); err != nil {
 		return model.SnapshotStat{}, fmt.Errorf("write archive: %w", err)
 	}
 	return model.SnapshotStat{
-		Volume:  s.volume,
-		Type:    model.SnapshotBackendFullCopy,
-		Payload: Payload{SizeBytes: counted.N()},
+		Volume:      s.volume,
+		Type:        model.SnapshotBackendFullCopy,
+		SizeBytes:   size.N(),
+		StoredBytes: stored.N(),
+		Payload:     Payload{Compression: s.compression},
 	}, nil
 }
 
-// Restore hands the stored tar stream to WriteVolume, which wipes the volume
-// and extracts into it. req.Payload is not read: the key is recomputed.
+// Restore decodes the stored archive and hands the tar stream to WriteVolume,
+// which wipes the volume and extracts into it. The record's payload names the
+// format; req.SizeBytes is the tar stream's length, the capture's counted size.
 func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
-	captureStore, err := s.captureStore(req.SnapshotID)
-	if err != nil {
+	var (
+		captureStore storages.Storager
+		payload      Payload
+		src          model.MountSource
+		archive      io.ReadCloser
+		tarStream    io.ReadCloser
+		err          error
+	)
+	if captureStore, err = s.captureStore(req.SnapshotID); err != nil {
+		return err
+	}
+	if payload, err = DecodePayload(req.Payload); err != nil {
+		return err
+	}
+	if src, err = s.mountSource(ctx); err != nil {
 		return err
 	}
 
-	src, err := s.mountSource(ctx)
-	if err != nil {
-		return err
-	}
-
-	archive, err := captureStore.GetObject(ctx, archiveName)
-	if err != nil {
+	if archive, err = captureStore.GetObject(ctx, payload.Compression.archiveName()); err != nil {
 		return fmt.Errorf("open archive: %w", err)
 	}
 	defer func() {
@@ -149,8 +179,16 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 			zerolog.Ctx(ctx).Error().Err(err).Msg("close archive")
 		}
 	}()
+	if tarStream, err = newDecoder(payload.Compression, archive); err != nil {
+		return err
+	}
+	defer func() {
+		if err := tarStream.Close(); err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("close decoder")
+		}
+	}()
 
-	if err := s.docker.WriteVolume(ctx, src, archive); err != nil {
+	if err := s.docker.WriteVolume(ctx, src, progress.NewReader(ctx, tarStream, req.SizeBytes)); err != nil {
 		return fmt.Errorf("write docker volume %s: %w", src.Source, err)
 	}
 	return nil
@@ -167,14 +205,22 @@ func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error
 	return src, nil
 }
 
-// Remove deletes the archive and stops: a Storager may not delete its own root,
-// so the caller sweeps the directory. An archive already gone is not an error.
+// Remove deletes the archive the record's payload names and stops: a Storager
+// may not delete its own root, so the caller sweeps the directory. An archive
+// already gone is not an error.
 func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
-	captureStore, err := s.captureStore(req.SnapshotID)
-	if err != nil {
+	var (
+		captureStore storages.Storager
+		payload      Payload
+		err          error
+	)
+	if captureStore, err = s.captureStore(req.SnapshotID); err != nil {
 		return err
 	}
-	if err := captureStore.Delete(ctx, archiveName); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+	if payload, err = DecodePayload(req.Payload); err != nil {
+		return err
+	}
+	if err := captureStore.Delete(ctx, payload.Compression.archiveName()); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
 		return fmt.Errorf("delete archive: %w", err)
 	}
 	return nil

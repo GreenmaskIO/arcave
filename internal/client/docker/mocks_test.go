@@ -43,6 +43,16 @@ func (m *mockAPI) ContainerCreate(ctx context.Context, options client.ContainerC
 	return args.Get(0).(client.ContainerCreateResult), args.Error(1)
 }
 
+func (m *mockAPI) ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
+	args := m.Called(ctx, containerID, options)
+	return args.Get(0).(client.ExecCreateResult), args.Error(1)
+}
+
+func (m *mockAPI) ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	args := m.Called(ctx, execID, options)
+	return args.Get(0).(client.ExecAttachResult), args.Error(1)
+}
+
 func (m *mockAPI) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	return client.ContainerStartResult{}, m.Called(ctx, containerID, options).Error(0)
 }

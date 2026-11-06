@@ -1,7 +1,7 @@
 ---
 title: Environment variables
-description: The ARCAVE_ variables arcave reads — which config keys they reach, the two different things ARCAVE_PROJECT_NAME names, and ARCAVE_SESSION.
-keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, config keys, docker compose]
+description: The ARCAVE_ variables arcave reads — every config key has one — the two different things ARCAVE_PROJECT_NAME names, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS and ARCAVE_ENCRYPTION_KEY.
+keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS, ARCAVE_ENCRYPTION_KEY, config keys, docker compose]
 ---
 
 # Environment variables
@@ -10,27 +10,13 @@ A config key is set in the environment as `ARCAVE_<KEY>`, with dots replaced by 
 
 ## Which keys a variable reaches
 
-A variable is read only for a key arcave already knows about — one a flag binds, or one your `.arcave/config.yaml` carries. A key that is in neither place is not read from the environment at all.
-
-These are bound to flags, so they work in any project:
-
-| Variable | Config key |
-|---|---|
-| `ARCAVE_LOG_LEVEL` | `log.level` |
-| `ARCAVE_LOG_FORMAT` | `log.format` |
-| `ARCAVE_COMPOSE_WAIT_TIMEOUT` | `compose.wait_timeout` |
-| `ARCAVE_COMPOSE_STOP_TIMEOUT` | `compose.stop_timeout` |
-| `ARCAVE_COMPOSE_PROGRESS` | `compose.progress` |
-
-`ARCAVE_PROJECT_NAME` is read as `project.name`, which every config carries, **and** as the compose project — see below.
-
-Any other key works when the file declares it. No variable reaches the file `arcave init` writes — it is a template of the defaults and `--name`; `ARCAVE_LOG_LEVEL` and `ARCAVE_LOG_FORMAT` steer only its own log. That template carries `storage.type`, `storage.directory.path`, `snapshot.backend`, `writable_layers.backend` and the `project`, `common`, `compose`, `capture`, `rollback` and `log` sections, so `ARCAVE_SNAPSHOT_BACKEND`, `ARCAVE_CAPTURE_IMAGES` or `ARCAVE_ROLLBACK_LEFTOVER_VOLUMES` override a default config out of the box:
+Every key of the config, whether or not the file carries it: arcave binds each one to its `ARCAVE_<KEY>` variable at start, so `ARCAVE_BACKENDS_CDC_RESTORE_MODE=wipe` sets `backends.cdc.restore_mode` in a project whose file has no `backends` section at all. A variable naming no config key is ignored.
 
 ```shell
 ARCAVE_SNAPSHOT_BACKEND=cdc arcave -p myapp savepoint create nightly
 ```
 
-A `backends.cdc` block, which `init` does not write, is the case to watch: until the file carries the section, `ARCAVE_BACKENDS_CDC_RESTORE_MODE` is ignored silently — the run neither takes the value nor reports it. Write the section into the file, and the variable overrides it from then on.
+No variable reaches the file `arcave init` writes — it is a template of the defaults and `--name`; `ARCAVE_LOG_LEVEL` and `ARCAVE_LOG_FORMAT` steer only its own log.
 
 ## `ARCAVE_PROJECT_NAME`
 
@@ -63,6 +49,25 @@ arcave -p myapp savepoint create step-1
 ```
 
 For [`arcave mcp`](cli/mcp.md) it pins the server: every tool call given no `session` works in that session, and `session_set` and `session_unset` are refused.
+
+## `ARCAVE_FORMAT` and `ARCAVE_PROGRESS`
+
+How a run prints its result and shows its progress — the same things `--format` and `--progress` name, and beaten by them. Neither is a config key: they describe one run's output, not the project.
+
+| Variable | Values | Unset |
+|---|---|---|
+| `ARCAVE_FORMAT` | `auto`, `json`, `text` | `auto`: text while the live tree is drawn and stdout is a terminal, else JSON |
+| `ARCAVE_PROGRESS` | `auto`, `tty`, `log`, `json` | `auto`: the live tree on a terminal stderr with `log.format: text`, else log records |
+
+```shell title="JSON results on a terminal, for the rest of the shell"
+export ARCAVE_FORMAT=json
+```
+
+See [Output and exit codes](output.md).
+
+## `ARCAVE_ENCRYPTION_KEY`
+
+The store key, `encryption.key`: a secret [`arcave init`](cli/init.md) never writes, read from the environment like every key. A `key:` in the file is the fallback. See [`encryption`](configuration.md#encryption).
 
 ## Variables that are not arcave's
 

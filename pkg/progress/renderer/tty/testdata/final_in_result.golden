@@ -1,0 +1,9 @@
+✔ album.publish summer  0.6s
+  ! 2 raw files skipped
+├── ✔ queue.pause       0.2s
+│     worker-1  Paused
+│     worker-2  unreachable
+├── ✔ album.export      0.3s
+│     ! cover.jpg recompressed
+└── ✔ cdn.upload        0.1s
+      ! edge timeout, retried

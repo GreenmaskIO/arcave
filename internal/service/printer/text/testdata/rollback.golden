@@ -1,0 +1,9 @@
+Rolled back to test3 · 01a188c4 · 2026-10-29 19:45:35
+  volumes   4
+  layers    2
+
+Warnings (2)
+  ! the containers run on the savepoint's writable layers
+    → `docker compose up` of your compose file recreates them on its images and drops those layers
+  ! safety snapshot 01a188c9-0000-7000-8000-000000000002 kept
+    → drop it:  arcave -p arcave-demo savepoint remove 01a188c9-0000-7000-8000-000000000002

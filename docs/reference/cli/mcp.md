@@ -12,7 +12,7 @@ Serves arcave's workflows as MCP tools.
 arcave mcp [--session <id|name>]
 ```
 
-No arguments and no flags of its own; `--session` is the [global flag](index.md#global-flags), and here it pins the server — see [Sessions](#sessions). The ten tools — four for savepoints, six for sessions — their arguments and their output shapes are in [MCP tools](../mcp_tools.md).
+No arguments and no flags of its own; `--session` is the [global flag](index.md#global-flags), and here it pins the server — see [Sessions](#sessions). The twelve tools — four for savepoints, six for sessions, `gc` and `compose_generate` — their arguments and their output shapes are in [MCP tools](../mcp_tools.md).
 
 `arcave mcp` takes no `-p/--project-name`: one server addresses many compose projects, and each tool call names the one it means. Every call wires the store and the daemon clients for the project it names and releases them when the call returns.
 
@@ -84,4 +84,4 @@ arcave --log-format json mcp 2> arcave-mcp.log
 
 ## Next step
 
-[MCP tools](../mcp_tools.md) — the ten tools, their arguments and what they return.
+[MCP tools](../mcp_tools.md) — the twelve tools, their arguments and what they return.

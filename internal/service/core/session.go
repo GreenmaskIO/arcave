@@ -28,6 +28,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 type sessionRepository interface {
@@ -293,7 +294,12 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 // default one empties its tree, and it goes on existing.
 func (s *SessionService) RemoveSession(
 	ctx context.Context, req model.RemoveSessionRequest,
-) (model.RemoveSessionResponse, error) {
+) (_ model.RemoveSessionResponse, err error) {
+	ctx, step := progress.Begin(ctx, progress.Step{
+		Kind: kindSessionRemove,
+		Name: req.Session,
+	})
+	defer func() { step.End(err) }()
 	if req.Session == "" {
 		return model.RemoveSessionResponse{}, model.ErrNoSessionRef
 	}
@@ -676,7 +682,13 @@ func requireFreeName(sessions []model.Session, name string) error {
 
 // forkUnderSourceLock forks session from its source under the source's lock: a gc there must not
 // delete what the copy reads. The new session is no one's to touch until its record lands.
-func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.Session) error {
+func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.Session) (err error) {
+	// Outside the source's lock, and the heartbeat's cancellation: the root says why either ended it.
+	ctx, step := progress.Begin(ctx, progress.Step{
+		Kind: kindSessionFork,
+		Name: cmp.Or(session.Name, session.ID.String()),
+	})
+	defer func() { step.End(err) }()
 	source := session.From.Session
 	locker, err := s.newLocker(source)
 	if err != nil {

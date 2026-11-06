@@ -46,11 +46,20 @@ var ErrInvalid = errors.New("invalid config")
 
 // The tokens snapshot.backend accepts.
 const (
-	// SnapshotBackendFullCopy stores each mount's tar stream verbatim.
+	// SnapshotBackendFullCopy stores each mount's tar stream whole, in the format
+	// backends.fullcopy.compression names.
 	SnapshotBackendFullCopy = string(model.SnapshotBackendFullCopy)
 	// SnapshotBackendCDC captures into a restic repository that outlives any one
 	// savepoint, writing only the chunks that changed.
 	SnapshotBackendCDC = string(model.SnapshotBackendCDC)
+)
+
+// The formats backends.fullcopy.compression accepts.
+const (
+	// CompressionZstd stores each archive under zstd at its default level. The default.
+	CompressionZstd = "zstd"
+	// CompressionNone stores each archive as the daemon hands it over.
+	CompressionNone = "none"
 )
 
 // The cdc backend's restore strategies, selected by backends.cdc.restore_mode.
@@ -75,7 +84,20 @@ const (
 // --delete/--overwrite need restic ≥0.17.
 const DefaultResticImage = "restic/restic:0.19.1"
 
-// Where cdc's restic server lives: the two ends of one loopback hop.
+// The transports backends.cdc.transport accepts.
+const (
+	// CDCTransportStdio serves each repository over a docker exec stream into the
+	// restic container: no listener, no network, any daemon arcave's API reaches.
+	CDCTransportStdio = "stdio"
+	// CDCTransportTCP serves the repositories on a loopback TCP server the container
+	// dials, configured by server_address, server_scheme, container_host, network_mode.
+	CDCTransportTCP = "tcp"
+	// DefaultCDCTransport is the exec stream.
+	DefaultCDCTransport = CDCTransportStdio
+)
+
+// Where cdc's restic server lives under the tcp transport: the two ends of one
+// loopback hop.
 const (
 	// DefaultCDCServerAddress binds the loopback on a port the kernel picks. A
 	// fixed port would collide between two arcave processes — a CLI run and an
@@ -150,10 +172,6 @@ const (
 // moves at once.
 const DefaultConcurrency = 5
 
-// DefaultRestoredLayerGrace holds back a layer tag a rollback in another project directory sharing
-// the arcave project may have just put on, under a lock this one's gc cannot see.
-const DefaultRestoredLayerGrace = time.Hour
-
 // The tokens rollback.leftover_volumes accepts.
 const (
 	// LeftoverVolumesOverwrite restores over a volume that outlived its compose project's
@@ -173,11 +191,11 @@ type Config struct {
 	Docker         Docker         `yaml:"docker,omitempty" mapstructure:"docker"`
 	Compose        Compose        `yaml:"compose" mapstructure:"compose"`
 	Storage        Storage        `yaml:"storage" mapstructure:"storage"`
+	Encryption     Encryption     `yaml:"encryption,omitempty" mapstructure:"encryption"`
 	Snapshot       Snapshot       `yaml:"snapshot" mapstructure:"snapshot"`
 	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
 	Rollback       Rollback       `yaml:"rollback" mapstructure:"rollback"`
-	GC             GC             `yaml:"gc" mapstructure:"gc"`
 	// Backends holds the settings of the individual snapshot backends, one
 	// section per backend, present only for the backends a project configures.
 	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
@@ -200,6 +218,15 @@ func (p Project) Validate() error {
 		return fmt.Errorf("%w: project.name: %w (set project.name explicitly)", ErrInvalid, err)
 	}
 	return nil
+}
+
+// Encryption encrypts every object arcave writes to the store, to Key. A missing or
+// malformed Key is refused where the store opens, not here: init writes Enabled with no
+// Key, and a Key in the environment reaches a plain project too, where it is ignored.
+type Encryption struct {
+	Enabled bool `yaml:"enabled,omitempty" mapstructure:"enabled"`
+	// Key is the age identity every object is encrypted to. Secret.
+	Key string `yaml:"key,omitempty" mapstructure:"key"`
 }
 
 // Common holds the settings every workflow shares.
@@ -370,31 +397,35 @@ func (r Rollback) Policy() model.LeftoverVolumesPolicy {
 	return model.LeftoverVolumesPolicy(r.LeftoverVolumes)
 }
 
-// GC configures garbage collection: how long a layer tag no container uses is held back.
-// What a gc looks for is the invocation's to narrow, never the config's.
-type GC struct {
-	// RestoredLayerGrace is how old an unused layer tag must be before it counts as garbage;
-	// DefaultRestoredLayerGrace when unset, while 0 counts every one.
-	RestoredLayerGrace *time.Duration `yaml:"restored_layer_grace" mapstructure:"restored_layer_grace"`
-}
-
-// Validate rejects a negative restored layer grace.
-func (g GC) Validate() error {
-	if grace := utils.Value(g.RestoredLayerGrace); grace < 0 {
-		return fmt.Errorf("%w: gc.restored_layer_grace %s is negative", ErrInvalid, grace)
-	}
-	return nil
-}
-
-// Backends is one optional section per snapshot backend. The arms are pointers
-// so a project that never names a backend carries no section for it.
+// Backends is one section per snapshot backend. The cdc arm is a pointer so a
+// project that never names cdc carries no section for it; fullcopy is one key
+// with a default, and every project carries it.
 type Backends struct {
-	CDC *CDCBackend `yaml:"cdc,omitempty" mapstructure:"cdc"`
+	FullCopy FullCopyBackend `yaml:"fullcopy" mapstructure:"fullcopy"`
+	CDC      *CDCBackend     `yaml:"cdc,omitempty" mapstructure:"cdc"`
+}
+
+// FullCopyBackend configures the wholesale backend. Compression reaches only new
+// captures: a restore reads the format off the record.
+type FullCopyBackend struct {
+	// Compression is zstd (the default) or none.
+	Compression string `yaml:"compression" mapstructure:"compression"`
+}
+
+// Validate rejects a format the backend cannot write.
+func (f FullCopyBackend) Validate() error {
+	switch f.Compression {
+	case CompressionZstd, CompressionNone:
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported backends.fullcopy.compression %q (supported: %s, %s)", ErrInvalid,
+			f.Compression, CompressionZstd, CompressionNone)
+	}
 }
 
 // CDCBackend configures the content-defined-chunking backend: which restic image
-// its one-shot containers run, how a restore reaches the live mount, and the two
-// ends of the loopback hop a container fetches its repository over.
+// its one-shot containers run, how a restore reaches the live mount, and how a
+// container reaches its repository — an exec stream, or a loopback TCP hop.
 type CDCBackend struct {
 	// RestoreMode is wipe (clear the mount, then restore it whole) or incremental
 	// (restore over the live data, letting restic write only the difference).
@@ -403,6 +434,10 @@ type CDCBackend struct {
 	Overwrite string `yaml:"overwrite" mapstructure:"overwrite"`
 	// Image is the restic image every cdc command runs in.
 	Image string `yaml:"image" mapstructure:"image"`
+	// Transport is how a restic container reaches its repository: stdio (an exec
+	// stream, the default) or tcp. The four keys below are acted on, and validated,
+	// only under tcp.
+	Transport string `yaml:"transport" mapstructure:"transport"`
 	// ServerAddress is what arcave's restic server binds. Port 0 lets the kernel
 	// pick, which is what keeps two arcave processes from colliding.
 	ServerAddress string `yaml:"server_address" mapstructure:"server_address"`
@@ -419,17 +454,20 @@ type CDCBackend struct {
 	NetworkMode string `yaml:"network_mode" mapstructure:"network_mode"`
 }
 
-// Validate checks the arms that are present. An absent arm is not an error: a
-// project that does not use a backend does not have to configure it.
+// Validate checks the arms that are present. An absent cdc arm is not an error: a
+// project that does not use cdc does not have to configure it.
 func (b Backends) Validate() error {
+	if err := b.FullCopy.Validate(); err != nil {
+		return err
+	}
 	if b.CDC == nil {
 		return nil
 	}
 	return b.CDC.Validate()
 }
 
-// Validate rejects a mode or an overwrite policy the backend cannot act on, and
-// a server address it cannot bind.
+// Validate rejects a mode or an overwrite policy the backend cannot act on, and,
+// under tcp, a server it cannot bind or reach.
 func (c CDCBackend) Validate() error {
 	switch c.RestoreMode {
 	case RestoreModeWipe, RestoreModeIncremental:
@@ -446,6 +484,19 @@ func (c CDCBackend) Validate() error {
 	if c.Image == "" {
 		return fmt.Errorf("%w: backends.cdc.image is required", ErrInvalid)
 	}
+	switch c.Transport {
+	case CDCTransportStdio:
+		return nil
+	case CDCTransportTCP:
+		return c.validateTCP()
+	default:
+		return fmt.Errorf("%w: unsupported backends.cdc.transport %q (supported: %s, %s)", ErrInvalid,
+			c.Transport, CDCTransportStdio, CDCTransportTCP)
+	}
+}
+
+// validateTCP checks the keys only the tcp transport reads.
+func (c CDCBackend) validateTCP() error {
 	if c.ServerAddress == "" {
 		return fmt.Errorf("%w: backends.cdc.server_address is required", ErrInvalid)
 	}
@@ -472,9 +523,44 @@ func (c CDCBackend) Validate() error {
 	return nil
 }
 
+// IgnoredTCPKeys names the keys set that only the tcp transport reads, under any other.
+func (c CDCBackend) IgnoredTCPKeys() []string {
+	if c.Transport == CDCTransportTCP {
+		return nil
+	}
+	var keys []string
+	for _, key := range []struct {
+		name  string
+		value string
+	}{
+		{
+			name:  "backends.cdc.server_address",
+			value: c.ServerAddress,
+		},
+		{
+			name:  "backends.cdc.server_scheme",
+			value: c.ServerScheme,
+		},
+		{
+			name:  "backends.cdc.container_host",
+			value: c.ContainerHost,
+		},
+		{
+			name:  "backends.cdc.network_mode",
+			value: c.NetworkMode,
+		},
+	} {
+		if key.value != "" {
+			keys = append(keys, key.name)
+		}
+	}
+	return keys
+}
+
 // Log is the project's default logging configuration, persisted under the "log"
 // key in .arcave/config.yaml.
 type Log struct {
+	// Level is empty unless set: the output then picks its own, warn above the live tree, else info.
 	Level  string `yaml:"level,omitempty" mapstructure:"level"`
 	Format string `yaml:"format,omitempty" mapstructure:"format"`
 }
@@ -483,7 +569,6 @@ type Log struct {
 func NewConfig() Config {
 	return Config{
 		Log: Log{
-			Level:  utils.DefaultLogLevel,
 			Format: utils.DefaultLogFormat,
 		},
 	}
@@ -539,8 +624,9 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Rollback.LeftoverVolumes == "" {
 		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
 	}
-	if c.GC.RestoredLayerGrace == nil {
-		c.GC.RestoredLayerGrace = utils.New(DefaultRestoredLayerGrace)
+	// Whatever snapshot.backend says: a label may route a volume through fullcopy.
+	if c.Backends.FullCopy.Compression == "" {
+		c.Backends.FullCopy.Compression = CompressionZstd
 	}
 	c.applyCDCDefaults()
 }
@@ -577,6 +663,13 @@ func CDCWithDefaults(configured *CDCBackend) CDCBackend {
 	if cdc.Image == "" {
 		cdc.Image = DefaultResticImage
 	}
+	if cdc.Transport == "" {
+		cdc.Transport = DefaultCDCTransport
+	}
+	if cdc.Transport != CDCTransportTCP {
+		return cdc
+	}
+	// The keys only tcp reads default only under it.
 	if cdc.ServerAddress == "" {
 		cdc.ServerAddress = DefaultCDCServerAddress
 	}
@@ -614,9 +707,6 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Rollback.Validate(); err != nil {
-		return err
-	}
-	if err := c.GC.Validate(); err != nil {
 		return err
 	}
 	return c.Backends.Validate()

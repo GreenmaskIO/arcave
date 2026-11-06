@@ -16,14 +16,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"filippo.io/age"
 	"github.com/docker/cli/cli/flags"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
@@ -39,16 +44,16 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // newCDCOptions is the translation that keeps internal/config free of any package
 // carrying a client: the config's own vocabulary in, the backend's own out.
 func TestNewCDCOptions(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         config.CDCBackend
-		hostNetwork bool
-		want        cdc.Options
+		name string
+		cfg  config.CDCBackend
+		want cdc.Options
 	}{
 		{
 			// A project that never names cdc carries no section, and still gets a
@@ -87,23 +92,12 @@ func TestNewCDCOptions(t *testing.T) {
 				Overwrite:   config.OverwriteIfChanged,
 			},
 		},
-		{
-			name:        "the resolved transport carries through",
-			cfg:         config.CDCWithDefaults(nil),
-			hostNetwork: true,
-			want: cdc.Options{
-				Image:       config.DefaultResticImage,
-				Overwrite:   config.OverwriteAlways,
-				Incremental: true,
-				HostNetwork: true,
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newCDCOptions(tt.cfg, tt.hostNetwork)
+			got := newCDCOptions(tt.cfg)
 
 			// Assert
 			assert.Equal(t, tt.want, got)
@@ -384,15 +378,17 @@ func TestNewProgress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			events, stream := newProgress(tt.mode, zerolog.Nop())
+			events, stream, adapter := newProgress(tt.mode, zerolog.Nop())
 
 			// Assert
 			require.NotNil(t, events)
 			if tt.wantStream == nil {
 				require.IsType(t, &compose.ProgressLogger{}, stream)
 				assert.Same(t, stream, events, "one adapter takes both the events and the plain lines")
+				assert.Same(t, stream, adapter, "the adapter compose reports to is the one its events reach a step through")
 				return
 			}
+			assert.Nil(t, adapter)
 			assert.NotEqual(t, reflect.TypeFor[*compose.ProgressLogger](), reflect.TypeOf(events),
 				"compose renders its own events here")
 			// The streams arcave does not own are wrapped so Close cannot reach
@@ -412,7 +408,7 @@ func TestNewComposeService(t *testing.T) {
 	dockerCli, apiClient, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
-	events, stream := newProgress(config.ProgressLog, zerolog.Nop())
+	events, stream, _ := newProgress(config.ProgressLog, zerolog.Nop())
 
 	// Act
 	service, err := newComposeService(dockerCli, events, stream)
@@ -637,13 +633,85 @@ func TestNewComposeProjectErasers(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-// newTestResticInspectorOpener is an opener over a fresh directory store, its containers on the
-// host network so that no daemon is asked.
+// newTestResticInspectorOpener is a tcp opener over a fresh directory store, its containers on
+// the host network so that no daemon is asked.
 func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages.Storager) {
 	t.Helper()
 	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
-	return resticInspectorOpener{cfg: config.CDCWithDefaults(&config.CDCBackend{NetworkMode: config.NetworkModeHost})}, store
+	cfg := config.CDCWithDefaults(&config.CDCBackend{
+		Transport:   config.CDCTransportTCP,
+		NetworkMode: config.NetworkModeHost,
+	})
+	return resticInspectorOpener{cfg: cfg}, store
+}
+
+// stdio serves the repositories over each container's exec stream and listens on nothing, so
+// the tcp keys are not read; tcp binds the server and names it to the containers.
+func TestOpenCDCTransport(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.CDCBackend
+		verify  func(t *testing.T, opened openedCDCTransport)
+		wantErr string
+	}{
+		{
+			// auto would ask the nil engine and the address would not bind, so
+			// either one read under stdio fails the open.
+			name: "stdio is the default and reads no tcp key",
+			cfg: config.CDCWithDefaults(&config.CDCBackend{
+				NetworkMode:   config.NetworkModeAuto,
+				ServerAddress: "192.0.2.1:1",
+			}),
+			verify: func(t *testing.T, opened openedCDCTransport) {
+				transport, ok := opened.transport.(cdc.StdioTransport)
+				require.True(t, ok, "transport = %T", opened.transport)
+				assert.NotNil(t, transport.Server)
+				assert.Nil(t, opened.server, "stdio listens on nothing")
+				assert.NotPanics(t, func() { opened.Close(context.Background()) }, "Close has nothing to stop")
+			},
+		},
+		{
+			name: "tcp",
+			cfg: config.CDCWithDefaults(&config.CDCBackend{
+				Transport:   config.CDCTransportTCP,
+				NetworkMode: config.NetworkModeHost,
+			}),
+			verify: func(t *testing.T, opened openedCDCTransport) {
+				require.NotNil(t, opened.server)
+				port := strconv.Itoa(opened.server.Listener.Addr().(*net.TCPAddr).Port)
+				assert.Equal(t, cdc.TCPTransport{
+					RepoURLBase: "rest:http://127.0.0.1:" + port,
+					HostNetwork: true,
+				}, opened.transport)
+			},
+		},
+		{
+			name:    "a transport arcave does not offer is refused",
+			cfg:     config.CDCBackend{Transport: "ssh"},
+			wantErr: `unsupported backends.cdc.transport "ssh"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := zerolog.Nop().WithContext(context.Background())
+			store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+			require.NoError(t, err)
+
+			// Act
+			opened, err := openCDCTransport(ctx, tt.cfg, nil, store)
+
+			// Assert
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { opened.Close(ctx) })
+			tt.verify(t, opened)
+		})
+	}
 }
 
 // The opener serves the compose project's repositories while the inspector is open.
@@ -734,21 +802,231 @@ func TestResticPruner_Close(t *testing.T) {
 
 // The served repositories are the compose project store's restic/ namespace, as objects too: a
 // pruner clears the locks it finds there.
-func TestServeResticRepositories(t *testing.T) {
+func TestOpenResticRepositories(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	opener, store := newTestResticInspectorOpener(t)
 	require.NoError(t, store.PutObject(ctx, "restic/volume-named-db/locks/a1", strings.NewReader("orphan")))
 
 	// Act
-	served, err := serveResticRepositories(ctx, opener.cfg, nil, store)
+	served, err := openResticRepositories(ctx, opener.cfg, nil, store)
 
 	// Assert
 	require.NoError(t, err)
-	t.Cleanup(func() { shutdownResticServer(ctx, served.server) })
+	t.Cleanup(func() { served.Close(ctx) })
 	objects, err := served.root.List(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, objects, 1)
 	assert.Equal(t, "volume-named-db/locks/a1", objects[0].Name)
-	assert.Contains(t, served.repoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
+	transport, ok := served.transport.(cdc.TCPTransport)
+	require.True(t, ok, "transport = %T", served.transport)
+	assert.Contains(t, transport.RepoURLBase, strconv.Itoa(served.server.Listener.Addr().(*net.TCPAddr).Port))
+}
+
+// eventRecorder keeps every event it is handed.
+type eventRecorder struct {
+	events []progress.Event
+}
+
+func (r *eventRecorder) Render(evt progress.Event) {
+	r.events = append(r.events, evt)
+}
+
+func TestComposeEventSink_Event(t *testing.T) {
+	// Arrange
+	recorder := &eventRecorder{}
+	ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(recorder, time.Now))
+	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "savepoint.create"})
+	ctx, step := progress.Run(ctx, progress.Step{Kind: "compose.stop"}, progress.MeasureResources)
+	sink := newComposeEventSink(ctx)
+	require.NotNil(t, sink)
+
+	// Act
+	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopping", State: compose.EventWorking})
+	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopped", State: compose.EventDone})
+	sink.Event(compose.Event{Name: "3f2a", Status: "Error", Text: "denied", State: compose.EventError})
+	step.End(nil)
+
+	// Assert
+	type line struct {
+		status   progress.Status
+		msg      string
+		resource progress.Resource
+		settled  bool
+	}
+	var got []line
+	for _, evt := range recorder.events {
+		if evt.Resource != nil {
+			got = append(got, line{evt.Status, evt.Msg, *evt.Resource, evt.Settled})
+		}
+	}
+	assert.Equal(t, []line{
+		{progress.StatusInProgress, "Stopping", progress.Resource{Kind: "container", ID: "demo-db-1"}, false},
+		{progress.StatusInProgress, "Stopped", progress.Resource{Kind: "container", ID: "demo-db-1"}, true},
+		{progress.StatusWarned, "Error denied", progress.Resource{Kind: composeResourceObject, ID: "3f2a"}, false},
+	}, got)
+}
+
+func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
+	// Act
+	sink := newComposeEventSink(context.Background())
+
+	// Assert
+	assert.Nil(t, sink)
+}
+
+// An encrypted store opens with its key and a plain one plainly; a section that does not fit
+// the store is refused with the fix and writes nothing.
+func TestOpenArcaveProjectStore(t *testing.T) {
+	key := newTestStoreKey(t)
+	encrypted := func(t *testing.T, projectPath string) {
+		t.Helper()
+		created, err := openArcaveProjectStore(t.Context(),
+			newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath)
+		require.NoError(t, err)
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
+		require.NoError(t, created.root.Close())
+	}
+	plain := func(t *testing.T, projectPath string) {
+		t.Helper()
+		created, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath)
+		require.NoError(t, err)
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
+		require.NoError(t, created.root.Close())
+	}
+	tests := []struct {
+		name       string
+		stored     func(t *testing.T, projectPath string)
+		encryption config.Encryption
+		wantErr    error
+		wantMsg    string
+		verify     func(t *testing.T, projectPath string, opened openedArcaveProject)
+	}{
+		{
+			name:       "an encrypted store with the key it was created with",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true, Key: key},
+			verify: func(t *testing.T, projectPath string, opened openedArcaveProject) {
+				assert.Equal(t, "a secret", readStoreObject(t, opened.store, "sessions/x/session.json"))
+				raw, err := os.ReadFile(filepath.Join(arcaveProjectPath(projectPath), "sessions", "x", "session.json"))
+				require.NoError(t, err)
+				assert.NotContains(t, string(raw), "a secret")
+			},
+		},
+		{
+			name:       "an encrypted store with another key",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true, Key: newTestStoreKey(t)},
+			wantErr:    model.ErrWrongStoreKey,
+			wantMsg:    "check encryption.key",
+		},
+		{
+			name:       "an encrypted store with no key",
+			stored:     encrypted,
+			encryption: config.Encryption{Enabled: true},
+			wantErr:    model.ErrInvalidStoreKey,
+			wantMsg:    "none set (check encryption.key",
+		},
+		{
+			name:    "an encrypted store with encryption off",
+			stored:  encrypted,
+			wantErr: model.ErrStoreEncrypted,
+			wantMsg: "set encryption.enabled: true",
+		},
+		{
+			name:   "a plain store with encryption off",
+			stored: plain,
+			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
+				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"))
+			},
+		},
+		{
+			name:       "a plain store with the key exported and encryption off",
+			stored:     plain,
+			encryption: config.Encryption{Key: key},
+			verify: func(t *testing.T, _ string, opened openedArcaveProject) {
+				assert.Equal(t, "{}", readStoreObject(t, opened.store, "sessions/x/session.json"), "the key is ignored")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			projectPath := t.TempDir()
+			tt.stored(t, projectPath)
+			before := listTree(t, arcaveProjectPath(projectPath))
+
+			// Act
+			opened, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMsg)
+				if tt.encryption.Key != "" {
+					assert.NotContains(t, err.Error(), tt.encryption.Key)
+				}
+				assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "a refusal writes nothing")
+				return
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, opened.root.Close()) })
+			tt.verify(t, projectPath, opened)
+		})
+	}
+}
+
+// arcaveProjectPath is where the directory storage of newEncryptionConfig keeps the demo arcave project.
+func arcaveProjectPath(projectPath string) string {
+	return filepath.Join(projectPath, ".arcave", "storage", "arcave", "projects", "demo")
+}
+
+// listTree is every file under root with its contents, as a refusal must leave it.
+func listTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	tree := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		tree[path] = string(data)
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return tree
+	}
+	require.NoError(t, err)
+	return tree
+}
+
+func newEncryptionConfig(t *testing.T, projectPath string, encryption config.Encryption) config.Config {
+	t.Helper()
+	cfg := config.Config{
+		Project:    config.Project{Name: "demo"},
+		Encryption: encryption,
+	}
+	cfg.ApplyDefaults(projectPath)
+	require.NoError(t, cfg.Validate())
+	return cfg
+}
+
+func newTestStoreKey(t *testing.T) string {
+	t.Helper()
+	identity, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+	return identity.String()
+}
+
+func readStoreObject(t *testing.T, store storages.Storager, key string) string {
+	t.Helper()
+	body, err := store.GetObject(t.Context(), key)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, body.Close()) })
+	data, err := io.ReadAll(body)
+	require.NoError(t, err)
+	return string(data)
 }

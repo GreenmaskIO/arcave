@@ -37,14 +37,52 @@ const progressLogMessage = "compose"
 // accumulated bytes are emitted and the buffer is dropped.
 const maxProgressLine = 64 << 10
 
-// progressLevels maps the severity compose attaches to an event onto a log
-// level. The split is "in flight" versus "settled": a step that is still running
-// is DEBUG, the outcome it settles into is INFO.
-var progressLevels = map[api.EventStatus]zerolog.Level{
-	api.Working: zerolog.DebugLevel,
-	api.Done:    zerolog.InfoLevel,
-	api.Warning: zerolog.WarnLevel,
-	api.Error:   zerolog.ErrorLevel,
+// EventState is where one event leaves its object.
+type EventState int
+
+const (
+	// EventWorking is a step still under way.
+	EventWorking EventState = iota
+	// EventDone is the outcome a step settled into.
+	EventDone
+	// EventWarning is a step compose skipped.
+	EventWarning
+	// EventError is a step that failed.
+	EventError
+)
+
+// Event is one compose progress event.
+type Event struct {
+	// Kind is compose's kind of object — Container, Network, Volume, Image — empty when the id
+	// names none.
+	Kind   string
+	Name   string
+	Status string
+	Text   string
+	State  EventState
+}
+
+// EventSink takes the adapter's events in place of the log while it is set.
+type EventSink interface {
+	Event(evt Event)
+}
+
+// progressStates maps the severity compose attaches to an event onto the state
+// it leaves the object in.
+var progressStates = map[api.EventStatus]EventState{
+	api.Working: EventWorking,
+	api.Done:    EventDone,
+	api.Warning: EventWarning,
+	api.Error:   EventError,
+}
+
+// stateLevels is the level a state is logged at: a step in flight is DEBUG, the outcome it
+// settles into INFO.
+var stateLevels = map[EventState]zerolog.Level{
+	EventWorking: zerolog.DebugLevel,
+	EventDone:    zerolog.InfoLevel,
+	EventWarning: zerolog.WarnLevel,
+	EventError:   zerolog.ErrorLevel,
 }
 
 // ProgressLogger turns compose's progress into arcave log records, which is what
@@ -66,11 +104,15 @@ var progressLevels = map[api.EventStatus]zerolog.Level{
 // buffer, which is where a race would corrupt a record by splicing two half-lines
 // together. It does not order the records: concurrent events were unordered
 // before this adapter too.
+//
+// While a sink is set, an event goes to it instead of the log: compose.Client sets the one its
+// call's context carries for the call's duration.
 type ProgressLogger struct {
 	logger zerolog.Logger
 
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	sink EventSink
 }
 
 // NewProgressLogger returns the adapter to hand compose as both its event
@@ -81,6 +123,13 @@ func NewProgressLogger(logger zerolog.Logger) *ProgressLogger {
 	return &ProgressLogger{logger: logger}
 }
 
+// SetSink routes events to sink, or back to the log for nil.
+func (p *ProgressLogger) SetSink(sink EventSink) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sink = sink
+}
+
 // Start is a no-op: an operation's start carries nothing its events do not.
 func (p *ProgressLogger) Start(context.Context, string) {}
 
@@ -88,15 +137,30 @@ func (p *ProgressLogger) Start(context.Context, string) {}
 // which arcave reports in its own right.
 func (p *ProgressLogger) Done(string, bool) {}
 
-// On emits one record per event.
+// On emits one record per event, or hands each to the sink while one is set.
 func (p *ProgressLogger) On(events ...api.Resource) {
+	p.mu.Lock()
+	sink := p.sink
+	p.mu.Unlock()
+
 	for _, event := range events {
+		if sink != nil {
+			kind, name := splitProgressID(event.ID)
+			sink.Event(Event{
+				Kind:   kind,
+				Name:   name,
+				Status: event.Text,
+				Text:   event.Details,
+				State:  progressState(event),
+			})
+			continue
+		}
 		p.event(event)
 	}
 }
 
 func (p *ProgressLogger) event(event api.Resource) {
-	record := p.logger.WithLevel(progressLevel(event))
+	record := p.logger.WithLevel(stateLevels[progressState(event)])
 	if kind, name := splitProgressID(event.ID); name != "" {
 		if kind != "" {
 			record = record.Str("kind", kind)
@@ -121,20 +185,20 @@ func (p *ProgressLogger) event(event api.Resource) {
 	record.Msg(progressLogMessage)
 }
 
-// progressLevel picks the level for one event. Byte-progress ticks are demoted
+// progressState picks the state of one event. Byte-progress ticks are in flight
 // wholesale: pull.go fills Current/Total/Percent from the daemon's own progress
-// messages, and those arrive many times per layer. Demoting them by content
+// messages, and those arrive many times per layer. Judging them by content
 // rather than by remembering the previous status is what keeps this adapter
 // stateless. The terminal "Pull complete" / "Already exists" events arrive with
-// no total, so they stay at INFO: one visible line per layer, none of the ticks.
-func progressLevel(event api.Resource) zerolog.Level {
+// no total, so they are done: one visible line per layer, none of the ticks.
+func progressState(event api.Resource) EventState {
 	if event.Total > 0 {
-		return zerolog.DebugLevel
+		return EventWorking
 	}
-	if level, ok := progressLevels[event.Status]; ok {
-		return level
+	if state, ok := progressStates[event.Status]; ok {
+		return state
 	}
-	return zerolog.InfoLevel
+	return EventDone
 }
 
 // splitProgressID splits compose's event id — "Container arcave-demo-app-1" —

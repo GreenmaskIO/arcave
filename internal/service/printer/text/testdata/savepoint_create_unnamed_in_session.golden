@@ -1,0 +1,5 @@
+Savepoint 01a188c4 · 19:45:35 · stored 1.0 KB
+            count    size  stored
+  volumes       1  1.0 KB  1.0 KB
+
+  roll back:  arcave -p arcave-demo --session 'feature x' rollback 01a188c4-1650-7000-8000-000000000001

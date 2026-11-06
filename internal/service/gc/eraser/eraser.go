@@ -126,6 +126,7 @@ func (s ForgetEraser) Erase(
 		wg            sync.WaitGroup
 		slots         = make(chan struct{}, max(s.concurrency, 1))
 	)
+	ctx, batch := gc.BeginDeletion(ctx, len(repos))
 	for i, repo := range repos {
 		slots <- struct{}{}
 		wg.Go(func() {
@@ -134,7 +135,9 @@ func (s ForgetEraser) Erase(
 		})
 	}
 	wg.Wait()
-	return newForgetDeletion(repos, pruned, failed)
+	deletion := newForgetDeletion(repos, pruned, failed)
+	gc.EndDeletion(ctx, batch, deletion)
+	return deletion
 }
 
 // repoForget is the snapshots of one repository ops name; ids is empty for a prune alone.
@@ -205,14 +208,17 @@ func forgetRepo(ctx context.Context, pruner Pruner, repo repoForget) repoPrune {
 	if ctx.Err() != nil {
 		return repoPrune{notRun: true}
 	}
-	freed, err := pruner.Forget(ctx, repo.objectID, repo.ids)
+	repoCtx, step := gc.BeginTarget(ctx, cdc.NewRepositoryKey(repo.objectID))
+	freed, err := pruner.Forget(repoCtx, repo.objectID, repo.ids)
 	if err != nil {
+		step.End(err)
 		zerolog.Ctx(ctx).Error().Err(err).Str("repository", repo.objectID).Msg("forget dead snapshots")
 		return repoPrune{
 			err:         err,
 			interrupted: ctx.Err() != nil,
 		}
 	}
+	step.Done(gc.NewFreedSample(freed))
 	return repoPrune{freed: freed}
 }
 

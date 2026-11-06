@@ -41,6 +41,8 @@ dist/
 # restic fixture the demo generates
 examples/demo/repo/
 .idea
+.run
+.DS_Store
 
 .mcp.json
 .agents
@@ -49,3 +51,12 @@ CLAUDE.md
 AGENTS.md
 skills-lock.json
 /arcave
+
+# build output of the progress example and the debugger
+/pkg/progress/examples/examples
+/cmd/arcave/__debug_bin*
+
+# docs preview
+tools/docs-preview/node_modules
+tools/docs-preview/build
+tools/docs-preview/.docusaurus

@@ -1,6 +1,6 @@
 ---
 title: Limitations
-description: What arcave does not do — downtime on every operation, no point-in-time recovery, one environment and one writer, manual cleanup in the alpha, and the platform-specific constraints.
+description: What arcave does not do — downtime on every operation, no point-in-time recovery, one environment and one writer per session, cleanup in more than one gc run, and the platform-specific constraints.
 keywords: [arcave limitations, downtime, point-in-time recovery, storage cost, virtiofs, docker compose]
 ---
 
@@ -30,13 +30,15 @@ A rollback replaces the project's state rather than starting a second copy besid
 
 ## One writer per project
 
-Only one command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `session create`, `remove`, `set` or `unset` — runs in a project at a time. A second one fails right away rather than waiting:
+Only one command that changes something — `savepoint create`, `rollback`, `savepoint remove`, `arcave gc`, `session create`, `remove`, `set` or `unset` — runs in a project at a time. A second one on the same machine fails right away rather than waiting:
 
 ```text
 another arcave command is already running in this project
 ```
 
-Commands that only read — `savepoint list`, `session list`, `session current`, `savepoint remove --dry-run` — always run. This guard works on one machine only. Don't point two machines at the same store.
+Commands that only read — `savepoint list`, `session list`, `session current`, `savepoint remove --dry-run` — always run.
+
+Machines sharing one store take turns per session: a command that finds the session held by another machine waits up to 60 seconds, then fails naming the holder. See [One session at a time across hosts](../how_it_works.md#one-session-at-a-time-across-hosts). The one thing not to run on a shared store while another machine works in the same session is a deleting `arcave gc`, see [gc on a shared store](#gc-on-a-shared-store).
 
 ## A rollback puts back the project, not the outside world
 
@@ -72,7 +74,6 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 [`arcave gc`](cli/gc.md) deletes dead savepoint trees, the images and blobs no savepoint uses, the `cdc` snapshots of removed savepoints, and the layer tags no container uses. `arcave gc --dry-run` reports without deleting anything. Some space takes more than one run to come back:
 
 * **An unused image.** Its layers go on the run after the image.
-* **A recent layer tag.** A tag younger than `gc.restored_layer_grace`, an hour by default, waits for a later run.
 * **An interrupted prune.** If a `cdc` repository's `restic forget --prune` is cut short after the snapshots are forgotten, the next gc prunes that repository again.
 
 `arcave session remove` frees everything a session holds, `cdc` repositories included; `arcave session list --all` lists the trees a failed fork left, and `session remove <id>` deletes one. The default `baseline` session can't be deleted: once you no longer need any of its savepoints, `arcave session remove baseline --force` empties it.
@@ -80,6 +81,10 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 ### gc on a shared store
 
 The session's lock in the store is taken by writing it, waiting a second, and reading it back, because the stores arcave supports offer no write-if-absent. Two machines claiming it at the same moment can, rarely, both believe they hold it. For a capture that only costs a savepoint, but a gc that deletes could then remove a blob a capture on the other machine has just reused, and that savepoint would fail to roll back. Run `arcave gc` without `--dry-run` only while no other machine works in the session. `--dry-run` is safe anywhere.
+
+### gc is not kept out of a rollback's window from elsewhere
+
+A rollback loads its layers into the daemon and tags them before it creates the containers that run on them. The project lock keeps a gc in the same checkout out of that window, and the session's lock one in the same session on any host sharing the store. A gc of the same arcave project on the same daemon, in another session or over another store, is kept out by neither: it removes the tags, and the rollback fails when it creates or rebuilds its containers and goes back to its safety snapshot, or takes down what it created. No data is lost: the layers stay in the store, and running the rollback again passes. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
 
 ### Some layer tags gc never judges
 
@@ -95,7 +100,22 @@ If a rollback is killed partway through, arcave refuses every command that chang
 
 ## `cdc` and host bind mounts on macOS
 
-On Docker Desktop for macOS, the `cdc` backend can't capture a host bind mount (VirtioFS returns `EIO`). Named volumes are fine. Use a named volume, switch Docker Desktop's file sharing to gRPC FUSE, or use `fullcopy` for that project.
+On Docker Desktop for macOS with VirtioFS file sharing, the `cdc` backend can fail on a host bind mount (VirtioFS returns `EIO`). Named volumes are fine. Use a named volume, switch Docker Desktop's file sharing to gRPC FUSE, or use `fullcopy` for that project.
+
+## Encryption hides contents, not shape
+
+[`encryption`](configuration.md#encryption) keeps whoever reads the store — the provider, a leaked read-only bucket key, a shared SFTP account — from reading or silently altering any object. It does not hide:
+
+- **Names**: savepoint and session ids, volume object ids (`volume-named-myapp_pgdata`), compose project names, image digests and restic pack names.
+- **Shape**: object sizes, give or take the encryption overhead, and how many objects there are and when they were written.
+- **Anything from whoever can write**: they can delete objects, or put one encrypted object under another's name.
+- **The host**: the key in `.arcave/config.yaml` when it is written there literally, the process environment, and the images in the Docker daemon — a writable layer holding a secret is encrypted in the store, not in the daemon.
+
+A lost key cannot be recovered, and an unencrypted store is not encrypted in place: switching encryption on over one marks it as encrypted and leaves what it held unreadable. Start an encrypted store at an empty location.
+
+## Podman is not supported yet
+
+arcave lets a Podman daemon through with a warning, but a savepoint on it fails by default. Getting past that makes a `fullcopy` rollback lose volume data, and on either backend a later rollback can fail and remove the project's containers. See [Requirements](requirements.md#docker-25-or-newer).
 
 ## SFTP storage does not check host keys
 

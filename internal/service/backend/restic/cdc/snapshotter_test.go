@@ -78,11 +78,10 @@ func TestSnapshotter_Snapshot(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, model.SnapshotBackendCDC, stat.Type)
-			assert.Equal(t, Payload{
-				SnapshotObjectID:    "3f8a1c0d9b",
-				DataAdded:           1048576,
-				TotalBytesProcessed: 10485760,
-			}, stat.Payload)
+			assert.Equal(t, Payload{SnapshotObjectID: "3f8a1c0d9b"}, stat.Payload)
+			assert.Equal(t, int64(10485760), stat.SizeBytes, "the volume's logical size")
+			assert.Equal(t, int64(524288), stat.StoredBytes, "what the repository grew by, packed")
+			assert.Equal(t, int64(10485760-1048576), stat.ReusedBytes, "what was read but not added, before compression")
 
 			// Whatever the state, the locks are gone and nothing else was touched.
 			assert.Empty(t, objectsUnder(t, h.repo, locksPrefix), "every standing lock is an orphan by construction")
@@ -139,7 +138,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 		assert.ElementsMatch(t,
 			[]string{"RESTIC_REPOSITORY=" + demoRepoURL, "RESTIC_PASSWORD=" + resticPassword},
 			spec.Env, "run %d", i)
-		assert.False(t, spec.HostNetwork, "run %d: the default transport is the bridge", i)
+		assert.False(t, spec.HostNetwork, "run %d: tcp keeps off the host network unless told", i)
 	}
 	h.runner.AssertExpectations(t)
 }
@@ -147,9 +146,7 @@ func TestSnapshotter_Snapshot_CommandLine(t *testing.T) {
 // The transport the DI root resolved reaches every restic container.
 func TestSnapshotter_Snapshot_HostNetwork(t *testing.T) {
 	// Arrange
-	opts := defaultOptions()
-	opts.HostNetwork = true
-	h := newHarness(t, opts)
+	h := newHarnessOver(t, demoHostTCPTransport, defaultOptions())
 	h.runner.On("RunOneShot", mock.Anything, matchRestic("init")).Return(nil).Once()
 	h.runner.On("RunOneShot", mock.Anything, matchRestic("backup")).
 		Run(respondWith(backupSummaryLine)).Return(nil).Once()
@@ -225,7 +222,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 		Run(respondWith(backupSummaryLine)).Return(nil).Once()
 
 	snapshotter, err := NewFactory(Dependencies{
-		Runner: runner, RepoURLBase: demoRepoURLBase,
+		Runner: runner, Transport: demoTCPTransport,
 		RepositoryRoot: newStore(t), Options: defaultOptions(),
 	}).New(model.BackendSpec{Volume: vol})
 	require.NoError(t, err)
@@ -253,7 +250,7 @@ func TestSnapshotter_Snapshot_CapturesASubpathMountedVolumeWhole(t *testing.T) {
 // report it, restic would simply talk to the wrong path.
 func TestSnapshotter_newRunner(t *testing.T) {
 	// Arrange
-	backend, err := NewFactory(Dependencies{RepoURLBase: demoRepoURLBase, RepositoryRoot: newStore(t)}).
+	backend, err := NewFactory(Dependencies{Transport: demoTCPTransport, RepositoryRoot: newStore(t)}).
 		New(model.BackendSpec{Volume: demoVolume()})
 	require.NoError(t, err)
 	snapshotter, ok := backend.(*Snapshotter)
@@ -264,7 +261,9 @@ func TestSnapshotter_newRunner(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	got := resticRunner.repoURL
+	transport, ok := resticRunner.transport.(TCPTransport)
+	require.True(t, ok)
+	got := transport.newRepositoryURL(resticRunner.objectID)
 	assert.Equal(t, demoRepoURL, got)
 	parsed, err := url.Parse(strings.TrimPrefix(got, "rest:"))
 	require.NoError(t, err)
@@ -343,11 +342,7 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	// Act
 	err := h.snapshotter.Restore(ctx, model.BackendRestoreRequest{
 		SnapshotID: "019e843e-1650-7000-8000-000000000000",
-		Payload: map[string]any{
-			"restic_snapshot_id":    "3f8a1c0d9b",
-			"data_added":            float64(1048576),
-			"total_bytes_processed": float64(10485760),
-		},
+		Payload:    map[string]any{"restic_snapshot_id": "3f8a1c0d9b"},
 	})
 
 	// Assert

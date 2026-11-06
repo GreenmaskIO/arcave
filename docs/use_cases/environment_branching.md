@@ -8,6 +8,10 @@ keywords: [database branching, environment branching, session, fork, savepoint, 
 
 Branch your environment roughly the way you branch your code: fork a line off a known state, go off and change things on it, and switch between lines when you want to.
 
+<video src={require('../assets/demo/sessions.mp4').default} autoPlay loop muted playsInline controls width="100%" />
+
+*What it shows:* `session create --from baseline` copies the baseline into `feature-x`; with `feature-x` current, a dropped table and its savepoint stay in `feature-x`; `session list` shows both lines; back in `baseline`, `rollback seed` brings the table back.
+
 In arcave a branch is a [session](../sessions.md) — an independent line of savepoints. A fork copies every savepoint of the session it starts from, and nothing written on one line reaches the other. It is not a copy-on-write clone and there is no second environment running beside the first — but for the thing developers actually want from database branching on a laptop, it gets most of the way there with nothing but Docker.
 
 The commands below assume the compose project is named in the shell, `export ARCAVE_PROJECT_NAME=myapp`, or with `-p myapp` on each `savepoint` and `rollback` command.
@@ -52,7 +56,7 @@ The session names and the git branch names are yours to keep in step. arcave doe
 * **A named line you can return to.** Each session keeps its own savepoints. `arcave rollback billing-wip` in `feature/new-billing` puts the environment back exactly as it stood, as many times as you like, and the other sessions never see that savepoint.
 * **A shared starting point.** Every fork from `baseline` starts with a copy of `main-baseline`, under the same name and id.
 * **It covers the whole environment.** Postgres, Redis, MinIO, the app container's writable layer, the images, and the compose spec itself. Switching back does not leave a cache holding the other branch's data, or a service running the other branch's image.
-* **No infrastructure to run.** No copy-on-write filesystem, no volume plugin, no storage appliance, no hosted service. Docker, and — for [`cdc`](../reference/configuration.md#snapshot) — permission to run a stock `restic` container and expose a loopback port to it.
+* **No infrastructure to run.** No copy-on-write filesystem, no volume plugin, no storage appliance, no hosted service. Docker, and — for [`cdc`](../reference/configuration.md#snapshot) — permission to run a stock `restic` container.
 
 ## Where the analogy stops
 
@@ -94,10 +98,11 @@ Within a session, prune savepoints the way you prune merged branches:
 arcave savepoint list
 arcave savepoint remove --retain-recent 10
 arcave savepoint remove --retain-for 14d --dry-run
-arcave savepoint remove 019e843e-1650-7000-8000-000000000000 019e8488-3ac8-7000-8000-000000000000
+arcave savepoint remove before-refactor 019e8488-3ac8-7000-8000-000000000000
+arcave gc
 ```
 
-`--dry-run` reports what would go without deleting anything. Deletion by id is all-or-nothing: an unknown id is an error and removes nothing, so a typo cannot half-empty your set of branch points.
+`--dry-run` reports what would go without deleting anything. Removal by name or id is all-or-nothing: an unknown one is an error and removes nothing, so a typo cannot half-empty your set of branch points. `savepoint remove` deletes the records and each savepoint's own directory; [`arcave gc`](../reference/cli/gc.md) frees what they shared with other savepoints, and their `cdc` snapshots.
 
 ## Related docs
 

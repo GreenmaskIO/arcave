@@ -47,12 +47,18 @@ const (
 	demoImage = "restic/restic:0.19.1"
 )
 
+// demoTCPTransport reaches the repositories over the TCP server.
+var demoTCPTransport = TCPTransport{RepoURLBase: demoRepoURLBase}
+
+// demoHostTCPTransport is demoTCPTransport with its containers on the host network.
+var demoHostTCPTransport = TCPTransport{RepoURLBase: demoRepoURLBase, HostNetwork: true}
+
 // The restic ndjson these tests feed back, taken from the shape a real run
 // prints: progress lines, then one summary.
 const (
 	backupStatusLine  = `{"message_type":"status","seconds_elapsed":2,"percent_done":0.5,"total_files":3,"files_done":1}`
 	backupSummaryLine = `{"message_type":"summary","files_new":3,"files_changed":0,"dirs_new":2,` +
-		`"data_added":1048576,"total_files_processed":3,"total_bytes_processed":10485760,` +
+		`"data_added":1048576,"data_added_packed":524288,"total_files_processed":3,"total_bytes_processed":10485760,` +
 		`"total_duration":1.5,"snapshot_id":"3f8a1c0d9b"}`
 	restoreSummaryLine = `{"message_type":"summary","total_files":3,"files_restored":3,` +
 		`"total_bytes":10485760,"bytes_restored":10485760}`
@@ -110,6 +116,13 @@ type harness struct {
 func newHarness(t *testing.T, opts Options) *harness {
 	t.Helper()
 
+	return newHarnessOver(t, demoTCPTransport, opts)
+}
+
+// newHarnessOver is newHarness over transport.
+func newHarnessOver(t *testing.T, transport Transport, opts Options) *harness {
+	t.Helper()
+
 	root := newStore(t)
 	repo, err := root.SubStorage(demoObjectID, true)
 	require.NoError(t, err)
@@ -119,7 +132,7 @@ func newHarness(t *testing.T, opts Options) *harness {
 
 	snapshotter, err := NewFactory(Dependencies{
 		Runner:         runner,
-		RepoURLBase:    demoRepoURLBase,
+		Transport:      transport,
 		RepositoryRoot: root,
 		Options:        opts,
 	}).New(model.BackendSpec{Volume: demoVolume()})

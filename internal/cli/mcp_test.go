@@ -494,10 +494,10 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				svc.On("GenerateCompose", mock.Anything, model.GenerateComposeRequest{AbsolutePaths: true}).
 					Return(model.GenerateComposeResponse{ComposeProject: "demo", Services: []string{"db"}, Spec: []byte("name: demo\n")}, nil).Once()
 			}, want: composeGenerateOutput{ComposeProject: "demo", Services: []string{"db"}, Spec: "name: demo\n"}},
-		{tool: "gc", args: map[string]any{"restored_layer_grace": "1h", "kinds": []string{"upstream-images"}},
+		{tool: "gc", args: map[string]any{"kinds": []string{"upstream-images"}},
 			setup: func(svc *mockService) {
 				svc.On("GarbageCollect", mock.Anything, model.GarbageCollectRequest{
-					DryRun: true, RestoredLayerGrace: utils.New(time.Hour), DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages},
+					DryRun: true, DataKinds: []model.GarbageDataKind{model.GarbageDataKindUpstreamImages},
 				}).
 					Return(gcResult, model.ErrGarbageCollectPartial).Once()
 			}, want: gcResult},

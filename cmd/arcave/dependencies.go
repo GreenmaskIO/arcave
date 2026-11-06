@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
 	"github.com/docker/cli/cli/streams"
@@ -43,6 +45,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	cfgrepo "github.com/greenmaskio/arcave/internal/repository/config"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
+	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
@@ -66,14 +69,18 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
-	"github.com/greenmaskio/arcave/internal/service/printer/json"
 	"github.com/greenmaskio/arcave/internal/service/sessionlock"
+	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
+
+// composeResourceObject is the resource kind of a compose event whose id names no kind of object.
+const composeResourceObject = "object"
 
 // dependencies is the composition root's bag of per-command collaborators.
 type dependencies struct {
@@ -85,11 +92,10 @@ type dependencies struct {
 	composeService      api.Compose
 	engine              *docker.Engine
 	composeRunner       *compose.Client
-	// resticServer is held for one reason only — so Close shuts it down. What goes
-	// down to the backend is the URL base, never the object.
-	resticServer *echo.Echo
+	// cdcTransport is how cdc's containers reach their repositories, closed by Close.
+	cdcTransport openedCDCTransport
 	service      *core.Service
-	printer      *json.Printer
+	printer      resultPrinter
 }
 
 // newDependencies wires the savepoint workflows for the project rooted at projectPath, in the
@@ -103,10 +109,11 @@ func newDependencies(
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	storeRoot, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
+	storeRoot, arcaveProjectStore := arcaveProject.root, arcaveProject.store
 	opened.add("store root", storeRoot)
 
 	sessions := sessionrepo.New(arcaveProjectStore)
@@ -127,7 +134,8 @@ func newDependencies(
 	}
 
 	// Where compose's own progress goes, on the logger initRoot resolved.
-	progressEvents, progressWriter := newProgress(cfg.Compose.Progress, *log.Ctx(ctx))
+	progressEvents, progressWriter, composeEvents := newProgress(
+		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx))
 	opened.add("compose progress writer", progressWriter)
 
 	// One docker/cli instance is the single daemon connection both halves of
@@ -150,8 +158,10 @@ func newDependencies(
 		return nil, fmt.Errorf("initialise compose: %w", err)
 	}
 	composeRunner := compose.NewClient(composeService, compose.Options{
-		WaitTimeout: cfg.Compose.WaitTimeout,
-		StopTimeout: cfg.Compose.StopTimeout,
+		WaitTimeout:     cfg.Compose.WaitTimeout,
+		StopTimeout:     cfg.Compose.StopTimeout,
+		Events:          composeEvents,
+		SinkFromContext: newComposeEventSink,
 	})
 
 	// The effective cdc section, defaults included even where the project carries
@@ -168,32 +178,24 @@ func newDependencies(
 		return nil, fmt.Errorf("initialise restic repository root: %w", err)
 	}
 
-	// The server cdc's containers fetch their repositories over. It listens for
-	// the whole process, so an address that will not bind fails the command up
-	// front, and the port it took is known here — before the first backend.
-	resticServer := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
-	resticPort, err := rest.Serve(resticServer, cdcCfg.ServerAddress)
-	if err != nil {
-		return nil, fmt.Errorf("start the restic server: %w", err)
-	}
-	opened.add("restic server", resticServer)
-
-	cdcHostNetwork, cdcContainerHost, err := resolveCDCTransport(ctx, cdcCfg, engine)
+	// Under tcp the server listens for the whole process, so a bad address fails up front.
+	cdcTransport, err := openCDCTransport(ctx, cdcCfg, engine, resticRoot)
 	if err != nil {
 		return nil, err
+	}
+	if cdcTransport.server != nil {
+		opened.add("restic server", cdcTransport.server)
 	}
 
 	// The one place a volume's Backend becomes an instance, and the only place
 	// that names the engine — through the seam its backend declares.
 	backendRegistry, err := core.NewSnapshotBackendRegistry(
-		fullcopy.NewFactory(engine),
+		fullcopy.NewFactory(engine, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
-			Runner: engine,
-			// The container's own name for the server, joined to the port it bound:
-			// the value the backend is handed, so nothing below holds the server.
-			RepoURLBase:    rest.RepositoryURLBase(cdcCfg.ServerScheme, cdcContainerHost, resticPort),
+			Runner:         engine,
+			Transport:      cdcTransport.transport,
 			RepositoryRoot: resticRoot,
-			Options:        newCDCOptions(cdcCfg, cdcHostNetwork),
+			Options:        newCDCOptions(cdcCfg),
 		}),
 	)
 	if err != nil {
@@ -254,17 +256,69 @@ func newDependencies(
 		composeService:      composeService,
 		engine:              engine,
 		composeRunner:       composeRunner,
-		resticServer:        resticServer,
+		cdcTransport:        cdcTransport,
 		service:             svc,
-		printer:             json.New(os.Stdout),
+		printer:             loadRunOutput(),
 	}, nil
 }
 
-// resolveCDCTransport turns backends.cdc.network_mode into the transport the
-// restic containers use: whether they join the host's network namespace, and
+// openedCDCTransport is how cdc's containers reach one tree of repositories.
+type openedCDCTransport struct {
+	transport cdc.Transport
+	// server is the tcp transport's listener; nil under stdio.
+	server *echo.Echo
+}
+
+// Close stops the tcp transport's server, if any.
+func (o openedCDCTransport) Close(ctx context.Context) { shutdownResticServer(ctx, o.server) }
+
+// openCDCTransport opens backends.cdc.transport over resticRoot: a stream server
+// under stdio, a listening server and the URL base to dial it at under tcp.
+func openCDCTransport(
+	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, resticRoot storages.Storager,
+) (openedCDCTransport, error) {
+	switch cfg.Transport {
+	case config.CDCTransportStdio:
+		return openedCDCTransport{
+			transport: cdc.StdioTransport{
+				Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot)),
+			},
+		}, nil
+	case config.CDCTransportTCP:
+		return openTCPTransport(ctx, cfg, engine, resticRoot)
+	default:
+		return openedCDCTransport{}, fmt.Errorf("unsupported backends.cdc.transport %q", cfg.Transport)
+	}
+}
+
+// openTCPTransport starts the server restic containers dial, and names the URL base
+// they dial it at.
+func openTCPTransport(
+	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, resticRoot storages.Storager,
+) (openedCDCTransport, error) {
+	hostNetwork, containerHost, err := resolveCDCNetwork(ctx, cfg, engine)
+	if err != nil {
+		return openedCDCTransport{}, err
+	}
+	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
+	port, err := rest.Serve(server, cfg.ServerAddress)
+	if err != nil {
+		return openedCDCTransport{}, fmt.Errorf("start the restic server: %w", err)
+	}
+	return openedCDCTransport{
+		transport: cdc.TCPTransport{
+			RepoURLBase: rest.RepositoryURLBase(cfg.ServerScheme, containerHost, port),
+			HostNetwork: hostNetwork,
+		},
+		server: server,
+	}, nil
+}
+
+// resolveCDCNetwork turns backends.cdc.network_mode into how the tcp
+// transport's restic containers reach the server: whether they join the host's network namespace, and
 // the host their repository URL names. Auto probes the daemon, but mispicks
 // host networking for a remote Linux daemon — bridge is the escape hatch there.
-func resolveCDCTransport(
+func resolveCDCNetwork(
 	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine,
 ) (hostNetwork bool, containerHost string, err error) {
 	switch cfg.NetworkMode {
@@ -284,14 +338,12 @@ func resolveCDCTransport(
 	}
 }
 
-// newCDCOptions translates the backends.cdc section into the backend's own
-// options, plus the transport resolveCDCTransport picked.
-func newCDCOptions(cfg config.CDCBackend, hostNetwork bool) cdc.Options {
+// newCDCOptions translates the backends.cdc section into the backend's own options.
+func newCDCOptions(cfg config.CDCBackend) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
 		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
-		HostNetwork: hostNetwork,
 	}
 }
 
@@ -322,22 +374,23 @@ func (p *partial) releaseOnFailure(ctx context.Context) {
 	}
 }
 
-// Close releases the restic server, the Docker engine, the progress writer and
+// Close releases the cdc transport, the Docker engine, the progress writer and
 // the store this root owns; only the store's error is returned. The progress
 // writer is closed after the engine, so a line compose left unterminated is
 // still emitted. dockerClient is not closed — the engine was built over it.
 func (d *dependencies) Close(ctx context.Context) error {
-	shutdownResticServer(ctx, d.resticServer)
+	d.cdcTransport.Close(ctx)
 	closeQuietly(ctx, "docker engine", d.engine)
 	closeQuietly(ctx, "compose progress writer", d.progressWriter)
 	return d.storeRoot.Close()
 }
 
-// shutdownResticServer stops serving gracefully: restic in a container reports a
-// severed connection as a repository error rather than as the shutdown it was.
-// The deadline is detached from ctx, which is routinely already cancelled by the
-// time Close runs from a defer — and a cancelled Shutdown severs at once.
+// shutdownResticServer stops server gracefully, on a deadline detached from ctx: restic
+// reads a severed connection as a repository error. A nil server is a no-op.
 func shutdownResticServer(ctx context.Context, server *echo.Echo) {
+	if server == nil {
+		return
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resticShutdownTimeout)
 	defer cancel()
 
@@ -348,15 +401,15 @@ func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 
 // newInitDependencies wires `arcave init`: somewhere to write the config, nothing
 // more. Nothing here holds a resource.
-func newInitDependencies(projectPath string) (*core.InitService, *json.Printer) {
-	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), json.New(os.Stdout)
+func newInitDependencies(projectPath string) (*core.InitService, resultPrinter) {
+	return core.NewInitService(projectPath, cfgrepo.New(projectPath)), loadRunOutput()
 }
 
 // toolsDependencies is what the tools commands run on: one daemon connection, no store.
 type toolsDependencies struct {
 	dockerClient client.APIClient
 	service      *core.ComposeFileService
-	printer      *json.Printer
+	printer      resultPrinter
 }
 
 // newToolsDependencies wires the tools commands for composeProject over the daemon docker.* names.
@@ -375,7 +428,11 @@ func newToolsDependencies(cfg config.Config, composeProject model.DockerComposeP
 		ProjectAssembler: composespec.NewAssembler(),
 		SpecCodec:        composespec.NewComposeFileCodec(),
 	})
-	return &toolsDependencies{dockerClient: dockerClientAPI, service: svc, printer: json.New(os.Stdout)}, nil
+	return &toolsDependencies{
+		dockerClient: dockerClientAPI,
+		service:      svc,
+		printer:      loadRunOutput(),
+	}, nil
 }
 
 func (d *toolsDependencies) Close() error {
@@ -387,16 +444,20 @@ func (d *toolsDependencies) Close() error {
 type sessionDependencies struct {
 	store   storages.Storager
 	service *core.SessionService
-	printer *json.Printer
+	printer resultPrinter
 }
 
 func newSessionDependencies(ctx context.Context, projectPath string, cfg config.Config) (*sessionDependencies, error) {
-	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
-	svc := newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore))
-	return &sessionDependencies{store: root, service: svc, printer: json.New(os.Stdout)}, nil
+	svc := newSessionService(projectPath, arcaveProject.store, sessionrepo.New(arcaveProject.store))
+	return &sessionDependencies{
+		store:   arcaveProject.root,
+		service: svc,
+		printer: loadRunOutput(),
+	}, nil
 }
 
 // newSessionService wires the session commands over the arcave project's store.
@@ -439,21 +500,75 @@ func newRunnerInfo() heartbeat.RunnerInfo {
 	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
 }
 
-// openArcaveProjectStore opens the store root and descends to the arcave project; the root
-// is what the caller closes.
-func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (root, arcaveProjectStore storages.Storager, err error) {
-	root, err = storefactory.Root(ctx, cfg.Storage, projectPath)
+// openedArcaveProject is the arcave project's store as every workflow reads and writes it.
+type openedArcaveProject struct {
+	// root is what the caller closes.
+	root  storages.Storager
+	store storages.Storager
+}
+
+// openArcaveProjectStore opens the store root and descends to the arcave project, encrypted to
+// encryption.key under encryption.enabled.
+func openArcaveProjectStore(ctx context.Context, cfg config.Config, projectPath string) (openedArcaveProject, error) {
+	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialise store root: %w", err)
+		return openedArcaveProject{}, fmt.Errorf("initialise store root: %w", err)
 	}
-	arcaveProjectStore, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name))
+	arcaveProject, err := openArcaveProject(ctx, cfg, root)
 	if err != nil {
 		if closeErr := root.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("close store root")
 		}
-		return nil, nil, fmt.Errorf("initialise arcave project store: %w", err)
+		return openedArcaveProject{}, err
 	}
-	return root, arcaveProjectStore, nil
+	return arcaveProject, nil
+}
+
+func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Storager) (openedArcaveProject, error) {
+	var (
+		plain    storages.Storager
+		identity *age.X25519Identity
+		store    storages.Storager
+		err      error
+	)
+	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
+		return openedArcaveProject{}, fmt.Errorf("initialise arcave project store: %w", err)
+	}
+	markers := encryptionmarker.New(plain)
+	if !cfg.Encryption.Enabled {
+		if err = storekey.RequirePlain(ctx, markers); err != nil {
+			return openedArcaveProject{}, newStoreKeyError(err)
+		}
+		return openedArcaveProject{
+			root:  root,
+			store: plain,
+		}, nil
+	}
+	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
+		return openedArcaveProject{}, newStoreKeyError(err)
+	}
+	if err = storekey.AdmitEncrypted(ctx, markers, identity); err != nil {
+		return openedArcaveProject{}, newStoreKeyError(err)
+	}
+	if store, err = storefactory.Encrypt(plain, identity); err != nil {
+		return openedArcaveProject{}, err
+	}
+	return openedArcaveProject{
+		root:  root,
+		store: store,
+	}, nil
+}
+
+// newStoreKeyError adds the fix to a store the encryption section does not open.
+func newStoreKeyError(err error) error {
+	switch {
+	case errors.Is(err, model.ErrInvalidStoreKey), errors.Is(err, model.ErrWrongStoreKey):
+		return fmt.Errorf("open the store: %w (check encryption.key, "+encryptionKeyEnv+" by default)", err)
+	case errors.Is(err, model.ErrStoreEncrypted):
+		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.key)", err)
+	default:
+		return fmt.Errorf("open the arcave project store: %w", err)
+	}
 }
 
 // closeQuietly closes c and logs any error without failing the caller.
@@ -537,37 +652,88 @@ func (nopWriteCloser) Close() error { return nil }
 // newProgress translates compose.progress into the processor compose reports its
 // events to plus the stream it writes its few plain lines on. The destination is
 // always stderr or nothing — stdout carries arcave's JSON — and the default
-// re-emits compose's events as arcave log records, so the run speaks one format.
-func newProgress(mode string, logger zerolog.Logger) (api.EventProcessor, io.WriteCloser) {
+// re-emits compose's events as arcave log records, so the run speaks one format;
+// that adapter is returned again as what the events reach a step through, nil
+// otherwise.
+func newProgress(mode string, logger zerolog.Logger) (api.EventProcessor, io.WriteCloser, *compose.ProgressLogger) {
 	switch mode {
 	case config.ProgressQuiet:
 		// Discarding the stream too covers the warnings compose writes outside the UI.
-		return display.Quiet(), nopWriteCloser{io.Discard}
+		return display.Quiet(), nopWriteCloser{io.Discard}, nil
 	case config.ProgressTTY:
 		// compose's own choice for --progress auto: the live view on a terminal,
 		// plain lines in a pipe.
 		if streams.NewOut(os.Stderr).IsTerminal() {
-			return display.Full(os.Stderr, os.Stderr, true), nopWriteCloser{os.Stderr}
+			return display.Full(os.Stderr, os.Stderr, true), nopWriteCloser{os.Stderr}, nil
 		}
-		return display.Plain(os.Stderr), nopWriteCloser{os.Stderr}
+		return display.Plain(os.Stderr), nopWriteCloser{os.Stderr}, nil
 	default:
-		logger := compose.NewProgressLogger(logger)
-		return logger, logger
+		adapter := compose.NewProgressLogger(logger)
+		return adapter, adapter, adapter
 	}
 }
 
 // newComposeService builds the compose library over dockerCli, never touching
-// stdout: events go to progress, compose's plain lines to stream, stdin is empty,
+// stdout: events go to events, compose's plain lines to stream, stdin is empty,
 // and a prompt — a volume whose configuration changed, for one — is answered yes
 // without being printed, since arcave runs non-interactively.
 func newComposeService(
-	dockerCli command.Cli, progress api.EventProcessor, stream io.Writer,
+	dockerCli command.Cli, events api.EventProcessor, stream io.Writer,
 ) (api.Compose, error) {
 	return dockercompose.NewComposeService(dockerCli,
 		dockercompose.WithStreams(io.Discard, stream, strings.NewReader("")),
 		dockercompose.WithPrompt(dockercompose.AlwaysOkPrompt()),
-		dockercompose.WithEventProcessor(progress),
+		dockercompose.WithEventProcessor(events),
 	)
+}
+
+// composeEventSink puts compose's events on the progress step of the call, a resource per object.
+type composeEventSink struct {
+	step *progress.StepReporter
+}
+
+// newComposeEventSink is the sink of the step ctx carries; nil under a mute one, so the events
+// stay in the log.
+func newComposeEventSink(ctx context.Context) compose.EventSink {
+	step := progress.Current(ctx)
+	if step.IsMute() {
+		return nil
+	}
+	return composeEventSink{step: step}
+}
+
+// Event reports one event as its object's line: in flight, settled, or a warning.
+func (s composeEventSink) Event(evt compose.Event) {
+	kind := strings.ToLower(evt.Kind)
+	if kind == "" {
+		kind = composeResourceObject
+	}
+	var (
+		resource = progress.Resource{
+			Kind: progress.ResourceKind(kind),
+			ID:   evt.Name,
+		}
+		msg = strings.TrimSpace(evt.Status + " " + evt.Text)
+	)
+	switch evt.State {
+	case compose.EventWorking:
+		s.step.UpdateResource(resource, msg)
+	case compose.EventDone:
+		s.step.SettleResource(resource, msg)
+	default:
+		s.step.WarnResource(resource, msg)
+	}
+}
+
+// composeProgressMode keeps compose's own renderer off a terminal arcave's tree is drawn on:
+// two renderers on one stderr tear each other's frames.
+func composeProgressMode(ctx context.Context, mode string, drawing bool) string {
+	if !drawing || mode != config.ProgressTTY {
+		return mode
+	}
+	log.Ctx(ctx).Warn().Msg("compose.progress: tty is ignored while arcave draws its own progress; " +
+		"compose's progress goes to the log, pass --progress log to keep compose's renderer")
+	return config.ProgressLog
 }
 
 // newDockerClient resolves cfg into the one docker/cli instance both halves of
@@ -668,12 +834,13 @@ func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 	}
 }
 
-// gcDependencies is what gc runs on: the arcave project's store and the daemon. It holds no
-// printer, since arcave mcp builds one too.
+// gcDependencies is what gc runs on: the arcave project's store and the daemon; arcave mcp
+// leaves its printer unused.
 type gcDependencies struct {
 	store   storages.Storager
 	engine  *docker.Engine
 	service *gc.GarbageCollector
+	printer resultPrinter
 }
 
 // newGCDependencies wires a gc over the session's compose projects, one collector per kind. The
@@ -684,10 +851,11 @@ func newGCDependencies(
 	var opened partial
 	defer func() { opened.releaseOnFailure(ctx) }()
 
-	root, arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath)
 	if err != nil {
 		return nil, err
 	}
+	root, arcaveProjectStore := arcaveProject.root, arcaveProject.store
 	opened.add("store root", root)
 
 	sessions := sessionrepo.New(arcaveProjectStore)
@@ -707,11 +875,7 @@ func newGCDependencies(
 	engine := docker.NewEngine(dockerClientAPI)
 	opened.add("docker engine", engine)
 
-	deps := &gcDependencies{
-		store:  root,
-		engine: engine,
-	}
-	deps.service = gc.New(gc.Deps{
+	service := gc.New(gc.Deps{
 		Store:                    arcaveProjectStore,
 		Session:                  session.ID,
 		Sessions:                 sessions,
@@ -725,10 +889,14 @@ func newGCDependencies(
 		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
 		// resticrepo reads the repositories through restic, not the listing.
 		UnlistedNamespaces: []string{cdc.NamespaceRepos},
-		RestoredLayerGrace: utils.Value(cfg.GC.RestoredLayerGrace),
 	})
 	opened.keep()
-	return deps, nil
+	return &gcDependencies{
+		store:   root,
+		engine:  engine,
+		service: service,
+		printer: loadRunOutput(),
+	}, nil
 }
 
 func (d *gcDependencies) Close(ctx context.Context) error {
@@ -787,38 +955,29 @@ func newComposeProjectErasers(cfg config.Config, engine *docker.Engine) []gc.Com
 	}
 }
 
-// servedRestic is one compose project's restic repositories, served to restic containers.
-type servedRestic struct {
+// openedRestic is one compose project's restic repositories, served to restic containers.
+type openedRestic struct {
 	// root is the repositories as objects, rooted at cdc.NamespaceRepos.
-	root        storages.Storager
-	repoURLBase string
-	options     cdc.Options
-	server      *echo.Echo
+	root storages.Storager
+	openedCDCTransport
 }
 
-// serveResticRepositories starts the restic server over store's repositories, as newDependencies
-// serves them to the cdc backend; shutdownResticServer stops it.
-func serveResticRepositories(
+// openResticRepositories opens the transport over store's repositories, as newDependencies
+// serves them to the cdc backend; the transport's Close releases it.
+func openResticRepositories(
 	ctx context.Context, cfg config.CDCBackend, engine *docker.Engine, store storages.Navigator,
-) (servedRestic, error) {
+) (openedRestic, error) {
 	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
 	if err != nil {
-		return servedRestic{}, fmt.Errorf("open restic repository root: %w", err)
+		return openedRestic{}, fmt.Errorf("open restic repository root: %w", err)
 	}
-	hostNetwork, containerHost, err := resolveCDCTransport(ctx, cfg, engine)
+	transport, err := openCDCTransport(ctx, cfg, engine, resticRoot)
 	if err != nil {
-		return servedRestic{}, err
+		return openedRestic{}, err
 	}
-	server := rest.NewEcho(ctx, repo.NewResolver(resticRoot))
-	port, err := rest.Serve(server, cfg.ServerAddress)
-	if err != nil {
-		return servedRestic{}, fmt.Errorf("start the restic server: %w", err)
-	}
-	return servedRestic{
-		root:        resticRoot,
-		repoURLBase: rest.RepositoryURLBase(cfg.ServerScheme, containerHost, port),
-		options:     newCDCOptions(cfg, hostNetwork),
-		server:      server,
+	return openedRestic{
+		root:               resticRoot,
+		openedCDCTransport: transport,
 	}, nil
 }
 
@@ -828,25 +987,23 @@ type resticInspectorOpener struct {
 	engine *docker.Engine
 }
 
-// Open starts the restic server over store's repositories; the inspector's Close stops it.
+// Open opens the transport over store's repositories; the inspector's Close releases it.
 func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
-	served, err := serveResticRepositories(ctx, o.cfg, o.engine, store)
+	served, err := openResticRepositories(ctx, o.cfg, o.engine, store)
 	if err != nil {
 		return nil, err
 	}
 	return resticInspector{
-		Inspector: cdc.NewInspector(o.engine, served.repoURLBase, served.options),
-		server:    served.server,
+		Inspector:          cdc.NewInspector(o.engine, served.transport, newCDCOptions(o.cfg)),
+		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
 
-// resticInspector is a cdc.Inspector with the server it reads through.
+// resticInspector is a cdc.Inspector with the transport it reads through.
 type resticInspector struct {
 	*cdc.Inspector
-	server *echo.Echo
+	openedCDCTransport
 }
-
-func (i resticInspector) Close(ctx context.Context) { shutdownResticServer(ctx, i.server) }
 
 // resticPrunerOpener serves one compose project's restic repositories to a cdc.Pruner.
 type resticPrunerOpener struct {
@@ -854,22 +1011,20 @@ type resticPrunerOpener struct {
 	engine *docker.Engine
 }
 
-// Open starts the restic server over store's repositories; the pruner's Close stops it.
+// Open opens the transport over store's repositories; the pruner's Close releases it.
 func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
-	served, err := serveResticRepositories(ctx, o.cfg, o.engine, store)
+	served, err := openResticRepositories(ctx, o.cfg, o.engine, store)
 	if err != nil {
 		return nil, err
 	}
 	return resticPruner{
-		Pruner: cdc.NewPruner(o.engine, served.root, served.repoURLBase, served.options),
-		server: served.server,
+		Pruner:             cdc.NewPruner(o.engine, served.root, served.transport, newCDCOptions(o.cfg)),
+		openedCDCTransport: served.openedCDCTransport,
 	}, nil
 }
 
-// resticPruner is a cdc.Pruner with the server it prunes through.
+// resticPruner is a cdc.Pruner with the transport it prunes through.
 type resticPruner struct {
 	*cdc.Pruner
-	server *echo.Echo
+	openedCDCTransport
 }
-
-func (p resticPruner) Close(ctx context.Context) { shutdownResticServer(ctx, p.server) }

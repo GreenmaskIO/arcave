@@ -91,45 +91,14 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
-			name: "gc holds back a restored layer tagged within the hour by default",
-			yaml: "project:\n  name: myapp\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, utils.New(time.Hour), cfg.GC.RestoredLayerGrace)
-			},
-		},
-		{
-			name: "an explicit zero grace counts every restored layer",
-			yaml: "gc:\n  restored_layer_grace: 0s\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, utils.New(time.Duration(0)), cfg.GC.RestoredLayerGrace)
-			},
-		},
-		{
-			name: "the gc section is read",
-			yaml: "gc:\n  restored_layer_grace: 2h\n",
-			verify: func(t *testing.T, cfg Config) {
-				assert.Equal(t, utils.New(2*time.Hour), cfg.GC.RestoredLayerGrace)
-			},
-		},
-		{
-			name:       "gc names no kinds: the invocation narrows a run",
-			yaml:       "gc:\n  collect:\n    images: false\n",
-			wantErrMsg: "collect",
-		},
-		{
-			name:       "gc has no grace period: liveness is the savepoints' status",
+			name:       "gc has no section: liveness is the savepoints' status, and the invocation narrows a run",
 			yaml:       "gc:\n  grace_period: 24h\n",
-			wantErrMsg: "grace_period",
+			wantErrMsg: "has invalid keys: gc",
 		},
 		{
-			name:       "gc has no scope: it works on one session",
-			yaml:       "gc:\n  scope: project\n",
-			wantErrMsg: "scope",
-		},
-		{
-			name:       "a negative restored layer grace is rejected",
-			yaml:       "gc:\n  restored_layer_grace: -1h\n",
-			wantErrMsg: "gc.restored_layer_grace -1h0m0s is negative",
+			name:       "a config an earlier init wrote names the removed section",
+			yaml:       "gc:\n  restored_layer_grace: 1h0m0s\n",
+			wantErrMsg: "has invalid keys: gc",
 		},
 		{
 			name: "the compose section is read",
@@ -267,6 +236,39 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: "stray",
 		},
 		{
+			name: "a full-copy project compresses with zstd by default",
+			yaml: "snapshot:\n  backend: fullcopy\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name: "an explicit compression is read back",
+			yaml: "backends:\n  fullcopy:\n    compression: none\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name: "a cdc project compresses a volume a label routes through fullcopy too",
+			yaml: "snapshot:\n  backend: cdc\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionZstd, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name: "a fullcopy section under a cdc project is still honoured",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  fullcopy:\n    compression: none\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, CompressionNone, cfg.Backends.FullCopy.Compression)
+			},
+		},
+		{
+			name:       "a compression arcave does not offer is rejected",
+			yaml:       "backends:\n  fullcopy:\n    compression: gzip\n",
+			wantErrMsg: "unsupported backends.fullcopy.compression",
+		},
+		{
 			// A full-copy project carries no cdc section: a backend it never runs
 			// should not be a block in its config file.
 			name: "a full-copy project gets no cdc arm",
@@ -285,17 +287,49 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, RestoreModeIncremental, cfg.Backends.CDC.RestoreMode)
 				assert.Equal(t, OverwriteAlways, cfg.Backends.CDC.Overwrite)
 				assert.Equal(t, DefaultResticImage, cfg.Backends.CDC.Image)
-				// Both ends of the loopback hop default with it, and how a container
-				// crosses it stays a probe.
+				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
+				// stdio reads none of the tcp keys, so none defaults.
+				assert.Empty(t, cfg.Backends.CDC.ServerAddress)
+				assert.Empty(t, cfg.Backends.CDC.ServerScheme)
+				assert.Empty(t, cfg.Backends.CDC.ContainerHost)
+				assert.Empty(t, cfg.Backends.CDC.NetworkMode)
+			},
+		},
+		{
+			name: "the tcp transport fills both ends of the loopback hop",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    transport: tcp\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, CDCTransportTCP, cfg.Backends.CDC.Transport)
+				// How a container crosses the hop stays a probe.
 				assert.Equal(t, DefaultCDCServerAddress, cfg.Backends.CDC.ServerAddress)
+				assert.Equal(t, DefaultCDCServerScheme, cfg.Backends.CDC.ServerScheme)
 				assert.Equal(t, DefaultCDCContainerHost, cfg.Backends.CDC.ContainerHost)
 				assert.Equal(t, NetworkModeAuto, cfg.Backends.CDC.NetworkMode)
 			},
 		},
 		{
+			// stdio never reads the tcp keys, so it does not judge them either.
+			name: "stdio leaves the tcp keys unchecked",
+			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
+				"    transport: stdio\n    server_address: 18080\n    network_mode: vpn\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, CDCTransportStdio, cfg.Backends.CDC.Transport)
+				assert.Equal(t, "18080", cfg.Backends.CDC.ServerAddress)
+				assert.Equal(t, "vpn", cfg.Backends.CDC.NetworkMode)
+			},
+		},
+		{
+			name:       "a transport arcave does not offer is rejected",
+			yaml:       "backends:\n  cdc:\n    transport: ssh\n",
+			wantErrMsg: "unsupported backends.cdc.transport",
+		},
+		{
 			name: "an explicit network mode is read back",
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
-				"    network_mode: host\n",
+				"    transport: tcp\n    network_mode: host\n",
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Backends.CDC)
 				assert.Equal(t, NetworkModeHost, cfg.Backends.CDC.NetworkMode)
@@ -303,13 +337,13 @@ func TestUnmarshal(t *testing.T) {
 		},
 		{
 			name:       "a network mode arcave does not offer is rejected",
-			yaml:       "backends:\n  cdc:\n    network_mode: vpn\n",
+			yaml:       "backends:\n  cdc:\n    transport: tcp\n    network_mode: vpn\n",
 			wantErrMsg: "unsupported backends.cdc.network_mode",
 		},
 		{
 			name: "the server address is read, and the container host still defaults",
 			yaml: "snapshot:\n  backend: cdc\nbackends:\n  cdc:\n" +
-				"    server_address: 127.0.0.1:18080\n",
+				"    transport: tcp\n    server_address: 127.0.0.1:18080\n",
 			verify: func(t *testing.T, cfg Config) {
 				require.NotNil(t, cfg.Backends.CDC)
 				assert.Equal(t, "127.0.0.1:18080", cfg.Backends.CDC.ServerAddress)
@@ -320,12 +354,12 @@ func TestUnmarshal(t *testing.T) {
 			// The address is bound at wiring time, so a value that cannot split
 			// fails here rather than halfway through a command.
 			name:       "a server address that is not host:port is rejected",
-			yaml:       "backends:\n  cdc:\n    server_address: 18080\n",
+			yaml:       "backends:\n  cdc:\n    transport: tcp\n    server_address: 18080\n",
 			wantErrMsg: "is not a host:port address",
 		},
 		{
-			// The transport is tcp and nothing else, so the union that used to
-			// carry it is gone: its keys are unknown ones now, and named as such.
+			// The transport is backends.cdc.transport now, so the union that used to
+			// carry it is gone: its keys are unknown ones, and named as such.
 			name:       "the withdrawn data_plane block is rejected as an unknown key",
 			yaml:       "backends:\n  cdc:\n    data_plane:\n      transport: unix\n",
 			wantErrMsg: "data_plane",
@@ -410,6 +444,13 @@ func TestUnmarshal(t *testing.T) {
 			name:       "an image backend arcave does not know is rejected",
 			yaml:       "writable_layers:\n  backend: copy\n",
 			wantErrMsg: "unsupported writable_layers.backend",
+		},
+		{
+			name: "the encryption section is read",
+			yaml: "encryption:\n  enabled: true\n  key: AGE-SECRET-KEY-1TEST\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, Encryption{Enabled: true, Key: "AGE-SECRET-KEY-1TEST"}, cfg.Encryption)
+			},
 		},
 		{
 			name:       "an unknown key under backends is rejected",

@@ -23,6 +23,16 @@ Four things are named there, outermost first:
 
 The static `arcave` segment is what bounds every write and every delete: point the path at `/etc` and arcave operates in `/etc/arcave`. Each segment below it is checked against an allowlist rather than a denylist, because a list of what a path segment must *not* be is never provably complete.
 
+An [encrypted](configuration.md#encryption) arcave project keeps a marker beside its sessions — the one object it stores in plaintext, naming the public key it is encrypted to and nothing secret:
+
+```text
+projects/<project>/
+  encryption.json                              {"recipient": "age1…"}
+  sessions/…                                   every object below is an age file
+```
+
+The marker is what refuses a plain host over an encrypted arcave project, and a host with another key; no marker is no encryption, and the first encrypted command writes it. Object names, directories and sizes are the same as in an unencrypted store, give or take 200 bytes per object and 16 per 64 KiB.
+
 `compose/` has a reserved sibling for a second timeline that is not built yet, which is why the compose project sits one level down rather than at the root.
 
 ## Inside a session
@@ -48,7 +58,7 @@ A session directory without `session.json` is not a session: no `--session` find
     project.yaml                               the compose spec the project was captured under
     heartbeat.json                             the state of the capture that wrote the tree
     volume-named-myapp_pgdata/
-      data.tar                                 a fullcopy capture of one volume
+      data.tar.zst                             a fullcopy capture of one volume, zstd; data.tar under compression: none
     images/app/replicas/1/                     one container's writable layer, dedupcopy
       index.json                               verbatim from the image archive
       manifest.json                            verbatim from the image archive
@@ -95,7 +105,7 @@ The [`cdc` backend](configuration.md#snapshot) keeps one restic repository per v
 
 ## Moving a savepoint
 
-Everything about one savepoint is under its own directory, except the blobs and images it shares and its cdc repositories. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as the storage path, `project.name` and `-p` point at the same three segments.
+Everything about one savepoint is under its own directory, except the blobs and images it shares and its cdc repositories. Copying a whole compose project's store root — savepoint directories, `shared/` and `restic/` together — moves every savepoint in it, and arcave finds them again as soon as the storage path, `project.name` and `-p` point at the same three segments. In an [encrypted](configuration.md#encryption) store, copy `encryption.json` along with it: the objects open only with the key of the arcave project that wrote them, which is in your config, not in the store.
 
 ## On the host
 

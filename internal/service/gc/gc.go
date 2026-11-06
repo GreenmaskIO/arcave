@@ -18,13 +18,12 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"slices"
-	"time"
 
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // SavepointReader reads the committed savepoints of one compose project's store.
@@ -66,13 +65,9 @@ type Deps struct {
 	// an action none carries out is only reported.
 	DaemonErasers         []DaemonEraser
 	ComposeProjectErasers []ComposeProjectEraser
-	// RestoredLayerGrace is the restored layer grace of a request naming none.
-	RestoredLayerGrace time.Duration
 	// UnlistedNamespaces are the top-level directories of a compose project store its scope's
 	// listing leaves out: a backend's own, which its collector reads through the backend.
 	UnlistedNamespaces []string
-	// Now is the clock a scope is stamped with; nil is the wall clock.
-	Now func() time.Time
 }
 
 // GarbageCollector finds one session's garbage, and deletes what its erasers can.
@@ -88,16 +83,10 @@ type GarbageCollector struct {
 	composeProjectCollectors []ComposeProjectCollector
 	erasers                  eraserSet
 	unlisted                 []string
-	grace                    time.Duration
-	now                      func() time.Time
 }
 
 // New builds a GarbageCollector over deps.
 func New(deps Deps) *GarbageCollector {
-	now := deps.Now
-	if now == nil {
-		now = func() time.Time { return time.Now().Round(0) }
-	}
 	return &GarbageCollector{
 		store:                    deps.Store,
 		session:                  cmp.Or(deps.Session, model.DefaultSession),
@@ -110,8 +99,6 @@ func New(deps Deps) *GarbageCollector {
 		composeProjectCollectors: deps.ComposeProjectCollectors,
 		erasers:                  newEraserSet(deps.DaemonErasers, deps.ComposeProjectErasers),
 		unlisted:                 deps.UnlistedNamespaces,
-		grace:                    deps.RestoredLayerGrace,
-		now:                      now,
 	}
 }
 
@@ -119,7 +106,10 @@ func New(deps Deps) *GarbageCollector {
 // deletes it. It holds the project and session locks throughout, so no capture runs meanwhile.
 func (s *GarbageCollector) GarbageCollect(
 	ctx context.Context, req model.GarbageCollectRequest,
-) (model.GarbageCollectResult, error) {
+) (_ model.GarbageCollectResult, err error) {
+	// Outside the locks: a lost lock cancels the work under it, and the root says why.
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindGC})
+	defer func() { step.End(err) }()
 	if err := req.Validate(); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
@@ -158,7 +148,9 @@ func withSessionLock[T any](
 	ctx context.Context, locker model.SessionLocker,
 	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
 ) (T, error) {
-	lockCtx, grantedLock, err := locker.Lock(ctx, model.SessionLockOperationGarbageCollect)
+	waitCtx, wait := progress.Begin(ctx, progress.Step{Kind: kindSessionLock})
+	lockCtx, grantedLock, err := locker.Lock(waitCtx, model.SessionLockOperationGarbageCollect)
+	wait.End(err)
 	if err != nil {
 		var zero T
 		return zero, fmt.Errorf("lock session: %w", err)
@@ -168,7 +160,7 @@ func withSessionLock[T any](
 			zerolog.Ctx(ctx).Error().Err(err).Msg("unlock session")
 		}
 	}()
-	return fn(lockCtx, grantedLock)
+	return fn(progress.WithStep(lockCtx, progress.Current(ctx)), grantedLock)
 }
 
 // requireSession refuses a session other than the default that has no record: one removed
@@ -204,11 +196,11 @@ func (s *GarbageCollector) reportGarbage(
 	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
 ) (model.GarbageCollectResult, error) {
 	inflightWarnings := s.readInflightWarnings(ctx)
-	found := s.findGarbage(ctx, req, collectors)
+	found := s.findGarbage(ctx, collectors)
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
-	result := s.newGarbageCollectResult(req, found, slices.Concat(collectors.warnings, inflightWarnings))
+	result := s.newGarbageCollectResult(req, found, inflightWarnings)
 	if result.IsPartial() {
 		return result, model.ErrGarbageCollectPartial
 	}
@@ -225,13 +217,14 @@ func (s *GarbageCollector) deleteGarbage(
 	if err := s.requireNoInflight(ctx); err != nil {
 		return model.GarbageCollectResult{}, err
 	}
-	found := s.findGarbage(ctx, req, collectors)
+	found := s.findGarbage(ctx, collectors)
 	if cause := context.Cause(ctx); cause != nil {
 		return model.GarbageCollectResult{}, cause
 	}
-	deleted, err := s.erasers.deleteGarbage(ctx, grantedLock, found)
-	warnings := slices.Concat(collectors.warnings, newUndeletedWarnings(deleted.reports()))
-	result := s.newGarbageCollectResult(req, deleted, warnings)
+	eraseCtx, erase := progress.Begin(ctx, progress.Step{Kind: kindGCErase})
+	deleted, err := s.erasers.deleteGarbage(eraseCtx, grantedLock, found)
+	erase.End(err)
+	result := s.newGarbageCollectResult(req, deleted, newUndeletedWarnings(deleted.reports()))
 	if err != nil {
 		return result, &model.GarbageCollectInterruptedError{Cause: err}
 	}
@@ -276,18 +269,12 @@ func (s *GarbageCollector) readInflightWarnings(ctx context.Context) []string {
 
 // findGarbage runs the daemon collectors, then each compose project's.
 func (s *GarbageCollector) findGarbage(
-	ctx context.Context, req model.GarbageCollectRequest, collectors collectorSet,
+	ctx context.Context, collectors collectorSet,
 ) garbageFound {
-	grace := s.grace
-	if req.RestoredLayerGrace != nil {
-		grace = *req.RestoredLayerGrace
-	}
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindGCFind})
+	defer func() { step.End(context.Cause(ctx)) }()
 	sessionStore, composeProjects, listErr := s.readComposeProjects(ctx)
-	daemonScope := DaemonScope{
-		ComposeProjects:    composeProjects,
-		Now:                s.now(),
-		RestoredLayerGrace: grace,
-	}
+	daemonScope := DaemonScope{ComposeProjects: composeProjects}
 	// The daemon's objects are judged against the compose projects: none read is no verdict.
 	daemonReports := collectors.runDaemonCollectors(ctx, daemonScope, listErr)
 	logGarbageFound(ctx, daemonReports)
@@ -313,8 +300,13 @@ func (s *GarbageCollector) findComposeProjectGarbage(
 	}
 	garbage := make([]composeProjectGarbage, 0, len(names))
 	for _, name := range names {
-		scope, store, err := s.readComposeProjectScope(ctx, sessionStore, name)
-		reports := collectors.runComposeProjectCollectors(ctx, name, scope, err)
+		projectCtx, step := progress.Begin(ctx, progress.Step{
+			Kind: kindComposeProject,
+			Name: name.String(),
+		})
+		scope, store, err := s.readComposeProjectScope(projectCtx, sessionStore, name)
+		reports := collectors.runComposeProjectCollectors(projectCtx, name, scope, err)
+		step.End(context.Cause(projectCtx))
 		logGarbageFound(ctx, reports)
 		garbage = append(garbage, composeProjectGarbage{
 			scope:   scope,

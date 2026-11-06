@@ -16,7 +16,6 @@ package gc
 
 import (
 	"slices"
-	"time"
 
 	"github.com/greenmaskio/storages"
 
@@ -27,10 +26,6 @@ import (
 // project of the session.
 type DaemonScope struct {
 	ComposeProjects []model.DockerComposeProjectName
-	// Now is when the gc started.
-	Now time.Time
-	// RestoredLayerGrace is how old an unused layer tag must be to count as garbage.
-	RestoredLayerGrace time.Duration
 }
 
 // ComposeProjectScope is what a compose-project collector judges: one compose project's

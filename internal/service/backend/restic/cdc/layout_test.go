@@ -149,30 +149,53 @@ func TestParseSnapshotKey(t *testing.T) {
 	}
 }
 
+// A runner is bound to a volume's repository over the transport it is handed.
 func TestRepositories_newRunner(t *testing.T) {
+	stdio := StdioTransport{Server: &mockServer{}}
+	options := Options{Image: demoImage}
+
 	tests := []struct {
-		name     string
-		objectID string
-		wantURL  string
-		wantErr  bool
+		name      string
+		transport Transport
+		objectID  string
+		want      runner
+		wantErr   string
 	}{
-		{name: "a volume's repository", objectID: demoObjectID, wantURL: demoRepoURL},
-		{name: "a segment that is no volume's", objectID: "..", wantErr: true},
-		{name: "a segment holding a path", objectID: "volume-named-db/config", wantErr: true},
+		{
+			name:      "tcp: a volume's repository",
+			transport: demoTCPTransport,
+			objectID:  demoObjectID,
+			want:      runner{image: demoImage, objectID: demoObjectID, transport: demoTCPTransport},
+		},
+		{name: "tcp: a segment that is no volume's", transport: demoTCPTransport, objectID: "..", wantErr: "no volume's repository"},
+		{name: "tcp: a segment holding a path", transport: demoTCPTransport, objectID: "volume-named-db/config", wantErr: "no volume's repository"},
+		{
+			name:      "stdio: a volume's repository",
+			transport: stdio,
+			objectID:  demoObjectID,
+			want:      runner{image: demoImage, objectID: demoObjectID, transport: stdio},
+		},
+		{name: "stdio: a segment that is no volume's", transport: stdio, objectID: "..", wantErr: "no volume's repository"},
+		{name: "stdio: a segment holding a path", transport: stdio, objectID: "volume-named-db/config", wantErr: "no volume's repository"},
+		{name: "no transport", objectID: demoObjectID, wantErr: errNoTransport.Error()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			containers := &mockRunner{}
+
 			// Act
-			got, err := newRepositories(&mockRunner{}, demoRepoURLBase, Options{Image: demoImage}).newRunner(tt.objectID)
+			got, err := newRepositories(containers, tt.transport, options).newRunner(tt.objectID)
 
 			// Assert
-			if tt.wantErr {
-				assert.Error(t, err)
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantURL, got.repoURL)
-			assert.Equal(t, demoImage, got.image)
+			want := tt.want
+			want.containers = containers
+			assert.Equal(t, want, got)
 		})
 	}
 }

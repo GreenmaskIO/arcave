@@ -91,7 +91,7 @@ A **snapshot backend** owns the read-and-write pipeline for one volume. arcave s
 
 | Backend | How it captures |
 |---|---|
-| `fullcopy` | One `data.tar` per volume per savepoint, streamed through the Docker engine. Simple, portable, and every savepoint costs full size. |
+| `fullcopy` | One archive per volume per savepoint, streamed through the Docker engine and zstd-compressed. Simple, portable, and every savepoint costs full size, compressed. |
 | `cdc` | Content-defined chunking into a per-volume restic repository that outlives any one savepoint. Only changed chunks are written. |
 
 `snapshot.backend` in the config says which backend a **new** savepoint uses, and an `arcave.*` label can pick another one per volume. A rollback reads the backend out of the record it is restoring, so changing the setting never orphans an existing savepoint. See [Configuration](reference/configuration.md#snapshot).

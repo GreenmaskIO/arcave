@@ -4,6 +4,9 @@ description: Delete arcave savepoints by id, by name or by retention rules — k
 keywords: [arcave savepoint remove, retention, dry run, safety snapshot, docker compose]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # arcave savepoint remove
 
 Deletes savepoints of the compose project, in the session the command works in, selected either by id or name, or by retention rules.
@@ -55,6 +58,22 @@ A scanning selector cannot delete the last copy of a pre-rollback state by accid
 
 ## Output
 
+On a terminal, the final tree of the steps on stderr and a summary on stdout; in a script, or with `--format json`, JSON on stdout.
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stderr + stdout"
+✔ savepoint.remove         1.0s
+└── ✔ savepoint.drop  1/1  0.0s
+
+Removed 1 savepoint:
+  before-migration · 019e843e-1650-7000-8000-000000000000 · 2026-06-01 19:41
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
 ```json title="stdout"
 {
   "dry_run": false,
@@ -67,18 +86,22 @@ A scanning selector cannot delete the last copy of a pre-rollback state by accid
       "stats": [ … ],
       "writable_layers": [ … ],
       "images": [ … ],
-      "spec": { "format": "compose-yaml" }
+      "spec": { "format": "compose-yaml" },
+      "not_covered": { … }
     }
   ]
 }
 ```
+
+</TabItem>
+</Tabs>
 
 | Field | Meaning |
 |---|---|
 | `dry_run` | Whether anything was actually deleted. |
 | `removed` | The savepoints deleted — or, under `--dry-run`, the ones that would be — oldest first. Each is the whole record. |
 
-A selection that matches nothing is not an error: `removed` is `null`, and the exit code is `0`.
+Under `--dry-run` the summary reads `Would remove 1 savepoint:`, and no tree is drawn. A selection that matches nothing is not an error: it prints `Nothing to remove.` on a terminal, `removed` is `null` in the JSON, and the exit code is `0`.
 
 Deletion is permanent. It frees the savepoint's own directory; the [deduplicated image blobs](../storage_layout.md#shared-blobs) and images it shared with other savepoints, and its `cdc` snapshots, stay where they are. [`arcave gc`](gc.md) deletes the blobs and images no remaining savepoint uses, and forgets and prunes the snapshots; deleting the whole session gives everything back — see [`session remove`](session.md#session-remove).
 
@@ -125,7 +148,7 @@ Until you have confirmed the environment, that snapshot is the last copy of the 
 
 ## Retention rules do not know which savepoint matters
 
-A seeded `clean` baseline is deleted by `--retain-recent 5` as soon as five newer savepoints exist. A savepoint that has to survive indefinitely is pruned around by id, or kept in a [session](session.md) of its own that the retention runs never name.
+A seeded `clean` baseline is deleted by `--retain-recent 5` as soon as five newer savepoints exist. A savepoint that has to survive indefinitely is removed around by id or name, never by a rule, or kept in a [session](session.md) of its own that the retention runs never name.
 
 ## Next step
 

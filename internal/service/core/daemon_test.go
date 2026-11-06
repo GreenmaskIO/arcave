@@ -28,10 +28,11 @@ import (
 
 func TestRequireDaemon(t *testing.T) {
 	tests := []struct {
-		name     string
-		version  string
-		minMajor int
-		wantErr  error
+		name       string
+		version    string
+		components []system.ComponentVersion
+		minMajor   int
+		wantErr    error
 	}{
 		{name: "docker 24 is refused", version: "24.0.7", minMajor: 25, wantErr: model.ErrUnsupportedDaemon},
 		{name: "docker 20.10 is refused", version: "20.10.24", minMajor: 25, wantErr: model.ErrUnsupportedDaemon},
@@ -41,6 +42,16 @@ func TestRequireDaemon(t *testing.T) {
 		{name: "an empty version passes", version: "", minMajor: 25},
 		{name: "a dev build passes", version: "dev", minMajor: 25},
 		{name: "no requirement accepts any daemon", version: "20.10.24", minMajor: 0},
+		{name: "docker 29 naming its engine is accepted", version: "29.8.2", minMajor: 25,
+			components: []system.ComponentVersion{{Name: "Engine", Version: "29.8.2"}}},
+		{name: "docker 24 naming its engine is refused", version: "24.0.7", minMajor: 25, wantErr: model.ErrUnsupportedDaemon,
+			components: []system.ComponentVersion{{Name: "Engine", Version: "24.0.7"}}},
+		{name: "podman 6 passes", version: "6.1.4", minMajor: 25,
+			components: []system.ComponentVersion{{Name: "Podman Engine", Version: "6.1.4"}, {Name: "Engine", Version: "6.1.4"}}},
+		{name: "podman 4 passes", version: "4.9.3", minMajor: 25,
+			components: []system.ComponentVersion{{Name: "Podman Engine", Version: "4.9.3"}}},
+		{name: "a version below the floor without components is refused", version: "6.1.4", minMajor: 25,
+			wantErr: model.ErrUnsupportedDaemon},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,7 +59,7 @@ func TestRequireDaemon(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			err := requireDaemon(ctx, system.Info{ServerVersion: tt.version}, tt.minMajor)
+			err := requireDaemon(ctx, system.Info{ServerVersion: tt.version}, system.VersionResponse{Components: tt.components}, tt.minMajor)
 
 			// Assert
 			if tt.wantErr != nil {

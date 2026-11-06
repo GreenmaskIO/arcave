@@ -48,7 +48,9 @@ func record(id model.SavepointID) model.Savepoint {
 		Name:      "before-migration",
 		CreatedAt: time.Date(2026, 6, 1, 19, 41, 12, 0, time.UTC),
 		Stats: []model.SnapshotStat{{
-			Type: model.SnapshotBackendFullCopy,
+			Type:        model.SnapshotBackendFullCopy,
+			SizeBytes:   10485760,
+			StoredBytes: 1048576,
 			Volume: model.Volume{
 				ObjectID: "volume-named-myapp_pgdata",
 				Type:     model.VolumeTypeNamed,

@@ -1,12 +1,12 @@
 ---
 title: MCP tools
-description: The ten tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback and the six session tools — their arguments, their output shapes, and where they differ from the CLI.
+description: The twelve tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, the six session tools, gc and compose_generate — their arguments, their output shapes, and where they differ from the CLI.
 keywords: [arcave MCP tools, savepoint_create, rollback, session_create, AI agent, model context protocol]
 ---
 
 # MCP tools
 
-[`arcave mcp`](cli/mcp.md) exposes ten tools: four for savepoints and six for sessions. Each savepoint tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
+[`arcave mcp`](cli/mcp.md) exposes twelve tools: four for savepoints, six for sessions, [`gc`](#gc) and [`compose_generate`](#compose_generate). Each savepoint tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
 
 Every tool runs the workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a rollback of a running project that fails replays its safety snapshot. What an agent takes, you list; what you take, an agent rolls back to.
 
@@ -211,7 +211,6 @@ Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose fil
 |---|---|---|
 | `dry_run` | no | `true`, the default, only reports; `false` deletes, as `arcave gc` without `--dry-run` does. |
 | `session` | no | The session to look in, by name or by id. The default is the pinned session, or the current one. |
-| `restored_layer_grace` | no | How long ago an unused layer tag must have been tagged before it counts as garbage, written as a duration such as `1h`. The default is `gc.restored_layer_grace`. |
 | `kinds` | no | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. The default is every kind. |
 
 Returns the report [`arcave gc`](cli/gc.md) prints. Unless `dry_run` is `false` the tool deletes nothing; it is marked destructive either way. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`, and what failed to delete is under `deletion.failed`. A gc that lost its session lock midway through deleting is returned as a tool error that still carries the report, with what was deleted before the loss.

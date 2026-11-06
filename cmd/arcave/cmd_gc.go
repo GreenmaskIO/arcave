@@ -18,29 +18,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/printer/json"
 )
 
 var (
-	gcDryRun             bool
-	gcRestoredLayerGrace time.Duration
-	gcDataKinds          []string
+	gcDryRun    bool
+	gcDataKinds []string
 
 	gcCmd = &cobra.Command{
 		Use:   "gc",
 		Short: "Find and delete the garbage arcave leaves behind",
 		Long: `Find and delete what no live savepoint of the session keeps alive, in every compose project
 it holds, and the restored layer tags no container uses. The layers of an image a run deletes go
-on the next run. A removed savepoint's restic snapshots are forgotten and their repository pruned;
-a tag goes only once it is older than the restored layer grace.`,
+on the next run. A removed savepoint's restic snapshots are forgotten and their repository pruned.`,
 		Args: cobra.NoArgs,
 		RunE: runGC,
 	}
@@ -54,26 +49,19 @@ func runGC(cmd *cobra.Command, _ []string) error {
 	if cmd.Flags().Changed("project-name") {
 		return errors.New("gc works on a session, every compose project in it: drop -p/--project-name")
 	}
-	var (
-		dataKinds []model.GarbageDataKind
-		grace     *time.Duration
-	)
+	var dataKinds []model.GarbageDataKind
 	for _, dataKind := range gcDataKinds {
 		dataKinds = append(dataKinds, model.GarbageDataKind(dataKind))
 	}
-	if cmd.Flags().Changed("restored-layer-grace") {
-		grace = &gcRestoredLayerGrace
-	}
 	req := model.GarbageCollectRequest{
-		DryRun:             gcDryRun,
-		DataKinds:          dataKinds,
-		RestoredLayerGrace: grace,
+		DryRun:    gcDryRun,
+		DataKinds: dataKinds,
 	}
 	if err := cli.ValidateGarbageCollectRequest(req); err != nil {
 		return err
 	}
 	return withGCDeps(cmd.Context(), func(ctx context.Context, d *gcDependencies) error {
-		return cli.NewGCHandler(d.service, json.New(os.Stdout)).GarbageCollect(ctx, req)
+		return cli.NewGCHandler(d.service, d.printer).GarbageCollect(ctx, req)
 	})
 }
 
@@ -94,8 +82,6 @@ func withGCDeps(ctx context.Context, fn func(ctx context.Context, d *gcDependenc
 func init() {
 	flags := gcCmd.Flags()
 	flags.BoolVar(&gcDryRun, "dry-run", false, "Report the garbage without deleting it")
-	flags.DurationVar(&gcRestoredLayerGrace, "restored-layer-grace", 0,
-		"How old an unused layer tag must be to count as garbage; default gc.restored_layer_grace")
 	flags.StringSliceVar(&gcDataKinds, "kind", nil,
 		"What to look at, repeatable: savepoint-data, deduplicated-volumes, image-layers, upstream-images, "+
 			"restored-layers; default every one")

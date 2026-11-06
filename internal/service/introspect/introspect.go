@@ -35,6 +35,7 @@ import (
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
@@ -62,6 +63,7 @@ type dockerAPI interface {
 	NetworkList(ctx context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error)
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	Info(ctx context.Context, opts client.InfoOptions) (client.SystemInfoResult, error)
+	ServerVersion(ctx context.Context, opts client.ServerVersionOptions) (client.ServerVersionResult, error)
 }
 
 // Inspector reports the one compose project it is constructed with.
@@ -118,6 +120,10 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon info: %w", err)
 	}
+	version, err := s.api.ServerVersion(ctx, client.ServerVersionOptions{})
+	if err != nil {
+		return model.IntrospectionResult{}, fmt.Errorf("read docker daemon version: %w", err)
+	}
 
 	return model.IntrospectionResult{
 		Project: model.Project{
@@ -126,11 +132,25 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 			Volumes:  s.newNamedVolumes(services, volumeIndex),
 			Networks: networks,
 		},
-		Daemon:     info.Info,
-		Images:     images,
-		Volumes:    volumeIndex,
-		Referenced: referenced,
+		Daemon:        info.Info,
+		DaemonVersion: newDaemonVersion(version),
+		Images:        images,
+		Volumes:       volumeIndex,
+		Referenced:    referenced,
 	}, nil
+}
+
+// newDaemonVersion is the `docker version` response the client's result was decoded from.
+func newDaemonVersion(version client.ServerVersionResult) system.VersionResponse {
+	return system.VersionResponse{
+		Platform:      system.PlatformInfo{Name: version.Platform.Name},
+		Version:       version.Version,
+		APIVersion:    version.APIVersion,
+		MinAPIVersion: version.MinAPIVersion,
+		Os:            version.Os,
+		Arch:          version.Arch,
+		Components:    version.Components,
+	}
 }
 
 // replicas lists the compose project's containers, stopped ones included, without the one-off

@@ -287,7 +287,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).Return(nil).Once()
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	up := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
 	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
 	removeSafety := safetySnapshotBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
@@ -432,7 +432,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
 	// The revert rebuilds the live compose project and fails replaying its own capture: no
 	// start follows.

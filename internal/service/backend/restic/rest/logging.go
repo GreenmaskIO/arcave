@@ -15,6 +15,8 @@
 package rest
 
 import (
+	"net/http"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/rs/zerolog"
@@ -34,9 +36,9 @@ func newEnrichLogger(logger *lecho.Logger) echo.MiddlewareFunc {
 	})
 }
 
-// newJournalLogger reports the end of every request — at DEBUG when an operation
-// answered, at ERROR when an error escaped one — and is the only place the
-// cause of a 500 is written down.
+// newJournalLogger reports the end of every request — at ERROR for a 5xx, at
+// DEBUG otherwise, a 4xx's cause included — and is the only place the cause of a
+// 500 is written down.
 func newJournalLogger() echo.MiddlewareFunc {
 	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		// HandleError lets the error handler pick the status before the line is
@@ -77,13 +79,16 @@ func logStarted(c echo.Context) {
 }
 
 // logAnswered writes one completion line through the logger newEnrichLogger stamped.
+// A 4xx is the client's own probe or miss — restic's rclone backend opens with a GET
+// it expects a 404 for — so only a 5xx is an error.
 func logAnswered(c echo.Context, v middleware.RequestLoggerValues) error {
 	logger := zerolog.Ctx(c.Request().Context())
 	evt := logger.Debug()
-	if v.Error != nil {
-		evt = logger.Err(v.Error)
+	if v.Status >= http.StatusInternalServerError {
+		evt = logger.Error()
 	}
-	evt.Str("remote_ip", v.RemoteIP).
+	evt.AnErr("error", v.Error).
+		Str("remote_ip", v.RemoteIP).
 		Str("host", v.Host).
 		Str("method", v.Method).
 		Str("uri", v.URI).

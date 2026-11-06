@@ -4,6 +4,9 @@ description: Recovering from an interrupted rollback, a held project or session 
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Troubleshooting
 
 Each entry names the symptom as arcave reports it, what happened, and what to do.
@@ -30,17 +33,40 @@ Pass the same two flags to the commands below.
 arcave savepoint list --include-safety-snapshots
 ```
 
-```json title="stdout"
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+NAME                                                           ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+safety-snapshot-019e843e-1650-7000-8000-000000000000 (safety)  019e8491-04c8-7000-8000-000000000000  2026-06-01 21:22  1        2       3.9 MB   1
+before-migration                                               019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       173 MB   1
+```
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
+```json title="stdout (each record trimmed)"
 [
   {
     "id": "019e8491-04c8-7000-8000-000000000000",
     "name": "safety-snapshot-019e843e-1650-7000-8000-000000000000",
     "description": "",
     "labels": { "arcave-safety-snapshot": "true" },
-    "created_at": "2026-06-01T21:22:37.009412Z"
+    "created_at": "2026-06-01T21:22:37.009412Z",
+    …
+  },
+  {
+    "id": "019e843e-1650-7000-8000-000000000000",
+    "name": "before-migration",
+    "description": "before the v2 schema",
+    "created_at": "2026-06-01T19:41:12.123456789Z",
+    …
   }
 ]
 ```
+
+</TabItem>
+</Tabs>
 
 The name carries the id of the savepoint that rollback was applying, so a leftover always identifies the run that abandoned it.
 
@@ -75,7 +101,7 @@ Run that same rollback again; the marker lets it through, and it finishes what t
 
 ## `another arcave command is already running in this project`
 
-Another arcave process holds the lock on `.arcave/lock`. Only commands that change something take it — `savepoint list`, `session list` and `session current` always run. The lock is not a queue — a second run fails rather than waiting.
+Another arcave process holds the lock on `.arcave/lock`. Only commands that change something take it, `arcave gc` (`--dry-run` included) among them — `savepoint list`, `session list` and `session current` always run. The lock is not a queue — a second run fails rather than waiting.
 
 ```shell
 ps aux | grep '[a]rcave'
@@ -225,13 +251,13 @@ The project is rebuilt from the compose spec the savepoint recorded, and savepoi
 unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer
 ```
 
-`savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on a daemon whose version arcave could not read:
+`savepoint create` and `rollback` refuse the daemon before anything is stopped or loaded. The second form comes from the capture itself, on an engine that is not Docker or whose version arcave could not read:
 
 ```text
-unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
+unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape
 ```
 
-Either way the daemon is older than Docker 25. Upgrade it — see [Requirements](requirements.md#docker-25-or-newer).
+On Docker, the daemon is older than 25: upgrade it — see [Requirements](requirements.md#docker-25-or-newer). Podman exports this shape whatever its version and is [not supported yet](requirements.md#docker-25-or-newer). Leaving container files and images out of the capture gets past this error, but a `fullcopy` rollback then loses volume data and later rollbacks can fail, so don't use that as a way around it.
 
 ## `invalid capture policy label`
 
@@ -271,11 +297,20 @@ With `snapshot.backend: cdc`, capturing a host bind mount fails with an I/O erro
 
 ## `cdc` containers cannot reach arcave's restic server
 
-A restic container has to reach a server bound to your host loopback, and how it does that differs per platform.
+This applies to `backends.cdc.transport: tcp` only. The default, `stdio`, reaches the repositories over the Docker API and opens no port; switching back to it is the fix for a remote `DOCKER_HOST`:
+
+```yaml title="The default"
+backends:
+    cdc:
+        transport: stdio
+```
+
+Under `tcp`, a restic container has to reach a server bound to your host loopback, and how it does that differs per platform.
 
 ```yaml title="Let arcave work it out"
 backends:
     cdc:
+        transport: tcp
         network_mode: auto
 ```
 
@@ -284,11 +319,29 @@ backends:
 ```yaml title="A remote or rootless daemon"
 backends:
     cdc:
+        transport: tcp
         network_mode: bridge
         container_host: docker-host.internal
 ```
 
 For a remote daemon, `container_host` has to be a name that resolves **from inside the container** to the host running arcave.
+
+## A custom restic image fails every `cdc` command
+
+Under the default `backends.cdc.transport: stdio`, arcave copies a small shell script into each restic container and starts restic behind it, so the image in `backends.cdc.image` has to ship `/bin/sh`, `mkfifo` and `cat`, as the stock `restic/restic` image does. One without `/bin/sh` fails when its container starts, with `exec /run/arcave/stdio.sh: no such file or directory`; one without `mkfifo` exits with status 1 and `arcave-stdio: cannot make the FIFOs` among its output.
+
+Build the image on one that carries a shell, or set `transport: tcp`, which runs the image's own entrypoint.
+
+## `open the store: …` on an encrypted store
+
+```text
+init dependencies: open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+init dependencies: open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+init dependencies: open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+init dependencies: open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
+```
+
+Each is refused before anything is stopped. Export the key the store was encrypted to as `ARCAVE_ENCRYPTION_KEY`, in the form `AGE-SECRET-KEY-1…`, and keep `encryption.enabled: true` in the config. A lost key can't be recovered. See [`encryption`](configuration.md#encryption).
 
 ## An unknown key fails the command
 
@@ -316,20 +369,26 @@ An absolute `storage.directory.path` must already exist. Only a relative one mat
 mkdir -p /srv/arcave/myapp
 ```
 
-## An environment variable is ignored
+## An environment variable is ignored, or fails the command
 
-`ARCAVE_<KEY>` reaches a key a flag binds, or one your config file already carries. A `backends.cdc` key is the usual case to trip on: until the file declares the section, the variable is neither taken nor reported. See [Environment variables](environment_variables.md#which-keys-a-variable-reaches).
+`ARCAVE_<KEY>` reaches every config key, whether or not your config file carries it. A variable that seems ignored names no key: check the spelling, with dots replaced by underscores, as in `ARCAVE_BACKENDS_CDC_RESTORE_MODE`. A flag you passed also beats it.
+
+Its value is validated like the file's, so a stale or invalid one fails the command even if the file never mentions that key. Check `env | grep ARCAVE_`. See [Environment variables](environment_variables.md#which-keys-a-variable-reaches).
 
 ## JSON output is mixed with log lines
 
-It is not — check which stream you are reading. Results go to stdout, logs to stderr.
+It is not — check which stream you are reading. Results go to stdout, logs and the live progress tree to stderr.
 
 ```shell
 arcave savepoint list 2>/dev/null | jq .
 ID=$(arcave savepoint create nightly | jq -r .id)
 ```
 
-Two exceptions: `arcave --version` prints a plain version line, and `arcave mcp` writes nothing to stdout at all.
+## The result is text, not JSON
+
+While the live tree is drawn — stderr a terminal, `log.format: text` — and stdout is a terminal, arcave prints the result as text for a person to read. Anything else gets JSON — a pipe, a redirect, `--log-format json` — and `--format json` (or `ARCAVE_FORMAT=json`) asks for it anywhere. Under `--progress json`, stdout carries a JSON line per step event before the result — the result is the last line, `{"type":"result",…}`; see [Output](output.md#result-format).
+
+Exceptions: `arcave --version` prints a plain version line, and `arcave mcp` writes nothing to stdout at all.
 
 ## Next step
 

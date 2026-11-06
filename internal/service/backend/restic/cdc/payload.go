@@ -28,13 +28,8 @@ var errNoSnapshotID = errors.New("no restic snapshot id")
 // Payload is what a cdc capture reports in its SnapshotStat, and the only way a
 // restore can address its data: a restic snapshot id is content-derived, so
 // unlike a fullcopy archive key it cannot be recomputed.
-//
-// The two sizes stay separate: DataAdded is what this capture cost the store
-// (near zero for an increment), TotalBytesProcessed the volume's logical size.
 type Payload struct {
-	SnapshotObjectID    string `json:"restic_snapshot_id"`
-	DataAdded           int64  `json:"data_added"`
-	TotalBytesProcessed int64  `json:"total_bytes_processed"`
+	SnapshotObjectID string `json:"restic_snapshot_id"`
 }
 
 // DecodePayload reads back what a capture reported. A record that has been

@@ -29,6 +29,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
+// testStoreKey is a key the resolution carries as any string; only the store parses it.
+const testStoreKey = "AGE-SECRET-KEY-1TESTKEY"
+
 func TestResolveConfig(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -47,7 +50,7 @@ func TestResolveConfig(t *testing.T) {
 				// No project segment: storefactory roots the store at the project itself.
 				assert.Equal(t, filepath.Join(".arcave", "storage"), cfg.Storage.DirectoryPath())
 				assert.Equal(t, config.SnapshotBackendFullCopy, cfg.Snapshot.Backend)
-				assert.Equal(t, utils.DefaultLogLevel, cfg.Log.Level)
+				assert.Empty(t, cfg.Log.Level, "the output picks the level when none is set")
 				assert.Equal(t, utils.DefaultLogFormat, cfg.Log.Format)
 			},
 		},
@@ -132,7 +135,7 @@ func TestResolveConfig(t *testing.T) {
 		{
 			// The flag's own default is the *lowest* precedence source, so an
 			// unchanged --wait-timeout must not overwrite the file's value.
-			name:      "an unchanged --progress leaves the file's mode alone",
+			name:      "an unchanged --compose-progress leaves the file's mode alone",
 			file:      "compose:\n  progress: quiet\n",
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
@@ -146,6 +149,23 @@ func TestResolveConfig(t *testing.T) {
 			wantFound: true,
 			verify: func(t *testing.T, _ string, cfg config.Config) {
 				assert.Equal(t, 90*time.Second, cfg.Compose.WaitTimeout)
+			},
+		},
+		{
+			name: "a key the file does not carry is read from the environment",
+			env:  map[string]string{"ARCAVE_BACKENDS_CDC_RESTORE_MODE": config.RestoreModeWipe},
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				require.NotNil(t, cfg.Backends.CDC)
+				assert.Equal(t, config.RestoreModeWipe, cfg.Backends.CDC.RestoreMode)
+			},
+		},
+		{
+			name:      "the store key reaches encryption.key from the environment with no line in the file",
+			file:      "encryption:\n  enabled: true\n",
+			env:       map[string]string{encryptionKeyEnv: testStoreKey},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.Equal(t, config.Encryption{Enabled: true, Key: testStoreKey}, cfg.Encryption)
 			},
 		},
 	}
@@ -232,9 +252,14 @@ func TestResolveWithoutFile(t *testing.T) {
 	tests := []struct {
 		name      string
 		file      string // .arcave/config.yaml body; empty means no file
+		env       map[string]string
 		wantFound bool
 	}{
 		{name: "no file", wantFound: false},
+		{
+			name: "another project's environment does not stop it",
+			env:  map[string]string{"ARCAVE_STORAGE_TYPE": config.StorageTypeS3},
+		},
 		{name: "a valid file is not read", file: "project:\n  name: other\n", wantFound: true},
 		{name: "an unparsable file does not stop it", file: "project: [\n", wantFound: true},
 		{name: "an unset variable does not stop it", file: "project:\n  name: ${ARCAVE_IT_UNSET_NAME}\n", wantFound: true},
@@ -245,6 +270,9 @@ func TestResolveWithoutFile(t *testing.T) {
 			root := t.TempDir()
 			if tt.file != "" {
 				writeConfig(t, root, tt.file)
+			}
+			for k, v := range tt.env {
+				t.Setenv(k, v)
 			}
 
 			// Act
@@ -264,7 +292,7 @@ func TestResolveConfig_IgnoresUnboundFlags(t *testing.T) {
 	writeConfig(t, root, "log:\n  level: warn\n")
 	v := testViper(root)
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-	fs.String("log-level", utils.DefaultLogLevel, "") // deliberately NOT bound
+	fs.String("log-level", "", "") // deliberately NOT bound
 	require.NoError(t, fs.Set("log-level", "debug"))
 
 	// Act
@@ -304,17 +332,17 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	t.Helper()
 
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-	fs.String("log-level", utils.DefaultLogLevel, "")
+	fs.String("log-level", "", "")
 	fs.String("log-format", utils.DefaultLogFormat, "")
 	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
-	fs.String("progress", config.ProgressLog, "")
+	fs.String("compose-progress", config.ProgressLog, "")
 	viperBind(v, fs, map[string]string{
-		"log-level":    "log.level",
-		"log-format":   "log.format",
-		"wait-timeout": "compose.wait_timeout",
-		"stop-timeout": "compose.stop_timeout",
-		"progress":     "compose.progress",
+		"log-level":        "log.level",
+		"log-format":       "log.format",
+		"wait-timeout":     "compose.wait_timeout",
+		"stop-timeout":     "compose.stop_timeout",
+		"compose-progress": "compose.progress",
 	})
 	return fs
 }
