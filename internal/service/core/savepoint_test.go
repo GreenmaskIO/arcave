@@ -1029,7 +1029,7 @@ func TestService_ListSavepoints(t *testing.T) {
 
 // A scanning selector never sees a safety snapshot, so retention neither counts one
 // among the newest it keeps nor deletes one it never meant. An explicit id does
-// see it, and that is how the shard of a killed rollback is cleared.
+// see it, and that is how one is removed by hand.
 func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 	record, backup := demoRecord(), demoSafetySnapshot()
 

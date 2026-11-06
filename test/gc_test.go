@@ -40,6 +40,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociblob"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/safetysnapshot"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
 	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -64,9 +65,9 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	second, err := baseline.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 	require.NoError(t, err)
 	// Two rollbacks: the first's tag is left behind unused once the second runs.
-	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &first.ID})
+	olderUndo, err := baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &first.ID})
 	require.NoError(t, err)
-	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
+	newestUndo, err := baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &second.ID})
 	require.NoError(t, err)
 	_, err = baseline.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{Refs: []string{first.ID.String()}})
 	require.NoError(t, err)
@@ -105,7 +106,8 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	assert.ElementsMatch(t, []string{deadTree.String(), staleTree.String()}, targetsOf(ops[model.GarbageDataKindSavepointData]),
 		"a dead tree goes however young, whatever its heartbeat says")
 	assert.Contains(t, targetsOf(ops[model.GarbageDataKindUpstreamImages]), orphanImage)
-	assert.NotEmpty(t, ops[model.GarbageDataKindImageLayers], "the removed savepoint and the safety snapshots held blobs of their own")
+	assert.Equal(t, []string{olderUndo.SafetySnapshot.String()}, targetsOf(ops[model.GarbageDataKindSafetySnapshots]),
+		"the older of the two rollbacks' safety snapshots goes")
 	assert.NotContains(t, targetsOf(ops[model.GarbageDataKindImageLayers]), orphanBlob, "an unreferenced image's blob waits for its manifest to go")
 	tags := targetsOf(ops[model.GarbageDataKindRestoredLayers])
 	assert.Contains(t, strings.Join(tags, ","), ":sp-"+first.ID.String(), "the first rollback's tag is unused")
@@ -148,11 +150,12 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	assert.Nil(t, result.Total.FreedBytes, "what an untag frees in the daemon is not known")
 	assert.Equal(t, len(deleted)+len(tags), result.Total.Deleted)
 
-	// The run after frees the blob only the removed image listed.
+	// The run after frees what only the removed image and the retired safety snapshot listed.
 	secondRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
 	require.NoError(t, err)
 	secondOps := opsByKind(secondRun)
-	assert.Equal(t, []string{orphanBlob}, targetsOf(secondOps[model.GarbageDataKindImageLayers]))
+	assert.Contains(t, targetsOf(secondOps[model.GarbageDataKindImageLayers]), orphanBlob)
+	assert.Empty(t, secondOps[model.GarbageDataKindSafetySnapshots], "the newest stays")
 	assert.Empty(t, secondOps[model.GarbageDataKindSavepointData])
 	assert.Empty(t, secondOps[model.GarbageDataKindUpstreamImages])
 	assert.NoFileExists(t, filepath.Join(composeDir, filepath.FromSlash(orphanBlob)))
@@ -168,6 +171,12 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	} {
 		assert.Empty(t, thirdOps[kind], kind)
 	}
+
+	// The safety snapshot that stayed is whole: it holds what the second rollback overwrote.
+	_, err = baseline.svc.Rollback(env.ctx, model.RollbackRequest{ID: &newestUndo.SafetySnapshot})
+	require.NoError(t, err, "nothing a retained safety snapshot needs was deleted")
+	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], volumeMarker))
+	assert.Equal(t, "first", baseline.read(t, baseline.replicas(t)[0], layerMarker))
 
 	// The surviving savepoint is whole.
 	baseline.write(t, baseline.replicas(t)[0], "drifted")
@@ -261,7 +270,8 @@ func (e *sessionEnv) newGarbageCollector(
 		composeProjectCollectors []gc.ComposeProjectCollector
 		daemonErasers            []gc.DaemonEraser
 		composeProjectErasers    = []gc.ComposeProjectEraser{
-			eraser.NewTreeEraser(), eraser.NewImageEraser(), eraser.NewObjectEraser(),
+			eraser.NewTreeEraser(), eraser.NewSavepointEraser(newGCSavepointUncommitter), eraser.NewImageEraser(),
+			eraser.NewObjectEraser(),
 		}
 	)
 	if engine != nil {
@@ -272,6 +282,8 @@ func (e *sessionEnv) newGarbageCollector(
 		switch kind {
 		case model.GarbageDataKindSavepointData:
 			composeProjectCollectors = append(composeProjectCollectors, savepointdir.New())
+		case model.GarbageDataKindSafetySnapshots:
+			composeProjectCollectors = append(composeProjectCollectors, safetysnapshot.New(config.DefaultSafetySnapshotRetainRecent))
 		case model.GarbageDataKindUpstreamImages:
 			composeProjectCollectors = append(composeProjectCollectors, ociimage.New())
 		case model.GarbageDataKindImageLayers:
@@ -591,6 +603,8 @@ func opsByKind(result model.GarbageCollectResult) map[model.GarbageDataKind][]mo
 		}
 		switch stat := report.Detail.(type) {
 		case model.SavepointDirectoryStat:
+			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
+		case model.SafetySnapshotStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)
 		case model.OCIImageStat:
 			ops[report.DataKind] = append(ops[report.DataKind], stat.Ops...)

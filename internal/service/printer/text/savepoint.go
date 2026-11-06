@@ -78,7 +78,13 @@ func (s *Printer) formatRollback(response model.RollbackResponse) string {
 			cells: []string{strconv.Itoa(len(response.WritableLayers))},
 		})
 	}
+	safety := "none"
+	if response.SafetySnapshot != "" {
+		safety = formatShortID(response.SafetySnapshot.String())
+	}
 	b.WriteString(formatCaptureRows(nil, rows))
+	// Below the counts, not aligned with them: an id is no number.
+	b.WriteString(formatCaptureLine("safety", []string{safety}, []int{0}) + "\n")
 
 	var notices []model.Notice
 	if len(response.WritableLayers) > 0 {
@@ -87,13 +93,10 @@ func (s *Printer) formatRollback(response model.RollbackResponse) string {
 			Hint:    "`docker compose up` of your compose file recreates them on its images and drops those layers",
 		})
 	}
-	if response.SafetySnapshotKept != "" {
-		notices = append(notices, model.Notice{
-			Message: fmt.Sprintf("safety snapshot %s kept", response.SafetySnapshotKept),
-			Hint:    "drop it:  " + s.newCommand(true, "savepoint", "remove", response.SafetySnapshotKept.String()),
-		})
-	}
 	b.WriteString(formatNotices(notices))
+	if response.SafetySnapshot != "" {
+		b.WriteString("\n  undo it:  " + s.newCommand(true, "rollback", response.SafetySnapshot.String()) + "\n")
+	}
 	return b.String()
 }
 

@@ -67,6 +67,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociblob"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/safetysnapshot"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
 	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -979,6 +980,11 @@ func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
 	return sprepo.New(store)
 }
 
+// newGCSavepointUncommitter is the savepoint repository gc's eraser deletes a record through.
+func newGCSavepointUncommitter(store storages.Storager) eraser.SavepointUncommitter {
+	return sprepo.New(store)
+}
+
 // newDaemonCollectors builds the collectors judging the daemon.
 func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []gc.DaemonCollector {
 	return []gc.DaemonCollector{
@@ -990,6 +996,7 @@ func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []gc.DaemonCollecto
 func newComposeProjectCollectors(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectCollector {
 	return []gc.ComposeProjectCollector{
 		savepointdir.New(),
+		safetysnapshot.New(utils.Value(cfg.GC.SafetySnapshots.RetainRecent)),
 		ociimage.New(),
 		ociblob.New(cfg.Common.Concurrency),
 		resticrepo.New(daemon, resticInspectorOpener{
@@ -1010,6 +1017,7 @@ func newDaemonErasers(daemon gcDaemon) []gc.DaemonEraser {
 func newComposeProjectErasers(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectEraser {
 	return []gc.ComposeProjectEraser{
 		eraser.NewTreeEraser(),
+		eraser.NewSavepointEraser(newGCSavepointUncommitter),
 		eraser.NewImageEraser(),
 		eraser.NewObjectEraser(),
 		eraser.NewForgetEraser(resticPrunerOpener{

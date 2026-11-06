@@ -165,7 +165,7 @@ A rollback restores **the project the savepoint recorded**, not the one that is 
 14.  Restore every volume
 15.  Start the services and wait for health checks
 16.  Remove the anonymous volumes the teardown orphaned
-17.  Clear the marker, drop the safety snapshot
+17.  Clear the marker; the safety snapshot stays
 ```
 
 Steps 4 through 7 all run **while the project is still up**, and that is the point of them:
@@ -202,9 +202,13 @@ If any step past that point fails — a restore error, or services that never be
 The revert runs on a context that ignores cancellation, with its own 10-minute budget. The Ctrl-C that aborted your rollback must not tear down the revert that is trying to save your environment.
 :::
 
-The safety snapshot is deleted when the rollback succeeds, and when a revert succeeds. It is **kept** when the revert itself fails — at that point it is the last copy of your pre-rollback state, and its id is printed. A rollback that succeeded can also keep it, when it could not clear the marker, no longer held the session's lock, or could not delete the record; the result then names it in `safety_snapshot_kept`, and `arcave savepoint remove <id>` drops it.
+No rollback deletes its safety snapshot, whatever happens to it. The result of one that succeeds names it in `safety_snapshot`, and rolling back to that id undoes the rollback. When a revert fails it is the last copy of your pre-rollback state, and its id is printed.
 
-With the `cdc` backend the safety capture is an increment in the same per-volume repository, on the same host and the same path, which is exactly what restic picks a parent by. The undo therefore costs almost nothing. Deleting the safety snapshot leaves its restic snapshots in the repository, as `savepoint remove` does; [`arcave gc`](reference/cli/gc.md) forgets them and prunes what only they held.
+Only [`arcave gc`](reference/cli/gc.md) retires them, past the newest [`gc.safety_snapshots.retain_recent`](reference/configuration.md#gc) of each compose project, and it runs only when you run it: until then every rollback leaves one more. `arcave savepoint remove <id>` drops one by hand.
+
+[`rollback.safety_snapshot: false`](reference/configuration.md#rollback), or `arcave rollback --safety-snapshot=false`, skips it whole, volumes and writable layers alike, for a rollback that needs to be fast and has nothing worth keeping. Nothing can undo that rollback, and a failure has nothing to replay: arcave leaves the project as the failure found it, with the marker standing, until you run the same rollback again.
+
+With the `cdc` backend the safety capture is an increment in the same per-volume repository, on the same host and the same path, which is exactly what restic picks a parent by. The undo therefore costs almost nothing. Retiring the safety snapshot leaves its restic snapshots in the repository, as `savepoint remove` does; the next [`arcave gc`](reference/cli/gc.md) forgets them and prunes what only they held.
 
 ## The interrupted-rollback marker
 
@@ -217,9 +221,7 @@ A rollback writes `.arcave/inflight.json` before its first destructive write —
 | `restore-done` | Volumes restored, but the project never came up cleanly. |
 | `inconsistent` | The automatic revert itself failed. The safety snapshot is retained. |
 
-While a marker stands, the next mutating workflow is **refused** — with one exception, the remedy, which is allowed through: a rollback to that marker's own safety snapshot, or, for a rollback of a project with no containers, which took no safety snapshot, the same rollback again.
-
-The marker is cleared *before* the safety snapshot is dropped, so a failed clear can never leave a marker pointing at a snapshot that no longer exists.
+While a marker stands, the next mutating workflow is **refused** — with one exception, the remedy, which is allowed through: a rollback to that marker's own safety snapshot, or, after a rollback that took none, a rollback to any savepoint of the session and compose project: there is no earlier state left to protect.
 
 arcave does not finish a rollback it died in the middle of. Recovery is explicit and yours to drive — see [Troubleshooting](reference/troubleshooting.md#an-interrupted-rollback).
 

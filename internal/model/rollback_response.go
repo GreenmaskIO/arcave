@@ -20,6 +20,6 @@ type RollbackResponse struct {
 	RolledBackTo   Savepoint                    `json:"rolled_back_to"`
 	Restored       []Volume                     `json:"restored"`
 	WritableLayers []WritableLayerRestoreResult `json:"writable_layers,omitempty"`
-	// SafetySnapshotKept is the safety snapshot left behind; `savepoint remove <id>` drops it.
-	SafetySnapshotKept SavepointID `json:"safety_snapshot_kept,omitempty"`
+	// SafetySnapshot undoes the rollback: roll back to it by id. Omitted when none was taken.
+	SafetySnapshot SavepointID `json:"safety_snapshot,omitempty"`
 }

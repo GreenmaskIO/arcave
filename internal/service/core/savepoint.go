@@ -126,9 +126,8 @@ func requireUniqueName(visible []model.Savepoint, name string) error {
 // unique; a name matching several is an error, never a silent guess.
 //
 // It takes every record so it can apply the visibility rule: an id resolves
-// against all of them — rolling back to a killed rollback's undo is the manual
-// recovery path, spelled by id — while Name and Latest see only what
-// `savepoint list` shows.
+// against all of them — rolling back to a rollback's undo is spelled by id — while
+// Name and Latest see only what `savepoint list` shows.
 //
 // The caller has run req.Validate, so the branches read nil-ness alone.
 func findSavepoint(savepoints []model.Savepoint, req model.RollbackRequest) (model.Savepoint, error) {

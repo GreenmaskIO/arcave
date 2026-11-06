@@ -37,6 +37,11 @@ type RollbackRequest struct {
 	// LeftoverVolumes is what a rollback into a compose project with no containers does with
 	// the volumes that still exist; empty means LeftoverVolumesOverwrite.
 	LeftoverVolumes LeftoverVolumesPolicy
+
+	// SkipSafetySnapshot rolls a running compose project back capturing nothing of it, neither
+	// volumes nor writable layers: nothing undoes it, and after a failure the way back is the same
+	// rollback again.
+	SkipSafetySnapshot bool
 }
 
 // LeftoverVolumesPolicy is what a rollback does with a volume that outlived its compose

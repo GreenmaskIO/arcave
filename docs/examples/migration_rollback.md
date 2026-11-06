@@ -190,10 +190,13 @@ arcave rollback pre-migration
 Rolled back to pre-migration · 019e843e · 2026-06-01 19:41:12
   volumes   3
   layers    3
+  safety    019e8491
 
 Warnings (1)
   ! the containers run on the savepoint's writable layers
     → `docker compose up` of your compose file recreates them on its images and drops those layers
+
+  undo it:  arcave -p arcave-demo rollback 019e8491-04c8-7000-8000-000000000000
 ```
 
 </TabItem>
@@ -255,7 +258,8 @@ INF rollback[pre-migration] elapsed=12.126s status=succeeded
       "tag": "arcave/arcave-demo-postgres-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
     },
     …
-  ]
+  ],
+  "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
 

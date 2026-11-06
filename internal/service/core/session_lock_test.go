@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -34,7 +33,6 @@ import (
 var (
 	errWorkflow  = errors.New("workflow failed")
 	errListStore = errors.New("store unreachable")
-	errStore     = errors.New("store hiccup")
 )
 
 func newLockTestContext() context.Context {
@@ -426,66 +424,6 @@ func TestSessionService_CreateSession_CloneOfASourceRemovedMeanwhile(t *testing.
 	locker.AssertExpectations(t)
 }
 
-// sweepFailingStore refuses to delete a savepoint's tree.
-type sweepFailingStore struct {
-	storages.Storager
-}
-
-func (s *sweepFailingStore) DeleteAll(context.Context, string) error { return errListStore }
-
-// A rollback that succeeded names the safety snapshot it could not drop, so a caller reading
-// only the result learns it is still there.
-func TestService_releaseSafetySnapshot(t *testing.T) {
-	safetySnapshot := model.Savepoint{ID: "019e843e-1650-7000-8000-0000000000bb"}
-	tests := []struct {
-		name string
-		// clearErr fails the marker's clear, verifyErr the lock's check, deleteErr the uncommit.
-		clearErr, verifyErr, deleteErr error
-		// failSweep fails the removal of the tree once the record is gone.
-		failSweep bool
-		wantKept  model.SavepointID
-	}{
-		{name: "a dropped snapshot is not named"},
-		{name: "a marker that cannot be cleared keeps it", clearErr: errStore, wantKept: safetySnapshot.ID},
-		{name: "a lost session lock keeps it", verifyErr: model.ErrSessionLockLost, wantKept: safetySnapshot.ID},
-		{name: "a record that cannot be uncommitted keeps it", deleteErr: errStore, wantKept: safetySnapshot.ID},
-		{name: "an uncommitted snapshot is not named, its remains are gc's", failSweep: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			inflight := &mockInflight{}
-			inflight.On("Clear", mock.Anything).Return(tt.clearErr).Once()
-			grantedLock := &mockGrantedSessionLock{}
-			repo := &mockSavepointRepo{}
-			if tt.clearErr == nil {
-				grantedLock.On("Verify", mock.Anything).Return(tt.verifyErr).Once()
-			}
-			if tt.clearErr == nil && tt.verifyErr == nil {
-				repo.On("DeleteSavepoint", mock.Anything, safetySnapshot.ID).Return(tt.deleteErr).Once()
-			}
-			store := newDirStore(t)
-			if tt.failSweep {
-				store = &sweepFailingStore{Storager: store}
-			}
-			svc := New(Deps{
-				SavepointRepo: repo,
-				Inflight:      inflight,
-				Store:         store,
-			})
-
-			// Act
-			kept := svc.releaseSafetySnapshot(newLockTestContext(), grantedLock, safetySnapshot, nil)
-
-			// Assert
-			assert.Equal(t, tt.wantKept, kept)
-			inflight.AssertExpectations(t)
-			grantedLock.AssertExpectations(t)
-			repo.AssertExpectations(t)
-		})
-	}
-}
-
 func TestPreferInterrupt(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -514,48 +452,26 @@ func TestPreferInterrupt(t *testing.T) {
 	}
 }
 
-// A rollback aborted before its restore drops its safety snapshot only while the session's lock
-// is still its own, and restarts the services either way.
+// A rollback aborted before its restore only restarts the services, past the interrupt that
+// aborted it: the safety snapshot it took stays, and no session lock is asked.
 func TestService_abortBeforeRestore(t *testing.T) {
-	safetySnapshot := model.Savepoint{ID: "019e843e-1650-7000-8000-0000000000bb"}
-	tests := []struct {
-		name      string
-		verifyErr error
-	}{
-		{name: "a held lock drops the snapshot"},
-		{name: "a lost lock keeps the snapshot", verifyErr: model.ErrSessionLockLost},
+	// Arrange
+	runner := &mockComposeRunner{}
+	runner.On("Start", mock.MatchedBy(func(ctx context.Context) bool { return ctx.Err() == nil }), demoSpec, time.Minute).
+		Return(nil).Once()
+	svc := New(Deps{ComposeRunner: runner})
+	working := workingSet{
+		project:     demoSpec,
+		waitTimeout: time.Minute,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			grantedLock := &mockGrantedSessionLock{}
-			repo := &mockSavepointRepo{}
-			runner := &mockComposeRunner{}
-			calls := []*mock.Call{grantedLock.On("Verify", mock.Anything).Return(tt.verifyErr).Once()}
-			if tt.verifyErr == nil {
-				calls = append(calls, repo.On("DeleteSavepoint", mock.Anything, safetySnapshot.ID).Return(nil).Once())
-			}
-			calls = append(calls, runner.On("Start", mock.Anything, demoSpec, time.Minute).Return(nil).Once())
-			mock.InOrder(calls...)
-			svc := New(Deps{
-				SavepointRepo: repo,
-				ComposeRunner: runner,
-				Store:         newDirStore(t),
-			})
-			working := workingSet{
-				project:     demoSpec,
-				waitTimeout: time.Minute,
-			}
+	ctx, cancel := context.WithCancel(newLockTestContext())
+	cancel()
 
-			// Act
-			svc.abortBeforeRestore(newLockTestContext(), grantedLock, safetySnapshot, working)
+	// Act
+	svc.abortBeforeRestore(ctx, working)
 
-			// Assert
-			grantedLock.AssertExpectations(t)
-			repo.AssertExpectations(t)
-			runner.AssertExpectations(t)
-		})
-	}
+	// Assert
+	runner.AssertExpectations(t)
 }
 
 // A removal checks the session's lock before it uncommits each savepoint: a lost lock removes

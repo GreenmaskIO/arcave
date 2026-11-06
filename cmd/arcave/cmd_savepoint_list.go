@@ -65,7 +65,7 @@ func runSavepointList(cmd *cobra.Command, _ []string) error {
 
 func init() {
 	savepointListCmd.Flags().BoolVar(&savepointListIncludeSafety, "include-safety-snapshots", false,
-		"also list the safety snapshots a rollback takes of the live state; one that outlived its rollback can be rolled back to by id")
+		"also list the safety snapshots a rollback takes of the live state; rolling back to one by id undoes that rollback")
 	savepointListCmd.Flags().StringVar(&savepointListSort, "sort", string(model.SortDesc),
 		"order by age: desc (newest first) or asc")
 	savepointCmd.AddCommand(savepointListCmd)

@@ -57,7 +57,7 @@ Start the server **in the project directory**: `.arcave/config.yaml` is resolved
 | Another arcave run holds the project lock | A call that changes something fails at once rather than queuing. |
 | An interrupted rollback is marked | Mutating calls are refused until it is resolved. |
 
-A tool call runs the same workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a failed rollback replays its safety snapshot. A rollback of a project that is not running takes the [cold-start path](rollback.md#rolling-back-a-project-that-is-not-running), with `rollback.leftover_volumes` from the config. A savepoint an agent takes is listed and applied by the CLI, and the reverse.
+A tool call runs the same workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a failed rollback replays its safety snapshot. A rollback of a project that is not running takes the [cold-start path](rollback.md#rolling-back-a-project-that-is-not-running), with `rollback.leftover_volumes` from the config. `rollback.safety_snapshot` is the default for the `rollback` tool, whose `safety_snapshot` argument overrides it per call. A savepoint an agent takes is listed and applied by the CLI, and the reverse.
 
 ## Examples
 

@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -56,6 +57,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -691,6 +693,7 @@ func TestNewObjectCollectors(t *testing.T) {
 	want := map[model.GarbageDataKind]resolution{
 		model.GarbageDataKindRestoredLayers:      {collector: model.GarbageCollectorKindDockerLayerTags, daemon: true},
 		model.GarbageDataKindSavepointData:       {collector: model.GarbageCollectorKindSavepointDirectory},
+		model.GarbageDataKindSafetySnapshots:     {collector: model.GarbageCollectorKindSafetySnapshotRetention},
 		model.GarbageDataKindUpstreamImages:      {collector: model.GarbageCollectorKindOCIImages},
 		model.GarbageDataKindImageLayers:         {collector: model.GarbageCollectorKindOCIBlobs},
 		model.GarbageDataKindDeduplicatedVolumes: {collector: model.GarbageCollectorKindResticRepositories},
@@ -720,6 +723,44 @@ func TestNewObjectCollectors(t *testing.T) {
 	assert.ElementsMatch(t, model.GarbageCollectorKinds(), collectorKinds, "every collector kind is built once")
 }
 
+// gc.safety_snapshots.retain_recent reaches the collector that judges by it.
+func TestNewComposeProjectCollectors_Retention(t *testing.T) {
+	var (
+		labels     = map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
+		savepoints = []model.Savepoint{
+			{ID: "019e843e-1650-7000-8000-00000000000a", Labels: labels},
+			{ID: "019e843e-1650-7000-8000-00000000000b", Labels: labels},
+			{ID: "019e843e-1650-7000-8000-00000000000c", Labels: labels},
+		}
+	)
+	tests := []struct {
+		name         string
+		retainRecent int
+		wantFound    int
+	}{
+		{name: "0 deletes every one", retainRecent: 0, wantFound: 3},
+		{name: "2 keeps two", retainRecent: 2, wantFound: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			cfg := config.Config{GC: config.GC{SafetySnapshots: config.GCSafetySnapshots{RetainRecent: &tt.retainRecent}}}
+			collectors := newComposeProjectCollectors(cfg, nil)
+			index := slices.IndexFunc(collectors, func(collector gc.ComposeProjectCollector) bool {
+				return collector.DataKind() == model.GarbageDataKindSafetySnapshots
+			})
+			require.GreaterOrEqual(t, index, 0)
+
+			// Act
+			stat, err := collectors[index].Find(context.Background(), gc.ComposeProjectScope{Savepoints: savepoints})
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFound, stat.Summary().Found)
+		})
+	}
+}
+
 // The daemon's one gc action, untag, has its eraser.
 func TestNewDaemonErasers(t *testing.T) {
 	// Act
@@ -736,8 +777,8 @@ func TestNewDaemonErasers(t *testing.T) {
 func TestNewComposeProjectErasers(t *testing.T) {
 	// Arrange
 	want := []model.GarbageAction{
-		model.GarbageActionDeleteTree, model.GarbageActionDeleteImage, model.GarbageActionDeleteObject,
-		model.GarbageActionForget,
+		model.GarbageActionDeleteTree, model.GarbageActionDeleteSavepoint, model.GarbageActionDeleteImage,
+		model.GarbageActionDeleteObject, model.GarbageActionForget,
 	}
 
 	// Act

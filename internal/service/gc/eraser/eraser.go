@@ -62,6 +62,42 @@ func (s TreeEraser) Erase(
 	})
 }
 
+// SavepointUncommitter deletes a savepoint's record, the commit marker of its tree.
+type SavepointUncommitter interface {
+	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
+}
+
+// SavepointEraser deletes one committed savepoint per op, its record first.
+type SavepointEraser struct {
+	newUncommitter func(store storages.Storager) SavepointUncommitter
+}
+
+// NewSavepointEraser uncommits through what newUncommitter builds over a compose project's store.
+func NewSavepointEraser(newUncommitter func(store storages.Storager) SavepointUncommitter) SavepointEraser {
+	return SavepointEraser{newUncommitter: newUncommitter}
+}
+
+func (s SavepointEraser) Action() model.GarbageAction { return model.GarbageActionDeleteSavepoint }
+
+// Erase deletes every savepoint ops names, record first: one that fails past it leaves a dead
+// tree for the next run. What its tree does not hold, blobs and restic snapshots, this run's scope
+// still read as live: they go on the next one.
+func (s SavepointEraser) Erase(
+	ctx context.Context, store storages.Storager, ops []model.GarbageOp,
+) model.GarbageDeletion {
+	uncommitter := s.newUncommitter(store)
+	return gc.DeleteOps(ctx, ops, func(ctx context.Context, op model.GarbageOp) error {
+		id := model.SavepointID(op.Target)
+		if err := id.Validate(); err != nil {
+			return fmt.Errorf("validate savepoint id: %w", err)
+		}
+		if err := uncommitter.DeleteSavepoint(ctx, id); err != nil {
+			return fmt.Errorf("uncommit savepoint: %w", err)
+		}
+		return store.DeleteAll(ctx, op.Target)
+	})
+}
+
 // ImageEraser deletes one stored image per op.
 type ImageEraser struct{}
 

@@ -36,9 +36,6 @@ import (
 // in parallel; each fans out over its own volumes in turn.
 const maxParallelRemovals = 5
 
-// errStillCommitted is a drop that failed before it uncommitted the record: the savepoint stands.
-var errStillCommitted = errors.New("savepoint still committed")
-
 // SavepointStoreDeps is what the workflows that read and delete in the store alone run on.
 type SavepointStoreDeps struct {
 	SavepointRepo savepointRepository
@@ -239,7 +236,7 @@ func (s *SavepointStoreService) selectRemoval(ctx context.Context, req model.Rem
 // given, otherwise the retention rules.
 //
 // The two see different sets. An id sees every record, safety snapshots
-// included — that is how a killed rollback's shard is cleared — a name only the visible ones. The retention
+// included — that is how one is removed by hand — a name only the visible ones. The retention
 // rules scan, and a scan sees only what `savepoint list` shows: an undo must
 // neither count as one of the N newest, nor be swept by an age rule.
 func (s *SavepointStoreService) selectSavepointsToRemove(
@@ -404,7 +401,7 @@ func (s *SavepointStoreService) removeSavepoint(
 	}
 	if err := s.dropSavepoint(ctx, savepoint, backends); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", savepoint.ID.String()).
-			Msg("savepoint was uncommitted but its data could not be removed; the directory is orphaned")
+			Msg("failed to remove the savepoint; if its record went, the directory is orphaned for a gc")
 		return err
 	}
 	return nil
@@ -431,18 +428,14 @@ func (s *SavepointStoreService) newBackends(volumes []model.Volume) ([]model.Vol
 // Reversing that leaves a savepoint that still lists but is half gone, so the
 // order is pinned by a test.
 //
-// It is also what a failed capture wants: Delete is idempotent — a namespace
-// with no record is already uncommitted — so one function serves both.
-//
-// The sweep runs whatever the backends reported: it is what reclaims an archive a
-// capture that died mid-fan-out left behind, which no stat names.
+// The sweep runs whatever the backends reported: it also takes what no stat names.
 func (s *SavepointStoreService) dropSavepoint(
 	ctx context.Context,
 	savepoint model.Savepoint,
 	backends []model.VolumeSnapshotBackend,
 ) error {
 	if err := s.savepointRepo.DeleteSavepoint(ctx, savepoint.ID); err != nil {
-		return fmt.Errorf("%w: uncommit savepoint %s: %w", errStillCommitted, savepoint.ID, err)
+		return fmt.Errorf("uncommit savepoint %s: %w", savepoint.ID, err)
 	}
 
 	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, volumeRemove,
@@ -533,19 +526,19 @@ func (s *SavepointStoreService) sweepTree(ctx context.Context, id model.Savepoin
 
 // requireNoInflight refuses to run while .arcave/inflight.json stands, except for the rollback
 // that recovers from it. restoring is the savepoint the caller rolls back to, "" for any other
-// workflow. It returns the marker it let through, zero when there is none.
-func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (model.InflightMarker, error) {
+// workflow. It reports whether the caller is that recovery.
+func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (bool, error) {
 	marker, found, err := s.inflightMarker.Get(ctx)
 	if err != nil {
-		return model.InflightMarker{}, fmt.Errorf("reading the inflight marker: %w", err)
+		return false, fmt.Errorf("reading the inflight marker: %w", err)
 	}
 	if !found {
-		return model.InflightMarker{}, nil
+		return false, nil
 	}
 	if s.isRecoveryRollback(marker, restoring) {
 		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
 			Msg("recovering from an interrupted rollback; the marker clears on success")
-		return marker, nil
+		return true, nil
 	}
 	err = &model.InterruptedRollbackError{Marker: marker}
 	zerolog.Ctx(ctx).Error().Err(err).
@@ -555,11 +548,15 @@ func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring
 		Str("safety_snapshot_id", marker.Safety.String()).
 		Str("phase", string(marker.Phase)).
 		Msg(recoveryHint(marker))
-	return model.InflightMarker{}, err
+	return false, err
 }
 
 // isRecoveryRollback reports whether a rollback to id, in this session and compose project,
-// is the one that recovers from the interrupted rollback the marker records.
+// recovers from the interrupted rollback the marker records: one to its safety snapshot or, when it
+// took none and no earlier state is left to protect, one to any savepoint.
 func (s *SavepointStoreService) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
-	return id == marker.RecoveryID() && marker.Session == s.session && marker.ComposeProject == s.composeProject
+	if id == "" || marker.Session != s.session || marker.ComposeProject != s.composeProject {
+		return false
+	}
+	return marker.Safety == "" || id == marker.Safety
 }

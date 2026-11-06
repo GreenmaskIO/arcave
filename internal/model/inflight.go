@@ -40,13 +40,13 @@ type InflightMarker struct {
 	Session        SessionID                `json:"session"`
 	ComposeProject DockerComposeProjectName `json:"compose_project"`
 	Target         SavepointID              `json:"target"` // the savepoint being restored
-	// Safety is the safety snapshot that undoes the interrupted rollback; empty when the compose
-	// project had no containers, where running the same rollback again is the fix.
+	// Safety is the safety snapshot that undoes the interrupted rollback; empty when it took none,
+	// where a rollback to any savepoint is the fix, the same one first.
 	Safety SavepointID `json:"safety"`
 	At     time.Time   `json:"at"`
 }
 
-// RecoveryID is the savepoint to roll back to to recover: the safety snapshot, or, when the
+// RecoveryID is the savepoint a recovery is told to roll back to: the safety snapshot, or, when the
 // rollback took none, its own target again.
 func (m InflightMarker) RecoveryID() SavepointID {
 	if m.Safety == "" {
@@ -62,5 +62,10 @@ type InterruptedRollbackError struct {
 }
 
 func (m *InterruptedRollbackError) Error() string {
-	return fmt.Sprintf("rollback to savepoint %s was interrupted (%s)", m.Marker.Target, m.Marker.Phase)
+	interrupted := fmt.Sprintf("rollback to savepoint %s was interrupted (%s); recover by rolling back to %s",
+		m.Marker.Target, m.Marker.Phase, m.Marker.RecoveryID())
+	if m.Marker.Safety == "" {
+		return interrupted + " or another savepoint"
+	}
+	return interrupted
 }

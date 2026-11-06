@@ -44,6 +44,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/gc"
+	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -455,7 +456,7 @@ func TestSession_RollbackStaysInItsSession(t *testing.T) {
 	for _, sp := range []*imageRollbackEnv{baseline, branch} {
 		list, err := sp.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 		require.NoError(t, err)
-		assert.Len(t, list, 1, "each session holds its own sp and no leftover safety snapshot")
+		assert.Len(t, list, 2, "each session holds its own sp and its own rollback's safety snapshot")
 	}
 }
 
@@ -603,5 +604,10 @@ func newSavepointReader(store storages.Storager) core.SavepointReader {
 
 // newGCSavepointReader opens a compose project's savepoints the way the DI root does for gc.
 func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
+	return sprepo.New(store)
+}
+
+// newGCSavepointUncommitter is the savepoint repository gc's eraser deletes a record through.
+func newGCSavepointUncommitter(store storages.Storager) eraser.SavepointUncommitter {
 	return sprepo.New(store)
 }

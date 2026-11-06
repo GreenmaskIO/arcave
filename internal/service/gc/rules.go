@@ -15,8 +15,22 @@
 package gc
 
 import (
+	"strings"
+
+	"github.com/greenmaskio/storages"
+
 	"github.com/greenmaskio/arcave/internal/model"
 )
+
+// NewObjectTrees groups a compose project's listing by the savepoint tree each object lies in.
+func NewObjectTrees(objects []storages.ObjectStat) map[model.SavepointID][]storages.ObjectStat {
+	trees := map[model.SavepointID][]storages.ObjectStat{}
+	for _, object := range objects {
+		dir, _, _ := strings.Cut(object.Name, "/")
+		trees[model.SavepointID(dir)] = append(trees[model.SavepointID(dir)], object)
+	}
+	return trees
+}
 
 // NewLiveImages maps every image the savepoints hold the bytes of to the first savepoint naming it.
 func NewLiveImages(savepoints []model.Savepoint) map[model.ImageDigestID]model.SavepointID {

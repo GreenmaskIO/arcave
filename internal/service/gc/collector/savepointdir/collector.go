@@ -17,9 +17,6 @@ package savepointdir
 
 import (
 	"context"
-	"strings"
-
-	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/gc"
@@ -43,14 +40,9 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 // Find names every dead tree.
 func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
-		trees = map[model.SavepointID][]storages.ObjectStat{}
+		trees = gc.NewObjectTrees(scope.Objects)
 		ops   = []model.GarbageOp{}
 	)
-	for _, object := range scope.Objects {
-		dir, _, _ := strings.Cut(object.Name, "/")
-		trees[model.SavepointID(dir)] = append(trees[model.SavepointID(dir)], object)
-	}
-
 	for _, id := range scope.Dead {
 		bytes, lastModified := utils.MeasureObjects(trees[id])
 		ops = append(ops, model.GarbageOp{

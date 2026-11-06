@@ -94,7 +94,15 @@ func TestPrinter_Print(t *testing.T) {
 					{Service: "app", Replica: 1},
 					{Service: "app", Replica: 2},
 				},
-				SafetySnapshotKept: safetyID,
+				SafetySnapshot: safetyID,
+			},
+		},
+		{
+			name: "rollback_no_safety_snapshot",
+			opts: Options{ComposeProject: "arcave-demo"},
+			result: model.RollbackResponse{
+				RolledBackTo: newSavepoint(),
+				Restored:     []model.Volume{namedVolume("demo_db")},
 			},
 		},
 		{
@@ -153,14 +161,22 @@ func TestPrinter_Print(t *testing.T) {
 							Failed:  []model.GarbageDeleteFailure{{Target: "b", Error: "denied"}},
 						},
 					},
+					{
+						DataKind:       model.GarbageDataKindSafetySnapshots,
+						ComposeProject: "demo",
+						Summary:        model.GarbageSummary{Found: 1, Bytes: utils.New[int64](2_000_000)},
+						Deletion: &model.GarbageDeletion{
+							Deleted: []model.GarbageDeleted{{Target: "c", Bytes: utils.New[int64](2_000_000)}},
+						},
+					},
 				},
 				Total: model.GarbageTotal{
-					Found:         2,
-					Bytes:         12_400_000,
+					Found:         3,
+					Bytes:         14_400_000,
 					BytesComplete: true,
-					Deleted:       1,
+					Deleted:       2,
 					DeleteFailed:  1,
-					FreedBytes:    utils.New[int64](12_400_000),
+					FreedBytes:    utils.New[int64](14_400_000),
 				},
 			},
 		},

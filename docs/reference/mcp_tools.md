@@ -96,7 +96,7 @@ Either `refs` or the retention fields — not both, and not neither. The refusal
 
 ## `rollback`
 
-Returns the environment to a savepoint. Destructive: every volume it covers is overwritten with the savepoint's data, bind mounts included, and a volume a service reaches through `subpath:` goes back whole. When the project is running, arcave takes a safety snapshot of the live state first and replays it by itself if the rollback fails. A project with no containers is built from the savepoint's spec instead, with no safety snapshot, and [`rollback.leftover_volumes`](configuration.md#rollback) from the config decides about the named volumes it still owns — see [Rolling back a project that is not running](cli/rollback.md#rolling-back-a-project-that-is-not-running).
+Returns the environment to a savepoint. Destructive: every volume it covers is overwritten with the savepoint's data, bind mounts included, and a volume a service reaches through `subpath:` goes back whole. When the project is running, arcave takes a safety snapshot of the live state first and replays it by itself if the rollback fails; the result's `safety_snapshot` names it, and rolling back to that id undoes the rollback until a `gc` retires it. A project with no containers is built from the savepoint's spec instead, with no safety snapshot, and [`rollback.leftover_volumes`](configuration.md#rollback) from the config decides about the named volumes it still owns — see [Rolling back a project that is not running](cli/rollback.md#rolling-back-a-project-that-is-not-running).
 
 | Argument | Required | Description |
 |---|---|---|
@@ -104,6 +104,7 @@ Returns the environment to a savepoint. Destructive: every volume it covers is o
 | `session` | no | The session to work in for this call only. |
 | `ref` | yes | The savepoint to return to: its id, its name, or the literal `latest`. |
 | `wait_timeout` | no | How long to wait for services to become healthy on restart. Omit for the project's own bound. |
+| `safety_snapshot` | no | Whether to capture the live volumes and writable layers first. Omit for the project's [`rollback.safety_snapshot`](configuration.md#rollback). With `false` nothing can undo the rollback, and after a failure the project stays as it is, and refused, until the same rollback is run again. |
 
 Returns what the CLI prints — see [Output](output.md#rollback):
 
@@ -116,7 +117,8 @@ Returns what the CLI prints — see [Output](output.md#rollback):
   "writable_layers": [
     { "service": "app", "replica": 1, "container_name": "myapp-app-1", "image_id": "sha256:aaaa…",
       "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000" }
-  ]
+  ],
+  "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
 
@@ -211,9 +213,9 @@ Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose fil
 |---|---|---|
 | `dry_run` | no | `true`, the default, only reports; `false` deletes, as `arcave gc` without `--dry-run` does. |
 | `session` | no | The session to look in, by name or by id. The default is the pinned session, or the current one. |
-| `kinds` | no | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. The default is every kind. |
+| `kinds` | no | The kinds of data to look at: `savepoint-data`, `safety-snapshots`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. The default is every kind. |
 
-Returns the report [`arcave gc`](cli/gc.md) prints. Unless `dry_run` is `false` the tool deletes nothing; it is marked destructive either way. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`, and what failed to delete is under `deletion.failed`. A gc that lost its session lock midway through deleting is returned as a tool error that still carries the report, with what was deleted before the loss.
+Nothing runs it for you: call it after a rollback, or periodically, or safety snapshots pile up. Returns the report [`arcave gc`](cli/gc.md) prints. Unless `dry_run` is `false` the tool deletes nothing; it is marked destructive either way. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`, and what failed to delete is under `deletion.failed`. A gc that lost its session lock midway through deleting is returned as a tool error that still carries the report, with what was deleted before the loss.
 
 ## Where the tools differ from the CLI
 

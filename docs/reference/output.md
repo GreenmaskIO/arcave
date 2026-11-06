@@ -128,7 +128,7 @@ The JSON each command prints; [as text](#result-format), each is a summary, a ta
 | [`savepoint create`](cli/savepoint_create.md) | one savepoint record |
 | [`savepoint list`](cli/savepoint_list.md) | an array of savepoint records, newest first unless `--sort asc`; `[]` when there are none |
 | [`savepoint remove`](cli/savepoint_remove.md) | `{"dry_run": …, "removed": [ … ]}` |
-| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "safety_snapshot_kept": "<id>"}` |
+| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "safety_snapshot": "<id>"}` |
 | [`session create`](cli/session.md#session-create), [`session set`](cli/session.md#session-set), [`session unset`](cli/session.md#session-unset), [`session current`](cli/session.md#session-current) | one session record: `{"id": …, "name": …, "created_at": …, "from": {"session": …}}` |
 | [`session list`](cli/session.md#session-list) | an array of session entries — the record plus `status`, `current`, `savepoint_count`, `compose_projects`, `size_bytes` — newest first unless `--sort asc` |
 | [`session remove`](cli/session.md#session-remove) | `{"session": …, "removed": true, "freed_bytes": …}` |
@@ -283,13 +283,14 @@ Every field is omitted when empty, and `not_covered` itself when all are.
       "image_id": "sha256:aaaa…",
       "tag": "arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"
     }
-  ]
+  ],
+  "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
 
 `writable_layers` names each container layer put back, and is omitted when the savepoint held none. `tag` is the reference the restored layer answers to in your local Docker daemon: after a rollback the container runs on it, not on the image its compose file names.
 
-`safety_snapshot_kept` appears only when the rollback succeeded but could not drop its safety snapshot — the inflight marker could not be cleared, the session lock was no longer the rollback's, or the record could not be removed. It is still an ordinary savepoint: `arcave savepoint remove <id>` drops it.
+`safety_snapshot` is the id of the safety snapshot the rollback took: rolling back to it undoes the rollback. It is omitted when none was taken: the project had no containers, or `rollback.safety_snapshot` or `--safety-snapshot` turned it off. In that last case the stream has no `rollback.safety-snapshot` step, and a warning, marked `in_result`, says what running without one risks.
 
 ## Reading it
 

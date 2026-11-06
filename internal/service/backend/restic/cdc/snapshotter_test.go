@@ -168,8 +168,7 @@ func TestSnapshotter_Snapshot_HostNetwork(t *testing.T) {
 // A safety snapshot differs from a savepoint by its label and by nothing else:
 // same repository, same --host, same path. That is what makes it an increment
 // over the savepoints of that volume, since restic picks a parent by host and
-// paths — and the label is what makes one a killed rollback abandoned findable
-// with a plain `restic snapshots`.
+// paths — and the label is what makes one findable with a plain `restic snapshots`.
 func TestSnapshotter_Snapshot_SafetySnapshotDiffersOnlyByItsLabel(t *testing.T) {
 	// Arrange
 	savepoint := newHarness(t, defaultOptions())

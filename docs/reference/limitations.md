@@ -85,6 +85,20 @@ A rollback doesn't load the images a savepoint stored back into Docker. A servic
 
 The session's lock in the store is taken by writing it, waiting a second, and reading it back, because the stores arcave supports offer no write-if-absent. Two machines claiming it at the same moment can, rarely, both believe they hold it. For a capture that only costs a savepoint, but a gc that deletes could then remove a blob a capture on the other machine has just reused, and that savepoint would fail to roll back. Run `arcave gc` without `--dry-run` only while no other machine works in the session. `--dry-run` is safe anywhere.
 
+### Safety snapshots pile up between gc runs
+
+Every rollback of a running project leaves a safety snapshot, and only a run of `arcave gc` retires them: nothing runs it for you. On `fullcopy`, each one is a full copy of the volumes until then. Run gc periodically, or right after a rollback, or turn them off with `rollback.safety_snapshot: false`.
+
+A rollback that failed and reverted, or was interrupted before the teardown, leaves one too, and it counts toward the retention. Under `retain_recent: 1`, a gc after such a rollback retires the undo of the last rollback that did finish.
+
+### A rollback without a safety snapshot goes by the savepoint's spec
+
+`--safety-snapshot=false` reads nothing of the live project, so `compose down` knows only what the savepoint recorded. Containers go whatever the spec says, but a network the live project declares and the savepoint doesn't stays in Docker, and the next savepoint records it. A service is stopped within the savepoint's `stop_grace_period`, not the live one. Remove such a network with `docker network rm`.
+
+### gc on another machine doesn't see an interrupted rollback
+
+The marker a rollback leaves when it is interrupted, `.arcave/inflight.json`, is local to the machine it ran on. A gc there refuses to delete while it stands; a gc on another machine sharing the store doesn't see it, and may retire a safety snapshot that interrupted rollback still needs, its revert having failed included. After an interrupted rollback, recover before running gc from elsewhere.
+
 ### gc is not kept out of a rollback's window from elsewhere
 
 A rollback loads its layers into the daemon and tags them before it creates the containers that run on them. The project lock keeps a gc in the same checkout out of that window, and the session's lock one in the same session on any host sharing the store. A gc of the same arcave project on the same daemon, in another session or over another store, is kept out by neither: it removes the tags, and the rollback fails when it creates or rebuilds its containers and goes back to its safety snapshot, or takes down what it created. No data is lost: the layers stay in the store, and running the rollback again passes. Run `arcave gc` while no rollback runs on the daemon from another checkout or session.
@@ -95,7 +109,7 @@ Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in the daemon,
 
 ## An interrupted rollback is not finished for you
 
-If a rollback is killed partway through, arcave refuses every command that changes state until you recover. It doesn't resume on its own. A rollback of a project that had no containers has no safety snapshot to go back to: you recover by running the same rollback again. [Troubleshooting](troubleshooting.md#an-interrupted-rollback) shows how to recover.
+If a rollback is killed partway through, arcave refuses every command that changes state until you recover. It doesn't resume on its own. A rollback that took no safety snapshot — of a project that had no containers, or under `--safety-snapshot=false` — has none to go back to: you recover by running the same rollback again, or one to another savepoint. [Troubleshooting](troubleshooting.md#an-interrupted-rollback) shows how to recover.
 
 ## A fork copies the whole session
 
