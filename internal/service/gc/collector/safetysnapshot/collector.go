@@ -47,10 +47,10 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 // not CreatedAt's, another host's clock.
 func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
-		trees    = gc.NewObjectTrees(scope.Objects)
-		ids      []model.SavepointID
-		ops      = []model.GarbageOp{}
-		retained int
+		filesBySavepoint = gc.GroupFilesBySavepoint(scope.Objects)
+		ids              []model.SavepointID
+		ops              = []model.GarbageOp{}
+		retained         int
 	)
 	for _, savepoint := range scope.Savepoints {
 		if savepoint.IsSafetySnapshot() {
@@ -61,7 +61,7 @@ func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model
 
 	retained = min(s.retainRecent, len(ids))
 	for _, id := range ids[retained:] {
-		bytes, lastModified := utils.MeasureObjects(trees[id])
+		bytes, lastModified := utils.MeasureObjects(filesBySavepoint[id])
 		ops = append(ops, model.GarbageOp{
 			Action:       model.GarbageActionDeleteSavepoint,
 			Target:       id.String(),

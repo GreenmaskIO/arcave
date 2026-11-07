@@ -225,7 +225,7 @@ func (s *Service) rollbackLive(
 		}
 
 		log.Info().Str("safety_snapshot_id", safetySnapshot.ID.String()).Msg("reverted to the pre-rollback state")
-		s.cleanUpRollback(revertCtx, working.anonymousNames, volumesOf(safetySnapshot))
+		s.cleanUpRollback(revertCtx, working.anonymousVolumeNames, volumesOf(safetySnapshot))
 		return model.RollbackResult{}, fmt.Errorf("rollback failed: %w", err)
 	}
 
@@ -233,7 +233,7 @@ func (s *Service) rollbackLive(
 	// inflight marker or the orphaned volumes.
 	cleanupCtx, cancel := revertContext(ctx)
 	defer cancel()
-	s.cleanUpRollback(cleanupCtx, working.anonymousNames, volumesOf(savepoint))
+	s.cleanUpRollback(cleanupCtx, working.anonymousVolumeNames, volumesOf(savepoint))
 	logRestoredLayers(ctx, target.restored)
 	return target.newResult(savepoint, safetySnapshot.ID), nil
 }
@@ -431,23 +431,23 @@ func (s *Service) revert(
 
 // cleanUpRollback ends a consistent rollback: it drops the anonymous volumes the teardown orphaned
 // and clears the inflight marker. The safety snapshot stays.
-func (s *Service) cleanUpRollback(ctx context.Context, anonymousNames map[string]string, restored []model.Volume) {
+func (s *Service) cleanUpRollback(ctx context.Context, anonymousVolumeNames map[string]string, restored []model.Volume) {
 	// Run, not Begin: with nothing to reap and no warning, a lazy step would not report at all.
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindRollbackCleanup})
 	defer step.End(nil)
-	s.removeOrphanedVolumes(ctx, anonymousNames, restored)
+	s.removeOrphanedVolumes(ctx, anonymousVolumeNames, restored)
 	if err := s.inflightMarker.Clear(ctx); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to clear the inflight marker")
 	}
 }
 
-// removeOrphanedVolumes removes the anonymous volumes `compose down` left behind, anonymousNames
-// holding their docker names by ObjectID. Only those whose data restored holds: any other is its
-// own last copy.
-func (s *Service) removeOrphanedVolumes(ctx context.Context, anonymousNames map[string]string, restored []model.Volume) {
+// removeOrphanedVolumes removes the anonymous volumes `compose down` left behind; anonymousVolumeNames
+// holds their docker names by ObjectID. Only those whose data restored holds: any other is its own
+// last copy.
+func (s *Service) removeOrphanedVolumes(ctx context.Context, anonymousVolumeNames map[string]string, restored []model.Volume) {
 	log := zerolog.Ctx(ctx)
 	for _, volume := range restored {
-		name, ok := anonymousNames[volume.ObjectID]
+		name, ok := anonymousVolumeNames[volume.ObjectID]
 		if !ok {
 			continue
 		}
@@ -510,7 +510,7 @@ func (s *Service) rollbackWithoutSnapshot(
 	// inflight marker or the orphaned volumes.
 	cleanupCtx, cancel := revertContext(ctx)
 	defer cancel()
-	s.cleanUpRollback(cleanupCtx, newAnonymousNames(introspection), volumesOf(savepoint))
+	s.cleanUpRollback(cleanupCtx, newAnonymousVolumeNames(introspection), volumesOf(savepoint))
 	logRestoredLayers(ctx, target.restored)
 	return target.newResult(savepoint, ""), nil
 }

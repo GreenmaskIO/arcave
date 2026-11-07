@@ -22,14 +22,20 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// NewObjectTrees groups a compose project's listing by the savepoint tree each object lies in.
-func NewObjectTrees(objects []storages.ObjectStat) map[model.SavepointID][]storages.ObjectStat {
-	trees := map[model.SavepointID][]storages.ObjectStat{}
-	for _, object := range objects {
-		dir, _, _ := strings.Cut(object.Name, "/")
-		trees[model.SavepointID(dir)] = append(trees[model.SavepointID(dir)], object)
+// GroupFilesBySavepoint lets a collector measure a savepoint off the scope's one listing, asking the
+// store nothing more. It takes every stored file of a compose project and returns each savepoint's
+// own by its id; a file in no savepoint's directory, under shared/ say, is left out.
+func GroupFilesBySavepoint(files []storages.ObjectStat) map[model.SavepointID][]storages.ObjectStat {
+	filesBySavepoint := map[model.SavepointID][]storages.ObjectStat{}
+	for _, file := range files {
+		dir, _, _ := strings.Cut(file.Name, "/")
+		id := model.SavepointID(dir)
+		if id.Validate() != nil {
+			continue
+		}
+		filesBySavepoint[id] = append(filesBySavepoint[id], file)
 	}
-	return trees
+	return filesBySavepoint
 }
 
 // NewLiveImages maps every image the savepoints hold the bytes of to the first savepoint naming it.

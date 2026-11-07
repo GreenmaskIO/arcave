@@ -40,11 +40,11 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 // Find names every dead tree.
 func (s *Collector) Find(_ context.Context, scope gc.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
-		trees = gc.NewObjectTrees(scope.Objects)
-		ops   = []model.GarbageOp{}
+		filesBySavepoint = gc.GroupFilesBySavepoint(scope.Objects)
+		ops              = []model.GarbageOp{}
 	)
 	for _, id := range scope.Dead {
-		bytes, lastModified := utils.MeasureObjects(trees[id])
+		bytes, lastModified := utils.MeasureObjects(filesBySavepoint[id])
 		ops = append(ops, model.GarbageOp{
 			Action:       model.GarbageActionDeleteTree,
 			Target:       id.String(),
