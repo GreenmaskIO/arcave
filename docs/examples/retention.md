@@ -1,6 +1,6 @@
 ---
 title: Prune savepoints with retention rules
-description: Keep an arcave savepoint loop from filling the disk — preview with dry-run, keep the newest N, keep a time window, remove by name, delete leftover safety snapshots, and reclaim the space with arcave gc.
+description: Keep an arcave savepoint loop from filling the disk — preview with dry-run, keep the newest N, keep a time window, remove by name, retire safety snapshots, and reclaim the space with arcave gc.
 keywords: [arcave example, retention, prune snapshots, dry run, disk usage, savepoint remove, Open-Source, Greenmask]
 ---
 
@@ -205,9 +205,15 @@ arcave --log-format json gc
 
 The `OR` semantics are what you want here: the newest five survive no matter how old they are, and everything from the last week survives no matter how many there are.
 
-## 7. Deleting a leftover safety snapshot
+## 7. Retiring safety snapshots
 
-Retention rules never see [safety snapshots](../concepts.md#safety-snapshot), and neither does a name. A rollback drops its own once it succeeds or reverts, so one is left only when a rollback died mid-flight, its revert failed, or it could not drop it — a successful rollback then names it in `safety_snapshot_kept`. Find one explicitly:
+Retention rules never see [safety snapshots](../concepts.md#safety-snapshot), and neither does a name. Every rollback of a running project leaves one, and [`arcave gc`](../reference/cli/gc.md) retires them: each compose project keeps its newest [`gc.safety_snapshots.retain_recent`](../reference/configuration.md#gc), one by default. **gc runs only when you run it**, so run it periodically, or right after each rollback:
+
+```shell
+arcave rollback before-migration && arcave gc
+```
+
+With `fullcopy`, each safety snapshot is a full copy of the volumes until then. To remove one by hand, find it explicitly:
 
 ```shell
 arcave savepoint list --include-safety-snapshots \
@@ -225,25 +231,25 @@ arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 While the rollback that left it is unrecovered — `.arcave/inflight.json` still stands — every removal that is not a `--dry-run` is refused, because the safety snapshot may be the way back:
 
 ```text title="stderr"
-Error: rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)
+Error: rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000
 ```
 
 The log line before it names the rollback that recovers. Run that first; the removal works once the marker is cleared.
 
 :::warning
-Only after you are certain you do not need the pre-rollback state it holds. A safety snapshot that outlived its rollback is the last copy of that state — see [Troubleshooting](../reference/troubleshooting.md#an-interrupted-rollback).
+Only after you are certain you do not need the pre-rollback state it holds: a safety snapshot is the last copy of that state, and the only way to undo its rollback — see [Troubleshooting](../reference/troubleshooting.md#an-interrupted-rollback).
 :::
 
 ## 8. Reclaim the space
 
-`savepoint remove` deletes a savepoint's record and its own directory. What it shared with other savepoints — the deduplicated image blobs and images, and with the `cdc` backend its restic snapshots — stays in the store until [`arcave gc`](../reference/cli/gc.md) finds no savepoint using it:
+`savepoint remove`, like gc retiring a safety snapshot, deletes a savepoint's record and its own directory. What it shared with other savepoints — the deduplicated image blobs and images, and with the `cdc` backend its restic snapshots — stays in the store until [`arcave gc`](../reference/cli/gc.md) finds no savepoint using it:
 
 ```shell
 arcave gc --dry-run    # what would be freed, nothing deleted
 arcave gc              # delete it
 ```
 
-gc covers every compose project of the session at once, so it takes no `-p`. An unused image's layers go on the run after the image, so a second run can free more — see [gc frees space in more than one run](../reference/limitations.md#gc-frees-space-in-more-than-one-run). In a scheduled job, run `arcave gc` after the retention step.
+gc covers every compose project of the session at once, so it takes no `-p`. An unused image's layers go on the run after the image, and what only a retired safety snapshot held on the run after that one, so a second run can free more — see [gc frees space in more than one run](../reference/limitations.md#gc-frees-space-in-more-than-one-run). In a scheduled job, run `arcave gc` after the retention step.
 
 ## Reducing what a savepoint costs in the first place
 

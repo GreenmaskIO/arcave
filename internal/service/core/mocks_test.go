@@ -337,10 +337,6 @@ func (m *mockBackend) Restore(ctx context.Context, req model.BackendRestoreReque
 	return m.Called(ctx, req).Error(0)
 }
 
-func (m *mockBackend) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
-	return m.Called(ctx, req).Error(0)
-}
-
 // matchSpec matches a registry New's BackendSpec argument by the root it names
 // and the volume it is for. There is one root now, so the store no longer tells
 // a savepoint's instances from a rollback's undo — it is asserted because every

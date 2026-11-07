@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/xhit/go-str2duration/v2"
 	"golang.org/x/sync/errgroup"
@@ -32,45 +31,34 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// maxParallelRemovals caps how many savepoints applyRemoval deletes
-// in parallel; each fans out over its own volumes in turn.
+// maxParallelRemovals caps how many savepoints applyRemoval deletes in parallel.
 const maxParallelRemovals = 5
-
-// errStillCommitted is a drop that failed before it uncommitted the record: the savepoint stands.
-var errStillCommitted = errors.New("savepoint still committed")
 
 // SavepointStoreDeps is what the workflows that read and delete in the store alone run on.
 type SavepointStoreDeps struct {
 	SavepointRepo savepointRepository
 	ProjectLocker projectLocker
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
-	SessionLocker   model.SessionLocker
-	BackendRegistry model.SnapshotBackendRegistry
-	Inflight        inflightMarkers
-	Store           storages.Storager
-	// Session is the session Store belongs to; zero means model.DefaultSession.
+	SessionLocker model.SessionLocker
+	Inflight      inflightMarkers
+	// Session is the session SavepointRepo belongs to; zero means model.DefaultSession.
 	Session model.SessionID
-	// ComposeProject is the compose project Store belongs to.
+	// ComposeProject is the compose project SavepointRepo belongs to.
 	ComposeProject model.DockerComposeProjectName
 	// Sessions checks, under the lock, that Session still exists.
 	Sessions sessionLookup
-	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
-	Concurrency int
 }
 
 // SavepointStoreService lists and removes savepoints over one compose project's store. It reaches
 // no daemon, so it runs where none answers.
 type SavepointStoreService struct {
-	savepointRepo           savepointRepository
-	projectLocker           projectLocker
-	sessionLocker           model.SessionLocker
-	snapshotBackendRegistry model.SnapshotBackendRegistry
-	inflightMarker          inflightMarkers
-	store                   storages.Storager
-	session                 model.SessionID
-	composeProject          model.DockerComposeProjectName
-	sessions                sessionLookup
-	maxConcurrentOperations int
+	savepointRepo  savepointRepository
+	projectLocker  projectLocker
+	sessionLocker  model.SessionLocker
+	inflightMarker inflightMarkers
+	session        model.SessionID
+	composeProject model.DockerComposeProjectName
+	sessions       sessionLookup
 }
 
 func NewSavepointStoreService(deps SavepointStoreDeps) *SavepointStoreService {
@@ -78,16 +66,13 @@ func NewSavepointStoreService(deps SavepointStoreDeps) *SavepointStoreService {
 		deps.Session = model.DefaultSession
 	}
 	return &SavepointStoreService{
-		savepointRepo:           deps.SavepointRepo,
-		projectLocker:           deps.ProjectLocker,
-		sessionLocker:           deps.SessionLocker,
-		snapshotBackendRegistry: deps.BackendRegistry,
-		inflightMarker:          deps.Inflight,
-		store:                   deps.Store,
-		session:                 deps.Session,
-		composeProject:          deps.ComposeProject,
-		sessions:                deps.Sessions,
-		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
+		savepointRepo:  deps.SavepointRepo,
+		projectLocker:  deps.ProjectLocker,
+		sessionLocker:  deps.SessionLocker,
+		inflightMarker: deps.Inflight,
+		session:        deps.Session,
+		composeProject: deps.ComposeProject,
+		sessions:       deps.Sessions,
 	}
 }
 
@@ -239,7 +224,7 @@ func (s *SavepointStoreService) selectRemoval(ctx context.Context, req model.Rem
 // given, otherwise the retention rules.
 //
 // The two see different sets. An id sees every record, safety snapshots
-// included — that is how a killed rollback's shard is cleared — a name only the visible ones. The retention
+// included — that is how one is removed by hand — a name only the visible ones. The retention
 // rules scan, and a scan sees only what `savepoint list` shows: an undo must
 // neither count as one of the N newest, nor be swept by an age rule.
 func (s *SavepointStoreService) selectSavepointsToRemove(
@@ -355,9 +340,8 @@ func partitionSavepoints(
 	return kept, removed
 }
 
-// applyRemoval deletes uncommit-first, so the only observable states are "fully
-// present" and "gone". The cost is an orphaned directory when the data delete
-// fails, reported here and reclaimed by a future `arcave savepoint gc`.
+// applyRemoval deletes every savepoint removed names. A delete that fails past the record leaves
+// an orphaned directory, reported here and reclaimed by `arcave gc`.
 func (s *SavepointStoreService) applyRemoval(
 	ctx context.Context, grantedLock model.GrantedSessionLock, removed []model.Savepoint,
 ) error {
@@ -370,7 +354,7 @@ func (s *SavepointStoreService) applyRemoval(
 	eg.SetLimit(maxParallelRemovals)
 	for i, savepoint := range removed {
 		eg.Go(func() error {
-			removeCtx, step := progress.Begin(ctx, progress.Step{
+			removeCtx, step := progress.Run(ctx, progress.Step{
 				Kind: kindSavepoint,
 				ID:   savepoint.ID.String(),
 				Name: savepoint.Name,
@@ -389,163 +373,49 @@ func (s *SavepointStoreService) applyRemoval(
 	return nil
 }
 
-// removeSavepoint drops one savepoint from the savepoint store. The backends are
-// built first: one that cannot be built leaves the savepoint whole.
+// removeSavepoint drops one savepoint from the savepoint store.
 func (s *SavepointStoreService) removeSavepoint(
 	ctx context.Context, grantedLock model.GrantedSessionLock, savepoint model.Savepoint,
 ) error {
-	backends, err := s.newBackends(volumesOf(savepoint))
-	if err != nil {
-		return err
-	}
 	// Dropping it uncommits a record: only while the session's lock is still this run's.
 	if err := grantedLock.Verify(ctx); err != nil {
 		return fmt.Errorf("remove savepoint %s: %w", savepoint.ID, err)
 	}
-	if err := s.dropSavepoint(ctx, savepoint, backends); err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", savepoint.ID.String()).
-			Msg("savepoint was uncommitted but its data could not be removed; the directory is orphaned")
-		return err
-	}
-	return nil
-}
-
-// newBackends builds one backend per volume, all rooted at the one store, in
-// input order. All up front: an unregistered backend fails before any byte moves.
-func (s *SavepointStoreService) newBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
-	backends := make([]model.VolumeSnapshotBackend, len(volumes))
-	for i, volume := range volumes {
-		backend, err := s.snapshotBackendRegistry.New(model.BackendSpec{
-			Store:  s.store,
-			Volume: volume,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("building %s backend for volume %s: %w", volume.Backend, volume.ObjectID, err)
-		}
-		backends[i] = backend
-	}
-	return backends, nil
-}
-
-// dropSavepoint uncommits the record first, then drops the data it named.
-// Reversing that leaves a savepoint that still lists but is half gone, so the
-// order is pinned by a test.
-//
-// It is also what a failed capture wants: Delete is idempotent — a namespace
-// with no record is already uncommitted — so one function serves both.
-//
-// The sweep runs whatever the backends reported: it is what reclaims an archive a
-// capture that died mid-fan-out left behind, which no stat names.
-func (s *SavepointStoreService) dropSavepoint(
-	ctx context.Context,
-	savepoint model.Savepoint,
-	backends []model.VolumeSnapshotBackend,
-) error {
 	if err := s.savepointRepo.DeleteSavepoint(ctx, savepoint.ID); err != nil {
-		return fmt.Errorf("%w: uncommit savepoint %s: %w", errStillCommitted, savepoint.ID, err)
-	}
-
-	removeErr := s.forEachBackend(ctx, savepoint.ID, backends, volumeRemove,
-		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			if err := backend.Remove(ctx, model.BackendRemoveRequest{
-				SnapshotID: savepoint.ID,
-				Payload:    savepoint.Stats[i].Payload,
-			}); err != nil {
-				return fmt.Errorf("remove capture: %w", err)
-			}
-			return nil
-		})
-
-	sweepErr := s.sweepTree(ctx, savepoint.ID)
-	if sweepErr != nil {
-		sweepErr = fmt.Errorf("remove capture directory %s: %w", savepoint.ID, sweepErr)
-	}
-	return errors.Join(removeErr, sweepErr)
-}
-
-// forEachBackend runs fn over every backend concurrently and waits for all of them.
-// fn gets its slice index and a context whose step counts the volume's bytes.
-func (s *SavepointStoreService) forEachBackend(
-	ctx context.Context,
-	snapshotID model.SavepointID,
-	backends []model.VolumeSnapshotBackend,
-	op volumeOp,
-	fn func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error,
-) error {
-	if err := snapshotID.Validate(); err != nil {
-		return fmt.Errorf("validate savepoint id: %w", err)
-	}
-	if len(backends) == 0 {
-		return nil
-	}
-
-	// Before the group: the batch reports the group's cancellation, so it opens outside it.
-	ctx, batch := progress.Batch(ctx, progress.Step{Kind: op.kind}, len(backends))
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(s.maxConcurrentOperations)
-	for i, backend := range backends {
-		eg.Go(func() error {
-			opCtx := volumeOpContext(egCtx, backend, snapshotID, op.name)
-			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindVolume, ID: backend.Volume().ObjectID},
-				progress.MeasureBytes)
-			log := zerolog.Ctx(opCtx)
-
-			started := time.Now()
-			log.Debug().Msg("volume operation started")
-			if err := fn(opCtx, i, backend); err != nil {
-				err = fmt.Errorf("%s %s: %w", op.name, backend.Volume().ObjectID, err)
-				step.End(err)
-				return err
-			}
-			step.End(nil)
-			log.Debug().Dur("duration", time.Since(started)).Msg("volume operation finished")
-			return nil
-		})
-	}
-	err := eg.Wait()
-	batch.End(err)
-	return err
-}
-
-// volumeOpContext attributes every line the operation logs.
-func volumeOpContext(
-	ctx context.Context, backend model.VolumeSnapshotBackend, snapshotID model.SavepointID, opName string,
-) context.Context {
-	volume := backend.Volume()
-	return zerolog.Ctx(ctx).With().
-		Str("volume", volume.ObjectID).
-		Str("backend", string(volume.Backend)).
-		Str("snapshot_id", snapshotID.String()).
-		Str("op", opName).
-		Logger().
-		WithContext(ctx)
-}
-
-// sweepTree drops a whole capture directory — the one storage key the service
-// addresses itself; everything below it is the backends'. An absent tree is not
-// an error.
-func (s *SavepointStoreService) sweepTree(ctx context.Context, id model.SavepointID) error {
-	if err := s.store.DeleteAll(ctx, id.String()); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", savepoint.ID.String()).
+			Msg("failed to remove the savepoint; if its record went, the directory is orphaned for a gc")
 		return err
 	}
 	return nil
+}
+
+// rollbackRecovery is what a rollback takes over from the interrupted one it recovers from; zero
+// when it recovers from none.
+type rollbackRecovery struct {
+	recovering bool
+	// safety is the safety snapshot the standing marker names: the recovery's marker keeps naming
+	// it, as the last copy of the state before them both.
+	safety model.SavepointID
 }
 
 // requireNoInflight refuses to run while .arcave/inflight.json stands, except for the rollback
 // that recovers from it. restoring is the savepoint the caller rolls back to, "" for any other
-// workflow. It returns the marker it let through, zero when there is none.
-func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (model.InflightMarker, error) {
+// workflow. It reports what the caller, if it is that recovery, takes over.
+func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (rollbackRecovery, error) {
 	marker, found, err := s.inflightMarker.Get(ctx)
 	if err != nil {
-		return model.InflightMarker{}, fmt.Errorf("reading the inflight marker: %w", err)
+		return rollbackRecovery{}, fmt.Errorf("reading the inflight marker: %w", err)
 	}
 	if !found {
-		return model.InflightMarker{}, nil
+		return rollbackRecovery{}, nil
 	}
 	if s.isRecoveryRollback(marker, restoring) {
 		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
 			Msg("recovering from an interrupted rollback; the marker clears on success")
-		return marker, nil
+		return rollbackRecovery{
+			recovering: true,
+			safety:     marker.Safety,
+		}, nil
 	}
 	err = &model.InterruptedRollbackError{Marker: marker}
 	zerolog.Ctx(ctx).Error().Err(err).
@@ -555,11 +425,15 @@ func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring
 		Str("safety_snapshot_id", marker.Safety.String()).
 		Str("phase", string(marker.Phase)).
 		Msg(recoveryHint(marker))
-	return model.InflightMarker{}, err
+	return rollbackRecovery{}, err
 }
 
 // isRecoveryRollback reports whether a rollback to id, in this session and compose project,
-// is the one that recovers from the interrupted rollback the marker records.
+// recovers from the interrupted rollback the marker records: one to its safety snapshot or, when
+// the marker accepts any, one to any savepoint.
 func (s *SavepointStoreService) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
-	return id == marker.RecoveryID() && marker.Session == s.session && marker.ComposeProject == s.composeProject
+	if id == "" || marker.Session != s.session || marker.ComposeProject != s.composeProject {
+		return false
+	}
+	return marker.AcceptsAnySavepoint() || id == marker.Safety
 }

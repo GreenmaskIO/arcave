@@ -168,8 +168,7 @@ func TestSnapshotter_Snapshot_HostNetwork(t *testing.T) {
 // A safety snapshot differs from a savepoint by its label and by nothing else:
 // same repository, same --host, same path. That is what makes it an increment
 // over the savepoints of that volume, since restic picks a parent by host and
-// paths — and the label is what makes one a killed rollback abandoned findable
-// with a plain `restic snapshots`.
+// paths — and the label is what makes one findable with a plain `restic snapshots`.
 func TestSnapshotter_Snapshot_SafetySnapshotDiffersOnlyByItsLabel(t *testing.T) {
 	// Arrange
 	savepoint := newHarness(t, defaultOptions())
@@ -352,25 +351,6 @@ func TestSnapshotter_Restore_ReadsARoundTrippedPayload(t *testing.T) {
 	h.runner.AssertExpectations(t)
 }
 
-// Remove leaves the snapshot to a gc: nothing in the repository goes, and no container runs.
-func TestSnapshotter_Remove(t *testing.T) {
-	// Arrange
-	h := newHarness(t, defaultOptions())
-	ctx := zerolog.Nop().WithContext(context.Background())
-	require.NoError(t, h.repo.PutObject(ctx, "snapshots/3f8a1c0d9b", strings.NewReader("snapshot")))
-
-	// Act
-	err := h.snapshotter.Remove(ctx, model.BackendRemoveRequest{
-		SnapshotID: "019e843e-1650-7000-8000-000000000000",
-		Payload:    Payload{SnapshotObjectID: "3f8a1c0d9b"},
-	})
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, []string{"3f8a1c0d9b"}, objectsUnder(t, h.repo, snapshotsPath))
-	h.runner.AssertExpectations(t)
-}
-
 // A failure of the run reaches the caller with its cause: the operations are
 // what a whole workflow's error is attributed by, and a restic run that printed
 // no summary is as much a failure as one that exited non-zero.
@@ -442,9 +422,8 @@ func TestSnapshotter_ReportsRunFailures(t *testing.T) {
 	}
 }
 
-// The savepoint id becomes a storage key, so it is gated by an allowlist ahead
-// of every side effect; a payload naming no snapshot has nothing to restore or
-// drop. The empty runner is the assertion: neither reaches a container.
+// The savepoint id is gated by an allowlist ahead of every side effect, and a payload naming no
+// snapshot has nothing to restore. The empty runner is the assertion: neither reaches a container.
 func TestSnapshotter_RejectsUnusableIDs(t *testing.T) {
 	tests := []struct {
 		name string

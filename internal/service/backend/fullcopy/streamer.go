@@ -205,30 +205,9 @@ func (s *Snapshotter) mountSource(ctx context.Context) (model.MountSource, error
 	return src, nil
 }
 
-// Remove deletes the archive the record's payload names and stops: a Storager
-// may not delete its own root, so the caller sweeps the directory. An archive
-// already gone is not an error.
-func (s *Snapshotter) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
-	var (
-		captureStore storages.Storager
-		payload      Payload
-		err          error
-	)
-	if captureStore, err = s.captureStore(req.SnapshotID); err != nil {
-		return err
-	}
-	if payload, err = DecodePayload(req.Payload); err != nil {
-		return err
-	}
-	if err := captureStore.Delete(ctx, payload.Compression.archiveName()); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
-		return fmt.Errorf("delete archive: %w", err)
-	}
-	return nil
-}
-
 // captureStore narrows the root to the one capture a request addresses.
 // It is the only place an id becomes a storage key, so the id gate stands here:
-// the destructive paths render a key through it too.
+// Snapshot and Restore both render their key through it.
 func (s *Snapshotter) captureStore(snapshotID model.SavepointID) (storages.Storager, error) {
 	if err := snapshotID.Validate(); err != nil {
 		return nil, err

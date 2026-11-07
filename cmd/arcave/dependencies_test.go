@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -56,6 +57,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -691,6 +693,7 @@ func TestNewObjectCollectors(t *testing.T) {
 	want := map[model.GarbageDataKind]resolution{
 		model.GarbageDataKindRestoredLayers:      {collector: model.GarbageCollectorKindDockerLayerTags, daemon: true},
 		model.GarbageDataKindSavepointData:       {collector: model.GarbageCollectorKindSavepointDirectory},
+		model.GarbageDataKindSafetySnapshots:     {collector: model.GarbageCollectorKindSafetySnapshotRetention},
 		model.GarbageDataKindUpstreamImages:      {collector: model.GarbageCollectorKindOCIImages},
 		model.GarbageDataKindImageLayers:         {collector: model.GarbageCollectorKindOCIBlobs},
 		model.GarbageDataKindDeduplicatedVolumes: {collector: model.GarbageCollectorKindResticRepositories},
@@ -720,6 +723,44 @@ func TestNewObjectCollectors(t *testing.T) {
 	assert.ElementsMatch(t, model.GarbageCollectorKinds(), collectorKinds, "every collector kind is built once")
 }
 
+// gc.safety_snapshots.retain_recent reaches the collector that judges by it.
+func TestNewComposeProjectCollectors_Retention(t *testing.T) {
+	var (
+		labels     = map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
+		savepoints = []model.Savepoint{
+			{ID: "019e843e-1650-7000-8000-00000000000a", Labels: labels},
+			{ID: "019e843e-1650-7000-8000-00000000000b", Labels: labels},
+			{ID: "019e843e-1650-7000-8000-00000000000c", Labels: labels},
+		}
+	)
+	tests := []struct {
+		name         string
+		retainRecent int
+		wantFound    int
+	}{
+		{name: "0 deletes every one", retainRecent: 0, wantFound: 3},
+		{name: "2 keeps two", retainRecent: 2, wantFound: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			cfg := config.Config{GC: config.GC{SafetySnapshots: config.GCSafetySnapshots{RetainRecent: &tt.retainRecent}}}
+			collectors := newComposeProjectCollectors(cfg, nil)
+			index := slices.IndexFunc(collectors, func(collector gc.ComposeProjectCollector) bool {
+				return collector.DataKind() == model.GarbageDataKindSafetySnapshots
+			})
+			require.GreaterOrEqual(t, index, 0)
+
+			// Act
+			stat, err := collectors[index].Find(context.Background(), gc.ComposeProjectScope{Savepoints: savepoints})
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFound, stat.Summary().Found)
+		})
+	}
+}
+
 // The daemon's one gc action, untag, has its eraser.
 func TestNewDaemonErasers(t *testing.T) {
 	// Act
@@ -736,8 +777,8 @@ func TestNewDaemonErasers(t *testing.T) {
 func TestNewComposeProjectErasers(t *testing.T) {
 	// Arrange
 	want := []model.GarbageAction{
-		model.GarbageActionDeleteTree, model.GarbageActionDeleteImage, model.GarbageActionDeleteObject,
-		model.GarbageActionForget,
+		model.GarbageActionDeleteTree, model.GarbageActionDeleteSavepoint, model.GarbageActionDeleteImage,
+		model.GarbageActionDeleteObject, model.GarbageActionForget,
 	}
 
 	// Act
@@ -748,6 +789,54 @@ func TestNewComposeProjectErasers(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, want, got)
+}
+
+// The delete-savepoint eraser the DI root builds takes the record and the tree through the real
+// repository, and counts what the finding said, for a tree holding only its record too.
+func TestNewComposeProjectErasers_DeleteSavepoint(t *testing.T) {
+	const (
+		whole      = model.SavepointID("019e843e-1650-7000-8000-000000000000")
+		recordOnly = model.SavepointID("019e844b-7818-7000-8000-000000000000")
+		kept       = model.SavepointID("019e8450-0000-7000-8000-000000000000")
+	)
+	// Arrange
+	ctx := zerolog.Nop().WithContext(context.Background())
+	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
+	require.NoError(t, err)
+	repo := sprepo.New(store)
+	for _, id := range []model.SavepointID{whole, recordOnly, kept} {
+		require.NoError(t, repo.SaveSavepoint(ctx, model.Savepoint{ID: id}))
+	}
+	data := whole.String() + "/volume-named-a/data.tar"
+	require.NoError(t, store.PutObject(ctx, data, strings.NewReader("archive")))
+	var savepointEraser gc.ComposeProjectEraser
+	for _, eraser := range newComposeProjectErasers(config.Config{}, nil) {
+		if eraser.Action() == model.GarbageActionDeleteSavepoint {
+			savepointEraser = eraser
+		}
+	}
+	require.NotNil(t, savepointEraser)
+	wholeBytes, recordBytes := int64(7), int64(3)
+	ops := []model.GarbageOp{
+		{Action: model.GarbageActionDeleteSavepoint, Target: whole.String(), Bytes: &wholeBytes},
+		{Action: model.GarbageActionDeleteSavepoint, Target: recordOnly.String(), Bytes: &recordBytes},
+	}
+
+	// Act
+	got := savepointEraser.Erase(ctx, store, ops)
+
+	// Assert
+	assert.Equal(t, model.GarbageDeletion{Deleted: []model.GarbageDeleted{
+		{Target: whole.String(), Bytes: &wholeBytes},
+		{Target: recordOnly.String(), Bytes: &recordBytes},
+	}}, got)
+	exists, err := store.Exists(ctx, data)
+	require.NoError(t, err)
+	assert.False(t, exists, "the tree goes with the record")
+	left, err := repo.ListSavepoints(ctx)
+	require.NoError(t, err)
+	require.Len(t, left, 1)
+	assert.Equal(t, kept, left[0].ID)
 }
 
 // newTestResticInspectorOpener is a tcp opener over a fresh directory store, its containers on
@@ -1247,13 +1336,15 @@ func newUnreachableDaemonConfig(t *testing.T, projectPath string) config.Config 
 	return cfg
 }
 
-// savepoint list and remove reach no daemon: against one that does not answer a savepoint of
-// either backend is listed and removed, in a session of its own.
+// savepoint list and remove reach no daemon and build no backend: against a daemon that does not
+// answer and a compression no factory takes, a savepoint of any backend is listed and removed whole,
+// in a session of its own.
 func TestOpenSavepointStoreService(t *testing.T) {
 	// Arrange
 	ctx := zerolog.Nop().WithContext(context.Background())
 	projectPath := t.TempDir()
 	cfg := newUnreachableDaemonConfig(t, projectPath)
+	cfg.Backends.FullCopy.Compression = "lz4"
 
 	var opened closers
 	t.Cleanup(func() { opened.release(ctx) })
@@ -1269,9 +1360,12 @@ func TestOpenSavepointStoreService(t *testing.T) {
 		Stats: []model.SnapshotStat{
 			{Volume: model.Volume{ObjectID: "volume-named-a", Backend: model.SnapshotBackendFullCopy}},
 			{Volume: model.Volume{ObjectID: "volume-named-b", Backend: model.SnapshotBackendCDC}},
+			{Volume: model.Volume{ObjectID: "volume-named-c", Backend: "retired"}},
 		},
 	}
 	require.NoError(t, sprepo.New(scope.store).SaveSavepoint(ctx, savepoint))
+	archive := savepoint.ID.String() + "/volume-named-a/data.tar"
+	require.NoError(t, scope.store.PutObject(ctx, archive, strings.NewReader("archive")))
 
 	svc, err := openSavepointStoreService(ctx, projectPath, cfg, "exp", "demo", &opened)
 	require.NoError(t, err)
@@ -1290,6 +1384,9 @@ func TestOpenSavepointStoreService(t *testing.T) {
 	require.Len(t, removed.Removed, 1)
 	assert.Equal(t, savepoint.ID, removed.Removed[0].ID)
 	assert.Empty(t, left)
+	exists, err := scope.store.Exists(ctx, archive)
+	require.NoError(t, err)
+	assert.False(t, exists, "the tree goes with the record")
 }
 
 // A workflow that needs the daemon fails on the wiring's first request.
