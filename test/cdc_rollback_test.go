@@ -198,19 +198,17 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 		"the revert must put back exactly what the safety snapshot captured")
 	assert.Contains(t, env.logs.String(), "reverted to the pre-rollback state")
 
-	// A successful revert uncommits the backup, so nothing of it lists — not even
-	// with the flag. Its cdc snapshots stay in the shared repository for a gc to
-	// forget. The savepoint itself is untouched.
+	// A successful revert leaves the backup committed, listed under the flag; a listing without
+	// it shows the savepoint alone, untouched.
 	committed, err := env.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 	require.NoError(t, err)
-	require.Len(t, committed, 1)
-	assert.Equal(t, savepoint.ID, committed[0].ID)
+	require.Len(t, committed, 2)
+	assert.Equal(t, savepoint.ID, committed[1].ID)
+	assert.True(t, committed[0].IsSafetySnapshot(), "newest first")
 	assert.Equal(t, []string{"heartbeat.json", "project.yaml", "savepoint.json"},
 		objectNames(t, env.composeProjectStore, savepoint.ID.String()))
-	// Nothing of the backup is left beside the savepoint either: the compose project root
-	// holds that one savepoint directory and the repositories, and nothing else.
-	assert.Equal(t, []string{savepoint.ID.String(), cdc.NamespaceRepos}, dirNames(t, env.composeProjectStore),
-		"the backup's own directory is swept with it")
+	assert.ElementsMatch(t, []string{savepoint.ID.String(), committed[0].ID.String(), cdc.NamespaceRepos},
+		dirNames(t, env.composeProjectStore), "beside the two savepoint directories, only the repositories")
 }
 
 // A cloned session carries every cdc repository with it and restores through its own restic

@@ -32,8 +32,11 @@ var (
 		Use:   "gc",
 		Short: "Find and delete the garbage arcave leaves behind",
 		Long: `Find and delete what no live savepoint of the session keeps alive, in every compose project
-it holds, and the restored layer tags no container uses. The layers of an image a run deletes go
-on the next run. A removed savepoint's restic snapshots are forgotten and their repository pruned.`,
+it holds, and the restored layer tags no container uses. Each compose project keeps its newest
+safety snapshots, gc.safety_snapshots.retain_recent, and older ones go, and with them the undo of
+those rollbacks. The layers of an image a run deletes, and what only a deleted safety snapshot
+held, go on the next run. A removed savepoint's restic snapshots are forgotten and their repository
+pruned. Nothing runs gc for you: run it periodically, or right after a rollback.`,
 		Args: cobra.NoArgs,
 		RunE: runGC,
 	}
@@ -73,7 +76,7 @@ func init() {
 	flags := gcCmd.Flags()
 	flags.BoolVar(&gcDryRun, "dry-run", false, "Report the garbage without deleting it")
 	flags.StringSliceVar(&gcDataKinds, "kind", nil,
-		"What to look at, repeatable: savepoint-data, deduplicated-volumes, image-layers, upstream-images, "+
-			"restored-layers; default every one")
+		"What to look at, repeatable: savepoint-data, safety-snapshots, deduplicated-volumes, image-layers, "+
+			"upstream-images, restored-layers; default every one")
 	rootCmd.AddCommand(gcCmd)
 }

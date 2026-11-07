@@ -63,6 +63,11 @@ func TestUnmarshal(t *testing.T) {
 				assert.Equal(t, ProgressLog, cfg.Compose.Progress)
 				assert.Equal(t, LeftoverVolumesOverwrite, cfg.Rollback.LeftoverVolumes)
 				assert.Equal(t, model.LeftoverVolumesOverwrite, cfg.Rollback.Policy())
+				require.NotNil(t, cfg.Rollback.SafetySnapshot)
+				assert.True(t, *cfg.Rollback.SafetySnapshot)
+				assert.False(t, cfg.Rollback.SkipSafetySnapshot())
+				require.NotNil(t, cfg.GC.SafetySnapshots.RetainRecent)
+				assert.Equal(t, 1, *cfg.GC.SafetySnapshots.RetainRecent)
 				assert.Equal(t, DefaultConcurrency, cfg.Common.Concurrency)
 			},
 		},
@@ -91,14 +96,39 @@ func TestUnmarshal(t *testing.T) {
 			wantErrMsg: `unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)`,
 		},
 		{
-			name:       "gc has no section: liveness is the savepoints' status, and the invocation narrows a run",
+			name:       "the gc section holds only the retention: liveness is the savepoints' status",
 			yaml:       "gc:\n  grace_period: 24h\n",
-			wantErrMsg: "has invalid keys: gc",
+			wantErrMsg: "has invalid keys: grace_period",
 		},
 		{
-			name:       "a config an earlier init wrote names the removed section",
-			yaml:       "gc:\n  restored_layer_grace: 1h0m0s\n",
-			wantErrMsg: "has invalid keys: gc",
+			name: "a rollback may take no safety snapshot, and false stays false",
+			yaml: "rollback:\n  safety_snapshot: false\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.Rollback.SafetySnapshot)
+				assert.False(t, *cfg.Rollback.SafetySnapshot)
+				assert.True(t, cfg.Rollback.SkipSafetySnapshot())
+			},
+		},
+		{
+			name: "a retention of 0 stays 0: it deletes every safety snapshot",
+			yaml: "gc:\n  safety_snapshots:\n    retain_recent: 0\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.GC.SafetySnapshots.RetainRecent)
+				assert.Equal(t, 0, *cfg.GC.SafetySnapshots.RetainRecent)
+			},
+		},
+		{
+			name: "a retention is read",
+			yaml: "gc:\n  safety_snapshots:\n    retain_recent: 3\n",
+			verify: func(t *testing.T, cfg Config) {
+				require.NotNil(t, cfg.GC.SafetySnapshots.RetainRecent)
+				assert.Equal(t, 3, *cfg.GC.SafetySnapshots.RetainRecent)
+			},
+		},
+		{
+			name:       "a negative retention is rejected",
+			yaml:       "gc:\n  safety_snapshots:\n    retain_recent: -1\n",
+			wantErrMsg: "gc.safety_snapshots.retain_recent must not be negative, got -1",
 		},
 		{
 			name: "the compose section is read",

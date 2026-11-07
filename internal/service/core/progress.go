@@ -50,7 +50,6 @@ const (
 
 	kindVolumeCapture  progress.Kind = "volume.capture"
 	kindVolumeRestore  progress.Kind = "volume.restore"
-	kindVolumeRemove   progress.Kind = "volume.remove"
 	kindVolume         progress.Kind = "volume"
 	kindImageCapture   progress.Kind = "image.capture"
 	kindImage          progress.Kind = "image"
