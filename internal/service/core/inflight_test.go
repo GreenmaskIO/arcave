@@ -538,12 +538,13 @@ func TestService_requireNoInflight(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			recovering, err := svc.requireNoInflight(ctx, tt.restoring)
+			recovery, err := svc.requireNoInflight(ctx, tt.restoring)
 
 			// Assert
-			assert.Equal(t, tt.wantPass, recovering)
+			assert.Equal(t, tt.wantPass, recovery.recovering)
 			if tt.wantPass {
 				require.NoError(t, err)
+				assert.Equal(t, tt.marker.Safety, recovery.safety)
 				return
 			}
 			var interrupted *model.InterruptedRollbackError

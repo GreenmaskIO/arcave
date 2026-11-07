@@ -93,8 +93,8 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (_ mo
 	)
 }
 
-// rollback is the workflow itself, run with the project lock held: it finds the savepoint
-// and picks the path by whether the compose project has containers.
+// rollback is the workflow itself, run with the project lock held: it finds the savepoint and
+// picks the path: a project with no containers, one no snapshot is taken of, or the live one.
 func (s *Service) rollback(
 	ctx context.Context, grantedLock model.GrantedSessionLock, req model.RollbackRequest,
 ) (model.RollbackResult, error) {
@@ -109,7 +109,7 @@ func (s *Service) rollback(
 
 	// After the resolve: the gate lets through the rollback that repairs an interrupted one,
 	// and that is known only once the selector names a record.
-	recovering, err := s.requireNoInflight(ctx, savepoint.ID)
+	recovery, err := s.requireNoInflight(ctx, savepoint.ID)
 	if err != nil {
 		return model.RollbackResult{}, fmt.Errorf("require no inflight: %w", err)
 	}
@@ -125,9 +125,9 @@ func (s *Service) rollback(
 	}
 	switch {
 	case composeProjectAbsent(introspection):
-		return s.rollbackColdStart(ctx, req, savepoint, introspection, recovering)
-	case recovering || req.SkipSafetySnapshot:
-		return s.rollbackWithoutSnapshot(ctx, req, savepoint, introspection, recovering)
+		return s.rollbackColdStart(ctx, req, savepoint, introspection, recovery)
+	case recovery.recovering || req.SkipSafetySnapshot:
+		return s.rollbackWithoutSnapshot(ctx, req, savepoint, introspection, recovery)
 	default:
 		return s.rollbackLive(ctx, grantedLock, req, savepoint, introspection)
 	}
@@ -171,12 +171,14 @@ func (s *Service) rollbackLive(
 	// down yet, so there is nothing to replay.
 	if err := context.Cause(ctx); err != nil {
 		logInterrupt(ctx, "rollback interrupted after the safety snapshot: restarting services, nothing changed")
+		logKeptSafetySnapshot(ctx, safetySnapshot.ID)
 		s.abortBeforeRestore(ctx, working)
 		return model.RollbackResult{}, fmt.Errorf("rollback interrupted, nothing changed: %w", err)
 	}
 
 	// The marker is written before the first destructive step, and `compose down` is one.
 	if err := s.putInflightMarker(ctx, model.InflightRecreating, savepoint.ID, safetySnapshot.ID); err != nil {
+		logKeptSafetySnapshot(ctx, safetySnapshot.ID)
 		s.abortBeforeRestore(ctx, working)
 		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
 	}
@@ -229,7 +231,7 @@ func (s *Service) rollbackWithoutSnapshot(
 	req model.RollbackRequest,
 	savepoint model.Savepoint,
 	introspection model.IntrospectionResult,
-	recovering bool,
+	recovery rollbackRecovery,
 ) (model.RollbackResult, error) {
 	prepareCtx, prepare := progress.Begin(ctx, progress.Step{Kind: kindRollbackPrepare})
 	target, err := s.prepareTarget(prepareCtx, savepoint)
@@ -238,14 +240,20 @@ func (s *Service) rollbackWithoutSnapshot(
 		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
 		return model.RollbackResult{}, preferInterrupt(ctx, err)
 	}
+	// An interrupt that landed during the prepare stops here: a marker would refuse the next
+	// workflow over a compose project nothing touched.
+	if err := context.Cause(ctx); err != nil {
+		logInterrupt(ctx, "rollback interrupted before anything was stopped: nothing changed")
+		return model.RollbackResult{}, fmt.Errorf("rollback interrupted, nothing changed: %w", err)
+	}
 	progress.Current(ctx).WarnInResult(noSafetySnapshotWarning)
 
-	if err := s.putInflightMarker(ctx, newOpeningPhase(recovering), savepoint.ID, ""); err != nil {
+	if err := s.putInflightMarker(ctx, newOpeningPhase(recovery.recovering), savepoint.ID, recovery.safety); err != nil {
 		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
 	}
 
 	if err := runStep(ctx, kindRollbackApply, func(ctx context.Context) error {
-		return s.applySavepoint(ctx, savepoint, target, "", target.project, req.WaitTimeout)
+		return s.applySavepoint(ctx, savepoint, target, recovery.safety, target.project, req.WaitTimeout)
 	}); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Msg("the inflight marker stands: run the same rollback again")
 		return model.RollbackResult{}, fmt.Errorf("rollback failed: %w", preferInterrupt(ctx, err))
@@ -373,7 +381,7 @@ func (s *Service) rollbackColdStart(
 	req model.RollbackRequest,
 	savepoint model.Savepoint,
 	introspection model.IntrospectionResult,
-	recovering bool,
+	recovery rollbackRecovery,
 ) (model.RollbackResult, error) {
 	log := zerolog.Ctx(ctx)
 	log.Info().Msg("the compose project is not running: building it from the savepoint")
@@ -381,7 +389,7 @@ func (s *Service) rollbackColdStart(
 	// A recovery's volumes are the interrupted rollback's partial writes: they are not refused.
 	owned := ownedVolumes(introspection)
 	leftover := leftoverVolumes(owned, savepoint)
-	if len(leftover) > 0 && req.LeftoverVolumes == model.LeftoverVolumesRefuse && !recovering {
+	if len(leftover) > 0 && req.LeftoverVolumes == model.LeftoverVolumesRefuse && !recovery.recovering {
 		return model.RollbackResult{}, fmt.Errorf("%w: %s", model.ErrLeftoverVolumes, strings.Join(leftover, ", "))
 	}
 
@@ -399,13 +407,13 @@ func (s *Service) rollbackColdStart(
 				"and no safety snapshot is taken")
 	}
 
-	// No safety snapshot: the marker tells the user to run this same rollback again.
-	if err := s.putInflightMarker(ctx, newOpeningPhase(recovering), savepoint.ID, ""); err != nil {
+	// No safety snapshot of its own: the marker tells the user how to recover.
+	if err := s.putInflightMarker(ctx, newOpeningPhase(recovery.recovering), savepoint.ID, recovery.safety); err != nil {
 		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
 	}
 
 	if err := runStep(ctx, kindRollbackApply, func(ctx context.Context) error {
-		return s.buildFromSavepoint(ctx, savepoint, target, "", req.WaitTimeout)
+		return s.buildFromSavepoint(ctx, savepoint, target, recovery.safety, req.WaitTimeout)
 	}); err != nil {
 		logInterrupt(ctx, "rollback interrupted: removing what it created")
 		s.abortColdStart(ctx, target.project, owned)
@@ -511,6 +519,13 @@ func (s *Service) resolveSavepoint(ctx context.Context, req model.RollbackReques
 		return model.Savepoint{}, fmt.Errorf("finding savepoint %q: %w", req.Ref(), err)
 	}
 	return savepoint, nil
+}
+
+// logKeptSafetySnapshot names the safety snapshot a rollback stopped short of using: hidden from
+// `savepoint list`, it takes a retention slot until a gc retires it.
+func logKeptSafetySnapshot(ctx context.Context, id model.SavepointID) {
+	zerolog.Ctx(ctx).Warn().Str("safety_snapshot_id", id.String()).
+		Msg("the rollback changed nothing; its safety snapshot stays until a gc retires it")
 }
 
 // abortBeforeRestore restarts the services, best-effort and on a revertContext; nothing was

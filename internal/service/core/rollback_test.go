@@ -1381,7 +1381,8 @@ func TestService_Rollback_InterruptBeforeTheTeardownRestarts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			ctx, cancel := context.WithCancel(zerolog.Nop().WithContext(context.Background()))
+			logs := &syncBuffer{}
+			ctx, cancel := context.WithCancel(zerolog.New(logs).WithContext(context.Background()))
 			defer cancel()
 
 			vol := demoVolume()
@@ -1442,6 +1443,9 @@ func TestService_Rollback_InterruptBeforeTheTeardownRestarts(t *testing.T) {
 			assert.NoError(t, startErr, "the restart must run on a live context")
 			_, found, _ := inflight.Get(context.Background())
 			assert.False(t, found, "nothing was torn down, so no marker is written")
+			if tt.wantSnapshot {
+				assert.Contains(t, logs.String(), "safety_snapshot_id", "the snapshot it stopped short of using is named")
+			}
 			// No Down, Create or Restore is declared: any would fail the run.
 			repo.AssertExpectations(t)
 			inspector.AssertExpectations(t)
@@ -1538,8 +1542,13 @@ func newRestoreOf(record model.Savepoint) model.BackendRestoreRequest {
 
 // isInflightMarker matches a marker of phase that names no safety snapshot.
 func isInflightMarker(target model.SavepointID, phase model.InflightPhase) any {
+	return isInflightMarkerOf(target, phase, "")
+}
+
+// isInflightMarkerOf matches a marker naming safety as its safety snapshot.
+func isInflightMarkerOf(target model.SavepointID, phase model.InflightPhase, safety model.SavepointID) any {
 	return mock.MatchedBy(func(marker model.InflightMarker) bool {
-		return marker.Target == target && marker.Phase == phase && marker.Safety == ""
+		return marker.Target == target && marker.Phase == phase && marker.Safety == safety
 	})
 }
 
@@ -1808,13 +1817,14 @@ func TestService_Rollback_RecoveringLiveTakesNoSafetySnapshot(t *testing.T) {
 			inflight := &mockInflight{}
 			svc, doubles := newNoSnapshotService(t, record, inflight)
 			doubles.inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil).Once()
-			gate := inflight.On("Get", mock.Anything).Return(newRecoveredMarker(record.ID, tt.interrupted, tt.toSafety), true, nil).Once()
-			opening := inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRestoring)).Return(nil).Once()
+			standing := newRecoveredMarker(record.ID, tt.interrupted, tt.toSafety)
+			gate := inflight.On("Get", mock.Anything).Return(standing, true, nil).Once()
+			opening := inflight.On("Put", mock.Anything, isInflightMarkerOf(record.ID, model.InflightRestoring, standing.Safety)).Return(nil).Once()
 			down := doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
 			create := doubles.runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
-			restoring := inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRestoring)).Return(nil).Once()
+			restoring := inflight.On("Put", mock.Anything, isInflightMarkerOf(record.ID, model.InflightRestoring, standing.Safety)).Return(nil).Once()
 			restore := doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
-			done := inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRestoreDone)).Return(nil).Once()
+			done := inflight.On("Put", mock.Anything, isInflightMarkerOf(record.ID, model.InflightRestoreDone, standing.Safety)).Return(nil).Once()
 			start := doubles.runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
 			clearMarker := inflight.On("Clear", mock.Anything).Return(nil).Once()
 			mock.InOrder(gate, opening, down, create, restoring, restore, done, start, clearMarker)
@@ -1870,6 +1880,60 @@ func TestService_Rollback_NoSnapshotMarkerRecoversToAnotherSavepoint(t *testing.
 	_, standing, getErr := inflight.Get(ctx)
 	require.NoError(t, getErr)
 	assert.False(t, standing)
+	doubles.assert(t)
+}
+
+// A failed recovery to the safety snapshot keeps naming it: it is still the last copy of the state
+// before the rollback, so the gate stays shut to any other savepoint and the hint stays true.
+func TestService_Rollback_FailedRecoveryKeepsTheSafetySnapshot(t *testing.T) {
+	// Arrange
+	record := demoRecord()
+	standing := newRecoveredMarker(record.ID, model.InflightInconsistent, true)
+	inflight := &fakeInflight{}
+	require.NoError(t, inflight.Put(context.Background(), standing))
+	svc, doubles := newNoSnapshotService(t, record, inflight)
+	doubles.inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil).Once()
+	doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(errors.New("down failed")).Once()
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+	// Assert
+	require.ErrorContains(t, err, "down failed")
+	marker, found, getErr := inflight.Get(ctx)
+	require.NoError(t, getErr)
+	require.True(t, found)
+	assert.Equal(t, record.ID, marker.Safety)
+	assert.Equal(t, model.InflightRestoring, marker.Phase)
+	assert.False(t, svc.isRecoveryRollback(marker, demoSafetySnapshot().ID), "no other savepoint may recover yet")
+	assert.NotContains(t, recoveryHint(marker), "took no safety snapshot")
+	doubles.assert(t)
+}
+
+// An interrupt that lands during the prepare writes no marker and stops nothing: the empty runner
+// fails on a Down.
+func TestService_Rollback_NoSafetySnapshotInterruptBeforeTheMarker(t *testing.T) {
+	// Arrange
+	record := demoRecord()
+	inflight := &fakeInflight{}
+	svc, doubles := newNoSnapshotService(t, record, inflight)
+	ctx, cancel := context.WithCancel(zerolog.Nop().WithContext(context.Background()))
+	defer cancel()
+	doubles.inspector.On("Introspect", mock.Anything).Run(func(mock.Arguments) { cancel() }).
+		Return(demoIntrospection(), nil).Once()
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{
+		ID: ptrID(record.ID), WaitTimeout: 60 * time.Second, SkipSafetySnapshot: true,
+	})
+
+	// Assert
+	require.ErrorIs(t, err, context.Canceled)
+	assert.ErrorContains(t, err, "nothing changed")
+	_, found, getErr := inflight.Get(context.Background())
+	require.NoError(t, getErr)
+	assert.False(t, found)
 	doubles.assert(t)
 }
 

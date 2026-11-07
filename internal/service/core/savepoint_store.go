@@ -389,21 +389,33 @@ func (s *SavepointStoreService) removeSavepoint(
 	return nil
 }
 
+// rollbackRecovery is what a rollback takes over from the interrupted one it recovers from; zero
+// when it recovers from none.
+type rollbackRecovery struct {
+	recovering bool
+	// safety is the safety snapshot the standing marker names: the recovery's marker keeps naming
+	// it, since a failed recovery leaves that snapshot the last copy of the state before them both.
+	safety model.SavepointID
+}
+
 // requireNoInflight refuses to run while .arcave/inflight.json stands, except for the rollback
 // that recovers from it. restoring is the savepoint the caller rolls back to, "" for any other
-// workflow. It reports whether the caller is that recovery.
-func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (bool, error) {
+// workflow. It reports what the caller, if it is that recovery, takes over.
+func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring model.SavepointID) (rollbackRecovery, error) {
 	marker, found, err := s.inflightMarker.Get(ctx)
 	if err != nil {
-		return false, fmt.Errorf("reading the inflight marker: %w", err)
+		return rollbackRecovery{}, fmt.Errorf("reading the inflight marker: %w", err)
 	}
 	if !found {
-		return false, nil
+		return rollbackRecovery{}, nil
 	}
 	if s.isRecoveryRollback(marker, restoring) {
 		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
 			Msg("recovering from an interrupted rollback; the marker clears on success")
-		return true, nil
+		return rollbackRecovery{
+			recovering: true,
+			safety:     marker.Safety,
+		}, nil
 	}
 	err = &model.InterruptedRollbackError{Marker: marker}
 	zerolog.Ctx(ctx).Error().Err(err).
@@ -413,7 +425,7 @@ func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring
 		Str("safety_snapshot_id", marker.Safety.String()).
 		Str("phase", string(marker.Phase)).
 		Msg(recoveryHint(marker))
-	return false, err
+	return rollbackRecovery{}, err
 }
 
 // isRecoveryRollback reports whether a rollback to id, in this session and compose project,
