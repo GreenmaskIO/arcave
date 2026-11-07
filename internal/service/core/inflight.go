@@ -16,25 +16,31 @@ package core
 
 import (
 	"context"
-	"errors"
 	"time"
-
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // recoveryHint tells the user what state the interrupted rollback left and how to recover.
 func recoveryHint(marker model.InflightMarker) string {
-	return interruptedState(marker) + "; recover with `arcave rollback --session " + marker.Session.String() +
+	hint := interruptedState(marker) + "; recover with `arcave rollback --session " + marker.Session.String() +
 		" -p " + marker.ComposeProject.String() + " " + marker.RecoveryID().String() + "`"
+	if marker.AcceptsAnySavepoint() {
+		return hint + ", or name another savepoint"
+	}
+	return hint
 }
 
 // interruptedState describes what the interrupted rollback left behind, by the phase it reached.
 func interruptedState(marker model.InflightMarker) string {
 	switch {
+	case marker.Safety != "" && marker.Target == marker.Safety:
+		return "the recovery to the safety snapshot failed; volumes may be half-restored"
+	// Ahead of restore-done: a failed cold start has removed what the restore wrote into.
+	case marker.Safety == "" && marker.Phase == model.InflightRecreating:
+		return "a rollback that took no safety snapshot was interrupted before it wrote any volume"
 	case marker.Safety == "":
-		return "a rollback into a compose project that was not running was interrupted; volumes may be half-restored"
+		return "a rollback that took no safety snapshot was interrupted; volumes may be half-restored"
 	case marker.Phase == model.InflightRestoreDone:
 		return "every volume was restored and only the services were not started " +
 			"(starting the compose project and removing .arcave/inflight.json keeps the rollback instead)"
@@ -45,8 +51,8 @@ func interruptedState(marker model.InflightMarker) string {
 	}
 }
 
-// putInflightMarker writes the marker for the rollback restoring targetID; safety is the
-// safety snapshot that undoes it, empty when none was taken. A phase change rewrites it whole.
+// putInflightMarker writes the marker for the rollback restoring targetID; safety is the safety
+// snapshot it names, empty for none. A phase change rewrites it whole.
 func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, targetID, safety model.SavepointID) error {
 	return s.inflightMarker.Put(ctx, model.InflightMarker{
 		Phase:          phase,
@@ -56,33 +62,4 @@ func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPha
 		Safety:         safety,
 		At:             time.Now(),
 	})
-}
-
-// releaseSafetySnapshot ends a consistent rollback: marker first, snapshot second,
-// so a failed clear never leaves a marker pointing at a safety snapshot that is gone. It
-// returns the snapshot when it is still committed, so the result can name it; "" otherwise.
-func (s *Service) releaseSafetySnapshot(
-	ctx context.Context, grantedLock model.GrantedSessionLock, safetySnapshot model.Savepoint, backends []model.VolumeSnapshotBackend,
-) model.SavepointID {
-	log := zerolog.Ctx(ctx).With().Str("safety_snapshot_id", safetySnapshot.ID.String()).Logger()
-	if err := s.inflightMarker.Clear(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to clear the inflight marker; the safety snapshot it points at is kept")
-		return safetySnapshot.ID
-	}
-	// Dropping it uncommits a record: only while the session's lock is still this run's.
-	if err := grantedLock.Verify(ctx); err != nil {
-		log.Warn().Err(err).Msg("the safety snapshot is kept: the session lock is no longer this rollback's")
-		return safetySnapshot.ID
-	}
-	err := s.dropSavepoint(ctx, safetySnapshot, backends)
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, errStillCommitted) {
-		log.Warn().Err(err).Msg("failed to remove the safety snapshot; it is kept")
-		return safetySnapshot.ID
-	}
-	// Uncommitted, its remains are a later gc's.
-	log.Warn().Err(err).Msg("the safety snapshot is uncommitted, but not all of it was removed")
-	return ""
 }

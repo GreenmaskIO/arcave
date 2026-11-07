@@ -19,7 +19,9 @@ Finds what no live savepoint of a session keeps alive, and deletes it. The repor
 arcave gc [--dry-run] [--session <session>] [--kind <kind>…] [flags]
 ```
 
-gc deletes every kind of data it finds: savepoint directories, stored images and their layers, `cdc` snapshots, and the layer tags rollbacks left in Docker. gc asks nothing before it deletes: run `arcave gc --dry-run` first to see what will go.
+**Nothing runs gc for you.** Run it periodically, or right after a rollback (`arcave rollback … && arcave gc`): every rollback leaves a safety snapshot, and this is what retires them.
+
+gc deletes every kind of data it finds: savepoint directories, the safety snapshots past [the retention](../configuration.md#gc), stored images and their layers, `cdc` snapshots, and the layer tags rollbacks left in Docker. gc asks nothing before it deletes: run `arcave gc --dry-run` first to see what will go.
 
 gc stops nothing. It holds the project lock for its whole run, so it refuses to run while another arcave command in the project is working. It also holds the session's lock in the store, which it waits for as every command does. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
 
@@ -28,7 +30,7 @@ gc stops nothing. It holds the project lock for its whole run, so it refuses to 
 | Flag | Default | Description |
 |---|---|---|
 | `--dry-run` | `false` | Report the garbage without deleting it. |
-| `--kind` | every kind | The kinds of data to look at: `savepoint-data`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. Repeat the flag, or separate kinds with commas. |
+| `--kind` | every kind | The kinds of data to look at: `savepoint-data`, `safety-snapshots`, `deduplicated-volumes`, `image-layers`, `upstream-images`, `restored-layers`. Repeat the flag, or separate kinds with commas. |
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
 
@@ -41,15 +43,18 @@ A savepoint's status decides what it keeps alive. Whatever only a dead savepoint
 | committed | The savepoint has its `savepoint.json`. | Everything it names. Safety snapshots count. |
 | dead | No record. | Nothing. |
 
+The one committed record gc deletes is a safety snapshot past [`gc.safety_snapshots.retain_recent`](../configuration.md#gc): that retention is the one thing about what gc looks at that the config decides.
+
 gc holds the session's lock for its whole run, and so does every command that writes a savepoint: `savepoint create`, the safety snapshot a rollback takes and `savepoint remove`. No capture runs while gc reads, so a directory with no record was left by a run that died, however young it is and whatever its `heartbeat.json` says.
 
 ## What gc looks at
 
-gc looks for five kinds of data. A savepoint's record is the root that keeps data alive; the data is what hangs off it.
+gc looks for six kinds of data. A savepoint's record is the root that keeps data alive; the data is what hangs off it.
 
 | Kind | What it is | Garbage when |
 |---|---|---|
 | `savepoint-data` | A savepoint's own directory: its record, its compose spec, the volumes the `fullcopy` backend streamed, and its writable layers' archives and manifests. No other savepoint shares it. | The directory has no `savepoint.json`. A failed or interrupted create leaves one, and so does a remove. |
+| `safety-snapshots` | A rollback's [safety snapshot](../../concepts.md#safety-snapshot): its record and its directory. Newest by id, per compose project. | It is past the newest `gc.safety_snapshots.retain_recent`, 1 by default; `0` deletes every one. Rolling back to it can no longer undo its rollback. |
 | `deduplicated-volumes` | A snapshot in a `cdc` backend's restic repository, which shares its data across savepoints, or data in a repository that no snapshot uses. | The savepoint the snapshot's `arcave-savepoint` tag names has no record. `savepoint remove` leaves a `cdc` savepoint's snapshots in place for gc to forget. A repository with no dead snapshot is pruned when restic's prune dry run says the prune would free something (`unpruned-data`): the data an earlier prune that was cut short left behind. |
 | `image-layers` | The layers and configs of stored images, shared by writable layers and upstream images alike. | No manifest still stored lists it. |
 | `upstream-images` | An image a service's `image:` names, stored once for every savepoint; its layers are `image-layers`. | No savepoint names it. |
@@ -58,6 +63,10 @@ gc looks for five kinds of data. A savepoint's record is the root that keeps dat
 Each report names its `data_kind` and the `collector` that found it: how arcave looks for that kind of data in its store, such as `restic-repositories` for `deduplicated-volumes`.
 
 A dead savepoint's manifests hold no layer, so the layers only it lists are garbage in the same run. Every other manifest still in the store keeps its layers, including the manifest of an upstream image no savepoint names. Such a layer is skipped as `listed-by-unreferenced` and becomes garbage only once that image is gone. A manifest no savepoint names holds nothing when a capture would write it again: one that is missing, lists nothing, is torn, or names another image. Any other manifest that can't be read makes `image-layers` refuse to judge that compose project, because it might list any layer. The report lists it under `unreadable`, with the savepoint that names it when one does.
+
+:::note[Freeing a safety snapshot takes two runs]
+The run that retires a safety snapshot still read it as live, so it frees its record and its directory. What only it held, blobs in `image-layers`, images in `upstream-images` and restic snapshots in `deduplicated-volumes`, goes on the next run. The layers of such an image go on the run after that, as an unused image's always do.
+:::
 
 :::note[Freeing an image takes two runs]
 An unused upstream image and its layers are not freed in the same run. The first run finds the image under `upstream-images` and holds its layers back as `listed-by-unreferenced`; the run after the image is removed finds the layers under `image-layers`. This is on purpose: a capture that finds an image's manifest intact reuses its layers without writing them, so a layer may only go once no manifest lists it.
@@ -77,9 +86,10 @@ gc first looks with every collector, at the daemon and at every compose project,
 
 1. `restored-layers`: each unused tag, taken off the daemon one at a time, never forced. The image goes with its last tag. A tag whose image a container was created from since gc found it is refused, even when another tag names the same image, and listed under `deletion.failed`.
 2. `savepoint-data`: each dead savepoint's directory, whole.
-3. `upstream-images`: each unused image's directory, its manifest first. A deletion cut short then leaves no manifest that a capture would take for the image stored; the next gc deletes what is left of the directory.
-4. `image-layers`: each blob, one at a time.
-5. `deduplicated-volumes`: one restic run per repository, up to `common.concurrency` repositories at once. gc clears the repository's stale locks, then runs `restic forget <snapshots> --prune`, or `restic prune` for a repository with nothing to forget. Either takes restic's own lock. A repository whose run fails fails each of its ops.
+3. `safety-snapshots`: each retired one, record first, then its directory. One whose directory fails to go is dead, and goes with `savepoint-data` on the next run.
+4. `upstream-images`: each unused image's directory, its manifest first. A deletion cut short then leaves no manifest that a capture would take for the image stored; the next gc deletes what is left of the directory.
+5. `image-layers`: each blob, one at a time.
+6. `deduplicated-volumes`: one restic run per repository, up to `common.concurrency` repositories at once. gc clears the repository's stale locks, then runs `restic forget <snapshots> --prune`, or `restic prune` for a repository with nothing to forget. Either takes restic's own lock. A repository whose run fails fails each of its ops.
 
 gc deletes exactly the ops the report lists, by their `target`. A target already gone counts as deleted. A target it fails to delete is listed under the report's `deletion.failed`, and gc goes on with the next one. Before each kind, in each compose project, it checks that it still holds the session's lock. A check that fails stops every deletion after it, which is counted under `not_run`. A report whose kind was aborted or failed deletes nothing. An object left unjudged doesn't keep the kind's ops from being deleted.
 
@@ -239,7 +249,7 @@ A target is relative to the compose project's directory in the store. A `restore
 | Condition | What happens |
 |---|---|
 | A kind could not be judged, an object was left unjudged, a collector failed, or an op failed to delete or was not run | The full report is printed, then the command exits `1` with `garbage collection was partial`. |
-| An interrupted rollback is marked, and `--dry-run` is not passed | `rollback to savepoint 019e843e-… was interrupted (restoring)`. Nothing is read or deleted. |
+| An interrupted rollback is marked, and `--dry-run` is not passed | `rollback to savepoint 019e843e-… was interrupted (restoring); recover by rolling back to 019e8491-…`. Nothing is read or deleted. |
 | `--kind` names a kind arcave does not know | `invalid garbage collect request: unknown kind "restic"`. Nothing is opened first. |
 | Another arcave command holds the project lock | The command fails at once, without reading anything. |
 | No daemon answers within 10 seconds | The `restored-layers` and `deduplicated-volumes` reports are `aborted` with the ping's error, whether or not `--kind` names them. The other kinds still run, and the run is partial: the full report is printed, then the command exits `1`. |

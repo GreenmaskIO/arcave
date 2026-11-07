@@ -14,13 +14,13 @@
 
 package model
 
-// RollbackResult reports the savepoint that was restored, which volumes it
-// covered and which writable layers were put back.
+// RollbackResult is what a rollback did, and the JSON 'arcave rollback' prints. Restored names each
+// unit by the same object id the storage layout is keyed by.
 type RollbackResult struct {
-	Savepoint      Savepoint
-	Restored       []Volume                     // the units restored, as the savepoint recorded them
-	WritableLayers []WritableLayerRestoreResult // the writable layers loaded back into the daemon
-	// SafetySnapshotKept is the safety snapshot a rollback that succeeded could not drop, still a
-	// committed savepoint; empty when it was dropped, or there was none.
-	SafetySnapshotKept SavepointID
+	RolledBackTo   Savepoint                    `json:"rolled_back_to"`
+	Restored       []Volume                     `json:"restored"`
+	WritableLayers []WritableLayerRestoreResult `json:"writable_layers,omitempty"`
+	// SafetySnapshot undoes the rollback: roll back to it by id, a committed savepoint a gc retires.
+	// Omitted when none was taken.
+	SafetySnapshot SavepointID `json:"safety_snapshot,omitempty"`
 }

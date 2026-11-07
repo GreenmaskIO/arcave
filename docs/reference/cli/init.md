@@ -63,6 +63,10 @@ capture:
         anonymous: true
 rollback:
     leftover_volumes: overwrite
+    safety_snapshot: true
+gc:
+    safety_snapshots:
+        retain_recent: 1
 backends:
     fullcopy:
         compression: zstd

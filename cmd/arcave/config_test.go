@@ -55,6 +55,33 @@ func TestResolveConfig(t *testing.T) {
 			},
 		},
 		{
+			name:      "the file turns the safety snapshot off past the flag's default",
+			file:      "rollback:\n  safety_snapshot: false\n",
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.True(t, cfg.Rollback.SkipSafetySnapshot())
+			},
+		},
+		{
+			name:      "the variable wins over the file",
+			file:      "rollback:\n  safety_snapshot: true\n",
+			env:       map[string]string{"ARCAVE_ROLLBACK_SAFETY_SNAPSHOT": "false"},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.True(t, cfg.Rollback.SkipSafetySnapshot())
+			},
+		},
+		{
+			name:      "the flag wins over the file and the variable",
+			file:      "rollback:\n  safety_snapshot: false\n",
+			env:       map[string]string{"ARCAVE_ROLLBACK_SAFETY_SNAPSHOT": "false"},
+			flags:     map[string]string{"safety-snapshot": "true"},
+			wantFound: true,
+			verify: func(t *testing.T, _ string, cfg config.Config) {
+				assert.False(t, cfg.Rollback.SkipSafetySnapshot())
+			},
+		},
+		{
 			name: "reads the nested sections",
 			file: "project:\n  name: proj\n" +
 				"docker:\n  host: unix:///tmp/d.sock\n" +
@@ -199,6 +226,12 @@ func TestResolveConfig(t *testing.T) {
 
 // A file arcave cannot speak is rejected by the keys it uses — the legacy flat
 // layout included.
+// The real command's flag feeds the key: boundFlags only mirrors it.
+func TestRollbackCmd_BindsSafetySnapshot(t *testing.T) {
+	// Assert
+	assert.Equal(t, true, cfgViper.Get("rollback.safety_snapshot"))
+}
+
 func TestResolveConfig_RejectsBadFiles(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -337,7 +370,9 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs.Duration("wait-timeout", config.DefaultWaitTimeout, "")
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
 	fs.String("compose-progress", config.ProgressLog, "")
+	fs.Bool("safety-snapshot", true, "")
 	viperBind(v, fs, map[string]string{
+		"safety-snapshot":  "rollback.safety_snapshot",
 		"log-level":        "log.level",
 		"log-format":       "log.format",
 		"wait-timeout":     "compose.wait_timeout",

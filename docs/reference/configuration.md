@@ -40,6 +40,10 @@ capture:
         anonymous: true
 rollback:
     leftover_volumes: overwrite
+    safety_snapshot: true
+gc:
+    safety_snapshots:
+        retain_recent: 1
 backends:
     fullcopy:
         compression: zstd
@@ -384,8 +388,9 @@ These are the defaults a label overrides: `capture.volumes.bind: false` with `ar
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `rollback.leftover_volumes` | string | `overwrite` | What a rollback does when the compose project has no containers but still owns named volumes the savepoint restores into: `overwrite` them, with a warning naming each, or `refuse`. |
+| `rollback.safety_snapshot` | bool | `true` | Whether a rollback of a running project captures its live volumes and writable layers first. `false` captures neither: it is faster, but what the containers wrote to their own filesystem and the volumes hold is gone for good, nothing can undo the rollback, and after a failure the project stays as it is, and refused, until the same rollback is run again. `--safety-snapshot` overrides it per command, the `safety_snapshot` argument of the MCP tool per call. |
 
-It matters only for a compose project that is not running — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. `refuse` fails before anything is created:
+`rollback.leftover_volumes` matters only for a compose project that is not running — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. `refuse` fails before anything is created:
 
 ```text
 compose project is not running but its volumes survive: myapp_pgdata
@@ -393,6 +398,18 @@ compose project is not running but its volumes survive: myapp_pgdata
 
 ```text
 unsupported rollback.leftover_volumes "keep" (supported: overwrite, refuse)
+```
+
+## `gc`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `gc.safety_snapshots.retain_recent` | int | `1` | How many of a compose project's newest safety snapshots [`arcave gc`](cli/gc.md) keeps. `0` deletes every one. A negative value is refused. |
+
+The policy is carried out only by a run of `arcave gc`, and nothing runs that for you: run it periodically, or right after a rollback. Until then every rollback leaves one more.
+
+```text
+gc.safety_snapshots.retain_recent must not be negative, got -1
 ```
 
 ## `backends`

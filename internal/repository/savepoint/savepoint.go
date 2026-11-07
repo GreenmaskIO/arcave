@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Package savepoint reads and writes savepoint records — one JSON object per
-// savepoint, stored at the root of that savepoint's own namespace.
+// savepoint, stored at the root of that savepoint's own namespace — and deletes
+// a savepoint whole, record first.
 //
 // The record is the commit marker. It is written last on create and deleted
 // first on remove, so the only states a reader can observe are "fully present"
@@ -58,7 +59,7 @@ const (
 	specName   = "project.yaml" // the compose spec the savepoint was taken under
 )
 
-// Repository reads and writes savepoint records inside store.
+// Repository reads and writes savepoint records inside store, and deletes a savepoint's tree.
 type Repository struct {
 	// storage is re-rooted at the savepoint store, shared with the backend that
 	// writes the archives these records describe.
@@ -227,12 +228,8 @@ func (r *Repository) read(ctx context.Context, id model.SavepointID) (model.Save
 	return record, nil
 }
 
-// DeleteSavepoint removes one savepoint's record. It is the uncommit: the caller must run
-// it *before* dropping the savepoint's data, so a crash between the two leaves an
-// orphaned namespace (invisible, collectable) rather than a savepoint that still
-// lists and still resolves but whose archives are half gone.
-//
-// It is idempotent: a namespace with no record is already uncommitted.
+// DeleteSavepoint removes the record, then the whole tree, so a crash leaves a dead tree for a gc.
+// It is idempotent: a tree with no record is still deleted, and one already gone is no error.
 func (r *Repository) DeleteSavepoint(ctx context.Context, id model.SavepointID) error {
 	if err := id.Validate(); err != nil {
 		return err
@@ -241,11 +238,14 @@ func (r *Repository) DeleteSavepoint(ctx context.Context, id model.SavepointID) 
 	if err != nil {
 		return fmt.Errorf("stat savepoint record %s: %w", id, err)
 	}
-	if !exists {
-		return nil
+	if exists {
+		err := r.storage.Delete(ctx, recordKey(id))
+		if err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+			return fmt.Errorf("delete savepoint record %s: %w", id, err)
+		}
 	}
-	if err := r.storage.Delete(ctx, recordKey(id)); err != nil {
-		return fmt.Errorf("delete savepoint record %s: %w", id, err)
+	if err := r.storage.DeleteAll(ctx, id.String()); err != nil && !errors.Is(err, storages.ErrFileNotFound) {
+		return fmt.Errorf("delete savepoint tree %s: %w", id, err)
 	}
 	return nil
 }

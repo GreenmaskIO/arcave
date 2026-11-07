@@ -431,84 +431,6 @@ func TestSnapshotter_Restore_ReportsTheTarBytes(t *testing.T) {
 	docker.AssertExpectations(t)
 }
 
-// Removal deletes the archive the payload names — an archive already gone is
-// not an error — and leaves an archive of another format alone.
-func TestSnapshotter_Remove(t *testing.T) {
-	volume := bindVolume("app", "/etc/cfg")
-	captureDir := testSnapshotID.String() + "/" + volume.ObjectID + "/"
-
-	tests := []struct {
-		name       string
-		seed       []string
-		reqPayload any
-		want       []string
-		wantErrIs  error
-	}{
-		{
-			name:       "deletes the zstd archive",
-			seed:       []string{captureDir + archiveNameZstd},
-			reqPayload: Payload{Compression: CompressionZstd},
-		},
-		{
-			name:       "deletes the uncompressed archive of a record read back from the store",
-			seed:       []string{captureDir + archiveNameTar},
-			reqPayload: map[string]any{"compression": "none"},
-		},
-		{
-			name: "a record with no payload deletes the uncompressed archive",
-			seed: []string{captureDir + archiveNameTar},
-		},
-		{
-			name:       "an archive already gone is not an error",
-			reqPayload: Payload{Compression: CompressionZstd},
-		},
-		{
-			name:       "only the format the payload names is deleted",
-			seed:       []string{captureDir + archiveNameTar},
-			reqPayload: Payload{Compression: CompressionZstd},
-			want:       []string{captureDir + archiveNameTar},
-		},
-		{
-			name:       "an unknown format deletes nothing",
-			seed:       []string{captureDir + archiveNameTar},
-			reqPayload: map[string]any{"compression": "lz4"},
-			want:       []string{captureDir + archiveNameTar},
-			wantErrIs:  errUnknownCompression,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			docker := &mockVolumeStreamer{}
-			store := newStore(t, "savepoints")
-			ctx := context.Background()
-			for _, key := range tt.seed {
-				require.NoError(t, store.PutObject(ctx, key, strings.NewReader("archive")))
-			}
-			snapshotter, err := NewFactory(docker, CompressionZstd).
-				New(model.BackendSpec{Store: store, Volume: volume})
-			require.NoError(t, err)
-
-			// Act
-			err = snapshotter.Remove(ctx, model.BackendRemoveRequest{SnapshotID: testSnapshotID, Payload: tt.reqPayload})
-
-			// Assert
-			if tt.wantErrIs != nil {
-				require.ErrorIs(t, err, tt.wantErrIs)
-			} else {
-				require.NoError(t, err)
-			}
-			if tt.want == nil {
-				assert.Empty(t, objectNames(t, store))
-			} else {
-				assert.Equal(t, tt.want, objectNames(t, store))
-			}
-			docker.AssertExpectations(t)
-		})
-	}
-}
-
 // A payload carries the format, typed or as the store hands it back; none is
 // the format of a record that names no other.
 func TestDecodePayload(t *testing.T) {
@@ -572,9 +494,8 @@ func TestDecodePayload(t *testing.T) {
 	}
 }
 
-// Every method reaches its objects through captureStore, so every method — the
-// destructive ones included — stands behind the id gate, and none of them
-// touches the store or the engine under an id it refuses.
+// Every method reaches its objects through captureStore, so every method stands behind the id
+// gate, and none of them touches the store or the engine under an id it refuses.
 func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 	ids := []struct {
 		name       string
@@ -600,12 +521,6 @@ func TestSnapshotter_RejectsInvalidSnapshotID(t *testing.T) {
 			name: "restore",
 			call: func(ctx context.Context, s model.VolumeSnapshotBackend, id model.SavepointID) error {
 				return s.Restore(ctx, model.BackendRestoreRequest{SnapshotID: id})
-			},
-		},
-		{
-			name: "remove",
-			call: func(ctx context.Context, s model.VolumeSnapshotBackend, id model.SavepointID) error {
-				return s.Remove(ctx, model.BackendRemoveRequest{SnapshotID: id})
 			},
 		},
 	}

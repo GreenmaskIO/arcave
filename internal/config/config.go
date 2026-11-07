@@ -168,6 +168,9 @@ const (
 	ProgressQuiet = "quiet"
 )
 
+// DefaultSafetySnapshotRetainRecent is how many safety snapshots a gc leaves each compose project.
+const DefaultSafetySnapshotRetainRecent = 1
+
 // DefaultConcurrency is how many volumes, writable layers or images one workflow
 // moves at once.
 const DefaultConcurrency = 5
@@ -196,6 +199,7 @@ type Config struct {
 	WritableLayers WritableLayers `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Capture        Capture        `yaml:"capture" mapstructure:"capture"`
 	Rollback       Rollback       `yaml:"rollback" mapstructure:"rollback"`
+	GC             GC             `yaml:"gc" mapstructure:"gc"`
 	// Backends holds the settings of the individual snapshot backends, one
 	// section per backend, present only for the backends a project configures.
 	Backends Backends `yaml:"backends,omitempty" mapstructure:"backends"`
@@ -380,6 +384,9 @@ type Rollback struct {
 	// LeftoverVolumes is what a rollback does when the compose project has no containers
 	// but its volumes still exist: overwrite them, or refuse.
 	LeftoverVolumes string `yaml:"leftover_volumes" mapstructure:"leftover_volumes"`
+	// SafetySnapshot is whether a rollback captures the live volumes and writable layers first, so
+	// it can be undone.
+	SafetySnapshot *bool `yaml:"safety_snapshot" mapstructure:"safety_snapshot"`
 }
 
 // Validate rejects a leftover-volumes policy arcave does not know.
@@ -396,6 +403,30 @@ func (r Rollback) Validate() error {
 // Policy returns the configured token as the policy a rollback request carries.
 func (r Rollback) Policy() model.LeftoverVolumesPolicy {
 	return model.LeftoverVolumesPolicy(r.LeftoverVolumes)
+}
+
+// SkipSafetySnapshot reports whether the config turns the safety snapshot off; unset takes one.
+func (r Rollback) SkipSafetySnapshot() bool {
+	return r.SafetySnapshot != nil && !*r.SafetySnapshot
+}
+
+// GC configures what `arcave gc` retains.
+type GC struct {
+	SafetySnapshots GCSafetySnapshots `yaml:"safety_snapshots" mapstructure:"safety_snapshots"`
+}
+
+// GCSafetySnapshots says how many safety snapshots a gc leaves each compose project.
+type GCSafetySnapshots struct {
+	// RetainRecent is how many of the newest to keep; 0 deletes every one.
+	RetainRecent *int `yaml:"retain_recent" mapstructure:"retain_recent"`
+}
+
+// Validate rejects a negative retention.
+func (g GC) Validate() error {
+	if retainRecent := utils.Value(g.SafetySnapshots.RetainRecent); retainRecent < 0 {
+		return fmt.Errorf("%w: gc.safety_snapshots.retain_recent must not be negative, got %d", ErrInvalid, retainRecent)
+	}
+	return nil
 }
 
 // Backends is one section per snapshot backend. The cdc arm is a pointer so a
@@ -625,6 +656,12 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.Rollback.LeftoverVolumes == "" {
 		c.Rollback.LeftoverVolumes = LeftoverVolumesOverwrite
 	}
+	if c.Rollback.SafetySnapshot == nil {
+		c.Rollback.SafetySnapshot = utils.New(true)
+	}
+	if c.GC.SafetySnapshots.RetainRecent == nil {
+		c.GC.SafetySnapshots.RetainRecent = utils.New(DefaultSafetySnapshotRetainRecent)
+	}
 	// Whatever snapshot.backend says: a label may route a volume through fullcopy.
 	if c.Backends.FullCopy.Compression == "" {
 		c.Backends.FullCopy.Compression = CompressionZstd
@@ -708,6 +745,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.Rollback.Validate(); err != nil {
+		return err
+	}
+	if err := c.GC.Validate(); err != nil {
 		return err
 	}
 	return c.Backends.Validate()

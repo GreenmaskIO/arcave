@@ -42,9 +42,9 @@ type workingSet struct {
 	containers []model.ContainerRef
 	// images are the layers and upstreams the capture takes.
 	images imageSet
-	// anonVolumes maps a mount's ObjectID to the docker name behind it — the only
+	// anonymousVolumeNames maps a mount's ObjectID to the docker name behind it — the only
 	// record of what a teardown orphans.
-	anonVolumes map[string]string
+	anonymousVolumeNames map[string]string
 	// What a capture of this set leaves out, as known before the stop.
 	skippedMounts          []model.SkippedVolume
 	servicesWithoutVolumes []string
@@ -172,13 +172,13 @@ func (s *Service) newWorkingSet(
 	}
 
 	return workingSet{
-		project:     project,
-		spec:        spec,
-		waitTimeout: waitTimeout,
-		backends:    backends,
-		containers:  containers,
-		images:      images,
-		anonVolumes: anonymousVolumes(introspection),
+		project:              project,
+		spec:                 spec,
+		waitTimeout:          waitTimeout,
+		backends:             backends,
+		containers:           containers,
+		images:               images,
+		anonymousVolumeNames: newAnonymousVolumeNames(introspection),
 
 		skippedMounts:          notCovered.Mounts,
 		servicesWithoutVolumes: notCovered.ServicesWithoutVolumes,
@@ -405,9 +405,9 @@ func missingReplicas(numbers []int) []int {
 	return missing
 }
 
-// anonymousVolumes indexes the docker names of the compose project's anonymous volumes by
+// newAnonymousVolumeNames indexes the docker names of the compose project's anonymous volumes by
 // the identity their data is captured under.
-func anonymousVolumes(introspection model.IntrospectionResult) map[string]string {
+func newAnonymousVolumeNames(introspection model.IntrospectionResult) map[string]string {
 	names := map[string]string{}
 	for _, svc := range introspection.Project.Services {
 		for _, mount := range svc.Volumes {
