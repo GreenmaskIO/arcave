@@ -607,7 +607,7 @@ func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
 	return sprepo.New(store)
 }
 
-// newGCSavepointUncommitter is the savepoint repository gc's eraser deletes a record through.
-func newGCSavepointUncommitter(store storages.Storager) eraser.SavepointUncommitter {
+// newGCSavepointDeleter is the savepoint repository gc's eraser deletes a savepoint through.
+func newGCSavepointDeleter(store storages.Storager) eraser.SavepointDeleter {
 	return sprepo.New(store)
 }

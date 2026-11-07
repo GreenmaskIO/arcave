@@ -14,11 +14,8 @@
 
 package model
 
-// One request per kind of backend operation, blind to what the capture is for:
-// the root an instance writes to is bound at construction, never named per call.
-// The Backend prefix keeps them apart from the adapter-level
-// RemoveRequest/RollbackRequest, and SnapshotID addresses either kind of
-// capture — a savepoint's or a safety snapshot's.
+// One request per kind of backend operation; the root an instance writes to is bound at construction.
+// SnapshotID addresses either kind of capture — a savepoint's or a safety snapshot's.
 type (
 	BackendSnapshotRequest struct {
 		SnapshotID SavepointID
@@ -36,10 +33,5 @@ type (
 		// SizeBytes is the SnapshotStat.SizeBytes the write reported, 0 when
 		// unknown: a total for progress, never a check.
 		SizeBytes int64
-	}
-
-	BackendRemoveRequest struct {
-		SnapshotID SavepointID
-		Payload    any
 	}
 )

@@ -62,39 +62,31 @@ func (s TreeEraser) Erase(
 	})
 }
 
-// SavepointUncommitter deletes a savepoint's record, the commit marker of its tree.
-type SavepointUncommitter interface {
+// SavepointDeleter deletes a savepoint, its record and then its tree.
+type SavepointDeleter interface {
 	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
 }
 
-// SavepointEraser deletes one committed savepoint per op, its record first.
+// SavepointEraser deletes one committed savepoint per op.
 type SavepointEraser struct {
-	newUncommitter func(store storages.Storager) SavepointUncommitter
+	newDeleter func(store storages.Storager) SavepointDeleter
 }
 
-// NewSavepointEraser uncommits through what newUncommitter builds over a compose project's store.
-func NewSavepointEraser(newUncommitter func(store storages.Storager) SavepointUncommitter) SavepointEraser {
-	return SavepointEraser{newUncommitter: newUncommitter}
+// NewSavepointEraser deletes through what newDeleter builds over a compose project's store.
+func NewSavepointEraser(newDeleter func(store storages.Storager) SavepointDeleter) SavepointEraser {
+	return SavepointEraser{newDeleter: newDeleter}
 }
 
 func (s SavepointEraser) Action() model.GarbageAction { return model.GarbageActionDeleteSavepoint }
 
-// Erase deletes every savepoint ops names, record first: one that fails past it leaves a dead
-// tree for the next run. What its tree does not hold, blobs and restic snapshots, this run's scope
-// still read as live: they go on the next one.
+// Erase deletes every savepoint ops names; one that fails past its record leaves a dead tree.
+// Blobs and restic snapshots go on the next run: this run's scope still read them as live.
 func (s SavepointEraser) Erase(
 	ctx context.Context, store storages.Storager, ops []model.GarbageOp,
 ) model.GarbageDeletion {
-	uncommitter := s.newUncommitter(store)
+	deleter := s.newDeleter(store)
 	return gc.DeleteOps(ctx, ops, func(ctx context.Context, op model.GarbageOp) error {
-		id := model.SavepointID(op.Target)
-		if err := id.Validate(); err != nil {
-			return fmt.Errorf("validate savepoint id: %w", err)
-		}
-		if err := uncommitter.DeleteSavepoint(ctx, id); err != nil {
-			return fmt.Errorf("uncommit savepoint: %w", err)
-		}
-		return store.DeleteAll(ctx, op.Target)
+		return deleter.DeleteSavepoint(ctx, model.SavepointID(op.Target))
 	})
 }
 

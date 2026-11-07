@@ -148,10 +148,6 @@ type composeProjectScope struct {
 	// store holds savepoint records, fullcopy captures and a cdc repository root alike, rooted
 	// inside the session that they die with.
 	store storages.Storager
-	// resticRoot is the tree every cdc repository lives in — one directory per volume, named by
-	// its ObjectID, beside the savepoint directories. Resolved once and handed to both sides, so
-	// "the server serves exactly the tree cdc writes into" is visible in one place.
-	resticRoot storages.Storager
 }
 
 // openComposeProjectScope descends from the session to composeProject's store.
@@ -171,15 +167,10 @@ func openComposeProjectScope(
 	if err != nil {
 		return composeProjectScope{}, fmt.Errorf("initialise compose project store: %w", err)
 	}
-	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
-	if err != nil {
-		return composeProjectScope{}, fmt.Errorf("initialise restic repository root: %w", err)
-	}
 	return composeProjectScope{
 		sessionScope:   scope,
 		composeProject: composeProject,
 		store:          store,
-		resticRoot:     resticRoot,
 	}, nil
 }
 
@@ -210,14 +201,22 @@ func openSavepointService(
 		return nil, err
 	}
 
+	// The tree every cdc repository lives in — one directory per volume, named by its ObjectID,
+	// beside the savepoint directories. Resolved once and handed to both sides, so "the server
+	// serves exactly the tree cdc writes into" is visible in one place.
+	resticRoot, err := scope.store.SubStorage(cdc.NamespaceRepos, true)
+	if err != nil {
+		return nil, fmt.Errorf("initialise restic repository root: %w", err)
+	}
+
 	// Under tcp the server listens for the whole process, so a bad address fails up front.
-	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(cfg.Backends.CDC), profile.engine, scope.resticRoot)
+	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(cfg.Backends.CDC), profile.engine, resticRoot)
 	if err != nil {
 		return nil, err
 	}
 	opened.addFunc(cdcTransport.Close)
 
-	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, profile.volumes, profile.engine, cdcTransport.transport)
+	backendRegistry, err := newBackendRegistry(cfg, resticRoot, profile.volumes, profile.engine, cdcTransport.transport)
 	if err != nil {
 		return nil, err
 	}
@@ -278,22 +277,14 @@ func openSavepointStoreService(
 	if err != nil {
 		return nil, err
 	}
-	// Without the daemon a backend only removes, which reads the store alone.
-	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, nil, nil, nil)
-	if err != nil {
-		return nil, err
-	}
 	return core.NewSavepointStoreService(core.SavepointStoreDeps{
-		SavepointRepo:   sprepo.New(scope.store),
-		ProjectLocker:   lock.New(projectPath),
-		SessionLocker:   scope.sessionLocker,
-		BackendRegistry: backendRegistry,
-		Inflight:        inflightrepo.New(projectPath),
-		Store:           scope.store,
-		Concurrency:     cfg.Common.Concurrency,
-		Session:         scope.session,
-		ComposeProject:  composeProject,
-		Sessions:        scope.sessions,
+		SavepointRepo:  sprepo.New(scope.store),
+		ProjectLocker:  lock.New(projectPath),
+		SessionLocker:  scope.sessionLocker,
+		Inflight:       inflightrepo.New(projectPath),
+		Session:        scope.session,
+		ComposeProject: composeProject,
+		Sessions:       scope.sessions,
 	}), nil
 }
 
@@ -980,8 +971,8 @@ func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
 	return sprepo.New(store)
 }
 
-// newGCSavepointUncommitter is the savepoint repository gc's eraser deletes a record through.
-func newGCSavepointUncommitter(store storages.Storager) eraser.SavepointUncommitter {
+// newGCSavepointDeleter is the savepoint repository gc's eraser deletes a savepoint through.
+func newGCSavepointDeleter(store storages.Storager) eraser.SavepointDeleter {
 	return sprepo.New(store)
 }
 
@@ -1017,7 +1008,7 @@ func newDaemonErasers(daemon gcDaemon) []gc.DaemonEraser {
 func newComposeProjectErasers(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectEraser {
 	return []gc.ComposeProjectEraser{
 		eraser.NewTreeEraser(),
-		eraser.NewSavepointEraser(newGCSavepointUncommitter),
+		eraser.NewSavepointEraser(newGCSavepointDeleter),
 		eraser.NewImageEraser(),
 		eraser.NewObjectEraser(),
 		eraser.NewForgetEraser(resticPrunerOpener{

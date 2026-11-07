@@ -270,7 +270,7 @@ func (e *sessionEnv) newGarbageCollector(
 		composeProjectCollectors []gc.ComposeProjectCollector
 		daemonErasers            []gc.DaemonEraser
 		composeProjectErasers    = []gc.ComposeProjectEraser{
-			eraser.NewTreeEraser(), eraser.NewSavepointEraser(newGCSavepointUncommitter), eraser.NewImageEraser(),
+			eraser.NewTreeEraser(), eraser.NewSavepointEraser(newGCSavepointDeleter), eraser.NewImageEraser(),
 			eraser.NewObjectEraser(),
 		}
 	)
@@ -402,8 +402,10 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 			second, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "second"})
 			require.NoError(t, err)
 			kept := env.hashAll(t)
+			beforeRemove := repoBytes(t, env)
 			_, err = env.svc.RemoveSavepoints(env.ctx, model.RemoveRequest{Refs: []string{first.ID.String()}})
 			require.NoError(t, err)
+			require.Equal(t, beforeRemove, repoBytes(t, env), "a remove frees nothing in the repositories")
 			for _, stat := range first.Stats {
 				exists, err := env.composeProjectStore.Exists(env.ctx,
 					cdc.NewSnapshotKey(stat.Volume.ObjectID, resticPayload(t, stat).SnapshotObjectID))

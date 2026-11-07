@@ -963,7 +963,7 @@ func TestService_CreateSavepoint_CommittedWhenStartFails(t *testing.T) {
 		WaitTimeout: 60 * time.Second,
 	})
 
-	// Assert: the record is committed, so neither Delete nor Remove is expected above.
+	// Assert: the record is committed, so no Delete is expected above.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "committed; services failed to start")
 	assert.Contains(t, err.Error(), savedID.String())
@@ -1081,38 +1081,21 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 	}
 }
 
-// Removal is uncommit-first and sweeps afterwards. Both orders compile when
-// reversed, so they are pinned here.
+// Removal deletes the savepoint it selects through the repository, which owns the order.
 func TestService_RemoveSavepoints(t *testing.T) {
 	// Arrange
-	vol := demoVolume()
 	record := demoRecord()
 	locker := &mockLocker{}
 	expectLock(locker)
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	uncommit := repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
-
-	// A remove carries the payload the write reported: only its own backend
-	// reads one. NotBefore pins uncommit-first: data-first would leave a
-	// savepoint that still lists but is half gone.
-	backend := &mockBackend{volume: vol}
-	backend.On("Remove", mock.Anything, model.BackendRemoveRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
-		Return(nil).Once().NotBefore(uncommit)
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
-
-	// An orphan of a crashed create: no stat names it, only the sweep reclaims it.
-	require.NoError(t, store.PutObject(context.Background(),
-		record.ID.String()+"/volume-named-orphan/data.tar", strings.NewReader("orphan")))
+	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
 
 	// No daemon collaborator at all: savepoint remove runs where no daemon does.
 	svc := New(Deps{
 		SessionLocker: fakeSessionLocker{},
 		SavepointRepo: repo, ProjectLocker: locker,
-		BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, CaptureDefaults: demoCaptureDefaults,
+		Inflight: &fakeInflight{}, CaptureDefaults: demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -1122,38 +1105,27 @@ func TestService_RemoveSavepoints(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []model.Savepoint{record}, res.Removed)
-	assert.Empty(t, objectNames(t, store), "the sweep reclaims what no stat named")
 	locker.AssertExpectations(t)
 	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	backend.AssertExpectations(t)
 }
 
-// A savepoint whose data cannot be dropped is still uncommitted; the orphan is
-// named in the log.
-func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
+// A savepoint the repository fails to delete may be left uncommitted with its tree behind it; the
+// orphan is named in the log.
+func TestService_RemoveSavepoints_DeleteFailureNamesTheOrphan(t *testing.T) {
 	// Arrange
-	vol := demoVolume()
 	record := demoRecord()
 	locker := &mockLocker{}
 	expectLock(locker)
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
-
-	backend := &mockBackend{volume: vol}
-	backend.On("Remove", mock.Anything, model.BackendRemoveRequest{SnapshotID: record.ID, Payload: "sp-payload"}).
-		Return(errors.New("remove boom")).Once()
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
+	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(errors.New("remove boom")).Once()
 
 	svc := New(Deps{
 		SessionLocker: fakeSessionLocker{},
 		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
-		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
-		Store: store, CaptureDefaults: demoCaptureDefaults,
+		ComposeRunner: nil, Inflight: &fakeInflight{},
+		CaptureDefaults: demoCaptureDefaults,
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -1165,26 +1137,24 @@ func TestService_RemoveSavepoints_DataFailureLeavesAnOrphan(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "remove boom")
 	assert.Contains(t, logs.String(), "the directory is orphaned")
+	assert.Contains(t, logs.String(), record.ID.String())
 	locker.AssertExpectations(t)
 	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	backend.AssertExpectations(t)
 }
 
-// A dry run takes no lock, deletes no record and reaches no backend.
+// A dry run takes no lock and deletes nothing.
 func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	// Arrange
 	record := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "sp", CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC)}
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
 	locker := &mockLocker{}
-	registry := &mockRegistry{}
 
 	svc := New(Deps{
 		SessionLocker: fakeSessionLocker{},
 		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
-		ComposeRunner: nil, BackendRegistry: registry, Inflight: &fakeInflight{},
+		ComposeRunner: nil, Inflight: &fakeInflight{},
 		Store: nil, CaptureDefaults: demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -1195,12 +1165,10 @@ func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.True(t, res.DryRun)
-	// Only List is expected: a Delete, an Acquire or a backend build would each
-	// fail the run where it happened.
+	// Only List is expected: a Delete or an Acquire would fail the run where it happened.
 	assert.Equal(t, []model.Savepoint{record}, res.Removed)
 	repo.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	registry.AssertExpectations(t)
 }
 
 // TestValidateRemoveRequest covers the selector rules. A negative --retain-recent

@@ -16,6 +16,7 @@ package savepoint
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,8 +26,28 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// mockStore is the store as a delete reaches it; any other method panics on the nil Storager.
+type mockStore struct {
+	storages.Storager
+	mock.Mock
+}
+
+func (m *mockStore) Exists(ctx context.Context, key string) (bool, error) {
+	args := m.Called(ctx, key)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockStore) Delete(ctx context.Context, keys ...string) error {
+	return m.Called(ctx, keys).Error(0)
+}
+
+func (m *mockStore) DeleteAll(ctx context.Context, prefix string) error {
+	return m.Called(ctx, prefix).Error(0)
+}
 
 // newStore returns a Storager rooted at a fresh temp dir, plus that dir so a
 // test can plant objects behind the repository's back — an incomplete namespace,
@@ -213,29 +234,175 @@ func TestRepository_List(t *testing.T) {
 	}
 }
 
-func TestRepository_Delete(t *testing.T) {
+func TestRepository_DeleteSavepoint_RealStore(t *testing.T) {
 	// Arrange
+	const (
+		id        = "019e843e-1650-7000-8000-000000000000"
+		neighbour = "019e844b-7818-7000-8000-000000000000"
+	)
 	ctx := context.Background()
 	store, root := newStore(t)
 	repo := New(store)
-	require.NoError(t, repo.SaveSavepoint(ctx, record("019e843e-1650-7000-8000-000000000000")))
-	writeObject(t, root, "019e843e-1650-7000-8000-000000000000/db/data/data.tar", "payload")
+	require.NoError(t, repo.SaveSavepoint(ctx, record(id)))
+	require.NoError(t, repo.SaveSavepoint(ctx, record(neighbour)))
+	writeObject(t, root, id+"/volume-named-myapp_pgdata/data.tar", "payload")
+	writeObject(t, root, id+"/volume-named-orphan/data.tar", "no stat names this")
+	writeObject(t, root, neighbour+"/volume-named-myapp_pgdata/data.tar", "payload")
+	writeObject(t, root, "shared/oci/blobs/sha256/abc", "blob")
+	writeObject(t, root, "restic/volume-named-myapp_pgdata/config", "{}")
 
-	// Act: the uncommit drops the marker and nothing else.
-	err := repo.DeleteSavepoint(ctx, "019e843e-1650-7000-8000-000000000000")
+	// Act
+	err := repo.DeleteSavepoint(ctx, id)
 
 	// Assert
 	require.NoError(t, err)
-	assert.NoFileExists(t, filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "savepoint.json"))
-	assert.FileExists(t, filepath.Join(root, "019e843e-1650-7000-8000-000000000000", "db", "data", "data.tar"),
-		"Delete uncommits the savepoint; dropping its data is the backend's job")
+	assert.NoDirExists(t, filepath.Join(root, id), "the record and the whole tree go")
+	assert.FileExists(t, filepath.Join(root, neighbour, "savepoint.json"))
+	assert.FileExists(t, filepath.Join(root, neighbour, "volume-named-myapp_pgdata", "data.tar"))
+	assert.FileExists(t, filepath.Join(root, "shared", "oci", "blobs", "sha256", "abc"))
+	assert.FileExists(t, filepath.Join(root, "restic", "volume-named-myapp_pgdata", "config"))
 
 	got, err := repo.ListSavepoints(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, got, "an uncommitted savepoint must not list")
+	require.Len(t, got, 1)
+	assert.Equal(t, model.SavepointID(neighbour), got[0].ID)
+}
 
-	// Delete is idempotent: a namespace with no record is already uncommitted.
-	assert.NoError(t, repo.DeleteSavepoint(ctx, "019e843e-1650-7000-8000-000000000000"))
+// A savepoint already gone is no error.
+func TestRepository_DeleteSavepoint_AlreadyGone(t *testing.T) {
+	// Arrange
+	const id = "019e843e-1650-7000-8000-000000000000"
+	ctx := context.Background()
+	store, _ := newStore(t)
+	repo := New(store)
+	require.NoError(t, repo.SaveSavepoint(ctx, record(id)))
+	require.NoError(t, repo.DeleteSavepoint(ctx, id))
+
+	// Act
+	err := repo.DeleteSavepoint(ctx, id)
+
+	// Assert
+	require.NoError(t, err)
+}
+
+// A tree holding only its record goes whole. On an object store it is gone with the record, which
+// TestRepository_DeleteSavepoint's "a tree already gone" pins.
+func TestRepository_DeleteSavepoint_RecordOnlyTree(t *testing.T) {
+	// Arrange
+	const id = "019e843e-1650-7000-8000-000000000000"
+	ctx := context.Background()
+	store, root := newStore(t)
+	repo := New(store)
+	require.NoError(t, repo.SaveSavepoint(ctx, record(id)))
+
+	// Act
+	err := repo.DeleteSavepoint(ctx, id)
+
+	// Assert
+	require.NoError(t, err)
+	assert.NoDirExists(t, filepath.Join(root, id))
+}
+
+// The record goes first: a tree deleted under a standing record would be a savepoint that still
+// lists but is half gone.
+func TestRepository_DeleteSavepoint(t *testing.T) {
+	const (
+		id        = model.SavepointID("019e843e-1650-7000-8000-000000000000")
+		recordObj = "019e843e-1650-7000-8000-000000000000/savepoint.json"
+		tree      = "019e843e-1650-7000-8000-000000000000"
+	)
+	boom := errors.New("access denied")
+
+	tests := []struct {
+		name         string
+		existsErr    error
+		noRecord     bool
+		deleteErr    error
+		deleteAllErr error
+		wantDelete   bool
+		wantTree     bool
+		wantErr      string
+	}{
+		{
+			name:       "the record, then the tree",
+			wantDelete: true,
+			wantTree:   true,
+		},
+		{
+			name:      "a record that cannot be checked leaves everything",
+			existsErr: boom,
+			wantErr:   "stat savepoint record 019e843e-1650-7000-8000-000000000000: access denied",
+		},
+		{
+			name:       "a record that cannot go leaves the tree",
+			deleteErr:  boom,
+			wantDelete: true,
+			wantErr:    "delete savepoint record 019e843e-1650-7000-8000-000000000000: access denied",
+		},
+		{
+			name:       "a record gone since the check still deletes the tree",
+			deleteErr:  &storages.MissingObjectsError{Paths: []string{recordObj}},
+			wantDelete: true,
+			wantTree:   true,
+		},
+		{
+			name:         "a tree that cannot go fails",
+			deleteAllErr: boom,
+			wantDelete:   true,
+			wantTree:     true,
+			wantErr:      "delete savepoint tree 019e843e-1650-7000-8000-000000000000: access denied",
+		},
+		{
+			name:         "a tree already gone is no error",
+			deleteAllErr: &storages.MissingObjectsError{Paths: []string{tree}},
+			wantDelete:   true,
+			wantTree:     true,
+		},
+		{
+			name:     "a tree with no record is still deleted",
+			noRecord: true,
+			wantTree: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			store := &mockStore{}
+			exists := store.On("Exists", mock.Anything, recordObj).Return(!tt.noRecord, tt.existsErr).Once()
+			previous := exists
+			if tt.wantDelete {
+				previous = store.On("Delete", mock.Anything, []string{recordObj}).Return(tt.deleteErr).Once().NotBefore(exists)
+			}
+			if tt.wantTree {
+				store.On("DeleteAll", mock.Anything, tree).Return(tt.deleteAllErr).Once().NotBefore(previous)
+			}
+
+			// Act
+			err := New(store).DeleteSavepoint(context.Background(), id)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			store.AssertExpectations(t)
+		})
+	}
+}
+
+// An id that is no savepoint's reaches no store call: the empty mock fails on any.
+func TestRepository_DeleteSavepoint_RejectsInvalidID(t *testing.T) {
+	// Arrange
+	store := &mockStore{}
+
+	// Act
+	err := New(store).DeleteSavepoint(context.Background(), "../shared")
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrInvalidSavepointID)
+	store.AssertExpectations(t)
 }
 
 // nilIfEmpty normalises an empty slice to nil so a table can spell "no records"

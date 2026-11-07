@@ -26,7 +26,6 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
@@ -35,61 +34,46 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// SavepointEraser deletes the record before the tree, and stops at a record it cannot delete: the
-// tree of a savepoint still committed must stand. A tree that fails past the record is a dead one.
+// SavepointEraser deletes through the repository of the very store it was handed.
 func TestSavepointEraser_Erase(t *testing.T) {
 	var (
 		id = gctest.LiveSavepoint
 		op = model.GarbageOp{
 			Action: model.GarbageActionDeleteSavepoint, Target: id.String(), Bytes: utils.New(int64(5)),
 		}
-		boom = errors.New("access denied")
 	)
 	tests := []struct {
 		name      string
-		uncommit  error
-		deleteAll error
-		// wantTree is whether the tree is asked to go.
-		wantTree bool
-		want     model.GarbageDeletion
+		deleteErr error
+		want      model.GarbageDeletion
 	}{
 		{
-			name:     "record, then tree",
-			wantTree: true,
-			want:     model.GarbageDeletion{Deleted: []model.GarbageDeleted{{Target: id.String(), Bytes: utils.New(int64(5))}}},
+			name: "the savepoint goes",
+			want: model.GarbageDeletion{Deleted: []model.GarbageDeleted{{Target: id.String(), Bytes: utils.New(int64(5))}}},
 		},
 		{
-			name:      "a tree already gone counts as deleted, freeing nothing",
-			deleteAll: &storages.MissingObjectsError{Paths: []string{id.String()}},
-			wantTree:  true,
+			name:      "one already gone counts as deleted, freeing nothing",
+			deleteErr: storages.ErrFileNotFound,
 			want:      model.GarbageDeletion{Deleted: []model.GarbageDeleted{{Target: id.String(), Bytes: utils.New(int64(0))}}},
 		},
 		{
-			name:     "a record that cannot go leaves the tree",
-			uncommit: boom,
+			name:      "one that cannot go fails",
+			deleteErr: errors.New("delete savepoint record: access denied"),
 			want: model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{
-				{Target: id.String(), Error: "uncommit savepoint: access denied"},
+				{Target: id.String(), Error: "delete savepoint record: access denied"},
 			}},
-		},
-		{
-			name:      "a tree that cannot go fails",
-			deleteAll: boom,
-			wantTree:  true,
-			want:      model.GarbageDeletion{Failed: []model.GarbageDeleteFailure{{Target: id.String(), Error: "access denied"}}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			store := &gctest.MockStore{}
-			uncommitter := &mockSavepointUncommitter{}
-			uncommit := uncommitter.On("DeleteSavepoint", mock.Anything, id).Return(tt.uncommit).Once()
-			if tt.wantTree {
-				store.On("DeleteAll", mock.Anything, id.String()).Return(tt.deleteAll).Once().NotBefore(uncommit)
-			}
-			eraser := NewSavepointEraser(func(got storages.Storager) SavepointUncommitter {
-				assert.Same(t, store, got, "the record is deleted in the store the tree is")
-				return uncommitter
+			deleter := &mockSavepointDeleter{}
+			deleter.On("DeleteSavepoint", mock.Anything, id).Return(tt.deleteErr).Once()
+			var builtOver storages.Storager
+			eraser := NewSavepointEraser(func(store storages.Storager) SavepointDeleter {
+				builtOver = store
+				return deleter
 			})
 
 			// Act
@@ -97,28 +81,11 @@ func TestSavepointEraser_Erase(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
+			assert.Same(t, store, builtOver, "the savepoint is deleted in the store the op names")
 			store.AssertExpectations(t)
-			uncommitter.AssertExpectations(t)
+			deleter.AssertExpectations(t)
 		})
 	}
-}
-
-// A target that is no savepoint's id deletes nothing.
-func TestSavepointEraser_Erase_RefusesATargetThatIsNoSavepoint(t *testing.T) {
-	// Arrange
-	store := &gctest.MockStore{}
-	uncommitter := &mockSavepointUncommitter{}
-	eraser := NewSavepointEraser(func(storages.Storager) SavepointUncommitter { return uncommitter })
-	ops := []model.GarbageOp{{Action: model.GarbageActionDeleteSavepoint, Target: "../shared"}}
-
-	// Act
-	got := eraser.Erase(context.Background(), store, ops)
-
-	// Assert
-	require.Len(t, got.Failed, 1)
-	assert.Empty(t, got.Deleted)
-	store.AssertExpectations(t)
-	uncommitter.AssertExpectations(t)
 }
 
 // TreeEraser removes each tree its ops name, whole, in order.

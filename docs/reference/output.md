@@ -93,7 +93,7 @@ Every node's `open.step.kind` is one of these, and they are part of the stream's
 | `project.introspect` | reading the live compose project |
 | `compose.stop`, `compose.down`, `compose.create`, `compose.start` | a compose operation, one `resource` per container |
 | `savepoint.capture` | one savepoint's capture, a safety snapshot's included |
-| `volume.capture`, `volume.restore`, `volume.remove` → `volume` | a batch over the volumes, one `volume` per volume |
+| `volume.capture`, `volume.restore` → `volume` | a batch over the volumes, one `volume` per volume |
 | `layer.capture`, `layer.restore` → `layer` | a batch over the writable layers, one `layer` per container |
 | `image.capture` → `image` | a batch over the images, one `image` per image |
 | `replica.rebuild` → `replica` | the replicas a rollback recreates under their recorded number |

@@ -478,15 +478,11 @@ func TestService_abortBeforeRestore(t *testing.T) {
 // nothing.
 func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	// Arrange
-	vol := demoVolume()
 	record := demoRecord()
 	locker := &mockLocker{}
 	expectLock(locker)
 	repo := &mockSavepointRepo{}
 	list := repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(&mockBackend{volume: vol}, nil).Once()
 	sessionLocker := &mockSessionLocker{}
 	grantedLock := &mockGrantedSessionLock{}
 	lock := sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationSavepointRemove).Return(grantedLock, nil).Once()
@@ -494,12 +490,10 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	unlock := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	mock.InOrder(lock, list, verify, unlock)
 	svc := New(Deps{
-		ProjectLocker:   locker,
-		SessionLocker:   sessionLocker,
-		SavepointRepo:   repo,
-		BackendRegistry: registry,
-		Inflight:        &fakeInflight{},
-		Store:           store,
+		ProjectLocker: locker,
+		SessionLocker: sessionLocker,
+		SavepointRepo: repo,
+		Inflight:      &fakeInflight{},
 	})
 
 	// Act
@@ -508,7 +502,6 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	// Assert
 	require.ErrorIs(t, err, model.ErrSessionLockLost)
 	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
 	sessionLocker.AssertExpectations(t)
 	grantedLock.AssertExpectations(t)
 	locker.AssertExpectations(t)

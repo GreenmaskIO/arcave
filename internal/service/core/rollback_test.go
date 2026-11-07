@@ -330,8 +330,8 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	// Assert
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rollback failed: restore volume-named-demo_db: restore capture: restore boom")
-	// The backup is retained, captures and record alike: safetySnapshotBackend carries no
-	// Remove expectation and repo no Delete, so either would fail the run.
+	// The backup is retained, captures and record alike: repo carries no Delete expectation,
+	// so one would fail the run.
 	assert.Contains(t, logs.String(), "safety snapshot retained")
 	assert.Contains(t, logs.String(), safetySnapshotID.String())
 	assert.Contains(t, logs.String(), "--include-safety-snapshots",
@@ -395,8 +395,7 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 	assert.Contains(t, err.Error(),
 		"pre-rollback safety snapshot failed, nothing changed: snapshot volume-named-demo_db: capture volume: backup boom")
 	// Nothing may be restored over live data, and the partial capture is not deleted:
-	// no Restore on savepointBackend, no Remove on safetySnapshotBackend, no Delete on
-	// repo — each would fail the run as an unexpected call.
+	// no Restore on savepointBackend, no Delete on repo — either would fail the run.
 	repo.AssertExpectations(t)
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
