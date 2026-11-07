@@ -394,7 +394,7 @@ func (s *SavepointStoreService) removeSavepoint(
 type rollbackRecovery struct {
 	recovering bool
 	// safety is the safety snapshot the standing marker names: the recovery's marker keeps naming
-	// it, since a failed recovery leaves that snapshot the last copy of the state before them both.
+	// it, as the last copy of the state before them both.
 	safety model.SavepointID
 }
 
@@ -429,11 +429,11 @@ func (s *SavepointStoreService) requireNoInflight(ctx context.Context, restoring
 }
 
 // isRecoveryRollback reports whether a rollback to id, in this session and compose project,
-// recovers from the interrupted rollback the marker records: one to its safety snapshot or, when it
-// took none and no earlier state is left to protect, one to any savepoint.
+// recovers from the interrupted rollback the marker records: one to its safety snapshot or, when
+// the marker accepts any, one to any savepoint.
 func (s *SavepointStoreService) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
 	if id == "" || marker.Session != s.session || marker.ComposeProject != s.composeProject {
 		return false
 	}
-	return marker.Safety == "" || id == marker.Safety
+	return marker.AcceptsAnySavepoint() || id == marker.Safety
 }

@@ -1105,6 +1105,7 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 		name          string
 		createErr     error
 		restoreErr    error
+		startErr      error
 		wantErr       string
 		wantMarker    bool
 		wantMarkPhase model.InflightPhase
@@ -1118,6 +1119,14 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 			name:          "a failed restore keeps the marker",
 			restoreErr:    errors.New("restore boom"),
 			wantErr:       "rollback failed: restore volume-named-demo_db: restore capture: restore boom",
+			wantMarker:    true,
+			wantMarkPhase: model.InflightRestoring,
+		},
+		{
+			// The failure removes what the restore wrote into, so restore-done would lie.
+			name:          "a failed start keeps the marker, not at restore-done",
+			startErr:      errors.New("start boom"),
+			wantErr:       "rollback failed: services did not become healthy after restore: start boom",
 			wantMarker:    true,
 			wantMarkPhase: model.InflightRestoring,
 		},
@@ -1143,7 +1152,12 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 			removeCreated := volumeRemover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once()
 			if tt.createErr == nil {
 				restore := backend.On("Restore", mock.Anything, mock.Anything).Return(tt.restoreErr).Once()
-				mock.InOrder(create, restore, down, removeCreated)
+				if tt.startErr != nil {
+					start := runner.On("Start", mock.Anything, target, 60*time.Second).Return(tt.startErr).Once()
+					mock.InOrder(create, restore, start, down, removeCreated)
+				} else {
+					mock.InOrder(create, restore, down, removeCreated)
+				}
 			} else {
 				mock.InOrder(create, down, removeCreated)
 			}
@@ -1883,8 +1897,8 @@ func TestService_Rollback_NoSnapshotMarkerRecoversToAnotherSavepoint(t *testing.
 	doubles.assert(t)
 }
 
-// A failed recovery to the safety snapshot keeps naming it: it is still the last copy of the state
-// before the rollback, so the gate stays shut to any other savepoint and the hint stays true.
+// A failed recovery to the safety snapshot keeps naming it, and frees the gate: a snapshot that
+// cannot come up must hold nothing hostage, and the hint must not deny that it exists.
 func TestService_Rollback_FailedRecoveryKeepsTheSafetySnapshot(t *testing.T) {
 	// Arrange
 	record := demoRecord()
@@ -1892,6 +1906,7 @@ func TestService_Rollback_FailedRecoveryKeepsTheSafetySnapshot(t *testing.T) {
 	inflight := &fakeInflight{}
 	require.NoError(t, inflight.Put(context.Background(), standing))
 	svc, doubles := newNoSnapshotService(t, record, inflight)
+	require.False(t, svc.isRecoveryRollback(standing, demoSafetySnapshot().ID), "before it, only the snapshot recovers")
 	doubles.inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil).Once()
 	doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(errors.New("down failed")).Once()
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -1906,8 +1921,11 @@ func TestService_Rollback_FailedRecoveryKeepsTheSafetySnapshot(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, record.ID, marker.Safety)
 	assert.Equal(t, model.InflightRestoring, marker.Phase)
-	assert.False(t, svc.isRecoveryRollback(marker, demoSafetySnapshot().ID), "no other savepoint may recover yet")
-	assert.NotContains(t, recoveryHint(marker), "took no safety snapshot")
+	assert.True(t, svc.isRecoveryRollback(marker, demoSafetySnapshot().ID), "another savepoint may recover now")
+	hint := recoveryHint(marker)
+	assert.Contains(t, hint, "the recovery to the safety snapshot failed")
+	assert.Contains(t, hint, record.ID.String())
+	assert.Contains(t, hint, "or name another savepoint")
 	doubles.assert(t)
 }
 

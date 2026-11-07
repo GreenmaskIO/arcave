@@ -46,6 +46,13 @@ type InflightMarker struct {
 	At     time.Time   `json:"at"`
 }
 
+// AcceptsAnySavepoint reports whether a rollback to any savepoint recovers, not only to RecoveryID:
+// the rollback took no safety snapshot, or a recovery to it has failed, and one that cannot come up
+// must hold nothing hostage.
+func (m InflightMarker) AcceptsAnySavepoint() bool {
+	return m.Safety == "" || m.Target == m.Safety
+}
+
 // RecoveryID is the savepoint a recovery is told to roll back to: the safety snapshot, or, when the
 // rollback took none, its own target again.
 func (m InflightMarker) RecoveryID() SavepointID {

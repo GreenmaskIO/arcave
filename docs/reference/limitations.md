@@ -111,6 +111,10 @@ Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in the daemon,
 
 If a rollback is killed partway through, arcave refuses every command that changes state until you recover. It doesn't resume on its own. A rollback that took no safety snapshot — of a project that had no containers, or under `--safety-snapshot=false` — has none to go back to: you recover by running the same rollback again, or one to another savepoint. [Troubleshooting](troubleshooting.md#an-interrupted-rollback) shows how to recover.
 
+## A failed rollback can leave anonymous volumes behind
+
+When a rollback fails after building the project and arcave puts the previous state back, the anonymous volumes of the containers it built and then removed stay in Docker. They hold nothing the project needs; remove them by name with `docker volume rm`.
+
 ## A fork copies the whole session
 
 `session create --from` copies everything the source session holds, so it costs as much space and time as that session's `size_bytes`. Every other command that changes something in the project is refused until the copy is done; commands that only read still run.

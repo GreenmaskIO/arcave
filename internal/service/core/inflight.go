@@ -25,7 +25,7 @@ import (
 func recoveryHint(marker model.InflightMarker) string {
 	hint := interruptedState(marker) + "; recover with `arcave rollback --session " + marker.Session.String() +
 		" -p " + marker.ComposeProject.String() + " " + marker.RecoveryID().String() + "`"
-	if marker.Safety == "" {
+	if marker.AcceptsAnySavepoint() {
 		return hint + ", or name another savepoint"
 	}
 	return hint
@@ -34,6 +34,8 @@ func recoveryHint(marker model.InflightMarker) string {
 // interruptedState describes what the interrupted rollback left behind, by the phase it reached.
 func interruptedState(marker model.InflightMarker) string {
 	switch {
+	case marker.Safety != "" && marker.Target == marker.Safety:
+		return "the recovery to the safety snapshot failed; volumes may be half-restored"
 	// Ahead of restore-done: a failed cold start has removed what the restore wrote into.
 	case marker.Safety == "" && marker.Phase == model.InflightRecreating:
 		return "a rollback that took no safety snapshot was interrupted before it wrote any volume"
@@ -49,8 +51,8 @@ func interruptedState(marker model.InflightMarker) string {
 	}
 }
 
-// putInflightMarker writes the marker for the rollback restoring targetID; safety is the
-// safety snapshot that undoes it, empty when none was taken. A phase change rewrites it whole.
+// putInflightMarker writes the marker for the rollback restoring targetID; safety is the safety
+// snapshot it names, empty for none. A phase change rewrites it whole.
 func (s *Service) putInflightMarker(ctx context.Context, phase model.InflightPhase, targetID, safety model.SavepointID) error {
 	return s.inflightMarker.Put(ctx, model.InflightMarker{
 		Phase:          phase,
