@@ -43,8 +43,7 @@ func ParseSortOrder(token string) (SortOrder, error) {
 // change the signature.
 type ListRequest struct {
 	// IncludeSafetySnapshots adds the undo records a rollback commits. Hidden by
-	// default: one exists only while a rollback runs, and a leftover is the shard
-	// of a killed one.
+	// default: no one chose to keep them, and each stays until a gc or a remove.
 	IncludeSafetySnapshots bool
 	// Sort orders the listing by age; zero is newest first.
 	Sort SortOrder

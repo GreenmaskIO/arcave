@@ -51,7 +51,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			svcErr:      nil,
 			printerErr:  nil,
 			wantErrMsg:  "",
-			wantPrinted: []any{model.RemoveResponse(res)},
+			wantPrinted: []any{res},
 		},
 		{
 			name:        "selector conflict",
@@ -91,7 +91,7 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			svcErr:      nil,
 			printerErr:  printErr,
 			wantErrMsg:  printErr.Error(),
-			wantPrinted: []any{model.RemoveResponse(res)},
+			wantPrinted: []any{res},
 		},
 	}
 

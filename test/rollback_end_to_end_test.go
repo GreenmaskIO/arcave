@@ -172,7 +172,7 @@ func TestRollback_RebuildsAComposeProjectThatWasTakenDown(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, savepoint.ID, res.Savepoint.ID)
+	assert.Equal(t, savepoint.ID, res.RolledBackTo.ID)
 	containers := env.containers(t)
 	require.Len(t, containers, 9)
 	for name, c := range containers {

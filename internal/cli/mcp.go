@@ -96,23 +96,30 @@ type MCPFactories struct {
 	GC             MCPGCServiceFactory
 }
 
+// RollbackConfig is the project's config as the rollback tool reads it; a call may override
+// SkipSafetySnapshot alone.
+type RollbackConfig struct {
+	LeftoverVolumes    model.LeftoverVolumesPolicy
+	SkipSafetySnapshot bool
+}
+
 // MCPHandler serves arcave's savepoint and session workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
-	factories             MCPFactories
-	pinnedSession         model.SessionID
-	leftoverVolumesPolicy model.LeftoverVolumesPolicy
+	factories      MCPFactories
+	pinnedSession  model.SessionID
+	rollbackConfig RollbackConfig
 }
 
 // NewMCPHandler builds the MCP adapter; pinnedSession is the session the server was started in, zero to
-// follow the current one, and leftoverVolumes is the project's rollback.leftover_volumes.
+// follow the current one.
 func NewMCPHandler(
-	factories MCPFactories, pinnedSession model.SessionID, leftoverVolumes model.LeftoverVolumesPolicy,
+	factories MCPFactories, pinnedSession model.SessionID, rollbackConfig RollbackConfig,
 ) *MCPHandler {
 	return &MCPHandler{
-		factories:             factories,
-		pinnedSession:         pinnedSession,
-		leftoverVolumesPolicy: leftoverVolumes,
+		factories:      factories,
+		pinnedSession:  pinnedSession,
+		rollbackConfig: rollbackConfig,
 	}
 }
 
@@ -158,10 +165,9 @@ const (
 	descList = "List the project's savepoints, newest first unless sort is asc, with their id, name, " +
 		"description and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
 		"rollback or savepoint_remove. Safety snapshots — the undo a rollback commits of the live " +
-		"state before it overwrites it — are hidden unless include_safety_snapshots is set: one " +
-		"exists only while a rollback runs, and one that outlived its rollback means that rollback " +
-		"was killed partway. That leftover is the last copy of the pre-rollback state, so list it " +
-		"with the flag and roll back to it by id to recover by hand."
+		"state before it overwrites it — are hidden unless include_safety_snapshots is set. Each " +
+		"stays until a gc retires it, so list them with the flag and roll back to one by id to " +
+		"undo a rollback."
 	descRemove = "Delete savepoints and the snapshot data they hold. Select them either by " +
 		"explicit ids, or by retention rules (retain_recent/retain_for/before_date) — the two " +
 		"modes cannot be combined, and at least one is required. Pass dry_run to see what would " +
@@ -172,7 +178,11 @@ const (
 		"bind mounts, which are the user's own host folders, and including the parts of a volume " +
 		"a service only sees a subpath of. arcave takes a safety snapshot of the live state first " +
 		"and replays it automatically if the rollback fails, so a failed rollback leaves the " +
-		"environment as it was. Services are stopped and started again."
+		"environment as it was. The result's safety_snapshot names it: rolling back to that id " +
+		"undoes the rollback, until the gc tool retires it. With safety_snapshot false, or a " +
+		"project configured so, none is taken: it is faster, but nothing can undo the rollback, and " +
+		"after a failure the same rollback must be run again. " +
+		"Services are stopped and started again."
 	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — newest " +
 		"first unless sort is asc, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current " +
 		"marks the session the other tools work in when they are given no session — the one session_current " +
@@ -200,7 +210,10 @@ const (
 		"Bind sources under the project's working directory are relative (./…) unless absolute_paths is set. " +
 		"The file carries every environment value the containers run with, secrets included."
 	descGC = "Report the garbage arcave left in one session's store and in the Docker daemon; with dry_run " +
-		"false, delete it. A deleted image's layers go on the next run; a removed savepoint's restic snapshots " +
+		"false, delete it. Nothing runs it for you: call it after a rollback, or periodically. Each compose " +
+		"project keeps its newest safety snapshots, the project's gc.safety_snapshots.retain_recent, and " +
+		"older ones are deleted, and with them the undo of those rollbacks; what only they held goes on the next run. " +
+		"A deleted image's layers go on the next run; a removed savepoint's restic snapshots " +
 		"are forgotten and pruned; a restored layer tag goes once no container uses it. " +
 		"A busy project is refused: retry when its command finishes."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
@@ -307,10 +320,10 @@ type removeSavepointInput struct {
 }
 
 // removeSavepoints deletes the selected savepoints and reports what went.
-func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResponse, error) {
+func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResult, error) {
 	svc, release, err := h.openSavepointStoreService(ctx, in.Project, in.Session)
 	if err != nil {
-		return nil, model.RemoveResponse{}, err
+		return nil, model.RemoveResult{}, err
 	}
 	defer release()
 
@@ -322,9 +335,9 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 		DryRun:       in.DryRun,
 	})
 	if err != nil {
-		return nil, model.RemoveResponse{}, mcpError(removeUsageError(err))
+		return nil, model.RemoveResult{}, mcpError(removeUsageError(err))
 	}
-	return nil, model.RemoveResponse(res), nil
+	return nil, res, nil
 }
 
 // rollbackInput is rollback's input schema.
@@ -333,25 +346,36 @@ type rollbackInput struct {
 	Session     string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	Ref         string `json:"ref" jsonschema:"the savepoint to restore: its id, its name, or the literal 'latest'"`
 	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
+	// A pointer: an omitted field is the project's default, not false.
+	SafetySnapshot *bool `json:"safety_snapshot,omitempty" jsonschema:"whether to capture the live state first, so the rollback can be undone; omit for the project's default"`
+}
+
+// skipSafetySnapshot reports whether the call turns the safety snapshot off; omitted, the config decides.
+func (i rollbackInput) skipSafetySnapshot(configured bool) bool {
+	if i.SafetySnapshot == nil {
+		return configured
+	}
+	return !*i.SafetySnapshot
 }
 
 // rollback restores the environment to the referenced savepoint.
-func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in rollbackInput) (*mcpsdk.CallToolResult, model.RollbackResponse, error) {
+func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in rollbackInput) (*mcpsdk.CallToolResult, model.RollbackResult, error) {
 	waitTimeout, err := parseToolDuration("wait_timeout", in.WaitTimeout)
 	if err != nil {
-		return nil, model.RollbackResponse{}, err
+		return nil, model.RollbackResult{}, err
 	}
 	svc, release, err := h.openSavepointService(ctx, in.Project, in.Session)
 	if err != nil {
-		return nil, model.RollbackResponse{}, err
+		return nil, model.RollbackResult{}, err
 	}
 	defer release()
 
-	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.leftoverVolumesPolicy))
+	skipSafetySnapshot := in.skipSafetySnapshot(h.rollbackConfig.SkipSafetySnapshot)
+	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.rollbackConfig.LeftoverVolumes, skipSafetySnapshot))
 	if err != nil {
-		return nil, model.RollbackResponse{}, mcpError(err)
+		return nil, model.RollbackResult{}, mcpError(err)
 	}
-	return nil, newRollbackResponse(res), nil
+	return nil, res, nil
 }
 
 // composeGenerateInput is compose_generate's input schema.
@@ -386,7 +410,7 @@ func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolR
 type gcInput struct {
 	DryRun  *bool                   `json:"dry_run,omitempty" jsonschema:"default true: report only; false deletes"`
 	Session string                  `json:"session,omitempty" jsonschema:"the session to look in, by name or id; default the pinned or current session"`
-	Kinds   []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
+	Kinds   []model.GarbageDataKind `json:"kinds,omitempty" jsonschema:"what to look at: savepoint-data, safety-snapshots, deduplicated-volumes, image-layers, upstream-images, restored-layers; default every one"`
 }
 
 // garbageCollectMCP finds the garbage in scope and, when dry_run is false, deletes it.

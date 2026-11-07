@@ -345,14 +345,6 @@ func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.Savepoi
 	})).Return(nil).Once()
 }
 
-// expectSafetySnapshotUncommit declares the uncommit that opens the backup's drop.
-// id is read at match time, so it may be filled by the capture that runs first.
-func expectSafetySnapshotUncommit(repo *mockSavepointRepo, id *model.SavepointID) *mock.Call {
-	return repo.On("DeleteSavepoint", mock.Anything, mock.MatchedBy(func(got model.SavepointID) bool {
-		return got == *id
-	})).Return(nil).Once()
-}
-
 // ptrID and ptrBool render a literal as one of RollbackRequest's optional
 // selectors; a composite literal cannot take the address of a constant.
 func ptrID(id model.SavepointID) *model.SavepointID { return &id }

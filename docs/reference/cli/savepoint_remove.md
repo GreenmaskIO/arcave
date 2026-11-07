@@ -54,7 +54,7 @@ When several retention rules are combined, a savepoint survives if **any** one o
 | An explicit name | No |
 | `--retain-recent`, `--retain-for`, `--before-date` | No |
 
-A scanning selector cannot delete the last copy of a pre-rollback state by accident. Neither does a name, as in [`rollback`](rollback.md). Removing a [safety snapshot](savepoint_list.md#safety-snapshots-are-hidden) is always deliberate, by id.
+A scanning selector cannot delete the last copy of a pre-rollback state by accident. Neither does a name, as in [`rollback`](rollback.md). Removing a [safety snapshot](savepoint_list.md#safety-snapshots-are-hidden) here is always deliberate, by id; [`arcave gc`](gc.md) retires them by their own policy.
 
 ## Output
 
@@ -116,7 +116,7 @@ Deletion is permanent. It frees the savepoint's own directory; the [deduplicated
 | A bare date in `--before-date` | `invalid --before-date "2026-06-01": …` — it takes RFC3339Nano. |
 | An id or name that is not there | `savepoint(s) not found: 019e843e-1650-7000-8000-000000000000`, **and nothing is deleted**. Every such argument is named. There are no partial deletes: one typo in a list of five removes none of them. |
 | A name several savepoints carry | `2 savepoints are named "clean"; name one by id instead: 019e843e-1650-7000-8000-000000000000, 019e8488-3ac8-7000-8000-000000000000`, and nothing is deleted. |
-| An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)`. While the marker stands every removal but `--dry-run` is refused, by id or by rule: its safety snapshot is the remedy. Recover the rollback first. |
+| An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000`. While the marker stands every removal but `--dry-run` is refused, by id or by rule: its safety snapshot is the remedy. Recover the rollback first. |
 | Another arcave run holds the lock | `another arcave command is already running in this project`. `--dry-run` takes no lock and is unaffected. |
 
 Each removal uncommits the record first and drops the data second. A removal killed halfway therefore leaves data no record names — invisible to `savepoint list` — rather than a record pointing at data that is already half gone. What it leaves is named in the log.
@@ -139,7 +139,7 @@ arcave savepoint remove --retain-for 2w
 arcave savepoint remove --before-date 2026-06-01T00:00:00Z
 ```
 
-```shell title="Delete a leftover safety snapshot, once the environment is right"
+```shell title="Delete a safety snapshot, once the environment is right"
 arcave savepoint list --include-safety-snapshots
 arcave savepoint remove 019e8491-04c8-7000-8000-000000000000
 ```

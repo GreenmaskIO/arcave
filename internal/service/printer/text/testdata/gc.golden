@@ -1,7 +1,8 @@
 Garbage collected · session 019a2b3c-4d5e-7000-8000-000000000007
-  DATA            FOUND  SIZE     DELETED  FREED
-  savepoint-data  2      12.4 MB  1        12.4 MB
-  total           2      12.4 MB  1        12.4 MB
+  DATA              FOUND  SIZE     DELETED  FREED
+  savepoint-data    2      12.4 MB  1        12.4 MB
+  safety-snapshots  1      2.0 MB   1        2.0 MB
+  total             3      14.4 MB  2        14.4 MB
 
 Warnings (1)
   ! savepoint-data in demo: 1 deletion failed

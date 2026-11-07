@@ -39,3 +39,28 @@ func TestInflightMarker_RecoveryID(t *testing.T) {
 		})
 	}
 }
+
+func TestInflightMarker_AcceptsAnySavepoint(t *testing.T) {
+	const (
+		target = SavepointID("019e843e-1650-7000-8000-000000000000")
+		safety = SavepointID("019e844b-7818-7000-8000-000000000000")
+	)
+	tests := []struct {
+		name   string
+		marker InflightMarker
+		want   bool
+	}{
+		{name: "no safety snapshot", marker: InflightMarker{Target: target}, want: true},
+		{name: "a safety snapshot not yet tried", marker: InflightMarker{Target: target, Safety: safety}, want: false},
+		{name: "a recovery to the safety snapshot failed", marker: InflightMarker{Target: safety, Safety: safety}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := tt.marker.AcceptsAnySavepoint()
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

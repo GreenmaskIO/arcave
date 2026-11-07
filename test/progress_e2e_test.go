@@ -160,7 +160,7 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 	}
 	savepoint := decode[model.Savepoint](t, created.last.Result)
 	assert.Equal(t, "sp1", savepoint.Name)
-	result := decode[model.RollbackResponse](t, rolledBack.last.Result)
+	result := decode[model.RollbackResult](t, rolledBack.last.Result)
 	assert.Equal(t, savepoint.ID, result.RolledBackTo.ID)
 
 	var exitErr *exec.ExitError

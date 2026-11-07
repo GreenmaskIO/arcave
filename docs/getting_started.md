@@ -240,10 +240,13 @@ arcave rollback before-migration
 Rolled back to before-migration · 019e843e · 2026-06-01 19:41:12
   volumes   1
   layers    1
+  safety    019e8491
 
 Warnings (1)
   ! the containers run on the savepoint's writable layers
     → `docker compose up` of your compose file recreates them on its images and drops those layers
+
+  undo it:  arcave -p myapp rollback 019e8491-04c8-7000-8000-000000000000
 ```
 
 </TabItem>
@@ -283,7 +286,8 @@ Warnings (1)
       "image_id": "sha256:8769512644fabe547bc758133294a85b95543624a65f84924708eb2cb64b1d24",
       "tag": "arcave/myapp-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000"
     }
-  ]
+  ],
+  "safety_snapshot": "019e8491-04c8-7000-8000-000000000000"
 }
 ```
 
@@ -296,7 +300,7 @@ The table is back. So is everything else the project held at 19:41:12.
 
 The `db` container now runs on an `arcave/…` tag rather than on `postgres:16` — the warning above: a `docker compose up` from your compose file recreates the container on `postgres:16` and drops the restored layer — roll back again to get it back.
 
-Before overwriting anything, arcave took a **safety snapshot** of the state you are throwing away. If the restore had failed, or the services had come up unhealthy, arcave would have replayed that snapshot automatically and reported the error rather than leaving you between two states. See [How arcave works](how_it_works.md#the-safety-snapshot).
+Before overwriting anything, arcave took a **safety snapshot** of the state you are throwing away. If the restore had failed, or the services had come up unhealthy, arcave would have replayed that snapshot automatically and reported the error rather than leaving you between two states. It also stays afterwards, so you can undo the rollback: roll back to the id the result names. See [How arcave works](how_it_works.md#the-safety-snapshot).
 
 ## 7. See what you have
 
@@ -330,7 +334,7 @@ before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1     
 </TabItem>
 </Tabs>
 
-One row per savepoint — in the JSON a full savepoint record — newest first; `--sort asc` lists oldest first. The safety snapshot the rollback took is gone: a rollback that succeeds drops it. If it could not, the rollback's result names it under `safety_snapshot_kept` and says how to drop it.
+One row per savepoint — in the JSON a full savepoint record — newest first; `--sort asc` lists oldest first. The safety snapshot the rollback took is hidden here; `--include-safety-snapshots` lists it. It stays until `arcave gc` retires it.
 
 ## 8. Clean up
 
@@ -338,7 +342,7 @@ One row per savepoint — in the JSON a full savepoint record — newest first; 
 arcave savepoint remove before-migration      # by name, or by id
 arcave savepoint remove --retain-recent 5     # keep the newest five
 arcave savepoint remove --retain-for 7d --dry-run
-arcave gc                                     # free what they shared
+arcave gc                                     # free what they shared, retire old safety snapshots
 ```
 
 `savepoint remove` deletes each savepoint's record and its own directory; what it shared with other savepoints — stored images and layers — and its `cdc` snapshots are freed by [`arcave gc`](reference/cli/gc.md). `sp`, `ls` and `rm` are shorter spellings: `arcave sp ls`, `arcave sp rm before-migration` — see [Commands](reference/cli/index.md).

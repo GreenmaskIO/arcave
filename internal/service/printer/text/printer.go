@@ -76,9 +76,9 @@ func (s *Printer) Print(v any) error {
 		text = s.formatSavepoint(v)
 	case []model.Savepoint:
 		text = s.formatSavepoints(v)
-	case model.RollbackResponse:
+	case model.RollbackResult:
 		text = s.formatRollback(v)
-	case model.RemoveResponse:
+	case model.RemoveResult:
 		text = s.formatRemove(v)
 	case model.GarbageCollectResult:
 		text = s.formatGarbageCollect(v)

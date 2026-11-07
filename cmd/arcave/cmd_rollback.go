@@ -25,8 +25,12 @@ import (
 var rollbackCmd = &cobra.Command{
 	Use:   "rollback [savepoint-id|name|latest]",
 	Short: "Restore the environment to a specified savepoint",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runRollback,
+	Long: `Restore the environment to a savepoint, capturing the live state first as a safety snapshot:
+rolling back to its id undoes the rollback. Each rollback leaves one, and only a run of
+` + "`arcave gc`" + ` retires them, past gc.safety_snapshots.retain_recent: run it periodically, or right
+after (arcave rollback … && arcave gc).`,
+	Args: cobra.ExactArgs(1),
+	RunE: runRollback,
 }
 
 func runRollback(cmd *cobra.Command, args []string) error {
@@ -50,7 +54,10 @@ func runRollback(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
-	// No flags of its own: the bound it waits for before reverting is
-	// compose.wait_timeout, carried by rootCmd's persistent --wait-timeout.
+	// The wait before a revert is compose.wait_timeout, set by rootCmd's persistent --wait-timeout.
+	flags := rollbackCmd.Flags()
+	flags.Bool("safety-snapshot", true,
+		"Capture the live volumes and writable layers first, so the rollback can be undone; false captures neither: faster, but after a failure the same rollback must be run again")
+	viperBind(cfgViper, flags, map[string]string{"safety-snapshot": "rollback.safety_snapshot"})
 	rootCmd.AddCommand(rollbackCmd)
 }

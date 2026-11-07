@@ -187,6 +187,37 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 	}
 }
 
+// A remove reports the savepoints it drops and no volume: it reaches no backend.
+func TestService_RemoveSavepoints_Progress(t *testing.T) {
+	// Arrange
+	ctx, recorder := newProgressContext()
+	record := demoRecord()
+	locker := &mockLocker{}
+	expectLock(locker)
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
+	svc := New(Deps{
+		ProjectLocker: locker,
+		SessionLocker: fakeSessionLocker{},
+		SavepointRepo: repo,
+		Inflight:      &fakeInflight{},
+	})
+
+	// Act
+	_, err := svc.RemoveSavepoints(ctx, model.RemoveRequest{Refs: []string{record.ID.String()}})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"savepoint.remove/savepoint.drop/savepoint[" + record.ID.String() + "] succeeded",
+		"savepoint.remove/savepoint.drop succeeded",
+		"savepoint.remove succeeded",
+	}, recorder.ended)
+	locker.AssertExpectations(t)
+	repo.AssertExpectations(t)
+}
+
 // A lost lock cancels the work under it, and the root, opened outside the lock, carries why.
 func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Arrange

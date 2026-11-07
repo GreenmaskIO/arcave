@@ -16,7 +16,7 @@ Each entry names the symptom as arcave reports it, what happened, and what to do
 **Symptom.** Every command that changes something refuses to run (`rollback` prefixes it with `require no inflight: `):
 
 ```text
-rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring)
+rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000
 ```
 
 **What happened.** A rollback was killed after it began writing. `.arcave/inflight.json` records the phase it died in, and that marker refuses the next mutating workflow so nothing is built on a half-written environment.
@@ -68,7 +68,7 @@ before-migration                                               019e843e-1650-700
 </TabItem>
 </Tabs>
 
-The name carries the id of the savepoint that rollback was applying, so a leftover always identifies the run that abandoned it.
+The name carries the id of the savepoint that rollback was applying, so it always says which rollback it undoes.
 
 ```shell title="2. Apply it, by id"
 arcave rollback 019e8491-04c8-7000-8000-000000000000
@@ -86,18 +86,22 @@ Not before. Until then it is the last copy of the pre-rollback state.
 
 | Phase | What it means |
 |---|---|
-| `recreating` | Died between the teardown and the containers existing again. The volumes are untouched. |
+| `recreating` | Died between the teardown and the containers existing again. The volumes are untouched. Under `--safety-snapshot=false` the teardown itself may have failed, with the project still running: if `docker compose ps` shows it whole, removing `.arcave/inflight.json` keeps it. |
 | `restoring` | Died while writing volumes. The environment is partly overwritten. |
-| `restore-done` | Every volume was written back; only the start did not finish. Starting the project and removing `.arcave/inflight.json` is enough, if that is what you want. |
+| `restore-done` | Every volume was written back; only the start did not finish. Starting the project and removing `.arcave/inflight.json` is enough, if that is what you want. A failed rollback of a project with no containers has removed what it created, so it reads `restoring` instead. |
 | `inconsistent` | The automatic replay failed too. The safety snapshot is retained and is the last copy of the pre-rollback state. |
 
-**A rollback of a project that had no containers** — never started, or taken down — takes no safety snapshot, so there is nothing to return to. The hint says so, and names the savepoint the rollback was applying:
+**A rollback that took no safety snapshot** — of a project that had no containers, never started or taken down, or one run with `--safety-snapshot=false` — has nothing to return to. The hint says so, and names the savepoint the rollback was applying:
 
 ```text
-… a rollback into a compose project that was not running was interrupted; volumes may be half-restored; recover with `arcave rollback --session 00000000-0000-0000-0000-000000000001 -p myapp 019e843e-1650-7000-8000-000000000000`
+… a rollback that took no safety snapshot was interrupted; volumes may be half-restored; recover with `arcave rollback --session 00000000-0000-0000-0000-000000000001 -p myapp 019e843e-1650-7000-8000-000000000000`
 ```
 
-Run that same rollback again; the marker lets it through, and it finishes what the first one started.
+Run that same rollback again; the marker lets it through, and it finishes what the first one started. If the savepoint itself is the problem, its data damaged or a service in it never healthy, roll back to another one: with no earlier state to protect, the marker lets a rollback to any savepoint of the session and compose project through.
+
+**Recovering takes no safety snapshot**, whichever savepoint the hint names: it would capture half-restored volumes and call them an undo. If the recovery fails, the marker stays until you run it again. The anonymous volumes the interrupted attempt orphaned are not removed: find them with `docker volume ls --filter dangling=true`.
+
+**A recovery to a safety snapshot that keeps failing** takes none of its own. Its marker still names that snapshot, and from there a rollback to any savepoint passes too.
 
 ## `another arcave command is already running in this project`
 

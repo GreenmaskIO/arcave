@@ -66,7 +66,7 @@ func (c Compression) archiveName() string {
 }
 
 // Payload is what a fullcopy capture records: the format its archive is stored
-// in, which a restore and a remove read the key and the decoder by.
+// in, which a restore reads the key and the decoder by.
 type Payload struct {
 	Compression Compression `json:"compression"`
 }

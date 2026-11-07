@@ -245,7 +245,7 @@ func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, savepoint.ID, res.Savepoint.ID)
+	assert.Equal(t, savepoint.ID, res.RolledBackTo.ID)
 
 	after := env.inspect(t)
 	assert.Equal(t, "original data", env.read(t, env.namedVolume(), "marker"))

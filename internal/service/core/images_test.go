@@ -202,14 +202,10 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	restore := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	start := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
-	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
-	removeSafety := safetyBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(nil).Once()
 
 	// The containers it commits exist only between the stop and the teardown.
 	mock.InOrder(stop, snapshotSafety, upstreamSafety, captureSafety, specSafety, commitSafety, down, create,
-		restore, start, uncommitSafety, removeSafety)
+		restore, start)
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -301,12 +297,8 @@ func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
 	up := runner.On("Start", mock.Anything, liveSpec, 60*time.Second).Return(nil).Once()
-	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
-	removeSafety := safetyBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(nil).Once()
 	mock.InOrder(introspect, stop, snapshotSafety, upstreamSafety, captureSafety, specSafety, commitSafety, down, create,
-		restoreSp, restoreLayer, downForRevert, createForRevert, restoreSafety, up, uncommitSafety, removeSafety)
+		restoreSp, restoreLayer, downForRevert, createForRevert, restoreSafety, up)
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -343,13 +335,68 @@ func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
 	registry.AssertExpectations(t)
 }
 
+// A rollback taking no safety snapshot captures nothing of the live compose project, neither volumes
+// nor writable layers nor images, and stops nothing by itself; the savepoint's own layers still go
+// back. A capture or a stop has no expectation here, and fails the run.
+func TestService_Rollback_SkippedSafetySnapshotCapturesNoLayer(t *testing.T) {
+	// Arrange
+	vol := demoVolume()
+	record := demoRecordWithImages()
+	repo, inspector, locker := demoResolution(record)
+	images := &mockImageBackend{}
+	restoreLayer := images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
+		SnapshotID: record.ID, Layer: demoWritableLayer(), Tag: demoRestoredTag(1),
+	}).Return(demoWritableLayerRestoreResult(), nil).Once()
+	target := matchRetargetedImage(demoService, demoRestoredTag(1))
+	runner := &mockComposeRunner{}
+	down := runner.On("Down", mock.Anything, target).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, target).Return(nil).Once()
+	backend := &mockBackend{volume: vol}
+	restoreVolume := backend.On("Restore", mock.Anything,
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
+	start := runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
+	mock.InOrder(restoreLayer, down, create, restoreVolume, start)
+	store := newDirStore(t)
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
+	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		ImageBackend:     images,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		CaptureDefaults:  demoCaptureDefaults,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	res, err := svc.Rollback(ctx, model.RollbackRequest{
+		ID: ptrID(record.ID), WaitTimeout: 60 * time.Second, SkipSafetySnapshot: true,
+	})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Empty(t, res.SafetySnapshot)
+	assert.Equal(t, []model.WritableLayerRestoreResult{demoWritableLayerRestoreResult()}, res.WritableLayers)
+	images.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	backend.AssertExpectations(t)
+	registry.AssertExpectations(t)
+}
+
 func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	// Arrange
 	vol := demoVolume()
 	record := demoRecordWithImages()
 	repo, inspector, locker := demoResolution(record)
 
-	var safetySnapshotID model.SavepointID
 	images := &mockImageBackend{}
 	// The load runs on the live compose project: it is this workflow's pre-flight.
 	restoreImage := images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
@@ -360,7 +407,6 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	savepointBackend := &mockBackend{volume: vol}
 	safetyBackend := &mockBackend{volume: vol}
 	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
@@ -371,13 +417,9 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	restoreVolume := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	start := runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
-	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
-	removeSafety := safetyBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
-		return req.SnapshotID == safetySnapshotID
-	})).Return(nil).Once()
 
 	mock.InOrder(restoreImage, stop, snapshotSafety, specSafety, commitSafety, down, create,
-		restoreVolume, start, uncommitSafety, removeSafety)
+		restoreVolume, start)
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -460,8 +502,6 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	restoreVolume := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
-	repo.On("DeleteSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
-	safetyBackend.On("Remove", mock.Anything, mock.Anything).Return(nil).Once()
 
 	// The container set has to be final before a volume is restored into it.
 	mock.InOrder(create, rebuild, restoreVolume)
@@ -528,8 +568,6 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
 	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
-	repo.On("DeleteSavepoint", mock.Anything, mock.Anything).Return(nil).Once()
-	safetyBackend.On("Remove", mock.Anything, mock.Anything).Return(nil).Once()
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}

@@ -16,16 +16,17 @@ package model
 
 import "context"
 
-// VolumeSnapshotBackend is bound to one volume and one root, never per call: one
-// instance serves a whole workflow, and a rollback reverts through the very
-// instances that took its safety snapshot.
+// VolumeSnapshotBackend captures and restores one volume; it never deletes. What it
+// writes under the savepoint's tree goes with the tree, and anything beside it needs
+// a gc collector. It is bound to one volume and one root, never per call: one instance
+// serves a whole workflow, and a rollback reverts through the very instances that took
+// its safety snapshot.
 type VolumeSnapshotBackend interface {
 	// Volume is what the caller attributes its logs and errors by.
 	Volume() Volume
 
 	Snapshot(ctx context.Context, req BackendSnapshotRequest) (SnapshotStat, error)
 	Restore(ctx context.Context, req BackendRestoreRequest) error
-	Remove(ctx context.Context, req BackendRemoveRequest) error
 }
 
 // SnapshotBackendFactory builds a backend bound to one spec, for the Kind it
