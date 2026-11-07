@@ -24,20 +24,20 @@ On a **service** (`services.<name>.labels`):
 | `arcave.writable-layer.backend` | `dedupcopy` / `fullcopy` | How those layers are stored; see [`writable_layers`](configuration.md#writable_layers). |
 | `arcave.image.capture` | `true` / `false` | The bytes of the image the service's `image:` names. |
 
-On a **named volume** (`volumes.<name>.labels`) or an **anonymous volume** (the long syntax's `volume.labels`):
+On a **named volume** (`volumes.<name>.labels`):
 
 | Label | Value | What it decides |
 |---|---|---|
 | `arcave.capture` | `true` / `false` | That volume. |
 | `arcave.backend` | `fullcopy` / `cdc` | The backend that volume is captured by. |
 
-A target in a list must be one the service itself mounts — a bind, an anonymous volume or a named volume. Any other `arcave.*` key is refused.
+A bind or an anonymous volume has no labels of its own: it is steered from its service, by its target. An `arcave.*` label on an anonymous volume (the long syntax's `volume.labels`) is refused. A target in a list must be one the service itself mounts — a bind, an anonymous volume or a named volume. Any other `arcave.*` key is refused.
 
 ## Which one wins
 
 The most specific label wins:
 
-1. The volume's own label.
+1. A named volume's own label.
 2. The service's target lists — `arcave.mounts.exclude`/`include` for whether, `arcave.mounts.fullcopy`/`cdc` for the backend.
 3. The service's defaults — `arcave.capture`, `arcave.volume.backend`.
 4. The config: [`capture.*`](configuration.md#capture), [`snapshot.backend`](configuration.md#snapshot) and [`writable_layers.backend`](configuration.md#writable_layers).

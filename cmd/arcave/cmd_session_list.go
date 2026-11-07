@@ -15,6 +15,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
@@ -44,10 +46,16 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	return withSessionDeps(cmd.Context(), func(d *sessionDependencies) error {
-		return cli.NewSessionListHandler(d.service, d.printer).SessionList(cmd.Context(),
-			model.ListSessionsRequest{All: sessionListAll, Ref: sessionRef, Sort: order})
-	})
+	ctx := cmd.Context()
+	var opened closers
+	defer opened.release(ctx)
+
+	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
+	if err != nil {
+		return fmt.Errorf("init session dependencies: %w", err)
+	}
+	return cli.NewSessionListHandler(svc, loadRunOutput()).SessionList(ctx,
+		model.ListSessionsRequest{All: sessionListAll, Ref: sessionRef, Sort: order})
 }
 
 func init() {

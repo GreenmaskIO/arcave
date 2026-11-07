@@ -30,8 +30,8 @@ const (
 	// SystemLabelImageStamp is the capture stamp of the image a service's image: names.
 	SystemLabelImageStamp SystemLabel = CaptureStampLabelPrefix + "image"
 	// SystemLabelBaseImageID names, on an image arcave committed, the id of the image the
-	// user's compose file named: after a rollback the container runs on an arcave/…:sp-<id>
-	// tag, and this label is what still points past it to the true base.
+	// user's compose file named: after a rollback the container runs on an
+	// arcave/…:sp-<savepoint> tag, and this label still points past it to the true base.
 	SystemLabelBaseImageID SystemLabel = SystemLabelPrefix + "base-image-id"
 	// SystemLabelBaseImageRef names, beside SystemLabelBaseImageID, the reference the user's
 	// compose file named that image by.

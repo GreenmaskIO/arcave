@@ -255,11 +255,12 @@ type Docker struct {
 	// CertPath is a directory holding ca.pem/cert.pem/key.pem, the
 	// DOCKER_CERT_PATH convention. The three CertFile/CAFile/KeyFile fields below
 	// override an individual file when a certificate does not follow those names.
-	CertPath  string `yaml:"cert_path,omitempty" mapstructure:"cert_path"`
-	CAFile    string `yaml:"ca_file,omitempty" mapstructure:"ca_file"`
-	CertFile  string `yaml:"cert_file,omitempty" mapstructure:"cert_file"`
-	KeyFile   string `yaml:"key_file,omitempty" mapstructure:"key_file"`
-	TLSVerify bool   `yaml:"tls_verify,omitempty" mapstructure:"tls_verify"`
+	CertPath string `yaml:"cert_path,omitempty" mapstructure:"cert_path"`
+	CAFile   string `yaml:"ca_file,omitempty" mapstructure:"ca_file"`
+	CertFile string `yaml:"cert_file,omitempty" mapstructure:"cert_file"`
+	KeyFile  string `yaml:"key_file,omitempty" mapstructure:"key_file"`
+	// SkipTLSVerify turns TLS on and accepts any certificate the daemon presents.
+	SkipTLSVerify bool `yaml:"skip_tls_verify,omitempty" mapstructure:"skip_tls_verify"`
 }
 
 // Compose is how arcave drives the project's lifecycle — the two bounds it gives

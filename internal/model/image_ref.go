@@ -14,7 +14,11 @@
 
 package model
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/distribution/reference"
+)
 
 // RestoredLayerTagNamespace opens every tag a rollback puts on a restored layer.
 const RestoredLayerTagNamespace = "arcave"
@@ -24,6 +28,16 @@ const RestoredLayerTagPrefix = "sp-"
 
 // ImageRef is an image reference as the daemon reports it.
 type ImageRef string
+
+// Familiar is m as Docker spells it, with no docker.io/ or library/ Podman adds;
+// a ref that does not parse stays as it is.
+func (m ImageRef) Familiar() ImageRef {
+	named, err := reference.ParseNormalizedNamed(string(m))
+	if err != nil {
+		return m
+	}
+	return ImageRef(reference.FamiliarString(named))
+}
 
 // IsRestoredLayerTag reports whether m is the tag a rollback put on a restored layer:
 // arcave/…:sp-<savepoint id>.
@@ -35,7 +49,7 @@ func (m ImageRef) IsRestoredLayerTag() bool {
 // RestoredLayerSavepoint is the savepoint a restored layer's tag was put on for; ok is false
 // for any other ref.
 func (m ImageRef) RestoredLayerSavepoint() (SavepointID, bool) {
-	ref := string(m)
+	ref := string(m.Familiar())
 	if !strings.HasPrefix(ref, RestoredLayerTagNamespace+"/") {
 		return "", false
 	}

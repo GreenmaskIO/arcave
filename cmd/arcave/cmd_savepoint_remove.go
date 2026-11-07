@@ -15,7 +15,7 @@
 package main
 
 import (
-	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -42,15 +42,25 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewSavepointRemoveHandler(d.service, d.printer)
-		return h.SavepointRemove(ctx, model.RemoveRequest{
-			Refs:         args,
-			RetainRecent: savepointRemoveRetainRecent,
-			RetainFor:    savepointRemoveRetainFor,
-			BeforeDate:   savepointRemoveBeforeDate,
-			DryRun:       savepointRemoveDryRun,
-		})
+	composeProject, err := requireComposeProject()
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	var opened closers
+	defer opened.release(ctx)
+
+	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
+	if err != nil {
+		return fmt.Errorf("init dependencies: %w", err)
+	}
+	h := cli.NewSavepointRemoveHandler(svc, loadRunOutput())
+	return h.SavepointRemove(ctx, model.RemoveRequest{
+		Refs:         args,
+		RetainRecent: savepointRemoveRetainRecent,
+		RetainFor:    savepointRemoveRetainFor,
+		BeforeDate:   savepointRemoveBeforeDate,
+		DryRun:       savepointRemoveDryRun,
 	})
 }
 

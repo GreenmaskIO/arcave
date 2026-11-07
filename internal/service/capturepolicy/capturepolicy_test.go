@@ -90,7 +90,7 @@ func defaultImages() model.ServiceDecision {
 func TestResolve(t *testing.T) {
 	tests := []struct {
 		name                         string
-		app, db, anon, pgdata        map[string]string
+		app, db, pgdata              map[string]string
 		wantBind, wantAnon, wantData model.VolumeDecision
 		wantApp, wantDB              model.ServiceDecision
 	}{
@@ -130,18 +130,37 @@ func TestResolve(t *testing.T) {
 				string(model.CaptureLabelWritableLayerCapture): "true",
 				string(model.CaptureLabelWritableLayerBackend): "fullcopy",
 				string(model.CaptureLabelVolumeBackend):        "cdc",
+				string(model.CaptureLabelMountsInclude):        "/cache",
+				string(model.CaptureLabelMountsFullCopy):       "/cache",
 			},
-			anon:   map[string]string{string(model.CaptureLabelCapture): "true", string(model.CaptureLabelBackend): "fullcopy"},
 			pgdata: map[string]string{string(model.CaptureLabelBackend): "cdc"},
 			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
 				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
 			wantAnon: model.VolumeDecision{Backend: model.SnapshotBackendFullCopy,
-				CaptureDecision: byLabel(true, "arcave.capture=true on the anonymous volume at /cache of service app")},
+				CaptureDecision: byLabel(true, "arcave.mounts.include=/cache on service app")},
 			wantData: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
 				CaptureDecision: model.NewConfigDecision(true, "")},
 			wantApp: model.ServiceDecision{
 				WritableLayer: model.WritableLayerDecision{Backend: model.ImageBackendFullCopy,
 					CaptureDecision: byLabel(true, "arcave.writable-layer.capture=true on service app")},
+				Image: byLabel(false, "arcave.capture=false on service app"),
+			},
+			wantDB: defaultImages(),
+		},
+		{
+			name: "an anonymous volume no list names follows its service's capture and backend",
+			app: map[string]string{
+				string(model.CaptureLabelCapture):       "false",
+				string(model.CaptureLabelVolumeBackend): "cdc",
+			},
+			wantBind: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
+				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
+			wantAnon: model.VolumeDecision{Backend: model.SnapshotBackendCDC,
+				CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
+			wantData: byConfig(model.SnapshotBackendFullCopy),
+			wantApp: model.ServiceDecision{
+				WritableLayer: model.WritableLayerDecision{Backend: model.ImageBackendDedupCopy,
+					CaptureDecision: byLabel(false, "arcave.capture=false on service app")},
 				Image: byLabel(false, "arcave.capture=false on service app"),
 			},
 			wantDB: defaultImages(),
@@ -192,7 +211,7 @@ func TestResolve(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			introspection := demoProject(tt.app, tt.db, tt.anon, tt.pgdata)
+			introspection := demoProject(tt.app, tt.db, nil, tt.pgdata)
 
 			// Act
 			policy, err := Resolve(nopCtx(), introspection, defaults)
@@ -236,7 +255,10 @@ func TestResolve_Refuses(t *testing.T) {
 		{name: "a service label on a volume", pg: map[string]string{string(model.CaptureLabelWritableLayerCapture): "false"}, wantMsg: "on volume demo_pgdata"},
 		{name: "a volume label on a service", app: map[string]string{string(model.CaptureLabelBackend): "cdc"}, wantMsg: "not a label arcave reads here"},
 		{name: "a per-mount label", app: map[string]string{"arcave.mount./app.capture": "false"}, wantMsg: "not a label arcave reads here"},
-		{name: "a bad anonymous volume label", anon: map[string]string{string(model.CaptureLabelBackend): "x"}, wantMsg: "anonymous volume at /cache"},
+		{name: "a label on an anonymous volume", anon: map[string]string{string(model.CaptureLabelCapture): "false"},
+			wantMsg: `arcave.capture="false" on the anonymous volume at /cache of service app: not a label arcave reads here; name the target in the service's arcave.mounts.* lists`},
+		{name: "a backend label on an anonymous volume", anon: map[string]string{string(model.CaptureLabelBackend): "cdc"},
+			wantMsg: `arcave.backend="cdc" on the anonymous volume at /cache of service app: not a label arcave reads here`},
 		{name: "a target mounting nothing", app: map[string]string{string(model.CaptureLabelMountsExclude): "/nope"}, wantMsg: "mounts nothing at /nope"},
 		{name: "a target of a tmpfs", app: map[string]string{string(model.CaptureLabelMountsExclude): "/tmp"}, wantMsg: "not a volume or bind of the service's own"},
 		{name: "a target in both backend lists", app: map[string]string{
@@ -352,8 +374,9 @@ func TestResolve_ConfigKinds(t *testing.T) {
 	assert.Equal(t, model.NewConfigDecision(false, "capture.images=false in the config"), policy.DecideService("app").Image)
 }
 
-// Labels outside arcave.* are none of the policy's business, and an unknown
-// arcave.* key the image itself carries is the image's, not a typo.
+// Labels outside arcave.* are none of the policy's business, on a service or an
+// anonymous volume, and an unknown arcave.* key the image itself carries is the
+// image's, not a typo.
 func TestResolve_IgnoresOtherLabels(t *testing.T) {
 	// Arrange
 	labels := map[string]string{
@@ -362,7 +385,8 @@ func TestResolve_IgnoresOtherLabels(t *testing.T) {
 		"org.opencontainers.title":           "app",
 		"arcave.version":                     "1",
 	}
-	introspection := demoProject(labels, nil, nil, map[string]string{"com.docker.compose.project": "demo"})
+	anonLabels := map[string]string{"com.example.owner": "team", string(model.SystemLabelBaseImageID): "sha256:x"}
+	introspection := demoProject(labels, nil, anonLabels, map[string]string{"com.docker.compose.project": "demo"})
 	imageID := model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	introspection.Project.Services[0].Containers = []model.Container{{Inspect: container.InspectResponse{
 		Image: imageID.String(),
@@ -372,10 +396,11 @@ func TestResolve_IgnoresOtherLabels(t *testing.T) {
 	}
 
 	// Act
-	_, err := Resolve(nopCtx(), introspection, defaults)
+	policy, err := Resolve(nopCtx(), introspection, defaults)
 
 	// Assert
 	require.NoError(t, err)
+	assert.Equal(t, byConfig(model.SnapshotBackendFullCopy), policy.DecideMount(appAnon))
 }
 
 // With every label ignored, the config still decides.
@@ -383,7 +408,7 @@ func TestResolveWithoutLabels(t *testing.T) {
 	// Arrange
 	noBinds := defaults
 	noBinds.SavepointCapture.BindVolumes = false
-	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{string(model.CaptureLabelBackend): "x"}, nil)
+	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{string(model.CaptureLabelCapture): "false"}, nil)
 
 	// Act
 	policy, err := ResolveWithoutLabels(nopCtx(), introspection, noBinds)

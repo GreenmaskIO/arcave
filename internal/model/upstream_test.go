@@ -59,6 +59,17 @@ func TestResolveUpstream(t *testing.T) {
 			labels: map[string]string{string(SystemLabelBaseImageID): "postgres:16"},
 		},
 		{
+			name:  "a container on its upstream as Podman spells it",
+			image: upstreamID, ref: "docker.io/library/" + upstreamRef,
+			wantID: upstreamID, want: upstreamRef, wantOK: true,
+		},
+		{
+			name:  "a layer as Podman spells its tag",
+			image: layerID, ref: "docker.io/" + layerRef,
+			labels: map[string]string{string(SystemLabelBaseImageID): upstreamID.String(), string(SystemLabelBaseImageRef): upstreamRef},
+			wantID: upstreamID, want: upstreamRef, wantOK: true,
+		},
+		{
 			name:  "a layer carrying no labels",
 			image: layerID, ref: layerRef,
 		},

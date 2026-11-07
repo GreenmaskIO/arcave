@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/system"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -66,7 +67,7 @@ func TestWithRelativeBinds(t *testing.T) {
 func TestComposeFileCodec_MarshalParse(t *testing.T) {
 	// Arrange
 	codec := NewComposeFileCodec()
-	project, err := NewAssembler().Assemble(context.Background(), richResult())
+	project, err := NewAssembler(NewDockerStamps(system.Info{})).Assemble(context.Background(), richResult())
 	require.NoError(t, err)
 	require.NotEmpty(t, project.WorkingDir)
 	service := project.Services["db"]

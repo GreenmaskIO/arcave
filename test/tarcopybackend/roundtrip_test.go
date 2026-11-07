@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package tarcopybackend drives the fullcopy backend against a real daemon: one
-// volume, one instance, real containers, a real store. It is the only thing
-// that proves the whole-volume archive is round: that docker cp against a
-// container of arcave's own reads the volume, and that extracting the archive
-// back at the container's root lands the data where it came from.
-//
-// Guarded twice: -short skips, and so does an unreachable daemon.
+// Package tarcopybackend round-trips one volume through the fullcopy backend against a real
+// daemon and store; -short or an unreachable daemon skips it.
 package tarcopybackend
 
 import (
@@ -39,6 +34,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 )
@@ -166,8 +163,21 @@ func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 		cli:     cli,
 		engine:  engine,
 		store:   store,
-		factory: fullcopy.NewFactory(engine, compression),
+		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli), compression),
 	}
+}
+
+// newVolumeStreamer is the streamer arcave's DI root builds for the daemon cli answers as.
+func newVolumeStreamer(t *testing.T, cli *client.Client) fullcopy.VolumeStreamer {
+	t.Helper()
+	runtime, err := dockerclient.ReadRuntime(context.Background(), cli)
+	require.NoError(t, err)
+	if runtime.Kind == model.ContainerRuntimePodman {
+		libpodClient, err := libpod.NewClient(cli, libpod.Options{Version: runtime.Version})
+		require.NoError(t, err)
+		return podmanclient.NewEngine(dockerclient.NewEngine(podmanclient.NewAPI(cli, libpodClient)))
+	}
+	return dockerclient.NewEngine(cli)
 }
 
 // backend builds the instance under test, as the registry does.

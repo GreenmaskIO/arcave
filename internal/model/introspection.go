@@ -21,7 +21,6 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
-	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/api/types/volume"
 )
 
@@ -300,11 +299,6 @@ type Project struct {
 // in one pass before anything is stopped. Daemon answers are verbatim.
 type IntrospectionResult struct {
 	Project Project
-	// Daemon is what `docker info` reports.
-	Daemon system.Info
-	// DaemonVersion is what `docker version` reports: its components name the
-	// engine, which `docker info` does not.
-	DaemonVersion system.VersionResponse
 	// Images are the images the compose project's containers run on and the base images those name
 	// by SystemLabelBaseImageID, keyed by id, verbatim.
 	Images map[ImageDigestID]image.InspectResponse

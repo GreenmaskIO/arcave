@@ -42,7 +42,7 @@ func (e *Engine) CommitContainer(
 	resp, err := e.api.ContainerCommit(ctx, containerID, client.ContainerCommitOptions{
 		NoPause: true,
 		Comment: comment,
-		Changes: labelChanges(labels),
+		Changes: newLabelChanges(labels),
 	})
 	if err != nil {
 		return "", fmt.Errorf("commit container %s: %w", containerID, err)
@@ -65,9 +65,8 @@ func withDigestAlgorithm(id string) string {
 	return "sha256:" + id
 }
 
-// labelChanges renders labels as Dockerfile LABEL instructions, in key order so the
-// changes are deterministic.
-func labelChanges(labels map[string]string) []string {
+// newLabelChanges renders labels as Dockerfile LABEL instructions, in key order.
+func newLabelChanges(labels map[string]string) []string {
 	keys := slices.Sorted(maps.Keys(labels))
 	changes := make([]string, 0, len(keys))
 	for _, key := range keys {
@@ -107,9 +106,10 @@ func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 	if err != nil {
 		return fmt.Errorf("inspect image reference %s: %w", ref, err)
 	}
+	// A bare hex: Podman matches no container to a "sha256:" ancestor, Docker takes either.
 	containers, err := e.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: client.Filters{}.Add("ancestor", inspect.ID),
+		Filters: client.Filters{}.Add("ancestor", strings.TrimPrefix(inspect.ID, "sha256:")),
 	})
 	if err != nil {
 		return fmt.Errorf("list containers of image %s: %w", inspect.ID, err)
@@ -178,8 +178,8 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 	return true, nil
 }
 
-// ListLayerImages lists every arcave/…:sp-<savepoint> tag the daemon holds, with the image it names
-// and the origin that image's labels name.
+// ListLayerImages lists every arcave/…:sp-<savepoint> tag the daemon holds, spelled
+// as Docker does, with the image it names and the origin that image's labels name.
 func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
 	summaries, err := e.api.ImageList(ctx, client.ImageListOptions{
 		Filters: client.Filters{}.Add("reference", model.RestoredLayerTagNamespace+"/*"),
@@ -191,11 +191,12 @@ func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, erro
 	for _, summary := range summaries.Items {
 		origin, _ := model.ParseLayerOrigin(summary.Labels)
 		for _, ref := range summary.RepoTags {
-			if !model.ImageRef(ref).IsRestoredLayerTag() {
+			familiar := model.ImageRef(ref).Familiar()
+			if !familiar.IsRestoredLayerTag() {
 				continue
 			}
 			tagged = append(tagged, model.TaggedImage{
-				Ref:     model.ImageRef(ref),
+				Ref:     familiar,
 				ImageID: model.ImageDigestID(summary.ID),
 				Origin:  origin,
 			})
@@ -206,7 +207,7 @@ func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, erro
 }
 
 // ListContainerImages lists what every container, running or not, was created from: the
-// reference it names and the image that resolved to.
+// reference it names, spelled as Docker does, and the image that resolved to.
 func (e *Engine) ListContainerImages(ctx context.Context) ([]model.ContainerImage, error) {
 	containers, err := e.api.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
@@ -216,7 +217,7 @@ func (e *Engine) ListContainerImages(ctx context.Context) ([]model.ContainerImag
 	for _, summary := range containers.Items {
 		images = append(images, model.ContainerImage{
 			ContainerID: summary.ID,
-			Ref:         model.ImageRef(summary.Image),
+			Ref:         model.ImageRef(summary.Image).Familiar(),
 			ImageID:     model.ImageDigestID(summary.ImageID),
 		})
 	}

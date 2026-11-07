@@ -165,8 +165,7 @@ func (s *Service) captureImages(
 }
 
 // restoreWritableLayers loads every writable layer the savepoint holds back into the daemon,
-// concurrently, and names each under a tag of its own. A savepoint holding no
-// writable layer restores nothing.
+// concurrently, each under its own tag.
 func (s *Service) restoreWritableLayers(
 	ctx context.Context, savepoint model.Savepoint, composeProject string,
 ) ([]model.WritableLayerRestoreResult, error) {

@@ -79,7 +79,6 @@ func TestService_prepare_LabelsDecideTheImages(t *testing.T) {
 func TestService_prepare_OldDaemonIsRefusedWithoutALayer(t *testing.T) {
 	// Arrange
 	introspection := labelledIntrospection(map[string]string{string(model.CaptureLabelWritableLayerCapture): "false"})
-	introspection.Daemon.ServerVersion = "24.0.7"
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	// No expectation on the registry: the refusal comes before any backend is built.
@@ -90,6 +89,7 @@ func TestService_prepare_OldDaemonIsRefusedWithoutALayer(t *testing.T) {
 		BackendRegistry:  registry,
 		Store:            newDirStore(t),
 		CaptureDefaults:  demoCaptureDefaults,
+		DaemonVersion:    "24.0.7",
 		MinDaemonMajor:   25,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())

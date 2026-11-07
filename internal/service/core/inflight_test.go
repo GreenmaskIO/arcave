@@ -646,3 +646,28 @@ func TestNew_ZeroSessionIsTheDefault(t *testing.T) {
 	// Assert
 	assert.Equal(t, model.DefaultSession, svc.session)
 }
+
+// A zero session is the default one. A zero concurrency is no limit: an errgroup limit of 0 would
+// admit no goroutine, and a removal would hang on its first backend.
+func TestNewSavepointStoreService(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+		want        int
+	}{
+		{name: "no limit", concurrency: 0, want: -1},
+		{name: "a limit", concurrency: 3, want: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			svc := NewSavepointStoreService(SavepointStoreDeps{Concurrency: tt.concurrency})
+			forwarded := New(Deps{Concurrency: tt.concurrency})
+
+			// Assert
+			assert.Equal(t, model.DefaultSession, svc.session)
+			assert.Equal(t, tt.want, svc.maxConcurrentOperations)
+			assert.Equal(t, tt.want, forwarded.maxConcurrentOperations)
+		})
+	}
+}

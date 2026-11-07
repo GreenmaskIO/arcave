@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -33,12 +34,14 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
@@ -86,6 +89,131 @@ volumes:
 networks:
   back: {}
 `
+
+// rebuiltReplicaSpec is two replicas on what compat's inspect drops: a volume at a subpath, a bind
+// of the mount API and a log size. Compose creates both; a rollback rebuilds the second by itself.
+const rebuiltReplicaSpec = `
+name: %[1]s
+services:
+  app:
+    image: busybox
+    command: ["sleep", "3600"]
+    stop_signal: SIGKILL
+    deploy: {replicas: 2}
+    logging:
+      driver: json-file
+      options: {max-size: 1MB}
+    volumes:
+      - {type: volume, source: shared, target: /sub, read_only: true, volume: {subpath: app}}
+      - {type: bind, source: %[2]s, target: /host, read_only: true, bind: {create_host_path: false}}
+volumes:
+  shared: {name: %[1]s-shared, external: true}
+`
+
+// A replica a rollback rebuilds by itself, from its own inspect, comes back with the mounts and the
+// log size compose created it with.
+func TestRollback_RebuiltReplicaKeepsItsMountsAndLogSize(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newImageRollbackEnv(t)
+	skipWithoutVolumeSubpath(t, env.daemon)
+	env.externalVolume(t, env.project+"-shared", "mkdir /data/app && printf %s kept > /data/app/marker")
+	env.upDocument(t, fmt.Sprintf(rebuiltReplicaSpec, env.project, t.TempDir()))
+	containers := env.containers(t)
+	require.Len(t, containers, 2)
+	require.Contains(t, containers, "app-2")
+	before := containers["app-2"]
+	storedBefore := env.storedMounts(t, before.ID)
+	for name, c := range containers {
+		env.exec(t, c.ID, "sh", "-c", fmt.Sprintf("printf %%s %s > %s", name, layerMarker))
+	}
+	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "two-replicas"})
+	require.NoError(t, err)
+	require.Len(t, savepoint.WritableLayers, 2, "one layer per replica, so the second has to be rebuilt")
+
+	// Act
+	_, err = env.svc.Rollback(env.ctx, model.RollbackRequest{ID: &savepoint.ID})
+
+	// Assert
+	require.NoError(t, err)
+	containers = env.containers(t)
+	require.Contains(t, containers, "app-2")
+	after := containers["app-2"]
+	assert.Equal(t, "app-2", env.read(t, after.ID, layerMarker), "rebuilt on its own layer, not its service's")
+	assert.Equal(t, "kept", env.read(t, after.ID, "/sub/marker"), "the subpath, not the volume whole")
+	assert.Equal(t, before.Inspect.HostConfig.Binds, after.Inspect.HostConfig.Binds, "binds")
+	assert.ElementsMatch(t, before.Inspect.HostConfig.Mounts, after.Inspect.HostConfig.Mounts, "mount requests")
+	assert.Equal(t, "1MB", after.Inspect.HostConfig.LogConfig.Config["max-size"], "the log's size")
+	assert.ElementsMatch(t, storedBefore, env.storedMounts(t, after.ID), "what the daemon stores of each mount")
+}
+
+// The built binary, over the DI root itself and not this package's mirror of it: a replica rebuilt by
+// itself keeps its subpath and log size, and a volume comes back with its owner. Each goes wrong on
+// Podman alone, should the wiring hand a workflow the wrong engine.
+func TestRollback_ThroughTheBuiltBinary(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newImageRollbackEnv(t)
+	skipWithoutVolumeSubpath(t, env.daemon)
+	shared := env.project + "-shared"
+	env.externalVolume(t, shared, "mkdir /data/app && printf %s kept > /data/app/marker && chown 999:999 /data/app/marker")
+	env.upDocument(t, fmt.Sprintf(rebuiltReplicaSpec, env.project, t.TempDir()))
+	projectRoot := t.TempDir()
+	runArcave(t, projectRoot, nil, "init", "--name", "arcave-binary-rollback")
+	writeStorageConfig(t, projectRoot, config.Storage{
+		Type:      config.StorageTypeDirectory,
+		Directory: &config.DirectoryStorage{Path: t.TempDir()},
+	}, config.SnapshotBackendFullCopy)
+	run := func(args ...string) []byte {
+		t.Helper()
+		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
+	}
+	savepoint := decode[model.Savepoint](t, run("savepoint", "create", "two-replicas"))
+	require.Len(t, savepoint.WritableLayers, 2, "one layer per replica, so the second has to be rebuilt")
+	busybox(t, dockerclient.NewEngine(env.daemon), shared, "printf %s drifted > /data/app/marker && chown 0:0 /data/app/marker")
+
+	// Act
+	run("rollback", "two-replicas")
+
+	// Assert
+	containers := env.containers(t)
+	require.Contains(t, containers, "app-2")
+	replica := containers["app-2"]
+	assert.Equal(t, "kept", env.read(t, replica.ID, "/sub/marker"), "the subpath, not the volume whole, and its data")
+	assert.Equal(t, "999:999", strings.TrimSpace(env.exec(t, replica.ID, "stat", "-c", "%u:%g", "/sub/marker")), "its owner")
+	assert.Equal(t, "1MB", replica.Inspect.HostConfig.LogConfig.Config["max-size"], "the log's size")
+}
+
+// skipWithoutVolumeSubpath skips on a Docker older than the API that mounts a volume at a subpath.
+func skipWithoutVolumeSubpath(t *testing.T, daemon *client.Client) {
+	t.Helper()
+
+	const volumeSubpathAPI = "1.45"
+	if isPodman(t, daemon) {
+		return
+	}
+	version, err := daemon.ServerVersion(context.Background(), client.ServerVersionOptions{})
+	require.NoError(t, err)
+	if versions.LessThan(version.APIVersion, volumeSubpathAPI) {
+		t.Skipf("the daemon's API %s mounts no volume at a subpath", version.APIVersion)
+	}
+}
+
+// storedMounts are a container's mounts as libpod stores them; none on Docker, which has no libpod.
+func (e *imageRollbackEnv) storedMounts(t *testing.T, containerID string) []libpod.Mount {
+	t.Helper()
+
+	runtime, err := dockerclient.ReadRuntime(e.ctx, e.daemon)
+	require.NoError(t, err)
+	if runtime.Kind != model.ContainerRuntimePodman {
+		return nil
+	}
+	stored, err := newLibpodClient(t, e.daemon, runtime.Version).InspectContainer(e.ctx, containerID)
+	require.NoError(t, err)
+	return stored.Mounts
+}
 
 func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
 	t.Parallel()
@@ -167,8 +295,8 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService := newComposeService(t, cli)
-	engine := dockerclient.NewEngine(daemonAPI)
-	inspector := introspect.NewInspector(daemonAPI, model.DockerComposeProjectName(project))
+	profile := newRuntimeProfile(t, daemonAPI)
+	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
 	})
@@ -191,14 +319,14 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,
-		ProjectAssembler:   composespec.NewAssembler(),
+		ProjectAssembler:   profile.assembler,
 		SpecCodec:          codec,
 		ComposeRunner:      runner,
-		VolumeRemover:      engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), engine, blobStore),
-		ContainerRebuilder: engine,
-		ImageLookup:        engine,
-		BackendRegistry:    mustRegistry(t, engine),
+		VolumeRemover:      profile.engine,
+		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), profile.engine, blobStore),
+		ContainerRebuilder: profile.engine,
+		ImageLookup:        profile.engine,
+		BackendRegistry:    mustRegistry(t, profile.volumes),
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
@@ -208,7 +336,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		ctx:       zerolog.New(io.Discard).WithContext(context.Background()),
 		svc:       svc,
 		compose:   runner,
-		engine:    engine,
+		engine:    profile.engine,
 		daemon:    daemonAPI,
 		inspector: inspector,
 		codec:     codec,
@@ -220,10 +348,10 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	return env
 }
 
-func mustRegistry(t *testing.T, engine *dockerclient.Engine) model.SnapshotBackendRegistry {
+func mustRegistry(t *testing.T, volumes fullcopy.VolumeStreamer) model.SnapshotBackendRegistry {
 	t.Helper()
 
-	registry, err := core.NewSnapshotBackendRegistry(fullcopy.NewFactory(engine, fullcopy.CompressionZstd))
+	registry, err := core.NewSnapshotBackendRegistry(fullcopy.NewFactory(volumes, fullcopy.CompressionZstd))
 	require.NoError(t, err)
 	return registry
 }
@@ -335,7 +463,11 @@ func mountTargets(c container.InspectResponse) []string {
 func networkAliases(c container.InspectResponse) map[string][]string {
 	aliases := map[string][]string{}
 	for name, endpoint := range c.NetworkSettings.Networks {
-		aliases[name] = endpoint.Aliases
+		// The container's short id is no declared alias: Podman lists it, and it is another
+		// container's after a rebuild.
+		aliases[name] = slices.DeleteFunc(slices.Clone(endpoint.Aliases), func(alias string) bool {
+			return alias != "" && strings.HasPrefix(c.ID, alias)
+		})
 	}
 	return aliases
 }

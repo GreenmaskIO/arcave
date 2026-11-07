@@ -22,10 +22,10 @@ const CaptureLabelPrefix = "arcave."
 type CaptureLabel string
 
 const (
-	// CaptureLabelCapture is "true" or "false": on a service, everything of it; on a named or
-	// anonymous volume, that volume.
+	// CaptureLabelCapture is "true" or "false": on a service, everything of it; on a named
+	// volume, that volume.
 	CaptureLabelCapture CaptureLabel = "arcave.capture"
-	// CaptureLabelBackend is a volume's backend token, on a named or anonymous volume.
+	// CaptureLabelBackend is a named volume's backend token.
 	CaptureLabelBackend CaptureLabel = "arcave.backend"
 	// CaptureLabelVolumeBackend is a service's default backend token for its binds and
 	// anonymous volumes.

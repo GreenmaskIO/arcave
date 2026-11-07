@@ -71,7 +71,11 @@ The store key, `encryption.key`: a secret [`arcave init`](cli/init.md) never wri
 
 ## Variables that are not arcave's
 
-`DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY` are read by the Docker client when the [`docker` section](configuration.md#docker) leaves the matching key empty, which is the default.
+`DOCKER_HOST` and `DOCKER_CONTEXT` are read by the Docker client when the [`docker` section](configuration.md#docker) leaves the matching key empty, which is the default.
+
+`DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH` count only beside a `tcp://` `DOCKER_HOST`, or one with no scheme, which the Docker client reads as `tcp://`, with no `docker.host` or `docker.context` set; a Docker context carries its own TLS settings. `DOCKER_TLS_VERIFY`, at any non-empty value, brings in `DOCKER_CERT_PATH`, which acts as `docker.cert_path`, under the same requirement of all three files, unless `docker.cert_path`, `ca_file`, `cert_file` or `key_file` is set. Alone, `DOCKER_CERT_PATH` turns nothing on. Unlike the docker CLI, it has no `~/.docker` default, so `DOCKER_TLS_VERIFY` without it is refused. `DOCKER_TLS` is not read.
+
+Podman's `CONTAINER_HOST` is not read: see [Connecting to Podman](requirements.md#connecting-to-podman).
 
 `ARCAVE_VERSION`, `ARCAVE_INSTALL_DIR` and `ARCAVE_BASE_URL` belong to the install script, not to the CLI.
 

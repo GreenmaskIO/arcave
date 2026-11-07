@@ -15,7 +15,7 @@
 package main
 
 import (
-	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -44,12 +44,22 @@ func runSavepointList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	return withDeps(cmd, func(ctx context.Context, d *dependencies) error {
-		h := cli.NewSavepointListHandler(d.service, d.printer)
-		return h.SavepointList(ctx, model.ListRequest{
-			IncludeSafetySnapshots: savepointListIncludeSafety,
-			Sort:                   order,
-		})
+	composeProject, err := requireComposeProject()
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	var opened closers
+	defer opened.release(ctx)
+
+	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
+	if err != nil {
+		return fmt.Errorf("init dependencies: %w", err)
+	}
+	h := cli.NewSavepointListHandler(svc, loadRunOutput())
+	return h.SavepointList(ctx, model.ListRequest{
+		IncludeSafetySnapshots: savepointListIncludeSafety,
+		Sort:                   order,
 	})
 }
 

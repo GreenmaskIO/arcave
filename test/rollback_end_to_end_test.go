@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +29,7 @@ import (
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/composespec"
 )
 
 // endToEndSpec is one compose project carrying everything a rollback has to rebuild: a named
@@ -129,7 +129,8 @@ func TestRollback_RebuildsEverythingTheSavepointRecorded(t *testing.T) {
 	for _, upstream := range second.Images {
 		refs = append(refs, upstream.Refs...)
 	}
-	assert.Subset(t, refs, []string{"busybox", "alpine:3.22"})
+	assertNamesImage(t, refs, "busybox")
+	assertNamesImage(t, refs, "alpine:3.22")
 	for _, ref := range refs {
 		assert.False(t, model.ImageRef(ref).IsRestoredLayerTag(), "%s is an upstream, not arcave's tag", ref)
 	}
@@ -197,7 +198,15 @@ func (e *imageRollbackEnv) down(t *testing.T) {
 
 	res, err := e.inspector.Introspect(e.ctx)
 	require.NoError(t, err)
-	require.NoError(t, e.compose.Down(e.ctx, &types.Project{Name: e.project}))
+	// The project as compose would load it, so Down removes a container before the one
+	// whose namespace it joins: Podman refuses the other order.
+	assembled, err := newRuntimeProfile(t, e.daemon).assembler.Assemble(e.ctx, res)
+	require.NoError(t, err)
+	spec, err := composespec.NewCodec().Marshal(assembled)
+	require.NoError(t, err)
+	project, err := composespec.NewCodec().Parse(e.ctx, spec)
+	require.NoError(t, err)
+	require.NoError(t, e.compose.Down(e.ctx, project))
 
 	for _, svc := range res.Project.Services {
 		for _, v := range svc.Volumes {

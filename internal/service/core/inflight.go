@@ -17,46 +17,12 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
-
-// requireNoInflight refuses to run while .arcave/inflight.json stands, except for the rollback
-// that recovers from it. restoring is the savepoint the caller rolls back to, "" for any other
-// workflow. It returns the marker it let through, zero when there is none.
-func (s *Service) requireNoInflight(ctx context.Context, restoring model.SavepointID) (model.InflightMarker, error) {
-	marker, found, err := s.inflightMarker.Get(ctx)
-	if err != nil {
-		return model.InflightMarker{}, fmt.Errorf("reading the inflight marker: %w", err)
-	}
-	if !found {
-		return model.InflightMarker{}, nil
-	}
-	if s.isRecoveryRollback(marker, restoring) {
-		zerolog.Ctx(ctx).Info().Str("interrupted_target", marker.Target.String()).
-			Msg("recovering from an interrupted rollback; the marker clears on success")
-		return marker, nil
-	}
-	err = &model.InterruptedRollbackError{Marker: marker}
-	zerolog.Ctx(ctx).Error().Err(err).
-		Str("interrupted_target", marker.Target.String()).
-		Str("session", marker.Session.String()).
-		Str("compose_project", marker.ComposeProject.String()).
-		Str("safety_snapshot_id", marker.Safety.String()).
-		Str("phase", string(marker.Phase)).
-		Msg(recoveryHint(marker))
-	return model.InflightMarker{}, err
-}
-
-// isRecoveryRollback reports whether a rollback to id, in this session and compose project,
-// is the one that recovers from the interrupted rollback the marker records.
-func (s *Service) isRecoveryRollback(marker model.InflightMarker, id model.SavepointID) bool {
-	return id == marker.RecoveryID() && marker.Session == s.session && marker.ComposeProject == s.composeProject
-}
 
 // recoveryHint tells the user what state the interrupted rollback left and how to recover.
 func recoveryHint(marker model.InflightMarker) string {

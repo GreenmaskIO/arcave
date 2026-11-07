@@ -208,7 +208,7 @@ func TestEngine_RemoveImageRef(t *testing.T) {
 			if tt.inspectErr == nil {
 				calls = append(calls, api.On("ContainerList", mock.Anything, client.ContainerListOptions{
 					All:     true,
-					Filters: client.Filters{}.Add("ancestor", imageID),
+					Filters: client.Filters{}.Add("ancestor", strings.TrimPrefix(imageID, "sha256:")),
 				}).Return(client.ContainerListResult{Items: tt.containers}, nil).Once())
 			}
 			if tt.wantRemove {
@@ -349,16 +349,23 @@ func (b *trackedBody) Close() error {
 	return b.ReadCloser.Close()
 }
 
+// A tag comes back as Docker spells it, whichever daemon prefixed it with docker.io/.
 func TestEngine_ListLayerImages(t *testing.T) {
 	// Arrange
-	const layerRef = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000001"
+	const (
+		layerRef  = "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000001"
+		podmanRef = "arcave/demo-db-2:sp-019e843e-1650-7000-8000-000000000001"
+	)
 	api := &mockAPI{}
-	api.On("ImageList", mock.Anything, mock.Anything).Return(client.ImageListResult{Items: []image.Summary{
+	api.On("ImageList", mock.Anything, client.ImageListOptions{
+		Filters: client.Filters{}.Add("reference", "arcave/*"),
+	}).Return(client.ImageListResult{Items: []image.Summary{
 		{
 			ID: "sha256:aaaa", RepoTags: []string{layerRef, "postgres:16"},
 			Labels: map[string]string{string(model.SystemLabelArcaveProject): "app", string(model.SystemLabelComposeProject): "demo"},
 		},
-		{ID: "sha256:bbbb", RepoTags: []string{"arcave/demo-db-2:sp-019e843e-1650-7000-8000-000000000001"}},
+		{ID: "sha256:bbbb", RepoTags: []string{"docker.io/" + podmanRef}},
+		{ID: "sha256:cccc", RepoTags: []string{"arcave/demo-db-3:sp-not-a-savepoint"}},
 		{ID: "sha256:dddd", RepoTags: []string{"busybox:latest"}},
 	}}, nil).Once()
 	e := &Engine{api: api}
@@ -370,7 +377,32 @@ func TestEngine_ListLayerImages(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []model.TaggedImage{
 		{Ref: layerRef, ImageID: "sha256:aaaa", Origin: model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}},
-		{Ref: "arcave/demo-db-2:sp-019e843e-1650-7000-8000-000000000001", ImageID: "sha256:bbbb"},
+		{Ref: podmanRef, ImageID: "sha256:bbbb"},
 	}, tagged)
+	api.AssertExpectations(t)
+}
+
+// A container's reference comes back as Docker spells it, to meet ListLayerImages' tags.
+func TestEngine_ListContainerImages(t *testing.T) {
+	// Arrange
+	const layerRef = "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000001"
+	api := &mockAPI{}
+	api.On("ContainerList", mock.Anything, client.ContainerListOptions{All: true}).Return(client.ContainerListResult{Items: []container.Summary{
+		{ID: "c1", Image: layerRef, ImageID: "sha256:aaaa"},
+		{ID: "c2", Image: "docker.io/" + layerRef, ImageID: "sha256:aaaa"},
+		{ID: "c3", Image: "sha256:bbbb", ImageID: "sha256:bbbb"},
+	}}, nil).Once()
+	e := &Engine{api: api}
+
+	// Act
+	images, err := e.ListContainerImages(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []model.ContainerImage{
+		{ContainerID: "c1", Ref: layerRef, ImageID: "sha256:aaaa"},
+		{ContainerID: "c2", Ref: layerRef, ImageID: "sha256:aaaa"},
+		{ContainerID: "c3", Ref: "sha256:bbbb", ImageID: "sha256:bbbb"},
+	}, images)
 	api.AssertExpectations(t)
 }

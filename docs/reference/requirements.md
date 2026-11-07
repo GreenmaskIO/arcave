@@ -1,12 +1,12 @@
 ---
 title: Requirements
-description: What arcave needs — Docker 25 or newer, Linux or macOS, a compose project the Docker daemon knows — and the long list of things it does not need.
-keywords: [arcave requirements, Docker 25, prerequisites, Linux, macOS, docker compose]
+description: What arcave needs — Docker 25 or newer or Podman, Linux or macOS, a compose project the daemon knows — and the long list of things it does not need.
+keywords: [arcave requirements, Docker 25, Podman, prerequisites, Linux, macOS, docker compose]
 ---
 
 # Requirements
 
-## Docker 25 or newer
+## Docker 25 or newer, or Podman
 
 arcave captures each container's writable layer by committing it and exporting it, and it stores the export split by content — which needs the OCI layout `docker save` writes from Docker 25 onward. An older daemon exports a shape whose members carry no digest, so `savepoint create` and `rollback` refuse it before they stop or load anything:
 
@@ -14,23 +14,55 @@ arcave captures each container's writable layer by committing it and exporting i
 unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer
 ```
 
-`rollback` reports it after `prepare: `. `savepoint list`, `savepoint remove` and the `session` commands touch no image and keep working. An engine that is not Docker — Podman, which names itself in `docker version` — and a daemon whose version cannot be read are let through with a warning, and the capture itself still refuses an archive of the old shape:
+`rollback` reports it after `prepare: `. `savepoint list`, `savepoint remove` and the `session` commands touch no image and keep working. A daemon whose version cannot be read is let through with a warning, and the capture itself still refuses an archive of the old shape:
 
 ```text
-unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25, or Podman, exports this shape
+unsupported image archive format: member "…" is neither a blob nor metadata; a daemon older than Docker 25 exports this shape
 ```
 
-**Podman is not supported yet.** Podman 6 exports that shape, so a default `savepoint create` fails there and the services start again. Don't get past it by setting [`capture.writable_layers` and `capture.images`](configuration.md#capture) to `false`: a `fullcopy` rollback then brings volumes back empty and still reports success, and with either backend a rollback to a savepoint taken after an earlier rollback fails, removes the project's containers and leaves an `inconsistent` marker that refuses further commands.
+Podman, which names itself in `docker version`, is not held to Docker's floor: arcave commits and exports through Podman's own API, which writes the OCI layout, and reads a volume through a `tar` of its own, which keeps the owners Podman's archive API would rewrite to the container's user. Volumes, writable layers and images are all captured. A Podman daemon that reports no version is refused, since requests to its own API name it. A Podman daemon behind TLS is reached as a Docker one is: see [Podman behind TLS](#podman-behind-tls).
 
-The daemon must also be **reachable** for `savepoint create` and `rollback`, which fail on their first look at the compose project. `init`, `savepoint list`, `savepoint remove` and the `session` commands reach no daemon:
+The daemon must also be **reachable** for `savepoint create` and `rollback`, which ask it which engine it is before anything else. `init`, `savepoint list`, `savepoint remove` and the `session` commands reach no daemon:
 
 ```text
-introspect compose project: read containers of compose project "demo": list containers: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+init dependencies: read the daemon version: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
 ```
-
-Under [`backends.cdc.transport: tcp`](configuration.md#backendscdc) with `network_mode: auto`, every command but `init` and the `session` commands asks the daemon while it wires itself up, so an unreachable one fails `savepoint list` too.
 
 Which daemon, and how to reach it, is the [`docker` config section](configuration.md#docker); left empty, it reads `DOCKER_HOST` and friends.
+
+### Connecting to Podman
+
+arcave reaches Podman through its Docker-compatible socket, named by `DOCKER_HOST` or `docker.host`. It does not read `CONTAINER_HOST` or `podman system connection`, so with neither set it looks for Docker's socket and fails as above.
+
+On Linux, rootless:
+
+```bash
+systemctl --user enable --now podman.socket
+export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
+```
+
+On Linux, rootful, the socket is `unix:///run/podman/podman.sock`, enabled with `sudo systemctl enable --now podman.socket`.
+
+On macOS, `podman machine start` prints the `DOCKER_HOST` to export when it does not serve Docker's default socket.
+
+Without systemd, start the service with no idle timeout, since one that exits while idle can cut a rollback short:
+
+```bash
+podman system service --time 0
+```
+
+#### Podman behind TLS
+
+Podman's API service terminates TLS itself; `--tls-client-ca` also requires a client certificate:
+
+```bash
+podman system service --time 0 --tls-cert server.pem --tls-key server-key.pem \
+  --tls-client-ca ca.pem tcp://0.0.0.0:8443
+```
+
+Point arcave at it as at a Docker daemon behind TLS: the [`docker` section](configuration.md#docker), a Docker context, or `DOCKER_HOST` with `DOCKER_TLS_VERIFY` and `DOCKER_CERT_PATH`. Podman's own API is reached over the same connection and certificates. Name the daemon `tcp://`: a context's `http://` or `https://` host is refused, since the Docker client cannot attach to a container over one.
+
+arcave is tested on projects brought up by `docker compose` through this socket. `podman compose` is a wrapper that runs `docker-compose` when it is installed and `podman-compose` otherwise; `podman-compose` itself has not been tested, and neither has `DOCKER_HOST=ssh://` to a Podman host.
 
 ## Linux or macOS
 
@@ -89,7 +121,7 @@ Tested on macOS arm64, 2026-11-02, with arcave's integration suites and a smoke 
 | Docker Engine, rootless | 29.6.2, Ubuntu 26.04 in Lima | ✅ | ✅ | ✅ | |
 | Colima | 0.10.3, dockerd 29.5.2 | ✅ | ✅ | ✅ | |
 | OrbStack | 2.2.5, Engine 29.8.2 | ✅ | ✅ | ✅ | |
-| Podman | 6.1.4 | ❌ | ❌ | ❌ | [not supported yet](#docker-25-or-newer) |
+| Podman, rootless and rootful | 6.1.4 | ✅ | ✅ | ✅ | retested 2026-11-03 on `podman machine`, behind TLS and mutual TLS 2026-11-06, older versions not tested; what Podman does not store — `sysctls`, a fixed address, `domainname` — is not put back: see [Limitations](limitations.md) |
 
 Speed of a first backup and a full restore of 1 GiB, in seconds — `stdio` against `tcp`. `stdio` is bound by
 how fast the engine streams a `docker exec`, `tcp` by its network. The Podman rows measure the transport only:

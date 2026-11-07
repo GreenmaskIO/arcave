@@ -246,6 +246,103 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	registry.AssertExpectations(t)
 }
 
+// The revert puts the safety snapshot's layers back: the parity the capture side has.
+func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
+	// Arrange
+	introspection := demoIntrospectionWithContainers()
+	vol := demoVolume()
+	record := demoRecord()
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
+	locker := &mockLocker{}
+	expectLock(locker)
+	inspector := &mockInspector{}
+	introspect := inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
+
+	var safetySnapshotID model.SavepointID
+	revertTag := func() string {
+		return fmt.Sprintf("arcave/%s-%s-1-postgres-16:sp-%s", demoProject, demoService, safetySnapshotID)
+	}
+	runner := &mockComposeRunner{}
+	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string{demoContainerID}, nil).Once()
+	savepointBackend := &mockBackend{volume: vol}
+	safetyBackend := &mockBackend{volume: vol}
+	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
+		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
+		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
+	images := &mockImageBackend{}
+	captureSafety := images.On("CaptureWritableLayer", mock.Anything, mock.MatchedBy(func(req model.WritableLayerCaptureRequest) bool {
+		return req.SnapshotID == safetySnapshotID && req.Container == demoContainerRef()
+	})).Return(demoWritableLayer(), nil).Once()
+	upstreamSafety := images.On("CaptureImage", mock.Anything, demoImageCaptureRequest()).Return(demoImage(), nil).Once()
+	specSafety := expectSpecCommit(repo)
+	commitSafety := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
+		return r.IsSafetySnapshot() && len(r.WritableLayers) == 1
+	})).Return(nil).Once()
+	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, demoTargetSpec).Return(nil).Once()
+	restoreSp := savepointBackend.On("Restore", mock.Anything,
+		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
+		Return(errors.New("restore boom")).Once()
+	// demoSpec names no service, so the retargeted live spec is matched by name alone.
+	liveSpec := mock.MatchedBy(func(project *types.Project) bool {
+		return project.Name == demoSpec.Name && len(project.Services) == 0
+	})
+	restoreLayer := images.On("RestoreWritableLayer", mock.Anything, mock.MatchedBy(func(req model.WritableLayerRestoreRequest) bool {
+		return req.SnapshotID == safetySnapshotID && req.Layer == demoWritableLayer() && req.Tag == revertTag()
+	})).Return(model.WritableLayerRestoreResult{
+		Service: demoService, Replica: 1, ContainerName: demoContainerName(1),
+		ImageID: demoWritableLayer().CommittedImageID, Tag: "revert-tag",
+	}, nil).Once()
+	downForRevert := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
+	createForRevert := runner.On("Create", mock.Anything, liveSpec).Return(nil).Once()
+	restoreSafety := safetyBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
+		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
+	})).Return(nil).Once()
+	up := runner.On("Start", mock.Anything, liveSpec, 60*time.Second).Return(nil).Once()
+	uncommitSafety := expectSafetySnapshotUncommit(repo, &safetySnapshotID)
+	removeSafety := safetyBackend.On("Remove", mock.Anything, mock.MatchedBy(func(req model.BackendRemoveRequest) bool {
+		return req.SnapshotID == safetySnapshotID
+	})).Return(nil).Once()
+	mock.InOrder(introspect, stop, snapshotSafety, upstreamSafety, captureSafety, specSafety, commitSafety, down, create,
+		restoreSp, restoreLayer, downForRevert, createForRevert, restoreSafety, up, uncommitSafety, removeSafety)
+
+	store := newDirStore(t)
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetyBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
+
+	svc := New(Deps{
+		SessionLocker:    fakeSessionLocker{},
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: assemblerFor(introspection),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		ImageBackend:     images,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		CaptureDefaults:  demoCaptureDefaults,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+	// Assert
+	require.ErrorContains(t, err, "restore boom")
+	repo.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	images.AssertExpectations(t)
+	savepointBackend.AssertExpectations(t)
+	safetyBackend.AssertExpectations(t)
+	registry.AssertExpectations(t)
+}
+
 func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	// Arrange
 	vol := demoVolume()
@@ -517,7 +614,6 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
 	// Arrange
 	introspection := demoIntrospectionWithContainers()
-	introspection.Daemon.ServerVersion = "24.0.7"
 	locker := &mockLocker{}
 	expectLock(locker)
 	inspector := &mockInspector{}
@@ -543,6 +639,7 @@ func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            newDirStore(t),
 		CaptureDefaults:  demoCaptureDefaults,
+		DaemonVersion:    "24.0.7",
 		MinDaemonMajor:   25,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -569,7 +666,6 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	introspection := demoIntrospectionWithContainers()
-	introspection.Daemon.ServerVersion = "24.0.7"
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	// Restore carries no expectation: the daemon is refused before any layer loads.
@@ -591,6 +687,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 		Inflight:         inflight,
 		Store:            newDirStore(t),
 		CaptureDefaults:  demoCaptureDefaults,
+		DaemonVersion:    "24.0.7",
 		MinDaemonMajor:   25,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
