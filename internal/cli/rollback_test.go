@@ -76,24 +76,24 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			// service's now, not this adapter's.
 			name: "forwards every restored volume",
 			res: model.RollbackResult{
-				Savepoint: savepoint,
-				Restored:  restored,
+				RolledBackTo: savepoint,
+				Restored:     restored,
 			},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
-			wantPrinted: []any{model.RollbackResponse{
+			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
 				Restored:     restored,
 			}},
 		},
 		{
 			name:       "restores nothing",
-			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
+			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
-			wantPrinted: []any{model.RollbackResponse{
+			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
@@ -109,11 +109,11 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		{
 			name: "the safety snapshot that undoes it is named",
 			res: model.RollbackResult{
-				Savepoint:      savepoint,
+				RolledBackTo:   savepoint,
 				Restored:       []model.Volume{},
 				SafetySnapshot: "019e843e-1650-7000-8000-0000000000bb",
 			},
-			wantPrinted: []any{model.RollbackResponse{
+			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo:   savepoint,
 				Restored:       []model.Volume{},
 				SafetySnapshot: "019e843e-1650-7000-8000-0000000000bb",
@@ -121,11 +121,11 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 		},
 		{
 			name:       "printer error surfaces",
-			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
+			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: printErr,
 			wantErr:    printErr,
-			wantPrinted: []any{model.RollbackResponse{
+			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
@@ -216,7 +216,7 @@ func TestRollbackHandler_Rollback_SafetySnapshotFromConfig(t *testing.T) {
 				return req.SkipSafetySnapshot == tt.wantSkip
 			})).Return(model.RollbackResult{}, nil).Once()
 			output := &capturePrinter{}
-			output.On("Print", model.RollbackResponse{}).Return(nil).Once()
+			output.On("Print", model.RollbackResult{}).Return(nil).Once()
 			cfg := config.Config{Rollback: config.Rollback{SafetySnapshot: tt.safetySnapshot}}
 
 			// Act

@@ -85,7 +85,7 @@ func TestPrinter_Print(t *testing.T) {
 		{
 			name: "rollback",
 			opts: Options{ComposeProject: "arcave-demo"},
-			result: model.RollbackResponse{
+			result: model.RollbackResult{
 				RolledBackTo: newSavepoint(),
 				Restored: []model.Volume{
 					namedVolume("demo_db"), namedVolume("demo_minio"), namedVolume("demo_redis"), namedVolume("demo_cache"),
@@ -100,21 +100,21 @@ func TestPrinter_Print(t *testing.T) {
 		{
 			name: "rollback_no_safety_snapshot",
 			opts: Options{ComposeProject: "arcave-demo"},
-			result: model.RollbackResponse{
+			result: model.RollbackResult{
 				RolledBackTo: newSavepoint(),
 				Restored:     []model.Volume{namedVolume("demo_db")},
 			},
 		},
 		{
 			name: "savepoint_remove_dry_run",
-			result: model.RemoveResponse{
+			result: model.RemoveResult{
 				DryRun:  true,
 				Removed: []model.Savepoint{newSavepoint()},
 			},
 		},
 		{
 			name:   "savepoint_remove_nothing",
-			result: model.RemoveResponse{},
+			result: model.RemoveResult{},
 		},
 		{
 			name: "gc_dry_run",

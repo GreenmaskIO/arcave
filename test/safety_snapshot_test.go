@@ -88,16 +88,16 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 
 	// Act: the first undo holds a layer no other savepoint does, so its blobs are its own.
 	compose.write(t, compose.replicas(t)[0], "first")
-	first := decode[model.RollbackResponse](t, arcave("rollback", "v1"))
-	second := decode[model.RollbackResponse](t, arcave("rollback", "v2"))
+	first := decode[model.RollbackResult](t, arcave("rollback", "v1"))
+	second := decode[model.RollbackResult](t, arcave("rollback", "v2"))
 	compose.write(t, compose.replicas(t)[0], "third")
-	third := decode[model.RollbackResponse](t, arcave("rollback", "v1"))
+	third := decode[model.RollbackResult](t, arcave("rollback", "v1"))
 	beforeGC := listed()
 	preview := gc("--dry-run", "--kind", string(model.GarbageDataKindSafetySnapshots))
 	afterPreview := listed()
 	retiring := gc()
 	afterGC := listed()
-	undone := decode[model.RollbackResponse](t, arcave("rollback", third.SafetySnapshot.String()))
+	undone := decode[model.RollbackResult](t, arcave("rollback", third.SafetySnapshot.String()))
 	replica := compose.replicas(t)[0]
 	volumeUndone, layerUndone := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
 	freeing := gc()
@@ -209,7 +209,7 @@ func TestGC_RetainRecentFromTheEnvironment(t *testing.T) {
 	}
 	compose.write(t, compose.replicas(t)[0], "v1")
 	arcave("savepoint", "create", "v1")
-	rolledBack := decode[model.RollbackResponse](t, arcave("rollback", "v1"))
+	rolledBack := decode[model.RollbackResult](t, arcave("rollback", "v1"))
 
 	// Act
 	collected := decode[safetySnapshotGarbage](t, runArcave(t, env.projectRoot,
@@ -240,8 +240,8 @@ func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"project": env.project, "name": "v1"})
 
 	// Act
-	byDefault := callTool[model.RollbackResponse](t, cs, "rollback", map[string]any{"project": env.project, "ref": "v1"})
-	asked := callTool[model.RollbackResponse](t, cs, "rollback", map[string]any{
+	byDefault := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{"project": env.project, "ref": "v1"})
+	asked := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{
 		"project": env.project, "ref": "v1", "safety_snapshot": true,
 	})
 

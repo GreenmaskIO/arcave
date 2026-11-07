@@ -44,5 +44,5 @@ func (h *SavepointRemoveHandler) SavepointRemove(ctx context.Context, req model.
 	if err != nil {
 		return removeUsageError(err)
 	}
-	return h.printer.Print(model.RemoveResponse(res))
+	return h.printer.Print(res)
 }

@@ -52,7 +52,7 @@ type rollbackTarget struct {
 // newResult reports a rollback to savepoint that built t, and the safety snapshot that undoes it.
 func (t rollbackTarget) newResult(savepoint model.Savepoint, safetySnapshot model.SavepointID) model.RollbackResult {
 	return model.RollbackResult{
-		Savepoint:      savepoint,
+		RolledBackTo:   savepoint,
 		Restored:       volumesOf(savepoint),
 		WritableLayers: t.restored,
 		SafetySnapshot: safetySnapshot,

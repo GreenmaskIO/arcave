@@ -96,8 +96,9 @@ type MCPFactories struct {
 	GC             MCPGCServiceFactory
 }
 
-// RollbackDefaults is what the rollback tool does when its call does not say: the project's config.
-type RollbackDefaults struct {
+// RollbackConfig is the project's config as the rollback tool reads it; a call may override
+// SkipSafetySnapshot alone.
+type RollbackConfig struct {
 	LeftoverVolumes    model.LeftoverVolumesPolicy
 	SkipSafetySnapshot bool
 }
@@ -105,20 +106,20 @@ type RollbackDefaults struct {
 // MCPHandler serves arcave's savepoint and session workflows as MCP tools over stdio.
 // stdout is the JSON-RPC channel, so nothing here may write to it; logs go to stderr.
 type MCPHandler struct {
-	factories        MCPFactories
-	pinnedSession    model.SessionID
-	rollbackDefaults RollbackDefaults
+	factories      MCPFactories
+	pinnedSession  model.SessionID
+	rollbackConfig RollbackConfig
 }
 
 // NewMCPHandler builds the MCP adapter; pinnedSession is the session the server was started in, zero to
 // follow the current one.
 func NewMCPHandler(
-	factories MCPFactories, pinnedSession model.SessionID, rollbackDefaults RollbackDefaults,
+	factories MCPFactories, pinnedSession model.SessionID, rollbackConfig RollbackConfig,
 ) *MCPHandler {
 	return &MCPHandler{
-		factories:        factories,
-		pinnedSession:    pinnedSession,
-		rollbackDefaults: rollbackDefaults,
+		factories:      factories,
+		pinnedSession:  pinnedSession,
+		rollbackConfig: rollbackConfig,
 	}
 }
 
@@ -319,10 +320,10 @@ type removeSavepointInput struct {
 }
 
 // removeSavepoints deletes the selected savepoints and reports what went.
-func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResponse, error) {
+func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResult, error) {
 	svc, release, err := h.openSavepointStoreService(ctx, in.Project, in.Session)
 	if err != nil {
-		return nil, model.RemoveResponse{}, err
+		return nil, model.RemoveResult{}, err
 	}
 	defer release()
 
@@ -334,9 +335,9 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 		DryRun:       in.DryRun,
 	})
 	if err != nil {
-		return nil, model.RemoveResponse{}, mcpError(removeUsageError(err))
+		return nil, model.RemoveResult{}, mcpError(removeUsageError(err))
 	}
-	return nil, model.RemoveResponse(res), nil
+	return nil, res, nil
 }
 
 // rollbackInput is rollback's input schema.
@@ -349,27 +350,32 @@ type rollbackInput struct {
 	SafetySnapshot *bool `json:"safety_snapshot,omitempty" jsonschema:"whether to capture the live state first, so the rollback can be undone; omit for the project's default"`
 }
 
+// skipSafetySnapshot reports whether the call turns the safety snapshot off; omitted, the config decides.
+func (i rollbackInput) skipSafetySnapshot(configured bool) bool {
+	if i.SafetySnapshot == nil {
+		return configured
+	}
+	return !*i.SafetySnapshot
+}
+
 // rollback restores the environment to the referenced savepoint.
-func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in rollbackInput) (*mcpsdk.CallToolResult, model.RollbackResponse, error) {
+func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in rollbackInput) (*mcpsdk.CallToolResult, model.RollbackResult, error) {
 	waitTimeout, err := parseToolDuration("wait_timeout", in.WaitTimeout)
 	if err != nil {
-		return nil, model.RollbackResponse{}, err
+		return nil, model.RollbackResult{}, err
 	}
 	svc, release, err := h.openSavepointService(ctx, in.Project, in.Session)
 	if err != nil {
-		return nil, model.RollbackResponse{}, err
+		return nil, model.RollbackResult{}, err
 	}
 	defer release()
 
-	skipSafetySnapshot := h.rollbackDefaults.SkipSafetySnapshot
-	if in.SafetySnapshot != nil {
-		skipSafetySnapshot = !*in.SafetySnapshot
-	}
-	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.rollbackDefaults.LeftoverVolumes, skipSafetySnapshot))
+	skipSafetySnapshot := in.skipSafetySnapshot(h.rollbackConfig.SkipSafetySnapshot)
+	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.rollbackConfig.LeftoverVolumes, skipSafetySnapshot))
 	if err != nil {
-		return nil, model.RollbackResponse{}, mcpError(err)
+		return nil, model.RollbackResult{}, mcpError(err)
 	}
-	return nil, newRollbackResponse(res), nil
+	return nil, res, nil
 }
 
 // composeGenerateInput is compose_generate's input schema.

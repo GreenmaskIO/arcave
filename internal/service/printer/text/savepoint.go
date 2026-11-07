@@ -64,7 +64,7 @@ func (s *Printer) formatSavepoints(savepoints []model.Savepoint) string {
 }
 
 // formatRollback is what a rollback restored, and what is left to know about it.
-func (s *Printer) formatRollback(response model.RollbackResponse) string {
+func (s *Printer) formatRollback(response model.RollbackResult) string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("Rolled back to "+
 		s.formatSavepointTitle(response.RolledBackTo, "2006-01-02 15:04:05")) + "\n")
@@ -101,7 +101,7 @@ func (s *Printer) formatRollback(response model.RollbackResponse) string {
 }
 
 // formatRemove is the savepoints a remove took, or would take.
-func (s *Printer) formatRemove(response model.RemoveResponse) string {
+func (s *Printer) formatRemove(response model.RemoveResult) string {
 	if len(response.Removed) == 0 {
 		return "Nothing to remove.\n"
 	}

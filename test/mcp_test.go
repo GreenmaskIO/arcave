@@ -326,7 +326,7 @@ func TestMCP_SavepointsFollowTheCurrentSession(t *testing.T) {
 	v2 := callTool[model.Savepoint](t, cs, "savepoint_create", with("name", "v2"))
 	inFork := callTool[savepointListResult](t, cs, "savepoint_list", project)
 	inBaseline := callTool[savepointListResult](t, cs, "savepoint_list", with("session", "baseline"))
-	rolledBack := callTool[model.RollbackResponse](t, cs, "rollback", with("ref", "v1"))
+	rolledBack := callTool[model.RollbackResult](t, cs, "rollback", with("ref", "v1"))
 
 	// Assert: what the tools reported is what each session's store holds.
 	savepointIDs := func(sps []model.Savepoint) []model.SavepointID {
@@ -366,9 +366,9 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	compose.write(t, compose.replicas(t)[0], "v2")
 
 	// Act: a removed safety snapshot leaves a restic snapshot for the gc.
-	rolledBack := callTool[model.RollbackResponse](t, cs, "rollback", map[string]any{"project": env.project, "ref": "v1"})
+	rolledBack := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{"project": env.project, "ref": "v1"})
 	require.NotEmpty(t, rolledBack.SafetySnapshot)
-	callTool[model.RemoveResponse](t, cs, "savepoint_remove", map[string]any{
+	callTool[model.RemoveResult](t, cs, "savepoint_remove", map[string]any{
 		"project": env.project,
 		"refs":    []string{rolledBack.SafetySnapshot.String()},
 	})

@@ -47,7 +47,7 @@ func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref s
 	if err != nil {
 		return err
 	}
-	return h.printer.Print(newRollbackResponse(res))
+	return h.printer.Print(res)
 }
 
 // newRollbackRequest builds the request both adapters send, so neither drifts on
@@ -71,14 +71,4 @@ func newRollbackRequest(
 		req.Name = &ref
 	}
 	return req
-}
-
-// newRollbackResponse builds the response both adapters return, so neither drops a field.
-func newRollbackResponse(res model.RollbackResult) model.RollbackResponse {
-	return model.RollbackResponse{
-		RolledBackTo:   res.Savepoint,
-		Restored:       res.Restored,
-		WritableLayers: res.WritableLayers,
-		SafetySnapshot: res.SafetySnapshot,
-	}
 }

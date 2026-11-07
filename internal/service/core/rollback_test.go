@@ -97,7 +97,7 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []model.Volume{vol}, res.Restored)
-	assert.Equal(t, record, res.Savepoint)
+	assert.Equal(t, record, res.RolledBackTo)
 
 	// The safety snapshot was taken under the id the run created, committed under it
 	// and stays; no expectation above lets it be deleted or the savepoint's own record rewritten.
@@ -1051,7 +1051,7 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 
 	// Assert: the volume `compose down` kept is overwritten under a warning naming it.
 	require.NoError(t, err)
-	assert.Equal(t, record, res.Savepoint)
+	assert.Equal(t, record, res.RolledBackTo)
 	assert.Equal(t, []model.Volume{vol}, res.Restored)
 	assert.Equal(t, []model.WritableLayerRestoreResult{demoWritableLayerRestoreResult()}, res.WritableLayers)
 	assert.Contains(t, logs.String(), `"volume":"`+demoVolumeName+`"`)
