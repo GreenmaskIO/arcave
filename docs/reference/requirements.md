@@ -138,7 +138,7 @@ how fast the engine streams a `docker exec`, `tcp` by its network. The Podman ro
 
 ## There is nothing else to install
 
-* **Not the `docker` CLI, and not the compose plugin.** arcave speaks to the daemon itself and drives compose itself. A machine with a daemon and the arcave binary is a complete installation. arcave carries compose 5.7. If you also run `docker compose` on the project yourself, use 5.6 or newer: on Docker's containerd image store an older compose labels a container's image differently, and the two recreate each other's containers.
+* **Not the `docker` CLI, and not the compose plugin.** arcave speaks to the daemon itself and drives compose itself. A machine with a daemon and the arcave binary is a complete installation. arcave carries compose 5.7.
 * **Not a particular filesystem.** No ZFS, no btrfs, no reflink support, no copy-on-write anything. arcave gets cheap repeat savepoints from deduplication and incremental capture, which work on an ordinary directory on an ordinary disk.
 * **Not a reconfigured daemon.** No storage driver to choose, no experimental features, no privileges beyond what talking to the daemon already takes.
 * **Nothing to write per database.** arcave stops the services and captures the volumes at rest, so a capture needs no engine-specific hook or quiescing script of your own.
