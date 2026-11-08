@@ -15,6 +15,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -157,25 +158,13 @@ func initRoot(cmd *cobra.Command) error {
 	return nil
 }
 
-// flagEnvs pairs each flag that feeds no config key with its environment counterpart: viper never
+// readFlagEnvs fills each flag left empty from its variable: they feed no config key, so viper never
 // reads the environment for them.
-var flagEnvs = []struct {
-	value *string
-	env   string
-}{
-	{value: &composeProjectFlag, env: composeProjectEnv},
-	{value: &sessionRef, env: sessionEnv},
-	{value: &progressMode, env: progressEnv},
-	{value: &resultFormat, env: formatEnv},
-}
-
-// readFlagEnvs fills every flag of flagEnvs left empty from its environment variable.
 func readFlagEnvs() {
-	for _, flagEnv := range flagEnvs {
-		if *flagEnv.value == "" {
-			*flagEnv.value = os.Getenv(flagEnv.env)
-		}
-	}
+	composeProjectFlag = cmp.Or(composeProjectFlag, os.Getenv(composeProjectEnv))
+	sessionRef = cmp.Or(sessionRef, os.Getenv(sessionEnv))
+	progressMode = cmp.Or(progressMode, os.Getenv(progressEnv))
+	resultFormat = cmp.Or(resultFormat, os.Getenv(formatEnv))
 }
 
 // warnIgnoredCDCKeys warns, once per run, of the tcp transport's keys set under another.

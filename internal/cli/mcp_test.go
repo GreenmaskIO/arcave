@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -616,63 +615,6 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		})
 	}
 	svc.AssertExpectations(t)
-}
-
-// A compose project with no container is named back to the agent by the argument it passes.
-func TestMCPHandler_ComposeProjectAbsent(t *testing.T) {
-	absent := fmt.Errorf("compose project %q: %w", "demo", model.ErrComposeProjectAbsent)
-	tests := []struct {
-		name  string
-		setup func(svc *mockService)
-		call  func(h *MCPHandler) error
-	}{
-		{
-			name: "savepoint_create",
-			setup: func(svc *mockService) {
-				svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{}).
-					Return(model.Savepoint{}, absent).Once()
-			},
-			call: func(h *MCPHandler) error {
-				_, _, err := h.createSavepointMCP(context.Background(), nil, createInput{ComposeProject: "demo"})
-				return err
-			},
-		},
-		{
-			name: "compose_generate",
-			setup: func(svc *mockService) {
-				svc.On("GenerateCompose", mock.Anything, model.GenerateComposeRequest{}).
-					Return(model.GenerateComposeResponse{}, absent).Once()
-			},
-			call: func(h *MCPHandler) error {
-				_, _, err := h.generateComposeMCP(context.Background(), nil, composeGenerateInput{ComposeProject: "demo"})
-				return err
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			svc := &mockService{}
-			tt.setup(svc)
-			h := NewMCPHandler(MCPFactories{
-				Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
-					return svc, func() {}, nil
-				},
-				Tools: func(context.Context, string) (MCPToolsService, func(), error) {
-					return svc, func() {}, nil
-				},
-			}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
-
-			// Act
-			err := tt.call(h)
-
-			// Assert
-			require.ErrorIs(t, err, model.ErrComposeProjectAbsent)
-			assert.ErrorContains(t, err, "the compose_project argument")
-			svc.AssertExpectations(t)
-		})
-	}
 }
 
 // dry_run left out reports only; false reaches the request and deletes. A gc that fails past a

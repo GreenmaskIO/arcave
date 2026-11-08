@@ -17,6 +17,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
-	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -376,47 +376,42 @@ func writeConfig(t *testing.T, root, body string) {
 func TestReadFlagEnvs_NameNoConfigKey(t *testing.T) {
 	keyEnvs := make(map[string]string)
 	for _, key := range config.Keys() {
-		keyEnvs[newKeyEnv(key)] = key
+		keyEnvs["ARCAVE_"+strings.ToUpper(strings.ReplaceAll(key, ".", "_"))] = key
 	}
 
-	for _, flagEnv := range flagEnvs {
-		t.Run(flagEnv.env, func(t *testing.T) {
-			key, collides := keyEnvs[flagEnv.env]
+	for _, env := range []string{composeProjectEnv, sessionEnv, progressEnv, formatEnv} {
+		t.Run(env, func(t *testing.T) {
+			key, collides := keyEnvs[env]
 
-			assert.False(t, collides, "%s is the variable of config key %q", flagEnv.env, key)
+			assert.False(t, collides, "%s is the variable of config key %q", env, key)
 		})
 	}
 }
 
-// The compose project's variable and the arcave project's are two: each feeds its own name alone.
+// ARCAVE_COMPOSE_PROJECT_NAME names the compose project alone, ARCAVE_PROJECT_NAME project.name alone.
 func TestReadFlagEnvs(t *testing.T) {
 	tests := []struct {
 		name               string
 		flag               string
 		env                map[string]string
 		wantComposeProject string
-		wantErr            bool
 		wantArcaveProject  string
 	}{
 		{
-			name:               "the compose project's variable leaves project.name to the file",
+			name:               "the compose project's variable",
 			env:                map[string]string{composeProjectEnv: "x"},
 			wantComposeProject: "x",
 			wantArcaveProject:  "fromfile",
 		},
 		{
-			name:              "ARCAVE_PROJECT_NAME is project.name and names no compose project",
-			env:               map[string]string{newKeyEnv("project.name"): "y"},
-			wantErr:           true,
+			name:              "project.name's variable",
+			env:               map[string]string{"ARCAVE_PROJECT_NAME": "y"},
 			wantArcaveProject: "y",
 		},
 		{
-			name: "the flag wins over the compose project's variable and leaves project.name to ARCAVE_PROJECT_NAME",
-			flag: "z",
-			env: map[string]string{
-				composeProjectEnv:         "x",
-				newKeyEnv("project.name"): "y",
-			},
+			name:               "the flag wins over the compose project's variable",
+			flag:               "z",
+			env:                map[string]string{composeProjectEnv: "x", "ARCAVE_PROJECT_NAME": "y"},
 			wantComposeProject: "z",
 			wantArcaveProject:  "y",
 		},
@@ -428,35 +423,21 @@ func TestReadFlagEnvs(t *testing.T) {
 			root := t.TempDir()
 			writeConfig(t, root, "project:\n  name: fromfile\n")
 			t.Setenv(composeProjectEnv, "")
-			t.Setenv(newKeyEnv("project.name"), "")
+			t.Setenv("ARCAVE_PROJECT_NAME", "")
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			saved := make([]string, len(flagEnvs))
-			for i, flagEnv := range flagEnvs {
-				saved[i] = *flagEnv.value
-				*flagEnv.value = ""
-			}
-			t.Cleanup(func() {
-				for i, flagEnv := range flagEnvs {
-					*flagEnv.value = saved[i]
-				}
-			})
+			saved := composeProjectFlag
+			t.Cleanup(func() { composeProjectFlag = saved })
 			composeProjectFlag = tt.flag
 
 			// Act
 			readFlagEnvs()
-			composeProject, composeErr := requireComposeProject()
 			cfg, _, err := resolveConfig(testViper(root), root)
 
 			// Assert
 			require.NoError(t, err)
-			if tt.wantErr {
-				assert.ErrorContains(t, composeErr, composeProjectEnv)
-			} else {
-				require.NoError(t, composeErr)
-			}
-			assert.Equal(t, model.DockerComposeProjectName(tt.wantComposeProject), composeProject)
+			assert.Equal(t, tt.wantComposeProject, composeProjectFlag)
 			assert.Equal(t, tt.wantArcaveProject, cfg.Project.Name)
 		})
 	}

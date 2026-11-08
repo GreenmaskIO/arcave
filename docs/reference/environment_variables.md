@@ -28,8 +28,8 @@ arcave savepoint create nightly
 ```
 
 ```shell title="Two compose projects under one tenant"
-ARCAVE_COMPOSE_PROJECT_NAME=myapp-blue arcave savepoint create nightly
-ARCAVE_COMPOSE_PROJECT_NAME=myapp-green arcave savepoint create nightly
+arcave -p myapp-blue savepoint create nightly
+arcave -p myapp-green savepoint create nightly
 ```
 
 Both compose projects store under the tenant `project.name` from the config file, in [store roots](storage_layout.md) that differ in their last segment.
