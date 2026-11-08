@@ -23,8 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
+	"github.com/moby/moby/client"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -106,15 +105,14 @@ func waitForPhase(t *testing.T, env *sessionEnv, phase model.InflightPhase) {
 func oneShotContainers(t *testing.T, env *sessionEnv) []string {
 	t.Helper()
 
-	containers, err := env.daemon.ContainerList(env.ctx, container.ListOptions{
-		All: true, Filters: filters.NewArgs(
-			filters.Arg("label", "arcave.oneshot"),
-			filters.Arg("volume", env.project+"_data"),
-		),
+	containers, err := env.daemon.ContainerList(env.ctx, client.ContainerListOptions{
+		All: true, Filters: make(client.Filters).
+			Add("label", "arcave.oneshot").
+			Add("volume", env.project+"_data"),
 	})
 	require.NoError(t, err)
-	names := make([]string, 0, len(containers))
-	for _, c := range containers {
+	names := make([]string, 0, len(containers.Items))
+	for _, c := range containers.Items {
 		names = append(names, c.Names...)
 	}
 	return names

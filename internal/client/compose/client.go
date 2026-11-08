@@ -24,8 +24,8 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
 	"github.com/rs/zerolog"
 )
 
@@ -57,7 +57,7 @@ type dockerComposeAPI interface {
 }
 
 // Client runs the project's lifecycle, the compose project to act on passed per call. It
-// calls compose/v2 as a library, so the host needs no docker CLI.
+// calls compose/v5 as a library, so the host needs no docker CLI.
 type Client struct {
 	api          dockerComposeAPI
 	opts         Options
@@ -75,8 +75,10 @@ type Options struct {
 	// StopTimeout is the least grace period before Stop and Down SIGKILL a container;
 	// a service's stop_grace_period raises it.
 	StopTimeout time.Duration
-	// Events is the adapter compose renders its progress on; nil when it renders elsewhere.
-	Events *ProgressLogger
+	// Events is the processor compose reports its progress to; nil when it renders elsewhere.
+	Events *EventLogger
+	// Prompter is what compose asks its questions of; nil when compose asks something else.
+	Prompter *Prompter
 	// SinkFromContext returns the sink a call's events go to instead of the log; nil, or a nil
 	// sink, keeps them in the log.
 	SinkFromContext func(ctx context.Context) EventSink
@@ -115,10 +117,11 @@ func (c *Client) Down(ctx context.Context, project *types.Project) error {
 	})
 }
 
-// Create builds the project's containers, networks and volumes without starting
-// them. Inherit is off so an anonymous volume is created fresh, not reused.
-func (c *Client) Create(ctx context.Context, project *types.Project) error {
+// Create builds the project's containers, networks and volumes without starting them, anonymous
+// volumes fresh; a drifted volume is recreated only when restoredVolumes holds its docker name.
+func (c *Client) Create(ctx context.Context, project *types.Project, restoredVolumes []string) error {
 	defer c.routeEvents(ctx)()
+	defer c.routePrompts(ctx, restoredVolumes)()
 	timeout := c.stopTimeout()
 	zerolog.Ctx(ctx).Debug().Msg("creating compose containers")
 
@@ -129,7 +132,6 @@ func (c *Client) Create(ctx context.Context, project *types.Project) error {
 		Inherit:              false,
 		RemoveOrphans:        true,
 		QuietPull:            true,
-		AssumeYes:            true,
 	})
 }
 
@@ -169,6 +171,23 @@ func (c *Client) routeEvents(ctx context.Context) func() {
 	}
 	c.opts.Events.SetSink(sink)
 	return func() { c.opts.Events.SetSink(nil) }
+}
+
+// routePrompts answers the prompter's questions by restoredVolumes and the sink ctx carries,
+// until the returned func takes them back.
+func (c *Client) routePrompts(ctx context.Context, restoredVolumes []string) func() {
+	if c.opts.Prompter == nil {
+		return func() {}
+	}
+	var sink EventSink
+	if c.opts.SinkFromContext != nil {
+		sink = c.opts.SinkFromContext(ctx)
+	}
+	return c.opts.Prompter.begin(promptCall{
+		restored: restoredVolumes,
+		sink:     sink,
+		logger:   zerolog.Ctx(ctx),
+	})
 }
 
 // logStopTimeout resolves the stop bound for project and logs it with msg, at info only when a

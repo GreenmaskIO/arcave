@@ -308,10 +308,10 @@ func (s *Service) composeDown(ctx context.Context, project *types.Project) error
 }
 
 // composeCreate creates the containers of project without starting them: the data is
-// restored into them first.
-func (s *Service) composeCreate(ctx context.Context, project *types.Project) error {
+// restored into them first. Only a volume of restoredVolumes may be recreated.
+func (s *Service) composeCreate(ctx context.Context, project *types.Project, restoredVolumes []string) error {
 	if err := runComposeActivity(ctx, kindComposeCreate, func(ctx context.Context) error {
-		return s.composeRunner.Create(ctx, project)
+		return s.composeRunner.Create(ctx, project, restoredVolumes)
 	}); err != nil {
 		return fmt.Errorf("creating the compose project: %w", err)
 	}

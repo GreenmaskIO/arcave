@@ -25,13 +25,15 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/docker/compose/v2/pkg/progress"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/docker/cli/cli/command"
+	"github.com/docker/compose/v5/cmd/display"
+	"github.com/docker/compose/v5/pkg/api"
+	dockercompose "github.com/docker/compose/v5/pkg/compose"
+	"github.com/moby/moby/client"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/require"
 
+	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -47,6 +49,19 @@ var issuedSuffixes sync.Map
 // anonymousVolumeLabel is what the daemon stamps on a volume it created for a container.
 const anonymousVolumeLabel = "com.docker.volume.anonymous"
 
+// newComposeService is compose over cli, its progress silent and its questions answered by the
+// returned prompter, which a runner's Options carry: unanswered, compose asks on stdout.
+func newComposeService(t *testing.T, cli command.Cli) (api.Compose, *composeclient.Prompter) {
+	t.Helper()
+	prompter := composeclient.NewPrompter(zerolog.Nop())
+	service, err := dockercompose.NewComposeService(cli,
+		dockercompose.WithEventProcessor(display.Quiet()),
+		dockercompose.WithPrompt(prompter.Prompt),
+	)
+	require.NoError(t, err)
+	return service, prompter
+}
+
 // resource is one thing the daemon holds: a container, volume, anonymous volume, network or image.
 type resource struct{ kind, name string }
 
@@ -56,9 +71,7 @@ func (r resource) String() string { return r.kind + " " + r.name }
 // anonymous volume is only reported: the daemon is shared, and it carries no test's name.
 func TestMain(m *testing.M) {
 	flag.Parse()
-	// Set once here: the envs run in parallel, and compose reads it from every one of them.
-	progress.Mode = progress.ModeQuiet
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil || testing.Short() {
 		os.Exit(m.Run())
 	}
@@ -133,43 +146,43 @@ func ownResource(name string) bool {
 // daemonResources is every container, volume, network and image tag the daemon holds.
 func daemonResources(cli *client.Client) (map[resource]bool, error) {
 	ctx := context.Background()
-	if _, err := cli.Ping(ctx); err != nil {
+	if _, err := cli.Ping(ctx, client.PingOptions{}); err != nil {
 		return nil, err
 	}
 	held := map[resource]bool{}
 
-	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		for _, name := range c.Names {
 			held[resource{"container", strings.TrimPrefix(name, "/")}] = true
 		}
 	}
-	volumes, err := cli.VolumeList(ctx, volume.ListOptions{})
+	volumes, err := cli.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	for _, v := range volumes.Volumes {
+	for _, v := range volumes.Items {
 		if _, ok := v.Labels[anonymousVolumeLabel]; ok {
 			held[resource{"anonymous volume", v.Name}] = true
 			continue
 		}
 		held[resource{"volume", v.Name}] = true
 	}
-	networks, err := cli.NetworkList(ctx, network.ListOptions{})
+	networks, err := cli.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	for _, n := range networks {
+	for _, n := range networks.Items {
 		held[resource{"network", n.Name}] = true
 	}
-	images, err := cli.ImageList(ctx, image.ListOptions{All: true})
+	images, err := cli.ImageList(ctx, client.ImageListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
-	for _, img := range images {
+	for _, img := range images.Items {
 		for _, tag := range img.RepoTags {
 			held[resource{"image", tag}] = true
 		}

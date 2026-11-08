@@ -16,19 +16,19 @@ package composespec
 
 import (
 	"maps"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/go-connections/nat"
+	"github.com/docker/compose/v5/pkg/api"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/system"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,31 +59,29 @@ func richService() model.Service {
 			Name:   "demo-db-1",
 			Number: 1,
 			Inspect: container.InspectResponse{
-				ContainerJSONBase: &container.ContainerJSONBase{
-					ID:   fixtureContainerID,
-					Name: "/demo-db-1",
-					HostConfig: &container.HostConfig{
-						PortBindings: nat.PortMap{
-							"5432/tcp": []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "15432"}},
-						},
-						RestartPolicy: container.RestartPolicy{Name: "on-failure", MaximumRetryCount: 3},
-						NetworkMode:   "demo_back",
-						LogConfig:     container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m"}},
-						ExtraHosts:    []string{"api.local:10.0.0.5"},
-						Tmpfs:         map[string]string{"/run/lock": "size=1m"},
-						CapAdd:        []string{"SYS_NICE"},
-						Privileged:    true,
-						Init:          &init,
-						ShmSize:       268435456,
-						Sysctls:       map[string]string{"net.core.somaxconn": "1024"},
-						IpcMode:       "private",
-						Resources: container.Resources{
-							Memory:    1073741824,
-							NanoCPUs:  1500000000,
-							PidsLimit: &pidsLimit,
-							Ulimits:   []*container.Ulimit{{Name: "nofile", Soft: 1024, Hard: 4096}},
-							Devices:   []container.DeviceMapping{{PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"}},
-						},
+				ID:   fixtureContainerID,
+				Name: "/demo-db-1",
+				HostConfig: &container.HostConfig{
+					PortBindings: network.PortMap{
+						network.MustParsePort("5432/tcp"): []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "15432"}},
+					},
+					RestartPolicy: container.RestartPolicy{Name: "on-failure", MaximumRetryCount: 3},
+					NetworkMode:   "demo_back",
+					LogConfig:     container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m"}},
+					ExtraHosts:    []string{"api.local:10.0.0.5"},
+					Tmpfs:         map[string]string{"/run/lock": "size=1m"},
+					CapAdd:        []string{"SYS_NICE"},
+					Privileged:    true,
+					Init:          &init,
+					ShmSize:       268435456,
+					Sysctls:       map[string]string{"net.core.somaxconn": "1024"},
+					IpcMode:       "private",
+					Resources: container.Resources{
+						Memory:    1073741824,
+						NanoCPUs:  1500000000,
+						PidsLimit: &pidsLimit,
+						Ulimits:   []*container.Ulimit{{Name: "nofile", Soft: 1024, Hard: 4096}},
+						Devices:   []container.DeviceMapping{{PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"}},
 					},
 				},
 				Config: &container.Config{
@@ -94,7 +92,7 @@ func richService() model.Service {
 					Cmd:          []string{"postgres", "-c", "shared_buffers=256MB"},
 					Entrypoint:   []string{"docker-entrypoint.sh"},
 					WorkingDir:   "/var/lib/postgresql",
-					ExposedPorts: nat.PortSet{"5432/tcp": struct{}{}},
+					ExposedPorts: network.PortSet{network.MustParsePort("5432/tcp"): struct{}{}},
 					StopSignal:   "SIGINT",
 					StopTimeout:  &stopTimeout,
 					Tty:          true,
@@ -114,7 +112,7 @@ func richService() model.Service {
 					Networks: map[string]*network.EndpointSettings{
 						"demo_back": {
 							Aliases:    []string{"db", "demo-db-1", fixtureContainerID[:12], "primary"},
-							IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: "172.28.0.10"},
+							IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: netip.MustParseAddr("172.28.0.10")},
 						},
 					},
 				},
@@ -432,16 +430,14 @@ func TestNewServiceConfig_SharedNamespaces(t *testing.T) {
 			// The namespace owner's hostname and the image's EXPOSE: the daemon refuses both here.
 			Config: &container.Config{
 				Image: "postgres:16", Hostname: dbReplicaID[:12],
-				ExposedPorts: nat.PortSet{"5432/tcp": struct{}{}},
+				ExposedPorts: network.PortSet{network.MustParsePort("5432/tcp"): struct{}{}},
 			},
-			ContainerJSONBase: &container.ContainerJSONBase{
-				ID: "app1",
-				HostConfig: &container.HostConfig{
-					NetworkMode: container.NetworkMode("container:" + dbReplicaID),
-					IpcMode:     container.IpcMode("container:" + dbReplicaID),
-					PidMode:     container.PidMode("container:" + dbReplicaID),
-					VolumesFrom: []string{dbReplicaID},
-				},
+			ID: "app1",
+			HostConfig: &container.HostConfig{
+				NetworkMode: container.NetworkMode("container:" + dbReplicaID),
+				IpcMode:     container.IpcMode("container:" + dbReplicaID),
+				PidMode:     container.PidMode("container:" + dbReplicaID),
+				VolumesFrom: []string{dbReplicaID},
 			},
 		},
 	}}}
@@ -537,8 +533,8 @@ func TestNewServiceConfig_Image(t *testing.T) {
 			svc := model.Service{Name: "db", Containers: []model.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{ID: "c1", Image: tt.running.String()},
-					Config:            &container.Config{Image: tt.ref},
+					ID: "c1", Image: tt.running.String(),
+					Config: &container.Config{Image: tt.ref},
 				},
 			}}}
 			introspection := model.IntrospectionResult{
@@ -624,8 +620,8 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 			svc := model.Service{Name: "db", Containers: []model.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{ID: "c1", HostConfig: &host},
-					Config:            &container.Config{Image: "postgres:16", StopTimeout: tt.stop},
+					ID: "c1", HostConfig: &host,
+					Config: &container.Config{Image: "postgres:16", StopTimeout: tt.stop},
 				},
 			}}}
 			introspection := model.IntrospectionResult{
@@ -705,10 +701,10 @@ func TestNewServiceConfig_DaemonAdditions(t *testing.T) {
 		},
 		{
 			name: "a port compose exposed because it is published",
-			host: container.HostConfig{PortBindings: nat.PortMap{
-				"80/tcp": []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "8080"}},
+			host: container.HostConfig{PortBindings: network.PortMap{
+				network.MustParsePort("80/tcp"): []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "8080"}},
 			}},
-			config: container.Config{ExposedPorts: nat.PortSet{"80/tcp": {}, "80/udp": {}, "9090/tcp": {}}},
+			config: container.Config{ExposedPorts: network.PortSet{network.MustParsePort("80/tcp"): {}, network.MustParsePort("80/udp"): {}, network.MustParsePort("9090/tcp"): {}}},
 			verify: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Equal(t, types.StringOrNumberList{"80/udp", "9090/tcp"}, cfg.Expose)
 			},
@@ -722,8 +718,8 @@ func TestNewServiceConfig_DaemonAdditions(t *testing.T) {
 			svc := model.Service{Name: "app", Containers: []model.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{ID: "c1", HostConfig: &host},
-					Config:            &config,
+					ID: "c1", HostConfig: &host,
+					Config: &config,
 				},
 			}}}
 			introspection := model.IntrospectionResult{
@@ -761,6 +757,19 @@ func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 			endpoint: network.EndpointSettings{Aliases: []string{"api"}},
 			want:     &types.ServiceNetworkConfig{Aliases: []string{"api"}},
 		},
+		{
+			name: "static addresses are spelled",
+			endpoint: network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{
+				IPv4Address:  netip.MustParseAddr("172.28.0.10"),
+				IPv6Address:  netip.MustParseAddr("fd00::10"),
+				LinkLocalIPs: []netip.Addr{netip.MustParseAddr("169.254.0.5")},
+			}},
+			want: &types.ServiceNetworkConfig{
+				Ipv4Address:  "172.28.0.10",
+				Ipv6Address:  "fd00::10",
+				LinkLocalIPs: []string{"169.254.0.5"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -770,8 +779,8 @@ func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 			svc := model.Service{Name: "app", Containers: []model.Container{{
 				ID: "c1",
 				Inspect: container.InspectResponse{
-					ContainerJSONBase: &container.ContainerJSONBase{ID: "c1", HostConfig: &container.HostConfig{}},
-					Config:            &container.Config{},
+					ID: "c1", HostConfig: &container.HostConfig{},
+					Config: &container.Config{},
 					NetworkSettings: &container.NetworkSettings{
 						Networks: map[string]*network.EndpointSettings{"demo_default": &endpoint},
 					},
@@ -789,6 +798,44 @@ func TestNewServiceConfig_NetworkAttachment(t *testing.T) {
 			// Assert
 			require.Contains(t, cfg.Networks, "default")
 			assert.Equal(t, tt.want, cfg.Networks["default"])
+		})
+	}
+}
+
+func TestNewServiceConfig_DNS(t *testing.T) {
+	tests := []struct {
+		name string
+		dns  []netip.Addr
+		want types.StringList
+	}{
+		{name: "none", dns: nil, want: nil},
+		{name: "an unset address is none", dns: []netip.Addr{{}}, want: nil},
+		{
+			name: "each server is spelled",
+			dns:  []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("2001:4860:4860::8888")},
+			want: types.StringList{"8.8.8.8", "2001:4860:4860::8888"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := model.Service{Name: "app", Containers: []model.Container{{
+				ID: "c1",
+				Inspect: container.InspectResponse{
+					ID: "c1", HostConfig: &container.HostConfig{DNS: tt.dns},
+					Config: &container.Config{},
+				},
+			}}}
+			introspection := model.IntrospectionResult{
+				Project: model.Project{Name: "demo", Services: []model.Service{svc}},
+			}
+
+			// Act
+			cfg := newAssembly(introspection, NewDockerStamps(system.Info{})).newServiceConfig(svc)
+
+			// Assert
+			assert.Equal(t, tt.want, cfg.DNS)
 		})
 	}
 }
@@ -823,9 +870,7 @@ func TestNewServiceConfig_VolumesFrom(t *testing.T) {
 					ID:     "c1",
 					Number: 1,
 					Inspect: container.InspectResponse{
-						ContainerJSONBase: &container.ContainerJSONBase{
-							ID: "c1", HostConfig: &container.HostConfig{VolumesFrom: []string{"db-id"}},
-						},
+						ID: "c1", HostConfig: &container.HostConfig{VolumesFrom: []string{"db-id"}},
 						Config: &container.Config{},
 					},
 				}},

@@ -20,10 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -64,7 +62,7 @@ func TestSnapshotter_Snapshot_Stdio_KilledMidBackup(t *testing.T) {
 			err = waitForPacks(strikeCtx, repoStore)
 		}
 		if err == nil {
-			err = env.cli.ContainerKill(context.Background(), id, "KILL")
+			_, err = env.cli.ContainerKill(context.Background(), id, client.ContainerKillOptions{Signal: "KILL"})
 		}
 		killed <- err
 	}()
@@ -215,17 +213,17 @@ func waitForRestic(ctx context.Context, cli *client.Client, vol model.Volume) (s
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		running, err := cli.ContainerList(ctx, container.ListOptions{Filters: filters.NewArgs(
-			filters.Arg("label", "arcave.oneshot"),
-			filters.Arg("ancestor", wipeOptions().Image),
-			filters.Arg("volume", vol.Named.VolumeName),
-			filters.Arg("status", "running"),
-		)})
+		running, err := cli.ContainerList(ctx, client.ContainerListOptions{Filters: make(client.Filters).
+			Add("label", "arcave.oneshot").
+			Add("ancestor", wipeOptions().Image).
+			Add("volume", vol.Named.VolumeName).
+			Add("status", "running"),
+		})
 		if err != nil {
 			return "", err
 		}
-		if len(running) > 0 {
-			return running[0].ID, nil
+		if len(running.Items) > 0 {
+			return running.Items[0].ID, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -240,11 +238,11 @@ func waitForExec(ctx context.Context, cli *client.Client, containerID string) er
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		inspect, err := cli.ContainerInspect(ctx, containerID)
+		inspect, err := cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 		if err != nil {
 			return err
 		}
-		if len(inspect.ExecIDs) > 0 {
+		if len(inspect.Container.ExecIDs) > 0 {
 			return nil
 		}
 		select {
@@ -280,16 +278,15 @@ func waitForPacks(ctx context.Context, repoStore storages.Storager) error {
 func oneShotsOn(t *testing.T, cli *client.Client, vol model.Volume) []string {
 	t.Helper()
 
-	containers, err := cli.ContainerList(context.Background(), container.ListOptions{
+	containers, err := cli.ContainerList(context.Background(), client.ContainerListOptions{
 		All: true,
-		Filters: filters.NewArgs(
-			filters.Arg("label", "arcave.oneshot"),
-			filters.Arg("volume", vol.Named.VolumeName),
-		),
+		Filters: make(client.Filters).
+			Add("label", "arcave.oneshot").
+			Add("volume", vol.Named.VolumeName),
 	})
 	require.NoError(t, err)
-	ids := make([]string, 0, len(containers))
-	for _, c := range containers {
+	ids := make([]string, 0, len(containers.Items))
+	for _, c := range containers.Items {
 		ids = append(ids, c.ID)
 	}
 	return ids

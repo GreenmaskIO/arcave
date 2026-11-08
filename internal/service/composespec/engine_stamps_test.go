@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/system"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/system"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 
@@ -233,8 +233,8 @@ func TestAssembly_dropEngineStamps(t *testing.T) {
 			// Arrange
 			imageID := "sha256:" + strings.Repeat("d", 64)
 			replica := model.Container{Inspect: container.InspectResponse{
-				ContainerJSONBase: &container.ContainerJSONBase{Image: imageID},
-				Config:            &container.Config{Hostname: "db", Image: "app:1"},
+				Image:  imageID,
+				Config: &container.Config{Hostname: "db", Image: "app:1"},
 			}}
 			introspection := model.IntrospectionResult{Images: map[model.ImageDigestID]image.InspectResponse{
 				model.ImageDigestID(imageID): {ID: imageID, Config: &tt.image},

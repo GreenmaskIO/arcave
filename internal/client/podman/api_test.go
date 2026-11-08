@@ -25,11 +25,10 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -62,17 +61,17 @@ func newRecordedDaemon(t *testing.T) *client.Client {
 		}
 	}))
 	t.Cleanup(server.Close)
-	api, err := client.NewClientWithOpts(
+	api, err := client.New(
 		client.WithHost("tcp://"+strings.TrimPrefix(server.URL, "http://")),
 		client.WithHTTPClient(server.Client()),
-		client.WithVersion("1.44"),
+		client.WithAPIVersion("1.44"),
 	)
 	require.NoError(t, err)
 	return api
 }
 
 func newInspectOf(hostConfig *container.HostConfig) container.InspectResponse {
-	return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{HostConfig: hostConfig}}
+	return container.InspectResponse{HostConfig: hostConfig}
 }
 
 // What a real Podman answered, read off the wire, comes out as the mount requests and log size.
@@ -84,16 +83,15 @@ func TestAPI_ContainerInspect_RecordedDaemon(t *testing.T) {
 	api := NewAPI(daemon, libpodClient)
 
 	// Act
-	got, err := api.ContainerInspect(context.Background(), "c1")
+	got, err := api.ContainerInspect(context.Background(), "c1", client.ContainerInspectOptions{})
 
 	// Assert
 	require.NoError(t, err)
-	require.NotNil(t, got.ContainerJSONBase)
-	require.NotNil(t, got.HostConfig)
+	require.NotNil(t, got.Container.HostConfig)
 	assert.Equal(t, []string{
 		"/tmp:/short:rw,rprivate,nosuid,nodev,rbind",
 		"arcave-fixture:/data:rw,rprivate,nosuid,nodev,rbind",
-	}, got.HostConfig.Binds)
+	}, got.Container.HostConfig.Binds)
 	assert.Equal(t, []mount.Mount{{
 		Type:          mount.TypeVolume,
 		Source:        "arcave-fixture",
@@ -106,11 +104,11 @@ func TestAPI_ContainerInspect_RecordedDaemon(t *testing.T) {
 		Target:      "/long",
 		ReadOnly:    true,
 		BindOptions: &mount.BindOptions{Propagation: mount.PropagationRShared},
-	}}, got.HostConfig.Mounts)
+	}}, got.Container.HostConfig.Mounts)
 	assert.Equal(t, container.LogConfig{
 		Type:   "json-file",
 		Config: map[string]string{"max-size": "1MB"},
-	}, got.HostConfig.LogConfig)
+	}, got.Container.HostConfig.LogConfig)
 }
 
 // The compat inspect is asked first and libpod's answer goes into it; a compat refusal leaves libpod unasked.
@@ -155,7 +153,7 @@ func TestAPI_ContainerInspect(t *testing.T) {
 			// Arrange
 			compat := &mockCompatAPI{}
 			stored := &mockLibpod{}
-			inspected := compat.On("ContainerInspect", mock.Anything, "c1").
+			inspected := compat.On("ContainerInspect", mock.Anything, "c1", client.ContainerInspectOptions{}).
 				Return(newInspectOf(&container.HostConfig{Binds: []string{"pgdata:/data"}}), tt.compatErr).Once()
 			if tt.compatErr == nil {
 				mock.InOrder(
@@ -169,7 +167,7 @@ func TestAPI_ContainerInspect(t *testing.T) {
 			api := NewAPI(compat, stored)
 
 			// Act
-			got, err := api.ContainerInspect(context.Background(), "c1")
+			got, err := api.ContainerInspect(context.Background(), "c1", client.ContainerInspectOptions{})
 
 			// Assert
 			if tt.wantErr != "" {
@@ -178,7 +176,7 @@ func TestAPI_ContainerInspect(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, client.ContainerInspectResult{Container: tt.want}, got)
 			compat.AssertExpectations(t)
 			stored.AssertExpectations(t)
 		})
@@ -190,18 +188,17 @@ func TestAPI_ContainerCommit(t *testing.T) {
 	errRefused := errors.New(`libpod answered 500 Internal Server Error: {"cause":"no such container"}`)
 	tests := []struct {
 		name       string
-		options    container.CommitOptions
+		options    client.ContainerCommitOptions
 		wantCommit *libpod.CommitOptions
 		libpodErr  error
-		want       container.CommitResponse
+		want       client.ContainerCommitResult
 		wantErr    string
 	}{
 		{
 			name: "the changes and pause go through, the comment is dropped",
-			options: container.CommitOptions{
+			options: client.ContainerCommitOptions{
 				Comment: "a comment OCI cannot carry",
 				Changes: []string{`LABEL "io.arcave.a"="one two"`},
-				Pause:   true,
 			},
 			wantCommit: &libpod.CommitOptions{
 				Container: "c1",
@@ -209,10 +206,11 @@ func TestAPI_ContainerCommit(t *testing.T) {
 				Pause:     true,
 				Changes:   []string{`LABEL "io.arcave.a"="one two"`},
 			},
-			want: container.CommitResponse{ID: bareImageID},
+			want: client.ContainerCommitResult{ID: bareImageID},
 		},
 		{
-			name: "libpod refuses",
+			name:    "libpod refuses, asked not to pause",
+			options: client.ContainerCommitOptions{NoPause: true},
 			wantCommit: &libpod.CommitOptions{
 				Container: "c1",
 				Format:    "oci",
@@ -222,17 +220,17 @@ func TestAPI_ContainerCommit(t *testing.T) {
 		},
 		{
 			name:    "a reference is refused",
-			options: container.CommitOptions{Reference: "repo:tag"},
+			options: client.ContainerCommitOptions{Reference: "repo:tag"},
 			wantErr: "a commit through libpod takes no reference, author or config",
 		},
 		{
 			name:    "an author is refused",
-			options: container.CommitOptions{Author: "someone"},
+			options: client.ContainerCommitOptions{Author: "someone"},
 			wantErr: "a commit through libpod takes no reference, author or config",
 		},
 		{
 			name:    "a config is refused",
-			options: container.CommitOptions{Config: &container.Config{}},
+			options: client.ContainerCommitOptions{Config: &container.Config{}},
 			wantErr: "a commit through libpod takes no reference, author or config",
 		},
 	}
@@ -384,13 +382,11 @@ func TestAPI_ContainerInspect_ThroughEngine(t *testing.T) {
 	compat := &mockCompatAPI{}
 	stored := &mockLibpod{}
 	mock.InOrder(
-		compat.On("ContainerInspect", mock.Anything, "c1").Return(container.InspectResponse{
-			ContainerJSONBase: &container.ContainerJSONBase{
-				ID:   "c1",
-				Name: "/demo-app-2",
-				HostConfig: &container.HostConfig{
-					Binds: []string{"pgdata:/data:rw", "pgdata:/sub:ro", "/srv:/long:ro,rshared,bind"},
-				},
+		compat.On("ContainerInspect", mock.Anything, "c1", client.ContainerInspectOptions{}).Return(container.InspectResponse{
+			ID:   "c1",
+			Name: "/demo-app-2",
+			HostConfig: &container.HostConfig{
+				Binds: []string{"pgdata:/data:rw", "pgdata:/sub:ro", "/srv:/long:ro,rshared,bind"},
 			},
 			Config: &container.Config{},
 		}, nil).Once(),
@@ -408,14 +404,14 @@ func TestAPI_ContainerInspect_ThroughEngine(t *testing.T) {
 			},
 			HostConfig: libpod.HostConfig{LogConfig: libpod.LogConfig{Size: "1MB"}},
 		}, nil).Once(),
-		compat.On("ContainerRemove", mock.Anything, "c1", container.RemoveOptions{RemoveVolumes: true}).
+		compat.On("ContainerRemove", mock.Anything, "c1", client.ContainerRemoveOptions{RemoveVolumes: true}).
 			Return(nil).Once(),
-		compat.On("ContainerCreate", mock.Anything,
-			&container.Config{
+		compat.On("ContainerCreate", mock.Anything, client.ContainerCreateOptions{
+			Config: &container.Config{
 				Image:  imageRef,
 				Labels: map[string]string{"com.docker.compose.container-number": "2"},
 			},
-			&container.HostConfig{
+			HostConfig: &container.HostConfig{
 				Binds: []string{"pgdata:/data:rw"},
 				Mounts: []mount.Mount{{
 					Type:          mount.TypeVolume,
@@ -432,10 +428,9 @@ func TestAPI_ContainerInspect_ThroughEngine(t *testing.T) {
 				}},
 				LogConfig: container.LogConfig{Config: map[string]string{"max-size": "1MB"}},
 			},
-			&network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{}},
-			(*ocispec.Platform)(nil),
-			"demo-app-2",
-		).Return(container.CreateResponse{ID: "new"}, nil).Once(),
+			NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{}},
+			Name:             "demo-app-2",
+		}).Return(client.ContainerCreateResult{ID: "new"}, nil).Once(),
 	)
 	engine := docker.NewEngine(NewAPI(compat, stored))
 

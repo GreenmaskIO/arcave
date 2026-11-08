@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -37,8 +38,8 @@ const (
 	ExportFormatOCIArchive = "oci-archive"
 )
 
-// placeholderHost is the host a request names when the connection's transport dials a
-// socket of its own: the URL needs one, the dialer ignores it.
+// placeholderHost is the host a request names when the connection dials a socket of
+// its own: the URL needs one, the dialer ignores it.
 const placeholderHost = "docker"
 
 // maxErrorBytes bounds how much of a refused request's body its error carries.
@@ -49,7 +50,8 @@ var errNoVersion = errors.New("no Podman version to name in the path")
 
 // connection is the daemon connection libpod is reached over; the SDK's client.APIClient satisfies it.
 type connection interface {
-	HTTPClient() *http.Client
+	// Dialer opens a stream to the daemon as the connection's own requests reach it, TLS included.
+	Dialer() func(context.Context) (net.Conn, error)
 	DaemonHost() string
 }
 
@@ -58,9 +60,6 @@ type Options struct {
 	// Version is the Podman version the requests name: libpod answers in the shape of the
 	// version in its path, and its numbering is not the Docker API's.
 	Version string
-	// UseTLS says the endpoint carries TLS settings, which the connection applies to a
-	// tcp host and the SDK does not expose.
-	UseTLS bool
 }
 
 // Client is Podman's own API, reached over a daemon connection, certificates included.
@@ -74,7 +73,7 @@ func NewClient(conn connection, options Options) (*Client, error) {
 	if options.Version == "" {
 		return nil, errNoVersion
 	}
-	baseURL, err := newBaseURL(conn.DaemonHost(), options.UseTLS)
+	baseURL, err := newBaseURL(conn.DaemonHost())
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +177,7 @@ func (c *Client) call(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.conn.HTTPClient().Do(req)
+	resp, err := c.newHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +195,16 @@ func (c *Client) call(
 	return resp, nil
 }
 
+// newHTTPClient reaches the daemon through the connection's dialer, TLS included: the SDK keeps
+// its own HTTP client to itself. A connection carries one request, so none is left idle.
+func (c *Client) newHTTPClient() *http.Client {
+	dial := c.conn.Dialer()
+	return &http.Client{Transport: &http.Transport{
+		DialContext:       func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
+		DisableKeepAlives: true,
+	}}
+}
+
 // readJSON decodes resp's body, and closes it.
 func readJSON[T any](resp *http.Response) (T, error) {
 	//nolint:errcheck // the body is read whole below
@@ -208,30 +217,22 @@ func readJSON[T any](resp *http.Response) (T, error) {
 	return answer, nil
 }
 
-// newBaseURL is the URL the connection's own requests go to: a tcp host as it is, over
-// https under TLS settings; any other a placeholder the transport's dialer ignores.
-func newBaseURL(host string, useTLS bool) (*url.URL, error) {
+// newBaseURL is the URL the connection's own requests go to: a tcp host as it is, over plain
+// http since the dialer speaks any TLS; any other a placeholder the dialer ignores.
+func newBaseURL(host string) (*url.URL, error) {
 	daemon, err := url.Parse(host)
 	if err != nil {
 		return nil, fmt.Errorf("parse daemon host %q: %w", host, err)
 	}
-	switch {
-	case daemon.Scheme != "tcp":
+	if daemon.Scheme != "tcp" {
 		return &url.URL{
 			Scheme: "http",
 			Host:   placeholderHost,
 		}, nil
-	case useTLS:
-		return &url.URL{
-			Scheme: "https",
-			Host:   daemon.Host,
-			Path:   daemon.Path,
-		}, nil
-	default:
-		return &url.URL{
-			Scheme: "http",
-			Host:   daemon.Host,
-			Path:   daemon.Path,
-		}, nil
 	}
+	return &url.URL{
+		Scheme: "http",
+		Host:   daemon.Host,
+		Path:   daemon.Path,
+	}, nil
 }

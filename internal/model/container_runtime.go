@@ -14,7 +14,7 @@
 
 package model
 
-import "github.com/docker/docker/api/types"
+import "github.com/moby/moby/api/types/system"
 
 // podmanEngine is the component Podman's `docker version` names itself by.
 const podmanEngine = "Podman Engine"
@@ -36,15 +36,15 @@ type ContainerRuntime struct {
 
 // NewContainerRuntime names the engine a `docker version` answer describes: Podman when
 // a component names itself so, Docker otherwise.
-func NewContainerRuntime(version types.Version) ContainerRuntime {
+func NewContainerRuntime(version string, components []system.ComponentVersion) ContainerRuntime {
 	kind := ContainerRuntimeDocker
-	for _, component := range version.Components {
+	for _, component := range components {
 		if component.Name == podmanEngine {
 			kind = ContainerRuntimePodman
 		}
 	}
 	return ContainerRuntime{
 		Kind:    kind,
-		Version: version.Version,
+		Version: version,
 	}
 }

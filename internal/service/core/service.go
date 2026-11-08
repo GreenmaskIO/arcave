@@ -71,7 +71,9 @@ type composeRunner interface {
 	// Stop returns the ids of the containers its deadline killed.
 	Stop(ctx context.Context, project *types.Project) ([]string, error)
 	Down(ctx context.Context, project *types.Project) error
-	Create(ctx context.Context, project *types.Project) error
+	// Create lets compose recreate a volume whose config drifted only when restoredVolumes, the
+	// docker names of the volumes the rollback restores, holds it.
+	Create(ctx context.Context, project *types.Project, restoredVolumes []string) error
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
 }
 

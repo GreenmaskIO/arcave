@@ -20,14 +20,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/compose/v5/pkg/api"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// logRecords decodes what the adapter wrote, one map per zerolog record. The
-// assertions go through the JSON rather than the rendered text so a case names
-// the field it cares about instead of matching a line format.
+// logRecords decodes what the processor wrote, one map per zerolog record.
 func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 
@@ -43,191 +42,108 @@ func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return records
 }
 
-// The golden inputs are lines captured from compose v2.40.3 running the demo
-// compose project, not invented ones: the test doubles as the record of the schema arcave
-// decodes, and is what fails first when the pinned compose version changes it.
-func TestProgressLogger_Write(t *testing.T) {
+func TestEventLogger_On(t *testing.T) {
 	tests := []struct {
-		name   string
-		writes []string
-		verify func(t *testing.T, records []map[string]any)
+		name     string
+		resource api.Resource
+		want     map[string]any
+		absent   []string
 	}{
 		{
-			name:   "a settled lifecycle event carries its object and lands on info",
-			writes: []string{`{"id":"Container arcave-demo-minio-1","status":"Healthy"}` + "\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "info", records[0]["level"])
-				assert.Equal(t, "compose", records[0]["message"])
-				assert.Equal(t, "Container", records[0]["kind"])
-				assert.Equal(t, "arcave-demo-minio-1", records[0]["name"])
-				assert.Equal(t, "Healthy", records[0]["status"])
+			name:     "a settled event carries its object and lands on info",
+			resource: api.Resource{ID: "Container arcave-demo-minio-1", Text: api.StatusHealthy, Status: api.Done},
+			want: map[string]any{
+				"level": "info", "message": "compose", "kind": "Container",
+				"name": "arcave-demo-minio-1", "status": "Healthy",
 			},
+			absent: []string{"text", "percent"},
 		},
 		{
-			name:   "an in-flight event is demoted to debug",
-			writes: []string{`{"id":"Container arcave-demo-app-1","status":"Starting"}` + "\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "debug", records[0]["level"])
-				assert.Equal(t, "Starting", records[0]["status"])
-			},
+			name:     "an in-flight event is demoted to debug",
+			resource: api.Resource{ID: "Container arcave-demo-app-1", Text: api.StatusStarting, Status: api.Working},
+			want:     map[string]any{"level": "debug", "status": "Starting"},
 		},
 		{
-			name:   "Error is reported at error level",
-			writes: []string{`{"id":"Container arcave-demo-app-1","status":"Error"}` + "\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "error", records[0]["level"])
-			},
+			name:     "a warning is reported at warn",
+			resource: api.Resource{ID: "Volume demo_data", Text: "Skipped", Details: "in use", Status: api.Warning},
+			want:     map[string]any{"level": "warn", "kind": "Volume", "status": "Skipped", "text": "in use"},
 		},
 		{
-			name:   "a skip is a warning and keeps its reason",
-			writes: []string{`{"id":"Container arcave-demo-app-1","status":"Skipped: optional dependency is not running"}` + "\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "warn", records[0]["level"])
-				assert.Equal(t, "Skipped: optional dependency is not running", records[0]["status"])
-			},
+			name:     "an error is reported at error",
+			resource: api.Resource{ID: "Network demo_default", Text: api.StatusError, Details: "in use", Status: api.Error},
+			want:     map[string]any{"level": "error", "status": "Error", "text": "in use"},
 		},
 		{
-			name:   "a byte-progress tick is debug and carries percent",
-			writes: []string{`{"id":"a2abf6c4d29d","text":"Downloading","status":"Downloading","current":524288,"total":1048576,"percent":50}` + "\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "debug", records[0]["level"])
-				assert.EqualValues(t, 50, records[0]["percent"])
-				assert.Equal(t, "Downloading", records[0]["text"])
+			name: "byte progress carries its percent",
+			resource: api.Resource{
+				ID: "Image postgres:16", Text: api.StatusDownloading, Status: api.Working, Total: 100, Percent: 40,
 			},
+			want: map[string]any{"level": "debug", "percent": float64(40)},
 		},
 		{
-			name:   "a completed layer has no total, so it stays visible at info",
-			writes: []string{`{"id":"a2abf6c4d29d","text":"Pull complete","status":"Pull complete","percent":100}` + "\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "info", records[0]["level"])
-				assert.NotContains(t, records[0], "percent", "percent is only meaningful while a total is known")
-			},
-		},
-		{
-			name:   "a line compose wrote outside its event stream goes through verbatim",
-			writes: []string{"Warning: memory limits are not supported\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "info", records[0]["level"])
-				assert.Equal(t, "Warning: memory limits are not supported", records[0]["message"])
-				assert.Equal(t, "compose", records[0]["source"])
-			},
-		},
-		{
-			name:   "a line that starts like JSON but does not decode goes through verbatim",
-			writes: []string{"{not json\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "{not json", records[0]["message"])
-			},
-		},
-		{
-			name: "two events in one Write become two records",
-			writes: []string{
-				`{"id":"Container arcave-demo-app-1","status":"Stopping"}` + "\n" +
-					`{"id":"Container arcave-demo-postgres-1","status":"Started"}` + "\n",
-			},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 2)
-				assert.Equal(t, "arcave-demo-app-1", records[0]["name"])
-				assert.Equal(t, "arcave-demo-postgres-1", records[1]["name"])
-			},
-		},
-		{
-			name: "an event split across two Writes becomes one record",
-			writes: []string{
-				`{"id":"Container arcave-demo-app-1",`,
-				`"status":"Healthy"}` + "\n",
-			},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "Healthy", records[0]["status"])
-			},
-		},
-		{
-			name:   "an id with no space is all name",
-			writes: []string{`{"id":"a2abf6c4d29d","status":"Already exists"}` + "\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "a2abf6c4d29d", records[0]["name"])
-				assert.NotContains(t, records[0], "kind")
-			},
-		},
-		{
-			name:   "a blank line is dropped",
-			writes: []string{"\n   \n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				assert.Empty(t, records)
-			},
-		},
-		{
-			name:   "a stream with no newline is flushed once it outgrows the buffer bound",
-			writes: []string{strings.Repeat("x", maxProgressLine+1)},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Len(t, records[0]["message"], maxProgressLine+1)
-			},
+			name:     "an id with no space is all name",
+			resource: api.Resource{ID: "demo", Text: api.StatusCreated, Status: api.Done},
+			want:     map[string]any{"name": "demo"},
+			absent:   []string{"kind"},
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Arrange: debug level, so a case can assert a record was demoted
-			// rather than dropped.
+			// Arrange
 			buf := &bytes.Buffer{}
-			p := NewProgressLogger(zerolog.New(buf).Level(zerolog.DebugLevel))
+			p := NewEventLogger(zerolog.New(buf).Level(zerolog.DebugLevel))
 
 			// Act
-			for _, write := range tt.writes {
-				n, err := p.Write([]byte(write))
-				require.NoError(t, err)
-				assert.Equal(t, len(write), n)
-			}
+			p.On(tt.resource)
 
 			// Assert
-			tt.verify(t, logRecords(t, buf))
+			records := logRecords(t, buf)
+			require.Len(t, records, 1)
+			for key, value := range tt.want {
+				assert.Equal(t, value, records[0][key], key)
+			}
+			for _, key := range tt.absent {
+				assert.NotContains(t, records[0], key)
+			}
 		})
 	}
 }
 
-// A last line with no trailing newline would sit in the buffer forever, so Close
-// hands it over — and having done so, has nothing left to hand over twice.
-func TestProgressLogger_Close(t *testing.T) {
-	// Arrange
-	buf := &bytes.Buffer{}
-	p := NewProgressLogger(zerolog.New(buf))
-	_, err := p.Write([]byte(`{"id":"Container arcave-demo-app-1","status":"Started"}`))
-	require.NoError(t, err)
-	require.Empty(t, logRecords(t, buf), "an unterminated line is held, not emitted")
+func TestNewEventState(t *testing.T) {
+	tests := []struct {
+		name   string
+		status api.EventStatus
+		want   EventState
+	}{
+		{name: "working", status: api.Working, want: EventWorking},
+		{name: "done", status: api.Done, want: EventDone},
+		{name: "warning", status: api.Warning, want: EventWarning},
+		{name: "error", status: api.Error, want: EventError},
+		{name: "unknown reads as compose renders it, an error", status: api.EventStatus(42), want: EventError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := newEventState(api.Resource{Status: tt.status})
 
-	// Act
-	require.NoError(t, p.Close())
-	require.NoError(t, p.Close())
-
-	// Assert
-	records := logRecords(t, buf)
-	require.Len(t, records, 1)
-	assert.Equal(t, "arcave-demo-app-1", records[0]["name"])
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
-// The level table is what decides whether a run says anything at all, so a
-// filtering logger must drop the in-flight events and keep the settled ones.
-func TestProgressLogger_Write_HonoursTheLoggerLevel(t *testing.T) {
+// The level table decides whether a run says anything at all: a filtering logger drops the
+// in-flight events and keeps the settled ones.
+func TestEventLogger_On_HonoursTheLoggerLevel(t *testing.T) {
 	// Arrange
 	buf := &bytes.Buffer{}
-	p := NewProgressLogger(zerolog.New(buf).Level(zerolog.InfoLevel))
+	p := NewEventLogger(zerolog.New(buf).Level(zerolog.InfoLevel))
 
 	// Act
-	_, err := p.Write([]byte(
-		`{"id":"Container arcave-demo-app-1","status":"Starting"}` + "\n" +
-			`{"id":"Container arcave-demo-app-1","status":"Started"}` + "\n"))
-	require.NoError(t, err)
+	p.On(
+		api.Resource{ID: "Container arcave-demo-app-1", Text: api.StatusStarting, Status: api.Working},
+		api.Resource{ID: "Container arcave-demo-app-1", Text: api.StatusStarted, Status: api.Done},
+	)
 
 	// Assert
 	records := logRecords(t, buf)
@@ -244,21 +160,21 @@ func (r *sinkRecorder) Event(evt Event) {
 	r.events = append(r.events, evt)
 }
 
-func TestProgressLogger_Write_ToTheSink(t *testing.T) {
+func TestEventLogger_On_ToTheSink(t *testing.T) {
 	// Arrange
 	var buf bytes.Buffer
-	adapter := NewProgressLogger(zerolog.New(&buf))
+	p := NewEventLogger(zerolog.New(&buf))
 	sink := &sinkRecorder{}
-	adapter.SetSink(sink)
+	p.SetSink(sink)
 
 	// Act
-	_, err := adapter.Write([]byte(`{"id":"Container arcave-demo-db-1","status":"Stopping"}` + "\n" +
-		`{"id":"Container arcave-demo-db-1","status":"Stopped"}` + "\n" +
-		`{"id":"Network arcave-demo_default","status":"Error","text":"in use"}` + "\n"))
-	require.NoError(t, err)
-	adapter.SetSink(nil)
-	_, err = adapter.Write([]byte(`{"id":"Container arcave-demo-db-1","status":"Removed"}` + "\n"))
-	require.NoError(t, err)
+	p.On(
+		api.Resource{ID: "Container arcave-demo-db-1", Text: api.StatusStopping, Status: api.Working},
+		api.Resource{ID: "Container arcave-demo-db-1", Text: api.StatusStopped, Status: api.Done},
+		api.Resource{ID: "Network arcave-demo_default", Text: api.StatusError, Details: "in use", Status: api.Error},
+	)
+	p.SetSink(nil)
+	p.On(api.Resource{ID: "Container arcave-demo-db-1", Text: api.StatusRemoved, Status: api.Done})
 
 	// Assert
 	assert.Equal(t, []Event{

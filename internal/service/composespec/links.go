@@ -21,8 +21,8 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -36,7 +36,7 @@ func (a assembly) applyLinks(cfg *types.ServiceConfig, replica model.Container) 
 // HostConfig, as /target:/self/alias, on the default bridge.
 func linkEntries(inspect container.InspectResponse) []string {
 	var entries []string
-	if inspect.ContainerJSONBase != nil && inspect.HostConfig != nil {
+	if inspect.HostConfig != nil {
 		entries = append(entries, inspect.HostConfig.Links...)
 	}
 	if inspect.NetworkSettings != nil {

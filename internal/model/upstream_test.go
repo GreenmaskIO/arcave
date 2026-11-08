@@ -17,9 +17,9 @@ package model
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 )
@@ -84,7 +84,7 @@ func TestResolveUpstream(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			c := Container{ID: "c1", Inspect: container.InspectResponse{
-				ContainerJSONBase: &container.ContainerJSONBase{Image: tt.image.String()},
+				Image: tt.image.String(),
 			}}
 			if !tt.noConf {
 				c.Inspect.Config = &container.Config{Image: tt.ref}

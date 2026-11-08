@@ -27,9 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -177,9 +176,9 @@ func newDockerClient(t *testing.T) *client.Client {
 	if testing.Short() {
 		t.Skip("skipping the restic transport e2e test in short mode")
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background()); err != nil {
+	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
 		_ = cli.Close()
 		t.Skip("skipping the restic transport e2e test: no reachable docker daemon: " + err.Error())
 	}
@@ -198,9 +197,9 @@ func newDataVolume(t *testing.T, cli *client.Client, runner containerRunner) str
 	require.NoError(t, err)
 	name := "arcave-restic-e2e-" + hex.EncodeToString(suffix)
 
-	_, err = cli.VolumeCreate(context.Background(), volume.CreateOptions{Name: name})
+	_, err = cli.VolumeCreate(context.Background(), client.VolumeCreateOptions{Name: name})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cli.VolumeRemove(context.Background(), name, true) })
+	t.Cleanup(func() { _, _ = cli.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true}) })
 
 	busybox(t, runner, name, fmt.Sprintf(
 		"dd if=/dev/urandom of=/data/blob bs=1M count=%d && mkdir -p /data/nested && dd if=/dev/urandom of=/data/nested/inner bs=1M count=8 && dd if=/dev/urandom of=/data/small bs=1k count=4",

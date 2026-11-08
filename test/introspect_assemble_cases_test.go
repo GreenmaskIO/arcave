@@ -17,7 +17,7 @@ package test
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types/mount"
+	"github.com/moby/moby/api/types/mount"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -492,6 +492,22 @@ networks:
 			setup: func(t *testing.T, e *fidelityEnv) { e.createOutsideNetwork(t, "shared") },
 		},
 		{
+			// compose v5 hands the IPAM driver its options; the spec carries them back.
+			name: "ipam options",
+			compose: `
+services:
+  app: {image: "{{busybox}}", command: [sleep, infinity], networks: [back]}
+networks:
+  back: {ipam: {options: {foo: bar}}}
+`,
+			want: busyboxBase + `
+services:
+  app: {<<: *base, scale: 1, networks: {back: null}}
+networks:
+  back: {name: "{{project}}_back", driver: bridge, ipam: {driver: default, options: {foo: bar}}}
+`,
+		},
+		{
 			name: "static ipv4 address",
 			compose: `
 services:
@@ -598,7 +614,7 @@ services:
 ` + defaultNetwork,
 			},
 			drift: func(r *model.IntrospectionResult, _ model.ContainerRuntimeKind) {
-				r.Project.Services[0].Containers[0].Inspect.NetworkSettings.Networks[r.Project.Name+"_default"].MacAddress = ""
+				r.Project.Services[0].Containers[0].Inspect.NetworkSettings.Networks[r.Project.Name+"_default"].MacAddress = nil
 			},
 		},
 		{
@@ -1178,8 +1194,8 @@ services:
     scale: 1
     networks: {default: null}
     volumes:
-      - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {}}
-      - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {}}
+      - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {create_host_path: false}}
 ` + defaultNetwork,
 				// Podman reports the secret through the mount API and the config through the bind API (BACKLOG.md: Пределы Podman).
 				model.ContainerRuntimePodman: busyboxBase + `
@@ -1189,8 +1205,8 @@ services:
     scale: 1
     networks: {default: null}
     volumes:
-      - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {propagation: private}}
-      - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {create_host_path: true}}
+      - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {propagation: private, create_host_path: false}}
+      - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {}}
 ` + defaultNetwork,
 			},
 			files: map[string]string{"token.txt": "s3cr3t\n", "app.conf": "key=value\n"},
@@ -1349,7 +1365,7 @@ services:
     <<: *base
     scale: 1
     networks: {default: null}
-    volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {}}]
+    volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {create_host_path: false}}]
 ` + defaultNetwork,
 				// Podman reports its default propagation as declared (BACKLOG.md: Пределы Podman).
 				model.ContainerRuntimePodman: busyboxBase + `
@@ -1358,7 +1374,7 @@ services:
     <<: *base
     scale: 1
     networks: {default: null}
-    volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {propagation: private}}]
+    volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {propagation: private, create_host_path: false}}]
 ` + defaultNetwork,
 			},
 			files: map[string]string{"data/.keep": ""},
@@ -1382,7 +1398,7 @@ services:
     networks: {default: null}
     volumes:
       - {type: volume, source: data, target: /data, read_only: true}
-      - {type: bind, source: "{{dir}}/conf", target: /conf, read_only: true, bind: {create_host_path: true}}
+      - {type: bind, source: "{{dir}}/conf", target: /conf, read_only: true, bind: {}}
 volumes:
   data: {name: "{{project}}_data", driver: local}
 ` + defaultNetwork,

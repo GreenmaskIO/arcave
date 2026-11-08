@@ -22,10 +22,10 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/go-connections/nat"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -135,7 +135,7 @@ func isLocalImage(inspect image.InspectResponse) bool {
 // applyHostConfig reads what the container was created against the host with.
 // What the engine fills in by itself is left out by dropEngineStamps.
 func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.InspectResponse) {
-	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+	if inspect.HostConfig == nil {
 		return
 	}
 	hostConfig := inspect.HostConfig
@@ -151,7 +151,7 @@ func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.In
 	cfg.CapDrop = hostConfig.CapDrop
 	cfg.GroupAdd = hostConfig.GroupAdd
 	cfg.SecurityOpt = hostConfig.SecurityOpt
-	cfg.DNS = types.StringList(hostConfig.DNS)
+	cfg.DNS = toAddrStrings(hostConfig.DNS)
 	cfg.DNSOpts = hostConfig.DNSOptions
 	cfg.DNSSearch = types.StringList(hostConfig.DNSSearch)
 	cfg.VolumesFrom = declaredVolumesFrom(hostConfig.VolumesFrom, a.serviceByReplica)
@@ -226,16 +226,21 @@ func applyNetworks(
 		if !ok || endpoint == nil {
 			continue
 		}
+		var ipv4, ipv6 string
+		var linkLocal []string
+		if endpoint.IPAMConfig != nil {
+			ipv4 = toNetString(endpoint.IPAMConfig.IPv4Address)
+			ipv6 = toNetString(endpoint.IPAMConfig.IPv6Address)
+			linkLocal = toAddrStrings(endpoint.IPAMConfig.LinkLocalIPs)
+		}
 		// MacAddress is left out: after the first run it is generated, not declared.
 		attachment := &types.ServiceNetworkConfig{
 			Aliases:         declaredAliases(endpoint.Aliases, inspect.ID, generated),
 			DriverOpts:      endpoint.DriverOpts,
 			GatewayPriority: endpoint.GwPriority,
-		}
-		if endpoint.IPAMConfig != nil {
-			attachment.Ipv4Address = endpoint.IPAMConfig.IPv4Address
-			attachment.Ipv6Address = endpoint.IPAMConfig.IPv6Address
-			attachment.LinkLocalIPs = endpoint.IPAMConfig.LinkLocalIPs
+			Ipv4Address:     ipv4,
+			Ipv6Address:     ipv6,
+			LinkLocalIPs:    linkLocal,
 		}
 		if endpoint.IPAMConfig == nil && isEmptyAttachment(attachment) {
 			// compose creates the endpoint of a nil entry without an IPAM config, and of an
@@ -421,13 +426,15 @@ func declaredAliases(aliases []string, containerID string, generated []string) [
 }
 
 // toExposedPorts renders EXPOSE, sorted so one compose project renders one spec.
-func toExposedPorts(set nat.PortSet) types.StringOrNumberList {
+func toExposedPorts(set network.PortSet) types.StringOrNumberList {
 	if len(set) == 0 {
 		return nil
 	}
 	exposed := make([]string, 0, len(set))
 	for port := range set {
-		exposed = append(exposed, string(port))
+		if port.IsValid() {
+			exposed = append(exposed, port.String())
+		}
 	}
 	sort.Strings(exposed)
 	return exposed
@@ -454,19 +461,18 @@ func unpublished(expose types.StringOrNumberList, ports []types.ServicePortConfi
 
 // newPublishedPorts renders the ports: section from the bindings, not from the running
 // container: an empty published port asks for a random one and must not be pinned.
-func newPublishedPorts(bindings nat.PortMap) []types.ServicePortConfig {
+func newPublishedPorts(bindings network.PortMap) []types.ServicePortConfig {
 	published := make([]types.ServicePortConfig, 0, len(bindings))
 	for port, hosts := range bindings {
-		target, err := strconv.ParseUint(port.Port(), 10, 32)
-		if err != nil {
+		if !port.IsValid() {
 			continue
 		}
 		for _, host := range hosts {
 			published = append(published, types.ServicePortConfig{
-				Target:    uint32(target),
-				Protocol:  port.Proto(),
+				Target:    uint32(port.Num()),
+				Protocol:  string(port.Proto()),
 				Published: host.HostPort,
-				HostIP:    host.HostIP,
+				HostIP:    toNetString(host.HostIP),
 			})
 		}
 	}

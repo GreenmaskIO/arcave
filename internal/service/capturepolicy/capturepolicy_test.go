@@ -19,9 +19,9 @@ import (
 	"maps"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -389,7 +389,7 @@ func TestResolve_IgnoresOtherLabels(t *testing.T) {
 	introspection := demoProject(labels, nil, anonLabels, map[string]string{"com.docker.compose.project": "demo"})
 	imageID := model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	introspection.Project.Services[0].Containers = []model.Container{{Inspect: container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{Image: imageID.String()},
+		Image: imageID.String(),
 	}}}
 	introspection.Images = map[model.ImageDigestID]image.InspectResponse{
 		imageID: {Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: map[string]string{"arcave.version": "1"}}}},

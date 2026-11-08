@@ -86,7 +86,7 @@ func TestToolsGenerateCompose_FileRebuildsTheComposeProject(t *testing.T) {
 
 	// The file pins its volume and network names to the compose project, so it is put back as that one.
 	require.NoError(t, env.compose.Down(env.ctx, project))
-	require.NoError(t, env.compose.Create(env.ctx, generated), "compose creates the project from the generated file")
+	require.NoError(t, env.compose.Create(env.ctx, generated, nil), "compose creates the project from the generated file")
 }
 
 // loadComposeFile loads path as the docker CLI would, its relative paths resolved against its directory.

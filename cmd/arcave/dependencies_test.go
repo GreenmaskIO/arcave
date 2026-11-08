@@ -36,11 +36,12 @@ import (
 	clicontext "github.com/docker/cli/cli/context"
 	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/flags"
-	composeprogress "github.com/docker/compose/v2/pkg/progress"
-	"github.com/docker/docker/api/types/system"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/cmd/display"
+	"github.com/docker/compose/v5/pkg/api"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -483,56 +484,52 @@ func TestNewDockerTLSOptions(t *testing.T) {
 // Compose's progress is what turns a two-minute health-check wait from a hang
 // into something a user can watch, so every channel must reach the library — and
 // none of them may reach stdout, which carries arcave's JSON.
-func TestNewProgressWriter(t *testing.T) {
+func TestNewComposeProgress(t *testing.T) {
 	tests := []struct {
-		name     string
-		mode     string
-		wantMode string
-		wantOut  io.Writer // nil means "the adapter", which has no comparable value
+		name          string
+		mode          string
+		wantProcessor api.EventProcessor // nil means "the event logger"
+		wantStream    io.Writer
 	}{
 		{
-			name: "log folds compose's events into arcave's own log",
-			mode: config.ProgressLog, wantMode: composeprogress.ModeJSON,
+			name:       "log folds compose's events into arcave's own log",
+			mode:       config.ProgressLog,
+			wantStream: io.Discard,
 		},
 		{
-			// ModeAuto, not ModeTTY: compose then redraws on a terminal and falls
-			// back to plain lines in a pipe, where ModeTTY would spray ANSI escapes
-			// into a log file.
-			name: "tty hands the terminal back to compose's own renderer",
-			mode: config.ProgressTTY, wantMode: composeprogress.ModeAuto, wantOut: os.Stderr,
+			// Plain off a terminal, as here: compose's tree would spray ANSI escapes into a log file.
+			name:          "tty hands stderr back to compose's own renderer",
+			mode:          config.ProgressTTY,
+			wantProcessor: display.Plain(io.Discard),
+			wantStream:    os.Stderr,
 		},
 		{
-			name: "quiet discards the stream as well as the UI",
-			mode: config.ProgressQuiet, wantMode: composeprogress.ModeQuiet, wantOut: io.Discard,
+			name:          "quiet discards the stream as well as the UI",
+			mode:          config.ProgressQuiet,
+			wantProcessor: display.Quiet(),
+			wantStream:    io.Discard,
 		},
 		{
-			name: "an unset channel is the log",
-			mode: "", wantMode: composeprogress.ModeJSON,
+			name:       "an unset channel is the log",
+			mode:       "",
+			wantStream: io.Discard,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Arrange: progress.Mode is the library's global, so it is restored.
-			original := composeprogress.Mode
-			t.Cleanup(func() { composeprogress.Mode = original })
-
 			// Act
-			out, events := newProgressWriter(tt.mode, zerolog.Nop())
+			got := newComposeProgress(tt.mode, zerolog.Nop())
 
 			// Assert
-			assert.Equal(t, tt.wantMode, composeprogress.Mode)
-			if tt.wantOut == nil {
-				assert.IsType(t, &compose.ProgressLogger{}, out)
-				assert.Same(t, out, events, "the adapter compose renders on is the one its events reach")
+			assert.Equal(t, tt.wantStream, got.stream)
+			if tt.wantProcessor == nil {
+				require.NotNil(t, got.events)
+				assert.Same(t, got.events, got.processor, "the logger compose reports to is the one a step reads")
 				return
 			}
-			assert.Nil(t, events)
-			// The streams arcave does not own are wrapped so Close cannot reach
-			// them — closing os.Stderr would take the process's error stream down
-			// with it.
-			assert.Equal(t, nopWriteCloser{tt.wantOut}, out)
-			assert.NoError(t, out.Close())
+			assert.IsType(t, tt.wantProcessor, got.processor)
+			assert.Nil(t, got.events)
 		})
 	}
 }
@@ -545,13 +542,14 @@ func TestNewDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	dockerCli, apiClient, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	daemon, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
-	assert.NotNil(t, dockerCli)
-	assert.NotNil(t, apiClient)
+	t.Cleanup(func() { assert.NoError(t, daemon.api.Close()) })
+	assert.NotNil(t, daemon.cli)
+	assert.NotNil(t, daemon.api)
+	assert.Equal(t, "unix:///nowhere/docker.sock", daemon.api.DaemonHost())
 }
 
 // api_version is the one docker field carried not through ClientOptions but
@@ -564,14 +562,14 @@ func TestNewDockerClient_PinsAPIVersion(t *testing.T) {
 	t.Setenv(client.EnvOverrideAPIVersion, "")
 
 	// Act
-	_, apiClient, err := newDockerClient(config.Docker{
+	daemon, err := newDockerClient(config.Docker{
 		Host:       "unix:///nowhere/docker.sock",
 		APIVersion: "1.45",
 	}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
+	t.Cleanup(func() { assert.NoError(t, daemon.api.Close()) })
 	assert.Equal(t, "1.45", os.Getenv(client.EnvOverrideAPIVersion),
 		"cfg.APIVersion must reach docker/cli through DOCKER_API_VERSION")
 }
@@ -585,11 +583,11 @@ func TestNewDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
 	t.Setenv(client.EnvOverrideAPIVersion, "1.40")
 
 	// Act
-	_, apiClient, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	daemon, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, apiClient.Close()) })
+	t.Cleanup(func() { assert.NoError(t, daemon.api.Close()) })
 	assert.Equal(t, "1.40", os.Getenv(client.EnvOverrideAPIVersion),
 		"an unset APIVersion must not disturb a version already in the environment")
 }
@@ -603,7 +601,7 @@ func TestNewDockerClient_RejectsAnUnknownContext(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	_, _, err := newDockerClient(config.Docker{Context: "nosuchcontext"}, io.Discard)
+	_, err := newDockerClient(config.Docker{Context: "nosuchcontext"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "nosuchcontext")
@@ -620,7 +618,7 @@ func TestNewDockerClient_RejectsAnUnbuildableClient(t *testing.T) {
 	t.Setenv("DOCKER_CUSTOM_HEADERS", "not-a-key-value-pair")
 
 	// Act
-	_, _, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	_, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "DOCKER_CUSTOM_HEADERS")
@@ -661,10 +659,10 @@ func TestNewCaptureDefaults(t *testing.T) {
 // the gc decides whether to leave the kind out or abort it.
 func TestNewDaemonCollectors_DaemonDoesNotAnswer(t *testing.T) {
 	// Arrange
-	_, dockerClientAPI, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
+	daemon, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = dockerClientAPI.Close() })
-	engine := docker.NewEngine(dockerClientAPI)
+	t.Cleanup(func() { _ = daemon.api.Close() })
+	engine := docker.NewEngine(daemon.api)
 	collectors := newDaemonCollectors(config.Config{}, engine)
 
 	// Act
@@ -682,10 +680,10 @@ func TestNewDaemonCollectors_DaemonDoesNotAnswer(t *testing.T) {
 // Every data kind is resolved by exactly one collector, at the level its report names.
 func TestNewObjectCollectors(t *testing.T) {
 	// Arrange
-	_, dockerClientAPI, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
+	daemon, err := newDockerClient(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = dockerClientAPI.Close() })
-	engine := docker.NewEngine(dockerClientAPI)
+	t.Cleanup(func() { _ = daemon.api.Close() })
+	engine := docker.NewEngine(daemon.api)
 	type resolution struct {
 		collector model.GarbageCollectorKind
 		daemon    bool
@@ -1051,6 +1049,7 @@ func TestComposeEventSink_Event(t *testing.T) {
 	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopping", State: compose.EventWorking})
 	sink.Event(compose.Event{Kind: "Container", Name: "demo-db-1", Status: "Stopped", State: compose.EventDone})
 	sink.Event(compose.Event{Name: "3f2a", Status: "Error", Text: "denied", State: compose.EventError})
+	sink.Event(compose.Event{Kind: "Volume", Name: "demo_kept", Text: "not recreated", State: compose.EventWarning})
 	step.End(nil)
 
 	// Assert
@@ -1070,6 +1069,7 @@ func TestComposeEventSink_Event(t *testing.T) {
 		{progress.StatusInProgress, "Stopping", progress.Resource{Kind: "container", ID: "demo-db-1"}, false},
 		{progress.StatusInProgress, "Stopped", progress.Resource{Kind: "container", ID: "demo-db-1"}, true},
 		{progress.StatusWarned, "Error denied", progress.Resource{Kind: composeResourceObject, ID: "3f2a"}, false},
+		{progress.StatusWarned, "not recreated", progress.Resource{Kind: "volume", ID: "demo_kept"}, false},
 	}, got)
 }
 
@@ -1081,23 +1081,25 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 	assert.Nil(t, sink)
 }
 
-// The engine decides the profile whole: Podman is reached past its compat API, over TLS as the
-// endpoint is, held to no Docker version, with its own defaults; Docker through the API itself.
+// The engine decides the profile whole: Podman is reached past its compat API, through the
+// client's own dialer, held to no Docker version, with its own defaults; Docker through the API itself.
 func TestNewRuntimeProfile(t *testing.T) {
-	api, err := client.NewClientWithOpts(client.WithHost("tcp://10.0.0.5:2376"))
+	api, err := client.New(client.WithHost("tcp://10.0.0.5:2376"))
 	require.NoError(t, err)
 	info := system.Info{Name: "host-1", LoggingDriver: "json-file", DefaultRuntime: "runc"}
 	plain := dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2375"}}
 	dockerEngine := docker.NewEngine(api)
-	libpodPlain, err := libpod.NewClient(api, libpod.Options{Version: "6.1.4"})
+	libpodClient, err := libpod.NewClient(api, libpod.Options{Version: "6.1.4"})
 	require.NoError(t, err)
-	libpodTLS, err := libpod.NewClient(api, libpod.Options{
-		Version: "6.1.4",
-		UseTLS:  true,
-	})
-	require.NoError(t, err)
-	podmanEngine := func(libpodClient *libpod.Client) *docker.Engine {
-		return docker.NewEngine(podman.NewAPI(api, libpodClient))
+	podmanAPI := podman.NewAPI(api, libpodClient)
+	podmanEngine := docker.NewEngine(podmanAPI)
+	podmanProfile := runtimeProfile{
+		api:            podmanAPI,
+		engine:         podmanEngine,
+		volumes:        podman.NewEngine(podmanEngine),
+		version:        "6.1.4",
+		minDaemonMajor: 0,
+		assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 	}
 	tests := []struct {
 		name     string
@@ -1139,14 +1141,7 @@ func TestNewRuntimeProfile(t *testing.T) {
 			name:     "podman",
 			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: plain,
-			want: runtimeProfile{
-				api:            podman.NewAPI(api, libpodPlain),
-				engine:         podmanEngine(libpodPlain),
-				volumes:        podman.NewEngine(podmanEngine(libpodPlain)),
-				version:        "6.1.4",
-				minDaemonMajor: 0,
-				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
-			},
+			want:     podmanProfile,
 		},
 		{
 			name:     "podman reporting no version is refused",
@@ -1155,20 +1150,13 @@ func TestNewRuntimeProfile(t *testing.T) {
 			wantErr:  "reach libpod: no Podman version",
 		},
 		{
-			name:    "podman behind TLS reaches libpod over TLS",
+			name:    "podman behind TLS builds the same profile",
 			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: dockercontext.Endpoint{
 				EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
 				TLSData:      &clicontext.TLSData{},
 			},
-			want: runtimeProfile{
-				api:            podman.NewAPI(api, libpodTLS),
-				engine:         podmanEngine(libpodTLS),
-				volumes:        podman.NewEngine(podmanEngine(libpodTLS)),
-				version:        "6.1.4",
-				minDaemonMajor: 0,
-				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
-			},
+			want: podmanProfile,
 		},
 		{
 			name:    "podman behind an https:// host of a context is refused",
@@ -1198,19 +1186,6 @@ func TestNewRuntimeProfile(t *testing.T) {
 				assembler:      composespec.NewAssembler(composespec.NewDockerStamps(info)),
 			},
 		},
-		{
-			name:     "podman with TLS verification off reaches libpod over TLS too",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
-			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376", SkipTLSVerify: true}},
-			want: runtimeProfile{
-				api:            podman.NewAPI(api, libpodTLS),
-				engine:         podmanEngine(libpodTLS),
-				volumes:        podman.NewEngine(podmanEngine(libpodTLS)),
-				version:        "6.1.4",
-				minDaemonMajor: 0,
-				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1229,8 +1204,8 @@ func TestNewRuntimeProfile(t *testing.T) {
 	}
 }
 
-// The endpoint the client resolved decides how libpod is reached: a daemon behind TLS over
-// https, a plain one over http.
+// A Podman daemon is reached through libpod over the very connection the client resolved: a
+// socket, plain tcp or TLS. ssh is the integration tests'.
 func TestReadRuntimeProfile(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1239,13 +1214,36 @@ func TestReadRuntimeProfile(t *testing.T) {
 			_, _ = io.WriteString(w, `{"Version":"6.1.4","Components":[{"Name":"Podman Engine","Version":"6.1.4"}]}`)
 		case strings.HasSuffix(r.URL.Path, "/info"):
 			_, _ = io.WriteString(w, `{}`)
+		case strings.HasSuffix(r.URL.Path, "/v6.1.4/libpod/containers/c1/json"):
+			_, _ = io.WriteString(w, `{"HostConfig": {"LogConfig": {"Size": "1MB"}}}`)
+		case strings.HasSuffix(r.URL.Path, "/containers/c1/json"):
+			_, _ = io.WriteString(w, `{"Id": "c1", "HostConfig": {"LogConfig": {"Type": "k8s-file"}}}`)
+		default:
+			http.NotFound(w, r)
 		}
 	})
 	tests := []struct {
 		name    string
 		newCase func(t *testing.T) config.Docker
-		wantTLS bool
 	}{
+		{
+			name: "a daemon on a unix socket",
+			newCase: func(t *testing.T) config.Docker {
+				t.Helper()
+				// t.TempDir is too long a path for a socket on macOS.
+				dir, err := os.MkdirTemp("", "arcave")
+				require.NoError(t, err)
+				t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
+				socket := filepath.Join(dir, "d.sock")
+				listener, err := net.Listen("unix", socket)
+				require.NoError(t, err)
+				server := httptest.NewUnstartedServer(handler)
+				server.Listener = listener
+				server.Start()
+				t.Cleanup(server.Close)
+				return config.Docker{Host: "unix://" + socket}
+			},
+		},
 		{
 			name: "a plain daemon",
 			newCase: func(t *testing.T) config.Docker {
@@ -1266,7 +1264,6 @@ func TestReadRuntimeProfile(t *testing.T) {
 				require.NoError(t, os.WriteFile(caFile, caPEM, 0o600))
 				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), CAFile: caFile}
 			},
-			wantTLS: true,
 		},
 		{
 			name: "a daemon behind TLS under skip_tls_verify, with no certificate",
@@ -1276,7 +1273,6 @@ func TestReadRuntimeProfile(t *testing.T) {
 				t.Cleanup(server.Close)
 				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), SkipTLSVerify: true}
 			},
-			wantTLS: true,
 		},
 	}
 	for _, tt := range tests {
@@ -1287,10 +1283,7 @@ func TestReadRuntimeProfile(t *testing.T) {
 			defer opened.release(context.Background())
 			daemon, err := connectDaemon(tt.newCase(t), io.Discard, opened)
 			require.NoError(t, err)
-			libpodClient, err := libpod.NewClient(daemon.api, libpod.Options{
-				Version: "6.1.4",
-				UseTLS:  tt.wantTLS,
-			})
+			libpodClient, err := libpod.NewClient(daemon.api, libpod.Options{Version: "6.1.4"})
 			require.NoError(t, err)
 
 			// Act
@@ -1299,6 +1292,9 @@ func TestReadRuntimeProfile(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, podman.NewAPI(daemon.api, libpodClient), got.api)
+			inspect, err := got.api.ContainerInspect(context.Background(), "c1", client.ContainerInspectOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, map[string]string{"max-size": "1MB"}, inspect.Container.HostConfig.LogConfig.Config)
 		})
 	}
 }
@@ -1423,7 +1419,7 @@ func TestOpenGCService_DaemonUnreachable(t *testing.T) {
 	assert.NotNil(t, svc)
 }
 
-// The client goes on the stack: nothing else closes the connection.
+// The client goes on the stack: nothing else closes its connections.
 func TestConnectDaemon(t *testing.T) {
 	// Arrange
 	t.Setenv("DOCKER_CONFIG", t.TempDir())

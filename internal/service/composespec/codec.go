@@ -21,6 +21,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
+	"go.yaml.in/yaml/v4"
 )
 
 // specFilename names the artifact in compose's own error messages.
@@ -52,11 +53,16 @@ func (s *Codec) Marshal(project *types.Project) ([]byte, error) {
 
 	stamped := *project
 	stamped.Extensions = withOrigin(project.Extensions, project.WorkingDir, project.ComposeFiles)
-	spec, err := stamped.MarshalYAML()
+	spec, err := marshalYAML(&stamped)
 	if err != nil {
 		return nil, fmt.Errorf("render compose spec: %w", err)
 	}
 	return spec, nil
+}
+
+// marshalYAML renders project as compose-go's MarshalYAML does, but never folds a long value.
+func marshalYAML(project *types.Project) ([]byte, error) {
+	return yaml.Dump(project, yaml.WithV3Defaults(), yaml.WithIndent(2), yaml.WithLineWidth(-1))
 }
 
 // Parse reads an artifact back through compose's own loader, so a truncated or

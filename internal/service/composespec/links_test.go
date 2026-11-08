@@ -18,9 +18,9 @@ import (
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/system"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -104,7 +104,7 @@ func TestNewServiceConfig_Links(t *testing.T) {
 	introspection := linkedProject()
 	app := introspection.Project.Services[0]
 	app.Containers[0].Inspect = container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{ID: "app1", HostConfig: &container.HostConfig{}},
+		ID: "app1", HostConfig: &container.HostConfig{},
 		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
 			"demo_default": {Links: []string{"demo-db-1:database", "demo-db-1:db-1", "demo-db-1:demo-db-1", "outside:ext"}},
 		}},

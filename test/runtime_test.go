@@ -16,12 +16,11 @@ package test
 
 import (
 	"context"
-	"os"
 	"slices"
 	"testing"
 
 	"github.com/distribution/reference"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,8 +50,9 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 	t.Helper()
 	runtime, err := dockerclient.ReadRuntime(context.Background(), api)
 	require.NoError(t, err)
-	info, err := api.Info(context.Background())
+	answer, err := api.Info(context.Background(), client.InfoOptions{})
 	require.NoError(t, err)
+	info := answer.Info
 	if runtime.Kind == model.ContainerRuntimePodman {
 		libpodClient := newLibpodClient(t, api, runtime.Version)
 		podmanAPI := podmanclient.NewAPI(api, libpodClient)
@@ -75,13 +75,10 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 	}
 }
 
-// newLibpodClient reaches libpod over api, whose daemon is Podman of version.
+// newLibpodClient reaches libpod at api's daemon, Podman of version, through api's own dialer.
 func newLibpodClient(t *testing.T, api *client.Client, version string) *libpod.Client {
 	t.Helper()
-	libpodClient, err := libpod.NewClient(api, libpod.Options{
-		Version: version,
-		UseTLS:  os.Getenv(client.EnvOverrideCertPath) != "",
-	})
+	libpodClient, err := libpod.NewClient(api, libpod.Options{Version: version})
 	require.NoError(t, err)
 	return libpodClient
 }

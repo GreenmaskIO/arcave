@@ -29,11 +29,9 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/greenmaskio/storages"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,10 +81,10 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	composeService := dockercompose.NewComposeService(cli)
+	composeService, prompter := newComposeService(t, cli)
 	profile := newRuntimeProfile(t, daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
-		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
+		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 
 	projectRoot := t.TempDir()
@@ -137,7 +135,7 @@ func (e *ociDedupEnv) up(t *testing.T) {
 	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
 	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
-	require.NoError(t, e.compose.Create(e.ctx, project))
+	require.NoError(t, e.compose.Create(e.ctx, project, nil))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
 }
 
@@ -268,12 +266,12 @@ func (e *ociDedupEnv) containerID(t *testing.T) string {
 func (e *ociDedupEnv) exec(t *testing.T, containerID string, cmd ...string) string {
 	t.Helper()
 
-	created, err := e.daemon.ContainerExecCreate(e.ctx, containerID, container.ExecOptions{
+	created, err := e.daemon.ExecCreate(e.ctx, containerID, client.ExecCreateOptions{
 		Cmd: cmd, AttachStdout: true, AttachStderr: true,
 	})
 	require.NoError(t, err)
 
-	attached, err := e.daemon.ContainerExecAttach(e.ctx, created.ID, container.ExecAttachOptions{})
+	attached, err := e.daemon.ExecAttach(e.ctx, created.ID, client.ExecAttachOptions{})
 	require.NoError(t, err)
 	defer attached.Close()
 
@@ -281,7 +279,7 @@ func (e *ociDedupEnv) exec(t *testing.T, containerID string, cmd ...string) stri
 	_, err = stdcopy.StdCopy(&out, &out, attached.Reader)
 	require.NoError(t, err)
 
-	inspect, err := e.daemon.ContainerExecInspect(e.ctx, created.ID)
+	inspect, err := e.daemon.ExecInspect(e.ctx, created.ID, client.ExecInspectOptions{})
 	require.NoError(t, err)
 	require.Zero(t, inspect.ExitCode, out.String())
 	return out.String()

@@ -18,10 +18,8 @@ import (
 	"context"
 	"io"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
@@ -56,21 +54,24 @@ type mockCompatAPI struct {
 	mock.Mock
 }
 
-func (m *mockCompatAPI) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
-	args := m.Called(ctx, containerID)
-	return args.Get(0).(container.InspectResponse), args.Error(1)
+func (m *mockCompatAPI) ContainerInspect(
+	ctx context.Context, containerID string, options client.ContainerInspectOptions,
+) (client.ContainerInspectResult, error) {
+	args := m.Called(ctx, containerID, options)
+	return client.ContainerInspectResult{Container: args.Get(0).(container.InspectResponse)}, args.Error(1)
 }
 
-func (m *mockCompatAPI) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
-	return m.Called(ctx, containerID, options).Error(0)
+func (m *mockCompatAPI) ContainerRemove(
+	ctx context.Context, containerID string, options client.ContainerRemoveOptions,
+) (client.ContainerRemoveResult, error) {
+	return client.ContainerRemoveResult{}, m.Called(ctx, containerID, options).Error(0)
 }
 
 func (m *mockCompatAPI) ContainerCreate(
-	ctx context.Context, config *container.Config, hostConfig *container.HostConfig,
-	networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string,
-) (container.CreateResponse, error) {
-	args := m.Called(ctx, config, hostConfig, networkingConfig, platform, containerName)
-	return args.Get(0).(container.CreateResponse), args.Error(1)
+	ctx context.Context, options client.ContainerCreateOptions,
+) (client.ContainerCreateResult, error) {
+	args := m.Called(ctx, options)
+	return args.Get(0).(client.ContainerCreateResult), args.Error(1)
 }
 
 // mockOneShotRunner is a test double for the engine a volume export runs its container through.
