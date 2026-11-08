@@ -43,19 +43,8 @@ const bareImageID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 const podmanImageID = model.ImageDigestID("sha256:" + bareImageID)
 
-// recordedConnection is the transport libpod reaches the recorded daemon over.
-type recordedConnection struct {
-	client *http.Client
-	host   string
-}
-
-func (c recordedConnection) HTTPClient() *http.Client { return c.client }
-
-func (c recordedConnection) DaemonHost() string { return c.host }
-
-// newRecordedDaemon is a client of a daemon answering for c1 as a real Podman did, on compat and libpod,
-// and the transport it sends over.
-func newRecordedDaemon(t *testing.T) (*client.Client, recordedConnection) {
+// newRecordedDaemon is a client of a daemon answering for c1 as a real Podman did, on compat and libpod.
+func newRecordedDaemon(t *testing.T) *client.Client {
 	t.Helper()
 	compat, err := os.ReadFile("testdata/compat_inspect.json")
 	require.NoError(t, err)
@@ -72,17 +61,13 @@ func newRecordedDaemon(t *testing.T) (*client.Client, recordedConnection) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	host := "tcp://" + strings.TrimPrefix(server.URL, "http://")
 	api, err := client.New(
-		client.WithHost(host),
+		client.WithHost("tcp://"+strings.TrimPrefix(server.URL, "http://")),
 		client.WithHTTPClient(server.Client()),
 		client.WithAPIVersion("1.44"),
 	)
 	require.NoError(t, err)
-	return api, recordedConnection{
-		client: server.Client(),
-		host:   host,
-	}
+	return api
 }
 
 func newInspectOf(hostConfig *container.HostConfig) container.InspectResponse {
@@ -92,8 +77,8 @@ func newInspectOf(hostConfig *container.HostConfig) container.InspectResponse {
 // What a real Podman answered, read off the wire, comes out as the mount requests and log size.
 func TestAPI_ContainerInspect_RecordedDaemon(t *testing.T) {
 	// Arrange
-	daemon, connection := newRecordedDaemon(t)
-	libpodClient, err := libpod.NewClient(connection, libpod.Options{Version: "6.1.4"})
+	daemon := newRecordedDaemon(t)
+	libpodClient, err := libpod.NewClient(daemon, libpod.Options{Version: "6.1.4"})
 	require.NoError(t, err)
 	api := NewAPI(daemon, libpodClient)
 

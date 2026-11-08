@@ -16,14 +16,10 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,14 +28,12 @@ import (
 
 	"filippo.io/age"
 	"github.com/docker/cli/cli/command"
-	"github.com/docker/cli/cli/connhelper"
 	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/flags"
 	dockeropts "github.com/docker/cli/opts"
 	"github.com/docker/compose/v5/cmd/display"
 	"github.com/docker/compose/v5/pkg/api"
 	dockercompose "github.com/docker/compose/v5/pkg/compose"
-	"github.com/docker/go-connections/sockets"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/storages"
@@ -89,9 +83,6 @@ import (
 
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
-
-// errInvalidEndpointCA refuses an endpoint whose CA is no PEM certificate.
-var errInvalidEndpointCA = errors.New("failed to retrieve context tls info: ca.pem seems invalid")
 
 // composeResourceObject is the resource kind of a compose event whose id names no kind of object.
 const composeResourceObject = "object"
@@ -331,26 +322,6 @@ type daemonConnection struct {
 	// cli is what compose runs on, over api, so compose and the engine reach one daemon.
 	cli *command.DockerCli
 	api client.APIClient
-	// transport is what api sends over; libpod reaches a Podman daemon through it too.
-	transport daemonTransport
-}
-
-// daemonTransport is the HTTP client the SDK's client is built from; libpod sends over it too.
-type daemonTransport struct {
-	client *http.Client
-	host   string
-}
-
-// HTTPClient is the client every request to the daemon goes through.
-func (t daemonTransport) HTTPClient() *http.Client { return t.client }
-
-// DaemonHost is the daemon's host as the SDK's client names it.
-func (t daemonTransport) DaemonHost() string { return t.host }
-
-// Close drops the idle connections libpod left, which the SDK's client does not own.
-func (t daemonTransport) Close() error {
-	t.client.CloseIdleConnections()
-	return nil
 }
 
 // connectDaemon builds the connection; its closer goes on opened.
@@ -360,7 +331,6 @@ func connectDaemon(cfg config.Docker, progressOut io.Writer, opened *closers) (d
 		return daemonConnection{}, err
 	}
 	opened.add("docker client", daemon.api)
-	opened.add("libpod transport", daemon.transport)
 	return daemon, nil
 }
 
@@ -386,7 +356,7 @@ func readRuntimeProfile(ctx context.Context, daemon daemonConnection) (runtimePr
 	if err != nil {
 		return runtimeProfile{}, err
 	}
-	return newRuntimeProfile(runtime, info, daemon.api, daemon.transport, daemon.cli.DockerEndpoint())
+	return newRuntimeProfile(runtime, info, daemon.api, daemon.cli.DockerEndpoint())
 }
 
 // readEngine asks the daemon which engine it is and what `docker info` says of it.
@@ -403,9 +373,9 @@ func readEngine(ctx context.Context, api client.APIClient) (model.ContainerRunti
 }
 
 // newRuntimeProfile chooses everything that differs by the engine behind the daemon; libpod
-// is reached over TLS when the endpoint, as the CLI resolved it, is.
+// is reached through api's own dialer, over TLS when the endpoint is.
 func newRuntimeProfile(
-	runtime model.ContainerRuntime, info system.Info, api client.APIClient, transport daemonTransport,
+	runtime model.ContainerRuntime, info system.Info, api client.APIClient,
 	endpoint dockercontext.Endpoint,
 ) (runtimeProfile, error) {
 	switch runtime.Kind {
@@ -413,10 +383,7 @@ func newRuntimeProfile(
 		if isHTTPHost(endpoint.Host) {
 			return runtimeProfile{}, fmt.Errorf("docker endpoint %q: the Docker client cannot attach to a container over an http:// or https:// host, which a Podman volume export needs: name it tcp://", endpoint.Host)
 		}
-		libpodClient, err := libpod.NewClient(transport, libpod.Options{
-			Version: runtime.Version,
-			UseTLS:  isTLSEndpoint(endpoint),
-		})
+		libpodClient, err := libpod.NewClient(api, libpod.Options{Version: runtime.Version})
 		if err != nil {
 			return runtimeProfile{}, fmt.Errorf("reach libpod: %w", err)
 		}
@@ -446,11 +413,6 @@ func newRuntimeProfile(
 // isHTTPHost reports whether host, which only a context can spell so, names http or https.
 func isHTTPHost(host string) bool {
 	return strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://")
-}
-
-// isTLSEndpoint reports whether endpoint carries TLS settings, which the client applies to a tcp host.
-func isTLSEndpoint(endpoint dockercontext.Endpoint) bool {
-	return endpoint.TLSData != nil || endpoint.SkipTLSVerify
 }
 
 // openedCDCTransport is how cdc's containers reach one tree of repositories.
@@ -867,8 +829,8 @@ func composeProgressMode(ctx context.Context, mode string, drawing bool) string 
 	return config.ProgressLog
 }
 
-// newDockerClient resolves cfg into the docker/cli instance compose runs on, its API client and that
-// client's transport. progressOut becomes the CLI's error stream once the endpoint resolves.
+// newDockerClient resolves cfg into the docker/cli instance compose runs on and its API client.
+// progressOut becomes the CLI's error stream once the endpoint resolves.
 func newDockerClient(cfg config.Docker, progressOut io.Writer) (daemonConnection, error) {
 	clientOpts, err := newDockerClientOptions(cfg)
 	if err != nil {
@@ -900,20 +862,6 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (daemonConnection
 		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
 	}
 
-	// The client is built from a transport of arcave's own, which libpod sends over: the SDK's client
-	// hands its transport to no one. The CLI applies the option last, over the endpoint's own.
-	endpoint, err := readDockerEndpoint(dockerCli)
-	if err != nil {
-		return daemonConnection{}, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %w", cfg.Host, cfg.Context, err)
-	}
-	transport, err := newDaemonTransport(endpoint)
-	if err != nil {
-		return daemonConnection{}, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %w", cfg.Host, cfg.Context, err)
-	}
-	if err := command.WithAPIClientOptions(client.WithHTTPClient(transport))(dockerCli); err != nil {
-		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
-	}
-
 	// Initialize can log a benign warning of its own (a malformed
 	// ~/.docker/config.json), so from here on the buffer holds only the resolution.
 	initErr.Reset()
@@ -935,93 +883,7 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (daemonConnection
 	return daemonConnection{
 		cli: dockerCli,
 		api: apiClient,
-		transport: daemonTransport{
-			client: transport,
-			host:   apiClient.DaemonHost(),
-		},
 	}, nil
-}
-
-// readDockerEndpoint is the endpoint, its TLS material loaded, of the context the CLI resolved.
-func readDockerEndpoint(dockerCli *command.DockerCli) (dockercontext.Endpoint, error) {
-	contextName := dockerCli.CurrentContext()
-	metadata, err := dockerCli.ContextStore().GetMetadata(contextName)
-	if err != nil {
-		return dockercontext.Endpoint{}, fmt.Errorf("unable to resolve docker endpoint: %w", err)
-	}
-	endpointMeta, err := dockercontext.EndpointFromContext(metadata)
-	if err != nil {
-		return dockercontext.Endpoint{}, fmt.Errorf("unable to resolve docker endpoint: %w", err)
-	}
-	endpoint, err := dockercontext.WithTLSData(dockerCli.ContextStore(), contextName, endpointMeta)
-	if err != nil {
-		return dockercontext.Endpoint{}, fmt.Errorf("unable to resolve docker endpoint: %w", err)
-	}
-	return endpoint, nil
-}
-
-// newDaemonTransport is the HTTP client endpoint is reached over, as docker/cli and the SDK build it:
-// a connection helper's dialer for ssh, else the host's socket, with TLS unless that socket is local.
-func newDaemonTransport(endpoint dockercontext.Endpoint) (*http.Client, error) {
-	host := cmp.Or(endpoint.Host, client.DefaultDockerHost)
-	helper, err := connhelper.GetConnectionHelper(host)
-	if err != nil {
-		return nil, err
-	}
-	if helper != nil {
-		// No TLS, and no proxy.
-		return &http.Client{Transport: &http.Transport{DialContext: helper.Dialer}}, nil
-	}
-
-	hostURL, err := client.ParseHostURL(host)
-	if err != nil {
-		return nil, err
-	}
-	var tlsConfig *tls.Config
-	if !isSocketHost(hostURL.Scheme) {
-		if tlsConfig, err = newEndpointTLSConfig(endpoint); err != nil {
-			return nil, err
-		}
-	}
-	roundTripper := &http.Transport{TLSClientConfig: tlsConfig}
-	if err := sockets.ConfigureTransport(roundTripper, hostURL.Scheme, hostURL.Host); err != nil {
-		return nil, err
-	}
-	return &http.Client{
-		Transport:     roundTripper,
-		CheckRedirect: client.CheckRedirect,
-	}, nil
-}
-
-// isSocketHost reports whether scheme names a local socket, which carries no TLS.
-func isSocketHost(scheme string) bool {
-	return scheme == "unix" || scheme == "npipe" || scheme == "fd"
-}
-
-// newEndpointTLSConfig is endpoint's TLS as docker/cli builds it; nil when it carries none.
-func newEndpointTLSConfig(endpoint dockercontext.Endpoint) (*tls.Config, error) {
-	if endpoint.TLSData == nil && !endpoint.SkipTLSVerify {
-		return nil, nil
-	}
-	var tlsOpts []func(*tls.Config)
-	if endpoint.TLSData != nil && endpoint.TLSData.CA != nil {
-		certPool := x509.NewCertPool()
-		if !certPool.AppendCertsFromPEM(endpoint.TLSData.CA) {
-			return nil, errInvalidEndpointCA
-		}
-		tlsOpts = append(tlsOpts, func(cfg *tls.Config) { cfg.RootCAs = certPool })
-	}
-	if endpoint.TLSData != nil && endpoint.TLSData.Key != nil && endpoint.TLSData.Cert != nil {
-		certificate, err := tls.X509KeyPair(endpoint.TLSData.Cert, endpoint.TLSData.Key)
-		if err != nil {
-			return nil, fmt.Errorf("read the endpoint's client certificate: %w", err)
-		}
-		tlsOpts = append(tlsOpts, func(cfg *tls.Config) { cfg.Certificates = []tls.Certificate{certificate} })
-	}
-	if endpoint.SkipTLSVerify {
-		tlsOpts = append(tlsOpts, func(cfg *tls.Config) { cfg.InsecureSkipVerify = true })
-	}
-	return tlsconfig.ClientDefault(tlsOpts...), nil
 }
 
 // newImageBackend builds the image backend over both archivers a writable layer may name;

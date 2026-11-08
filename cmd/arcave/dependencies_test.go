@@ -549,8 +549,7 @@ func TestNewDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, daemon.api.Close()) })
 	assert.NotNil(t, daemon.cli)
 	assert.NotNil(t, daemon.api)
-	assert.Equal(t, "unix:///nowhere/docker.sock", daemon.transport.DaemonHost())
-	assert.NotNil(t, daemon.transport.HTTPClient())
+	assert.Equal(t, "unix:///nowhere/docker.sock", daemon.api.DaemonHost())
 }
 
 // api_version is the one docker field carried not through ClientOptions but
@@ -1082,27 +1081,25 @@ func TestNewComposeEventSink_MuteNodeKeepsTheLog(t *testing.T) {
 	assert.Nil(t, sink)
 }
 
-// The engine decides the profile whole: Podman is reached past its compat API, over TLS as the
-// endpoint is, held to no Docker version, with its own defaults; Docker through the API itself.
+// The engine decides the profile whole: Podman is reached past its compat API, through the
+// client's own dialer, held to no Docker version, with its own defaults; Docker through the API itself.
 func TestNewRuntimeProfile(t *testing.T) {
 	api, err := client.New(client.WithHost("tcp://10.0.0.5:2376"))
 	require.NoError(t, err)
-	transport := daemonTransport{
-		client: &http.Client{},
-		host:   api.DaemonHost(),
-	}
 	info := system.Info{Name: "host-1", LoggingDriver: "json-file", DefaultRuntime: "runc"}
 	plain := dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2375"}}
 	dockerEngine := docker.NewEngine(api)
-	libpodPlain, err := libpod.NewClient(transport, libpod.Options{Version: "6.1.4"})
+	libpodClient, err := libpod.NewClient(api, libpod.Options{Version: "6.1.4"})
 	require.NoError(t, err)
-	libpodTLS, err := libpod.NewClient(transport, libpod.Options{
-		Version: "6.1.4",
-		UseTLS:  true,
-	})
-	require.NoError(t, err)
-	podmanEngine := func(libpodClient *libpod.Client) *docker.Engine {
-		return docker.NewEngine(podman.NewAPI(api, libpodClient))
+	podmanAPI := podman.NewAPI(api, libpodClient)
+	podmanEngine := docker.NewEngine(podmanAPI)
+	podmanProfile := runtimeProfile{
+		api:            podmanAPI,
+		engine:         podmanEngine,
+		volumes:        podman.NewEngine(podmanEngine),
+		version:        "6.1.4",
+		minDaemonMajor: 0,
+		assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 	}
 	tests := []struct {
 		name     string
@@ -1144,14 +1141,7 @@ func TestNewRuntimeProfile(t *testing.T) {
 			name:     "podman",
 			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: plain,
-			want: runtimeProfile{
-				api:            podman.NewAPI(api, libpodPlain),
-				engine:         podmanEngine(libpodPlain),
-				volumes:        podman.NewEngine(podmanEngine(libpodPlain)),
-				version:        "6.1.4",
-				minDaemonMajor: 0,
-				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
-			},
+			want:     podmanProfile,
 		},
 		{
 			name:     "podman reporting no version is refused",
@@ -1160,20 +1150,13 @@ func TestNewRuntimeProfile(t *testing.T) {
 			wantErr:  "reach libpod: no Podman version",
 		},
 		{
-			name:    "podman behind TLS reaches libpod over TLS",
+			name:    "podman behind TLS builds the same profile",
 			runtime: model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
 			endpoint: dockercontext.Endpoint{
 				EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
 				TLSData:      &clicontext.TLSData{},
 			},
-			want: runtimeProfile{
-				api:            podman.NewAPI(api, libpodTLS),
-				engine:         podmanEngine(libpodTLS),
-				volumes:        podman.NewEngine(podmanEngine(libpodTLS)),
-				version:        "6.1.4",
-				minDaemonMajor: 0,
-				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
-			},
+			want: podmanProfile,
 		},
 		{
 			name:    "podman behind an https:// host of a context is refused",
@@ -1203,24 +1186,11 @@ func TestNewRuntimeProfile(t *testing.T) {
 				assembler:      composespec.NewAssembler(composespec.NewDockerStamps(info)),
 			},
 		},
-		{
-			name:     "podman with TLS verification off reaches libpod over TLS too",
-			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimePodman, Version: "6.1.4"},
-			endpoint: dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376", SkipTLSVerify: true}},
-			want: runtimeProfile{
-				api:            podman.NewAPI(api, libpodTLS),
-				engine:         podmanEngine(libpodTLS),
-				volumes:        podman.NewEngine(podmanEngine(libpodTLS)),
-				version:        "6.1.4",
-				minDaemonMajor: 0,
-				assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := newRuntimeProfile(tt.runtime, info, api, transport, tt.endpoint)
+			got, err := newRuntimeProfile(tt.runtime, info, api, tt.endpoint)
 
 			// Assert
 			if tt.wantErr != "" {
@@ -1234,8 +1204,8 @@ func TestNewRuntimeProfile(t *testing.T) {
 	}
 }
 
-// The endpoint the client resolved decides how libpod is reached: a daemon behind TLS over
-// https, a plain one over http.
+// A Podman daemon is reached through libpod over the very connection the client resolved: a
+// socket, plain tcp or TLS. ssh is the integration tests'.
 func TestReadRuntimeProfile(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1244,13 +1214,36 @@ func TestReadRuntimeProfile(t *testing.T) {
 			_, _ = io.WriteString(w, `{"Version":"6.1.4","Components":[{"Name":"Podman Engine","Version":"6.1.4"}]}`)
 		case strings.HasSuffix(r.URL.Path, "/info"):
 			_, _ = io.WriteString(w, `{}`)
+		case strings.HasSuffix(r.URL.Path, "/v6.1.4/libpod/containers/c1/json"):
+			_, _ = io.WriteString(w, `{"HostConfig": {"LogConfig": {"Size": "1MB"}}}`)
+		case strings.HasSuffix(r.URL.Path, "/containers/c1/json"):
+			_, _ = io.WriteString(w, `{"Id": "c1", "HostConfig": {"LogConfig": {"Type": "k8s-file"}}}`)
+		default:
+			http.NotFound(w, r)
 		}
 	})
 	tests := []struct {
 		name    string
 		newCase func(t *testing.T) config.Docker
-		wantTLS bool
 	}{
+		{
+			name: "a daemon on a unix socket",
+			newCase: func(t *testing.T) config.Docker {
+				t.Helper()
+				// t.TempDir is too long a path for a socket on macOS.
+				dir, err := os.MkdirTemp("", "arcave")
+				require.NoError(t, err)
+				t.Cleanup(func() { assert.NoError(t, os.RemoveAll(dir)) })
+				socket := filepath.Join(dir, "d.sock")
+				listener, err := net.Listen("unix", socket)
+				require.NoError(t, err)
+				server := httptest.NewUnstartedServer(handler)
+				server.Listener = listener
+				server.Start()
+				t.Cleanup(server.Close)
+				return config.Docker{Host: "unix://" + socket}
+			},
+		},
 		{
 			name: "a plain daemon",
 			newCase: func(t *testing.T) config.Docker {
@@ -1271,7 +1264,6 @@ func TestReadRuntimeProfile(t *testing.T) {
 				require.NoError(t, os.WriteFile(caFile, caPEM, 0o600))
 				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), CAFile: caFile}
 			},
-			wantTLS: true,
 		},
 		{
 			name: "a daemon behind TLS under skip_tls_verify, with no certificate",
@@ -1281,7 +1273,6 @@ func TestReadRuntimeProfile(t *testing.T) {
 				t.Cleanup(server.Close)
 				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), SkipTLSVerify: true}
 			},
-			wantTLS: true,
 		},
 	}
 	for _, tt := range tests {
@@ -1292,10 +1283,7 @@ func TestReadRuntimeProfile(t *testing.T) {
 			defer opened.release(context.Background())
 			daemon, err := connectDaemon(tt.newCase(t), io.Discard, opened)
 			require.NoError(t, err)
-			libpodClient, err := libpod.NewClient(daemon.transport, libpod.Options{
-				Version: "6.1.4",
-				UseTLS:  tt.wantTLS,
-			})
+			libpodClient, err := libpod.NewClient(daemon.api, libpod.Options{Version: "6.1.4"})
 			require.NoError(t, err)
 
 			// Act
@@ -1304,6 +1292,9 @@ func TestReadRuntimeProfile(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, podman.NewAPI(daemon.api, libpodClient), got.api)
+			inspect, err := got.api.ContainerInspect(context.Background(), "c1", client.ContainerInspectOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, map[string]string{"max-size": "1MB"}, inspect.Container.HostConfig.LogConfig.Config)
 		})
 	}
 }
@@ -1428,7 +1419,7 @@ func TestOpenGCService_DaemonUnreachable(t *testing.T) {
 	assert.NotNil(t, svc)
 }
 
-// The client and libpod's transport go on the stack: nothing else closes their connections.
+// The client goes on the stack: nothing else closes its connections.
 func TestConnectDaemon(t *testing.T) {
 	// Arrange
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
@@ -1441,7 +1432,7 @@ func TestConnectDaemon(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.NotNil(t, daemon.api)
-	assert.Len(t, opened.releases, 2)
+	assert.Len(t, opened.releases, 1)
 }
 
 // The name is gated before anything is opened, though the tools commands open no store.
@@ -1658,63 +1649,4 @@ func readStoreObject(t *testing.T, store storages.Storager, key string) string {
 	data, err := io.ReadAll(body)
 	require.NoError(t, err)
 	return string(data)
-}
-
-// The transport libpod shares is the one the endpoint names: TLS off a tcp host only, a helper's
-// dialer for ssh, the default socket for no host.
-func TestNewDaemonTransport(t *testing.T) {
-	tests := []struct {
-		name     string
-		endpoint dockercontext.EndpointMeta
-		tlsData  *clicontext.TLSData
-		wantTLS  bool
-		wantErr  error
-	}{
-		{
-			name:     "a tcp host under skip_tls_verify carries TLS",
-			endpoint: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376", SkipTLSVerify: true},
-			wantTLS:  true,
-		},
-		{
-			name:     "a tcp host with no TLS material is plain",
-			endpoint: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2375"},
-		},
-		{
-			name:     "a unix socket carries no TLS whatever the endpoint says",
-			endpoint: dockercontext.EndpointMeta{Host: "unix:///var/run/docker.sock", SkipTLSVerify: true},
-		},
-		{
-			name: "no host is the default socket",
-		},
-		{
-			name:     "ssh dials through the connection helper",
-			endpoint: dockercontext.EndpointMeta{Host: "ssh://user@10.0.0.5"},
-		},
-		{
-			name:     "a CA that is no certificate is refused",
-			endpoint: dockercontext.EndpointMeta{Host: "tcp://10.0.0.5:2376"},
-			tlsData:  &clicontext.TLSData{CA: []byte("not a certificate")},
-			wantErr:  errInvalidEndpointCA,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got, err := newDaemonTransport(dockercontext.Endpoint{EndpointMeta: tt.endpoint, TLSData: tt.tlsData})
-
-			// Assert
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			transport, ok := got.Transport.(*http.Transport)
-			require.True(t, ok)
-			assert.NotNil(t, transport.DialContext)
-			assert.Equal(t, tt.wantTLS, transport.TLSClientConfig != nil)
-			if tt.wantTLS {
-				assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
-			}
-		})
-	}
 }

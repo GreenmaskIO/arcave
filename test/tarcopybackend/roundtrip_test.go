@@ -18,18 +18,12 @@ package tarcopybackend
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/docker/go-connections/sockets"
-	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/inmemory"
 	"github.com/moby/moby/api/types/container"
@@ -159,7 +153,7 @@ type env struct {
 func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 	t.Helper()
 
-	cli, connection := newDaemonClient(t)
+	cli := newDaemonClient(t)
 	store := inmemory.New("session")
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	engine := dockerclient.NewEngine(cli)
@@ -169,20 +163,17 @@ func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 		cli:     cli,
 		engine:  engine,
 		store:   store,
-		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli, connection), compression),
+		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli), compression),
 	}
 }
 
 // newVolumeStreamer is the streamer arcave's DI root builds for the daemon cli answers as.
-func newVolumeStreamer(t *testing.T, cli *client.Client, connection daemonConnection) fullcopy.VolumeStreamer {
+func newVolumeStreamer(t *testing.T, cli *client.Client) fullcopy.VolumeStreamer {
 	t.Helper()
 	runtime, err := dockerclient.ReadRuntime(context.Background(), cli)
 	require.NoError(t, err)
 	if runtime.Kind == model.ContainerRuntimePodman {
-		libpodClient, err := libpod.NewClient(connection, libpod.Options{
-			Version: runtime.Version,
-			UseTLS:  os.Getenv(client.EnvOverrideCertPath) != "",
-		})
+		libpodClient, err := libpod.NewClient(cli, libpod.Options{Version: runtime.Version})
 		require.NoError(t, err)
 		return podmanclient.NewEngine(dockerclient.NewEngine(podmanclient.NewAPI(cli, libpodClient)))
 	}
@@ -302,59 +293,21 @@ func objectNames(t *testing.T, store storages.Storager) []string {
 	return names
 }
 
-// daemonConnection is the transport the SDK's client and libpod share, as arcave's DI root builds it.
-type daemonConnection struct {
-	client *http.Client
-	host   string
-}
-
-func (c daemonConnection) HTTPClient() *http.Client { return c.client }
-
-func (c daemonConnection) DaemonHost() string { return c.host }
-
-// newDaemonClient skips the test unless a docker daemon answers; the client and libpod reach it
-// over one transport, built for the environment's host and TLS as the SDK builds it.
-func newDaemonClient(t *testing.T) (*client.Client, daemonConnection) {
+// newDaemonClient skips the test unless a docker daemon answers.
+func newDaemonClient(t *testing.T) *client.Client {
 	t.Helper()
 
 	if testing.Short() {
 		t.Skip("skipping the fullcopy backend volume-level test in short mode")
 	}
-	transport := newDaemonTransport(t)
-	cli, err := client.New(client.FromEnv, client.WithHTTPClient(transport))
+	cli, err := client.New(client.FromEnv)
 	require.NoError(t, err)
 	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
 		_ = cli.Close()
 		t.Skip("skipping the fullcopy backend volume-level test: no reachable docker daemon: " + err.Error())
 	}
 	t.Cleanup(func() { _ = cli.Close() })
-	return cli, daemonConnection{
-		client: transport,
-		host:   cli.DaemonHost(),
-	}
-}
-
-// newDaemonTransport is the HTTP client for DOCKER_HOST, with DOCKER_CERT_PATH's TLS when it is set.
-func newDaemonTransport(t *testing.T) *http.Client {
-	t.Helper()
-
-	hostURL, err := client.ParseHostURL(cmp.Or(os.Getenv(client.EnvOverrideHost), client.DefaultDockerHost))
-	require.NoError(t, err)
-	roundTripper := &http.Transport{}
-	if certPath := os.Getenv(client.EnvOverrideCertPath); certPath != "" {
-		roundTripper.TLSClientConfig, err = tlsconfig.Client(tlsconfig.Options{
-			CAFile:             filepath.Join(certPath, "ca.pem"),
-			CertFile:           filepath.Join(certPath, "cert.pem"),
-			KeyFile:            filepath.Join(certPath, "key.pem"),
-			InsecureSkipVerify: os.Getenv(client.EnvTLSVerify) == "",
-		})
-		require.NoError(t, err)
-	}
-	require.NoError(t, sockets.ConfigureTransport(roundTripper, hostURL.Scheme, hostURL.Host))
-	return &http.Client{
-		Transport:     roundTripper,
-		CheckRedirect: client.CheckRedirect,
-	}
+	return cli
 }
 
 // randomSuffix keeps concurrent copies of these tests apart on one daemon.

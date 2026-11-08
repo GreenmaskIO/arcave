@@ -16,13 +16,16 @@ package libpod
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/stretchr/testify/assert"
@@ -35,12 +38,20 @@ const recordedVolumeSource = "/var/home/core/.local/share/containers/storage/vol
 const bareImageID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 type fakeConnection struct {
-	client *http.Client
-	host   string
+	dial func(context.Context) (net.Conn, error)
+	host string
 }
 
-func (f fakeConnection) HTTPClient() *http.Client { return f.client }
-func (f fakeConnection) DaemonHost() string       { return f.host }
+func (f fakeConnection) Dialer() func(context.Context) (net.Conn, error) { return f.dial }
+func (f fakeConnection) DaemonHost() string                              { return f.host }
+
+// dialTo dials server's listener, as the SDK's dialer does a tcp host.
+func dialTo(server *httptest.Server) func(context.Context) (net.Conn, error) {
+	return func(ctx context.Context) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}
+}
 
 // newTestClient is a Client whose daemon answers with handler.
 func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
@@ -48,8 +59,8 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	client, err := NewClient(fakeConnection{
-		client: server.Client(),
-		host:   "tcp://" + strings.TrimPrefix(server.URL, "http://"),
+		dial: dialTo(server),
+		host: "tcp://" + strings.TrimPrefix(server.URL, "http://"),
 	}, Options{Version: "6.1.4"})
 	require.NoError(t, err)
 	return client
@@ -315,8 +326,8 @@ func TestClient_call_HostPath(t *testing.T) {
 	}))
 	defer server.Close()
 	client, err := NewClient(fakeConnection{
-		client: server.Client(),
-		host:   "tcp://" + strings.TrimPrefix(server.URL, "http://") + "/prefix",
+		dial: dialTo(server),
+		host: "tcp://" + strings.TrimPrefix(server.URL, "http://") + "/prefix",
 	}, Options{Version: "6.1.4"})
 	require.NoError(t, err)
 
@@ -344,7 +355,7 @@ func TestClient_call_Cancelled(t *testing.T) {
 	assert.Nil(t, resp)
 }
 
-// A client that speaks TLS reaches libpod over it, through its own transport.
+// A connection whose dialer speaks TLS reaches libpod over it.
 func TestClient_InspectContainer_OverTLS(t *testing.T) {
 	// Arrange
 	var gotTLS bool
@@ -353,13 +364,16 @@ func TestClient_InspectContainer_OverTLS(t *testing.T) {
 		_, _ = io.WriteString(w, `{"HostConfig": {"LogConfig": {"Size": "1MB"}}}`)
 	}))
 	defer server.Close()
+	transport, ok := server.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	tlsConfig := transport.TLSClientConfig
 	client, err := NewClient(fakeConnection{
-		client: server.Client(),
-		host:   "tcp://" + strings.TrimPrefix(server.URL, "https://"),
-	}, Options{
-		Version: "6.1.4",
-		UseTLS:  true,
-	})
+		dial: func(ctx context.Context) (net.Conn, error) {
+			dialer := tls.Dialer{Config: tlsConfig}
+			return dialer.DialContext(ctx, "tcp", server.Listener.Addr().String())
+		},
+		host: "tcp://" + strings.TrimPrefix(server.URL, "https://"),
+	}, Options{Version: "6.1.4"})
 	require.NoError(t, err)
 
 	// Act
@@ -369,6 +383,62 @@ func TestClient_InspectContainer_OverTLS(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, gotTLS)
 	assert.Equal(t, "1MB", got.HostConfig.LogConfig.Size)
+}
+
+// A socket or ssh host is reached through the connection's dialer, under the placeholder host.
+func TestClient_InspectContainer_ThroughTheDialer(t *testing.T) {
+	// Arrange
+	var gotHost string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		_, _ = io.WriteString(w, `{"HostConfig": {"LogConfig": {"Size": "1MB"}}}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(fakeConnection{
+		dial: dialTo(server),
+		host: "unix:///run/podman/podman.sock",
+	}, Options{Version: "6.1.4"})
+	require.NoError(t, err)
+
+	// Act
+	got, err := client.InspectContainer(context.Background(), "c1")
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, placeholderHost, gotHost)
+	assert.Equal(t, "1MB", got.HostConfig.LogConfig.Size)
+}
+
+// A request's connection is closed once its answer is read: none is left idle, so nothing has to close them.
+func TestClient_InspectContainer_ClosesTheConnection(t *testing.T) {
+	// Arrange
+	closed := make(chan struct{})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateClosed {
+			close(closed)
+		}
+	}
+	server.Start()
+	defer server.Close()
+	client, err := NewClient(fakeConnection{
+		dial: dialTo(server),
+		host: "tcp://" + strings.TrimPrefix(server.URL, "http://"),
+	}, Options{Version: "6.1.4"})
+	require.NoError(t, err)
+
+	// Act
+	_, err = client.InspectContainer(context.Background(), "c1")
+
+	// Assert
+	require.NoError(t, err)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection was left open")
+	}
 }
 
 // A host that cannot be parsed, or no version to name in the path, fails the construction.
@@ -403,27 +473,24 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-// Only a tcp host is used as it is, over https under TLS; any other is addressed by a placeholder.
+// Only a tcp host is used as it is, over http, the dialer speaking any TLS; any other is
+// addressed by a placeholder.
 func TestNewBaseURL(t *testing.T) {
 	tests := []struct {
-		name   string
-		host   string
-		useTLS bool
-		want   string
+		name string
+		host string
+		want string
 	}{
 		{name: "a unix socket", host: "unix:///run/podman/podman.sock", want: "http://docker"},
-		{name: "a unix socket under TLS", host: "unix:///run/podman/podman.sock", useTLS: true, want: "http://docker"},
 		{name: "ssh", host: "ssh://core@127.0.0.1:54651", want: "http://docker"},
-		{name: "tcp, plain", host: "tcp://10.0.0.5:2375", want: "http://10.0.0.5:2375"},
-		{name: "tcp under TLS", host: "tcp://10.0.0.5:2376", useTLS: true, want: "https://10.0.0.5:2376"},
-		{name: "tcp with a path, plain", host: "tcp://10.0.0.5:2375/prefix", want: "http://10.0.0.5:2375/prefix"},
-		{name: "tcp with a path under TLS", host: "tcp://10.0.0.5:2376/prefix", useTLS: true, want: "https://10.0.0.5:2376/prefix"},
-		{name: "ssh, as the client reports it, under TLS settings", host: "http://docker.example.com", useTLS: true, want: "http://docker"},
+		{name: "ssh, as the client reports it", host: "http://docker.example.com", want: "http://docker"},
+		{name: "tcp", host: "tcp://10.0.0.5:2376", want: "http://10.0.0.5:2376"},
+		{name: "tcp with a path", host: "tcp://10.0.0.5:2376/prefix", want: "http://10.0.0.5:2376/prefix"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, err := newBaseURL(tt.host, tt.useTLS)
+			got, err := newBaseURL(tt.host)
 
 			// Assert
 			require.NoError(t, err)
