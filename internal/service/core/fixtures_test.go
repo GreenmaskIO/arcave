@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/mock"
@@ -59,9 +59,16 @@ func cdcCaptureDefaults() capturepolicy.CaptureDefaults {
 	return defaults
 }
 
+// demoRestoredVolumes are the docker names of the volumes a rollback to demoRecord restores.
+var demoRestoredVolumes = []string{demoVolumeName}
+
 // demoVolume is the unit, in the form the mock tests address it by.
 func demoVolume() model.Volume {
-	return model.Volume{ObjectID: "volume-named-" + demoVolumeName, Backend: model.SnapshotBackendFullCopy}
+	return model.Volume{
+		ObjectID: "volume-named-" + demoVolumeName,
+		Backend:  model.SnapshotBackendFullCopy,
+		Named:    &model.VolumePropertiesNamed{VolumeName: demoVolumeName},
+	}
 }
 
 // demoRecord is a committed savepoint of demoVolume.
@@ -148,8 +155,8 @@ func demoContainerName(n int) string {
 // demoContainerInspect is a replica running on demoBaseImage.
 func demoContainerInspect() container.InspectResponse {
 	return container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{Image: demoUpstreamID.String()},
-		Config:            &container.Config{Image: demoBaseImage},
+		Image:  demoUpstreamID.String(),
+		Config: &container.Config{Image: demoBaseImage},
 	}
 }
 

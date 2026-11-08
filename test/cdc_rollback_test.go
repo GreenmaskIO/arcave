@@ -29,10 +29,9 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -527,7 +526,7 @@ func (s *stubComposeRunner) Stop(context.Context, *types.Project) ([]string, err
 
 func (s *stubComposeRunner) Down(context.Context, *types.Project) error { return nil }
 
-func (s *stubComposeRunner) Create(context.Context, *types.Project) error { return nil }
+func (s *stubComposeRunner) Create(context.Context, *types.Project, []string) error { return nil }
 
 func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration) error {
 	if err := s.failNextUp; err != nil {
@@ -573,9 +572,9 @@ func newDaemonClient(t *testing.T) *client.Client {
 	if testing.Short() {
 		t.Skip("skipping the cdc backend integration test in short mode")
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background()); err != nil {
+	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
 		_ = cli.Close()
 		t.Skip("skipping the cdc backend integration test: no reachable docker daemon: " + err.Error())
 	}
@@ -621,9 +620,9 @@ func randomSuffix(t *testing.T) string {
 func createVolume(t *testing.T, cli *client.Client, name string) {
 	t.Helper()
 
-	_, err := cli.VolumeCreate(context.Background(), volume.CreateOptions{Name: name})
+	_, err := cli.VolumeCreate(context.Background(), client.VolumeCreateOptions{Name: name})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cli.VolumeRemove(context.Background(), name, true) })
+	t.Cleanup(func() { _, _ = cli.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true}) })
 }
 
 // createLabelledContainer creates — never starts — a container carrying
@@ -633,8 +632,8 @@ func createVolume(t *testing.T, cli *client.Client, name string) {
 func createLabelledContainer(t *testing.T, cli *client.Client, service string, v cdcVolume) {
 	t.Helper()
 
-	created, err := cli.ContainerCreate(context.Background(),
-		&container.Config{
+	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image: busyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
@@ -642,11 +641,12 @@ func createLabelledContainer(t *testing.T, cli *client.Client, service string, v
 				"com.docker.compose.service": service,
 			},
 		},
-		&container.HostConfig{Binds: []string{v.name + ":" + v.target}},
-		nil, nil, v.name+"-holder")
+		HostConfig: &container.HostConfig{Binds: []string{v.name + ":" + v.target}},
+		Name:       v.name + "-holder",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
 }
 

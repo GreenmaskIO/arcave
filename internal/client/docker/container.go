@@ -20,8 +20,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -35,11 +36,12 @@ func (e *Engine) RecreateWithImage(
 	if identity.Name == "" || identity.Number < 1 {
 		return "", fmt.Errorf("container %s: no replica identity to rebuild it as", containerID)
 	}
-	inspect, err := e.api.ContainerInspect(ctx, containerID)
+	inspected, err := e.api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", fmt.Errorf("inspect container %s: %w", containerID, err)
 	}
-	if inspect.Config == nil || inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+	inspect := inspected.Container
+	if inspect.Config == nil || inspect.HostConfig == nil {
 		return "", fmt.Errorf("container %s reports no configuration to rebuild it from", containerID)
 	}
 
@@ -57,11 +59,17 @@ func (e *Engine) RecreateWithImage(
 
 	// The empty anonymous volumes compose made for this container go with it; the
 	// replacement is handed fresh ones.
-	if err := e.api.ContainerRemove(ctx, containerID, container.RemoveOptions{RemoveVolumes: true}); err != nil {
+	if _, err := e.api.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{RemoveVolumes: true}); err != nil {
 		return "", fmt.Errorf("remove container %s: %w", containerID, err)
 	}
 
-	created, err := e.api.ContainerCreate(ctx, &config, &hostConfig, networking, platform, identity.Name)
+	created, err := e.api.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           &config,
+		HostConfig:       &hostConfig,
+		NetworkingConfig: networking,
+		Platform:         platform,
+		Name:             identity.Name,
+	})
 	if err != nil {
 		return "", fmt.Errorf("recreate container %s as %s from %s: %w", name, identity.Name, imageRef, err)
 	}

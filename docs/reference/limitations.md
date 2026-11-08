@@ -49,11 +49,12 @@ A rollback restores volumes, container files and the compose setup. Anything out
 arcave rebuilds the project from what Docker reports, and Docker doesn't keep everything a compose file says. Your compose file itself is never changed. After a rollback:
 
 * `build`, `profiles`, `develop` and `x-` keys are not applied; the image that was already built keeps running.
-* `post_start` and `pre_stop` hooks do not run.
+* `pre_start`, `post_start` and `pre_stop` hooks do not run.
 * `env_file` is not applied; the variables it set are kept.
 * An optional `depends_on` (`required: false`) becomes required.
 * A container gets a new MAC address.
 * A network's subnet may change, unless a service has a fixed address in it.
+* A named volume whose driver, options or labels changed since the savepoint is recreated with the savepoint's settings when the savepoint holds its data. One the savepoint does not hold keeps its current settings and data, with a warning naming it.
 * On Podman, what it does not store is not put back: `sysctls`, a fixed `ipv4_address`, `domainname`, a volume's `nocopy`, the `max-file` of a log, and a `cap_drop` of a capability Podman never grants are dropped. A long-syntax bind declaring no propagation comes back with `propagation: private`, Podman's default for it, and a long-syntax `tmpfs` comes back in the `tmpfs:` shorthand. A tag beside a digest (`postgres:16@sha256:…`) comes back as the digest alone, and a port published without a host port comes back fixed to the one Podman picked. What Podman set itself and reports as if declared — `oom_score_adj` and the `nofile`/`nproc` limits — is recorded as is.
 * Podman refuses `links:` when it creates a container (`link is not supported`), so a project declaring them does not run on it.
 * Nothing is guaranteed to work between Docker and Podman: Docker Engine, Docker Desktop, Colima and OrbStack are one side, Podman the other. arcave converts nothing and checks nothing. The spec it assembles on one carries defaults the other refuses or spells differently, so a rollback across can fail after the project has stopped, with compose's own error.

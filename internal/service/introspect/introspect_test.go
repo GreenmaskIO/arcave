@@ -24,14 +24,14 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/pkg/api"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -107,7 +107,7 @@ func TestInspector_Introspect_Referenced(t *testing.T) {
 		r.HostConfig = &h
 		return r
 	}
-	vpn := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"}}
+	vpn := container.InspectResponse{ID: vpnID, Name: "/vpn"}
 
 	tests := []struct {
 		name     string
@@ -169,7 +169,7 @@ func TestInspector_Introspect_Referenced(t *testing.T) {
 				if err != nil {
 					answer = container.InspectResponse{}
 				}
-				daemon.On("ContainerInspect", mock.Anything, id).Return(answer, err).Once()
+				daemon.On("ContainerInspect", mock.Anything, id, client.ContainerInspectOptions{}).Return(answer, err).Once()
 			}
 			daemon.expectVolumes()
 			daemon.expectNetworks()
@@ -280,7 +280,7 @@ func TestInspector_Introspect_ClassifiesMounts(t *testing.T) {
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
 			if tt.mount.Type == mount.TypeVolume && tt.mount.Name != ownedName {
-				daemon.On("VolumeInspect", mock.Anything, tt.mount.Name).
+				daemon.On("VolumeInspect", mock.Anything, tt.mount.Name, client.VolumeInspectOptions{}).
 					Return(volume.Volume{Name: tt.mount.Name, Labels: tt.labels}, nil).Once()
 			}
 
@@ -466,6 +466,39 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
+func TestKeepProjectContainers(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		kept   bool
+	}{
+		{name: "a replica", labels: nil, kept: true},
+		{name: "a one-off", labels: map[string]string{api.OneoffLabel: "True"}, kept: false},
+		{name: "a one-off label other than True", labels: map[string]string{api.OneoffLabel: "False"}, kept: true},
+		{name: "a lifecycle hook", labels: map[string]string{api.HookLabel: "pre_start"}, kept: false},
+		{name: "a provider's relay", labels: map[string]string{api.RelayLabel: "3f2a"}, kept: false},
+		{name: "an empty hook label", labels: map[string]string{api.HookLabel: ""}, kept: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			candidate := summary("c-web-1", "web", "nginx:1", 1)
+			maps.Copy(candidate.Labels, tt.labels)
+
+			// Act
+			got := keepProjectContainers([]container.Summary{candidate})
+
+			// Assert
+			if tt.kept {
+				assert.Equal(t, []container.Summary{candidate}, got)
+			} else {
+				assert.Empty(t, got)
+			}
+		})
+	}
+}
+
 func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 	anon := func(name string) volume.Volume {
 		return volume.Volume{Name: name, Labels: map[string]string{anonymousVolumeLabel: ""}}
@@ -521,7 +554,7 @@ func TestInspector_Introspect_AnonymousVolumePerReplica(t *testing.T) {
 			for _, r := range tt.replicas {
 				for _, m := range r.mounts {
 					if m.Type == mount.TypeVolume && m.Name != ownedName {
-						daemon.On("VolumeInspect", mock.Anything, m.Name).Return(anon(m.Name), nil).Once()
+						daemon.On("VolumeInspect", mock.Anything, m.Name, client.VolumeInspectOptions{}).Return(anon(m.Name), nil).Once()
 					}
 				}
 			}
@@ -560,8 +593,8 @@ func TestInspector_Introspect_InheritedMounts(t *testing.T) {
 		return r
 	}
 	vpn := container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{ID: vpnID, Name: "/vpn"},
-		Mounts:            []container.MountPoint{vpnBind},
+		ID: vpnID, Name: "/vpn",
+		Mounts: []container.MountPoint{vpnBind},
 	}
 
 	tests := []struct {
@@ -599,14 +632,14 @@ func TestInspector_Introspect_InheritedMounts(t *testing.T) {
 			)
 			daemon.expectInspected(tt.app, data)
 			if tt.foreign {
-				daemon.On("ContainerInspect", mock.Anything, "vpn").Return(vpn, nil).Once()
+				daemon.On("ContainerInspect", mock.Anything, "vpn", client.ContainerInspectOptions{}).Return(vpn, nil).Once()
 			}
 			daemon.expectVolumes()
 			var names []string
 			for _, m := range append(slices.Clone(tt.app.Mounts), data.Mounts...) {
 				if m.Type == mount.TypeVolume && !slices.Contains(names, m.Name) {
 					names = append(names, m.Name)
-					daemon.On("VolumeInspect", mock.Anything, m.Name).
+					daemon.On("VolumeInspect", mock.Anything, m.Name, client.VolumeInspectOptions{}).
 						Return(volume.Volume{Name: m.Name, Labels: map[string]string{anonymousVolumeLabel: ""}}, nil).Once()
 				}
 			}
@@ -697,6 +730,9 @@ func TestUndeclaredMounts(t *testing.T) {
 func TestInspector_Introspect_NoContainers(t *testing.T) {
 	oneoff := summary("c-web-run", "web", "nginx:1", 1)
 	oneoff.Labels[api.OneoffLabel] = "True"
+	hook := summary("c-web-hook", "web", "nginx:1", 0)
+	hook.Labels[api.HookLabel] = "pre_start"
+	delete(hook.Labels, api.ContainerNumberLabel)
 
 	tests := []struct {
 		name       string
@@ -704,6 +740,7 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 	}{
 		{name: "the daemon holds none"},
 		{name: "only one-off containers are left", containers: []container.Summary{oneoff}},
+		{name: "only a failed pre_start hook is left", containers: []container.Summary{hook}},
 	}
 
 	for _, tt := range tests {
@@ -751,7 +788,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 			setup: func(daemon *mockDockerAPI) {
 				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
 				daemon.On("VolumeList", mock.Anything, mock.Anything).
-					Return(volume.ListResponse{}, daemonErr).Once()
+					Return([]volume.Volume(nil), daemonErr).Once()
 			},
 		},
 		{
@@ -760,7 +797,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 			setup: func(daemon *mockDockerAPI) {
 				daemon.expectContainers(summary("c-db-1", "db", "busybox", 1))
 				daemon.expectVolumes()
-				daemon.On("ContainerInspect", mock.Anything, "c-db-1").
+				daemon.On("ContainerInspect", mock.Anything, "c-db-1", client.ContainerInspectOptions{}).
 					Return(container.InspectResponse{}, daemonErr).Once()
 			},
 		},
@@ -772,7 +809,7 @@ func TestInspector_Introspect_DaemonFailures(t *testing.T) {
 					mountPoint(mount.TypeVolume, "shared", "", "/data", false)))
 				daemon.expectVolumes()
 				daemon.expectInspect("c-db-1")
-				daemon.On("VolumeInspect", mock.Anything, "shared").
+				daemon.On("VolumeInspect", mock.Anything, "shared", client.VolumeInspectOptions{}).
 					Return(volume.Volume{}, daemonErr).Once()
 			},
 		},
@@ -989,7 +1026,7 @@ func TestInspector_Introspect_Volumes(t *testing.T) {
 			daemon.expectReplicas(tt.replicas...)
 			daemon.expectVolumes(tt.owned...)
 			for _, v := range tt.foreign {
-				daemon.On("VolumeInspect", mock.Anything, v.Name).Return(v, nil).Once()
+				daemon.On("VolumeInspect", mock.Anything, v.Name, client.VolumeInspectOptions{}).Return(v, nil).Once()
 			}
 			daemon.expectNetworks()
 			daemon.expectImage(testImageID, nil)
@@ -1044,8 +1081,8 @@ func mountPoint(t mount.Type, name, source, destination string, readOnly bool) c
 // inspected is what `docker container inspect` reports for one container.
 func inspected(id, imageID string, mounts ...container.MountPoint) container.InspectResponse {
 	return container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{ID: id, Image: imageID},
-		Mounts:            mounts,
+		ID: id, Image: imageID,
+		Mounts: mounts,
 	}
 }
 
@@ -1068,8 +1105,8 @@ func ownedVolume(name, key string) volume.Volume {
 type mockDockerAPI struct{ mock.Mock }
 
 func (m *mockDockerAPI) expectContainers(summaries ...container.Summary) {
-	m.On("ContainerList", mock.Anything, mock.MatchedBy(func(opts container.ListOptions) bool {
-		return opts.All && len(opts.Filters.Get("label")) == 1
+	m.On("ContainerList", mock.Anything, mock.MatchedBy(func(opts client.ContainerListOptions) bool {
+		return opts.All && len(opts.Filters["label"]) == 1
 	})).Return(summaries, nil).Once()
 }
 
@@ -1082,7 +1119,7 @@ func (m *mockDockerAPI) expectInspect(ids ...string) {
 
 func (m *mockDockerAPI) expectInspected(responses ...container.InspectResponse) {
 	for _, r := range responses {
-		m.On("ContainerInspect", mock.Anything, r.ID).Return(r, nil).Once()
+		m.On("ContainerInspect", mock.Anything, r.ID, client.ContainerInspectOptions{}).Return(r, nil).Once()
 	}
 }
 
@@ -1103,50 +1140,52 @@ func (m *mockDockerAPI) expectImage(id model.ImageDigestID, labels map[string]st
 }
 
 func (m *mockDockerAPI) expectVolumes(volumes ...volume.Volume) {
-	listed := make([]*volume.Volume, 0, len(volumes))
-	for i := range volumes {
-		listed = append(listed, &volumes[i])
-	}
-	m.On("VolumeList", mock.Anything, mock.Anything).
-		Return(volume.ListResponse{Volumes: listed}, nil).Once()
+	m.On("VolumeList", mock.Anything, mock.Anything).Return(volumes, nil).Once()
 }
 
 func (m *mockDockerAPI) expectNetworks(summaries ...network.Summary) {
 	m.On("NetworkList", mock.Anything, mock.Anything).Return(summaries, nil).Once()
 }
 
-func (m *mockDockerAPI) ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error) {
+func (m *mockDockerAPI) ContainerList(
+	ctx context.Context, opts client.ContainerListOptions,
+) (client.ContainerListResult, error) {
 	args := m.Called(ctx, opts)
 	summaries, _ := args.Get(0).([]container.Summary)
-	return summaries, args.Error(1)
+	return client.ContainerListResult{Items: summaries}, args.Error(1)
 }
 
-func (m *mockDockerAPI) ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error) {
-	args := m.Called(ctx, id)
-	return args.Get(0).(container.InspectResponse), args.Error(1)
+func (m *mockDockerAPI) ContainerInspect(
+	ctx context.Context, id string, opts client.ContainerInspectOptions,
+) (client.ContainerInspectResult, error) {
+	args := m.Called(ctx, id, opts)
+	return client.ContainerInspectResult{Container: args.Get(0).(container.InspectResponse)}, args.Error(1)
 }
 
-func (m *mockDockerAPI) VolumeList(ctx context.Context, opts volume.ListOptions) (volume.ListResponse, error) {
+func (m *mockDockerAPI) VolumeList(ctx context.Context, opts client.VolumeListOptions) (client.VolumeListResult, error) {
 	args := m.Called(ctx, opts)
-	return args.Get(0).(volume.ListResponse), args.Error(1)
+	volumes, _ := args.Get(0).([]volume.Volume)
+	return client.VolumeListResult{Items: volumes}, args.Error(1)
 }
 
-func (m *mockDockerAPI) VolumeInspect(ctx context.Context, name string) (volume.Volume, error) {
-	args := m.Called(ctx, name)
-	return args.Get(0).(volume.Volume), args.Error(1)
+func (m *mockDockerAPI) VolumeInspect(
+	ctx context.Context, name string, opts client.VolumeInspectOptions,
+) (client.VolumeInspectResult, error) {
+	args := m.Called(ctx, name, opts)
+	return client.VolumeInspectResult{Volume: args.Get(0).(volume.Volume)}, args.Error(1)
 }
 
-func (m *mockDockerAPI) NetworkList(ctx context.Context, opts network.ListOptions) ([]network.Summary, error) {
+func (m *mockDockerAPI) NetworkList(ctx context.Context, opts client.NetworkListOptions) (client.NetworkListResult, error) {
 	args := m.Called(ctx, opts)
 	summaries, _ := args.Get(0).([]network.Summary)
-	return summaries, args.Error(1)
+	return client.NetworkListResult{Items: summaries}, args.Error(1)
 }
 
 func (m *mockDockerAPI) ImageInspect(
 	ctx context.Context, imageID string, _ ...client.ImageInspectOption,
-) (image.InspectResponse, error) {
+) (client.ImageInspectResult, error) {
 	args := m.Called(ctx, imageID)
-	return args.Get(0).(image.InspectResponse), args.Error(1)
+	return client.ImageInspectResult{InspectResponse: args.Get(0).(image.InspectResponse)}, args.Error(1)
 }
 
 func TestContainerName(t *testing.T) {

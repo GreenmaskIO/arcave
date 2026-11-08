@@ -25,10 +25,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 )
@@ -67,42 +67,49 @@ func NewAPI(api client.APIClient, libpod libpodAPI) *API {
 	}
 }
 
-// ContainerInspect is the compat inspect with libpod's subpath and mount-API bind mounts
-// as mount requests, and its log size as the max-size option.
-func (a *API) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
-	inspect, err := a.APIClient.ContainerInspect(ctx, containerID)
+// ContainerInspect is the compat inspect, Raw included, with libpod's subpath and mount-API bind
+// mounts as mount requests and its log size as the max-size option.
+func (a *API) ContainerInspect(
+	ctx context.Context, containerID string, options client.ContainerInspectOptions,
+) (client.ContainerInspectResult, error) {
+	inspect, err := a.APIClient.ContainerInspect(ctx, containerID, options)
 	if err != nil {
-		return container.InspectResponse{}, err
+		return client.ContainerInspectResult{}, err
 	}
 	stored, err := a.libpod.InspectContainer(ctx, containerID)
 	if err != nil {
-		return container.InspectResponse{}, fmt.Errorf("inspect container %s through libpod: %w", containerID, err)
+		return client.ContainerInspectResult{}, fmt.Errorf("inspect container %s through libpod: %w", containerID, err)
 	}
-	return withLibpodRequest(inspect, stored), nil
+	return client.ContainerInspectResult{
+		Container: withLibpodRequest(inspect.Container, stored),
+		Raw:       inspect.Raw,
+	}, nil
 }
 
 // ContainerCommit commits a container's writable layer through libpod as OCI, whose id survives a
 // save and a load; the comment is dropped, OCI carries none. The id is libpod's, a bare hex.
 func (a *API) ContainerCommit(
-	ctx context.Context, containerID string, options container.CommitOptions,
-) (container.CommitResponse, error) {
+	ctx context.Context, containerID string, options client.ContainerCommitOptions,
+) (client.ContainerCommitResult, error) {
 	if options.Reference != "" || options.Author != "" || options.Config != nil {
-		return container.CommitResponse{}, errUnsupportedCommitOptions
+		return client.ContainerCommitResult{}, errUnsupportedCommitOptions
 	}
 	committed, err := a.libpod.CommitContainer(ctx, libpod.CommitOptions{
 		Container: containerID,
 		Format:    libpod.CommitFormatOCI,
-		Pause:     options.Pause,
+		Pause:     !options.NoPause,
 		Changes:   options.Changes,
 	})
 	if err != nil {
-		return container.CommitResponse{}, err
+		return client.ContainerCommitResult{}, err
 	}
-	return container.CommitResponse{ID: committed}, nil
+	return client.ContainerCommitResult{ID: committed}, nil
 }
 
 // ImageSave streams one image out as an OCI archive, through libpod; the caller closes the stream.
-func (a *API) ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (io.ReadCloser, error) {
+func (a *API) ImageSave(
+	ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption,
+) (client.ImageSaveResult, error) {
 	if len(imageIDs) != 1 || len(opts) != 0 {
 		return nil, errUnsupportedSaveOptions
 	}
@@ -112,7 +119,7 @@ func (a *API) ImageSave(ctx context.Context, imageIDs []string, opts ...client.I
 // withLibpodRequest is inspect with the mount requests and log size libpod reports, and
 // without the binds those requests replace.
 func withLibpodRequest(inspect container.InspectResponse, stored libpod.Container) container.InspectResponse {
-	if inspect.ContainerJSONBase == nil || inspect.HostConfig == nil {
+	if inspect.HostConfig == nil {
 		return inspect
 	}
 	requests := newMountRequests(stored.Mounts)
@@ -120,9 +127,7 @@ func withLibpodRequest(inspect container.InspectResponse, stored libpod.Containe
 	hostConfig.Binds = withoutRequestedBinds(hostConfig.Binds, requests)
 	hostConfig.Mounts = slices.Concat(hostConfig.Mounts, requests)
 	hostConfig.LogConfig = withLogSize(hostConfig.LogConfig, stored.HostConfig.LogConfig.Size)
-	base := *inspect.ContainerJSONBase
-	base.HostConfig = &hostConfig
-	inspect.ContainerJSONBase = &base
+	inspect.HostConfig = &hostConfig
 	return inspect
 }
 

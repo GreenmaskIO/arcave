@@ -18,19 +18,23 @@ package tarcopybackend
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/sockets"
+	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/inmemory"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,7 +143,7 @@ func TestSnapshotter_Snapshot_MissingVolume(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not exist")
 	assert.Empty(t, objectNames(t, e.store), "nothing may be stored for a volume that is not there")
-	_, inspectErr := e.cli.VolumeInspect(context.Background(), vol.Named.VolumeName)
+	_, inspectErr := e.cli.VolumeInspect(context.Background(), vol.Named.VolumeName, client.VolumeInspectOptions{})
 	assert.Error(t, inspectErr, "the refused capture must not have created the volume it refused")
 }
 
@@ -155,7 +159,7 @@ type env struct {
 func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 	t.Helper()
 
-	cli := newDaemonClient(t)
+	cli, connection := newDaemonClient(t)
 	store := inmemory.New("session")
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	engine := dockerclient.NewEngine(cli)
@@ -165,17 +169,17 @@ func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 		cli:     cli,
 		engine:  engine,
 		store:   store,
-		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli), compression),
+		factory: fullcopy.NewFactory(newVolumeStreamer(t, cli, connection), compression),
 	}
 }
 
 // newVolumeStreamer is the streamer arcave's DI root builds for the daemon cli answers as.
-func newVolumeStreamer(t *testing.T, cli *client.Client) fullcopy.VolumeStreamer {
+func newVolumeStreamer(t *testing.T, cli *client.Client, connection daemonConnection) fullcopy.VolumeStreamer {
 	t.Helper()
 	runtime, err := dockerclient.ReadRuntime(context.Background(), cli)
 	require.NoError(t, err)
 	if runtime.Kind == model.ContainerRuntimePodman {
-		libpodClient, err := libpod.NewClient(cli, libpod.Options{
+		libpodClient, err := libpod.NewClient(connection, libpod.Options{
 			Version: runtime.Version,
 			UseTLS:  os.Getenv(client.EnvOverrideCertPath) != "",
 		})
@@ -298,21 +302,59 @@ func objectNames(t *testing.T, store storages.Storager) []string {
 	return names
 }
 
-// newDaemonClient skips the test unless a docker daemon answers.
-func newDaemonClient(t *testing.T) *client.Client {
+// daemonConnection is the transport the SDK's client and libpod share, as arcave's DI root builds it.
+type daemonConnection struct {
+	client *http.Client
+	host   string
+}
+
+func (c daemonConnection) HTTPClient() *http.Client { return c.client }
+
+func (c daemonConnection) DaemonHost() string { return c.host }
+
+// newDaemonClient skips the test unless a docker daemon answers; the client and libpod reach it
+// over one transport, built for the environment's host and TLS as the SDK builds it.
+func newDaemonClient(t *testing.T) (*client.Client, daemonConnection) {
 	t.Helper()
 
 	if testing.Short() {
 		t.Skip("skipping the fullcopy backend volume-level test in short mode")
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	transport := newDaemonTransport(t)
+	cli, err := client.New(client.FromEnv, client.WithHTTPClient(transport))
 	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background()); err != nil {
+	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
 		_ = cli.Close()
 		t.Skip("skipping the fullcopy backend volume-level test: no reachable docker daemon: " + err.Error())
 	}
 	t.Cleanup(func() { _ = cli.Close() })
-	return cli
+	return cli, daemonConnection{
+		client: transport,
+		host:   cli.DaemonHost(),
+	}
+}
+
+// newDaemonTransport is the HTTP client for DOCKER_HOST, with DOCKER_CERT_PATH's TLS when it is set.
+func newDaemonTransport(t *testing.T) *http.Client {
+	t.Helper()
+
+	hostURL, err := client.ParseHostURL(cmp.Or(os.Getenv(client.EnvOverrideHost), client.DefaultDockerHost))
+	require.NoError(t, err)
+	roundTripper := &http.Transport{}
+	if certPath := os.Getenv(client.EnvOverrideCertPath); certPath != "" {
+		roundTripper.TLSClientConfig, err = tlsconfig.Client(tlsconfig.Options{
+			CAFile:             filepath.Join(certPath, "ca.pem"),
+			CertFile:           filepath.Join(certPath, "cert.pem"),
+			KeyFile:            filepath.Join(certPath, "key.pem"),
+			InsecureSkipVerify: os.Getenv(client.EnvTLSVerify) == "",
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, sockets.ConfigureTransport(roundTripper, hostURL.Scheme, hostURL.Host))
+	return &http.Client{
+		Transport:     roundTripper,
+		CheckRedirect: client.CheckRedirect,
+	}
 }
 
 // randomSuffix keeps concurrent copies of these tests apart on one daemon.
@@ -329,9 +371,9 @@ func randomSuffix(t *testing.T) string {
 func createVolume(t *testing.T, cli *client.Client, name string) {
 	t.Helper()
 
-	_, err := cli.VolumeCreate(context.Background(), volume.CreateOptions{Name: name})
+	_, err := cli.VolumeCreate(context.Background(), client.VolumeCreateOptions{Name: name})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cli.VolumeRemove(context.Background(), name, true) })
+	t.Cleanup(func() { _, _ = cli.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true}) })
 }
 
 // createLabelledContainer creates — never starts — a container carrying
@@ -359,8 +401,8 @@ func createSubpathContainer(t *testing.T, cli *client.Client, service, name, tar
 func createHolder(t *testing.T, cli *client.Client, service, name string, host *container.HostConfig) {
 	t.Helper()
 
-	created, err := cli.ContainerCreate(context.Background(),
-		&container.Config{
+	created, err := cli.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+		Config: &container.Config{
 			Image: busyboxImage,
 			Cmd:   []string{"sh", "-c", "sleep 3600"},
 			Labels: map[string]string{
@@ -368,10 +410,12 @@ func createHolder(t *testing.T, cli *client.Client, service, name string, host *
 				"com.docker.compose.service": service,
 			},
 		},
-		host, nil, nil, name+"-holder")
+		HostConfig: host,
+		Name:       name + "-holder",
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	})
 }
 

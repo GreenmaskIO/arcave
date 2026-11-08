@@ -20,9 +20,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/client"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -30,7 +29,7 @@ import (
 // execStream is an exec's stdio as one stream: its stdout read, its stdin
 // written. Its stderr goes to the writer it was opened with.
 type execStream struct {
-	attached types.HijackedResponse
+	attached client.HijackedResponse
 	pr       *io.PipeReader
 	// demuxed is closed once the demultiplexer has stopped writing.
 	demuxed chan struct{}
@@ -41,7 +40,7 @@ var _ io.ReadWriteCloser = (*execStream)(nil)
 
 // newExecStream demultiplexes attached in the background: stdout into the
 // stream's reads, stderr into stderr.
-func newExecStream(attached types.HijackedResponse, stderr io.Writer) *execStream {
+func newExecStream(attached client.HijackedResponse, stderr io.Writer) *execStream {
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -85,20 +84,20 @@ func (s *execStream) release() {
 func openExecStream(
 	ctx context.Context, api dockerAPI, containerID string, exec model.OneShotExec,
 ) (*execStream, error) {
-	created, err := api.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+	created, err := api.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          exec.Cmd,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
 		// A tty would mangle the binary stream and merge stderr into it.
-		Tty: false,
+		TTY: false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create exec in container %s: %w", containerID, err)
 	}
-	attached, err := api.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	attached, err := api.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("attach to exec %s: %w", created.ID, err)
 	}
-	return newExecStream(attached, exec.Stderr), nil
+	return newExecStream(attached.HijackedResponse, exec.Stderr), nil
 }

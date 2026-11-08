@@ -21,12 +21,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/service/composespec"
 )
 
 // capturePolicySpec labels out a bind, an anonymous volume and a whole service, and
@@ -104,13 +105,13 @@ func TestRollback_CapturesWhatTheLabelsSay(t *testing.T) {
 	// The recorded spec stamps every decision, with where it came from.
 	spec, err := sprepo.New(env.store).LoadSpec(env.ctx, savepoint.ID)
 	require.NoError(t, err)
-	for _, line := range []string{
-		"io.arcave.capture.mount./src: false; origin=label; source=arcave.mounts.exclude=/src,/scratch on service app",
-		"io.arcave.capture.mount./data: true; backend=fullcopy; origin=config",
-		"io.arcave.capture.writable-layer: true; backend=fullcopy; origin=config",
-	} {
-		assert.Contains(t, string(spec), line)
-	}
+	recorded, err := composespec.NewCodec().Parse(env.ctx, spec)
+	require.NoError(t, err)
+	assert.Subset(t, recorded.Services["app"].Labels, map[string]string{
+		"io.arcave.capture.mount./src":     "false; origin=label; source=arcave.mounts.exclude=/src,/scratch on service app",
+		"io.arcave.capture.mount./data":    "true; backend=fullcopy; origin=config",
+		"io.arcave.capture.writable-layer": "true; backend=fullcopy; origin=config",
+	})
 
 	stamp("drifted")
 
@@ -200,8 +201,9 @@ func TestRollback_KeepsAGapWithoutALayer(t *testing.T) {
 	for number, c := range env.workers(t) {
 		env.stamp(t, c.ID, fmt.Sprintf("replica-%d", number))
 	}
-	require.NoError(t, env.daemon.ContainerRemove(env.ctx, env.workers(t)[2].ID,
-		container.RemoveOptions{Force: true, RemoveVolumes: true}))
+	_, err := env.daemon.ContainerRemove(env.ctx, env.workers(t)[2].ID,
+		client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	require.NoError(t, err)
 
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "gap-no-layer"})
 	require.NoError(t, err)

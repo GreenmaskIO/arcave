@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -73,9 +73,10 @@ func TestRollback_KeepsALinkToARebuiltReplica(t *testing.T) {
 			env.upDocument(t, fmt.Sprintf(linkedReplicasSpec, env.project, tt.replicas))
 			require.Empty(t, env.danglingLinks(t, "client-1"))
 			if tt.remove != 0 {
-				require.NoError(t, env.daemon.ContainerRemove(env.ctx,
+				_, err := env.daemon.ContainerRemove(env.ctx,
 					env.containers(t)[fmt.Sprintf("worker-%d", tt.remove)].ID,
-					container.RemoveOptions{Force: true, RemoveVolumes: true}))
+					client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+				require.NoError(t, err)
 			}
 			savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "linked"})
 			require.NoError(t, err)

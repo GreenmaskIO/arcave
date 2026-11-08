@@ -47,7 +47,7 @@ const maxErrorBytes = 4 << 10
 // errNoVersion refuses a client with no Podman version for its paths.
 var errNoVersion = errors.New("no Podman version to name in the path")
 
-// connection is the daemon connection libpod is reached over; the SDK's client.APIClient satisfies it.
+// connection is the daemon connection libpod is reached over, the transport the SDK's client is built on.
 type connection interface {
 	HTTPClient() *http.Client
 	DaemonHost() string

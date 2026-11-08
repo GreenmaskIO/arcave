@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **arcave now drives compose 5.7** (was 2.40) and speaks to the daemon through the moby client. Containers arcave creates carry the image label compose 5.6 and newer write, so a `docker compose up` of your own on Docker's containerd image store no longer recreates them for that reason alone. Use `docker compose` 5.6 or newer beside arcave.
+- **A rollback no longer recreates a named volume it does not restore.** When a volume's driver, options or labels changed since the savepoint, compose asks before recreating it. arcave says yes only for a volume the savepoint holds data for, which it restores right after. Any other keeps its current settings and data, and the rollback warns with its name. Before, arcave always said yes, and the data of a volume it does not capture was lost.
+- **Containers of a compose `pre_start` hook or a provider's relay are not read as a service's replica.**
+- **Ten known vulnerabilities in dependencies are gone** with `github.com/docker/docker`, `compose/v2` and the older containerd, buildkit and docker/cli.
+
 ## v0.1.0-alpha.3 — 2026-11-05
 
 Encrypt the store on your own machine, run `cdc` without opening a port, and store smaller `fullcopy` savepoints by default.

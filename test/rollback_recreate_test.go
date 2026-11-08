@@ -30,13 +30,11 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/api"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/versions"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -196,7 +194,7 @@ func skipWithoutVolumeSubpath(t *testing.T, daemon *client.Client) {
 	if isPodman(t, daemon) {
 		return
 	}
-	version, err := daemon.ServerVersion(context.Background())
+	version, err := daemon.ServerVersion(context.Background(), client.ServerVersionOptions{})
 	require.NoError(t, err)
 	if versions.LessThan(version.APIVersion, volumeSubpathAPI) {
 		t.Skipf("the daemon's API %s mounts no volume at a subpath", version.APIVersion)
@@ -296,11 +294,11 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	composeService := dockercompose.NewComposeService(cli)
+	composeService, prompter := newComposeService(t, cli)
 	profile := newRuntimeProfile(t, daemonAPI)
 	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
-		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
+		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 	codec := composespec.NewCodec()
 
@@ -371,7 +369,7 @@ func (e *recreateEnv) spec(t *testing.T, mode string, port int) *types.Project {
 func (e *recreateEnv) up(t *testing.T, project *types.Project) {
 	t.Helper()
 
-	require.NoError(t, e.compose.Create(e.ctx, project))
+	require.NoError(t, e.compose.Create(e.ctx, project, nil))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
 }
 
@@ -379,24 +377,25 @@ func (e *recreateEnv) down(t *testing.T) {
 	t.Helper()
 
 	// Down keeps volumes, so the anonymous ones it orphans are named first and dropped after.
-	byProject := filters.NewArgs(filters.Arg("label", api.ProjectLabel+"="+e.project))
-	containers, err := e.daemon.ContainerList(e.ctx, container.ListOptions{All: true, Filters: byProject})
+	byProject := make(client.Filters).Add("label", api.ProjectLabel+"="+e.project)
+	containers, err := e.daemon.ContainerList(e.ctx, client.ContainerListOptions{All: true, Filters: byProject})
 	require.NoError(t, err)
 
 	// By name: whatever spec built the compose project, this takes it down.
 	assert.NoError(t, e.compose.Down(e.ctx, &types.Project{Name: e.project}))
 
-	for _, c := range containers {
+	for _, c := range containers.Items {
 		for _, m := range c.Mounts {
 			if m.Type != mount.TypeVolume {
 				continue
 			}
-			v, err := e.daemon.VolumeInspect(e.ctx, m.Name)
+			v, err := e.daemon.VolumeInspect(e.ctx, m.Name, client.VolumeInspectOptions{})
 			if !assert.NoError(t, err, "inspect volume %s", m.Name) {
 				continue
 			}
-			if _, anonymous := v.Labels[anonymousVolumeLabel]; anonymous {
-				assert.NoError(t, e.daemon.VolumeRemove(e.ctx, m.Name, false), "remove volume %s", m.Name)
+			if _, anonymous := v.Volume.Labels[anonymousVolumeLabel]; anonymous {
+				_, err := e.daemon.VolumeRemove(e.ctx, m.Name, client.VolumeRemoveOptions{})
+				assert.NoError(t, err, "remove volume %s", m.Name)
 			}
 		}
 	}

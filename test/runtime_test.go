@@ -16,12 +16,17 @@ package test
 
 import (
 	"context"
+	"crypto/tls"
+	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/distribution/reference"
-	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/sockets"
+	"github.com/docker/go-connections/tlsconfig"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,8 +56,9 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 	t.Helper()
 	runtime, err := dockerclient.ReadRuntime(context.Background(), api)
 	require.NoError(t, err)
-	info, err := api.Info(context.Background())
+	answer, err := api.Info(context.Background(), client.InfoOptions{})
 	require.NoError(t, err)
+	info := answer.Info
 	if runtime.Kind == model.ContainerRuntimePodman {
 		libpodClient := newLibpodClient(t, api, runtime.Version)
 		podmanAPI := podmanclient.NewAPI(api, libpodClient)
@@ -75,15 +81,48 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 	}
 }
 
-// newLibpodClient reaches libpod over api, whose daemon is Podman of version.
+// newLibpodClient reaches libpod at api's daemon, Podman of version.
 func newLibpodClient(t *testing.T, api *client.Client, version string) *libpod.Client {
 	t.Helper()
-	libpodClient, err := libpod.NewClient(api, libpod.Options{
+	libpodClient, err := libpod.NewClient(newLibpodConnection(t, api.DaemonHost()), libpod.Options{
 		Version: version,
 		UseTLS:  os.Getenv(client.EnvOverrideCertPath) != "",
 	})
 	require.NoError(t, err)
 	return libpodClient
+}
+
+// libpodConnection is the transport libpod reaches the daemon over.
+type libpodConnection struct {
+	client *http.Client
+	host   string
+}
+
+func (c libpodConnection) HTTPClient() *http.Client { return c.client }
+
+func (c libpodConnection) DaemonHost() string { return c.host }
+
+// newLibpodConnection reaches host as client.FromEnv does: its socket, with the TLS DOCKER_CERT_PATH names.
+func newLibpodConnection(t *testing.T, host string) libpodConnection {
+	t.Helper()
+	hostURL, err := client.ParseHostURL(host)
+	require.NoError(t, err)
+	transport := &http.Transport{}
+	if certPath := os.Getenv(client.EnvOverrideCertPath); certPath != "" {
+		transport.TLSClientConfig, err = tlsconfig.Client(tlsconfig.Options{
+			CAFile:             filepath.Join(certPath, "ca.pem"),
+			CertFile:           filepath.Join(certPath, "cert.pem"),
+			KeyFile:            filepath.Join(certPath, "key.pem"),
+			InsecureSkipVerify: os.Getenv(client.EnvTLSVerify) == "",
+			MinVersion:         tls.VersionTLS12,
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, sockets.ConfigureTransport(transport, hostURL.Scheme, hostURL.Host))
+	return libpodConnection{
+		client: &http.Client{Transport: transport},
+		host:   host,
+	}
 }
 
 // isPodman reports whether api's daemon is Podman.

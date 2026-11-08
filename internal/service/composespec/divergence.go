@@ -49,16 +49,16 @@ func (a assembly) warnOnDivergentReplicas(ctx context.Context, svc model.Service
 		Msg("replicas differ; the spec declares the first replica's")
 }
 
-// divergentFields names, by their compose key, the fields a and b differ in.
+// divergentFields names, by their compose key, the fields a and b differ in, those an
+// embedded spec promotes included.
 func divergentFields(a, b types.ServiceConfig) []string {
 	valueA, valueB := reflect.ValueOf(a), reflect.ValueOf(b)
 	var fields []string
-	for i := range valueA.NumField() {
-		field := valueA.Type().Field(i)
-		if slices.Contains(perReplicaFields, field.Name) {
+	for _, field := range reflect.VisibleFields(valueA.Type()) {
+		if field.Anonymous || slices.Contains(perReplicaFields, field.Name) {
 			continue
 		}
-		if !reflect.DeepEqual(valueA.Field(i).Interface(), valueB.Field(i).Interface()) {
+		if !reflect.DeepEqual(valueA.FieldByIndex(field.Index).Interface(), valueB.FieldByIndex(field.Index).Interface()) {
 			fields = append(fields, composeKey(field))
 		}
 	}

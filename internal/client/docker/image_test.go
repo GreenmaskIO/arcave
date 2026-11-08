@@ -22,9 +22,9 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -35,15 +35,15 @@ import (
 func TestEngine_CommitContainer(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{
-		Pause:   false,
+	api.On("ContainerCommit", mock.Anything, "c0ffee", client.ContainerCommitOptions{
+		NoPause: true,
 		Comment: "arcave savepoint 019e7044-8800-7000-8000-000000000000",
 		Changes: []string{
 			`LABEL "io.arcave.base-image-id"="sha256:bbbb"`,
 			`LABEL "io.arcave.base-image-ref"="postgres:16"`,
 		},
 	}).
-		Return(container.CommitResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil).Once()
+		Return(client.ContainerCommitResult{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -62,8 +62,8 @@ func TestEngine_CommitContainer_PrefixesABareDigest(t *testing.T) {
 	// Arrange
 	const bare = "ebf716eb4137a315c21ae58522ef7b138f6b91f15585e3e2f694c5af324afbe9"
 	api := &mockAPI{}
-	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false, Changes: []string{}}).
-		Return(container.CommitResponse{ID: bare}, nil).Once()
+	api.On("ContainerCommit", mock.Anything, "c0ffee", client.ContainerCommitOptions{NoPause: true, Changes: []string{}}).
+		Return(client.ContainerCommitResult{ID: bare}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -78,8 +78,8 @@ func TestEngine_CommitContainer_PrefixesABareDigest(t *testing.T) {
 func TestEngine_CommitContainer_RefusesAnAnswerThatIsNotADigest(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ContainerCommit", mock.Anything, "c0ffee", container.CommitOptions{Pause: false, Changes: []string{}}).
-		Return(container.CommitResponse{ID: "postgres:16"}, nil).Once()
+	api.On("ContainerCommit", mock.Anything, "c0ffee", client.ContainerCommitOptions{NoPause: true, Changes: []string{}}).
+		Return(client.ContainerCommitResult{ID: "postgres:16"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -95,7 +95,7 @@ func TestEngine_CommitContainer_ReportsTheDaemonsRefusal(t *testing.T) {
 	wantErr := errors.New("no such container")
 	api := &mockAPI{}
 	api.On("ContainerCommit", mock.Anything, "gone", mock.Anything).
-		Return(container.CommitResponse{}, wantErr).Once()
+		Return(client.ContainerCommitResult{}, wantErr).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -130,7 +130,7 @@ func TestEngine_SaveImage(t *testing.T) {
 func TestEngine_RemoveImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", image.RemoveOptions{}).
+	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", client.ImageRemoveOptions{}).
 		Return([]image.DeleteResponse{{Deleted: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, nil).Once()
 	e := &Engine{api: api}
 
@@ -146,7 +146,7 @@ func TestEngine_RemoveImage_ReportsTheDaemonsRefusal(t *testing.T) {
 	// Arrange
 	wantErr := errors.New("image is being used by stopped container")
 	api := &mockAPI{}
-	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", image.RemoveOptions{}).
+	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", client.ImageRemoveOptions{}).
 		Return(nil, wantErr).Once()
 	e := &Engine{api: api}
 
@@ -206,13 +206,13 @@ func TestEngine_RemoveImageRef(t *testing.T) {
 				api.On("ImageInspect", mock.Anything, ref).Return(image.InspectResponse{ID: imageID}, tt.inspectErr).Once(),
 			}
 			if tt.inspectErr == nil {
-				calls = append(calls, api.On("ContainerList", mock.Anything, container.ListOptions{
+				calls = append(calls, api.On("ContainerList", mock.Anything, client.ContainerListOptions{
 					All:     true,
-					Filters: filters.NewArgs(filters.Arg("ancestor", strings.TrimPrefix(imageID, "sha256:"))),
+					Filters: make(client.Filters).Add("ancestor", strings.TrimPrefix(imageID, "sha256:")),
 				}).Return(tt.containers, nil).Once())
 			}
 			if tt.wantRemove {
-				calls = append(calls, api.On("ImageRemove", mock.Anything, ref, image.RemoveOptions{PruneChildren: true}).
+				calls = append(calls, api.On("ImageRemove", mock.Anything, ref, client.ImageRemoveOptions{PruneChildren: true}).
 					Return([]image.DeleteResponse{{Untagged: ref}}, tt.removeErr).Once())
 			}
 			mock.InOrder(calls...)
@@ -247,7 +247,7 @@ func TestEngine_LoadImage(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, archive, string(read))
 		}).
-		Return(image.LoadResponse{Body: body}, nil).Once()
+		Return(body, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -264,7 +264,7 @@ func TestEngine_LoadImage_ReportsTheDaemonsRefusal(t *testing.T) {
 	// Arrange
 	wantErr := errors.New("unexpected EOF")
 	api := &mockAPI{}
-	api.On("ImageLoad", mock.Anything, mock.Anything).Return(image.LoadResponse{}, wantErr).Once()
+	api.On("ImageLoad", mock.Anything, mock.Anything).Return(nil, wantErr).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -278,7 +278,10 @@ func TestEngine_LoadImage_ReportsTheDaemonsRefusal(t *testing.T) {
 func TestEngine_TagImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ImageTag", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000").Return(nil).Once()
+	api.On("ImageTag", mock.Anything, client.ImageTagOptions{
+		Source: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Target: "arcave/demo-db-1-postgres-16:sp-019e843e-1650-7000-8000-000000000000",
+	}).Return(nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -354,8 +357,8 @@ func TestEngine_ListLayerImages(t *testing.T) {
 		podmanRef = "arcave/demo-db-2:sp-019e843e-1650-7000-8000-000000000001"
 	)
 	api := &mockAPI{}
-	api.On("ImageList", mock.Anything, image.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("reference", "arcave/*")),
+	api.On("ImageList", mock.Anything, client.ImageListOptions{
+		Filters: make(client.Filters).Add("reference", "arcave/*"),
 	}).Return([]image.Summary{
 		{
 			ID: "sha256:aaaa", RepoTags: []string{layerRef, "postgres:16"},
@@ -384,7 +387,7 @@ func TestEngine_ListContainerImages(t *testing.T) {
 	// Arrange
 	const layerRef = "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000001"
 	api := &mockAPI{}
-	api.On("ContainerList", mock.Anything, container.ListOptions{All: true}).Return([]container.Summary{
+	api.On("ContainerList", mock.Anything, client.ContainerListOptions{All: true}).Return([]container.Summary{
 		{ID: "c1", Image: layerRef, ImageID: "sha256:aaaa"},
 		{ID: "c2", Image: "docker.io/" + layerRef, ImageID: "sha256:aaaa"},
 		{ID: "c3", Image: "sha256:bbbb", ImageID: "sha256:bbbb"},

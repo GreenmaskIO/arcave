@@ -34,14 +34,10 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/api"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,7 +163,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, dockerCLI.Initialize(flags.NewClientOptions()))
-	composeService := dockercompose.NewComposeService(dockerCLI)
+	composeService, prompter := newComposeService(t, dockerCLI)
 	logs := &syncBuffer{}
 	profile := newRuntimeProfile(t, daemon)
 	e := &fidelityEnv{
@@ -176,7 +172,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 		daemon:  daemon,
 		compose: composeService,
 		runner: composeclient.NewClient(composeService, composeclient.Options{
-			WaitTimeout: 90 * time.Second, StopTimeout: 2 * time.Second,
+			WaitTimeout: 90 * time.Second, StopTimeout: 2 * time.Second, Prompter: prompter,
 		}),
 		inspector: introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
 		assembler: profile.assembler,
@@ -203,19 +199,21 @@ func (e *fidelityEnv) cleanup(t *testing.T) {
 	// One a replica joins goes after the project on Podman, which refuses to remove it first.
 	var joined []string
 	for _, id := range e.outsideContainers {
-		if err := e.daemon.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil {
+		if _, err := e.daemon.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true}); err != nil {
 			joined = append(joined, id)
 		}
 	}
 	removeComposeProject(t, e.daemon, e.project)
 	for _, id := range joined {
-		assert.NoError(t, e.daemon.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}), "remove container %s", id)
+		_, err := e.daemon.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+		assert.NoError(t, err, "remove container %s", id)
 	}
 	for _, id := range e.outsideNetworks {
-		assert.NoError(t, e.daemon.NetworkRemove(ctx, id), "remove network %s", id)
+		_, err := e.daemon.NetworkRemove(ctx, id, client.NetworkRemoveOptions{})
+		assert.NoError(t, err, "remove network %s", id)
 	}
 	for name := range e.volumes {
-		if err := e.daemon.VolumeRemove(ctx, name, true); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := e.daemon.VolumeRemove(ctx, name, client.VolumeRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			assert.NoError(t, err, "remove volume %s", name)
 		}
 	}
@@ -305,7 +303,7 @@ func (e *fidelityEnv) build(t *testing.T, project *types.Project) {
 func (e *fidelityEnv) up(t *testing.T, tc fidelityCase, project *types.Project) {
 	t.Helper()
 
-	require.NoError(t, e.runner.Create(e.ctx, project), "create")
+	require.NoError(t, e.runner.Create(e.ctx, project, nil), "create")
 	require.NoError(t, e.runner.Start(e.ctx, project, 90*time.Second), "start")
 }
 
@@ -412,19 +410,20 @@ func (e *fidelityEnv) updateMemory(t *testing.T, service string, replica int, by
 	t.Helper()
 
 	name := strings.Join([]string{e.project, service, strconv.Itoa(replica)}, "-")
-	_, err := e.daemon.ContainerUpdate(e.ctx, name, container.UpdateConfig{
-		Resources: container.Resources{Memory: bytes, MemorySwap: -1},
+	_, err := e.daemon.ContainerUpdate(e.ctx, name, client.ContainerUpdateOptions{
+		Resources: &container.Resources{Memory: bytes, MemorySwap: -1},
 	})
 	require.NoError(t, err, "update %s", name)
 }
 
 // readPublishedPort is the host port the daemon gave service's first replica for port.
-func (e *fidelityEnv) readPublishedPort(t *testing.T, service string, port nat.Port) string {
+func (e *fidelityEnv) readPublishedPort(t *testing.T, service string, port string) string {
 	t.Helper()
 
-	inspect, err := e.daemon.ContainerInspect(e.ctx, strings.Join([]string{e.project, service, "1"}, "-"))
+	inspect, err := e.daemon.ContainerInspect(e.ctx, strings.Join([]string{e.project, service, "1"}, "-"),
+		client.ContainerInspectOptions{})
 	require.NoError(t, err)
-	bindings := inspect.NetworkSettings.Ports[port]
+	bindings := inspect.Container.NetworkSettings.Ports[network.MustParsePort(port)]
 	require.NotEmpty(t, bindings, "no binding of %s", port)
 	return bindings[0].HostPort
 }
@@ -438,12 +437,15 @@ func (e *fidelityEnv) runOutsideContainer(t *testing.T, name, network string) {
 	if network != "" {
 		hostConfig.NetworkMode = container.NetworkMode(network)
 	}
-	created, err := e.daemon.ContainerCreate(e.ctx,
-		&container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}},
-		hostConfig, nil, nil, e.project+"-"+name)
+	created, err := e.daemon.ContainerCreate(e.ctx, client.ContainerCreateOptions{
+		Config:     &container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}},
+		HostConfig: hostConfig,
+		Name:       e.project + "-" + name,
+	})
 	require.NoError(t, err)
 	e.outsideContainers = append(e.outsideContainers, created.ID)
-	require.NoError(t, e.daemon.ContainerStart(e.ctx, created.ID, container.StartOptions{}))
+	_, err = e.daemon.ContainerStart(e.ctx, created.ID, client.ContainerStartOptions{})
+	require.NoError(t, err)
 }
 
 // createOutsideVolume creates a volume outside the compose project, named <project>-<name>,
@@ -452,7 +454,7 @@ func (e *fidelityEnv) createOutsideVolume(t *testing.T, name, script string) {
 	t.Helper()
 
 	volumeName := e.project + "-" + name
-	_, err := e.daemon.VolumeCreate(e.ctx, volume.CreateOptions{Name: volumeName})
+	_, err := e.daemon.VolumeCreate(e.ctx, client.VolumeCreateOptions{Name: volumeName})
 	require.NoError(t, err)
 	e.volumes[volumeName] = true
 	if script != "" {
@@ -464,7 +466,7 @@ func (e *fidelityEnv) createOutsideVolume(t *testing.T, name, script string) {
 func (e *fidelityEnv) createOutsideNetwork(t *testing.T, name string) {
 	t.Helper()
 
-	created, err := e.daemon.NetworkCreate(e.ctx, e.project+"-"+name, network.CreateOptions{})
+	created, err := e.daemon.NetworkCreate(e.ctx, e.project+"-"+name, client.NetworkCreateOptions{})
 	require.NoError(t, err)
 	e.outsideNetworks = append(e.outsideNetworks, created.ID)
 }
@@ -487,7 +489,7 @@ func readEngineStamps(ctx context.Context, daemon *client.Client) (map[string]st
 }
 
 func runStampProbe(ctx context.Context, daemon *client.Client) (map[string]string, error) {
-	pull, err := daemon.ImagePull(ctx, fidelityBusybox, image.PullOptions{})
+	pull, err := daemon.ImagePull(ctx, fidelityBusybox, client.ImagePullOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -496,22 +498,24 @@ func runStampProbe(ctx context.Context, daemon *client.Client) (map[string]strin
 	if _, err := io.Copy(io.Discard, pull); err != nil {
 		return nil, err
 	}
-	created, err := daemon.ContainerCreate(ctx,
-		&container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}}, nil, nil, nil, "")
+	created, err := daemon.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{Image: fidelityBusybox, Cmd: []string{"sleep", "infinity"}},
+	})
 	if err != nil {
 		return nil, err
 	}
 	//nolint:errcheck // a probe left behind fails nothing the run checks
-	defer daemon.ContainerRemove(context.WithoutCancel(ctx), created.ID, container.RemoveOptions{Force: true})
-	if err := daemon.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	defer daemon.ContainerRemove(context.WithoutCancel(ctx), created.ID, client.ContainerRemoveOptions{Force: true})
+	if _, err := daemon.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return nil, err
 	}
-	inspect, err := daemon.ContainerInspect(ctx, created.ID)
+	inspect, err := daemon.ContainerInspect(ctx, created.ID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
-	values := map[string]string{"oom_score_adj": strconv.Itoa(inspect.HostConfig.OomScoreAdj)}
-	for _, limit := range inspect.HostConfig.Ulimits {
+	hostConfig := inspect.Container.HostConfig
+	values := map[string]string{"oom_score_adj": strconv.Itoa(hostConfig.OomScoreAdj)}
+	for _, limit := range hostConfig.Ulimits {
 		name := strings.ToLower(strings.TrimPrefix(limit.Name, "RLIMIT_"))
 		values[name+"_soft"] = strconv.FormatInt(limit.Soft, 10)
 		values[name+"_hard"] = strconv.FormatInt(limit.Hard, 10)

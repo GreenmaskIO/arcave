@@ -24,10 +24,7 @@ import (
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -42,8 +39,8 @@ func (e *Engine) CommitContainer(
 ) (model.ImageDigestID, error) {
 	// Unpaused: the caller has already stopped the services, and a stopped container
 	// cannot be paused.
-	resp, err := e.api.ContainerCommit(ctx, containerID, container.CommitOptions{
-		Pause:   false,
+	resp, err := e.api.ContainerCommit(ctx, containerID, client.ContainerCommitOptions{
+		NoPause: true,
 		Comment: comment,
 		Changes: newLabelChanges(labels),
 	})
@@ -91,7 +88,7 @@ func (e *Engine) SaveImage(ctx context.Context, imageID model.ImageDigestID) (io
 // RemoveImage drops one image from the daemon. Not forced, so an image something
 // still references is refused rather than taken.
 func (e *Engine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) error {
-	if _, err := e.api.ImageRemove(ctx, imageID.String(), image.RemoveOptions{}); err != nil {
+	if _, err := e.api.ImageRemove(ctx, imageID.String(), client.ImageRemoveOptions{}); err != nil {
 		return fmt.Errorf("remove image %s: %w", imageID, err)
 	}
 	return nil
@@ -110,17 +107,17 @@ func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 		return fmt.Errorf("inspect image reference %s: %w", ref, err)
 	}
 	// A bare hex: Podman matches no container to a "sha256:" ancestor, Docker takes either.
-	containers, err := e.api.ContainerList(ctx, container.ListOptions{
+	containers, err := e.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: filters.NewArgs(filters.Arg("ancestor", strings.TrimPrefix(inspect.ID, "sha256:"))),
+		Filters: make(client.Filters).Add("ancestor", strings.TrimPrefix(inspect.ID, "sha256:")),
 	})
 	if err != nil {
 		return fmt.Errorf("list containers of image %s: %w", inspect.ID, err)
 	}
-	if len(containers) > 0 {
-		return fmt.Errorf("remove image reference %s: image %s is used by container %s", ref, inspect.ID, containers[0].ID)
+	if len(containers.Items) > 0 {
+		return fmt.Errorf("remove image reference %s: image %s is used by container %s", ref, inspect.ID, containers.Items[0].ID)
 	}
-	_, err = e.api.ImageRemove(ctx, string(ref), image.RemoveOptions{PruneChildren: true})
+	_, err = e.api.ImageRemove(ctx, string(ref), client.ImageRemoveOptions{PruneChildren: true})
 	if cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("remove image reference %s: %w", ref, model.ErrImageRefNotFound)
 	}
@@ -139,11 +136,11 @@ func (e *Engine) LoadImage(ctx context.Context, r io.Reader) error {
 		return fmt.Errorf("load image archive: %w", err)
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
+		if err := resp.Close(); err != nil {
 			zerolog.Ctx(ctx).Error().Err(err).Msg("close image load response")
 		}
 	}()
-	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+	if _, err := io.Copy(io.Discard, resp); err != nil {
 		return fmt.Errorf("read image load response: %w", err)
 	}
 	return nil
@@ -151,7 +148,7 @@ func (e *Engine) LoadImage(ctx context.Context, r io.Reader) error {
 
 // TagImage points ref at an image already in the daemon.
 func (e *Engine) TagImage(ctx context.Context, imageID model.ImageDigestID, ref string) error {
-	if err := e.api.ImageTag(ctx, imageID.String(), ref); err != nil {
+	if _, err := e.api.ImageTag(ctx, client.ImageTagOptions{Source: imageID.String(), Target: ref}); err != nil {
 		return fmt.Errorf("tag image %s as %s: %w", imageID, ref, err)
 	}
 	return nil
@@ -184,14 +181,14 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 // ListLayerImages lists every arcave/…:sp-<savepoint> tag the daemon holds, spelled
 // as Docker does, with the image it names and the origin that image's labels name.
 func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
-	summaries, err := e.api.ImageList(ctx, image.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("reference", model.RestoredLayerTagNamespace+"/*")),
+	summaries, err := e.api.ImageList(ctx, client.ImageListOptions{
+		Filters: make(client.Filters).Add("reference", model.RestoredLayerTagNamespace+"/*"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list arcave images: %w", err)
 	}
 	var tagged []model.TaggedImage
-	for _, summary := range summaries {
+	for _, summary := range summaries.Items {
 		origin, _ := model.ParseLayerOrigin(summary.Labels)
 		for _, ref := range summary.RepoTags {
 			familiar := model.ImageRef(ref).Familiar()
@@ -212,12 +209,12 @@ func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, erro
 // ListContainerImages lists what every container, running or not, was created from: the
 // reference it names, spelled as Docker does, and the image that resolved to.
 func (e *Engine) ListContainerImages(ctx context.Context) ([]model.ContainerImage, error) {
-	containers, err := e.api.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := e.api.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("list containers: %w", err)
 	}
-	images := make([]model.ContainerImage, 0, len(containers))
-	for _, summary := range containers {
+	images := make([]model.ContainerImage, 0, len(containers.Items))
+	for _, summary := range containers.Items {
 		images = append(images, model.ContainerImage{
 			ContainerID: summary.ID,
 			Ref:         model.ImageRef(summary.Image).Familiar(),

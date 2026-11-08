@@ -296,8 +296,8 @@ func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) er
 	return m.Called(ctx, project).Error(0)
 }
 
-func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project) error {
-	return m.Called(ctx, project).Error(0)
+func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project, restoredVolumes []string) error {
+	return m.Called(ctx, project, restoredVolumes).Error(0)
 }
 
 func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {

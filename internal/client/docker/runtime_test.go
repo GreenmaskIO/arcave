@@ -18,7 +18,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -26,17 +27,20 @@ import (
 )
 
 type fakeVersionReader struct {
-	version types.Version
+	version client.ServerVersionResult
 	err     error
 }
 
-func (f fakeVersionReader) ServerVersion(context.Context) (types.Version, error) {
+func (f fakeVersionReader) ServerVersion(context.Context, client.ServerVersionOptions) (client.ServerVersionResult, error) {
 	return f.version, f.err
 }
 
 func TestReadRuntime(t *testing.T) {
 	unreachable := errors.New("connection refused")
-	podman := types.Version{Version: "6.1.4", Components: []types.ComponentVersion{{Name: "Podman Engine", Version: "6.1.4"}}}
+	podman := client.ServerVersionResult{
+		Version:    "6.1.4",
+		Components: []system.ComponentVersion{{Name: "Podman Engine", Version: "6.1.4"}},
+	}
 	tests := []struct {
 		name    string
 		reader  fakeVersionReader

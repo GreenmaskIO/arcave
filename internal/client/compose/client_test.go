@@ -24,7 +24,8 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -265,7 +266,7 @@ func TestClient_Create(t *testing.T) {
 	c := NewClient(composeAPI, testOptions)
 
 	// Act
-	err := c.Create(context.Background(), project)
+	err := c.Create(context.Background(), project, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -287,7 +288,7 @@ func TestClient_Create_StampsComposeLabels(t *testing.T) {
 	c := NewClient(composeAPI, testOptions)
 
 	// Act
-	require.NoError(t, c.Create(context.Background(), project))
+	require.NoError(t, c.Create(context.Background(), project, nil))
 
 	// Assert
 	stamped := composeAPI.createProject(t)
@@ -373,7 +374,7 @@ func TestClient_Start_HealthCheckDisabled(t *testing.T) {
 	running := func(service string) api.ContainerSummary {
 		return api.ContainerSummary{Name: "demo-" + service + "-1", Service: service, State: "running"}
 	}
-	withHealth := func(c api.ContainerSummary, health string) api.ContainerSummary {
+	withHealth := func(c api.ContainerSummary, health container.HealthStatus) api.ContainerSummary {
 		c.Health = health
 		return c
 	}
@@ -644,13 +645,13 @@ func TestClient_Stop_RoutesEventsToTheContextsSink(t *testing.T) {
 	// Arrange
 	project := fixtureProject()
 	var logs bytes.Buffer
-	adapter := NewProgressLogger(zerolog.New(&logs))
+	adapter := NewEventLogger(zerolog.New(&logs))
 	sink := &sinkRecorder{}
 	composeAPI := &mockComposeAPI{}
 	composeAPI.On("Ps", mock.Anything, "demo", psRunning(project)).Return([]api.ContainerSummary{}, nil).Once()
 	composeAPI.On("Stop", mock.Anything, "demo", mock.Anything).
 		Run(func(mock.Arguments) {
-			_, _ = adapter.Write([]byte(`{"id":"Container demo-db-1","status":"Stopped"}` + "\n"))
+			adapter.On(api.Resource{ID: "Container demo-db-1", Text: api.StatusStopped, Status: api.Done})
 		}).
 		Return(nil).Once()
 	opts := testOptions
@@ -664,7 +665,7 @@ func TestClient_Stop_RoutesEventsToTheContextsSink(t *testing.T) {
 
 	// Act
 	_, err := c.Stop(ctx, project)
-	_, _ = adapter.Write([]byte(`{"id":"Container demo-db-1","status":"Removed"}` + "\n"))
+	adapter.On(api.Resource{ID: "Container demo-db-1", Text: api.StatusRemoved, Status: api.Done})
 
 	// Assert
 	require.NoError(t, err)

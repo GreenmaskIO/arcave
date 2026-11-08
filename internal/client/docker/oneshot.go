@@ -23,11 +23,10 @@ import (
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
@@ -57,7 +56,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		return err
 	}
 	cfg, hostCfg := newOneShotConfig(spec)
-	created, err := api.ContainerCreate(ctx, cfg, hostCfg, nil, nil, "")
+	created, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: hostCfg})
 	if err != nil {
 		return fmt.Errorf("create %s container: %w", spec.Image, err)
 	}
@@ -71,7 +70,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 
 	// The attach happens before the start, not after: a container started first
 	// can produce — and lose — output before anyone is listening.
-	var attached types.HijackedResponse
+	var attached client.HijackedResponse
 	if attaches(spec) {
 		if attached, err = attachOneShotContainer(ctx, api, created.ID, spec); err != nil {
 			return err
@@ -83,7 +82,7 @@ func runOneShotContainer(ctx context.Context, api dockerAPI, spec model.OneShotS
 		defer stopOnCancel()
 	}
 
-	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start %s container: %w", spec.Image, err)
 	}
 
@@ -136,7 +135,7 @@ func ensureImage(ctx context.Context, api dockerAPI, ref string) error {
 		return fmt.Errorf("inspect image %s: %w", ref, err)
 	}
 
-	rc, err := api.ImagePull(ctx, ref, image.PullOptions{})
+	rc, err := api.ImagePull(ctx, ref, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
@@ -191,8 +190,8 @@ func newOneShotConfig(spec model.OneShotSpec) (*container.Config, *container.Hos
 // role. The removal outlives a cancelled run: on the run's own ctx the daemon
 // would refuse it, leaving the container behind with nobody to remove it.
 func removeOneShotContainer(ctx context.Context, api dockerAPI, containerID, image, role string) {
-	if err := api.ContainerRemove(
-		context.WithoutCancel(ctx), containerID, container.RemoveOptions{Force: true},
+	if _, err := api.ContainerRemove(
+		context.WithoutCancel(ctx), containerID, client.ContainerRemoveOptions{Force: true},
 	); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("container", containerID).Str("image", image).
 			Msgf("remove %s container", role)
@@ -202,17 +201,17 @@ func removeOneShotContainer(ctx context.Context, api dockerAPI, containerID, ima
 // attachOneShotContainer attaches to the stdio spec exchanges with containerID.
 func attachOneShotContainer(
 	ctx context.Context, api dockerAPI, containerID string, spec model.OneShotSpec,
-) (types.HijackedResponse, error) {
-	attached, err := api.ContainerAttach(ctx, containerID, container.AttachOptions{
+) (client.HijackedResponse, error) {
+	attached, err := api.ContainerAttach(ctx, containerID, client.ContainerAttachOptions{
 		Stream: true,
 		Stdin:  spec.Stdin != nil,
 		Stdout: spec.Stdout != nil,
 		Stderr: spec.Stderr != nil,
 	})
 	if err != nil {
-		return types.HijackedResponse{}, fmt.Errorf("attach to %s container: %w", spec.Image, err)
+		return client.HijackedResponse{}, fmt.Errorf("attach to %s container: %w", spec.Image, err)
 	}
-	return attached, nil
+	return attached.HijackedResponse, nil
 }
 
 // serveExec starts spec.Exec and runs Exec.Serve on its stream in the background.
@@ -247,11 +246,11 @@ func serveExec(ctx context.Context, api dockerAPI, containerID string, spec mode
 // isContainerRunning reports whether containerID still runs; a container the
 // daemon cannot inspect counts as running, so the caller does not wait on it.
 func isContainerRunning(ctx context.Context, api dockerAPI, containerID string) bool {
-	inspect, err := api.ContainerInspect(ctx, containerID)
-	if err != nil || inspect.ContainerJSONBase == nil || inspect.State == nil {
+	inspect, err := api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	if err != nil || inspect.Container.State == nil {
 		return true
 	}
-	return inspect.State.Running
+	return inspect.Container.State.Running
 }
 
 // exchange pumps the caller's streams through the attached connection while the
@@ -261,7 +260,7 @@ func isContainerRunning(ctx context.Context, api dockerAPI, containerID string) 
 // reading any stdout deadlocks on any payload larger than the pipe buffer — the
 // container blocks writing output nobody drains, arcave blocks writing input nobody
 // reads, and neither ever gets to the other half.
-func exchange(ctx context.Context, attached types.HijackedResponse, spec model.OneShotSpec) error {
+func exchange(ctx context.Context, attached client.HijackedResponse, spec model.OneShotSpec) error {
 	var eg errgroup.Group
 
 	if spec.Stdin != nil {
@@ -325,11 +324,11 @@ func (rr *recordingReader) Read(p []byte) (int, error) {
 // waitOneShotContainer waits for containerID to exit; a non-zero exit is a
 // model.ContainerExitError carrying the container's output.
 func waitOneShotContainer(ctx context.Context, api dockerAPI, containerID, image string) error {
-	statusCh, errCh := api.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	wait := api.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
-	case err := <-errCh:
+	case err := <-wait.Error:
 		return fmt.Errorf("wait for %s container: %w", image, err)
-	case status := <-statusCh:
+	case status := <-wait.Result:
 		if status.StatusCode == 0 {
 			return nil
 		}
@@ -363,7 +362,7 @@ func containerOutput(ctx context.Context, api dockerAPI, containerID string) []s
 	// Tail bounds the read at the daemon. Tty is false for every one-shot run, so
 	// the stream is stdcopy-framed (an 8-byte header per frame) and must be
 	// demultiplexed — reading it raw would put the framing bytes into the message.
-	rc, err := api.ContainerLogs(ctx, containerID, container.LogsOptions{
+	rc, err := api.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       "200",
@@ -427,27 +426,27 @@ func startVolumeHolder(
 		return "", err
 	}
 
-	created, err := api.ContainerCreate(ctx,
-		&container.Config{Image: VolumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
-		&container.HostConfig{
+	created, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{Image: VolumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
+		HostConfig: &container.HostConfig{
 			Binds:       []string{src.Source + ":" + volumeHolderMount},
 			SecurityOpt: VolumeSecurityOpt,
 		},
-		nil, nil, "")
+	})
 	if err != nil {
 		return "", fmt.Errorf("create %s container: %w", VolumeToolsImage, err)
 	}
 
-	if err := api.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		removeVolumeHolder(ctx, api, created.ID)
 		return "", fmt.Errorf("start %s container: %w", VolumeToolsImage, err)
 	}
-	statusCh, errCh := api.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	wait := api.ContainerWait(ctx, created.ID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
-	case err := <-errCh:
+	case err := <-wait.Error:
 		removeVolumeHolder(ctx, api, created.ID)
 		return "", fmt.Errorf("wait for %s container: %w", VolumeToolsImage, err)
-	case <-statusCh:
+	case <-wait.Result:
 	}
 	return created.ID, nil
 }

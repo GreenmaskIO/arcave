@@ -17,10 +17,12 @@ package docker
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -32,22 +34,22 @@ import (
 func TestEngine_RecreateWithImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	inspect := api.On("ContainerInspect", mock.Anything, replacedID).Return(builtReplica(), nil).Once()
+	inspect := api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).Return(builtReplica(), nil).Once()
 	remove := api.On("ContainerRemove", mock.Anything, replacedID,
-		container.RemoveOptions{RemoveVolumes: true}).Return(nil).Once()
+		client.ContainerRemoveOptions{RemoveVolumes: true}).Return(nil).Once()
 	var gotConfig *container.Config
 	var gotHostConfig *container.HostConfig
 	var gotNetworking *network.NetworkingConfig
 	var gotPlatform *ocispec.Platform
-	create := api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, "demo-app-3").
+	create := api.On("ContainerCreate", mock.Anything, matchCreateName("demo-app-3")).
 		Run(func(args mock.Arguments) {
-			gotConfig = args.Get(1).(*container.Config)
-			gotHostConfig = args.Get(2).(*container.HostConfig)
-			gotNetworking = args.Get(3).(*network.NetworkingConfig)
-			gotPlatform, _ = args.Get(4).(*ocispec.Platform)
+			options := args.Get(1).(client.ContainerCreateOptions)
+			gotConfig = options.Config
+			gotHostConfig = options.HostConfig
+			gotNetworking = options.NetworkingConfig
+			gotPlatform = options.Platform
 		}).
-		Return(container.CreateResponse{ID: "new"}, nil).Once()
+		Return(client.ContainerCreateResult{ID: "new"}, nil).Once()
 
 	// The container must be gone before its name is claimed again, and inspected
 	// before it is gone.
@@ -104,13 +106,12 @@ func TestEngine_RecreateWithImage_Hostname(t *testing.T) {
 			replica := builtReplica()
 			replica.Config.Hostname = tt.hostname
 			api := &mockAPI{}
-			api.On("ContainerInspect", mock.Anything, replacedID).Return(replica, nil).Once()
-			api.On("ContainerRemove", mock.Anything, replacedID, mock.Anything).Return(nil).Once()
+			api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).Return(replica, nil).Once()
+			api.On("ContainerRemove", mock.Anything, replacedID, client.ContainerRemoveOptions{RemoveVolumes: true}).Return(nil).Once()
 			var got string
-			api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-				mock.Anything, "demo-app-2").
-				Run(func(args mock.Arguments) { got = args.Get(1).(*container.Config).Hostname }).
-				Return(container.CreateResponse{ID: "new"}, nil).Once()
+			api.On("ContainerCreate", mock.Anything, matchCreateName("demo-app-2")).
+				Run(func(args mock.Arguments) { got = args.Get(1).(client.ContainerCreateOptions).Config.Hostname }).
+				Return(client.ContainerCreateResult{ID: "new"}, nil).Once()
 			e := &Engine{api: api}
 
 			// Act
@@ -128,11 +129,11 @@ func TestEngine_RecreateWithImage_AFailedCreateLeavesTheContainerRemoved(t *test
 	// Arrange
 	wantErr := errors.New("no such image")
 	api := &mockAPI{}
-	api.On("ContainerInspect", mock.Anything, replacedID).Return(builtReplica(), nil).Once()
-	api.On("ContainerRemove", mock.Anything, replacedID, container.RemoveOptions{RemoveVolumes: true}).
+	api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).Return(builtReplica(), nil).Once()
+	api.On("ContainerRemove", mock.Anything, replacedID, client.ContainerRemoveOptions{RemoveVolumes: true}).
 		Return(nil).Once()
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything, "demo-app-2").Return(container.CreateResponse{}, wantErr).Once()
+	api.On("ContainerCreate", mock.Anything, matchCreateName("demo-app-2")).
+		Return(client.ContainerCreateResult{}, wantErr).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -172,8 +173,8 @@ func TestEngine_RecreateWithImage_RefusesNoReplicaIdentity(t *testing.T) {
 func TestEngine_RecreateWithImage_RefusesAContainerItCannotRebuild(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("ContainerInspect", mock.Anything, replacedID).
-		Return(container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{Name: "/demo-app-2"}}, nil).Once()
+	api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).
+		Return(container.InspectResponse{Name: "/demo-app-2"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -182,6 +183,11 @@ func TestEngine_RecreateWithImage_RefusesAContainerItCannotRebuild(t *testing.T)
 	// Assert
 	require.ErrorContains(t, err, "no configuration")
 	api.AssertExpectations(t)
+}
+
+// matchCreateName matches a ContainerCreate naming the container name.
+func matchCreateName(name string) any {
+	return mock.MatchedBy(func(options client.ContainerCreateOptions) bool { return options.Name == name })
 }
 
 // replacedID is the container the fixup replaces; long enough for the daemon's
@@ -205,11 +211,9 @@ var builtReplicaLabels = map[string]string{
 // it: declared configuration, plus the endpoint fields the daemon filled in.
 func builtReplica() container.InspectResponse {
 	return container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{
-			ID:         replacedID,
-			Name:       "/demo-app-2",
-			HostConfig: &container.HostConfig{Binds: []string{"back"}, CapAdd: []string{"NET_ADMIN"}},
-		},
+		ID:         replacedID,
+		Name:       "/demo-app-2",
+		HostConfig: &container.HostConfig{Binds: []string{"back"}, CapAdd: []string{"NET_ADMIN"}},
 		ImageManifestDescriptor: &ocispec.Descriptor{
 			Platform: &ocispec.Platform{OS: "linux", Architecture: "arm64"},
 		},
@@ -226,8 +230,8 @@ func builtReplica() container.InspectResponse {
 					DriverOpts: map[string]string{"opt": "value"},
 					NetworkID:  "netid",
 					EndpointID: "epid",
-					IPAddress:  "172.18.0.3",
-					Gateway:    "172.18.0.1",
+					IPAddress:  netip.MustParseAddr("172.18.0.3"),
+					Gateway:    netip.MustParseAddr("172.18.0.1"),
 				},
 			},
 		},

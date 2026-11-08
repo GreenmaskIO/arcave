@@ -24,7 +24,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -39,7 +39,7 @@ func copyOneShotFiles(ctx context.Context, api dockerAPI, containerID string, fi
 	if err != nil {
 		return err
 	}
-	if err := api.CopyToContainer(ctx, containerID, "/", archive, container.CopyToContainerOptions{}); err != nil {
+	if _, err := api.CopyToContainer(ctx, containerID, client.CopyToContainerOptions{DestinationPath: "/", Content: archive}); err != nil {
 		return fmt.Errorf("copy files into container %s: %w", containerID, err)
 	}
 	return nil

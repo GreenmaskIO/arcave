@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -63,10 +63,10 @@ func TestEngine_OpenVolume(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	api, err := client.NewClientWithOpts(
+	api, err := client.New(
 		client.WithHost("tcp://"+strings.TrimPrefix(server.URL, "http://")),
 		client.WithHTTPClient(server.Client()),
-		client.WithVersion("1.44"),
+		client.WithAPIVersion("1.44"),
 	)
 	require.NoError(t, err)
 	e := NewEngine(docker.NewEngine(api))

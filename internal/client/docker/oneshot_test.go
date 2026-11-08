@@ -17,6 +17,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -27,12 +28,11 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/stdcopy"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -52,7 +52,7 @@ func TestRunOneShotContainer_PullsMissingImage(t *testing.T) {
 	api.On("ImageInspect", mock.Anything, testImage).
 		Return(image.InspectResponse{}, cerrdefs.ErrNotFound)
 	pulled := &countingReader{ReadCloser: io.NopCloser(strings.NewReader(`{"status":"done"}`))}
-	api.On("ImagePull", mock.Anything, testImage, image.PullOptions{}).Return(io.ReadCloser(pulled), nil)
+	api.On("ImagePull", mock.Anything, testImage, client.ImagePullOptions{}).Return(io.ReadCloser(pulled), nil)
 	expectOneShotRun(api, 0)
 
 	// Act
@@ -73,7 +73,7 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	// The daemon frames log output with stdcopy whenever the container has no TTY,
 	// which every one-shot run is; feeding raw bytes here would hide exactly the
 	// framing bug the demux fixes.
-	_, _ = io.WriteString(stdcopy.NewStdWriter(&framed, stdcopy.Stderr), "rm: permission denied\n")
+	_, _ = io.WriteString(newFrameWriter(&framed, stdcopy.Stderr), "rm: permission denied\n")
 
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
@@ -97,7 +97,7 @@ func TestRunOneShotContainer_NonZeroExitCarriesLogs(t *testing.T) {
 	assert.NotContains(t, err.Error(), "\x01", "the stdcopy header must be demultiplexed away")
 
 	// The read is bounded at the daemon.
-	opts := api.Calls[callIndex(api, "ContainerLogs")].Arguments.Get(2).(container.LogsOptions)
+	opts := api.Calls[callIndex(api, "ContainerLogs")].Arguments.Get(2).(client.ContainerLogsOptions)
 	assert.Equal(t, "200", opts.Tail, "the log read must be bounded at the daemon")
 }
 
@@ -105,8 +105,8 @@ func TestRunOneShotContainer_PropagatesCreateError(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{}, errors.New("boom"))
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{}, errors.New("boom"))
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
@@ -122,10 +122,10 @@ func TestRunOneShotContainer_RemovesContainerOnStartFailure(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{ID: oneShotID}, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(errors.New("no such image"))
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(errors.New("no such image"))
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 
 	// Act
 	err := runOneShotContainer(context.Background(), api, model.OneShotSpec{Image: testImage})
@@ -261,21 +261,19 @@ func TestRunOneShotContainer_DiscardLog(t *testing.T) {
 			}()
 			api := &mockAPI{}
 			expectImagePresent(api, testImage)
-			api.On("ContainerCreate", mock.Anything,
-				mock.MatchedBy(func(cfg *container.Config) bool { return cfg.Image == testImage }),
-				&container.HostConfig{LogConfig: container.LogConfig{Type: "none"}}, mock.Anything, mock.Anything, "").
-				Return(container.CreateResponse{ID: oneShotID}, nil).Once()
+			api.On("ContainerCreate", mock.Anything, matchOneShotCreate(&container.HostConfig{LogConfig: container.LogConfig{Type: "none"}}, func(cfg *container.Config) bool { return cfg.Image == testImage })).
+				Return(client.ContainerCreateResult{ID: oneShotID}, nil).Once()
 			api.On("ContainerAttach", mock.Anything, oneShotID,
-				container.AttachOptions{Stream: true, Stderr: true}).Return(hj.resp, nil).Once()
-			api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil).Once()
-			api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
+				client.ContainerAttachOptions{Stream: true, Stderr: true}).Return(hj.resp, nil).Once()
+			api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil).Once()
+			api.On("ContainerWait", mock.Anything, oneShotID, waitNotRunning).
 				Return(newWaitStatus(tt.exitCode), (<-chan error)(make(chan error))).Once()
 			if tt.exitCode != 0 {
 				api.On("ContainerLogs", mock.Anything, oneShotID,
-					container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "200"}).
+					client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "200"}).
 					Return(io.NopCloser(strings.NewReader("")), errNoLog).Once()
 			}
-			api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil).Once()
+			api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil).Once()
 			var stderr bytes.Buffer
 
 			// Act
@@ -377,11 +375,11 @@ func TestRunOneShotContainer_CancellationEndsTheRun(t *testing.T) {
 
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{ID: oneShotID}, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil)
 	api.On("ContainerAttach", mock.Anything, oneShotID, mock.Anything).Return(hj.resp, nil)
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var stdout bytes.Buffer
@@ -434,7 +432,7 @@ func TestEngine_RunOneShot(t *testing.T) {
 	cfg := createdConfig(t, api)
 	assert.Equal(t, spec.Cmd, []string(cfg.Cmd))
 	assert.Equal(t, spec.Env, cfg.Env)
-	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
+	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(1).(client.ContainerCreateOptions).HostConfig
 	assert.Equal(t, spec.Binds, hostCfg.Binds)
 	assert.Equal(t, spec.SecurityOpt, hostCfg.SecurityOpt)
 	assert.Empty(t, hostCfg.NetworkMode, "the default network is the daemon's, never named")
@@ -454,7 +452,7 @@ func TestEngine_RunOneShot_HostNetwork(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	api.AssertExpectations(t)
-	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(2).(*container.HostConfig)
+	hostCfg := api.Calls[callIndex(api, "ContainerCreate")].Arguments.Get(1).(client.ContainerCreateOptions).HostConfig
 	assert.Equal(t, network.NetworkHost, string(hostCfg.NetworkMode))
 }
 
@@ -466,13 +464,13 @@ const testImage = "busybox"
 // The exec every exec test starts, and the attach of a stdout-only run.
 var (
 	bridgeCmd         = []string{"bridge"}
-	bridgeExecOptions = container.ExecOptions{
+	bridgeExecOptions = client.ExecCreateOptions{
 		Cmd:          bridgeCmd,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
 	}
-	stdoutAttachOptions = container.AttachOptions{Stream: true, Stdout: true}
+	stdoutAttachOptions = client.ContainerAttachOptions{Stream: true, Stdout: true}
 )
 
 // An exec starts after the container and before the wait, and Serve gets its
@@ -494,21 +492,19 @@ func TestRunOneShotContainer_Exec(t *testing.T) {
 	api := &mockAPI{}
 	mock.InOrder(
 		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil),
-		api.On("ContainerCreate", mock.Anything,
-			mock.MatchedBy(func(cfg *container.Config) bool {
-				return slices.Equal(cfg.Entrypoint, []string{"sh", "-c", "script"}) &&
-					slices.Equal(cfg.Cmd, []string{"arg"})
-			}),
-			&container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
-			Return(container.CreateResponse{ID: oneShotID}, nil),
+		api.On("ContainerCreate", mock.Anything, matchOneShotCreate(&container.HostConfig{}, func(cfg *container.Config) bool {
+			return slices.Equal(cfg.Entrypoint, []string{"sh", "-c", "script"}) &&
+				slices.Equal(cfg.Cmd, []string{"arg"})
+		})).
+			Return(client.ContainerCreateResult{ID: oneShotID}, nil),
 		api.On("ContainerAttach", mock.Anything, oneShotID, stdoutAttachOptions).Return(main.resp, nil),
-		api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil),
-		api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-			Return(container.ExecCreateResponse{ID: execID}, nil),
-		api.On("ContainerExecAttach", mock.Anything, execID, container.ExecAttachOptions{}).Return(exec.resp, nil),
-		api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
+		api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil),
+		api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+			Return(client.ExecCreateResult{ID: execID}, nil),
+		api.On("ExecAttach", mock.Anything, execID, client.ExecAttachOptions{}).Return(exec.resp, nil),
+		api.On("ContainerWait", mock.Anything, oneShotID, waitNotRunning).
 			Return(newWaitStatus(0), (<-chan error)(make(chan error))),
-		api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).
+		api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).
 			Run(requireClosedBefore(t, exec, serveDone)).Return(nil),
 	)
 
@@ -552,12 +548,8 @@ func TestRunOneShotContainer_Exec(t *testing.T) {
 // is the run's error, and a container still running is not waited on.
 func TestRunOneShotContainer_ExecFails(t *testing.T) {
 	execErr := errors.New("exec refused")
-	exited := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
-		State: &container.State{Running: false},
-	}}
-	running := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
-		State: &container.State{Running: true},
-	}}
+	exited := container.InspectResponse{State: &container.State{Running: false}}
+	running := container.InspectResponse{State: &container.State{Running: true}}
 
 	tests := []struct {
 		name    string
@@ -567,9 +559,9 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 		{
 			name: "a non-zero exit outranks a refused create",
 			arrange: func(api *mockAPI) {
-				api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-					Return(container.ExecCreateResponse{}, execErr)
-				api.On("ContainerInspect", mock.Anything, oneShotID).Return(exited, nil)
+				api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+					Return(client.ExecCreateResult{}, execErr)
+				api.On("ContainerInspect", mock.Anything, oneShotID, client.ContainerInspectOptions{}).Return(exited, nil)
 				expectWait(api, 1)
 				expectLogs(api)
 			},
@@ -583,9 +575,9 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 		{
 			name: "a clean exit returns a refused create",
 			arrange: func(api *mockAPI) {
-				api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-					Return(container.ExecCreateResponse{}, execErr)
-				api.On("ContainerInspect", mock.Anything, oneShotID).Return(exited, nil)
+				api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+					Return(client.ExecCreateResult{}, execErr)
+				api.On("ContainerInspect", mock.Anything, oneShotID, client.ContainerInspectOptions{}).Return(exited, nil)
 				expectWait(api, 0)
 			},
 			verify: func(t *testing.T, err error) {
@@ -597,11 +589,11 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 		{
 			name: "a clean exit returns a refused attach",
 			arrange: func(api *mockAPI) {
-				api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-					Return(container.ExecCreateResponse{ID: execID}, nil)
-				api.On("ContainerExecAttach", mock.Anything, execID, container.ExecAttachOptions{}).
-					Return(types.HijackedResponse{}, execErr)
-				api.On("ContainerInspect", mock.Anything, oneShotID).Return(exited, nil)
+				api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+					Return(client.ExecCreateResult{ID: execID}, nil)
+				api.On("ExecAttach", mock.Anything, execID, client.ExecAttachOptions{}).
+					Return(client.HijackedResponse{}, execErr)
+				api.On("ContainerInspect", mock.Anything, oneShotID, client.ContainerInspectOptions{}).Return(exited, nil)
 				expectWait(api, 0)
 			},
 			verify: func(t *testing.T, err error) {
@@ -611,9 +603,9 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 		{
 			name: "a container still running is not waited on",
 			arrange: func(api *mockAPI) {
-				api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-					Return(container.ExecCreateResponse{}, execErr)
-				api.On("ContainerInspect", mock.Anything, oneShotID).Return(running, nil)
+				api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+					Return(client.ExecCreateResult{}, execErr)
+				api.On("ContainerInspect", mock.Anything, oneShotID, client.ContainerInspectOptions{}).Return(running, nil)
 			},
 			verify: func(t *testing.T, err error) {
 				assert.ErrorIs(t, err, execErr)
@@ -622,9 +614,9 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 		{
 			name: "a container the daemon cannot inspect is not waited on",
 			arrange: func(api *mockAPI) {
-				api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-					Return(container.ExecCreateResponse{}, execErr)
-				api.On("ContainerInspect", mock.Anything, oneShotID).
+				api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+					Return(client.ExecCreateResult{}, execErr)
+				api.On("ContainerInspect", mock.Anything, oneShotID, client.ContainerInspectOptions{}).
 					Return(container.InspectResponse{}, errors.New("daemon gone"))
 			},
 			verify: func(t *testing.T, err error) {
@@ -638,12 +630,12 @@ func TestRunOneShotContainer_ExecFails(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
 			expectImagePresent(api, testImage)
-			api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
+			api.On("ContainerCreate", mock.Anything, matchOneShotCreate(&container.HostConfig{}, func(cfg *container.Config) bool {
 				return cfg.Image == testImage
-			}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
-				Return(container.CreateResponse{ID: oneShotID}, nil)
-			api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
-			api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+			})).
+				Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+			api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil)
+			api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 			tt.arrange(api)
 			served := make(chan struct{}, 1)
 			spec := model.OneShotSpec{
@@ -678,21 +670,19 @@ func TestRunOneShotContainer_ExecFails_ReadsExitedStderr(t *testing.T) {
 		_, _ = io.WriteString(hj.stderr, "Fatal: no password")
 		hj.closeOutput()
 	}()
-	exited := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
-		State: &container.State{Running: false},
-	}}
+	exited := container.InspectResponse{State: &container.State{Running: false}}
 
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 1)
 	expectLogs(api)
-	api.On("ContainerAttach", mock.Anything, oneShotID, container.AttachOptions{
+	api.On("ContainerAttach", mock.Anything, oneShotID, client.ContainerAttachOptions{
 		Stream: true,
 		Stderr: true,
 	}).Return(hj.resp, nil)
-	api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-		Return(container.ExecCreateResponse{}, errors.New("exec refused"))
-	api.On("ContainerInspect", mock.Anything, oneShotID).Return(exited, nil)
+	api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+		Return(client.ExecCreateResult{}, errors.New("exec refused"))
+	api.On("ContainerInspect", mock.Anything, oneShotID, client.ContainerInspectOptions{}).Return(exited, nil)
 	var stderr bytes.Buffer
 	spec := model.OneShotSpec{
 		Image:  testImage,
@@ -722,9 +712,9 @@ func TestRunOneShotContainer_ExecServeFails(t *testing.T) {
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
 	expectOneShotRun(api, 0)
-	api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-		Return(container.ExecCreateResponse{ID: execID}, nil)
-	api.On("ContainerExecAttach", mock.Anything, execID, container.ExecAttachOptions{}).Return(exec.resp, nil)
+	api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+		Return(client.ExecCreateResult{ID: execID}, nil)
+	api.On("ExecAttach", mock.Anything, execID, client.ExecAttachOptions{}).Return(exec.resp, nil)
 	spec := model.OneShotSpec{
 		Image: testImage,
 		Exec: &model.OneShotExec{
@@ -750,17 +740,17 @@ func TestRunOneShotContainer_ExecWithoutStdio(t *testing.T) {
 	api := &mockAPI{}
 	mock.InOrder(
 		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil),
-		api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
+		api.On("ContainerCreate", mock.Anything, matchOneShotCreate(&container.HostConfig{}, func(cfg *container.Config) bool {
 			return cfg.Image == testImage && !cfg.AttachStdout
-		}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
-			Return(container.CreateResponse{ID: oneShotID}, nil),
-		api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil),
-		api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-			Return(container.ExecCreateResponse{ID: execID}, nil),
-		api.On("ContainerExecAttach", mock.Anything, execID, container.ExecAttachOptions{}).Return(exec.resp, nil),
-		api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
+		})).
+			Return(client.ContainerCreateResult{ID: oneShotID}, nil),
+		api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil),
+		api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+			Return(client.ExecCreateResult{ID: execID}, nil),
+		api.On("ExecAttach", mock.Anything, execID, client.ExecAttachOptions{}).Return(exec.resp, nil),
+		api.On("ContainerWait", mock.Anything, oneShotID, waitNotRunning).
 			Return(newWaitStatus(0), (<-chan error)(make(chan error))),
-		api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).
+		api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).
 			Run(requireClosedBefore(t, exec, serveDone)).Return(nil),
 	)
 	spec := model.OneShotSpec{
@@ -791,17 +781,17 @@ func TestRunOneShotContainer_ExecCancelledInWait(t *testing.T) {
 	waitErr := make(chan error, 1)
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
-	api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
+	api.On("ContainerCreate", mock.Anything, matchOneShotCreate(&container.HostConfig{}, func(cfg *container.Config) bool {
 		return cfg.Image == testImage
-	}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
-		Return(container.CreateResponse{ID: oneShotID}, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
-	api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-		Return(container.ExecCreateResponse{ID: execID}, nil)
-	api.On("ContainerExecAttach", mock.Anything, execID, container.ExecAttachOptions{}).Return(exec.resp, nil)
-	api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
+	})).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil)
+	api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+		Return(client.ExecCreateResult{ID: execID}, nil)
+	api.On("ExecAttach", mock.Anything, execID, client.ExecAttachOptions{}).Return(exec.resp, nil)
+	api.On("ContainerWait", mock.Anything, oneShotID, waitNotRunning).
 		Return((<-chan container.WaitResponse)(make(chan container.WaitResponse)), (<-chan error)(waitErr))
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -851,16 +841,16 @@ func TestRunOneShotContainer_ExecCancellation(t *testing.T) {
 
 	api := &mockAPI{}
 	expectImagePresent(api, testImage)
-	api.On("ContainerCreate", mock.Anything, mock.MatchedBy(func(cfg *container.Config) bool {
+	api.On("ContainerCreate", mock.Anything, matchOneShotCreate(&container.HostConfig{}, func(cfg *container.Config) bool {
 		return cfg.Image == testImage && cfg.AttachStdout
-	}), &container.HostConfig{}, (*network.NetworkingConfig)(nil), (*ocispec.Platform)(nil), "").
-		Return(container.CreateResponse{ID: oneShotID}, nil)
+	})).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
 	api.On("ContainerAttach", mock.Anything, oneShotID, stdoutAttachOptions).Return(main.resp, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
-	api.On("ContainerExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
-		Return(container.ExecCreateResponse{ID: execID}, nil)
-	api.On("ContainerExecAttach", mock.Anything, execID, container.ExecAttachOptions{}).Return(exec.resp, nil)
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil)
+	api.On("ExecCreate", mock.Anything, oneShotID, bridgeExecOptions).
+		Return(client.ExecCreateResult{ID: execID}, nil)
+	api.On("ExecAttach", mock.Anything, execID, client.ExecAttachOptions{}).Return(exec.resp, nil)
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	serving := make(chan struct{})
@@ -912,6 +902,19 @@ func runWithin(t *testing.T, ctx context.Context, api *mockAPI, spec model.OneSh
 	}
 }
 
+// waitNotRunning is the wait every one-shot run makes.
+var waitNotRunning = client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning}
+
+// matchOneShotCreate matches the create of a one-shot container: config as predicate says,
+// hostConfig as given, and nothing else set.
+func matchOneShotCreate(hostConfig *container.HostConfig, config func(*container.Config) bool) any {
+	return mock.MatchedBy(func(options client.ContainerCreateOptions) bool {
+		return options.Config != nil && config(options.Config) &&
+			assert.ObjectsAreEqual(hostConfig, options.HostConfig) &&
+			options.NetworkingConfig == nil && options.Platform == nil && options.Name == "" && options.Image == ""
+	})
+}
+
 // newWaitStatus is a ContainerWait status channel holding exitCode.
 func newWaitStatus(exitCode int64) <-chan container.WaitResponse {
 	status := make(chan container.WaitResponse, 1)
@@ -921,7 +924,7 @@ func newWaitStatus(exitCode int64) <-chan container.WaitResponse {
 
 // expectWait makes the container exit with exitCode.
 func expectWait(api *mockAPI, exitCode int64) {
-	api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
+	api.On("ContainerWait", mock.Anything, oneShotID, waitNotRunning).
 		Return(newWaitStatus(exitCode), (<-chan error)(make(chan error)))
 }
 
@@ -938,16 +941,16 @@ func expectImagePresent(api *mockAPI, ref string) {
 
 // expectOneShotRun drives one throwaway container through to the given exit status.
 func expectOneShotRun(api *mockAPI, exitCode int64) {
-	api.On("ContainerCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(container.CreateResponse{ID: oneShotID}, nil)
-	api.On("ContainerStart", mock.Anything, oneShotID, container.StartOptions{}).Return(nil)
+	api.On("ContainerCreate", mock.Anything, mock.Anything).
+		Return(client.ContainerCreateResult{ID: oneShotID}, nil)
+	api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil)
 
 	status := make(chan container.WaitResponse, 1)
 	status <- container.WaitResponse{StatusCode: exitCode}
-	api.On("ContainerWait", mock.Anything, oneShotID, container.WaitConditionNotRunning).
+	api.On("ContainerWait", mock.Anything, oneShotID, waitNotRunning).
 		Return((<-chan container.WaitResponse)(status), (<-chan error)(make(chan error)))
 
-	api.On("ContainerRemove", mock.Anything, oneShotID, container.RemoveOptions{Force: true}).Return(nil)
+	api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil)
 }
 
 // createdConfig returns the container.Config the run handed to ContainerCreate.
@@ -956,7 +959,7 @@ func createdConfig(t *testing.T, api *mockAPI) *container.Config {
 
 	i := callIndex(api, "ContainerCreate")
 	require.NotEqual(t, -1, i, "ContainerCreate was never called")
-	return api.Calls[i].Arguments.Get(1).(*container.Config)
+	return api.Calls[i].Arguments.Get(1).(client.ContainerCreateOptions).Config
 }
 
 // callIndex reports where method first appears in the recorded calls, or -1.
@@ -1028,7 +1031,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // whatever the test writes to stdout/stderr is framed exactly the way the daemon
 // multiplexes the two back over one connection.
 type fakeHijack struct {
-	resp types.HijackedResponse
+	resp client.HijackedResponse
 
 	// stdinR is the container's end of stdin — what the "process" reads.
 	stdinR *io.PipeReader
@@ -1043,19 +1046,41 @@ type fakeHijack struct {
 	closeOnce sync.Once
 }
 
+// frameWriter frames each write as the daemon does a no-TTY stream, one stdcopy frame per write.
+type frameWriter struct {
+	w      io.Writer
+	stream stdcopy.StdType
+}
+
+// newFrameWriter frames what is written to w as stream.
+func newFrameWriter(w io.Writer, stream stdcopy.StdType) io.Writer {
+	return &frameWriter{w: w, stream: stream}
+}
+
+func (f *frameWriter) Write(p []byte) (int, error) {
+	const headerLen = 8
+	frame := make([]byte, headerLen, headerLen+len(p))
+	frame[0] = byte(f.stream)
+	binary.BigEndian.PutUint32(frame[4:], uint32(len(p)))
+	if _, err := f.w.Write(append(frame, p...)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 func newFakeHijack() *fakeHijack {
 	stdinR, stdinW := io.Pipe()
 	outR, outW := io.Pipe()
 
 	f := &fakeHijack{
 		stdinR:      stdinR,
-		stdout:      stdcopy.NewStdWriter(outW, stdcopy.Stdout),
-		stderr:      stdcopy.NewStdWriter(outW, stdcopy.Stderr),
+		stdout:      newFrameWriter(outW, stdcopy.Stdout),
+		stderr:      newFrameWriter(outW, stdcopy.Stderr),
 		outW:        outW,
 		closedWrite: make(chan struct{}),
 		closed:      make(chan struct{}),
 	}
-	f.resp = types.NewHijackedResponse(&fakeConn{r: outR, w: stdinW, hj: f}, "")
+	f.resp = client.NewHijackedResponse(&fakeConn{r: outR, w: stdinW, hj: f}, "")
 	return f
 }
 

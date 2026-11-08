@@ -24,9 +24,9 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -152,7 +152,7 @@ func (a assembly) warnOnMissingContainers(ctx context.Context) {
 	var warned []string
 	for _, svc := range a.introspection.Project.Services {
 		for _, replica := range svc.Containers {
-			if replica.Inspect.ContainerJSONBase == nil || replica.Inspect.HostConfig == nil {
+			if replica.Inspect.HostConfig == nil {
 				continue
 			}
 			hostConfig := replica.Inspect.HostConfig
@@ -301,22 +301,36 @@ func declaredIPFamily(options map[string]string, defaulted string, enabled bool)
 	return &enabled
 }
 
-// newIPAM carries the driver, and the pools verbatim only when withPools: a static address needs
-// the pool it was allocated from, while pinning an auto-assigned one risks an overlap on create.
+// newIPAM carries the driver and its options, and the pools only when withPools: a static address
+// needs its pool, while pinning an auto-assigned one risks an overlap on create.
 func newIPAM(from network.IPAM, withPools bool) types.IPAMConfig {
-	config := types.IPAMConfig{Driver: from.Driver}
-	if !withPools {
-		return config
+	var pools []*types.IPAMPool
+	if withPools {
+		pools = newIPAMPools(from.Config)
 	}
-	for _, pool := range from.Config {
-		config.Config = append(config.Config, &types.IPAMPool{
-			Subnet:             pool.Subnet,
-			Gateway:            pool.Gateway,
-			IPRange:            pool.IPRange,
-			AuxiliaryAddresses: types.Mapping(pool.AuxAddress),
+	var options types.Options
+	if len(from.Options) > 0 {
+		options = types.Options(from.Options)
+	}
+	return types.IPAMConfig{
+		Driver:  from.Driver,
+		Config:  pools,
+		Options: options,
+	}
+}
+
+// newIPAMPools spells each pool as compose does, an unset address left out.
+func newIPAMPools(from []network.IPAMConfig) []*types.IPAMPool {
+	pools := make([]*types.IPAMPool, 0, len(from))
+	for _, pool := range from {
+		pools = append(pools, &types.IPAMPool{
+			Subnet:             toNetString(pool.Subnet),
+			Gateway:            toNetString(pool.Gateway),
+			IPRange:            toNetString(pool.IPRange),
+			AuxiliaryAddresses: toAddrMapping(pool.AuxAddress),
 		})
 	}
-	return config
+	return pools
 }
 
 // staticAddressNetworks are the docker names of the networks in which any replica holds a
@@ -343,7 +357,7 @@ func hasStaticAddress(endpoint *network.EndpointSettings) bool {
 	if endpoint == nil || endpoint.IPAMConfig == nil {
 		return false
 	}
-	return endpoint.IPAMConfig.IPv4Address != "" || endpoint.IPAMConfig.IPv6Address != ""
+	return endpoint.IPAMConfig.IPv4Address.IsValid() || endpoint.IPAMConfig.IPv6Address.IsValid()
 }
 
 // networkKeys maps a network's docker name to its key in the project: a foreign network

@@ -19,7 +19,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/docker/docker/api/types/system"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -83,7 +84,7 @@ func Test_sharesHostLoopback(t *testing.T) {
 func TestEngine_HostLoopbackShared(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("Info", mock.Anything).Return(system.Info{OSType: "linux", OperatingSystem: "Docker Desktop"}, nil)
+	api.On("Info", mock.Anything, client.InfoOptions{}).Return(system.Info{OSType: "linux", OperatingSystem: "Docker Desktop"}, nil)
 
 	// Act
 	shared, err := NewEngine(api).HostLoopbackShared(context.Background())
@@ -97,7 +98,7 @@ func TestEngine_HostLoopbackShared(t *testing.T) {
 func TestEngine_HostLoopbackShared_daemonError(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	api.On("Info", mock.Anything).Return(system.Info{}, errors.New("daemon down"))
+	api.On("Info", mock.Anything, client.InfoOptions{}).Return(system.Info{}, errors.New("daemon down"))
 
 	// Act
 	_, err := NewEngine(api).HostLoopbackShared(context.Background())

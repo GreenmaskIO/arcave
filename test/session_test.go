@@ -26,9 +26,8 @@ import (
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	dockercompose "github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/client"
 	"github.com/greenmaskio/storages"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -339,8 +338,9 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	profile := newRuntimeProfile(t, e.daemon)
 	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(e.project))
-	runner := composeclient.NewClient(dockercompose.NewComposeService(cli), composeclient.Options{
-		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
+	composeService, prompter := newComposeService(t, cli)
+	runner := composeclient.NewClient(composeService, composeclient.Options{
+		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 
 	root, err := storefactory.Root(t.Context(), e.storage, e.projectRoot)

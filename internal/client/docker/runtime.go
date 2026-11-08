@@ -18,21 +18,21 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/client"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
 // versionReader is the one call ReadRuntime makes.
 type versionReader interface {
-	ServerVersion(ctx context.Context) (types.Version, error)
+	ServerVersion(ctx context.Context, options client.ServerVersionOptions) (client.ServerVersionResult, error)
 }
 
 // ReadRuntime asks the daemon which engine it is (model.NewContainerRuntime).
 func ReadRuntime(ctx context.Context, api versionReader) (model.ContainerRuntime, error) {
-	version, err := api.ServerVersion(ctx)
+	version, err := api.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return model.ContainerRuntime{}, fmt.Errorf("read the daemon version: %w", err)
 	}
-	return model.NewContainerRuntime(version), nil
+	return model.NewContainerRuntime(version.Version, version.Components), nil
 }

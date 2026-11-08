@@ -366,7 +366,7 @@ func (s *Service) buildFromSavepoint(
 	markerTarget, safetyID model.SavepointID,
 	waitTimeout time.Duration,
 ) error {
-	if err := s.composeCreate(ctx, target.project); err != nil {
+	if err := s.composeCreate(ctx, target.project, newRestoredVolumeNames(savepoint)); err != nil {
 		return err
 	}
 	if err := s.rebuildDivergentReplicas(ctx, newRecordedReplicas(savepoint, target.project, target.restored)); err != nil {
@@ -657,6 +657,17 @@ func (s *Service) removeCreatedVolumes(ctx context.Context, ownedBefore map[stri
 		}
 		log.Debug().Str("volume", name).Msg("removed the volume the failed rollback created")
 	}
+}
+
+// newRestoredVolumeNames are the docker names of the named volumes savepoint restores.
+func newRestoredVolumeNames(savepoint model.Savepoint) []string {
+	var names []string
+	for _, stat := range savepoint.Stats {
+		if stat.Volume.Named != nil {
+			names = append(names, stat.Volume.Named.VolumeName)
+		}
+	}
+	return names
 }
 
 // volumesOf projects a savepoint's stats back to volumes. Non-nil, so an empty
