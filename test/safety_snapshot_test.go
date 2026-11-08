@@ -127,7 +127,7 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 		"the undo of the rollback to the kept one is the newest now")
 }
 
-// --safety-snapshot=false and rollback.safety_snapshot: false both take none: no record stays, the
+// --no-safety-snapshot and rollback.safety_snapshot: false both take none: no record stays, the
 // result names none, and the flag wins over the config. A failure is core's to test: no daemon
 // fails on demand here.
 func TestRollback_WithoutASafetySnapshot(t *testing.T) {
@@ -140,7 +140,7 @@ func TestRollback_WithoutASafetySnapshot(t *testing.T) {
 		want   bool
 	}{
 		{name: "the default takes one", want: true},
-		{name: "the flag skips it", flags: []string{"--safety-snapshot=false"}},
+		{name: "the flag skips it", flags: []string{"--no-safety-snapshot"}},
 		{name: "the config skips it", config: "ARCAVE_ROLLBACK_SAFETY_SNAPSHOT=false"},
 		{
 			name:   "the flag wins over the config",

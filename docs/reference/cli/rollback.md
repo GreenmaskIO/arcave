@@ -40,7 +40,10 @@ If such a rollback fails, arcave removes what it created. If it is interrupted, 
 
 | Flag | Default | Description |
 |---|---|---|
-| `--safety-snapshot` | `true` | Capture the live volumes and writable layers first. `--safety-snapshot=false` captures neither: faster, but what they held is gone for good, nothing can undo the rollback, and after a failure the project stays as it is until you run the same rollback again. Bound to [`rollback.safety_snapshot`](../configuration.md#rollback). |
+| `--no-safety-snapshot` | | Capture neither the live volumes nor the writable layers: faster, but what they held is gone for good, nothing can undo the rollback, and after a failure the project stays as it is until you run the same rollback again. |
+| `--safety-snapshot` | | Capture the live volumes and writable layers first. |
+
+Without either flag, [`rollback.safety_snapshot`](../configuration.md#rollback) decides, and takes a safety snapshot unless set to `false`. Either flag overrides it for one run; they cannot be combined, and neither takes a value.
 
 The bound it waits on before deciding a start has failed is [`--wait-timeout`](index.md#global-flags), which is a config key and therefore lives on the root command.
 
@@ -182,8 +185,8 @@ Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<bas
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The safety snapshot fails | `pre-rollback safety snapshot failed, nothing changed: …`. The services are started again. |
 | Anything fails after that | `rollback failed: …`, after the safety snapshot has been replayed. You are where you started. |
-| The marker can't be written, under `--safety-snapshot=false` | `recording the inflight marker, nothing changed: …`. The project keeps running. |
-| Anything fails after that, under `--safety-snapshot=false` | `rollback failed: …`, with nothing cleaned up or started and the marker standing. Run the same rollback again, or one to another savepoint. |
+| The marker can't be written, under `--no-safety-snapshot` | `recording the inflight marker, nothing changed: …`. The project keeps running. |
+| Anything fails after that, under `--no-safety-snapshot` | `rollback failed: …`, with nothing cleaned up or started and the marker standing. Run the same rollback again, or one to another savepoint. |
 | The replay fails too | The same error, with the safety snapshot **kept**, its id in the log, and the marker phased `inconsistent`. It is now the last copy of the pre-rollback state — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 
 Everything that can fail is done while the project is still up: both backend sets are built, the recorded spec is parsed, and every stored layer is loaded into the daemon before the first container is stopped.

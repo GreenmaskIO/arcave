@@ -388,7 +388,7 @@ These are the defaults a label overrides: `capture.volumes.bind: false` with `ar
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `rollback.leftover_volumes` | string | `overwrite` | What a rollback does when the compose project has no containers but still owns named volumes the savepoint restores into: `overwrite` them, with a warning naming each, or `refuse`. |
-| `rollback.safety_snapshot` | bool | `true` | Whether a rollback of a running project captures its live volumes and writable layers first. `false` captures neither: it is faster, but what the containers wrote to their own filesystem and the volumes hold is gone for good, nothing can undo the rollback, and after a failure the project stays as it is, and refused, until the same rollback is run again. `--safety-snapshot` overrides it per command, the `safety_snapshot` argument of the MCP tool per call. |
+| `rollback.safety_snapshot` | bool | `true` | Whether a rollback of a running project captures its live volumes and writable layers first. `false` captures neither: it is faster, but what the containers wrote to their own filesystem and the volumes hold is gone for good, nothing can undo the rollback, and after a failure the project stays as it is, and refused, until the same rollback is run again. `--no-safety-snapshot` and `--safety-snapshot` override it per command, the `safety_snapshot` argument of the MCP tool per call. |
 
 `rollback.leftover_volumes` matters only for a compose project that is not running — never started, or taken down with `docker compose down`, which leaves named volumes behind. A running project is always overwritten; that is what a rollback is for. `refuse` fails before anything is created:
 

@@ -94,7 +94,7 @@ A rollback that failed and reverted, or was interrupted before the teardown, lea
 
 ### A rollback without a safety snapshot goes by the savepoint's spec
 
-`--safety-snapshot=false` reads nothing of the live project, so `compose down` knows only what the savepoint recorded. Containers go whatever the spec says, but a network the live project declares and the savepoint doesn't stays in Docker, and the next savepoint records it. A service is stopped within the savepoint's `stop_grace_period`, not the live one. Remove such a network with `docker network rm`.
+`--no-safety-snapshot` reads nothing of the live project, so `compose down` knows only what the savepoint recorded. Containers go whatever the spec says, but a network the live project declares and the savepoint doesn't stays in Docker, and the next savepoint records it. A service is stopped within the savepoint's `stop_grace_period`, not the live one. Remove such a network with `docker network rm`.
 
 ### gc on another machine doesn't see an interrupted rollback
 
@@ -110,7 +110,7 @@ Every rollback leaves an `arcave/…:sp-<savepoint id>` image tag in the daemon,
 
 ## An interrupted rollback is not finished for you
 
-If a rollback is killed partway through, arcave refuses every command that changes state until you recover. It doesn't resume on its own. A rollback that took no safety snapshot — of a project that had no containers, or under `--safety-snapshot=false` — has none to go back to: you recover by running the same rollback again, or one to another savepoint. [Troubleshooting](troubleshooting.md#an-interrupted-rollback) shows how to recover.
+If a rollback is killed partway through, arcave refuses every command that changes state until you recover. It doesn't resume on its own. A rollback that took no safety snapshot — of a project that had no containers, or under `--no-safety-snapshot` — has none to go back to: you recover by running the same rollback again, or one to another savepoint. [Troubleshooting](troubleshooting.md#an-interrupted-rollback) shows how to recover.
 
 ## A failed rollback can leave anonymous volumes behind
 

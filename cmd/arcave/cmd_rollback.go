@@ -15,12 +15,21 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
+
+// errSwitchTakesNoValue refuses a value on a flag that is a plain switch.
+var errSwitchTakesNoValue = errors.New("the flag takes no value")
+
+// rollbackSafetySnapshot is what --safety-snapshot or --no-safety-snapshot chose; nil, neither was
+// passed and rollback.safety_snapshot decides.
+var rollbackSafetySnapshot *bool
 
 var rollbackCmd = &cobra.Command{
 	Use:   "rollback [savepoint-id|name|latest]",
@@ -49,15 +58,34 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("init dependencies: %w", err)
 	}
+	cfg := projectCfg
+	if rollbackSafetySnapshot != nil {
+		cfg.Rollback.SafetySnapshot = rollbackSafetySnapshot
+	}
 	h := cli.NewRollbackHandler(svc, loadRunOutput())
-	return h.Rollback(ctx, projectCfg, args[0])
+	return h.Rollback(ctx, cfg, args[0])
 }
 
 func init() {
 	// The wait before a revert is compose.wait_timeout, set by rootCmd's persistent --wait-timeout.
 	flags := rollbackCmd.Flags()
-	flags.Bool("safety-snapshot", true,
-		"Capture the live volumes and writable layers first, so the rollback can be undone; false captures neither: faster, but after a failure the same rollback must be run again")
-	viperBind(cfgViper, flags, map[string]string{"safety-snapshot": "rollback.safety_snapshot"})
+	flags.BoolFunc("safety-snapshot",
+		"Capture the live volumes and writable layers first, so the rollback can be undone. Without either flag, rollback.safety_snapshot decides (true unless set)",
+		newRollbackSafetySnapshotSwitch(true))
+	flags.BoolFunc("no-safety-snapshot",
+		"Capture neither the live volumes nor the writable layers: faster, but nothing can undo the rollback, and after a failure the same rollback must be run again",
+		newRollbackSafetySnapshotSwitch(false))
+	rollbackCmd.MarkFlagsMutuallyExclusive("safety-snapshot", "no-safety-snapshot")
 	rootCmd.AddCommand(rollbackCmd)
+}
+
+// newRollbackSafetySnapshotSwitch returns the setter of a safety-snapshot switch, refusing any value.
+func newRollbackSafetySnapshotSwitch(take bool) func(string) error {
+	return func(value string) error {
+		if value != "true" {
+			return errSwitchTakesNoValue
+		}
+		rollbackSafetySnapshot = utils.New(take)
+		return nil
+	}
 }
