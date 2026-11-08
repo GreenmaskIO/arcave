@@ -71,7 +71,9 @@ type composeRunner interface {
 	// Stop returns the ids of the containers its deadline killed.
 	Stop(ctx context.Context, project *types.Project) ([]string, error)
 	Down(ctx context.Context, project *types.Project) error
-	Create(ctx context.Context, project *types.Project) error
+	// Create lets compose recreate a volume whose config drifted only when restoredVolumes, the
+	// docker names of the volumes the rollback restores, holds it.
+	Create(ctx context.Context, project *types.Project, restoredVolumes []string) error
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
 }
 
@@ -153,57 +155,60 @@ type Deps struct {
 }
 
 // Service orchestrates arcave's savepoint workflows over one store root, the daemon's included:
-// the store's half is embedded, so a capture and a rollback read and drop savepoints through it.
+// the store's half is embedded, so a capture and a rollback read savepoints through it.
 //
 // Every record travels with its data, in a repository over that one store. A
 // rollback's safety snapshot is an ordinary savepoint there, marked
 // model.SavepointLabelSafetySnapshot: hidden from a scanning selector, findable by id.
 type Service struct {
 	*SavepointStoreService
-	composeInspector    composeIntrospector
-	projectAssembler    projectAssembler
-	specCodec           specCodec
-	composeRunner       composeRunner
-	volumeRemover       volumeRemover
-	imageBackend        imageBackend
-	containerRebuilder  containerRebuilder
-	imageLookup         imageLookup
-	captureDefaults     capturepolicy.CaptureDefaults
-	daemonVersion       string
-	minDaemonMajor      int
-	runnerInfo          heartbeat.RunnerInfo
-	heartbeatInterval   time.Duration
-	heartbeatStaleAfter time.Duration
+	composeInspector        composeIntrospector
+	projectAssembler        projectAssembler
+	specCodec               specCodec
+	composeRunner           composeRunner
+	volumeRemover           volumeRemover
+	imageBackend            imageBackend
+	containerRebuilder      containerRebuilder
+	imageLookup             imageLookup
+	snapshotBackendRegistry model.SnapshotBackendRegistry
+	store                   storages.Storager
+	captureDefaults         capturepolicy.CaptureDefaults
+	daemonVersion           string
+	minDaemonMajor          int
+	maxConcurrentOperations int
+	runnerInfo              heartbeat.RunnerInfo
+	heartbeatInterval       time.Duration
+	heartbeatStaleAfter     time.Duration
 }
 
 func New(deps Deps) *Service {
 	return &Service{
 		SavepointStoreService: NewSavepointStoreService(SavepointStoreDeps{
-			SavepointRepo:   deps.SavepointRepo,
-			ProjectLocker:   deps.ProjectLocker,
-			SessionLocker:   deps.SessionLocker,
-			BackendRegistry: deps.BackendRegistry,
-			Inflight:        deps.Inflight,
-			Store:           deps.Store,
-			Session:         deps.Session,
-			ComposeProject:  deps.ComposeProject,
-			Sessions:        deps.Sessions,
-			Concurrency:     deps.Concurrency,
+			SavepointRepo:  deps.SavepointRepo,
+			ProjectLocker:  deps.ProjectLocker,
+			SessionLocker:  deps.SessionLocker,
+			Inflight:       deps.Inflight,
+			Session:        deps.Session,
+			ComposeProject: deps.ComposeProject,
+			Sessions:       deps.Sessions,
 		}),
-		composeInspector:    deps.ComposeInspector,
-		projectAssembler:    deps.ProjectAssembler,
-		specCodec:           deps.SpecCodec,
-		composeRunner:       deps.ComposeRunner,
-		volumeRemover:       deps.VolumeRemover,
-		imageBackend:        deps.ImageBackend,
-		containerRebuilder:  deps.ContainerRebuilder,
-		imageLookup:         deps.ImageLookup,
-		captureDefaults:     deps.CaptureDefaults,
-		daemonVersion:       deps.DaemonVersion,
-		minDaemonMajor:      deps.MinDaemonMajor,
-		runnerInfo:          deps.RunnerInfo,
-		heartbeatInterval:   cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
-		heartbeatStaleAfter: cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
+		composeInspector:        deps.ComposeInspector,
+		projectAssembler:        deps.ProjectAssembler,
+		specCodec:               deps.SpecCodec,
+		composeRunner:           deps.ComposeRunner,
+		volumeRemover:           deps.VolumeRemover,
+		imageBackend:            deps.ImageBackend,
+		containerRebuilder:      deps.ContainerRebuilder,
+		imageLookup:             deps.ImageLookup,
+		snapshotBackendRegistry: deps.BackendRegistry,
+		store:                   deps.Store,
+		captureDefaults:         deps.CaptureDefaults,
+		daemonVersion:           deps.DaemonVersion,
+		minDaemonMajor:          deps.MinDaemonMajor,
+		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
+		runnerInfo:              deps.RunnerInfo,
+		heartbeatInterval:       cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
+		heartbeatStaleAfter:     cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 	}
 }
 

@@ -36,15 +36,15 @@ type ContainerRuntime struct {
 
 // NewContainerRuntime names the engine a `docker version` answer describes: Podman when
 // a component names itself so, Docker otherwise.
-func NewContainerRuntime(version system.VersionResponse) ContainerRuntime {
+func NewContainerRuntime(version string, components []system.ComponentVersion) ContainerRuntime {
 	kind := ContainerRuntimeDocker
-	for _, component := range version.Components {
+	for _, component := range components {
 		if component.Name == podmanEngine {
 			kind = ContainerRuntimePodman
 		}
 	}
 	return ContainerRuntime{
 		Kind:    kind,
-		Version: version.Version,
+		Version: version,
 	}
 }

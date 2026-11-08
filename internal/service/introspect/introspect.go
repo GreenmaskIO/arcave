@@ -127,8 +127,7 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 }
 
 // replicas lists the compose project's containers, stopped ones included, without the one-off
-// containers `docker compose run` leaves behind and the ones compose runs on a service's behalf.
-// None means never started or taken down, not an error.
+// containers `docker compose run` leaves behind. None means never started or taken down, not an error.
 func (s *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
 	listed, err := s.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
@@ -142,20 +141,20 @@ func (s *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
 
 // newProjectFilter selects what compose stamped with this compose project's name.
 func (s *Inspector) newProjectFilter() client.Filters {
-	return client.Filters{}.Add("label", api.ProjectLabel+"="+s.composeProject.String())
+	return make(client.Filters).Add("label", api.ProjectLabel+"="+s.composeProject.String())
 }
 
-// keepProjectContainers drops the containers that are no replica of a service: the one-off ones,
-// the ephemeral lifecycle-hook runners (a failed pre_start one carries no container number and
-// would otherwise be read as a replica) and the relays compose deploys for a provider service.
+// keepProjectContainers drops the one-off containers and those compose runs beside the replicas:
+// a lifecycle hook's, which a failed pre_start leaves behind, and a provider service's relay.
 // Filtered here, not in the daemon query: a compose too old to set the label would drop the compose project.
 func keepProjectContainers(summaries []container.Summary) []container.Summary {
 	kept := make([]container.Summary, 0, len(summaries))
 	for _, summary := range summaries {
-		if summary.Labels[api.OneoffLabel] == "True" || summary.Labels[api.HookLabel] != "" || summary.Labels[api.RelayLabel] != "" {
-			continue
+		if summary.Labels[api.OneoffLabel] != "True" &&
+			summary.Labels[api.HookLabel] == "" &&
+			summary.Labels[api.RelayLabel] == "" {
+			kept = append(kept, summary)
 		}
-		kept = append(kept, summary)
 	}
 	return kept
 }
@@ -277,13 +276,12 @@ func (s *Inspector) readContainers(ctx context.Context, group []container.Summar
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %s: %w", summary.ID, err)
 		}
-		inspect := inspected.Container
 		containers = append(containers, model.Container{
 			ID:      summary.ID,
 			Name:    containerName(summary.Names),
 			Number:  replicaNumber(summary.Labels),
 			Labels:  summary.Labels,
-			Inspect: inspect,
+			Inspect: inspected.Container,
 		})
 	}
 	return containers, nil
@@ -576,8 +574,7 @@ func mountedVolumeNames(services []model.Service) []string {
 	return names
 }
 
-// readNetworks reports the project's networks, sorted by key, without the bridge compose creates
-// for a provider service's relay: it is no network the project declares.
+// readNetworks reports the project's readNetworks, sorted by key.
 func (s *Inspector) readNetworks(ctx context.Context) ([]model.Network, error) {
 	listed, err := s.api.NetworkList(ctx, client.NetworkListOptions{Filters: s.newProjectFilter()})
 	if err != nil {
@@ -586,9 +583,6 @@ func (s *Inspector) readNetworks(ctx context.Context) ([]model.Network, error) {
 
 	networks := make([]model.Network, 0, len(listed.Items))
 	for _, summary := range listed.Items {
-		if summary.Labels[api.RelayNetworkLabel] != "" {
-			continue
-		}
 		networks = append(networks, model.Network{
 			Key:     summary.Labels[api.NetworkLabel],
 			Name:    summary.Name,
@@ -613,11 +607,11 @@ func (s *Inspector) readImages(
 
 	images := make(map[model.ImageDigestID]image.InspectResponse, len(ids))
 	for _, id := range ids {
-		inspect, err := s.api.ImageInspect(ctx, id.String())
+		inspected, err := s.api.ImageInspect(ctx, id.String())
 		if err != nil {
 			return nil, fmt.Errorf("inspect image %s: %w", id, err)
 		}
-		images[id] = inspect.InspectResponse
+		images[id] = inspected.InspectResponse
 	}
 
 	// Look for a base label on container images only, not on the base images found here.
@@ -635,7 +629,7 @@ func containerImageIDs(services []model.Service) ([]model.ImageDigestID, error) 
 	var ids []model.ImageDigestID
 	for _, svc := range services {
 		for _, replica := range svc.Containers {
-			id, err := model.ParseImageDigestID(replica.Inspect.Image)
+			id, err := model.ParseImageDigestID(containerImage(replica.Inspect))
 			if err != nil {
 				return nil, fmt.Errorf("image of container %s: %w", replica.ID, err)
 			}
@@ -645,6 +639,11 @@ func containerImageIDs(services []model.Service) ([]model.ImageDigestID, error) 
 		}
 	}
 	return ids, nil
+}
+
+// containerImage is the id of the image a container runs on, empty if the daemon gave none.
+func containerImage(inspect container.InspectResponse) string {
+	return inspect.Image
 }
 
 // baseImage adds to the index the base image named by the label on image id. A base image is
@@ -661,14 +660,14 @@ func (s *Inspector) baseImage(
 	if _, ok := images[base]; ok {
 		return nil
 	}
-	inspect, err := s.api.ImageInspect(ctx, base.String())
+	inspected, err := s.api.ImageInspect(ctx, base.String())
 	if cerrdefs.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("inspect base image %s of image %s: %w", base, id, err)
 	}
-	images[base] = inspect.InspectResponse
+	images[base] = inspected.InspectResponse
 	return nil
 }
 
@@ -699,7 +698,9 @@ func (s *Inspector) readReferenced(
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %s: %w", ref, err)
 		}
-		referenced[inspected.Container.ID] = inspected.Container
+		if inspected.Container.ID != "" {
+			referenced[inspected.Container.ID] = inspected.Container
+		}
 	}
 	return referenced, nil
 }

@@ -266,7 +266,7 @@ func TestClient_Create(t *testing.T) {
 	c := NewClient(composeAPI, testOptions)
 
 	// Act
-	err := c.Create(context.Background(), project)
+	err := c.Create(context.Background(), project, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -288,7 +288,7 @@ func TestClient_Create_StampsComposeLabels(t *testing.T) {
 	c := NewClient(composeAPI, testOptions)
 
 	// Act
-	require.NoError(t, c.Create(context.Background(), project))
+	require.NoError(t, c.Create(context.Background(), project, nil))
 
 	// Assert
 	stamped := composeAPI.createProject(t)
@@ -510,8 +510,8 @@ func fixtureProject() *types.Project {
 		WorkingDir:   "/work",
 		ComposeFiles: []string{"/work/a.yml", "/work/b.yml"},
 		Services: types.Services{
-			"db":  {ContainerSpec: types.ContainerSpec{Image: "postgres:16"}},
-			"app": {ContainerSpec: types.ContainerSpec{Image: "busybox"}},
+			"db":  {Image: "postgres:16"},
+			"app": {Image: "busybox"},
 		},
 	}
 }
@@ -537,8 +537,8 @@ func disabledHealthProject(check *types.HealthCheckConfig) *types.Project {
 	return &types.Project{
 		Name: "demo",
 		Services: types.Services{
-			"web": {Name: "web", ContainerSpec: types.ContainerSpec{Image: "busybox"}, WorkloadSpec: types.WorkloadSpec{HealthCheck: check}},
-			"db":  {Name: "db", ContainerSpec: types.ContainerSpec{Image: "postgres:16"}},
+			"web": {Name: "web", Image: "busybox", HealthCheck: check},
+			"db":  {Name: "db", Image: "postgres:16"},
 		},
 	}
 }
@@ -548,16 +548,11 @@ func oneShotProject() *types.Project {
 	return &types.Project{
 		Name: "demo",
 		Services: types.Services{
-			"migrate": {Name: "migrate", ContainerSpec: types.ContainerSpec{Image: "busybox"}},
+			"migrate": {Name: "migrate", Image: "busybox"},
 			"web": {
-				Name: "web", ContainerSpec: types.ContainerSpec{
-					Image: "busybox",
-				},
-				WorkloadSpec: types.WorkloadSpec{
-					HealthCheck: &types.HealthCheckConfig{Disable: true},
-					DependsOn: types.DependsOnConfig{
-						"migrate": {Condition: types.ServiceConditionCompletedSuccessfully, Required: true},
-					},
+				Name: "web", Image: "busybox", HealthCheck: &types.HealthCheckConfig{Disable: true},
+				DependsOn: types.DependsOnConfig{
+					"migrate": {Condition: types.ServiceConditionCompletedSuccessfully, Required: true},
 				},
 			},
 		},
@@ -650,13 +645,13 @@ func TestClient_Stop_RoutesEventsToTheContextsSink(t *testing.T) {
 	// Arrange
 	project := fixtureProject()
 	var logs bytes.Buffer
-	adapter := NewProgressLogger(zerolog.New(&logs))
+	adapter := NewEventLogger(zerolog.New(&logs))
 	sink := &sinkRecorder{}
 	composeAPI := &mockComposeAPI{}
 	composeAPI.On("Ps", mock.Anything, "demo", psRunning(project)).Return([]api.ContainerSummary{}, nil).Once()
 	composeAPI.On("Stop", mock.Anything, "demo", mock.Anything).
 		Run(func(mock.Arguments) {
-			adapter.On(api.Resource{ID: "Container demo-db-1", Status: api.Done, Text: api.StatusStopped})
+			adapter.On(api.Resource{ID: "Container demo-db-1", Text: api.StatusStopped, Status: api.Done})
 		}).
 		Return(nil).Once()
 	opts := testOptions
@@ -670,7 +665,7 @@ func TestClient_Stop_RoutesEventsToTheContextsSink(t *testing.T) {
 
 	// Act
 	_, err := c.Stop(ctx, project)
-	adapter.On(api.Resource{ID: "Container demo-db-1", Status: api.Done, Text: api.StatusRemoved})
+	adapter.On(api.Resource{ID: "Container demo-db-1", Text: api.StatusRemoved, Status: api.Done})
 
 	// Assert
 	require.NoError(t, err)

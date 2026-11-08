@@ -24,11 +24,11 @@ builds:
     main: ./cmd/arcave
     binary: arcave
     env:
-      # darwin CANNOT be built with CGO_ENABLED=0: compose/v2's pkg/compose
-      # pulls in pkg/watch, which pulls in github.com/fsnotify/fsevents — a
-      # cgo-only package with no pure-Go fallback, so a cgo-less darwin build
-      # fails with "undefined: EventFlags". That is why the release job needs a
-      # macOS runner at all. linux needs no C toolchain, so it stays static.
+      # darwin is still built with cgo, on a macOS runner. compose/v2 forced it
+      # through the cgo-only github.com/fsnotify/fsevents; compose/v5 no longer
+      # pulls that in and a cgo-less darwin build compiles, but moving the
+      # release off cgo is a backlog item of its own. linux needs no C
+      # toolchain, so it stays static.
       - CGO_ENABLED={{ if eq .Os "darwin" }}1{{ else }}0{{ end }}
       # Read only when cgo is on, i.e. only on darwin — on linux CGO_ENABLED=0
       # means the C compiler is never invoked and this value is inert. The macOS
@@ -37,8 +37,8 @@ builds:
       - CC=clang -arch {{ if eq .Arch "amd64" }}x86_64{{ else }}arm64{{ end }}
     flags:
       - -trimpath
-    # -s -w drops the symbol table and DWARF: the compose/v2 dependency puts the
-    # binary near 97 MB, and this is what brings it back to roughly 65 MB. The -X
+    # -s -w drops the symbol table and DWARF: the compose dependency makes the
+    # binary large, and this is what shrinks it by about a third. The -X
     # stamps are what make `arcave --version` report a real version;
     # cmd/arcave/cmd_root.go declares the vars they fill.
     ldflags:

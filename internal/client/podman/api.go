@@ -67,10 +67,8 @@ func NewAPI(api client.APIClient, libpod libpodAPI) *API {
 	}
 }
 
-// ContainerInspect is the compat inspect with libpod's subpath and mount-API bind mounts
-// as mount requests, and its log size as the max-size option.
-//
-// Raw is dropped: it is compat's answer, which the result no longer is.
+// ContainerInspect is the compat inspect, Raw included, with libpod's subpath and mount-API bind
+// mounts as mount requests and its log size as the max-size option.
 func (a *API) ContainerInspect(
 	ctx context.Context, containerID string, options client.ContainerInspectOptions,
 ) (client.ContainerInspectResult, error) {
@@ -82,7 +80,10 @@ func (a *API) ContainerInspect(
 	if err != nil {
 		return client.ContainerInspectResult{}, fmt.Errorf("inspect container %s through libpod: %w", containerID, err)
 	}
-	return client.ContainerInspectResult{Container: withLibpodRequest(inspect.Container, stored)}, nil
+	return client.ContainerInspectResult{
+		Container: withLibpodRequest(inspect.Container, stored),
+		Raw:       inspect.Raw,
+	}, nil
 }
 
 // ContainerCommit commits a container's writable layer through libpod as OCI, whose id survives a
@@ -106,7 +107,9 @@ func (a *API) ContainerCommit(
 }
 
 // ImageSave streams one image out as an OCI archive, through libpod; the caller closes the stream.
-func (a *API) ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (client.ImageSaveResult, error) {
+func (a *API) ImageSave(
+	ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption,
+) (client.ImageSaveResult, error) {
 	if len(imageIDs) != 1 || len(opts) != 0 {
 		return nil, errUnsupportedSaveOptions
 	}

@@ -26,9 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// logRecords decodes what the adapter wrote, one map per zerolog record. The
-// assertions go through the JSON rather than the rendered text so a case names
-// the field it cares about instead of matching a line format.
+// logRecords decodes what the processor wrote, one map per zerolog record.
 func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 
@@ -44,217 +42,107 @@ func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return records
 }
 
-// The events are the ones compose v5.6.1's own constructors build (pkg/compose/
-// progress.go, pull.go), so the test doubles as the record of the shape arcave reads.
-func TestProgressLogger_On(t *testing.T) {
+func TestEventLogger_On(t *testing.T) {
 	tests := []struct {
-		name   string
-		events []api.Resource
-		verify func(t *testing.T, records []map[string]any)
+		name     string
+		resource api.Resource
+		want     map[string]any
+		absent   []string
 	}{
 		{
-			name:   "a settled lifecycle event carries its object and lands on info",
-			events: []api.Resource{{ID: "Container arcave-demo-minio-1", Status: api.Done, Text: api.StatusHealthy}},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "info", records[0]["level"])
-				assert.Equal(t, "compose", records[0]["message"])
-				assert.Equal(t, "Container", records[0]["kind"])
-				assert.Equal(t, "arcave-demo-minio-1", records[0]["name"])
-				assert.Equal(t, "Healthy", records[0]["status"])
-				assert.NotContains(t, records[0], "text", "a lifecycle event carries no details")
+			name:     "a settled event carries its object and lands on info",
+			resource: api.Resource{ID: "Container arcave-demo-minio-1", Text: api.StatusHealthy, Status: api.Done},
+			want: map[string]any{
+				"level": "info", "message": "compose", "kind": "Container",
+				"name": "arcave-demo-minio-1", "status": "Healthy",
 			},
+			absent: []string{"text", "percent"},
 		},
 		{
-			name:   "an in-flight event is demoted to debug",
-			events: []api.Resource{{ID: "Container arcave-demo-app-1", Status: api.Working, Text: api.StatusStarting}},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "debug", records[0]["level"])
-				assert.Equal(t, "Starting", records[0]["status"])
-			},
+			name:     "an in-flight event is demoted to debug",
+			resource: api.Resource{ID: "Container arcave-demo-app-1", Text: api.StatusStarting, Status: api.Working},
+			want:     map[string]any{"level": "debug", "status": "Starting"},
 		},
 		{
-			name: "an error is reported at error level with its message",
-			events: []api.Resource{{ID: "Container arcave-demo-app-1", Status: api.Error, Text: api.StatusError,
-				Details: "port is already allocated"}},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "error", records[0]["level"])
-				assert.Equal(t, "port is already allocated", records[0]["text"])
-			},
+			name:     "a warning is reported at warn",
+			resource: api.Resource{ID: "Volume demo_data", Text: "Skipped", Details: "in use", Status: api.Warning},
+			want:     map[string]any{"level": "warn", "kind": "Volume", "status": "Skipped", "text": "in use"},
 		},
 		{
-			name: "a skip is a warning and keeps its reason",
-			events: []api.Resource{{ID: "Container arcave-demo-app-1", Status: api.Warning,
-				Text: "Skipped: optional dependency is not running"}},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "warn", records[0]["level"])
-				assert.Equal(t, "Skipped: optional dependency is not running", records[0]["status"])
-			},
+			name:     "an error is reported at error",
+			resource: api.Resource{ID: "Network demo_default", Text: api.StatusError, Details: "in use", Status: api.Error},
+			want:     map[string]any{"level": "error", "status": "Error", "text": "in use"},
 		},
 		{
-			name: "a byte-progress tick is debug and carries percent",
-			events: []api.Resource{{ID: "a2abf6c4d29d", Status: api.Working, Text: "Downloading", Details: "524.3kB",
-				Current: 524288, Total: 1048576, Percent: 50}},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "debug", records[0]["level"])
-				assert.EqualValues(t, 50, records[0]["percent"])
-				assert.Equal(t, "Downloading", records[0]["status"])
+			name: "byte progress carries its percent",
+			resource: api.Resource{
+				ID: "Image postgres:16", Text: api.StatusDownloading, Status: api.Working, Total: 100, Percent: 40,
 			},
+			want: map[string]any{"level": "debug", "percent": float64(40)},
 		},
 		{
-			name:   "a completed layer has no total, so it stays visible at info",
-			events: []api.Resource{{ID: "a2abf6c4d29d", Status: api.Done, Text: "Pull complete", Percent: 100}},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "info", records[0]["level"])
-				assert.NotContains(t, records[0], "percent", "percent is only meaningful while a total is known")
-			},
-		},
-		{
-			name: "two events in one call become two records",
-			events: []api.Resource{
-				{ID: "Container arcave-demo-app-1", Status: api.Working, Text: api.StatusStopping},
-				{ID: "Container arcave-demo-postgres-1", Status: api.Done, Text: api.StatusStarted},
-			},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 2)
-				assert.Equal(t, "arcave-demo-app-1", records[0]["name"])
-				assert.Equal(t, "arcave-demo-postgres-1", records[1]["name"])
-			},
-		},
-		{
-			name:   "an id with no space is all name",
-			events: []api.Resource{{ID: "a2abf6c4d29d", Status: api.Done, Text: "Already exists"}},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "a2abf6c4d29d", records[0]["name"])
-				assert.NotContains(t, records[0], "kind")
-			},
+			name:     "an id with no space is all name",
+			resource: api.Resource{ID: "demo", Text: api.StatusCreated, Status: api.Done},
+			want:     map[string]any{"name": "demo"},
+			absent:   []string{"kind"},
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange: debug level, so a case can assert a record was demoted
-			// rather than dropped.
-			buf := &bytes.Buffer{}
-			p := NewProgressLogger(zerolog.New(buf).Level(zerolog.DebugLevel))
-
-			// Act
-			p.On(tt.events...)
-
-			// Assert
-			tt.verify(t, logRecords(t, buf))
-		})
-	}
-}
-
-// What compose writes to its error stream outside the event stream goes through
-// line by line, verbatim.
-func TestProgressLogger_Write(t *testing.T) {
-	tests := []struct {
-		name   string
-		writes []string
-		verify func(t *testing.T, records []map[string]any)
-	}{
-		{
-			name:   "a line goes through verbatim, marked as compose's own",
-			writes: []string{"No stopped containers\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "info", records[0]["level"])
-				assert.Equal(t, "No stopped containers", records[0]["message"])
-				assert.Equal(t, "compose", records[0]["source"])
-			},
-		},
-		{
-			name:   "two lines in one Write become two records",
-			writes: []string{"first\nsecond\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 2)
-				assert.Equal(t, "first", records[0]["message"])
-				assert.Equal(t, "second", records[1]["message"])
-			},
-		},
-		{
-			name:   "a line split across two Writes becomes one record",
-			writes: []string{"No stopped ", "containers\n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Equal(t, "No stopped containers", records[0]["message"])
-			},
-		},
-		{
-			name:   "a blank line is dropped",
-			writes: []string{"\n   \n"},
-			verify: func(t *testing.T, records []map[string]any) {
-				assert.Empty(t, records)
-			},
-		},
-		{
-			name:   "a stream with no newline is flushed once it outgrows the buffer bound",
-			writes: []string{strings.Repeat("x", maxProgressLine+1)},
-			verify: func(t *testing.T, records []map[string]any) {
-				require.Len(t, records, 1)
-				assert.Len(t, records[0]["message"], maxProgressLine+1)
-			},
-		},
-	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			buf := &bytes.Buffer{}
-			p := NewProgressLogger(zerolog.New(buf))
+			p := NewEventLogger(zerolog.New(buf).Level(zerolog.DebugLevel))
 
 			// Act
-			for _, write := range tt.writes {
-				n, err := p.Write([]byte(write))
-				require.NoError(t, err)
-				assert.Equal(t, len(write), n)
-			}
+			p.On(tt.resource)
 
 			// Assert
-			tt.verify(t, logRecords(t, buf))
+			records := logRecords(t, buf)
+			require.Len(t, records, 1)
+			for key, value := range tt.want {
+				assert.Equal(t, value, records[0][key], key)
+			}
+			for _, key := range tt.absent {
+				assert.NotContains(t, records[0], key)
+			}
 		})
 	}
 }
 
-// A last line with no trailing newline would sit in the buffer forever, so Close
-// hands it over — and having done so, has nothing left to hand over twice.
-func TestProgressLogger_Close(t *testing.T) {
-	// Arrange
-	buf := &bytes.Buffer{}
-	p := NewProgressLogger(zerolog.New(buf))
-	_, err := p.Write([]byte("No stopped containers"))
-	require.NoError(t, err)
-	require.Empty(t, logRecords(t, buf), "an unterminated line is held, not emitted")
+func TestNewEventState(t *testing.T) {
+	tests := []struct {
+		name   string
+		status api.EventStatus
+		want   EventState
+	}{
+		{name: "working", status: api.Working, want: EventWorking},
+		{name: "done", status: api.Done, want: EventDone},
+		{name: "warning", status: api.Warning, want: EventWarning},
+		{name: "error", status: api.Error, want: EventError},
+		{name: "unknown reads as compose renders it, an error", status: api.EventStatus(42), want: EventError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := newEventState(api.Resource{Status: tt.status})
 
-	// Act
-	require.NoError(t, p.Close())
-	require.NoError(t, p.Close())
-
-	// Assert
-	records := logRecords(t, buf)
-	require.Len(t, records, 1)
-	assert.Equal(t, "No stopped containers", records[0]["message"])
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
-// The level mapping is what decides whether a run says anything at all, so a
-// filtering logger must drop the in-flight events and keep the settled ones.
-func TestProgressLogger_On_HonoursTheLoggerLevel(t *testing.T) {
+// The level table decides whether a run says anything at all: a filtering logger drops the
+// in-flight events and keeps the settled ones.
+func TestEventLogger_On_HonoursTheLoggerLevel(t *testing.T) {
 	// Arrange
 	buf := &bytes.Buffer{}
-	p := NewProgressLogger(zerolog.New(buf).Level(zerolog.InfoLevel))
+	p := NewEventLogger(zerolog.New(buf).Level(zerolog.InfoLevel))
 
 	// Act
 	p.On(
-		api.Resource{ID: "Container arcave-demo-app-1", Status: api.Working, Text: api.StatusStarting},
-		api.Resource{ID: "Container arcave-demo-app-1", Status: api.Done, Text: api.StatusStarted},
+		api.Resource{ID: "Container arcave-demo-app-1", Text: api.StatusStarting, Status: api.Working},
+		api.Resource{ID: "Container arcave-demo-app-1", Text: api.StatusStarted, Status: api.Done},
 	)
 
 	// Assert
@@ -272,21 +160,21 @@ func (r *sinkRecorder) Event(evt Event) {
 	r.events = append(r.events, evt)
 }
 
-func TestProgressLogger_On_ToTheSink(t *testing.T) {
+func TestEventLogger_On_ToTheSink(t *testing.T) {
 	// Arrange
 	var buf bytes.Buffer
-	adapter := NewProgressLogger(zerolog.New(&buf))
+	p := NewEventLogger(zerolog.New(&buf))
 	sink := &sinkRecorder{}
-	adapter.SetSink(sink)
+	p.SetSink(sink)
 
 	// Act
-	adapter.On(
-		api.Resource{ID: "Container arcave-demo-db-1", Status: api.Working, Text: api.StatusStopping},
-		api.Resource{ID: "Container arcave-demo-db-1", Status: api.Done, Text: api.StatusStopped},
-		api.Resource{ID: "Network arcave-demo_default", Status: api.Error, Text: api.StatusError, Details: "in use"},
+	p.On(
+		api.Resource{ID: "Container arcave-demo-db-1", Text: api.StatusStopping, Status: api.Working},
+		api.Resource{ID: "Container arcave-demo-db-1", Text: api.StatusStopped, Status: api.Done},
+		api.Resource{ID: "Network arcave-demo_default", Text: api.StatusError, Details: "in use", Status: api.Error},
 	)
-	adapter.SetSink(nil)
-	adapter.On(api.Resource{ID: "Container arcave-demo-db-1", Status: api.Done, Text: api.StatusRemoved})
+	p.SetSink(nil)
+	p.On(api.Resource{ID: "Container arcave-demo-db-1", Text: api.StatusRemoved, Status: api.Done})
 
 	// Assert
 	assert.Equal(t, []Event{

@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
@@ -75,24 +76,24 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			// service's now, not this adapter's.
 			name: "forwards every restored volume",
 			res: model.RollbackResult{
-				Savepoint: savepoint,
-				Restored:  restored,
+				RolledBackTo: savepoint,
+				Restored:     restored,
 			},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
-			wantPrinted: []any{model.RollbackResponse{
+			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
 				Restored:     restored,
 			}},
 		},
 		{
 			name:       "restores nothing",
-			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
+			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: nil,
 			wantErr:    nil,
-			wantPrinted: []any{model.RollbackResponse{
+			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
@@ -106,25 +107,25 @@ func TestRollbackHandler_Rollback(t *testing.T) {
 			wantPrinted: nil,
 		},
 		{
-			name: "a safety snapshot the rollback could not drop is named",
+			name: "the safety snapshot that undoes it is named",
 			res: model.RollbackResult{
-				Savepoint:          savepoint,
-				Restored:           []model.Volume{},
-				SafetySnapshotKept: "019e843e-1650-7000-8000-0000000000bb",
+				RolledBackTo:   savepoint,
+				Restored:       []model.Volume{},
+				SafetySnapshot: "019e843e-1650-7000-8000-0000000000bb",
 			},
-			wantPrinted: []any{model.RollbackResponse{
-				RolledBackTo:       savepoint,
-				Restored:           []model.Volume{},
-				SafetySnapshotKept: "019e843e-1650-7000-8000-0000000000bb",
+			wantPrinted: []any{model.RollbackResult{
+				RolledBackTo:   savepoint,
+				Restored:       []model.Volume{},
+				SafetySnapshot: "019e843e-1650-7000-8000-0000000000bb",
 			}},
 		},
 		{
 			name:       "printer error surfaces",
-			res:        model.RollbackResult{Savepoint: savepoint, Restored: []model.Volume{}},
+			res:        model.RollbackResult{RolledBackTo: savepoint, Restored: []model.Volume{}},
 			svcErr:     nil,
 			printerErr: printErr,
 			wantErr:    printErr,
-			wantPrinted: []any{model.RollbackResponse{
+			wantPrinted: []any{model.RollbackResult{
 				RolledBackTo: savepoint,
 				Restored:     []model.Volume{},
 			}},
@@ -179,7 +180,7 @@ func TestNewRollbackRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newRollbackRequest(tt.ref, 90*time.Second, model.LeftoverVolumesRefuse)
+			got := newRollbackRequest(tt.ref, 90*time.Second, model.LeftoverVolumesRefuse, true)
 
 			// Assert
 			assert.Equal(t, tt.wantID, got.ID)
@@ -187,10 +188,44 @@ func TestNewRollbackRequest(t *testing.T) {
 			assert.Equal(t, tt.wantLatest, got.Latest)
 			assert.Equal(t, 90*time.Second, got.WaitTimeout)
 			assert.Equal(t, model.LeftoverVolumesRefuse, got.LeftoverVolumes)
+			assert.True(t, got.SkipSafetySnapshot)
 			assert.ErrorIs(t, got.Validate(), tt.wantErr)
 			// Whatever it chose renders back as the word that was typed, which is what
 			// error messages quote and what a safety snapshot's name carries.
 			assert.Equal(t, tt.ref, got.Ref())
+		})
+	}
+}
+
+// The config decides whether a rollback takes a safety snapshot; an unset key takes one.
+func TestRollbackHandler_Rollback_SafetySnapshotFromConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		safetySnapshot *bool
+		wantSkip       bool
+	}{
+		{name: "unset takes one"},
+		{name: "true takes one", safetySnapshot: ptr(true)},
+		{name: "false skips it", safetySnapshot: ptr(false), wantSkip: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("Rollback", mock.Anything, mock.MatchedBy(func(req model.RollbackRequest) bool {
+				return req.SkipSafetySnapshot == tt.wantSkip
+			})).Return(model.RollbackResult{}, nil).Once()
+			output := &capturePrinter{}
+			output.On("Print", model.RollbackResult{}).Return(nil).Once()
+			cfg := config.Config{Rollback: config.Rollback{SafetySnapshot: tt.safetySnapshot}}
+
+			// Act
+			err := NewRollbackHandler(svc, output).Rollback(context.Background(), cfg, "latest")
+
+			// Assert
+			require.NoError(t, err)
+			svc.AssertExpectations(t)
+			output.AssertExpectations(t)
 		})
 	}
 }

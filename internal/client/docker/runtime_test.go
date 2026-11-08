@@ -37,7 +37,10 @@ func (f fakeVersionReader) ServerVersion(context.Context, client.ServerVersionOp
 
 func TestReadRuntime(t *testing.T) {
 	unreachable := errors.New("connection refused")
-	podman := client.ServerVersionResult{Version: "6.1.4", Components: []system.ComponentVersion{{Name: "Podman Engine", Version: "6.1.4"}}}
+	podman := client.ServerVersionResult{
+		Version:    "6.1.4",
+		Components: []system.ComponentVersion{{Name: "Podman Engine", Version: "6.1.4"}},
+	}
 	tests := []struct {
 		name    string
 		reader  fakeVersionReader

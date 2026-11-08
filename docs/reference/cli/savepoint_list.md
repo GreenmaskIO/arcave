@@ -21,7 +21,7 @@ It reads the store, stops nothing, changes nothing and takes no lock, so it runs
 
 | Flag | Default | Description |
 |---|---|---|
-| `--include-safety-snapshots` | `false` | Also list the safety snapshots a rollback takes of the live state. |
+| `--include-safety-snapshots` | `false` | Also list the safety snapshots a rollback takes of the live state; rolling back to one by id undoes that rollback. |
 | `--sort` | `desc` | Order by age: `desc` lists the newest first, `asc` the oldest. Any other value is refused. |
 
 Global flags apply — see [the CLI reference](index.md#global-flags).
@@ -38,7 +38,7 @@ arcave savepoint list | jq -r '.[0].id'
 
 A safety snapshot is an ordinary savepoint carrying the label `arcave-safety-snapshot: "true"`. The label hides it from this listing and from every scanning selector — `latest`, a name lookup, `--retain-recent`, `--retain-for`, `--before-date`. An explicit id still reaches one, in `rollback` and in `savepoint remove`, whether or not this flag was passed.
 
-It is hidden because one normally exists only *while* a rollback runs. One that outlived its rollback is the last copy of that rollback's pre-rollback state, and this flag is how you find its id. See [the safety snapshot](../../how_it_works.md#the-safety-snapshot).
+It is hidden because it is not a state you chose to keep. It is the last copy of that rollback's pre-rollback state, and stays until [`arcave gc`](gc.md) retires it; this flag is how you find its id, to undo the rollback or to remove it. See [the safety snapshot](../../how_it_works.md#the-safety-snapshot).
 
 ## Output
 
@@ -74,7 +74,7 @@ before-migration  019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1     
 
 On a terminal, one row per savepoint: what it captured, what it added to the store, and how many things it does not cover — `not_covered` and images not stored, spelled out by [`savepoint create`](savepoint_create.md#output). In the JSON each element is the whole record, exactly as `savepoint create` printed it — `stats`, `writable_layers`, `images`, `spec` and `not_covered` included. An empty store prints `No savepoints.` on a terminal, `[]` in JSON.
 
-With `--include-safety-snapshots`, a leftover safety snapshot is listed among the others, marked `(safety)` on a terminal; in the JSON it carries its label and its generated name:
+With `--include-safety-snapshots`, a safety snapshot is listed among the others, marked `(safety)` on a terminal; in the JSON it carries its label and its generated name:
 
 <Tabs groupId="output">
 <TabItem value="terminal" label="Terminal" default>
@@ -111,7 +111,7 @@ before-migration                                               019e843e-1650-700
 </TabItem>
 </Tabs>
 
-The name carries the id of the savepoint that rollback was applying, so a leftover always identifies the run that abandoned it.
+The name carries the id of the savepoint that rollback was applying, so it always says which savepoint that rollback was undoing.
 
 ## Errors
 
@@ -133,7 +133,7 @@ arcave savepoint list
 arcave savepoint list | jq -r '.[] | "\(.id)  \(.name)"'
 ```
 
-```shell title="Find a leftover safety snapshot"
+```shell title="Find the safety snapshots"
 arcave savepoint list --include-safety-snapshots \
   | jq -r '.[] | select(.labels."arcave-safety-snapshot" == "true") | "\(.id)  \(.name)"'
 ```

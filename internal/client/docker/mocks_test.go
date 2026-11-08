@@ -17,7 +17,13 @@ package docker
 import (
 	"context"
 	"io"
+	"iter"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/mock"
 )
@@ -30,17 +36,26 @@ type mockAPI struct {
 
 func (m *mockAPI) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	args := m.Called(ctx, options)
-	return args.Get(0).(client.ContainerListResult), args.Error(1)
+	return client.ContainerListResult{Items: args.Get(0).([]container.Summary)}, args.Error(1)
 }
 
 func (m *mockAPI) ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	args := m.Called(ctx, containerID, options)
-	return args.Get(0).(client.ContainerInspectResult), args.Error(1)
+	return client.ContainerInspectResult{Container: args.Get(0).(container.InspectResponse)}, args.Error(1)
 }
 
 func (m *mockAPI) ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	args := m.Called(ctx, options)
 	return args.Get(0).(client.ContainerCreateResult), args.Error(1)
+}
+
+func (m *mockAPI) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	return client.ContainerStartResult{}, m.Called(ctx, containerID, options).Error(0)
+}
+
+func (m *mockAPI) ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
+	args := m.Called(ctx, containerID, options)
+	return client.ContainerAttachResult{HijackedResponse: args.Get(0).(client.HijackedResponse)}, args.Error(1)
 }
 
 func (m *mockAPI) ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
@@ -50,25 +65,20 @@ func (m *mockAPI) ExecCreate(ctx context.Context, containerID string, options cl
 
 func (m *mockAPI) ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error) {
 	args := m.Called(ctx, execID, options)
-	return args.Get(0).(client.ExecAttachResult), args.Error(1)
-}
-
-func (m *mockAPI) ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
-	return client.ContainerStartResult{}, m.Called(ctx, containerID, options).Error(0)
-}
-
-func (m *mockAPI) ContainerAttach(ctx context.Context, containerID string, options client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
-	args := m.Called(ctx, containerID, options)
-	return args.Get(0).(client.ContainerAttachResult), args.Error(1)
+	return client.ExecAttachResult{HijackedResponse: args.Get(0).(client.HijackedResponse)}, args.Error(1)
 }
 
 func (m *mockAPI) ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult {
-	return m.Called(ctx, containerID, options).Get(0).(client.ContainerWaitResult)
+	args := m.Called(ctx, containerID, options)
+	return client.ContainerWaitResult{
+		Result: args.Get(0).(<-chan container.WaitResponse),
+		Error:  args.Get(1).(<-chan error),
+	}
 }
 
 func (m *mockAPI) ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	args := m.Called(ctx, containerID, options)
-	logs, _ := args.Get(0).(client.ContainerLogsResult)
+	logs, _ := args.Get(0).(io.ReadCloser)
 	return logs, args.Error(1)
 }
 
@@ -92,30 +102,46 @@ func (m *mockAPI) ContainerCommit(ctx context.Context, containerID string, optio
 
 func (m *mockAPI) ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error) {
 	args := m.Called(ctx, imageID)
-	return args.Get(0).(client.ImageInspectResult), args.Error(1)
+	return client.ImageInspectResult{InspectResponse: args.Get(0).(image.InspectResponse)}, args.Error(1)
 }
 
 func (m *mockAPI) ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error) {
 	args := m.Called(ctx, options)
-	return args.Get(0).(client.ImageListResult), args.Error(1)
+	return client.ImageListResult{Items: args.Get(0).([]image.Summary)}, args.Error(1)
 }
 
 func (m *mockAPI) ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error) {
 	args := m.Called(ctx, ref, options)
-	pulled, _ := args.Get(0).(client.ImagePullResponse)
-	return pulled, args.Error(1)
+	stream, _ := args.Get(0).(io.ReadCloser)
+	if stream == nil {
+		return nil, args.Error(1)
+	}
+	return pullStream{ReadCloser: stream}, args.Error(1)
+}
+
+// pullStream is a pull answer over a plain stream; arcave only reads and closes one.
+type pullStream struct {
+	io.ReadCloser
+}
+
+func (pullStream) JSONMessages(context.Context) iter.Seq2[jsonstream.Message, error] {
+	panic("pullStream.JSONMessages: not used by arcave")
+}
+
+func (pullStream) Wait(context.Context) error {
+	panic("pullStream.Wait: not used by arcave")
 }
 
 func (m *mockAPI) ImageSave(ctx context.Context, imageIDs []string, opts ...client.ImageSaveOption) (client.ImageSaveResult, error) {
 	args := m.Called(ctx, imageIDs)
-	saved, _ := args.Get(0).(client.ImageSaveResult)
-	return saved, args.Error(1)
+	rc, _ := args.Get(0).(io.ReadCloser)
+	return rc, args.Error(1)
 }
 
 func (m *mockAPI) ImageLoad(ctx context.Context, input io.Reader, opts ...client.ImageLoadOption) (client.ImageLoadResult, error) {
 	args := m.Called(ctx, input)
-	loaded, _ := args.Get(0).(client.ImageLoadResult)
-	return loaded, args.Error(1)
+	rc, _ := args.Get(0).(io.ReadCloser)
+	return rc, args.Error(1)
 }
 
 func (m *mockAPI) ImageTag(ctx context.Context, options client.ImageTagOptions) (client.ImageTagResult, error) {
@@ -124,13 +150,13 @@ func (m *mockAPI) ImageTag(ctx context.Context, options client.ImageTagOptions) 
 
 func (m *mockAPI) ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
 	args := m.Called(ctx, imageID, options)
-	removed, _ := args.Get(0).(client.ImageRemoveResult)
-	return removed, args.Error(1)
+	deleted, _ := args.Get(0).([]image.DeleteResponse)
+	return client.ImageRemoveResult{Items: deleted}, args.Error(1)
 }
 
 func (m *mockAPI) Info(ctx context.Context, options client.InfoOptions) (client.SystemInfoResult, error) {
 	args := m.Called(ctx, options)
-	return args.Get(0).(client.SystemInfoResult), args.Error(1)
+	return client.SystemInfoResult{Info: args.Get(0).(system.Info)}, args.Error(1)
 }
 
 func (m *mockAPI) Ping(ctx context.Context, options client.PingOptions) (client.PingResult, error) {
@@ -140,7 +166,7 @@ func (m *mockAPI) Ping(ctx context.Context, options client.PingOptions) (client.
 
 func (m *mockAPI) VolumeInspect(ctx context.Context, volumeID string, options client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
 	args := m.Called(ctx, volumeID, options)
-	return args.Get(0).(client.VolumeInspectResult), args.Error(1)
+	return client.VolumeInspectResult{Volume: args.Get(0).(volume.Volume)}, args.Error(1)
 }
 
 func (m *mockAPI) VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {

@@ -104,8 +104,7 @@ func TestNewServiceConfig_Links(t *testing.T) {
 	introspection := linkedProject()
 	app := introspection.Project.Services[0]
 	app.Containers[0].Inspect = container.InspectResponse{
-		ID:         "app1",
-		HostConfig: &container.HostConfig{},
+		ID: "app1", HostConfig: &container.HostConfig{},
 		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
 			"demo_default": {Links: []string{"demo-db-1:database", "demo-db-1:db-1", "demo-db-1:demo-db-1", "outside:ext"}},
 		}},

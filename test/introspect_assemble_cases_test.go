@@ -492,19 +492,19 @@ networks:
 			setup: func(t *testing.T, e *fidelityEnv) { e.createOutsideNetwork(t, "shared") },
 		},
 		{
-			// compose 5.x hands the IPAM driver its options; the daemon keeps them on the network.
+			// compose v5 hands the IPAM driver its options; the spec carries them back.
 			name: "ipam options",
 			compose: `
 services:
   app: {image: "{{busybox}}", command: [sleep, infinity], networks: [back]}
 networks:
-  back: {ipam: {driver: default, options: {io.arcave.test: "kept"}}}
+  back: {ipam: {options: {foo: bar}}}
 `,
 			want: busyboxBase + `
 services:
   app: {<<: *base, scale: 1, networks: {back: null}}
 networks:
-  back: {name: "{{project}}_back", driver: bridge, ipam: {driver: default, options: {io.arcave.test: "kept"}}}
+  back: {name: "{{project}}_back", driver: bridge, ipam: {driver: default, options: {foo: bar}}}
 `,
 		},
 		{
@@ -526,7 +526,7 @@ networks:
   back:
     name: "{{project}}_back"
     driver: bridge
-    ipam: {driver: default, config: [{subnet: 10.213.7.0/24}]}
+    ipam: {driver: default, config: [{subnet: 10.213.7.0/24, gateway: 10.213.7.1}]}
 `,
 				// Podman reports neither the address nor the pool (BACKLOG.md: Пределы Podman).
 				model.ContainerRuntimePodman: busyboxBase + `
@@ -782,23 +782,6 @@ services:
 
 func runtimeCases() []fidelityCase {
 	return []fidelityCase{
-		{
-			// compose runs the hook in a container of its own and removes it once it succeeds, so
-			// the daemon keeps no trace of it: the spec has no pre_start (BACKLOG.md: успешные
-			// pre_start-хуки не восстанавливаются откатом), and its runner is no replica.
-			name: "a pre_start hook that succeeded",
-			compose: `
-services:
-  app:
-    image: "{{busybox}}"
-    command: [sleep, infinity]
-    pre_start: [{command: [sh, -c, "true"]}]
-`,
-			want: busyboxBase + `
-services:
-  app: {<<: *base, scale: 1, networks: {default: null}}
-` + defaultNetwork,
-		},
 		{
 			name: "user and group_add",
 			compose: `
@@ -1222,8 +1205,8 @@ services:
     scale: 1
     networks: {default: null}
     volumes:
-      - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {propagation: private}}
-      - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {create_host_path: true}}
+      - {type: bind, source: "{{dir}}/token.txt", target: /run/secrets/token, read_only: true, bind: {propagation: private, create_host_path: false}}
+      - {type: bind, source: "{{dir}}/app.conf", target: /etc/app.conf, read_only: true, bind: {}}
 ` + defaultNetwork,
 			},
 			files: map[string]string{"token.txt": "s3cr3t\n", "app.conf": "key=value\n"},
@@ -1391,7 +1374,7 @@ services:
     <<: *base
     scale: 1
     networks: {default: null}
-    volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {propagation: private}}]
+    volumes: [{type: bind, source: "{{dir}}/data", target: /data, bind: {propagation: private, create_host_path: false}}]
 ` + defaultNetwork,
 			},
 			files: map[string]string{"data/.keep": ""},
@@ -1415,7 +1398,7 @@ services:
     networks: {default: null}
     volumes:
       - {type: volume, source: data, target: /data, read_only: true}
-      - {type: bind, source: "{{dir}}/conf", target: /conf, read_only: true, bind: {create_host_path: true}}
+      - {type: bind, source: "{{dir}}/conf", target: /conf, read_only: true, bind: {}}
 volumes:
   data: {name: "{{project}}_data", driver: local}
 ` + defaultNetwork,

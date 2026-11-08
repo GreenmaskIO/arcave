@@ -29,13 +29,11 @@ import (
 // mountingProject is a spec whose db mounts pgdata at /data, its labels as the case says.
 func mountingProject(labels types.Labels) *types.Project {
 	return &types.Project{Services: types.Services{"db": {
-		Name: "db",
-		ContainerSpec: types.ContainerSpec{
-			Labels: labels,
-			Volumes: []types.ServiceVolumeConfig{
-				{Type: types.VolumeTypeVolume, Source: "pgdata", Target: "/data"},
-				{Type: types.VolumeTypeVolume, Target: "/cache"},
-			},
+		Name:   "db",
+		Labels: labels,
+		Volumes: []types.ServiceVolumeConfig{
+			{Type: types.VolumeTypeVolume, Source: "pgdata", Target: "/data"},
+			{Type: types.VolumeTypeVolume, Target: "/cache"},
 		},
 	}}}
 }
@@ -92,7 +90,7 @@ func TestCheckCaptureStamps(t *testing.T) {
 // The stamps go onto the services they name, beside the user's labels, and nowhere else.
 func TestStampServices(t *testing.T) {
 	// Arrange
-	project := &types.Project{Services: types.Services{"db": {Name: "db", ContainerSpec: types.ContainerSpec{Labels: types.Labels{"tier": "data"}}}}}
+	project := &types.Project{Services: types.Services{"db": {Name: "db", Labels: types.Labels{"tier": "data"}}}}
 
 	// Act
 	stampServices(project, map[string]map[string]string{

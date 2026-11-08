@@ -14,8 +14,8 @@
 
 package model
 
-// RemoveResult reports what was (or would be) removed.
+// RemoveResult is what was (or would be) removed, and the JSON 'arcave savepoint remove' prints.
 type RemoveResult struct {
-	DryRun  bool
-	Removed []Savepoint
+	DryRun  bool        `json:"dry_run"`
+	Removed []Savepoint `json:"removed"`
 }

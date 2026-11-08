@@ -98,6 +98,11 @@ type dockerAPI interface {
 	VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error)
 }
 
+var (
+	_ dockerAPI = (*client.Client)(nil)
+	_ dockerAPI = client.APIClient(nil)
+)
+
 // Engine is arcave's volume and image I/O through the Docker API, the operations compose has no equivalent for.
 // It is concurrency-safe, and the connection stays its creator's to close.
 type Engine struct {
@@ -196,7 +201,8 @@ func (e *Engine) WriteVolume(ctx context.Context, src model.MountSource, r io.Re
 		// NopCloser hides r's Close from net/http, which closes a request body it can:
 		// the caller's own deferred Close would then fail on a stream closed twice.
 		if _, err := e.api.CopyToContainer(ctx, id, client.CopyToContainerOptions{
-			DestinationPath: volumeHolderMount, Content: io.NopCloser(r),
+			DestinationPath: volumeHolderMount,
+			Content:         io.NopCloser(r),
 		}); err != nil {
 			return fmt.Errorf("restore volume %s: %w", src.Source, err)
 		}
@@ -251,7 +257,7 @@ type mountInfo struct {
 func findServiceMount(
 	ctx context.Context, api dockerAPI, projectName, service string, replica int, target string,
 ) (mountInfo, error) {
-	filter := client.Filters{}.Add("label",
+	filter := make(client.Filters).Add("label",
 		composeProjectLabel+"="+projectName,
 		composeServiceLabel+"="+service,
 	)

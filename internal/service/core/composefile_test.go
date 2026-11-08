@@ -32,10 +32,8 @@ import (
 func newGeneratedProject() *types.Project {
 	return &types.Project{Name: demoProject, WorkingDir: "/srv/demo", Services: types.Services{
 		"web": {Name: "web"},
-		"db": {Name: "db", ContainerSpec: types.ContainerSpec{
-			Volumes: []types.ServiceVolumeConfig{
-				{Type: types.VolumeTypeBind, Source: "/srv/demo/conf", Target: "/etc/conf"},
-			},
+		"db": {Name: "db", Volumes: []types.ServiceVolumeConfig{
+			{Type: types.VolumeTypeBind, Source: "/srv/demo/conf", Target: "/etc/conf"},
 		}},
 	}}
 }

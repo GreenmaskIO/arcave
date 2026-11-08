@@ -140,8 +140,8 @@ func TestNewRecordedReplicas(t *testing.T) {
 		{Service: "worker", Replica: 3, Container: "demo-worker-3"},
 	}}}
 	project := &types.Project{Services: types.Services{
-		"worker": {Name: "worker", ContainerSpec: types.ContainerSpec{Image: "busybox"}},
-		"app":    {Name: "app", ContainerSpec: types.ContainerSpec{Image: "app:1"}},
+		"worker": {Name: "worker", Image: "busybox"},
+		"app":    {Name: "app", Image: "app:1"},
 	}}
 	layered := []model.WritableLayerRestoreResult{{Service: "app", Replica: 2, Tag: "arcave/app:sp-1", ContainerName: "demo-app-2"}}
 

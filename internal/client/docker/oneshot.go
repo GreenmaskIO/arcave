@@ -426,14 +426,13 @@ func startVolumeHolder(
 		return "", err
 	}
 
-	created, err := api.ContainerCreate(ctx,
-		client.ContainerCreateOptions{
-			Config: &container.Config{Image: VolumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
-			HostConfig: &container.HostConfig{
-				Binds:       []string{src.Source + ":" + volumeHolderMount},
-				SecurityOpt: VolumeSecurityOpt,
-			},
-		})
+	created, err := api.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{Image: VolumeToolsImage, Cmd: volumeHolderCmd, Labels: newOneShotLabels()},
+		HostConfig: &container.HostConfig{
+			Binds:       []string{src.Source + ":" + volumeHolderMount},
+			SecurityOpt: VolumeSecurityOpt,
+		},
+	})
 	if err != nil {
 		return "", fmt.Errorf("create %s container: %w", VolumeToolsImage, err)
 	}

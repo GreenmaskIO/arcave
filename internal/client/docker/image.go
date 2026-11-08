@@ -109,7 +109,7 @@ func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 	// A bare hex: Podman matches no container to a "sha256:" ancestor, Docker takes either.
 	containers, err := e.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: client.Filters{}.Add("ancestor", strings.TrimPrefix(inspect.ID, "sha256:")),
+		Filters: make(client.Filters).Add("ancestor", strings.TrimPrefix(inspect.ID, "sha256:")),
 	})
 	if err != nil {
 		return fmt.Errorf("list containers of image %s: %w", inspect.ID, err)
@@ -182,7 +182,7 @@ func (e *Engine) ImageExists(ctx context.Context, imageID model.ImageDigestID) (
 // as Docker does, with the image it names and the origin that image's labels name.
 func (e *Engine) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
 	summaries, err := e.api.ImageList(ctx, client.ImageListOptions{
-		Filters: client.Filters{}.Add("reference", model.RestoredLayerTagNamespace+"/*"),
+		Filters: make(client.Filters).Add("reference", model.RestoredLayerTagNamespace+"/*"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list arcave images: %w", err)

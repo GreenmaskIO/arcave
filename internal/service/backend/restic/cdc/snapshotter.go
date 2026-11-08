@@ -172,12 +172,6 @@ func (s *Snapshotter) Restore(ctx context.Context, req model.BackendRestoreReque
 	return err
 }
 
-// Remove leaves the capture's snapshot in place: tagged with a savepoint no record commits, it is
-// what arcave gc forgets, pruning the data it alone held.
-func (s *Snapshotter) Remove(_ context.Context, req model.BackendRemoveRequest) error {
-	return req.SnapshotID.Validate()
-}
-
 // openResticRunner clears whatever locks an earlier run orphaned and returns the runner
 // bound to the URL a container reaches the repository at.
 //

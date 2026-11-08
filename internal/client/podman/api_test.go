@@ -43,8 +43,19 @@ const bareImageID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 const podmanImageID = model.ImageDigestID("sha256:" + bareImageID)
 
-// newRecordedDaemon is a client of a daemon answering for c1 as a real Podman did, on compat and libpod.
-func newRecordedDaemon(t *testing.T) *client.Client {
+// recordedConnection is the transport libpod reaches the recorded daemon over.
+type recordedConnection struct {
+	client *http.Client
+	host   string
+}
+
+func (c recordedConnection) HTTPClient() *http.Client { return c.client }
+
+func (c recordedConnection) DaemonHost() string { return c.host }
+
+// newRecordedDaemon is a client of a daemon answering for c1 as a real Podman did, on compat and libpod,
+// and the transport it sends over.
+func newRecordedDaemon(t *testing.T) (*client.Client, recordedConnection) {
 	t.Helper()
 	compat, err := os.ReadFile("testdata/compat_inspect.json")
 	require.NoError(t, err)
@@ -61,13 +72,17 @@ func newRecordedDaemon(t *testing.T) *client.Client {
 		}
 	}))
 	t.Cleanup(server.Close)
+	host := "tcp://" + strings.TrimPrefix(server.URL, "http://")
 	api, err := client.New(
-		client.WithHost("tcp://"+strings.TrimPrefix(server.URL, "http://")),
+		client.WithHost(host),
 		client.WithHTTPClient(server.Client()),
 		client.WithAPIVersion("1.44"),
 	)
 	require.NoError(t, err)
-	return api
+	return api, recordedConnection{
+		client: server.Client(),
+		host:   host,
+	}
 }
 
 func newInspectOf(hostConfig *container.HostConfig) container.InspectResponse {
@@ -77,22 +92,21 @@ func newInspectOf(hostConfig *container.HostConfig) container.InspectResponse {
 // What a real Podman answered, read off the wire, comes out as the mount requests and log size.
 func TestAPI_ContainerInspect_RecordedDaemon(t *testing.T) {
 	// Arrange
-	daemon := newRecordedDaemon(t)
-	libpodClient, err := libpod.NewClient(daemon, libpod.Options{Version: "6.1.4"})
+	daemon, connection := newRecordedDaemon(t)
+	libpodClient, err := libpod.NewClient(connection, libpod.Options{Version: "6.1.4"})
 	require.NoError(t, err)
 	api := NewAPI(daemon, libpodClient)
 
 	// Act
-	inspected, err := api.ContainerInspect(context.Background(), "c1", client.ContainerInspectOptions{})
+	got, err := api.ContainerInspect(context.Background(), "c1", client.ContainerInspectOptions{})
 
 	// Assert
 	require.NoError(t, err)
-	got := inspected.Container
-	require.NotNil(t, got.HostConfig)
+	require.NotNil(t, got.Container.HostConfig)
 	assert.Equal(t, []string{
 		"/tmp:/short:rw,rprivate,nosuid,nodev,rbind",
 		"arcave-fixture:/data:rw,rprivate,nosuid,nodev,rbind",
-	}, got.HostConfig.Binds)
+	}, got.Container.HostConfig.Binds)
 	assert.Equal(t, []mount.Mount{{
 		Type:          mount.TypeVolume,
 		Source:        "arcave-fixture",
@@ -105,11 +119,11 @@ func TestAPI_ContainerInspect_RecordedDaemon(t *testing.T) {
 		Target:      "/long",
 		ReadOnly:    true,
 		BindOptions: &mount.BindOptions{Propagation: mount.PropagationRShared},
-	}}, got.HostConfig.Mounts)
+	}}, got.Container.HostConfig.Mounts)
 	assert.Equal(t, container.LogConfig{
 		Type:   "json-file",
 		Config: map[string]string{"max-size": "1MB"},
-	}, got.HostConfig.LogConfig)
+	}, got.Container.HostConfig.LogConfig)
 }
 
 // The compat inspect is asked first and libpod's answer goes into it; a compat refusal leaves libpod unasked.
@@ -155,9 +169,7 @@ func TestAPI_ContainerInspect(t *testing.T) {
 			compat := &mockCompatAPI{}
 			stored := &mockLibpod{}
 			inspected := compat.On("ContainerInspect", mock.Anything, "c1", client.ContainerInspectOptions{}).
-				Return(client.ContainerInspectResult{
-					Container: newInspectOf(&container.HostConfig{Binds: []string{"pgdata:/data"}}),
-				}, tt.compatErr).Once()
+				Return(newInspectOf(&container.HostConfig{Binds: []string{"pgdata:/data"}}), tt.compatErr).Once()
 			if tt.compatErr == nil {
 				mock.InOrder(
 					inspected,
@@ -179,7 +191,7 @@ func TestAPI_ContainerInspect(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			assert.Equal(t, tt.want, got.Container)
+			assert.Equal(t, client.ContainerInspectResult{Container: tt.want}, got)
 			compat.AssertExpectations(t)
 			stored.AssertExpectations(t)
 		})
@@ -212,7 +224,7 @@ func TestAPI_ContainerCommit(t *testing.T) {
 			want: client.ContainerCommitResult{ID: bareImageID},
 		},
 		{
-			name:    "libpod refuses",
+			name:    "libpod refuses, asked not to pause",
 			options: client.ContainerCommitOptions{NoPause: true},
 			wantCommit: &libpod.CommitOptions{
 				Container: "c1",
@@ -385,15 +397,14 @@ func TestAPI_ContainerInspect_ThroughEngine(t *testing.T) {
 	compat := &mockCompatAPI{}
 	stored := &mockLibpod{}
 	mock.InOrder(
-		compat.On("ContainerInspect", mock.Anything, "c1", client.ContainerInspectOptions{}).
-			Return(client.ContainerInspectResult{Container: container.InspectResponse{
-				ID:   "c1",
-				Name: "/demo-app-2",
-				HostConfig: &container.HostConfig{
-					Binds: []string{"pgdata:/data:rw", "pgdata:/sub:ro", "/srv:/long:ro,rshared,bind"},
-				},
-				Config: &container.Config{},
-			}}, nil).Once(),
+		compat.On("ContainerInspect", mock.Anything, "c1", client.ContainerInspectOptions{}).Return(container.InspectResponse{
+			ID:   "c1",
+			Name: "/demo-app-2",
+			HostConfig: &container.HostConfig{
+				Binds: []string{"pgdata:/data:rw", "pgdata:/sub:ro", "/srv:/long:ro,rshared,bind"},
+			},
+			Config: &container.Config{},
+		}, nil).Once(),
 		stored.On("InspectContainer", mock.Anything, "c1").Return(libpod.Container{
 			Mounts: []libpod.Mount{
 				{Type: "volume", Name: "pgdata", Destination: "/data", RW: true},
@@ -565,6 +576,12 @@ func TestWithLibpodRequest(t *testing.T) {
 			inspect: newInspectOf(nil),
 			stored:  libpod.Container{HostConfig: libpod.HostConfig{LogConfig: libpod.LogConfig{Size: "1MB"}}},
 			want:    newInspectOf(nil),
+		},
+		{
+			name:    "no base at all",
+			inspect: container.InspectResponse{},
+			stored:  libpod.Container{HostConfig: libpod.HostConfig{LogConfig: libpod.LogConfig{Size: "1MB"}}},
+			want:    container.InspectResponse{},
 		},
 	}
 	for _, tt := range tests {

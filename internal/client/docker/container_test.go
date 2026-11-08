@@ -34,21 +34,20 @@ import (
 func TestEngine_RecreateWithImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
-	inspect := api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).
-		Return(client.ContainerInspectResult{Container: builtReplica()}, nil).Once()
+	inspect := api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).Return(builtReplica(), nil).Once()
 	remove := api.On("ContainerRemove", mock.Anything, replacedID,
 		client.ContainerRemoveOptions{RemoveVolumes: true}).Return(nil).Once()
 	var gotConfig *container.Config
 	var gotHostConfig *container.HostConfig
 	var gotNetworking *network.NetworkingConfig
 	var gotPlatform *ocispec.Platform
-	create := api.On("ContainerCreate", mock.Anything, createdAs("demo-app-3")).
+	create := api.On("ContainerCreate", mock.Anything, matchCreateName("demo-app-3")).
 		Run(func(args mock.Arguments) {
-			opts := args.Get(1).(client.ContainerCreateOptions)
-			gotConfig = opts.Config
-			gotHostConfig = opts.HostConfig
-			gotNetworking = opts.NetworkingConfig
-			gotPlatform = opts.Platform
+			options := args.Get(1).(client.ContainerCreateOptions)
+			gotConfig = options.Config
+			gotHostConfig = options.HostConfig
+			gotNetworking = options.NetworkingConfig
+			gotPlatform = options.Platform
 		}).
 		Return(client.ContainerCreateResult{ID: "new"}, nil).Once()
 
@@ -107,11 +106,10 @@ func TestEngine_RecreateWithImage_Hostname(t *testing.T) {
 			replica := builtReplica()
 			replica.Config.Hostname = tt.hostname
 			api := &mockAPI{}
-			api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).
-				Return(client.ContainerInspectResult{Container: replica}, nil).Once()
-			api.On("ContainerRemove", mock.Anything, replacedID, mock.Anything).Return(nil).Once()
+			api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).Return(replica, nil).Once()
+			api.On("ContainerRemove", mock.Anything, replacedID, client.ContainerRemoveOptions{RemoveVolumes: true}).Return(nil).Once()
 			var got string
-			api.On("ContainerCreate", mock.Anything, createdAs("demo-app-2")).
+			api.On("ContainerCreate", mock.Anything, matchCreateName("demo-app-2")).
 				Run(func(args mock.Arguments) { got = args.Get(1).(client.ContainerCreateOptions).Config.Hostname }).
 				Return(client.ContainerCreateResult{ID: "new"}, nil).Once()
 			e := &Engine{api: api}
@@ -131,11 +129,11 @@ func TestEngine_RecreateWithImage_AFailedCreateLeavesTheContainerRemoved(t *test
 	// Arrange
 	wantErr := errors.New("no such image")
 	api := &mockAPI{}
-	api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).
-		Return(client.ContainerInspectResult{Container: builtReplica()}, nil).Once()
+	api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).Return(builtReplica(), nil).Once()
 	api.On("ContainerRemove", mock.Anything, replacedID, client.ContainerRemoveOptions{RemoveVolumes: true}).
 		Return(nil).Once()
-	api.On("ContainerCreate", mock.Anything, createdAs("demo-app-2")).Return(client.ContainerCreateResult{}, wantErr).Once()
+	api.On("ContainerCreate", mock.Anything, matchCreateName("demo-app-2")).
+		Return(client.ContainerCreateResult{}, wantErr).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -176,7 +174,7 @@ func TestEngine_RecreateWithImage_RefusesAContainerItCannotRebuild(t *testing.T)
 	// Arrange
 	api := &mockAPI{}
 	api.On("ContainerInspect", mock.Anything, replacedID, client.ContainerInspectOptions{}).
-		Return(client.ContainerInspectResult{Container: container.InspectResponse{Name: "/demo-app-2"}}, nil).Once()
+		Return(container.InspectResponse{Name: "/demo-app-2"}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -187,9 +185,9 @@ func TestEngine_RecreateWithImage_RefusesAContainerItCannotRebuild(t *testing.T)
 	api.AssertExpectations(t)
 }
 
-// createdAs matches the container create by the name the replacement is given.
-func createdAs(name string) any {
-	return mock.MatchedBy(func(opts client.ContainerCreateOptions) bool { return opts.Name == name })
+// matchCreateName matches a ContainerCreate naming the container name.
+func matchCreateName(name string) any {
+	return mock.MatchedBy(func(options client.ContainerCreateOptions) bool { return options.Name == name })
 }
 
 // replacedID is the container the fixup replaces; long enough for the daemon's

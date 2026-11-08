@@ -64,7 +64,11 @@ func (e *Engine) RecreateWithImage(
 	}
 
 	created, err := e.api.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config: &config, HostConfig: &hostConfig, NetworkingConfig: networking, Platform: platform, Name: identity.Name,
+		Config:           &config,
+		HostConfig:       &hostConfig,
+		NetworkingConfig: networking,
+		Platform:         platform,
+		Name:             identity.Name,
 	})
 	if err != nil {
 		return "", fmt.Errorf("recreate container %s as %s from %s: %w", name, identity.Name, imageRef, err)

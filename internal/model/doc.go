@@ -19,8 +19,8 @@
 // Besides the core domain types (Mount, SkippedMount, Savepoint), the package
 // also owns the JSON response shapes arcave commands print to stdout: single-
 // savepoint payloads marshal Savepoint directly (its json tags are the wire
-// contract), while the multi-part envelopes — RollbackResponse, RemoveResponse,
-// RestoredMount — have no other domain equivalent. Both the CLI and MCP adapters
+// contract), while the multi-part envelopes — RollbackResult, RemoveResult —
+// have no other domain equivalent. Both the CLI and MCP adapters
 // marshal these.
 //
 // errors.go holds the sentinel errors that cross a layer seam: a service returns

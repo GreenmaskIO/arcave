@@ -72,16 +72,14 @@ func TestAssembler_Assemble(t *testing.T) {
 			Key:  "back",
 			Name: "demo_back",
 			Inspect: network.Inspect{
-				Network: network.Network{
-					Driver:   "bridge",
-					Internal: true,
-					Options:  map[string]string{"com.docker.network.bridge.name": "br-demo"},
-					IPAM: network.IPAM{
-						Driver: "default",
-						Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix("172.28.0.0/16"), Gateway: netip.MustParseAddr("172.28.0.1")}},
-					},
-					Labels: map[string]string{api.NetworkLabel: "back"},
+				Driver:   "bridge",
+				Internal: true,
+				Options:  map[string]string{"com.docker.network.bridge.name": "br-demo"},
+				IPAM: network.IPAM{
+					Driver: "default",
+					Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix("172.28.0.0/16"), Gateway: netip.MustParseAddr("172.28.0.1")}},
 				},
+				Labels: map[string]string{api.NetworkLabel: "back"},
 			},
 		}},
 	}}
@@ -177,7 +175,7 @@ func TestAssembler_Assemble_NetworkPools(t *testing.T) {
 						replica("demo-web-2", tt.endpoint),
 					},
 				}},
-				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{Network: network.Network{IPAM: pools}}}},
+				Networks: []model.Network{{Key: "back", Name: "demo_back", Inspect: network.Inspect{IPAM: pools}}},
 			}}
 
 			// Act
@@ -203,25 +201,20 @@ func TestAssembler_Assemble_NetworkIPFamilies(t *testing.T) {
 	}{
 		{
 			name: "the options the daemon writes for a defaulted family are no declaration",
-			inspect: network.Inspect{Network: network.Network{
-				EnableIPv4: true,
-				Options: map[string]string{
-					enableIPv4Option: "true", enableIPv6Option: "false",
-				},
+			inspect: network.Inspect{EnableIPv4: true, Options: map[string]string{
+				enableIPv4Option: "true", enableIPv6Option: "false",
 			}},
 		},
 		{
 			name:     "a declared family carries no option, and is declared",
-			inspect:  network.Inspect{Network: network.Network{EnableIPv4: true, EnableIPv6: true}},
+			inspect:  network.Inspect{EnableIPv4: true, EnableIPv6: true},
 			wantIPv4: enabled(true),
 			wantIPv6: enabled(true),
 		},
 		{
 			name: "a driver option of the user's stays",
-			inspect: network.Inspect{Network: network.Network{
-				Options: map[string]string{
-					"com.docker.network.bridge.name": "br-demo", enableIPv4Option: "true", enableIPv6Option: "false",
-				},
+			inspect: network.Inspect{Options: map[string]string{
+				"com.docker.network.bridge.name": "br-demo", enableIPv4Option: "true", enableIPv6Option: "false",
 			}},
 			wantOpts: types.Options{"com.docker.network.bridge.name": "br-demo"},
 		},
@@ -410,52 +403,6 @@ func TestAssembler_Assemble_NoServices(t *testing.T) {
 	assert.Contains(t, err.Error(), `"demo"`)
 }
 
-// ServiceConfig embeds ContainerSpec and WorkloadSpec: a difference is named by the compose key
-// of the field, never by the struct that carries it.
-func TestDivergentFields(t *testing.T) {
-	base := func() types.ServiceConfig {
-		return types.ServiceConfig{
-			Name:          "web",
-			Restart:       "always",
-			ContainerName: "demo-web-1",
-			ContainerSpec: types.ContainerSpec{Image: "nginx:1", Hostname: "aaaa"},
-			WorkloadSpec:  types.WorkloadSpec{Expose: types.StringOrNumberList{"80"}},
-		}
-	}
-
-	tests := []struct {
-		name   string
-		mutate func(cfg *types.ServiceConfig)
-		want   []string
-	}{
-		{name: "identical configs differ in nothing", mutate: func(*types.ServiceConfig) {}},
-		{name: "a ServiceConfig field", mutate: func(cfg *types.ServiceConfig) { cfg.Restart = "no" }, want: []string{"restart"}},
-		{name: "a ContainerSpec field", mutate: func(cfg *types.ServiceConfig) { cfg.Image = "nginx:2" }, want: []string{"image"}},
-		{name: "a WorkloadSpec field", mutate: func(cfg *types.ServiceConfig) { cfg.Expose = nil }, want: []string{"expose"}},
-		{
-			name: "the per-replica fields are not differences",
-			mutate: func(cfg *types.ServiceConfig) {
-				cfg.ContainerName = "demo-web-2"
-				cfg.Hostname = "bbbb"
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			other := base()
-			tt.mutate(&other)
-
-			// Act
-			got := divergentFields(base(), other)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 	tests := []struct {
 		name string
@@ -471,9 +418,7 @@ func TestAssembler_Assemble_WarnsOnDivergentReplicas(t *testing.T) {
 			// Arrange
 			replica := func(id string, number int, env []string) model.Container {
 				return model.Container{ID: id, Number: number, Inspect: container.InspectResponse{
-					ID:         id,
-					Name:       "/demo-web-" + strconv.Itoa(number),
-					HostConfig: &container.HostConfig{},
+					ID: id, Name: "/demo-web-" + strconv.Itoa(number), HostConfig: &container.HostConfig{},
 					Config: &container.Config{Image: "nginx:1", Env: env, Hostname: id[:12], Labels: map[string]string{
 						api.ProjectLabel: "demo", api.ServiceLabel: "web", api.ContainerNumberLabel: strconv.Itoa(number),
 					}},
@@ -522,8 +467,7 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 		{
 			name: "a container outside the project is declared by name",
 			referenced: map[string]container.InspectResponse{vpnID: {
-				ID:   vpnID,
-				Name: "/vpn",
+				ID: vpnID, Name: "/vpn",
 			}},
 			want: "container:vpn",
 		},
@@ -535,9 +479,7 @@ func TestAssembler_Assemble_ForeignNamespace(t *testing.T) {
 			// Arrange
 			replica := func(id string) model.Container {
 				return model.Container{ID: id, Number: 1, Inspect: container.InspectResponse{
-					ID:   id,
-					Name: "/demo-app-1",
-					HostConfig: &container.HostConfig{
+					ID: id, Name: "/demo-app-1", HostConfig: &container.HostConfig{
 						NetworkMode: container.NetworkMode("container:" + vpnID),
 						IpcMode:     container.IpcMode("container:" + vpnID),
 					},

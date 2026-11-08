@@ -19,7 +19,6 @@ package composespec
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -302,54 +301,36 @@ func declaredIPFamily(options map[string]string, defaulted string, enabled bool)
 	return &enabled
 }
 
-// newIPAM carries the driver and its options, and the pools verbatim only when withPools: a static
-// address needs the pool it was allocated from, while pinning an auto-assigned one risks an overlap
-// on create.
+// newIPAM carries the driver and its options, and the pools only when withPools: a static address
+// needs its pool, while pinning an auto-assigned one risks an overlap on create.
 func newIPAM(from network.IPAM, withPools bool) types.IPAMConfig {
-	config := types.IPAMConfig{Driver: from.Driver}
+	var pools []*types.IPAMPool
+	if withPools {
+		pools = newIPAMPools(from.Config)
+	}
+	var options types.Options
 	if len(from.Options) > 0 {
-		config.Options = types.Options(from.Options)
+		options = types.Options(from.Options)
 	}
-	if !withPools {
-		return config
+	return types.IPAMConfig{
+		Driver:  from.Driver,
+		Config:  pools,
+		Options: options,
 	}
-	for _, pool := range from.Config {
-		config.Config = append(config.Config, &types.IPAMPool{
-			Subnet:             prefixString(pool.Subnet),
-			Gateway:            addrString(pool.Gateway),
-			IPRange:            prefixString(pool.IPRange),
-			AuxiliaryAddresses: auxAddresses(pool.AuxAddress),
+}
+
+// newIPAMPools spells each pool as compose does, an unset address left out.
+func newIPAMPools(from []network.IPAMConfig) []*types.IPAMPool {
+	pools := make([]*types.IPAMPool, 0, len(from))
+	for _, pool := range from {
+		pools = append(pools, &types.IPAMPool{
+			Subnet:             toNetString(pool.Subnet),
+			Gateway:            toNetString(pool.Gateway),
+			IPRange:            toNetString(pool.IPRange),
+			AuxiliaryAddresses: toAddrMapping(pool.AuxAddress),
 		})
 	}
-	return config
-}
-
-// addrString and prefixString render an address the daemon reports, empty for the one it left
-// unset, which is how the spec says "none".
-func addrString(addr netip.Addr) string {
-	if !addr.IsValid() {
-		return ""
-	}
-	return addr.String()
-}
-
-func prefixString(prefix netip.Prefix) string {
-	if !prefix.IsValid() {
-		return ""
-	}
-	return prefix.String()
-}
-
-// auxAddresses renders a pool's aux_addresses; nil when it has none.
-func auxAddresses(from map[string]netip.Addr) types.Mapping {
-	if len(from) == 0 {
-		return nil
-	}
-	mapping := make(types.Mapping, len(from))
-	for host, addr := range from {
-		mapping[host] = addrString(addr)
-	}
-	return mapping
+	return pools
 }
 
 // staticAddressNetworks are the docker names of the networks in which any replica holds a

@@ -33,7 +33,7 @@ func removeComposeProject(t *testing.T, cli *client.Client, project string) {
 	t.Helper()
 
 	ctx := context.Background()
-	byProject := client.Filters{}.Add("label", api.ProjectLabel+"="+project)
+	byProject := make(client.Filters).Add("label", api.ProjectLabel+"="+project)
 
 	containers, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: byProject})
 	if assert.NoError(t, err, "list containers of %s", project) {
@@ -98,7 +98,7 @@ func removeProjectNetworks(t *testing.T, cli *client.Client, project string) {
 
 	ctx := context.Background()
 	networks, err := cli.NetworkList(ctx, client.NetworkListOptions{
-		Filters: client.Filters{}.Add("label", api.ProjectLabel+"="+project),
+		Filters: make(client.Filters).Add("label", api.ProjectLabel+"="+project),
 	})
 	if !assert.NoError(t, err, "list networks of %s", project) {
 		return

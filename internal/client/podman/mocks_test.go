@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/mock"
 
@@ -57,7 +58,7 @@ func (m *mockCompatAPI) ContainerInspect(
 	ctx context.Context, containerID string, options client.ContainerInspectOptions,
 ) (client.ContainerInspectResult, error) {
 	args := m.Called(ctx, containerID, options)
-	return args.Get(0).(client.ContainerInspectResult), args.Error(1)
+	return client.ContainerInspectResult{Container: args.Get(0).(container.InspectResponse)}, args.Error(1)
 }
 
 func (m *mockCompatAPI) ContainerRemove(

@@ -15,7 +15,6 @@
 package composespec
 
 import (
-	"net/netip"
 	"slices"
 	"sort"
 	"strconv"
@@ -49,17 +48,13 @@ func (a assembly) newServiceConfig(svc model.Service) types.ServiceConfig {
 func (a assembly) newBaseConfig(svc model.Service) types.ServiceConfig {
 	scale := len(svc.Containers)
 	return types.ServiceConfig{
-		Name:  svc.Name,
-		Scale: &scale,
-		ContainerSpec: types.ContainerSpec{
-			Image:      svc.Image,
-			Labels:     userLabels(svc.Labels),
-			PullPolicy: pullPolicyMissing,
-			Volumes:    newServiceVolumes(ownVolumes(declaredVolumes(svc))),
-		},
-		WorkloadSpec: types.WorkloadSpec{
-			DependsOn: a.parseDependsOn(svc.Labels[api.DependenciesLabel]),
-		},
+		Name:       svc.Name,
+		Image:      svc.Image,
+		Labels:     userLabels(svc.Labels),
+		Scale:      &scale,
+		DependsOn:  a.parseDependsOn(svc.Labels[api.DependenciesLabel]),
+		PullPolicy: pullPolicyMissing,
+		Volumes:    newServiceVolumes(ownVolumes(declaredVolumes(svc))),
 	}
 }
 
@@ -156,7 +151,7 @@ func (a assembly) applyHostConfig(cfg *types.ServiceConfig, inspect container.In
 	cfg.CapDrop = hostConfig.CapDrop
 	cfg.GroupAdd = hostConfig.GroupAdd
 	cfg.SecurityOpt = hostConfig.SecurityOpt
-	cfg.DNS = addrStrings(hostConfig.DNS)
+	cfg.DNS = toAddrStrings(hostConfig.DNS)
 	cfg.DNSOpts = hostConfig.DNSOptions
 	cfg.DNSSearch = types.StringList(hostConfig.DNSSearch)
 	cfg.VolumesFrom = declaredVolumesFrom(hostConfig.VolumesFrom, a.serviceByReplica)
@@ -231,16 +226,21 @@ func applyNetworks(
 		if !ok || endpoint == nil {
 			continue
 		}
+		var ipv4, ipv6 string
+		var linkLocal []string
+		if endpoint.IPAMConfig != nil {
+			ipv4 = toNetString(endpoint.IPAMConfig.IPv4Address)
+			ipv6 = toNetString(endpoint.IPAMConfig.IPv6Address)
+			linkLocal = toAddrStrings(endpoint.IPAMConfig.LinkLocalIPs)
+		}
 		// MacAddress is left out: after the first run it is generated, not declared.
 		attachment := &types.ServiceNetworkConfig{
 			Aliases:         declaredAliases(endpoint.Aliases, inspect.ID, generated),
 			DriverOpts:      endpoint.DriverOpts,
 			GatewayPriority: endpoint.GwPriority,
-		}
-		if endpoint.IPAMConfig != nil {
-			attachment.Ipv4Address = addrString(endpoint.IPAMConfig.IPv4Address)
-			attachment.Ipv6Address = addrString(endpoint.IPAMConfig.IPv6Address)
-			attachment.LinkLocalIPs = addrStrings(endpoint.IPAMConfig.LinkLocalIPs)
+			Ipv4Address:     ipv4,
+			Ipv6Address:     ipv6,
+			LinkLocalIPs:    linkLocal,
 		}
 		if endpoint.IPAMConfig == nil && isEmptyAttachment(attachment) {
 			// compose creates the endpoint of a nil entry without an IPAM config, and of an
@@ -425,18 +425,6 @@ func declaredAliases(aliases []string, containerID string, generated []string) [
 	return kept
 }
 
-// addrStrings renders a list of addresses; nil when there are none.
-func addrStrings(addrs []netip.Addr) []string {
-	if len(addrs) == 0 {
-		return nil
-	}
-	rendered := make([]string, 0, len(addrs))
-	for _, addr := range addrs {
-		rendered = append(rendered, addrString(addr))
-	}
-	return rendered
-}
-
 // toExposedPorts renders EXPOSE, sorted so one compose project renders one spec.
 func toExposedPorts(set network.PortSet) types.StringOrNumberList {
 	if len(set) == 0 {
@@ -444,7 +432,9 @@ func toExposedPorts(set network.PortSet) types.StringOrNumberList {
 	}
 	exposed := make([]string, 0, len(set))
 	for port := range set {
-		exposed = append(exposed, port.String())
+		if port.IsValid() {
+			exposed = append(exposed, port.String())
+		}
 	}
 	sort.Strings(exposed)
 	return exposed
@@ -481,8 +471,8 @@ func newPublishedPorts(bindings network.PortMap) []types.ServicePortConfig {
 			published = append(published, types.ServicePortConfig{
 				Target:    uint32(port.Num()),
 				Protocol:  string(port.Proto()),
-				Published: publishedPort(host.HostPort),
-				HostIP:    addrString(host.HostIP),
+				Published: host.HostPort,
+				HostIP:    toNetString(host.HostIP),
 			})
 		}
 	}
@@ -496,15 +486,6 @@ func newPublishedPorts(bindings network.PortMap) []types.ServicePortConfig {
 		return published[i].Published < published[j].Published
 	})
 	return published
-}
-
-// publishedPort is the host port a binding asked for; compose 5 asks for a random one as "0",
-// which the spec spells as none.
-func publishedPort(hostPort string) string {
-	if hostPort == "0" {
-		return ""
-	}
-	return hostPort
 }
 
 // toRestartPolicy renders the restart: shorthand; docker's "no" is compose's default.

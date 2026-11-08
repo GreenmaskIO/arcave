@@ -43,6 +43,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/gc"
+	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -337,8 +338,9 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	profile := newRuntimeProfile(t, e.daemon)
 	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(e.project))
-	runner := composeclient.NewClient(newComposeService(t, cli), composeclient.Options{
-		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
+	composeService, prompter := newComposeService(t, cli)
+	runner := composeclient.NewClient(composeService, composeclient.Options{
+		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 
 	root, err := storefactory.Root(t.Context(), e.storage, e.projectRoot)
@@ -454,7 +456,7 @@ func TestSession_RollbackStaysInItsSession(t *testing.T) {
 	for _, sp := range []*imageRollbackEnv{baseline, branch} {
 		list, err := sp.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 		require.NoError(t, err)
-		assert.Len(t, list, 1, "each session holds its own sp and no leftover safety snapshot")
+		assert.Len(t, list, 2, "each session holds its own sp and its own rollback's safety snapshot")
 	}
 }
 
@@ -602,5 +604,10 @@ func newSavepointReader(store storages.Storager) core.SavepointReader {
 
 // newGCSavepointReader opens a compose project's savepoints the way the DI root does for gc.
 func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
+	return sprepo.New(store)
+}
+
+// newGCSavepointDeleter is the savepoint repository gc's eraser deletes a savepoint through.
+func newGCSavepointDeleter(store storages.Storager) eraser.SavepointDeleter {
 	return sprepo.New(store)
 }

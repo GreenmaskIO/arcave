@@ -151,10 +151,10 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	composeService := newComposeService(t, cli)
+	composeService, prompter := newComposeService(t, cli)
 	profile := newRuntimeProfile(t, daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
-		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
+		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 
 	projectRoot := t.TempDir()
@@ -203,7 +203,7 @@ func (e *imageCaptureEnv) up(t *testing.T) {
 	document := fmt.Sprintf(imageCaptureSpec, e.project, layerMarker)
 	project, err := composespec.NewCodec().Parse(e.ctx, []byte(document))
 	require.NoError(t, err)
-	require.NoError(t, e.compose.Create(e.ctx, project))
+	require.NoError(t, e.compose.Create(e.ctx, project, nil))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
 }
 

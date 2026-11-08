@@ -59,9 +59,16 @@ func cdcCaptureDefaults() capturepolicy.CaptureDefaults {
 	return defaults
 }
 
+// demoRestoredVolumes are the docker names of the volumes a rollback to demoRecord restores.
+var demoRestoredVolumes = []string{demoVolumeName}
+
 // demoVolume is the unit, in the form the mock tests address it by.
 func demoVolume() model.Volume {
-	return model.Volume{ObjectID: "volume-named-" + demoVolumeName, Backend: model.SnapshotBackendFullCopy}
+	return model.Volume{
+		ObjectID: "volume-named-" + demoVolumeName,
+		Backend:  model.SnapshotBackendFullCopy,
+		Named:    &model.VolumePropertiesNamed{VolumeName: demoVolumeName},
+	}
 }
 
 // demoRecord is a committed savepoint of demoVolume.
@@ -276,7 +283,7 @@ var (
 	demoAssembled  = &types.Project{Name: demoProject}
 	demoSpec       = &types.Project{Name: demoProject}
 	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{
-		demoService: {Name: demoService, ContainerSpec: types.ContainerSpec{Image: demoBaseImage}},
+		demoService: {Name: demoService, Image: demoBaseImage},
 	}}
 	demoSpecBytes       = []byte("name: demo\n")
 	demoTargetSpecBytes = []byte("name: demo\nservices: {db: {image: postgres:16}}\n")
@@ -342,14 +349,6 @@ func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.Savepoi
 	return repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil && r.Name == "safety-snapshot-"+restoring.String() &&
 			r.IsSafetySnapshot() && r.Spec != nil
-	})).Return(nil).Once()
-}
-
-// expectSafetySnapshotUncommit declares the uncommit that opens the backup's drop.
-// id is read at match time, so it may be filled by the capture that runs first.
-func expectSafetySnapshotUncommit(repo *mockSavepointRepo, id *model.SavepointID) *mock.Call {
-	return repo.On("DeleteSavepoint", mock.Anything, mock.MatchedBy(func(got model.SavepointID) bool {
-		return got == *id
 	})).Return(nil).Once()
 }
 

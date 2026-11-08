@@ -296,8 +296,8 @@ func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) er
 	return m.Called(ctx, project).Error(0)
 }
 
-func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project) error {
-	return m.Called(ctx, project).Error(0)
+func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project, restoredVolumes []string) error {
+	return m.Called(ctx, project, restoredVolumes).Error(0)
 }
 
 func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
@@ -334,10 +334,6 @@ func (m *mockBackend) Snapshot(ctx context.Context, req model.BackendSnapshotReq
 }
 
 func (m *mockBackend) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
-	return m.Called(ctx, req).Error(0)
-}
-
-func (m *mockBackend) Remove(ctx context.Context, req model.BackendRemoveRequest) error {
 	return m.Called(ctx, req).Error(0)
 }
 

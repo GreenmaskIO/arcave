@@ -171,7 +171,7 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	sp2 := decode[model.Savepoint](t, run("savepoint", "create", "sp2"))
 	listed := decode[[]model.Savepoint](t, run("savepoint", "list"))
 	ascending := decode[[]model.Savepoint](t, run("savepoint", "list", "--sort", "asc"))
-	rolledBack := decode[model.RollbackResponse](t, run("rollback", "sp1"))
+	rolledBack := decode[model.RollbackResult](t, run("rollback", "sp1"))
 	replica := compose.replicas(t)[0]
 	volumeAfter, layerAfter := compose.read(t, replica, volumeMarker), compose.read(t, replica, layerMarker)
 	withSafety := decode[[]model.Savepoint](t, run("savepoint", "list", "--include-safety-snapshots"))
@@ -179,7 +179,7 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	inFork := decode[[]model.Savepoint](t, run("--session", "fork", "savepoint", "list"))
 	run("--session", "fork", "rollback", "sp2")
 	volumeInFork := compose.read(t, compose.replicas(t)[0], volumeMarker)
-	removed := decode[model.RemoveResponse](t, run("savepoint", "remove", sp2.ID.String()))
+	removed := decode[model.RemoveResult](t, run("savepoint", "remove", sp2.ID.String()))
 	afterRemove := decode[[]model.Savepoint](t, run("savepoint", "list"))
 	// runArcave fails on a partial gc's non-zero exit.
 	collected := decode[storageE2EGarbage](t, runArcave(t, projectRoot, env, "gc"))
@@ -196,7 +196,9 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	assert.Equal(t, sp1.ID, rolledBack.RolledBackTo.ID)
 	assert.Equal(t, "v1", volumeAfter, "the volume is back at sp1")
 	assert.Equal(t, "v1", layerAfter, "the writable layer is back at sp1")
-	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(withSafety), "the safety snapshot is dropped")
+	require.NotEmpty(t, rolledBack.SafetySnapshot, "the result names the safety snapshot")
+	assert.Equal(t, []string{"safety-snapshot-" + sp1.ID.String(), "sp2", "sp1"}, savepointNames(withSafety),
+		"the safety snapshot stays")
 	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(inFork), "the fork holds the copied savepoints")
 	assert.Equal(t, "v2", volumeInFork, "the fork's copy of sp2 restores")
 	assert.Equal(t, []model.SavepointID{sp2.ID}, savepointIDs(removed.Removed))

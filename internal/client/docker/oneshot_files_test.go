@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -129,12 +130,12 @@ func TestRunOneShotContainer_Files(t *testing.T) {
 	api := &mockAPI{}
 	copyCall, copied := expectCopy(t, api, nil)
 	mock.InOrder(
-		api.On("ImageInspect", mock.Anything, testImage).Return(client.ImageInspectResult{}, nil).Once(),
+		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil).Once(),
 		expectOneShotCreate(api),
 		copyCall,
 		api.On("ContainerStart", mock.Anything, oneShotID, client.ContainerStartOptions{}).Return(nil).Once(),
-		api.On("ContainerWait", mock.Anything, oneShotID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning}).
-			Return(client.ContainerWaitResult{Result: newWaitStatus(0), Error: make(chan error)}).Once(),
+		api.On("ContainerWait", mock.Anything, oneShotID, waitNotRunning).
+			Return(newWaitStatus(0), (<-chan error)(make(chan error))).Once(),
 		api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil).Once(),
 	)
 
@@ -156,7 +157,7 @@ func TestRunOneShotContainer_FilesRefused(t *testing.T) {
 	api := &mockAPI{}
 	copyCall, _ := expectCopy(t, api, refused)
 	mock.InOrder(
-		api.On("ImageInspect", mock.Anything, testImage).Return(client.ImageInspectResult{}, nil).Once(),
+		api.On("ImageInspect", mock.Anything, testImage).Return(image.InspectResponse{}, nil).Once(),
 		expectOneShotCreate(api),
 		copyCall,
 		api.On("ContainerRemove", mock.Anything, oneShotID, client.ContainerRemoveOptions{Force: true}).Return(nil).Once(),
@@ -176,9 +177,8 @@ func TestRunOneShotContainer_FilesRefused(t *testing.T) {
 
 // expectOneShotCreate expects the one create of a one-shot container with no stdio.
 func expectOneShotCreate(api *mockAPI) *mock.Call {
-	return api.On("ContainerCreate", mock.Anything, createdWith(func(cfg *container.Config) bool {
-		return cfg.Image == testImage
-	})).
+	return api.On("ContainerCreate", mock.Anything, matchOneShotCreate(&container.HostConfig{},
+		func(cfg *container.Config) bool { return cfg.Image == testImage })).
 		Return(client.ContainerCreateResult{ID: oneShotID}, nil).Once()
 }
 
@@ -188,9 +188,10 @@ func expectCopy(t *testing.T, api *mockAPI, err error) (*mock.Call, *[]archivedE
 	t.Helper()
 
 	var copied []archivedEntry
-	call := api.On("CopyToContainer", mock.Anything, oneShotID, mock.MatchedBy(func(opts client.CopyToContainerOptions) bool {
-		_, buffered := opts.Content.(*bytes.Buffer)
-		return opts.DestinationPath == "/" && buffered
+	call := api.On("CopyToContainer", mock.Anything, oneShotID, mock.MatchedBy(func(options client.CopyToContainerOptions) bool {
+		_, isBuffer := options.Content.(*bytes.Buffer)
+		return options.DestinationPath == "/" && isBuffer &&
+			!options.AllowOverwriteDirWithFile && !options.CopyUIDGID
 	})).
 		Run(func(args mock.Arguments) {
 			copied = readArchive(t, args.Get(2).(client.CopyToContainerOptions).Content.(*bytes.Buffer))

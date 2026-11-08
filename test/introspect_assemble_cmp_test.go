@@ -158,12 +158,12 @@ var anonVolumeName = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var (
 	ignoredContainerFields = cmpopts.IgnoreFields(container.InspectResponse{},
 		"ID", "Created", "State", "ResolvConfPath", "HostnamePath", "HostsPath", "LogPath",
-		"RestartCount", "GraphDriver", "Storage", "ExecIDs", "MountLabel", "ProcessLabel")
+		"RestartCount", "GraphDriver", "ExecIDs", "MountLabel", "ProcessLabel")
 	ignoredSandboxFields = cmpopts.IgnoreFields(container.NetworkSettings{},
 		"SandboxID", "SandboxKey")
 	ignoredEndpointFields = cmpopts.IgnoreFields(network.EndpointSettings{},
 		"EndpointID", "NetworkID")
-	ignoredNetworkFields = cmpopts.IgnoreFields(network.Inspect{}, "Network.ID", "Network.Created", "Containers")
+	ignoredNetworkFields = cmpopts.IgnoreFields(network.Inspect{}, "ID", "Created", "Containers")
 )
 
 // introspectionOptions compare two introspections of one compose project created twice;
@@ -171,8 +171,10 @@ var (
 func introspectionOptions(declaredMACs map[string]bool, runtime model.ContainerRuntimeKind) gocmp.Options {
 	return gocmp.Options{
 		cmpopts.EquateEmpty(),
-		// The SDK's addresses and ports are values with unexported fields, equal by ==.
-		cmpopts.EquateComparable(netip.Addr{}, netip.Prefix{}, network.Port{}),
+		// The address and port types hide their fields; their == is their equality.
+		gocmp.Comparer(func(a, b netip.Addr) bool { return a == b }),
+		gocmp.Comparer(func(a, b netip.Prefix) bool { return a == b }),
+		gocmp.Comparer(func(a, b network.Port) bool { return a == b }),
 		ignoredContainerFields, ignoredSandboxFields, ignoredEndpointFields,
 		ignoredNetworkFields,
 		gocmp.Transformer("replicaIdentity", func(res model.IntrospectionResult) model.IntrospectionResult {
@@ -241,7 +243,7 @@ func newNormalizer(res model.IntrospectionResult) normalizer {
 			n.ids[c.ID] = identity
 			for _, m := range c.Inspect.Mounts {
 				if m.Type == "volume" && anonVolumeName.MatchString(m.Name) {
-					n.volumes[m.Name] = identity + ":" + m.Destination
+					n.volumes[m.Name] = joinedService(identity) + ":" + m.Destination
 				}
 			}
 			if c.Inspect.NetworkSettings != nil {
@@ -254,7 +256,7 @@ func newNormalizer(res model.IntrospectionResult) normalizer {
 			if c.Inspect.HostConfig != nil {
 				for port, bindings := range c.Inspect.HostConfig.PortBindings {
 					for _, b := range bindings {
-						if b.HostPort == "" || b.HostPort == "0" || strings.Contains(b.HostPort, "-") {
+						if b.HostPort == "" || strings.Contains(b.HostPort, "-") {
 							n.randomPorts[port.String()] = true
 						}
 					}
@@ -271,7 +273,7 @@ func (n normalizer) service(svc model.Service) model.Service {
 	out.Volumes = make([]model.ServiceVolume, len(svc.Volumes))
 	for i, v := range svc.Volumes {
 		v.VolumeName = n.volumeName(v.VolumeName)
-		v.InheritedFrom = n.id(v.InheritedFrom)
+		v.InheritedFrom = joinedService(n.id(v.InheritedFrom))
 		if v.Type == model.VolumeTypeAnon {
 			v.Source = n.volumeName(v.Source)
 		}
@@ -410,10 +412,17 @@ func (n normalizer) hostname(hostname string) string {
 	}
 	for id, identity := range n.ids {
 		if strings.HasPrefix(id, hostname) {
-			return identity
+			return joinedService(identity)
 		}
 	}
 	return hostname
+}
+
+// joinedService is the service of a replica identity: which replica of a service another joins
+// is compose's to pick, and v5 joins whichever its executor created first.
+func joinedService(identity string) string {
+	service, _, _ := strings.Cut(identity, "#")
+	return service
 }
 
 // id is the replica's identity, or the id as given when it is none of the project's.
@@ -431,7 +440,7 @@ func (n normalizer) entries(entries []string) []string {
 	out := make([]string, len(entries))
 	for i, entry := range entries {
 		id, mode, hasMode := strings.Cut(entry, ":")
-		out[i] = n.id(id)
+		out[i] = joinedService(n.id(id))
 		if hasMode {
 			out[i] += ":" + mode
 		}
@@ -441,7 +450,7 @@ func (n normalizer) entries(entries []string) []string {
 
 func (n normalizer) namespace(mode string) string {
 	if id, ok := strings.CutPrefix(mode, types.ContainerPrefix); ok {
-		return types.ContainerPrefix + n.id(id)
+		return types.ContainerPrefix + joinedService(n.id(id))
 	}
 	return mode
 }
@@ -502,11 +511,11 @@ func declaredMACs(project *types.Project) map[string]bool {
 	macs := map[string]bool{}
 	for _, svc := range project.Services {
 		if svc.MacAddress != "" {
-			macs[strings.ToLower(svc.MacAddress)] = true
+			macs[svc.MacAddress] = true
 		}
 		for _, attachment := range svc.Networks {
 			if attachment != nil && attachment.MacAddress != "" {
-				macs[strings.ToLower(attachment.MacAddress)] = true
+				macs[attachment.MacAddress] = true
 			}
 		}
 	}

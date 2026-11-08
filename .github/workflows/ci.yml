@@ -104,7 +104,7 @@ jobs:
     name: Build (all targets)
     if: github.ref == 'refs/heads/main'
     needs: [lint, unit, integration]
-    # macOS, not ubuntu: the darwin targets need cgo (compose/v2 pulls in the cgo-only fsnotify/fsevents)
+    # macOS, not ubuntu: the darwin targets are still built with cgo (.goreleaser.yaml says why)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

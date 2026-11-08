@@ -106,7 +106,9 @@ func oneShotContainers(t *testing.T, env *sessionEnv) []string {
 	t.Helper()
 
 	containers, err := env.daemon.ContainerList(env.ctx, client.ContainerListOptions{
-		All: true, Filters: client.Filters{}.Add("label", "arcave.oneshot").Add("volume", env.project+"_data"),
+		All: true, Filters: make(client.Filters).
+			Add("label", "arcave.oneshot").
+			Add("volume", env.project+"_data"),
 	})
 	require.NoError(t, err)
 	names := make([]string, 0, len(containers.Items))
@@ -118,7 +120,8 @@ func oneShotContainers(t *testing.T, env *sessionEnv) []string {
 
 // An agent host stopping `arcave mcp` mid-rollback leaves a consistent compose project: a
 // signal lets the rollback finish, a closed stdin cancels it into the revert, and either way
-// the server exits only once the call is over, with no marker, safety snapshot or helper left.
+// the server exits only once the call is over, with no marker or helper left and the safety
+// snapshot committed beside the savepoint.
 func TestMCP_InterruptedRollback(t *testing.T) {
 	t.Parallel()
 
@@ -189,8 +192,9 @@ func TestMCP_InterruptedRollback(t *testing.T) {
 			assert.Equal(t, tt.wantContent, app.read(t, replica, layerMarker), "the writable layer")
 			all, err := app.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 			require.NoError(t, err)
-			require.Len(t, all, 1, "the safety snapshot is dropped")
-			assert.Equal(t, "v1", all[0].Name)
+			require.Len(t, all, 2, "the safety snapshot stays")
+			assert.True(t, all[0].IsSafetySnapshot(), "newest first")
+			assert.Equal(t, "v1", all[1].Name)
 			assert.Empty(t, oneShotContainers(t, env), "no helper container is left behind")
 		})
 	}

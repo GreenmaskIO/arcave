@@ -276,7 +276,7 @@ func TestTTYOutput_Close_WritesTheResultThenTheError(t *testing.T) {
 		stderr:   &stderr,
 	}
 
-	require.NoError(t, out.Print(model.RemoveResponse{}))
+	require.NoError(t, out.Print(model.RemoveResult{}))
 	assert.Empty(t, stdout.String(), "nothing is written before Close")
 	out.Close(errors.New("partial"))
 
@@ -296,7 +296,7 @@ func TestTTYOutput_Close_FinalTree(t *testing.T) {
 	}{
 		{
 			name:   "a result keeps every stage and leaves the warnings it repeats out",
-			result: model.RemoveResponse{},
+			result: model.RemoveResult{},
 			wantStderr: "✔ savepoint.create    0.0s\n" +
 				"├── ✔ volume.capture  0.0s\n" +
 				"│     ! slow disk\n" +

@@ -39,6 +39,8 @@ func richResult() model.IntrospectionResult {
 	svc.Volumes = append(svc.Volumes,
 		model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/conf", Target: "/etc/conf",
 			Bind: &model.BindMount{Propagation: "rshared", Recursive: "disabled"}},
+		model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/demo/data", Target: "/data",
+			Bind: &model.BindMount{CreateHostPath: true}},
 		model.ServiceVolume{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/run/cache",
 			Tmpfs: &model.TmpfsMount{SizeBytes: 1 << 20, Mode: 0o1777}},
 		model.ServiceVolume{Type: model.VolumeTypeImage, RawType: "image", Source: "assets:1", Target: "/assets",
@@ -59,14 +61,13 @@ func richResult() model.IntrospectionResult {
 			Key:  "back",
 			Name: "demo_back",
 			Inspect: network.Inspect{
-				Network: network.Network{
-					Driver: "bridge",
-					IPAM: network.IPAM{
-						Driver: "default",
-						Config: []network.IPAMConfig{{Subnet: netip.MustParsePrefix("172.28.0.0/16"), Gateway: netip.MustParseAddr("172.28.0.1")}},
-					},
-					Labels: map[string]string{api.NetworkLabel: "back"},
+				Driver: "bridge",
+				IPAM: network.IPAM{
+					Driver:  "default",
+					Options: map[string]string{"foo": "bar"},
+					Config:  []network.IPAMConfig{{Subnet: netip.MustParsePrefix("172.28.0.0/16"), Gateway: netip.MustParseAddr("172.28.0.1")}},
 				},
+				Labels: map[string]string{api.NetworkLabel: "back"},
 			},
 		}},
 	}}
@@ -130,6 +131,7 @@ func TestCodec_MarshalParse_RoundTrip(t *testing.T) {
 	assert.Equal(t, assembled.Volumes["pgdata"].Name, parsed.Volumes["pgdata"].Name)
 	assert.Equal(t, assembled.Networks["back"].Name, parsed.Networks["back"].Name)
 	assert.Equal(t, assembled.Networks["back"].Ipam, parsed.Networks["back"].Ipam)
+	assert.Equal(t, types.Options{"foo": "bar"}, parsed.Networks["back"].Ipam.Options)
 
 	// The loader's normalisation settles in one pass: the parsed project re-renders
 	// to a document that parses back to itself.
@@ -150,15 +152,13 @@ func TestCodec_MarshalParse_EmptyOptions(t *testing.T) {
 	project := &types.Project{
 		Name: "demo",
 		Services: types.Services{"app": {
-			Name: "app",
-			ContainerSpec: types.ContainerSpec{
-				Image: "busybox",
-				Volumes: []types.ServiceVolumeConfig{
-					{Type: types.VolumeTypeVolume, Target: "/empty", Volume: &types.ServiceVolumeVolume{}},
-					{Type: types.VolumeTypeVolume, Target: "/none"},
-				},
-				Networks: map[string]*types.ServiceNetworkConfig{"front": {}, "back": nil},
+			Name:  "app",
+			Image: "busybox",
+			Volumes: []types.ServiceVolumeConfig{
+				{Type: types.VolumeTypeVolume, Target: "/empty", Volume: &types.ServiceVolumeVolume{}},
+				{Type: types.VolumeTypeVolume, Target: "/none"},
 			},
+			Networks: map[string]*types.ServiceNetworkConfig{"front": {}, "back": nil},
 		}},
 		Networks: types.Networks{"front": {Name: "demo_front"}, "back": {Name: "demo_back"}},
 	}
@@ -184,9 +184,8 @@ func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 	const dbID = "9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9"
 	replica := func(id, name string, host container.HostConfig) model.Container {
 		return model.Container{ID: id, Name: name, Number: 1, Inspect: container.InspectResponse{
-			ID:         id,
-			HostConfig: &host,
-			Config:     &container.Config{Image: "alpine:3"},
+			ID: id, HostConfig: &host,
+			Config: &container.Config{Image: "alpine:3"},
 		}}
 	}
 	introspection := model.IntrospectionResult{Project: model.Project{
@@ -229,26 +228,6 @@ func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 	again, err := codec.Marshal(parsed)
 	require.NoError(t, err)
 	assert.Equal(t, string(spec), string(again))
-}
-
-// A capture stamp runs past 80 columns; the artifact keeps it on its own line, as written.
-func TestCodec_Marshal_DoesNotWrapLongValues(t *testing.T) {
-	// Arrange
-	const stamp = "false; origin=label; source=arcave.mounts.exclude=/src on service app, which the user wrote"
-	project := &types.Project{
-		Name: "demo",
-		Services: types.Services{"app": {
-			Name:          "app",
-			ContainerSpec: types.ContainerSpec{Image: "busybox", Labels: types.Labels{"io.arcave.capture.mount./src": stamp}},
-		}},
-	}
-
-	// Act
-	spec, err := NewCodec().Marshal(project)
-
-	// Assert
-	require.NoError(t, err)
-	assert.Contains(t, string(spec), "io.arcave.capture.mount./src: "+stamp+"\n")
 }
 
 func TestCodec_Marshal_NoProject(t *testing.T) {

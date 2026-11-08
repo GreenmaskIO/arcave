@@ -18,15 +18,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v5/pkg/api"
-	dockercompose "github.com/docker/compose/v5/pkg/compose"
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -47,19 +44,6 @@ type composeEnv struct {
 	project string
 }
 
-// newComposeService builds compose over cli the way arcave does, but quiet: no events, nothing
-// on stdout, every prompt answered yes.
-func newComposeService(t *testing.T, cli command.Cli) api.Compose {
-	t.Helper()
-
-	service, err := dockercompose.NewComposeService(cli,
-		dockercompose.WithStreams(io.Discard, io.Discard, strings.NewReader("")),
-		dockercompose.WithPrompt(dockercompose.AlwaysOkPrompt()),
-	)
-	require.NoError(t, err)
-	return service
-}
-
 // newComposeEnv names the compose project arcave-<kind>-it-<suffix>, stops it within stopTimeout and
 // removes it when the test ends.
 func newComposeEnv(t *testing.T, kind string, stopTimeout time.Duration) *composeEnv {
@@ -75,11 +59,12 @@ func newComposeEnv(t *testing.T, kind string, stopTimeout time.Duration) *compos
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
+	composeService, prompter := newComposeService(t, cli)
 	logs := &syncBuffer{}
 	env := &composeEnv{
 		ctx: zerolog.New(logs).WithContext(context.Background()),
-		compose: composeclient.NewClient(newComposeService(t, cli), composeclient.Options{
-			WaitTimeout: 90 * time.Second, StopTimeout: stopTimeout,
+		compose: composeclient.NewClient(composeService, composeclient.Options{
+			WaitTimeout: 90 * time.Second, StopTimeout: stopTimeout, Prompter: prompter,
 		}),
 		engine:  dockerclient.NewEngine(daemonAPI),
 		daemon:  daemonAPI,
@@ -96,7 +81,7 @@ func (e *composeEnv) up(t *testing.T, document string, args ...any) *types.Proje
 
 	project, err := composespec.NewCodec().Parse(e.ctx, fmt.Appendf(nil, document, append([]any{e.project}, args...)...))
 	require.NoError(t, err)
-	require.NoError(t, e.compose.Create(e.ctx, project))
+	require.NoError(t, e.compose.Create(e.ctx, project, nil))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
 	return project
 }

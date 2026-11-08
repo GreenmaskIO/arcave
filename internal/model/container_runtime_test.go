@@ -22,41 +22,45 @@ import (
 
 func TestNewContainerRuntime(t *testing.T) {
 	tests := []struct {
-		name    string
-		version system.VersionResponse
-		want    ContainerRuntime
+		name       string
+		version    string
+		components []system.ComponentVersion
+		want       ContainerRuntime
 	}{
 		{
-			name: "Docker",
-			version: system.VersionResponse{Version: "29.8.2", Components: []system.ComponentVersion{
+			name:    "Docker",
+			version: "29.8.2",
+			components: []system.ComponentVersion{
 				{Name: "Engine", Version: "29.8.2"}, {Name: "containerd", Version: "2.1.0"},
-			}},
+			},
 			want: ContainerRuntime{Kind: ContainerRuntimeDocker, Version: "29.8.2"},
 		},
 		{
-			name: "Podman, by its component",
-			version: system.VersionResponse{Version: "4.9.4", Components: []system.ComponentVersion{
+			name:    "Podman, by its component",
+			version: "4.9.4",
+			components: []system.ComponentVersion{
 				{Name: "Podman Engine", Version: "6.1.4"}, {Name: "Conmon", Version: "2.1.13"},
-			}},
+			},
 			want: ContainerRuntime{Kind: ContainerRuntimePodman, Version: "4.9.4"},
 		},
 		{
-			name: "Podman listing a plain Engine first",
-			version: system.VersionResponse{Version: "6.1.4", Components: []system.ComponentVersion{
+			name:    "Podman listing a plain Engine first",
+			version: "6.1.4",
+			components: []system.ComponentVersion{
 				{Name: "Engine", Version: "6.1.4"}, {Name: "Podman Engine", Version: "6.1.4"},
-			}},
+			},
 			want: ContainerRuntime{Kind: ContainerRuntimePodman, Version: "6.1.4"},
 		},
 		{
 			name:    "no components at all",
-			version: system.VersionResponse{Version: "24.0.7"},
+			version: "24.0.7",
 			want:    ContainerRuntime{Kind: ContainerRuntimeDocker, Version: "24.0.7"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := NewContainerRuntime(tt.version)
+			got := NewContainerRuntime(tt.version, tt.components)
 
 			// Assert
 			assert.Equal(t, tt.want, got)

@@ -112,7 +112,7 @@ func TestEngine_SaveImage(t *testing.T) {
 	const archive = "save-archive-bytes"
 	api := &mockAPI{}
 	api.On("ImageSave", mock.Anything, []string{"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}).
-		Return(client.ImageSaveResult(io.NopCloser(strings.NewReader(archive))), nil).Once()
+		Return(io.NopCloser(strings.NewReader(archive)), nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -131,7 +131,7 @@ func TestEngine_RemoveImage(t *testing.T) {
 	// Arrange
 	api := &mockAPI{}
 	api.On("ImageRemove", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", client.ImageRemoveOptions{}).
-		Return(client.ImageRemoveResult{Items: []image.DeleteResponse{{Deleted: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}, nil).Once()
+		Return([]image.DeleteResponse{{Deleted: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -203,17 +203,17 @@ func TestEngine_RemoveImageRef(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
 			calls := []*mock.Call{
-				api.On("ImageInspect", mock.Anything, ref).Return(client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID}}, tt.inspectErr).Once(),
+				api.On("ImageInspect", mock.Anything, ref).Return(image.InspectResponse{ID: imageID}, tt.inspectErr).Once(),
 			}
 			if tt.inspectErr == nil {
 				calls = append(calls, api.On("ContainerList", mock.Anything, client.ContainerListOptions{
 					All:     true,
-					Filters: client.Filters{}.Add("ancestor", strings.TrimPrefix(imageID, "sha256:")),
-				}).Return(client.ContainerListResult{Items: tt.containers}, nil).Once())
+					Filters: make(client.Filters).Add("ancestor", strings.TrimPrefix(imageID, "sha256:")),
+				}).Return(tt.containers, nil).Once())
 			}
 			if tt.wantRemove {
 				calls = append(calls, api.On("ImageRemove", mock.Anything, ref, client.ImageRemoveOptions{PruneChildren: true}).
-					Return(client.ImageRemoveResult{Items: []image.DeleteResponse{{Untagged: ref}}}, tt.removeErr).Once())
+					Return([]image.DeleteResponse{{Untagged: ref}}, tt.removeErr).Once())
 			}
 			mock.InOrder(calls...)
 			e := &Engine{api: api}
@@ -247,7 +247,7 @@ func TestEngine_LoadImage(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, archive, string(read))
 		}).
-		Return(client.ImageLoadResult(body), nil).Once()
+		Return(body, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -311,7 +311,7 @@ func TestEngine_ImageExists(t *testing.T) {
 			// Arrange
 			api := &mockAPI{}
 			api.On("ImageInspect", mock.Anything, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").
-				Return(client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, tt.inspectErr).Once()
+				Return(image.InspectResponse{ID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, tt.inspectErr).Once()
 			e := &Engine{api: api}
 
 			// Act
@@ -358,8 +358,8 @@ func TestEngine_ListLayerImages(t *testing.T) {
 	)
 	api := &mockAPI{}
 	api.On("ImageList", mock.Anything, client.ImageListOptions{
-		Filters: client.Filters{}.Add("reference", "arcave/*"),
-	}).Return(client.ImageListResult{Items: []image.Summary{
+		Filters: make(client.Filters).Add("reference", "arcave/*"),
+	}).Return([]image.Summary{
 		{
 			ID: "sha256:aaaa", RepoTags: []string{layerRef, "postgres:16"},
 			Labels: map[string]string{string(model.SystemLabelArcaveProject): "app", string(model.SystemLabelComposeProject): "demo"},
@@ -367,7 +367,7 @@ func TestEngine_ListLayerImages(t *testing.T) {
 		{ID: "sha256:bbbb", RepoTags: []string{"docker.io/" + podmanRef}},
 		{ID: "sha256:cccc", RepoTags: []string{"arcave/demo-db-3:sp-not-a-savepoint"}},
 		{ID: "sha256:dddd", RepoTags: []string{"busybox:latest"}},
-	}}, nil).Once()
+	}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act
@@ -387,11 +387,11 @@ func TestEngine_ListContainerImages(t *testing.T) {
 	// Arrange
 	const layerRef = "arcave/demo-db-1:sp-019e843e-1650-7000-8000-000000000001"
 	api := &mockAPI{}
-	api.On("ContainerList", mock.Anything, client.ContainerListOptions{All: true}).Return(client.ContainerListResult{Items: []container.Summary{
+	api.On("ContainerList", mock.Anything, client.ContainerListOptions{All: true}).Return([]container.Summary{
 		{ID: "c1", Image: layerRef, ImageID: "sha256:aaaa"},
 		{ID: "c2", Image: "docker.io/" + layerRef, ImageID: "sha256:aaaa"},
 		{ID: "c3", Image: "sha256:bbbb", ImageID: "sha256:bbbb"},
-	}}, nil).Once()
+	}, nil).Once()
 	e := &Engine{api: api}
 
 	// Act

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,10 +59,9 @@ func TestClient_Stop_HonoursTheDeclaredGracePeriod(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Empty(t, killed)
-	inspected, err := env.daemon.ContainerInspect(env.ctx, env.project+"-db-1", client.ContainerInspectOptions{})
+	inspect, err := env.daemon.ContainerInspect(env.ctx, env.project+"-db-1", client.ContainerInspectOptions{})
 	require.NoError(t, err)
-	inspect := inspected.Container
-	assert.Equal(t, 0, inspect.State.ExitCode, "the service finished its shutdown")
+	assert.Equal(t, 0, inspect.Container.State.ExitCode, "the service finished its shutdown")
 	assert.Equal(t, "clean", busybox(t, env.engine, env.project+"_data", "test -f /data/clean && printf clean"))
 	assert.NotContains(t, env.logs.String(), "was killed")
 }
@@ -78,11 +76,10 @@ func TestClient_Stop_WarnsOfAKilledContainer(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err, "a killed container is warned of, not failed on")
-	inspected, err := env.daemon.ContainerInspect(env.ctx, env.project+"-db-1", client.ContainerInspectOptions{})
+	inspect, err := env.daemon.ContainerInspect(env.ctx, env.project+"-db-1", client.ContainerInspectOptions{})
 	require.NoError(t, err)
-	inspect := inspected.Container
-	assert.Equal(t, []string{inspect.ID}, killed)
-	assert.Equal(t, 137, inspect.State.ExitCode)
+	assert.Equal(t, []string{inspect.Container.ID}, killed)
+	assert.Equal(t, 137, inspect.Container.State.ExitCode)
 	assert.Contains(t, env.logs.String(), fmt.Sprintf("container %s-db-1 did not exit within 1s and was killed", env.project))
 }
 

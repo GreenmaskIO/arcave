@@ -159,7 +159,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			volume: namedVolume("demo_pgdata"),
 			arrange: func(api *mockAPI) {
 				api.On("VolumeInspect", mock.Anything, "demo_pgdata", client.VolumeInspectOptions{}).
-					Return(client.VolumeInspectResult{Volume: volume.Volume{Name: "demo_pgdata"}}, nil).Once()
+					Return(volume.Volume{Name: "demo_pgdata"}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "demo_pgdata"},
 		},
@@ -176,7 +176,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			volume: namedVolume("demo_pgdata"),
 			arrange: func(api *mockAPI) {
 				api.On("VolumeInspect", mock.Anything, "demo_pgdata", client.VolumeInspectOptions{}).
-					Return(client.VolumeInspectResult{}, errors.New("no such volume")).Once()
+					Return(volume.Volume{}, errors.New("no such volume")).Once()
 			},
 			wantErr: "does not exist",
 		},
@@ -185,8 +185,8 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			volume: anonVolume("db", target),
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "db")).
-					Return(client.ContainerListResult{Items: []container.Summary{{ID: "pg-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
-						{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}}}, nil).Once()
+					Return([]container.Summary{{ID: "pg-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
+						{Type: mount.TypeVolume, Name: "9f2c0a", Destination: target}}}}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "9f2c0a"},
 		},
@@ -198,12 +198,12 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			},
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "worker")).
-					Return(client.ContainerListResult{Items: []container.Summary{
+					Return([]container.Summary{
 						{ID: "worker-1", Labels: map[string]string{composeNumberLabel: "1"}, Mounts: []container.MountPoint{
 							{Type: mount.TypeVolume, Name: "a1", Destination: "/cache"}}},
 						{ID: "worker-2", Labels: map[string]string{composeNumberLabel: "2"}, Mounts: []container.MountPoint{
 							{Type: mount.TypeVolume, Name: "a2", Destination: "/cache"}}},
-					}}, nil).Once()
+					}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceVolume, Source: "a2"},
 		},
@@ -215,8 +215,8 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			},
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "app")).
-					Return(client.ContainerListResult{Items: []container.Summary{{ID: "app-1", Mounts: []container.MountPoint{
-						{Type: mount.TypeBind, Source: "/host/cfg", Destination: "/etc/cfg"}}}}}, nil).Once()
+					Return([]container.Summary{{ID: "app-1", Mounts: []container.MountPoint{
+						{Type: mount.TypeBind, Source: "/host/cfg", Destination: "/etc/cfg"}}}}, nil).Once()
 			},
 			want: model.MountSource{Type: model.MountSourceBind, Source: "/host/cfg"},
 		},
@@ -225,7 +225,7 @@ func TestEngine_ResolveMountSource(t *testing.T) {
 			volume: anonVolume("db", target),
 			arrange: func(api *mockAPI) {
 				api.On("ContainerList", mock.Anything, matchComposeLabels("demo", "db")).
-					Return(client.ContainerListResult{}, nil).Once()
+					Return([]container.Summary{}, nil).Once()
 			},
 			wantErr: "no container for service",
 		},
@@ -272,7 +272,8 @@ func TestEngine_OpenVolume(t *testing.T) {
 	api := &mockAPI{}
 	expectImagePresent(api, VolumeToolsImage)
 	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
-	copyOut := api.On("CopyFromContainer", mock.Anything, "holder-1", client.CopyFromContainerOptions{SourcePath: volumeHolderMount + "/."}).
+	copyOut := api.On("CopyFromContainer", mock.Anything, "holder-1",
+		client.CopyFromContainerOptions{SourcePath: volumeHolderMount + "/."}).
 		Return(client.CopyFromContainerResult{Content: io.NopCloser(strings.NewReader(payload))}, nil).Once()
 	removed := make(chan struct{})
 	holder.remove.Run(func(mock.Arguments) { close(removed) })
@@ -312,9 +313,8 @@ func TestEngine_WriteVolume(t *testing.T) {
 	wipe := expectContainerRun(api, "wipe-1", "find")
 	holder := expectContainerRun(api, "holder-1", volumeHolderCmd[0])
 	var body io.Reader
-	extract := api.On("CopyToContainer", mock.Anything, "holder-1", mock.MatchedBy(func(opts client.CopyToContainerOptions) bool {
-		return opts.DestinationPath == volumeHolderMount
-	})).
+	extract := api.On("CopyToContainer", mock.Anything, "holder-1", mock.MatchedBy(
+		func(options client.CopyToContainerOptions) bool { return options.DestinationPath == volumeHolderMount })).
 		Run(func(args mock.Arguments) { body = args.Get(2).(client.CopyToContainerOptions).Content }).
 		Return(nil).Once()
 	// The wipe must be finished before a byte is written back, or the restore
@@ -506,13 +506,13 @@ func expectContainerRun(api *mockAPI, id, verb string) *containerRun {
 	run.create = api.On("ContainerCreate", mock.Anything, matchCommand(verb)).
 		Return(client.ContainerCreateResult{ID: id}, nil).Once().
 		Run(func(args mock.Arguments) {
-			opts := args.Get(1).(client.ContainerCreateOptions)
-			run.cfg = opts.Config
-			run.host = opts.HostConfig
+			options := args.Get(1).(client.ContainerCreateOptions)
+			run.cfg = options.Config
+			run.host = options.HostConfig
 		})
 	api.On("ContainerStart", mock.Anything, id, client.ContainerStartOptions{}).Return(nil).Once()
-	api.On("ContainerWait", mock.Anything, id, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning}).
-		Return(client.ContainerWaitResult{Result: run.status, Error: make(chan error)}).Once()
+	api.On("ContainerWait", mock.Anything, id, waitNotRunning).
+		Return((<-chan container.WaitResponse)(run.status), (<-chan error)(make(chan error))).Once()
 	run.remove = api.On("ContainerRemove", mock.Anything, id, client.ContainerRemoveOptions{Force: true}).
 		Return(nil).Once()
 	return run
@@ -521,8 +521,8 @@ func expectContainerRun(api *mockAPI, id, verb string) *containerRun {
 // matchCommand matches a container by the command it runs, which is what tells
 // the wipe container and the volume holder of one restore apart.
 func matchCommand(verb string) any {
-	return mock.MatchedBy(func(opts client.ContainerCreateOptions) bool {
-		return opts.Config != nil && len(opts.Config.Cmd) > 0 && opts.Config.Cmd[0] == verb
+	return mock.MatchedBy(func(options client.ContainerCreateOptions) bool {
+		return options.Config != nil && len(options.Config.Cmd) > 0 && options.Config.Cmd[0] == verb
 	})
 }
 
@@ -531,7 +531,10 @@ func matchCommand(verb string) any {
 // contract of that call, so it is asserted rather than widened away.
 func matchComposeLabels(project, service string) any {
 	return mock.MatchedBy(func(opts client.ContainerListOptions) bool {
-		want := client.Filters{}.Add("label", composeProjectLabel+"="+project, composeServiceLabel+"="+service)
+		want := client.Filters{"label": {
+			composeProjectLabel + "=" + project: true,
+			composeServiceLabel + "=" + service: true,
+		}}
 		return opts.All && maps.EqualFunc(opts.Filters, want, maps.Equal)
 	})
 }

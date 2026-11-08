@@ -25,8 +25,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/docker/cli/cli/command"
+	"github.com/docker/compose/v5/cmd/display"
+	"github.com/docker/compose/v5/pkg/api"
+	dockercompose "github.com/docker/compose/v5/pkg/compose"
 	"github.com/moby/moby/client"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/require"
 
+	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -41,6 +48,19 @@ var issuedSuffixes sync.Map
 
 // anonymousVolumeLabel is what the daemon stamps on a volume it created for a container.
 const anonymousVolumeLabel = "com.docker.volume.anonymous"
+
+// newComposeService is compose over cli, its progress silent and its questions answered by the
+// returned prompter, which a runner's Options carry: unanswered, compose asks on stdout.
+func newComposeService(t *testing.T, cli command.Cli) (api.Compose, *composeclient.Prompter) {
+	t.Helper()
+	prompter := composeclient.NewPrompter(zerolog.Nop())
+	service, err := dockercompose.NewComposeService(cli,
+		dockercompose.WithEventProcessor(display.Quiet()),
+		dockercompose.WithPrompt(prompter.Prompt),
+	)
+	require.NoError(t, err)
+	return service, prompter
+}
 
 // resource is one thing the daemon holds: a container, volume, anonymous volume, network or image.
 type resource struct{ kind, name string }

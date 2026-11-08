@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -35,18 +34,5 @@ func ReadRuntime(ctx context.Context, api versionReader) (model.ContainerRuntime
 	if err != nil {
 		return model.ContainerRuntime{}, fmt.Errorf("read the daemon version: %w", err)
 	}
-	return model.NewContainerRuntime(newVersionResponse(version)), nil
-}
-
-// newVersionResponse is the `docker version` response the client's result was decoded from.
-func newVersionResponse(version client.ServerVersionResult) system.VersionResponse {
-	return system.VersionResponse{
-		Platform:      system.PlatformInfo{Name: version.Platform.Name},
-		Version:       version.Version,
-		APIVersion:    version.APIVersion,
-		MinAPIVersion: version.MinAPIVersion,
-		Os:            version.Os,
-		Arch:          version.Arch,
-		Components:    version.Components,
-	}
+	return model.NewContainerRuntime(version.Version, version.Components), nil
 }

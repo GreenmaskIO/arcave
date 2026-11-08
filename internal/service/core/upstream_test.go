@@ -148,12 +148,6 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 		want      bool
 	}{
 		{name: "the image compose created it from", composeID: runningID.String()},
-		// compose 5.5+ labels its platform manifest; on the containerd store a single-platform
-		// image's id is that same manifest.
-		{
-			name: "the platform manifest of a single-platform image", composeID: runningID.String(),
-			mediaType: ocispec.MediaTypeImageManifest,
-		},
 		{name: "another image", composeID: otherID, mediaType: ocispec.MediaTypeImageManifest, want: true},
 		{name: "a manifest of the index it runs on", composeID: otherID, mediaType: ocispec.MediaTypeImageIndex},
 		{name: "a manifest of a docker manifest list", composeID: otherID, mediaType: dockerManifestList},

@@ -213,7 +213,7 @@ func waitForRestic(ctx context.Context, cli *client.Client, vol model.Volume) (s
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		running, err := cli.ContainerList(ctx, client.ContainerListOptions{Filters: client.Filters{}.
+		running, err := cli.ContainerList(ctx, client.ContainerListOptions{Filters: make(client.Filters).
 			Add("label", "arcave.oneshot").
 			Add("ancestor", wipeOptions().Image).
 			Add("volume", vol.Named.VolumeName).
@@ -280,7 +280,7 @@ func oneShotsOn(t *testing.T, cli *client.Client, vol model.Volume) []string {
 
 	containers, err := cli.ContainerList(context.Background(), client.ContainerListOptions{
 		All: true,
-		Filters: client.Filters{}.
+		Filters: make(client.Filters).
 			Add("label", "arcave.oneshot").
 			Add("volume", vol.Named.VolumeName),
 	})

@@ -36,7 +36,7 @@ func TestExecStream_Read(t *testing.T) {
 		hj.closeOutput()
 	}()
 	var stderr bytes.Buffer
-	stream := newExecStream(hj.resp.HijackedResponse, &stderr)
+	stream := newExecStream(hj.resp, &stderr)
 
 	// Act
 	got, err := io.ReadAll(stream)
@@ -52,7 +52,7 @@ func TestExecStream_Write(t *testing.T) {
 	// Arrange
 	hj := newFakeHijack()
 	stdinGot := hj.collectStdin()
-	stream := newExecStream(hj.resp.HijackedResponse, nil)
+	stream := newExecStream(hj.resp, nil)
 
 	// Act
 	_, err := io.WriteString(stream, "request")
@@ -69,7 +69,7 @@ func TestExecStream_Write(t *testing.T) {
 func TestExecStream_Close(t *testing.T) {
 	// Arrange
 	hj := newFakeHijack()
-	stream := newExecStream(hj.resp.HijackedResponse, nil)
+	stream := newExecStream(hj.resp, nil)
 	readDone := make(chan error, 1)
 	go func() {
 		_, err := stream.Read(make([]byte, 1))
@@ -96,7 +96,7 @@ func TestExecStream_Read_BrokenStream(t *testing.T) {
 		_, _ = io.WriteString(hj.stdout, "partial")
 		_ = hj.outW.CloseWithError(broken)
 	}()
-	stream := newExecStream(hj.resp.HijackedResponse, nil)
+	stream := newExecStream(hj.resp, nil)
 
 	// Act
 	got, err := io.ReadAll(stream)

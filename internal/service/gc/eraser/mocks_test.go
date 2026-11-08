@@ -48,3 +48,9 @@ type mockTagRemover struct{ mock.Mock }
 func (m *mockTagRemover) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 	return m.Called(ctx, ref).Error(0)
 }
+
+type mockSavepointDeleter struct{ mock.Mock }
+
+func (m *mockSavepointDeleter) DeleteSavepoint(ctx context.Context, id model.SavepointID) error {
+	return m.Called(ctx, id).Error(0)
+}

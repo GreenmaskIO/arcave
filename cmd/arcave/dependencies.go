@@ -16,10 +16,14 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,13 +32,14 @@ import (
 
 	"filippo.io/age"
 	"github.com/docker/cli/cli/command"
+	"github.com/docker/cli/cli/connhelper"
 	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/cli/cli/streams"
 	dockeropts "github.com/docker/cli/opts"
 	"github.com/docker/compose/v5/cmd/display"
 	"github.com/docker/compose/v5/pkg/api"
 	dockercompose "github.com/docker/compose/v5/pkg/compose"
+	"github.com/docker/go-connections/sockets"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/storages"
@@ -69,6 +74,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociblob"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/service/gc/collector/safetysnapshot"
 	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
 	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -83,6 +89,9 @@ import (
 
 // resticShutdownTimeout bounds the restic server's graceful shutdown.
 const resticShutdownTimeout = 5 * time.Second
+
+// errInvalidEndpointCA refuses an endpoint whose CA is no PEM certificate.
+var errInvalidEndpointCA = errors.New("failed to retrieve context tls info: ca.pem seems invalid")
 
 // composeResourceObject is the resource kind of a compose event whose id names no kind of object.
 const composeResourceObject = "object"
@@ -149,10 +158,6 @@ type composeProjectScope struct {
 	// store holds savepoint records, fullcopy captures and a cdc repository root alike, rooted
 	// inside the session that they die with.
 	store storages.Storager
-	// resticRoot is the tree every cdc repository lives in — one directory per volume, named by
-	// its ObjectID, beside the savepoint directories. Resolved once and handed to both sides, so
-	// "the server serves exactly the tree cdc writes into" is visible in one place.
-	resticRoot storages.Storager
 }
 
 // openComposeProjectScope descends from the session to composeProject's store.
@@ -172,15 +177,10 @@ func openComposeProjectScope(
 	if err != nil {
 		return composeProjectScope{}, fmt.Errorf("initialise compose project store: %w", err)
 	}
-	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
-	if err != nil {
-		return composeProjectScope{}, fmt.Errorf("initialise restic repository root: %w", err)
-	}
 	return composeProjectScope{
 		sessionScope:   scope,
 		composeProject: composeProject,
 		store:          store,
-		resticRoot:     resticRoot,
 	}, nil
 }
 
@@ -195,30 +195,44 @@ func openSavepointService(
 		return nil, err
 	}
 
-	// Where compose's own progress goes, on the logger initRoot resolved. On the stack before
-	// the client, so it closes after: a line compose left unterminated is still emitted.
-	progressEvents, progressWriter, composeEvents := newProgress(
+	// Where compose's own progress goes, on the logger initRoot resolved.
+	composeOutput := newComposeProgress(
 		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx),
 	)
-	opened.add("compose progress writer", progressWriter)
-
-	daemon, err := connectDaemon(cfg.Docker, progressWriter, opened)
+	daemon, err := connectDaemon(cfg.Docker, composeOutput.stream, opened)
 	if err != nil {
 		return nil, err
+	}
+	// compose asks before recreating a volume; unanswered, it would ask on stdout.
+	prompter := compose.NewPrompter(*log.Ctx(ctx))
+	composeAPI, err := dockercompose.NewComposeService(daemon.cli,
+		dockercompose.WithEventProcessor(composeOutput.processor),
+		dockercompose.WithPrompt(prompter.Prompt),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialise compose: %w", err)
 	}
 	profile, err := readRuntimeProfile(ctx, daemon)
 	if err != nil {
 		return nil, err
 	}
 
+	// The tree every cdc repository lives in — one directory per volume, named by its ObjectID,
+	// beside the savepoint directories. Resolved once and handed to both sides, so "the server
+	// serves exactly the tree cdc writes into" is visible in one place.
+	resticRoot, err := scope.store.SubStorage(cdc.NamespaceRepos, true)
+	if err != nil {
+		return nil, fmt.Errorf("initialise restic repository root: %w", err)
+	}
+
 	// Under tcp the server listens for the whole process, so a bad address fails up front.
-	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(cfg.Backends.CDC), profile.engine, scope.resticRoot)
+	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(cfg.Backends.CDC), profile.engine, resticRoot)
 	if err != nil {
 		return nil, err
 	}
 	opened.addFunc(cdcTransport.Close)
 
-	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, profile.volumes, profile.engine, cdcTransport.transport)
+	backendRegistry, err := newBackendRegistry(cfg, resticRoot, profile.volumes, profile.engine, cdcTransport.transport)
 	if err != nil {
 		return nil, err
 	}
@@ -229,10 +243,6 @@ func openSavepointService(
 	imageBackend, err := newImageBackend(scope.store, origin, profile.engine)
 	if err != nil {
 		return nil, err
-	}
-	composeService, err := newComposeService(daemon.cli, progressEvents, progressWriter)
-	if err != nil {
-		return nil, fmt.Errorf("initialise compose: %w", err)
 	}
 
 	// One repository over the one store, so every record travels with its data. The
@@ -245,10 +255,11 @@ func openSavepointService(
 		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
 		ProjectAssembler: profile.assembler,
 		SpecCodec:        composespec.NewCodec(),
-		ComposeRunner: compose.NewClient(composeService, compose.Options{
+		ComposeRunner: compose.NewClient(composeAPI, compose.Options{
 			WaitTimeout:     cfg.Compose.WaitTimeout,
 			StopTimeout:     cfg.Compose.StopTimeout,
-			Events:          composeEvents,
+			Events:          composeOutput.events,
+			Prompter:        prompter,
 			SinkFromContext: newComposeEventSink,
 		}),
 		VolumeRemover:  profile.engine,
@@ -283,22 +294,14 @@ func openSavepointStoreService(
 	if err != nil {
 		return nil, err
 	}
-	// Without the daemon a backend only removes, which reads the store alone.
-	backendRegistry, err := newBackendRegistry(cfg, scope.resticRoot, nil, nil, nil)
-	if err != nil {
-		return nil, err
-	}
 	return core.NewSavepointStoreService(core.SavepointStoreDeps{
-		SavepointRepo:   sprepo.New(scope.store),
-		ProjectLocker:   lock.New(projectPath),
-		SessionLocker:   scope.sessionLocker,
-		BackendRegistry: backendRegistry,
-		Inflight:        inflightrepo.New(projectPath),
-		Store:           scope.store,
-		Concurrency:     cfg.Common.Concurrency,
-		Session:         scope.session,
-		ComposeProject:  composeProject,
-		Sessions:        scope.sessions,
+		SavepointRepo:  sprepo.New(scope.store),
+		ProjectLocker:  lock.New(projectPath),
+		SessionLocker:  scope.sessionLocker,
+		Inflight:       inflightrepo.New(projectPath),
+		Session:        scope.session,
+		ComposeProject: composeProject,
+		Sessions:       scope.sessions,
 	}), nil
 }
 
@@ -328,19 +331,37 @@ type daemonConnection struct {
 	// cli is what compose runs on, over api, so compose and the engine reach one daemon.
 	cli *command.DockerCli
 	api client.APIClient
+	// transport is what api sends over; libpod reaches a Podman daemon through it too.
+	transport daemonTransport
+}
+
+// daemonTransport is the HTTP client the SDK's client is built from; libpod sends over it too.
+type daemonTransport struct {
+	client *http.Client
+	host   string
+}
+
+// HTTPClient is the client every request to the daemon goes through.
+func (t daemonTransport) HTTPClient() *http.Client { return t.client }
+
+// DaemonHost is the daemon's host as the SDK's client names it.
+func (t daemonTransport) DaemonHost() string { return t.host }
+
+// Close drops the idle connections libpod left, which the SDK's client does not own.
+func (t daemonTransport) Close() error {
+	t.client.CloseIdleConnections()
+	return nil
 }
 
 // connectDaemon builds the connection; its closer goes on opened.
 func connectDaemon(cfg config.Docker, progressOut io.Writer, opened *closers) (daemonConnection, error) {
-	dockerCli, dockerClientAPI, err := newDockerClient(cfg, progressOut)
+	daemon, err := newDockerClient(cfg, progressOut)
 	if err != nil {
 		return daemonConnection{}, err
 	}
-	opened.add("docker client", dockerClientAPI)
-	return daemonConnection{
-		cli: dockerCli,
-		api: dockerClientAPI,
-	}, nil
+	opened.add("docker client", daemon.api)
+	opened.add("libpod transport", daemon.transport)
+	return daemon, nil
 }
 
 // runtimeProfile is everything that differs by the engine behind the daemon.
@@ -365,7 +386,7 @@ func readRuntimeProfile(ctx context.Context, daemon daemonConnection) (runtimePr
 	if err != nil {
 		return runtimeProfile{}, err
 	}
-	return newRuntimeProfile(runtime, info, daemon.api, daemon.cli.DockerEndpoint())
+	return newRuntimeProfile(runtime, info, daemon.api, daemon.transport, daemon.cli.DockerEndpoint())
 }
 
 // readEngine asks the daemon which engine it is and what `docker info` says of it.
@@ -382,16 +403,20 @@ func readEngine(ctx context.Context, api client.APIClient) (model.ContainerRunti
 }
 
 // newRuntimeProfile chooses everything that differs by the engine behind the daemon; libpod
-// is reached through api's own dialer, over TLS when the endpoint is.
+// is reached over TLS when the endpoint, as the CLI resolved it, is.
 func newRuntimeProfile(
-	runtime model.ContainerRuntime, info system.Info, api client.APIClient, endpoint dockercontext.Endpoint,
+	runtime model.ContainerRuntime, info system.Info, api client.APIClient, transport daemonTransport,
+	endpoint dockercontext.Endpoint,
 ) (runtimeProfile, error) {
 	switch runtime.Kind {
 	case model.ContainerRuntimePodman:
 		if isHTTPHost(endpoint.Host) {
 			return runtimeProfile{}, fmt.Errorf("docker endpoint %q: the Docker client cannot attach to a container over an http:// or https:// host, which a Podman volume export needs: name it tcp://", endpoint.Host)
 		}
-		libpodClient, err := libpod.NewClient(api, libpod.Options{Version: runtime.Version})
+		libpodClient, err := libpod.NewClient(transport, libpod.Options{
+			Version: runtime.Version,
+			UseTLS:  isTLSEndpoint(endpoint),
+		})
 		if err != nil {
 			return runtimeProfile{}, fmt.Errorf("reach libpod: %w", err)
 		}
@@ -421,6 +446,11 @@ func newRuntimeProfile(
 // isHTTPHost reports whether host, which only a context can spell so, names http or https.
 func isHTTPHost(host string) bool {
 	return strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://")
+}
+
+// isTLSEndpoint reports whether endpoint carries TLS settings, which the client applies to a tcp host.
+func isTLSEndpoint(endpoint dockercontext.Endpoint) bool {
+	return endpoint.TLSData != nil || endpoint.SkipTLSVerify
 }
 
 // openedCDCTransport is how cdc's containers reach one tree of repositories.
@@ -749,49 +779,43 @@ func tlsFile(explicit, certPath, name string) string {
 	return ""
 }
 
-// nopWriteCloser makes a stream arcave does not own — os.Stderr, io.Discard —
-// safe to hand to a Close that closes whatever writer it was given. Spelled out
-// because the stdlib has no writer counterpart to io.NopCloser (golang/go#22823).
-type nopWriteCloser struct{ io.Writer }
+// composeProgress is where compose's own progress goes.
+type composeProgress struct {
+	// processor is what compose reports its events to.
+	processor api.EventProcessor
+	// stream is the CLI's error stream, which compose writes beside its events.
+	stream io.Writer
+	// events re-emits the events as log records, or on a step; nil when compose renders them itself.
+	events *compose.EventLogger
+}
 
-func (nopWriteCloser) Close() error { return nil }
-
-// newProgress translates compose.progress into the processor compose reports its
-// events to plus the stream it writes its few plain lines on. The destination is
-// always stderr or nothing — stdout carries arcave's JSON — and the default
-// re-emits compose's events as arcave log records, so the run speaks one format;
-// that adapter is returned again as what the events reach a step through, nil
-// otherwise.
-func newProgress(mode string, logger zerolog.Logger) (api.EventProcessor, io.WriteCloser, *compose.ProgressLogger) {
+// newComposeProgress chooses compose's renderer: its own on stderr, nothing, or by default the
+// logger re-emitting its events as log records, which a call's step can take them from.
+func newComposeProgress(mode string, logger zerolog.Logger) composeProgress {
 	switch mode {
 	case config.ProgressQuiet:
 		// Discarding the stream too covers the warnings compose writes outside the UI.
-		return display.Quiet(), nopWriteCloser{io.Discard}, nil
-	case config.ProgressTTY:
-		// compose's own choice for --progress auto: the live view on a terminal,
-		// plain lines in a pipe.
-		if streams.NewOut(os.Stderr).IsTerminal() {
-			return display.Full(os.Stderr, os.Stderr, true), nopWriteCloser{os.Stderr}, nil
+		return composeProgress{
+			processor: display.Quiet(),
+			stream:    io.Discard,
 		}
-		return display.Plain(os.Stderr), nopWriteCloser{os.Stderr}, nil
+	case config.ProgressTTY:
+		processor := display.Plain(os.Stderr)
+		if isTerminal(os.Stderr) {
+			processor = display.Full(os.Stderr, os.Stderr, false)
+		}
+		return composeProgress{
+			processor: processor,
+			stream:    os.Stderr,
+		}
 	default:
-		adapter := compose.NewProgressLogger(logger)
-		return adapter, adapter, adapter
+		events := compose.NewEventLogger(logger)
+		return composeProgress{
+			processor: events,
+			stream:    io.Discard,
+			events:    events,
+		}
 	}
-}
-
-// newComposeService builds the compose library over dockerCli, never touching
-// stdout: events go to events, compose's plain lines to stream, stdin is empty,
-// and a prompt — a volume whose configuration changed, for one — is answered yes
-// without being printed, since arcave runs non-interactively.
-func newComposeService(
-	dockerCli command.Cli, events api.EventProcessor, stream io.Writer,
-) (api.Compose, error) {
-	return dockercompose.NewComposeService(dockerCli,
-		dockercompose.WithStreams(io.Discard, stream, strings.NewReader("")),
-		dockercompose.WithPrompt(dockercompose.AlwaysOkPrompt()),
-		dockercompose.WithEventProcessor(events),
-	)
 }
 
 // composeEventSink puts compose's events on the progress step of the call, a resource per object.
@@ -843,14 +867,12 @@ func composeProgressMode(ctx context.Context, mode string, drawing bool) string 
 	return config.ProgressLog
 }
 
-// newDockerClient resolves cfg into the one docker/cli instance both halves of
-// client/docker are built over, plus the APIClient it uses. progressOut becomes
-// the CLI's error stream once the endpoint resolves; until then that stream is a
-// buffer, being the only place docker/cli reports a failed resolution.
-func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerCli, client.APIClient, error) {
+// newDockerClient resolves cfg into the docker/cli instance compose runs on, its API client and that
+// client's transport. progressOut becomes the CLI's error stream once the endpoint resolves.
+func newDockerClient(cfg config.Docker, progressOut io.Writer) (daemonConnection, error) {
 	clientOpts, err := newDockerClientOptions(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
 	}
 
 	// DOCKER_API_VERSION is the only seam docker/cli leaves for pinning the API
@@ -858,7 +880,7 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerC
 	// arcave's own client and nothing else.
 	if cfg.APIVersion != "" {
 		if err := os.Setenv(client.EnvOverrideAPIVersion, cfg.APIVersion); err != nil {
-			return nil, nil, fmt.Errorf("pin docker api version %q: %w", cfg.APIVersion, err)
+			return daemonConnection{}, fmt.Errorf("pin docker api version %q: %w", cfg.APIVersion, err)
 		}
 	}
 
@@ -872,41 +894,134 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (*command.DockerC
 		command.WithErrorStream(&initErr),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
 	}
 	if err := dockerCli.Initialize(clientOpts); err != nil {
-		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
 	}
 
-	// Built here rather than left to dockerCli.Client(), which answers a failure
-	// with os.Exit(1). NewAPIClientFromFlags runs the same resolution and returns an
-	// error; injecting it back keeps the CLI and compose on this very client.
-	apiClient, err := command.NewAPIClientFromFlags(clientOpts, dockerCli.ConfigFile())
+	// The client is built from a transport of arcave's own, which libpod sends over: the SDK's client
+	// hands its transport to no one. The CLI applies the option last, over the endpoint's own.
+	endpoint, err := readDockerEndpoint(dockerCli)
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %w", cfg.Host, cfg.Context, err)
+		return daemonConnection{}, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %w", cfg.Host, cfg.Context, err)
 	}
-	if err := command.WithAPIClient(apiClient)(dockerCli); err != nil {
-		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+	transport, err := newDaemonTransport(endpoint)
+	if err != nil {
+		return daemonConnection{}, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %w", cfg.Host, cfg.Context, err)
+	}
+	if err := command.WithAPIClientOptions(client.WithHTTPClient(transport))(dockerCli); err != nil {
+		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
 	}
 
 	// Initialize can log a benign warning of its own (a malformed
 	// ~/.docker/config.json), so from here on the buffer holds only the resolution.
 	initErr.Reset()
 
-	// Force the CLI's own endpoint resolution now, while its failure is still
-	// arcave's to report: DockerEndpoint and Client() run the same sync.Once, but
-	// Client() prints the cause and exits, and compose calls it itself.
+	// Resolve the endpoint now, while a failure is still arcave's to report: Client() runs the same
+	// sync.Once but prints the cause and exits.
 	dockerCli.DockerEndpoint()
 	if initErr.Len() > 0 {
-		return nil, nil, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %s",
+		return daemonConnection{}, fmt.Errorf("connect to docker engine (docker.host %q, docker.context %q): %s",
 			cfg.Host, cfg.Context, strings.TrimSpace(initErr.String()))
 	}
+	apiClient := dockerCli.Client()
 
 	// Resolution succeeded, so the error stream becomes compose's progress channel.
 	if err := command.WithErrorStream(progressOut)(dockerCli); err != nil {
-		return nil, nil, fmt.Errorf("initialise docker client: %w", err)
+		closeQuietly(context.Background(), "docker client", apiClient)
+		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
 	}
-	return dockerCli, apiClient, nil
+	return daemonConnection{
+		cli: dockerCli,
+		api: apiClient,
+		transport: daemonTransport{
+			client: transport,
+			host:   apiClient.DaemonHost(),
+		},
+	}, nil
+}
+
+// readDockerEndpoint is the endpoint, its TLS material loaded, of the context the CLI resolved.
+func readDockerEndpoint(dockerCli *command.DockerCli) (dockercontext.Endpoint, error) {
+	contextName := dockerCli.CurrentContext()
+	metadata, err := dockerCli.ContextStore().GetMetadata(contextName)
+	if err != nil {
+		return dockercontext.Endpoint{}, fmt.Errorf("unable to resolve docker endpoint: %w", err)
+	}
+	endpointMeta, err := dockercontext.EndpointFromContext(metadata)
+	if err != nil {
+		return dockercontext.Endpoint{}, fmt.Errorf("unable to resolve docker endpoint: %w", err)
+	}
+	endpoint, err := dockercontext.WithTLSData(dockerCli.ContextStore(), contextName, endpointMeta)
+	if err != nil {
+		return dockercontext.Endpoint{}, fmt.Errorf("unable to resolve docker endpoint: %w", err)
+	}
+	return endpoint, nil
+}
+
+// newDaemonTransport is the HTTP client endpoint is reached over, as docker/cli and the SDK build it:
+// a connection helper's dialer for ssh, else the host's socket, with TLS unless that socket is local.
+func newDaemonTransport(endpoint dockercontext.Endpoint) (*http.Client, error) {
+	host := cmp.Or(endpoint.Host, client.DefaultDockerHost)
+	helper, err := connhelper.GetConnectionHelper(host)
+	if err != nil {
+		return nil, err
+	}
+	if helper != nil {
+		// No TLS, and no proxy.
+		return &http.Client{Transport: &http.Transport{DialContext: helper.Dialer}}, nil
+	}
+
+	hostURL, err := client.ParseHostURL(host)
+	if err != nil {
+		return nil, err
+	}
+	var tlsConfig *tls.Config
+	if !isSocketHost(hostURL.Scheme) {
+		if tlsConfig, err = newEndpointTLSConfig(endpoint); err != nil {
+			return nil, err
+		}
+	}
+	roundTripper := &http.Transport{TLSClientConfig: tlsConfig}
+	if err := sockets.ConfigureTransport(roundTripper, hostURL.Scheme, hostURL.Host); err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Transport:     roundTripper,
+		CheckRedirect: client.CheckRedirect,
+	}, nil
+}
+
+// isSocketHost reports whether scheme names a local socket, which carries no TLS.
+func isSocketHost(scheme string) bool {
+	return scheme == "unix" || scheme == "npipe" || scheme == "fd"
+}
+
+// newEndpointTLSConfig is endpoint's TLS as docker/cli builds it; nil when it carries none.
+func newEndpointTLSConfig(endpoint dockercontext.Endpoint) (*tls.Config, error) {
+	if endpoint.TLSData == nil && !endpoint.SkipTLSVerify {
+		return nil, nil
+	}
+	var tlsOpts []func(*tls.Config)
+	if endpoint.TLSData != nil && endpoint.TLSData.CA != nil {
+		certPool := x509.NewCertPool()
+		if !certPool.AppendCertsFromPEM(endpoint.TLSData.CA) {
+			return nil, errInvalidEndpointCA
+		}
+		tlsOpts = append(tlsOpts, func(cfg *tls.Config) { cfg.RootCAs = certPool })
+	}
+	if endpoint.TLSData != nil && endpoint.TLSData.Key != nil && endpoint.TLSData.Cert != nil {
+		certificate, err := tls.X509KeyPair(endpoint.TLSData.Cert, endpoint.TLSData.Key)
+		if err != nil {
+			return nil, fmt.Errorf("read the endpoint's client certificate: %w", err)
+		}
+		tlsOpts = append(tlsOpts, func(cfg *tls.Config) { cfg.Certificates = []tls.Certificate{certificate} })
+	}
+	if endpoint.SkipTLSVerify {
+		tlsOpts = append(tlsOpts, func(cfg *tls.Config) { cfg.InsecureSkipVerify = true })
+	}
+	return tlsconfig.ClientDefault(tlsOpts...), nil
 }
 
 // newImageBackend builds the image backend over both archivers a writable layer may name;
@@ -995,6 +1110,11 @@ func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
 	return sprepo.New(store)
 }
 
+// newGCSavepointDeleter is the savepoint repository gc's eraser deletes a savepoint through.
+func newGCSavepointDeleter(store storages.Storager) eraser.SavepointDeleter {
+	return sprepo.New(store)
+}
+
 // newDaemonCollectors builds the collectors judging the daemon.
 func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []gc.DaemonCollector {
 	return []gc.DaemonCollector{
@@ -1006,6 +1126,7 @@ func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []gc.DaemonCollecto
 func newComposeProjectCollectors(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectCollector {
 	return []gc.ComposeProjectCollector{
 		savepointdir.New(),
+		safetysnapshot.New(utils.Value(cfg.GC.SafetySnapshots.RetainRecent)),
 		ociimage.New(),
 		ociblob.New(cfg.Common.Concurrency),
 		resticrepo.New(daemon, resticInspectorOpener{
@@ -1026,6 +1147,7 @@ func newDaemonErasers(daemon gcDaemon) []gc.DaemonEraser {
 func newComposeProjectErasers(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectEraser {
 	return []gc.ComposeProjectEraser{
 		eraser.NewTreeEraser(),
+		eraser.NewSavepointEraser(newGCSavepointDeleter),
 		eraser.NewImageEraser(),
 		eraser.NewObjectEraser(),
 		eraser.NewForgetEraser(resticPrunerOpener{

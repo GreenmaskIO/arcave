@@ -110,7 +110,7 @@ func TestSessionFork_RollbackInTheForkDeploys(t *testing.T) {
 	assert.Equal(t, "original", fork.read(t, replica, layerMarker), "the writable layer")
 	list, err := fork.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 	require.NoError(t, err)
-	assert.Len(t, list, 1, "the rollback dropped its safety snapshot")
+	assert.Len(t, list, 2, "the rollback left its safety snapshot in the fork")
 }
 
 // A fork that fails mid-copy creates no session and leaves its tree, marked failed, to a gc.

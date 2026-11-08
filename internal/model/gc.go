@@ -28,6 +28,9 @@ const (
 	// GarbageDataKindSavepointData is a savepoint's own directory no record commits: its
 	// record, its spec, its streamed volumes and its writable layers' archives and manifests.
 	GarbageDataKindSavepointData GarbageDataKind = "savepoint-data"
+	// GarbageDataKindSafetySnapshots is a compose project's committed safety snapshots beyond the
+	// newest gc.safety_snapshots.retain_recent; what only they hold goes on the next run.
+	GarbageDataKindSafetySnapshots GarbageDataKind = "safety-snapshots"
 	// GarbageDataKindDeduplicatedVolumes is volume data shared across savepoints that no
 	// savepoint names.
 	GarbageDataKindDeduplicatedVolumes GarbageDataKind = "deduplicated-volumes"
@@ -45,8 +48,8 @@ const (
 // GarbageDataKinds lists every data kind.
 func GarbageDataKinds() []GarbageDataKind {
 	return []GarbageDataKind{
-		GarbageDataKindSavepointData, GarbageDataKindDeduplicatedVolumes, GarbageDataKindImageLayers,
-		GarbageDataKindUpstreamImages, GarbageDataKindRestoredLayers,
+		GarbageDataKindSavepointData, GarbageDataKindSafetySnapshots, GarbageDataKindDeduplicatedVolumes,
+		GarbageDataKindImageLayers, GarbageDataKindUpstreamImages, GarbageDataKindRestoredLayers,
 	}
 }
 
@@ -65,6 +68,9 @@ type GarbageCollectorKind string
 const (
 	// GarbageCollectorKindSavepointDirectory reads savepoint directories by their record.
 	GarbageCollectorKindSavepointDirectory GarbageCollectorKind = "savepoint-directory"
+	// GarbageCollectorKindSafetySnapshotRetention reads the committed safety snapshots against the
+	// configured retention.
+	GarbageCollectorKindSafetySnapshotRetention GarbageCollectorKind = "safety-snapshot-retention"
 	// GarbageCollectorKindResticRepositories reads the cdc backend's restic repositories.
 	GarbageCollectorKindResticRepositories GarbageCollectorKind = "restic-repositories"
 	// GarbageCollectorKindOCIBlobs reads the OCI blob store every stored image manifest lists.
@@ -78,8 +84,9 @@ const (
 // GarbageCollectorKinds lists every collector kind.
 func GarbageCollectorKinds() []GarbageCollectorKind {
 	return []GarbageCollectorKind{
-		GarbageCollectorKindSavepointDirectory, GarbageCollectorKindResticRepositories, GarbageCollectorKindOCIBlobs,
-		GarbageCollectorKindOCIImages, GarbageCollectorKindDockerLayerTags,
+		GarbageCollectorKindSavepointDirectory, GarbageCollectorKindSafetySnapshotRetention,
+		GarbageCollectorKindResticRepositories, GarbageCollectorKindOCIBlobs, GarbageCollectorKindOCIImages,
+		GarbageCollectorKindDockerLayerTags,
 	}
 }
 
@@ -89,6 +96,8 @@ type GarbageAction string
 const (
 	GarbageActionDeleteObject GarbageAction = "delete-object"
 	GarbageActionDeleteTree   GarbageAction = "delete-tree"
+	// GarbageActionDeleteSavepoint deletes a committed savepoint, its record first, then its tree.
+	GarbageActionDeleteSavepoint GarbageAction = "delete-savepoint"
 	// GarbageActionDeleteImage deletes one stored image, its manifest first.
 	GarbageActionDeleteImage GarbageAction = "delete-image"
 	// GarbageActionForget is a restic forget of one snapshot, its data freed by the prune after;
@@ -102,9 +111,11 @@ type GarbageReason string
 
 const (
 	// GarbageReasonDeadCapture is a savepoint tree no record commits.
-	GarbageReasonDeadCapture  GarbageReason = "dead-capture"
-	GarbageReasonUnreferenced GarbageReason = "unreferenced"
-	GarbageReasonUnusedTag    GarbageReason = "unused-tag"
+	GarbageReasonDeadCapture GarbageReason = "dead-capture"
+	// GarbageReasonBeyondRetention is a safety snapshot older than the newest the config retains.
+	GarbageReasonBeyondRetention GarbageReason = "beyond-retention"
+	GarbageReasonUnreferenced    GarbageReason = "unreferenced"
+	GarbageReasonUnusedTag       GarbageReason = "unused-tag"
 	// GarbageReasonUnprunedData is a restic repository holding data no snapshot uses: a prune
 	// that failed after its forget, or a capture cut short.
 	GarbageReasonUnprunedData GarbageReason = "unpruned-data"
@@ -236,6 +247,12 @@ func (m GarbageFindings) newOpBytes() *int64 {
 type SavepointDirectoryStat struct {
 	GarbageFindings
 	Committed int `json:"committed"`
+}
+
+// SafetySnapshotStat is a compose project's committed safety snapshots beyond the retention.
+type SafetySnapshotStat struct {
+	GarbageFindings
+	Retained int `json:"retained"`
 }
 
 // OCIImageStat is a compose project's stored upstream images no record names.

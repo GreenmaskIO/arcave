@@ -163,7 +163,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, dockerCLI.Initialize(flags.NewClientOptions()))
-	composeService := newComposeService(t, dockerCLI)
+	composeService, prompter := newComposeService(t, dockerCLI)
 	logs := &syncBuffer{}
 	profile := newRuntimeProfile(t, daemon)
 	e := &fidelityEnv{
@@ -172,7 +172,7 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 		daemon:  daemon,
 		compose: composeService,
 		runner: composeclient.NewClient(composeService, composeclient.Options{
-			WaitTimeout: 90 * time.Second, StopTimeout: 2 * time.Second,
+			WaitTimeout: 90 * time.Second, StopTimeout: 2 * time.Second, Prompter: prompter,
 		}),
 		inspector: introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
 		assembler: profile.assembler,
@@ -303,7 +303,7 @@ func (e *fidelityEnv) build(t *testing.T, project *types.Project) {
 func (e *fidelityEnv) up(t *testing.T, tc fidelityCase, project *types.Project) {
 	t.Helper()
 
-	require.NoError(t, e.runner.Create(e.ctx, project), "create")
+	require.NoError(t, e.runner.Create(e.ctx, project, nil), "create")
 	require.NoError(t, e.runner.Start(e.ctx, project, 90*time.Second), "start")
 }
 
@@ -417,7 +417,7 @@ func (e *fidelityEnv) updateMemory(t *testing.T, service string, replica int, by
 }
 
 // readPublishedPort is the host port the daemon gave service's first replica for port.
-func (e *fidelityEnv) readPublishedPort(t *testing.T, service, port string) string {
+func (e *fidelityEnv) readPublishedPort(t *testing.T, service string, port string) string {
 	t.Helper()
 
 	inspect, err := e.daemon.ContainerInspect(e.ctx, strings.Join([]string{e.project, service, "1"}, "-"),
@@ -509,11 +509,11 @@ func runStampProbe(ctx context.Context, daemon *client.Client) (map[string]strin
 	if _, err := daemon.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return nil, err
 	}
-	inspected, err := daemon.ContainerInspect(ctx, created.ID, client.ContainerInspectOptions{})
+	inspect, err := daemon.ContainerInspect(ctx, created.ID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
-	hostConfig := inspected.Container.HostConfig
+	hostConfig := inspect.Container.HostConfig
 	values := map[string]string{"oom_score_adj": strconv.Itoa(hostConfig.OomScoreAdj)}
 	for _, limit := range hostConfig.Ulimits {
 		name := strings.ToLower(strings.TrimPrefix(limit.Name, "RLIMIT_"))

@@ -49,14 +49,13 @@ func (a assembly) warnOnDivergentReplicas(ctx context.Context, svc model.Service
 		Msg("replicas differ; the spec declares the first replica's")
 }
 
-// divergentFields names, by their compose key, the fields a and b differ in. The structs
-// ServiceConfig embeds (ContainerSpec, WorkloadSpec) are no field of the spec: their own fields,
-// promoted, are what is compared.
+// divergentFields names, by their compose key, the fields a and b differ in, those an
+// embedded spec promotes included.
 func divergentFields(a, b types.ServiceConfig) []string {
 	valueA, valueB := reflect.ValueOf(a), reflect.ValueOf(b)
 	var fields []string
 	for _, field := range reflect.VisibleFields(valueA.Type()) {
-		if field.Anonymous || !field.IsExported() || slices.Contains(perReplicaFields, field.Name) {
+		if field.Anonymous || slices.Contains(perReplicaFields, field.Name) {
 			continue
 		}
 		if !reflect.DeepEqual(valueA.FieldByIndex(field.Index).Interface(), valueB.FieldByIndex(field.Index).Interface()) {

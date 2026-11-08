@@ -73,7 +73,7 @@ arcave --session fixtures savepoint create clean --description "seeded baseline,
 arcave --session fixtures rollback clean
 ```
 
-`savepoint remove --retain-recent 5` in your working session never sees `clean`. The rollback runs in `fixtures`, so its safety snapshot is recorded there and dropped again once the rollback succeeds.
+`savepoint remove --retain-recent 5` in your working session never sees `clean`. The rollback runs in `fixtures`, so its safety snapshot is recorded there and stays until a gc retires it. A reset loop leaves one per reset, and gc runs only when you run it: follow the reset with `arcave --session fixtures gc`, or take none, since a reset has nothing to undo — `rollback.safety_snapshot: false`, or `--safety-snapshot=false` on the rollback.
 
 ## Why the whole project matters here
 

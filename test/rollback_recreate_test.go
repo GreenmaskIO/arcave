@@ -243,7 +243,7 @@ func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, savepoint.ID, res.Savepoint.ID)
+	assert.Equal(t, savepoint.ID, res.RolledBackTo.ID)
 
 	after := env.inspect(t)
 	assert.Equal(t, "original data", env.read(t, env.namedVolume(), "marker"))
@@ -294,11 +294,11 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	)
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
-	composeService := newComposeService(t, cli)
+	composeService, prompter := newComposeService(t, cli)
 	profile := newRuntimeProfile(t, daemonAPI)
 	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
-		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second,
+		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
 	codec := composespec.NewCodec()
 
@@ -369,7 +369,7 @@ func (e *recreateEnv) spec(t *testing.T, mode string, port int) *types.Project {
 func (e *recreateEnv) up(t *testing.T, project *types.Project) {
 	t.Helper()
 
-	require.NoError(t, e.compose.Create(e.ctx, project))
+	require.NoError(t, e.compose.Create(e.ctx, project, nil))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
 }
 
@@ -377,7 +377,7 @@ func (e *recreateEnv) down(t *testing.T) {
 	t.Helper()
 
 	// Down keeps volumes, so the anonymous ones it orphans are named first and dropped after.
-	byProject := client.Filters{}.Add("label", api.ProjectLabel+"="+e.project)
+	byProject := make(client.Filters).Add("label", api.ProjectLabel+"="+e.project)
 	containers, err := e.daemon.ContainerList(e.ctx, client.ContainerListOptions{All: true, Filters: byProject})
 	require.NoError(t, err)
 
