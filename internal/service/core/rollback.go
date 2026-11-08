@@ -63,11 +63,13 @@ func safetySnapshotName(restoring model.SavepointID) string {
 	return safetySnapshotPrefix + "-" + restoring.String()
 }
 
-// newSafetySnapshotLabels is the mark that makes an ordinary savepoint an undo: it
-// hides the record from every scanning selector, and a backend with somewhere to
-// put it renders it into its own store (cdc into a restic tag).
-func newSafetySnapshotLabels() map[string]string {
-	return map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
+// newSafetySnapshotLabels marks a savepoint as the undo of the rollback to restoring, hiding it
+// from every scanning selector; cdc renders it as a restic tag.
+func newSafetySnapshotLabels(restoring model.SavepointID) map[string]string {
+	return map[string]string{
+		model.SavepointLabelSafetySnapshot:    model.SavepointLabelSafetySnapshotValue,
+		model.SavepointLabelSafetySnapshotFor: restoring.String(),
+	}
 }
 
 // Rollback restores the compose project to the referenced savepoint, putting the safety snapshot
@@ -212,7 +214,7 @@ func (s *Service) rollbackLive(
 		// revert meant to save the environment, and the cleanup after it.
 		revertCtx, cancel := revertContext(ctx)
 		defer cancel()
-		if revertErr := s.revert(revertCtx, safetySnapshot, working, savepoint.ID); revertErr != nil {
+		if revertErr := s.revert(revertCtx, safetySnapshot, working, savepoint); revertErr != nil {
 			// The snapshot is now the last copy of the pre-rollback state; the marker stays with it.
 			if markErr := s.putInflightMarker(revertCtx, model.InflightInconsistent, savepoint.ID, safetySnapshot.ID); markErr != nil {
 				log.Warn().Err(markErr).Msg("failed to mark the inflight marker inconsistent")
@@ -317,7 +319,7 @@ func (s *Service) takeSafetySnapshot(
 		return model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
 	}
 	safetySnapshot, err := s.performSavepoint(
-		ctx, grantedLock, working, killed, safetySnapshotName(savepoint.ID), "", newSafetySnapshotLabels(),
+		ctx, grantedLock, working, killed, safetySnapshotName(savepoint.ID), "", newSafetySnapshotLabels(savepoint.ID),
 	)
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
@@ -353,20 +355,26 @@ func (s *Service) applySavepoint(
 	if err := s.composeDown(ctx, downProject); err != nil {
 		return err
 	}
-	return s.buildFromSavepoint(ctx, savepoint, target, savepoint.ID, safetyID, waitTimeout)
+	return s.buildFromSavepoint(ctx, savepoint, nil, target, safetyID, waitTimeout)
 }
 
-// buildFromSavepoint creates the compose project from the savepoint's spec, restores every volume
-// and starts the services. The marker it phases names markerTarget, which differs from savepoint
-// when a revert builds from the safety snapshot; safetyID is empty when the marker names none.
+// buildFromSavepoint creates the compose project from savepoint's spec with the deployment labels,
+// restores every volume and starts it. revertedFrom, set on a revert, is what the marker names.
 func (s *Service) buildFromSavepoint(
 	ctx context.Context,
 	savepoint model.Savepoint,
+	revertedFrom *model.Savepoint,
 	target rollbackTarget,
-	markerTarget, safetyID model.SavepointID,
+	safetyID model.SavepointID,
 	waitTimeout time.Duration,
 ) error {
-	if err := s.composeCreate(ctx, target.project, newRestoredVolumeNames(savepoint)); err != nil {
+	markerTarget := savepoint.ID
+	if revertedFrom != nil {
+		markerTarget = revertedFrom.ID
+	}
+	// A copy: the project the caller holds is the one a revert or an abort acts on later.
+	project := withDeploymentLabels(target.project, s.newSavepointDeployment(savepoint, revertedFrom, target.project).Labels())
+	if err := s.composeCreate(ctx, project, newRestoredVolumeNames(savepoint)); err != nil {
 		return err
 	}
 	if err := s.rebuildDivergentReplicas(ctx, newRecordedReplicas(savepoint, target.project, target.restored)); err != nil {
@@ -389,21 +397,19 @@ func (s *Service) buildFromSavepoint(
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker forward")
 	}
 
-	if err := s.composeStart(ctx, target.project, waitTimeout); err != nil {
+	if err := s.composeStart(ctx, project, waitTimeout); err != nil {
 		return fmt.Errorf("services did not become healthy after restore: %w", err)
 	}
 	return nil
 }
 
-// revert replays the safety snapshot through the very instances that took it: load
-// its layers back, tear down, rebuild the compose project it was taken of on them, restore,
-// restart. It runs on the caller's context, not the fan-out's — an errgroup cancels
-// its own the moment Wait returns.
+// revert puts the safety snapshot back over the rollback to target. It runs on the caller's
+// context, not the fan-out's: an errgroup cancels its own the moment Wait returns.
 func (s *Service) revert(
 	ctx context.Context,
 	safetySnapshot model.Savepoint,
 	working workingSet,
-	targetID model.SavepointID,
+	target model.Savepoint,
 ) (err error) {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackRevert})
 	defer func() { step.End(err) }()
@@ -415,18 +421,18 @@ func (s *Service) revert(
 	}
 
 	// Back to recreating: the compose project is about to be torn down again.
-	if err := s.putInflightMarker(ctx, model.InflightRecreating, targetID, safetySnapshot.ID); err != nil {
+	if err := s.putInflightMarker(ctx, model.InflightRecreating, target.ID, safetySnapshot.ID); err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker back before revert")
 	}
 
 	if err := s.composeDown(ctx, working.project); err != nil {
 		return err
 	}
-	return s.buildFromSavepoint(ctx, safetySnapshot, rollbackTarget{
+	return s.buildFromSavepoint(ctx, safetySnapshot, &target, rollbackTarget{
 		project:  retargetImages(working.project, restored),
 		restored: restored,
 		backends: working.backends,
-	}, targetID, safetySnapshot.ID, working.waitTimeout)
+	}, safetySnapshot.ID, working.waitTimeout)
 }
 
 // cleanUpRollback ends a consistent rollback: it drops the anonymous volumes the teardown orphaned
@@ -560,7 +566,7 @@ func (s *Service) rollbackColdStart(
 	}
 
 	if err := runStep(ctx, kindRollbackApply, func(ctx context.Context) error {
-		return s.buildFromSavepoint(ctx, savepoint, target, savepoint.ID, recovery.safety, req.WaitTimeout)
+		return s.buildFromSavepoint(ctx, savepoint, nil, target, recovery.safety, req.WaitTimeout)
 	}); err != nil {
 		logInterrupt(ctx, "rollback interrupted: removing what it created")
 		s.abortColdStart(ctx, target.project, owned)

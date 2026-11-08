@@ -1493,6 +1493,47 @@ func TestClosers_release(t *testing.T) {
 	server.AssertExpectations(t)
 }
 
+func TestOpenArcaveProjectStoreForReading(t *testing.T) {
+	key := newTestStoreKey(t)
+	tests := []struct {
+		name    string
+		marked  bool
+		wantMsg string
+	}{
+		{name: "an unmarked project under encryption is refused and left unmarked", wantMsg: "not encrypted yet"},
+		{name: "a project marked for the key opens", marked: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			projectPath := t.TempDir()
+			cfg := newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key})
+			if tt.marked {
+				var opened closers
+				_, err := openArcaveProjectStore(t.Context(), cfg, projectPath, &opened)
+				opened.release(t.Context())
+				require.NoError(t, err)
+			}
+			before := listTree(t, projectPath)
+			var opened closers
+			defer opened.release(t.Context())
+
+			// Act
+			store, err := openArcaveProjectStoreForReading(t.Context(), cfg, projectPath, &opened)
+
+			// Assert
+			if tt.wantMsg != "" {
+				require.ErrorContains(t, err, tt.wantMsg)
+				assert.Nil(t, store)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, store)
+			}
+			assert.Equal(t, before, listTree(t, projectPath), "reading writes nothing, the marker least of all")
+		})
+	}
+}
+
 func TestOpenArcaveProjectStore(t *testing.T) {
 	key := newTestStoreKey(t)
 	encrypted := func(t *testing.T, projectPath string) {

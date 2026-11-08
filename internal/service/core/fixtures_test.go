@@ -16,12 +16,14 @@ package core
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -99,7 +101,7 @@ func demoSafetySnapshot() model.Savepoint {
 	return model.Savepoint{
 		ID:        "019e844b-7818-7000-8000-000000000000",
 		Name:      safetySnapshotName(demoRecord().ID),
-		Labels:    newSafetySnapshotLabels(),
+		Labels:    newSafetySnapshotLabels(demoRecord().ID),
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
 		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
 		Spec:      demoSpecRef(),
@@ -357,3 +359,70 @@ func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.Savepoi
 func ptrID(id model.SavepointID) *model.SavepointID { return &id }
 
 func ptrBool(b bool) *bool { return &b }
+
+// deployed matches the project a rollback builds from spec: spec with every service carrying the
+// deployment labels.
+func deployed(spec *types.Project) any {
+	return mock.MatchedBy(func(project *types.Project) bool {
+		for _, service := range project.Services {
+			if service.Labels[string(model.SystemLabelDeploymentID)] == "" {
+				return false
+			}
+		}
+		return assert.ObjectsAreEqual(spec, withoutDeploymentLabels(project))
+	})
+}
+
+// rolledBackTo matches what deployed does, labelled as a rollback to savepoint.
+func rolledBackTo(spec *types.Project, savepoint model.Savepoint) any {
+	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
+		return deployment.Origin == model.DeploymentOriginRollback && deployment.Savepoint.ID == savepoint.ID &&
+			deployment.RevertedFrom == model.SavepointRef{}
+	})
+}
+
+// revertedFrom matches what deployed does, labelled as the revert of the rollback to target: the
+// safety snapshot deployed, target named.
+func revertedFrom(spec *types.Project, target model.Savepoint) any {
+	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
+		return deployment.Origin == model.DeploymentOriginRevert && deployment.Savepoint.SafetySnapshotFor == target.ID &&
+			deployment.RevertedFrom == model.SavepointRef{ID: target.ID, Name: target.Name}
+	})
+}
+
+// deployedAs matches what deployed does, every service's labels read back into a deployment want
+// accepts.
+func deployedAs(spec *types.Project, want func(model.SavepointDeployment) bool) any {
+	return mock.MatchedBy(func(project *types.Project) bool {
+		for _, service := range project.Services {
+			deployment, ok, err := model.ParseSavepointDeployment(service.Labels)
+			if err != nil || !ok || !want(deployment) {
+				return false
+			}
+		}
+		return assert.ObjectsAreEqual(spec, withoutDeploymentLabels(project))
+	})
+}
+
+// withoutDeploymentLabels is project with the deployment labels a rollback adds taken off again.
+func withoutDeploymentLabels(project *types.Project) *types.Project {
+	stripped := *project
+	stripped.Services = nil
+	if len(project.Services) > 0 {
+		stripped.Services = make(types.Services, len(project.Services))
+	}
+	for name, service := range project.Services {
+		labels := types.Labels{}
+		for key, value := range service.Labels {
+			if !strings.HasPrefix(key, model.DeploymentLabelPrefix) {
+				labels[key] = value
+			}
+		}
+		if len(labels) == 0 {
+			labels = nil
+		}
+		service.Labels = labels
+		stripped.Services[name] = service
+	}
+	return &stripped
+}

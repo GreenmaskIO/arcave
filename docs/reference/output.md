@@ -135,7 +135,7 @@ The JSON each command prints; [as text](#result-format), each is a summary, a ta
 | [`tools generate-compose`](cli/tools_generate_compose.md) | `{"compose_project": …, "services": [ … ], "path": …}` — the compose file itself goes to `-o` |
 | [`gc`](cli/gc.md) | `{"dry_run": …, "session": …, "reports": [ … ], "savepoints": [ … ], "total": { … }}` — one report per kind and compose project of the session, each with its `deletion` past a dry run, and what each dead savepoint frees; `total` adds `deleted`, `delete_failed`, `not_run` and `freed_bytes` when gc deleted |
 | [`mcp`](cli/mcp.md) | nothing — the stream is the protocol |
-| [`status`](cli/status.md) | nothing; the command returns `not implemented` |
+| [`status`](cli/status.md) | one status object — `state`, the `deployment` the containers' labels name, `services` with every replica, `rollback_in_flight`, `unreadable` and `notices` — printed before the error when the status is partial |
 
 JSON is indented two spaces and ends with a newline.
 
@@ -291,6 +291,62 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 `writable_layers` names each container layer put back, and is omitted when the savepoint held none. `tag` is the reference the restored layer answers to in your local Docker daemon: after a rollback the container runs on it, not on the image its compose file names.
 
 `safety_snapshot` is the id of the safety snapshot the rollback took: rolling back to it undoes the rollback. It is omitted when none was taken: the project had no containers, or `rollback.safety_snapshot` or `--safety-snapshot` turned it off. In that last case the stream has no `rollback.safety-snapshot` step, and a warning, marked `in_result`, says what running without one risks.
+
+## `status`
+
+```json
+{
+  "compose_project": "myapp",
+  "checked_at": "2026-11-07T17:14:00Z",
+  "state": "degraded",
+  "session": {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline", "resolved_by": "default"},
+  "deployment": {
+    "source": "mixed",
+    "id": "019e9a1b-…",
+    "deployed_at": "2026-11-07T14:02:11Z",
+    "origin": "rollback",
+    "arcave_project": "myapp",
+    "session": {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline"},
+    "savepoint": {
+      "id": "019e843e-…", "name": "before-migration", "created_at": "2026-11-06T19:41:00Z",
+      "safety_snapshot": false,
+      "restored": {"volumes": 3, "writable_layers": 2},
+      "not_restored": {"volumes": 0, "writable_layers": 0}
+    },
+    "record": "found",
+    "host": "laptop",
+    "arcave_version": "v0.1.0"
+  },
+  "latest_savepoint": {"session": "00000000-0000-0000-0000-000000000001", "id": "019e9000-…", "name": "after-fix", "created_at": "…"},
+  "savepoint_count": 4,
+  "newer_than_deployed": 1,
+  "services": [
+    {
+      "name": "web", "state": "running", "replicas_expected": 2, "replicas_up": 2,
+      "replicas": [
+        {
+          "number": 2, "container": "myapp-web-2", "container_id": "…", "state": "running",
+          "exit_code": 0, "oom_killed": false, "restart_count": 0,
+          "created_at": "…", "started_at": "…", "image": "nginx:1.27",
+          "replaces": "myapp-web-2", "in_deployment": false, "in_savepoint": true,
+          "ports": [{"container_port": 80, "protocol": "tcp", "host_ip": "0.0.0.0", "host_port": 8080}]
+        }
+      ]
+    }
+  ],
+  "rollback_in_flight": null,
+  "unreadable": [],
+  "notices": [{"code": "replica-recreated", "message": "web-2 was recreated outside arcave …"}]
+}
+```
+
+`state` is one of `rollback-pending`, `absent`, `stopped`, `degraded`, `starting`, `running` — see [the command](cli/status.md#the-state). `deployment` is `null` with no container, and `{"source": "compose"}` alone when no container carries a rollback's labels; `source` is `savepoint` when every container does, `mixed` otherwise. Everything else in `deployment` is read off the labels, so it is there when the store is not; `record` says whether the deployed savepoint's session still holds it — `found`, `missing`, or `unreadable` — and is absent when the deployment is another arcave project's.
+
+A replica's `state` is `running`, `completed`, `exited`, `restarting`, `created`, `paused`, `removing`, `dead`, or `missing` for one the deployed savepoint recorded and the daemon does not hold; `health` is `healthy`, `unhealthy` or `starting`, and absent with no healthcheck or once the container stopped. `in_deployment` marks a container the deployment built and `in_savepoint` a replica the savepoint recorded: `false`/`true` was recreated outside arcave, `false`/`false` was added since. `replaces` is the container compose recreated this one over. `replicas_expected` is absent with nothing deployed.
+
+`latest_savepoint`, `savepoint_count` and `newer_than_deployed` read the deployed savepoint's session while the store holds that session, else the session your commands work in; safety snapshots are not counted, and `newer_than_deployed` is absent with nothing deployed. `rollback_in_flight` is the inflight marker: `{"phase", "session", "target", "safety", "at", "recover"}`, `recover` being the savepoint to roll back to. `unreadable` lists what could not be read — `{"source": "store" | "session" | "inflight-marker", "error"}` — and is not empty exactly when the command exits `1` with a result.
+
+`notices` are `{"code", "message", "severe"}`, the severe first. `code` names the condition and is stable — act on it, never on `message`, whose wording may change; [the command](cli/status.md#what-the-warnings-say) lists every code and what to do about it. A status notice carries no `hint`: what to do is the documentation's. Every id in a status is whole.
 
 ## Reading it
 

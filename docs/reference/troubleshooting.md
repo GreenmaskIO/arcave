@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Recovering from an interrupted rollback, a held project or session lock, a torn-down project, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
+description: Recovering from an interrupted rollback, finding what is deployed, a held project or session lock, a torn-down project, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
@@ -27,7 +27,7 @@ rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (rest
 … volumes may mix states; recover with `arcave rollback --session 00000000-0000-0000-0000-000000000001 -p myapp 019e8491-04c8-7000-8000-000000000000`
 ```
 
-Pass the same two flags to the commands below.
+`arcave status` reports the marker while it stands (`rollback-pending`), its `rollback_in_flight.recover` naming the savepoint to roll back to. Pass the same two flags to the commands below.
 
 ```shell title="1. Find it"
 arcave savepoint list --include-safety-snapshots
@@ -102,6 +102,24 @@ Run that same rollback again; the marker lets it through, and it finishes what t
 **Recovering takes no safety snapshot**, whichever savepoint the hint names: it would capture half-restored volumes and call them an undo. If the recovery fails, the marker stays until you run it again. The anonymous volumes the interrupted attempt orphaned are not removed: find them with `docker volume ls --filter dangling=true`.
 
 **A recovery to a safety snapshot that keeps failing** takes none of its own. Its marker still names that snapshot, and from there a rollback to any savepoint passes too.
+
+## What is deployed, and why a container lost its files
+
+**Symptom.** Tests fail against an environment you rolled back earlier, or files written inside a container after a rollback are gone, while its volumes are intact.
+
+**What happened.** Something recreated the container outside arcave, most often `docker compose up` of your own compose file: it builds the container on the image the file names, which drops the writable layer the rollback put back.
+
+**The remedy.** Ask the daemon what it runs:
+
+```shell
+arcave status
+```
+
+It names the savepoint a rollback deployed and warns of every container recreated since (`replica-recreated`), failed, unhealthy or missing. To keep today's state take a savepoint; to get the rolled-back one back, roll back to it again.
+
+## What status warns of
+
+Every warning of [`arcave status`](cli/status.md) carries a code; [its table](cli/status.md#what-the-warnings-say) says, per code, what happened and what to do. A warning states only what is so: the fix is here, in the documentation, so it does not drift from what arcave does.
 
 ## `another arcave command is already running in this project`
 

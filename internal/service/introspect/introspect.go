@@ -76,10 +76,11 @@ func NewInspector(api dockerAPI, composeProject model.DockerComposeProjectName) 
 // Introspect reports the compose project, stopped containers included. It cannot see an external volume
 // named like a generated one, an unmounted foreign volume, or a torn-down compose project.
 func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
-	replicas, err := s.replicas(ctx)
+	listed, err := s.listContainers(ctx)
 	if err != nil {
 		return model.IntrospectionResult{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
 	}
+	replicas := keepProjectContainers(listed)
 
 	// volumeIndex holds every volume the project names or uses: its own named volumes first,
 	// then each external or anonymous one a service or any of its replicas mounts.
@@ -126,9 +127,41 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 	}, nil
 }
 
-// replicas lists the compose project's containers, stopped ones included, without the one-off
-// containers `docker compose run` leaves behind. None means never started or taken down, not an error.
-func (s *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
+// ReadContainers reports the compose project's replicas and its hooks' runners, and nothing they
+// mount or run on. None means never started or taken down.
+func (s *Inspector) ReadContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
+	listed, err := s.listContainers(ctx)
+	if err != nil {
+		return model.ComposeProjectContainers{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
+	}
+	byService := groupByService(keepProjectContainers(listed))
+	services := make([]model.ServiceContainers, 0, len(byService))
+	for _, name := range slices.Sorted(maps.Keys(byService)) {
+		replicas := byService[name]
+		containers, err := s.readContainers(ctx, replicas)
+		if err != nil {
+			return model.ComposeProjectContainers{}, fmt.Errorf("read service %q of compose project %q: %w",
+				name, s.composeProject, err)
+		}
+		services = append(services, model.ServiceContainers{
+			Name:       name,
+			DependsOn:  parseDependsOn(replicas[0].Labels[api.DependenciesLabel]),
+			Containers: containers,
+		})
+	}
+	hookRunners, err := s.readHookRunners(ctx, keepHookRunners(listed))
+	if err != nil {
+		return model.ComposeProjectContainers{}, fmt.Errorf("read hook runners of compose project %q: %w", s.composeProject, err)
+	}
+	return model.ComposeProjectContainers{
+		Services:    services,
+		HookRunners: hookRunners,
+	}, nil
+}
+
+// listContainers lists every container compose stamped with the compose project's name, stopped
+// ones included.
+func (s *Inspector) listContainers(ctx context.Context) ([]container.Summary, error) {
 	listed, err := s.api.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: s.newProjectFilter(),
@@ -136,7 +169,25 @@ func (s *Inspector) replicas(ctx context.Context) ([]container.Summary, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list containers: %w", err)
 	}
-	return keepProjectContainers(listed.Items), nil
+	return listed.Items, nil
+}
+
+// readHookRunners inspects the containers compose ran a service's lifecycle hook in.
+func (s *Inspector) readHookRunners(ctx context.Context, hooks []container.Summary) ([]model.HookRunner, error) {
+	containers, err := s.readContainers(ctx, hooks)
+	if err != nil {
+		return nil, err
+	}
+	runners := make([]model.HookRunner, 0, len(containers))
+	for _, runner := range containers {
+		runners = append(runners, model.HookRunner{
+			Service:   runner.Labels[api.ServiceLabel],
+			Hook:      runner.Labels[api.HookLabel],
+			Index:     runner.Labels[api.HookIndexLabel],
+			Container: runner,
+		})
+	}
+	return runners, nil
 }
 
 // newProjectFilter selects what compose stamped with this compose project's name.
@@ -153,6 +204,17 @@ func keepProjectContainers(summaries []container.Summary) []container.Summary {
 		if summary.Labels[api.OneoffLabel] != "True" &&
 			summary.Labels[api.HookLabel] == "" &&
 			summary.Labels[api.RelayLabel] == "" {
+			kept = append(kept, summary)
+		}
+	}
+	return kept
+}
+
+// keepHookRunners keeps the containers compose ran a service's lifecycle hook in.
+func keepHookRunners(summaries []container.Summary) []container.Summary {
+	var kept []container.Summary
+	for _, summary := range summaries {
+		if summary.Labels[api.HookLabel] != "" {
 			kept = append(kept, summary)
 		}
 	}
@@ -229,6 +291,21 @@ func (s *Inspector) readService(
 	}, nil
 }
 
+// parseDependsOn reads compose's depends_on label, service:condition:restart entries comma-separated,
+// into the condition per service; nil for none.
+func parseDependsOn(label string) map[string]string {
+	if label == "" {
+		return nil
+	}
+	dependsOn := map[string]string{}
+	for entry := range strings.SplitSeq(label, ",") {
+		service, rest, _ := strings.Cut(entry, ":")
+		condition, _, _ := strings.Cut(rest, ":")
+		dependsOn[service] = condition
+	}
+	return dependsOn
+}
+
 // replicaMounts reports the mounts of a service's replicas, sorted by (target, replica).
 //
 // Replicas are created from one declaration, so the first replica's mounts stand for all
@@ -277,11 +354,12 @@ func (s *Inspector) readContainers(ctx context.Context, group []container.Summar
 			return nil, fmt.Errorf("inspect container %s: %w", summary.ID, err)
 		}
 		containers = append(containers, model.Container{
-			ID:      summary.ID,
-			Name:    containerName(summary.Names),
-			Number:  replicaNumber(summary.Labels),
-			Labels:  summary.Labels,
-			Inspect: inspected.Container,
+			ID:       summary.ID,
+			Name:     containerName(summary.Names),
+			Number:   replicaNumber(summary.Labels),
+			Labels:   summary.Labels,
+			Replaces: summary.Labels[api.ContainerReplaceLabel],
+			Inspect:  inspected.Container,
 		})
 	}
 	return containers, nil

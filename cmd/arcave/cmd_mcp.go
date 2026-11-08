@@ -60,6 +60,7 @@ func newMCPFactories() cli.MCPFactories {
 		Session:        mcpSessionServiceFactory,
 		Tools:          mcpToolsServiceFactory,
 		GC:             mcpGCServiceFactory,
+		Status:         mcpStatusServiceFactory,
 	}
 }
 
@@ -120,6 +121,17 @@ func mcpGCServiceFactory(ctx context.Context, sessionRef string) (cli.MCPGCServi
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, fmt.Errorf("init gc dependencies: %w", err)
+	}
+	return svc, func() { opened.release(ctx) }, nil
+}
+
+// mcpStatusServiceFactory wires the status of the compose project a tool call named.
+func mcpStatusServiceFactory(ctx context.Context, project string) (cli.MCPStatusService, func(), error) {
+	var opened closers
+	svc, err := openStatusService(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(project), &opened)
+	if err != nil {
+		opened.release(ctx)
+		return nil, nil, fmt.Errorf("init status dependencies: %w", err)
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }

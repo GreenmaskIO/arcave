@@ -88,6 +88,8 @@ func (s *Printer) Print(v any) error {
 		text = s.formatSessions(v)
 	case model.RemoveSessionResponse:
 		text = formatRemoveSession(v)
+	case model.ComposeProjectStatus:
+		text = s.formatStatus(v)
 	default:
 		return jsonprinter.New(s.w).Print(v)
 	}
@@ -128,7 +130,12 @@ func formatTable(header []string, rows [][]string) string {
 	}
 	//nolint:errcheck // a strings.Builder does not fail a write
 	_ = tw.Flush()
-	return b.String()
+	// tabwriter pads an empty last cell too.
+	lines := strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // formatSize renders a byte count in decimal units, to three significant digits at most.
@@ -167,7 +174,12 @@ func formatNotices(notices []model.Notice) string {
 	var b strings.Builder
 	b.WriteString("\n" + styleWarningsTitle.Render(fmt.Sprintf("Warnings (%d)", len(notices))) + "\n")
 	for _, notice := range notices {
-		b.WriteString(styleWarning.Render("  ! "+notice.Message) + "\n")
+		line := "  ! " + notice.Message
+		if notice.Code != "" {
+			// The code is what the documentation is looked up by.
+			line += " [" + string(notice.Code) + "]"
+		}
+		b.WriteString(styleWarning.Render(line) + "\n")
 		if notice.Hint != "" {
 			b.WriteString(styleHint.Render("    → "+notice.Hint) + "\n")
 		}

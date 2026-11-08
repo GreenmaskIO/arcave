@@ -707,7 +707,7 @@ func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
 
 func TestRequireUniqueName(t *testing.T) {
 	const id = model.SavepointID("019e843e-1650-7000-8000-000000000000")
-	safety := model.Savepoint{ID: id, Name: "pre-rollback", Labels: newSafetySnapshotLabels()}
+	safety := model.Savepoint{ID: id, Name: "pre-rollback", Labels: newSafetySnapshotLabels(demoRecord().ID)}
 
 	tests := []struct {
 		name     string
@@ -1343,7 +1343,7 @@ func TestFindSavepoint(t *testing.T) {
 	// The safety snapshot is the newest record and shares a name with two others, so
 	// it is in reach of every scanning selector — and must be picked by none.
 	safetySnapshot := model.Savepoint{
-		ID: "400", Name: "dup", Labels: newSafetySnapshotLabels(), CreatedAt: now.Add(3 * time.Hour),
+		ID: "400", Name: "dup", Labels: newSafetySnapshotLabels(demoRecord().ID), CreatedAt: now.Add(3 * time.Hour),
 	}
 	records := []model.Savepoint{
 		{ID: "100", Name: "before-migration", CreatedAt: now},
@@ -1427,7 +1427,7 @@ func TestFindSavepoint_AmbiguousName(t *testing.T) {
 	records := []model.Savepoint{
 		{ID: "300", Name: name, CreatedAt: now},
 		{ID: "200", Name: name, CreatedAt: now},
-		{ID: "400", Name: name, Labels: newSafetySnapshotLabels(), CreatedAt: now},
+		{ID: "400", Name: name, Labels: newSafetySnapshotLabels(demoRecord().ID), CreatedAt: now},
 	}
 
 	// Act

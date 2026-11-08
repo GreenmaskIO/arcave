@@ -304,6 +304,26 @@ Before overwriting anything, arcave took a **safety snapshot** of the state you 
 
 ## 7. See what you have
 
+What the daemon runs now, and whether it all came up:
+
+```shell
+arcave status
+```
+
+```text title="stdout"
+myapp · running · savepoint before-migration · 019e843e-1650-7000-8000-000000000000
+  session    baseline
+  deployed   2026-06-01 19:52 (12s ago) by rollback
+  savepoint  taken 2026-06-01 19:41 (11m ago) · restored 1 volume, 1 layer
+
+SERVICE  REPLICAS  STATE    UP   PORTS
+db       1/1       healthy  10s  127.0.0.1:5432→5432/tcp
+```
+
+If something is down, or was rebuilt outside arcave since, a `Warnings` block below says what, each with a code that [`arcave status`](reference/cli/status.md#what-the-warnings-say) explains.
+
+What the store holds:
+
 ```shell
 arcave savepoint list
 ```

@@ -198,10 +198,10 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 			}}, r.NotCovered)
 	})).Return(nil).Once()
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restore := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
-	start := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	start := runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 
 	// The containers it commits exist only between the stop and the teardown.
 	mock.InOrder(stop, snapshotSafety, upstreamSafety, captureSafety, specSafety, commitSafety, down, create,
@@ -277,7 +277,7 @@ func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
 		return r.IsSafetySnapshot() && len(r.WritableLayers) == 1
 	})).Return(nil).Once()
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
@@ -564,10 +564,10 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	expectSafetySnapshotCommit(repo, record.ID)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	// The spec goes to the rebuild untouched: nothing was retargeted.
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
-	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}

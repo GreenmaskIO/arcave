@@ -145,6 +145,10 @@ var (
 	// ErrGarbageCollectPartial reports a gc in which a collector failed or left objects unjudged,
 	// or a deletion failed or never ran; the result still carries every report.
 	ErrGarbageCollectPartial = errors.New("garbage collection was partial")
+
+	// ErrStatusPartial reports a status that could not read the store, the session or the inflight
+	// marker; the result still carries what the daemon reports.
+	ErrStatusPartial = errors.New("status is partial")
 )
 
 // GarbageCollectInterruptedError reports a gc that stopped deleting partway: it lost its session

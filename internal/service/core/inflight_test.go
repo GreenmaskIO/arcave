@@ -170,10 +170,10 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 	savepointBackend := &mockBackend{volume: vol}
 	runner := &mockComposeRunner{}
 	down := runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "safety-payload"}).Return(nil).Once()
-	up := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	up := runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 	mock.InOrder(down, create, restoreSp, up)
 
 	store := newDirStore(t)
@@ -249,10 +249,10 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
-	up := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	up := runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 
 	// The marker steps in workflow order: written before the teardown, phased to
 	// restoring before a byte moves and forward before the restart, then cleared.
@@ -384,14 +384,14 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
 	// The revert rebuilds the live compose project and fails replaying its own capture: no
 	// start follows.
 	downForRevert := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	createForRevert := runner.On("Create", mock.Anything, demoSpec, demoRestoredVolumes).Return(nil).Once()
+	createForRevert := runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSafety := safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(errors.New("revert boom")).Once()

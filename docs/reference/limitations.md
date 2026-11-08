@@ -59,7 +59,11 @@ arcave rebuilds the project from what Docker reports, and Docker doesn't keep ev
 * Podman refuses `links:` when it creates a container (`link is not supported`), so a project declaring them does not run on it.
 * Nothing is guaranteed to work between Docker and Podman: Docker Engine, Docker Desktop, Colima and OrbStack are one side, Podman the other. arcave converts nothing and checks nothing. The spec it assembles on one carries defaults the other refuses or spells differently, so a rollback across can fail after the project has stopped, with compose's own error.
 
-Running `docker compose up` by hand after a rollback recreates the containers from your compose file, which drops the container files the rollback restored. Volume data stays.
+Running `docker compose up` by hand after a rollback recreates the containers from your compose file, which drops the container files the rollback restored. Volume data stays. [`arcave status`](cli/status.md) says which containers were recreated; once every one was, nothing on the daemon remembers the rollback, and it reports the compose project as not deployed by arcave.
+
+## A deployment lives in the daemon
+
+A rollback labels the containers it builds with `io.arcave.deployment.*`, and `status` reads what is deployed off those labels. They live in the daemon the rollback ran against: another daemon (`DOCKER_HOST`) holds none. They are plain text there, the savepoint's name and description included, under `encryption.enabled` too: anyone who can `docker inspect` the containers reads them.
 
 ## Some volumes are captured differently than you might expect
 

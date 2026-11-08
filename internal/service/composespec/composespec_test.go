@@ -539,6 +539,16 @@ func TestUserLabels(t *testing.T) {
 		},
 		{name: "nothing left renders as nil", labels: map[string]string{string(model.SystemLabelBaseImageRef): "postgres:16"}, want: nil},
 		{
+			// A deployment is the containers', never the spec's: the next savepoint must not carry it.
+			name: "the deployment a rollback labelled the container with is dropped",
+			labels: map[string]string{
+				string(model.SystemLabelDeploymentID):        "019ea000-0000-7000-8000-000000000000",
+				string(model.SystemLabelDeploymentSavepoint): "019e843e-1650-7000-8000-000000000000",
+				"tier": "data",
+			},
+			want: types.Labels{"tier": "data"},
+		},
+		{
 			// The capture policy travels in the spec, so a rollback restores it with the topology.
 			name:   "the capture policy is kept",
 			labels: map[string]string{string(model.CaptureLabelCapture): "false", string(model.CaptureLabelMountsExclude): "/app"},

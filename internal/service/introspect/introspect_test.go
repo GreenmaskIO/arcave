@@ -442,6 +442,7 @@ func TestInspector_Introspect_DesktopBindSource(t *testing.T) {
 func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	// Arrange
 	second := summary("c-web-2", "web", "nginx:1", 2)
+	second.Labels[api.ContainerReplaceLabel] = "demo-web-2-old"
 	first := summary("c-web-1", "web", "nginx:1", 1)
 	oneoff := summary("c-web-run", "web", "nginx:1", 1)
 	oneoff.Labels[api.OneoffLabel] = "True"
@@ -463,7 +464,106 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	assert.Equal(t, 1, got.Project.Services[0].Containers[0].Number, "replicas sort by number")
 	assert.Equal(t, 2, got.Project.Services[0].Containers[1].Number)
 	assert.Equal(t, "c-web-1", got.Project.Services[0].Containers[0].Name)
+	assert.Equal(t, "demo-web-2-old", got.Project.Services[0].Containers[1].Replaces,
+		"a replica compose recreated names the one it replaced")
 	daemon.AssertExpectations(t)
+}
+
+func TestInspector_ReadContainers(t *testing.T) {
+	// Arrange: two replicas, one depending on a job, and a hook's runner, in one listing.
+	web := summary("c-web-1", "web", "nginx:1", 1)
+	web.Labels[api.DependenciesLabel] = "migrate:service_completed_successfully:false"
+	migrate := summary("c-migrate-1", "migrate", "nginx:1", 1)
+	runner := summary("c-web-hook", "web", "nginx:1", 0)
+	maps.Copy(runner.Labels, map[string]string{api.HookLabel: "pre_start", api.HookIndexLabel: "0"})
+	oneoff := summary("c-web-run", "web", "nginx:1", 1)
+	oneoff.Labels[api.OneoffLabel] = "True"
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(web, migrate, runner, oneoff)
+	daemon.expectInspect("c-migrate-1", "c-web-1", "c-web-hook")
+
+	// Act: no volume, network or image is read, so none is expected.
+	got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Services, 2)
+	assert.Equal(t, "migrate", got.Services[0].Name)
+	assert.Nil(t, got.Services[0].DependsOn)
+	assert.Equal(t, "web", got.Services[1].Name)
+	assert.Equal(t, map[string]string{"migrate": "service_completed_successfully"}, got.Services[1].DependsOn)
+	require.Len(t, got.Services[1].Containers, 1, "neither a hook's runner nor a one-off is a replica")
+	assert.Equal(t, "c-web-1", got.Services[1].Containers[0].ID)
+	require.Len(t, got.HookRunners, 1)
+	assert.Equal(t, model.HookRunner{
+		Service:   "web",
+		Hook:      "pre_start",
+		Index:     "0",
+		Container: got.HookRunners[0].Container,
+	}, got.HookRunners[0])
+	assert.Equal(t, "c-web-hook", got.HookRunners[0].Container.ID)
+	daemon.AssertExpectations(t)
+}
+
+func TestInspector_ReadContainers_DaemonFailures(t *testing.T) {
+	daemonErr := errors.New("daemon refused")
+	tests := []struct {
+		name  string
+		setup func(daemon *mockDockerAPI)
+	}{
+		{
+			name: "the listing",
+			setup: func(daemon *mockDockerAPI) {
+				daemon.On("ContainerList", mock.Anything, mock.Anything).Return(nil, daemonErr).Once()
+			},
+		},
+		{
+			name: "a replica's inspect",
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-web-1", "web", "nginx:1", 1))
+				daemon.On("ContainerInspect", mock.Anything, "c-web-1", client.ContainerInspectOptions{}).
+					Return(container.InspectResponse{}, daemonErr).Once()
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			tt.setup(daemon)
+
+			// Act
+			got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+
+			// Assert
+			require.ErrorIs(t, err, daemonErr)
+			assert.Equal(t, model.ComposeProjectContainers{}, got)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
+func TestParseDependsOn(t *testing.T) {
+	tests := []struct {
+		name  string
+		label string
+		want  map[string]string
+	}{
+		{name: "no label"},
+		{name: "one entry", label: "db:service_healthy:false", want: map[string]string{"db": "service_healthy"}},
+		{
+			name:  "several entries",
+			label: "db:service_healthy:false,migrate:service_completed_successfully:true",
+			want:  map[string]string{"db": "service_healthy", "migrate": "service_completed_successfully"},
+		},
+		{name: "an older label with no restart part", label: "db:service_started", want: map[string]string{"db": "service_started"}},
+		{name: "an older label with the service alone", label: "db", want: map[string]string{"db": ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseDependsOn(tt.label))
+		})
+	}
 }
 
 func TestKeepProjectContainers(t *testing.T) {
@@ -740,7 +840,7 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 	}{
 		{name: "the daemon holds none"},
 		{name: "only one-off containers are left", containers: []container.Summary{oneoff}},
-		{name: "only a failed pre_start hook is left", containers: []container.Summary{hook}},
+		{name: "only a failed pre_start hook is left, which the pass does not inspect", containers: []container.Summary{hook}},
 	}
 
 	for _, tt := range tests {

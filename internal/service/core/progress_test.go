@@ -352,7 +352,7 @@ func TestWarn(t *testing.T) {
 		},
 		{
 			name:   "a safety snapshot is not",
-			labels: newSafetySnapshotLabels(),
+			labels: newSafetySnapshotLabels(demoRecord().ID),
 			want:   []bool{false},
 		},
 	}

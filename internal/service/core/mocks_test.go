@@ -262,6 +262,20 @@ func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResu
 	return args.Get(0).(model.IntrospectionResult), args.Error(1)
 }
 
+type mockContainersReader struct{ mock.Mock }
+
+func (m *mockContainersReader) ReadContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(model.ComposeProjectContainers), args.Error(1)
+}
+
+// failingReader is a SessionReader and a SavepointReader whose every listing fails with err.
+type failingReader struct{ err error }
+
+func (f failingReader) ListSessions(context.Context) ([]model.Session, error) { return nil, f.err }
+
+func (f failingReader) ListSavepoints(context.Context) ([]model.Savepoint, error) { return nil, f.err }
+
 type mockAssembler struct{ mock.Mock }
 
 func (m *mockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {

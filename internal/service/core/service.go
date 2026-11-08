@@ -136,8 +136,14 @@ type Deps struct {
 	CaptureDefaults capturepolicy.CaptureDefaults
 	// Session is the session Store belongs to; zero means model.DefaultSession.
 	Session model.SessionID
+	// SessionName is Session's name, which a rollback labels the containers it builds with.
+	SessionName string
+	// ArcaveProject is the arcave project Store belongs to.
+	ArcaveProject model.ArcaveProjectName
 	// ComposeProject is the compose project Store belongs to.
 	ComposeProject model.DockerComposeProjectName
+	// Now is the clock a deployment is dated by; nil is time.Now.
+	Now func() time.Time
 	// Sessions checks, under the lock, that Session still exists.
 	Sessions sessionLookup
 	// DaemonVersion is the version the engine reports; requireDaemon judges it.
@@ -172,6 +178,9 @@ type Service struct {
 	imageLookup             imageLookup
 	snapshotBackendRegistry model.SnapshotBackendRegistry
 	store                   storages.Storager
+	sessionName             string
+	arcaveProject           model.ArcaveProjectName
+	now                     func() time.Time
 	captureDefaults         capturepolicy.CaptureDefaults
 	daemonVersion           string
 	minDaemonMajor          int
@@ -202,6 +211,9 @@ func New(deps Deps) *Service {
 		imageLookup:             deps.ImageLookup,
 		snapshotBackendRegistry: deps.BackendRegistry,
 		store:                   deps.Store,
+		sessionName:             deps.SessionName,
+		arcaveProject:           deps.ArcaveProject,
+		now:                     newClock(deps.Now),
 		captureDefaults:         deps.CaptureDefaults,
 		daemonVersion:           deps.DaemonVersion,
 		minDaemonMajor:          deps.MinDaemonMajor,
@@ -210,6 +222,14 @@ func New(deps Deps) *Service {
 		heartbeatInterval:       cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
 		heartbeatStaleAfter:     cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 	}
+}
+
+// newClock is now, time.Now when nil.
+func newClock(now func() time.Time) func() time.Time {
+	if now == nil {
+		return time.Now
+	}
+	return now
 }
 
 // withSessionLock runs fn holding the session's lock in the store, and unlocks it however fn

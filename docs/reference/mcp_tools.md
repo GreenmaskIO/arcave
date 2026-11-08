@@ -217,6 +217,15 @@ Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose fil
 
 Nothing runs it for you: call it after a rollback, or periodically, or safety snapshots pile up. Returns the report [`arcave gc`](cli/gc.md) prints. Unless `dry_run` is `false` the tool deletes nothing; it is marked destructive either way. A partial gc is still returned as a report: what could not be judged is marked `aborted` or `unjudged`, or carries an `error`, and what failed to delete is under `deletion.failed`. A gc that lost its session lock midway through deleting is returned as a tool error that still carries the report, with what was deleted before the loss.
 
+## `status`
+
+| Argument | Required | Description |
+|---|---|---|
+| `project` | yes | The compose project to look at. |
+| `session` | no | The session the user works in, by name or by id. The default is the pinned session, or the current one. |
+
+Returns the object [`arcave status`](cli/status.md) prints: which savepoint a rollback deployed and when, every replica's state, health and ports, and a rollback in progress or interrupted. Read-only: call it before tests, after a rollback, or when something looks wrong. A store that cannot be read is no tool error: `unreadable` says what, and the daemon's part is whole. A daemon that cannot be read is, and so is a `session` that names none. Each of `notices` carries a stable `code` to act on — [the command](cli/status.md#what-the-warnings-say) lists them — and no hint.
+
 ## Where the tools differ from the CLI
 
 * **Lists come wrapped in an object.** `savepoint_list` answers `{"savepoints": […]}` and `session_list` `{"sessions": […]}`, where the CLI prints the bare array.
