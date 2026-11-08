@@ -40,8 +40,10 @@ If such a rollback fails, arcave removes what it created. If it is interrupted, 
 
 | Flag | Default | Description |
 |---|---|---|
-| `--no-safety-snapshot` | | Capture neither the live volumes nor the writable layers: faster, but what they held is gone for good, nothing can undo the rollback, and after a failure the project stays as it is until you run the same rollback again. Overrides [`rollback.safety_snapshot`](../configuration.md#rollback). |
-| `--safety-snapshot` | | Capture the live volumes and writable layers first, even when [`rollback.safety_snapshot`](../configuration.md#rollback) is `false`. This is the default. Cannot be combined with `--no-safety-snapshot`. |
+| `--no-safety-snapshot` | | Capture neither the live volumes nor the writable layers: faster, but what they held is gone for good, nothing can undo the rollback, and after a failure the project stays as it is until you run the same rollback again. |
+| `--safety-snapshot` | | Capture the live volumes and writable layers first. |
+
+Without either flag, [`rollback.safety_snapshot`](../configuration.md#rollback) decides, and takes a safety snapshot unless set to `false`. Either flag overrides it for one run; they cannot be combined, and neither takes a value.
 
 The bound it waits on before deciding a start has failed is [`--wait-timeout`](index.md#global-flags), which is a config key and therefore lives on the root command.
 

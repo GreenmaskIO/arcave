@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-### New
+### Breaking changes
 
-- **`arcave rollback --no-safety-snapshot`.** Skipping the safety snapshot is now a plain switch. `--safety-snapshot` takes one even when `rollback.safety_snapshot: false` is set in the config, and the two flags cannot be passed together.
+- **`arcave rollback --no-safety-snapshot` replaces `--safety-snapshot=false`.** Both flags are plain switches now and take no value: `--safety-snapshot` takes a safety snapshot even under `rollback.safety_snapshot: false`, `--no-safety-snapshot` takes none, and the two cannot be passed together. Without either, the config decides.
 
 ## v0.1.0-alpha.4 — 2026-11-08
 
