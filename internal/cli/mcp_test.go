@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -51,7 +52,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	}}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
 
 	// Act
-	res, out, err := h.createSavepointMCP(context.Background(), nil, createInput{Project: "demo", Name: "before-migration"})
+	res, out, err := h.createSavepointMCP(context.Background(), nil, createInput{ComposeProject: "demo", Name: "before-migration"})
 
 	// Assert
 	require.NoError(t, err)
@@ -71,25 +72,25 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 		svc  []model.Savepoint
 		want listOutput
 	}{
-		{name: "hidden by default", in: listSavepointInput{Project: "demo"}, sort: model.SortDesc, svc: savepoints,
+		{name: "hidden by default", in: listSavepointInput{ComposeProject: "demo"}, sort: model.SortDesc, svc: savepoints,
 			want: listOutput{Savepoints: savepoints}},
 		{
 			name: "include_safety_snapshots reaches the service",
-			in:   listSavepointInput{Project: "demo", IncludeSafetySnapshots: true},
+			in:   listSavepointInput{ComposeProject: "demo", IncludeSafetySnapshots: true},
 			sort: model.SortDesc,
 			svc:  savepoints,
 			want: listOutput{Savepoints: savepoints},
 		},
 		{
 			name: "sort reaches the service",
-			in:   listSavepointInput{Project: "demo", Sort: "asc"},
+			in:   listSavepointInput{ComposeProject: "demo", Sort: "asc"},
 			sort: model.SortAsc,
 			svc:  savepoints,
 			want: listOutput{Savepoints: savepoints},
 		},
 		{
 			name: "no savepoints answers an empty array",
-			in:   listSavepointInput{Project: "demo"},
+			in:   listSavepointInput{ComposeProject: "demo"},
 			sort: model.SortDesc,
 			want: listOutput{Savepoints: []model.Savepoint{}},
 		},
@@ -117,7 +118,7 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, out)
 			assert.Nil(t, res)
-			assert.Equal(t, tt.in.Project, gotProject)
+			assert.Equal(t, tt.in.ComposeProject, gotProject)
 			assert.True(t, released, "what the call opened must not outlive it")
 			svc.AssertExpectations(t)
 		})
@@ -132,7 +133,7 @@ func TestMCPHandler_listSavepointsMCP_ABadSortIsRefused(t *testing.T) {
 	}}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
 
 	// Act
-	_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "demo", Sort: "newest"})
+	_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{ComposeProject: "demo", Sort: "newest"})
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrInvalidSortOrder)
@@ -147,7 +148,7 @@ func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
 	}}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
 
 	// Act
-	_, out, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{Project: "nope"})
+	_, out, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{ComposeProject: "nope"})
 
 	// Assert
 	require.ErrorIs(t, err, wireErr)
@@ -222,7 +223,7 @@ func TestMCPHandler_rollbackMCP_SafetySnapshot(t *testing.T) {
 
 			// Act
 			_, out, err := h.rollbackMCP(context.Background(), nil, rollbackInput{
-				Project: "demo", Ref: "latest", SafetySnapshot: tt.argument,
+				ComposeProject: "demo", Ref: "latest", SafetySnapshot: tt.argument,
 			})
 
 			// Assert
@@ -242,7 +243,7 @@ func TestMCPHandler_ALockedProjectIsNamed(t *testing.T) {
 	}}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
 
 	// Act
-	_, _, err := h.rollbackMCP(context.Background(), nil, rollbackInput{Project: "demo", Ref: "latest"})
+	_, _, err := h.rollbackMCP(context.Background(), nil, rollbackInput{ComposeProject: "demo", Ref: "latest"})
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrProjectLocked)
@@ -483,29 +484,30 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	layers := []model.WritableLayerRestoreResult{{Service: "db", Replica: 1, ContainerName: "demo-db-1",
 		ImageID: model.ImageDigestID("sha256:" + strings.Repeat("a", 64)), Tag: "arcave/demo-db-1-postgres-16:sp-v1"}}
 	tests := []struct {
-		tool  string
-		args  map[string]any
-		setup func(svc *mockService)
-		want  any // the structured content, decoded into its type
+		tool               string
+		args               map[string]any
+		setup              func(svc *mockService)
+		want               any    // the structured content, decoded into its type
+		wantComposeProject string // what the tool's factory was handed
 	}{
-		{tool: "savepoint_create", args: map[string]any{"project": "demo", "name": "v1"},
+		{tool: "savepoint_create", args: map[string]any{"compose_project": "demo", "name": "v1"},
 			setup: func(svc *mockService) {
 				svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{Name: "v1"}).Return(savepoint, nil).Once()
-			}, want: savepoint},
-		{tool: "savepoint_list", args: map[string]any{"project": "demo", "session": "feat"},
+			}, want: savepoint, wantComposeProject: "demo"},
+		{tool: "savepoint_list", args: map[string]any{"compose_project": "demo", "session": "feat"},
 			setup: func(svc *mockService) {
 				svc.On("ListSavepoints", mock.Anything, model.ListRequest{Sort: model.SortDesc}).Return([]model.Savepoint{savepoint}, nil).Once()
-			}, want: listOutput{Savepoints: []model.Savepoint{savepoint}}},
-		{tool: "savepoint_remove", args: map[string]any{"project": "demo", "refs": []string{savepoint.ID.String()}},
+			}, want: listOutput{Savepoints: []model.Savepoint{savepoint}}, wantComposeProject: "demo"},
+		{tool: "savepoint_remove", args: map[string]any{"compose_project": "demo", "refs": []string{savepoint.ID.String()}},
 			setup: func(svc *mockService) {
 				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{Refs: []string{savepoint.ID.String()}}).
 					Return(model.RemoveResult{}, nil).Once()
-			}, want: model.RemoveResult{}},
-		{tool: "rollback", args: map[string]any{"project": "demo", "ref": "latest"},
+			}, want: model.RemoveResult{}, wantComposeProject: "demo"},
+		{tool: "rollback", args: map[string]any{"compose_project": "demo", "ref": "latest"},
 			setup: func(svc *mockService) {
 				svc.On("Rollback", mock.Anything, mock.Anything).
 					Return(model.RollbackResult{RolledBackTo: savepoint, WritableLayers: layers}, nil).Once()
-			}, want: model.RollbackResult{RolledBackTo: savepoint, WritableLayers: layers}},
+			}, want: model.RollbackResult{RolledBackTo: savepoint, WritableLayers: layers}, wantComposeProject: "demo"},
 		{tool: "session_list", args: map[string]any{"all": true},
 			setup: func(svc *mockService) {
 				svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true, Sort: model.SortDesc}).
@@ -532,11 +534,11 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			setup: func(svc *mockService) {
 				svc.On("UnsetSession", mock.Anything).Return(model.DefaultSessionRecord, nil).Once()
 			}, want: model.DefaultSessionRecord},
-		{tool: "compose_generate", args: map[string]any{"project": "demo", "absolute_paths": true},
+		{tool: "compose_generate", args: map[string]any{"compose_project": "demo", "absolute_paths": true},
 			setup: func(svc *mockService) {
 				svc.On("GenerateCompose", mock.Anything, model.GenerateComposeRequest{AbsolutePaths: true}).
 					Return(model.GenerateComposeResponse{ComposeProject: "demo", Services: []string{"db"}, Spec: []byte("name: demo\n")}, nil).Once()
-			}, want: composeGenerateOutput{ComposeProject: "demo", Services: []string{"db"}, Spec: "name: demo\n"}},
+			}, want: composeGenerateOutput{ComposeProject: "demo", Services: []string{"db"}, Spec: "name: demo\n"}, wantComposeProject: "demo"},
 		{tool: "gc", args: map[string]any{"kinds": []string{"upstream-images"}},
 			setup: func(svc *mockService) {
 				svc.On("GarbageCollect", mock.Anything, model.GarbageCollectRequest{
@@ -551,17 +553,21 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	for _, tt := range tests {
 		tt.setup(svc)
 	}
+	var gotComposeProject string
 	h := NewMCPHandler(MCPFactories{
-		Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
+		Savepoint: func(_ context.Context, composeProject, _ string) (MCPSavepointService, func(), error) {
+			gotComposeProject = composeProject
 			return svc, func() {}, nil
 		},
-		SavepointStore: func(context.Context, string, string) (MCPSavepointStoreService, func(), error) {
+		SavepointStore: func(_ context.Context, composeProject, _ string) (MCPSavepointStoreService, func(), error) {
+			gotComposeProject = composeProject
 			return svc, func() {}, nil
 		},
 		Session: func(context.Context) (MCPSessionService, func(), error) {
 			return svc, func() {}, nil
 		},
-		Tools: func(context.Context, string) (MCPToolsService, func(), error) {
+		Tools: func(_ context.Context, composeProject string) (MCPToolsService, func(), error) {
+			gotComposeProject = composeProject
 			return svc, func() {}, nil
 		},
 		GC: func(context.Context, string) (MCPGCService, func(), error) {
@@ -592,6 +598,9 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.tool, func(t *testing.T) {
+			// Arrange
+			gotComposeProject = ""
+
 			// Act
 			res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: tt.tool, Arguments: tt.args})
 
@@ -603,9 +612,67 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			got := reflect.New(reflect.TypeOf(tt.want))
 			require.NoError(t, json.Unmarshal(data, got.Interface()))
 			assert.Equal(t, tt.want, got.Elem().Interface())
+			assert.Equal(t, tt.wantComposeProject, gotComposeProject)
 		})
 	}
 	svc.AssertExpectations(t)
+}
+
+// A compose project with no container is named back to the agent by the argument it passes.
+func TestMCPHandler_ComposeProjectAbsent(t *testing.T) {
+	absent := fmt.Errorf("compose project %q: %w", "demo", model.ErrComposeProjectAbsent)
+	tests := []struct {
+		name  string
+		setup func(svc *mockService)
+		call  func(h *MCPHandler) error
+	}{
+		{
+			name: "savepoint_create",
+			setup: func(svc *mockService) {
+				svc.On("CreateSavepoint", mock.Anything, model.CreateSavepointRequest{}).
+					Return(model.Savepoint{}, absent).Once()
+			},
+			call: func(h *MCPHandler) error {
+				_, _, err := h.createSavepointMCP(context.Background(), nil, createInput{ComposeProject: "demo"})
+				return err
+			},
+		},
+		{
+			name: "compose_generate",
+			setup: func(svc *mockService) {
+				svc.On("GenerateCompose", mock.Anything, model.GenerateComposeRequest{}).
+					Return(model.GenerateComposeResponse{}, absent).Once()
+			},
+			call: func(h *MCPHandler) error {
+				_, _, err := h.generateComposeMCP(context.Background(), nil, composeGenerateInput{ComposeProject: "demo"})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			tt.setup(svc)
+			h := NewMCPHandler(MCPFactories{
+				Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
+					return svc, func() {}, nil
+				},
+				Tools: func(context.Context, string) (MCPToolsService, func(), error) {
+					return svc, func() {}, nil
+				},
+			}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+
+			// Act
+			err := tt.call(h)
+
+			// Assert
+			require.ErrorIs(t, err, model.ErrComposeProjectAbsent)
+			assert.ErrorContains(t, err, "the compose_project argument")
+			svc.AssertExpectations(t)
+		})
+	}
 }
 
 // dry_run left out reports only; false reaches the request and deletes. A gc that fails past a
@@ -740,7 +807,7 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 			defer cancelCall()
 			go func() {
 				_, _ = cs.CallTool(callCtx, &mcpsdk.CallToolParams{
-					Name: "rollback", Arguments: map[string]any{"project": "demo", "ref": "latest"},
+					Name: "rollback", Arguments: map[string]any{"compose_project": "demo", "ref": "latest"},
 				})
 			}()
 			<-started
@@ -764,7 +831,7 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 
 			if tt.wantServing {
 				_, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{
-					Name: "savepoint_list", Arguments: map[string]any{"project": "demo"},
+					Name: "savepoint_list", Arguments: map[string]any{"compose_project": "demo"},
 				})
 				require.NoError(t, err, "a cancelled call leaves the server serving")
 				_ = cs.Close()

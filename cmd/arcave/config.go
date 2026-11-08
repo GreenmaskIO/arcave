@@ -41,17 +41,29 @@ import (
 // anything.
 var cfgViper = viper.New()
 
-// encryptionKeyEnv is the environment variable encryption.key is read from.
-const encryptionKeyEnv = "ARCAVE_ENCRYPTION_KEY"
+const (
+	// encryptionKeyEnv is the environment variable encryption.key is read from.
+	encryptionKeyEnv = "ARCAVE_ENCRYPTION_KEY"
+	// envPrefix opens every ARCAVE_<KEY> variable.
+	envPrefix = "ARCAVE"
+)
+
+// envKeyReplacer maps a config key's dots to a variable's underscores.
+var envKeyReplacer = strings.NewReplacer(".", "_")
 
 // setupViper points viper at configPath and lets ARCAVE_<KEY> environment variables
 // override it, with dots mapped to underscores (ARCAVE_LOG_LEVEL feeds "log.level").
 func setupViper(v *viper.Viper, configPath string) {
 	v.SetConfigFile(configPath)
 	v.SetConfigType("yaml")
-	v.SetEnvPrefix("ARCAVE")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.SetEnvPrefix(envPrefix)
+	v.SetEnvKeyReplacer(envKeyReplacer)
 	v.AutomaticEnv()
+}
+
+// newKeyEnv is the variable setupViper reads key from: ARCAVE_LOG_LEVEL for log.level.
+func newKeyEnv(key string) string {
+	return envPrefix + "_" + strings.ToUpper(envKeyReplacer.Replace(key))
 }
 
 // resolveConfig reads the config file (if present) and hands the merged sources to

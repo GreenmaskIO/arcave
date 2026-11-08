@@ -156,7 +156,7 @@ func TestMCP_InterruptedRollback(t *testing.T) {
 			app := env.in(t, model.DefaultSession)
 			app.write(t, app.replicas(t)[0], "v1")
 			srv := startMCPServer(t, env)
-			callTool[model.Savepoint](t, srv.cs, "savepoint_create", map[string]any{"project": env.project, "name": "v1"})
+			callTool[model.Savepoint](t, srv.cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "v1"})
 			app.write(t, app.replicas(t)[0], "v2")
 
 			results := make(chan *mcpsdk.CallToolResult, 1)
@@ -164,7 +164,7 @@ func TestMCP_InterruptedRollback(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), mcpCallTimeout)
 				defer cancel()
 				res, _ := srv.cs.CallTool(ctx, &mcpsdk.CallToolParams{
-					Name: "rollback", Arguments: map[string]any{"project": env.project, "ref": "v1"},
+					Name: "rollback", Arguments: map[string]any{"compose_project": env.project, "ref": "v1"},
 				})
 				results <- res
 			}()

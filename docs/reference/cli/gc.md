@@ -23,7 +23,7 @@ arcave gc [--dry-run] [--session <session>] [--kind <kind>…] [flags]
 
 gc deletes every kind of data it finds: savepoint directories, the safety snapshots past [the retention](../configuration.md#gc), stored images and their layers, `cdc` snapshots, and the layer tags rollbacks left in Docker. gc asks nothing before it deletes: run `arcave gc --dry-run` first to see what will go.
 
-gc stops nothing. It holds the project lock for its whole run, so it refuses to run while another arcave command in the project is working. It also holds the session's lock in the store, which it waits for as every command does. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
+gc stops nothing. It holds the project lock for its whole run, so it refuses to run while another arcave command in the project is working. It also holds the session's lock in the store, which it waits for as every command does. gc works on one session: the one `--session` names, or the current one. It looks at every compose project in that session, so it refuses `-p`. It ignores `ARCAVE_COMPOSE_PROJECT_NAME`, which you may have exported for the savepoint commands. Only `restored-layers` and `deduplicated-volumes` need the Docker daemon: the second runs restic in it.
 
 ## Flags
 

@@ -42,7 +42,7 @@ type MCPSavepointService interface {
 // MCPSavepointServiceFactory builds the workflows for one compose project in the named session
 // ("" is the current one) plus their release.
 type MCPSavepointServiceFactory func(
-	ctx context.Context, project, session string,
+	ctx context.Context, composeProject, session string,
 ) (svc MCPSavepointService, release func(), err error)
 
 // MCPSavepointStoreService is the MCP adapter's view of the savepoint workflows over the store alone.
@@ -53,7 +53,7 @@ type MCPSavepointStoreService interface {
 
 // MCPSavepointStoreServiceFactory is MCPSavepointServiceFactory for the workflows over the store alone.
 type MCPSavepointStoreServiceFactory func(
-	ctx context.Context, project, session string,
+	ctx context.Context, composeProject, session string,
 ) (svc MCPSavepointStoreService, release func(), err error)
 
 // MCPSessionService is the MCP adapter's view of the session commands.
@@ -76,7 +76,7 @@ type MCPToolsService interface {
 
 // MCPToolsServiceFactory builds the tools commands for one compose project, plus the release the
 // tool call invokes on return; they open no store and resolve no session.
-type MCPToolsServiceFactory func(ctx context.Context, project string) (svc MCPToolsService, release func(), err error)
+type MCPToolsServiceFactory func(ctx context.Context, composeProject string) (svc MCPToolsService, release func(), err error)
 
 // MCPGCService is the MCP adapter's view of gc.
 type MCPGCService interface {
@@ -123,11 +123,11 @@ func NewMCPHandler(
 	}
 }
 
-// openSavepointService builds the workflows for project in session, else in the pinned or current session.
+// openSavepointService builds the workflows for composeProject in session, else in the pinned or current session.
 func (h *MCPHandler) openSavepointService(
-	ctx context.Context, project, session string,
+	ctx context.Context, composeProject, session string,
 ) (MCPSavepointService, func(), error) {
-	svc, release, err := h.factories.Savepoint(ctx, project, cmp.Or(session, h.pinRef()))
+	svc, release, err := h.factories.Savepoint(ctx, composeProject, cmp.Or(session, h.pinRef()))
 	if err != nil {
 		return nil, nil, mcpError(err)
 	}
@@ -136,9 +136,9 @@ func (h *MCPHandler) openSavepointService(
 
 // openSavepointStoreService is openSavepointService for a tool that reads or deletes in the store alone.
 func (h *MCPHandler) openSavepointStoreService(
-	ctx context.Context, project, session string,
+	ctx context.Context, composeProject, session string,
 ) (MCPSavepointStoreService, func(), error) {
-	svc, release, err := h.factories.SavepointStore(ctx, project, cmp.Or(session, h.pinRef()))
+	svc, release, err := h.factories.SavepointStore(ctx, composeProject, cmp.Or(session, h.pinRef()))
 	if err != nil {
 		return nil, nil, mcpError(err)
 	}
@@ -224,11 +224,11 @@ const (
 
 // createInput is savepoint_create's input schema.
 type createInput struct {
-	Project     string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
-	Session     string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
-	Name        string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by arcave"`
-	Description string `json:"description,omitempty" jsonschema:"what this savepoint captures, e.g. the change it is being taken before"`
-	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
+	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	Session        string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
+	Name           string `json:"name,omitempty" jsonschema:"a short name for the savepoint, used to refer to it later; ids are assigned by arcave"`
+	Description    string `json:"description,omitempty" jsonschema:"what this savepoint captures, e.g. the change it is being taken before"`
+	WaitTimeout    string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
 }
 
 // createSavepoint snapshots every stateful mount in the project.
@@ -237,7 +237,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
-	svc, release, err := h.openSavepointService(ctx, in.Project, in.Session)
+	svc, release, err := h.openSavepointService(ctx, in.ComposeProject, in.Session)
 	if err != nil {
 		return nil, model.Savepoint{}, err
 	}
@@ -249,7 +249,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 		WaitTimeout: waitTimeout,
 	})
 	if err != nil {
-		return nil, model.Savepoint{}, mcpError(composeProjectAbsentError(err, "the project argument"))
+		return nil, model.Savepoint{}, mcpError(composeProjectAbsentError(err, "the compose_project argument"))
 	}
 	return nil, savepoint, nil
 }
@@ -276,7 +276,7 @@ type listOutput struct {
 // listSavepointInput is list's input schema — one flag, and the tool is
 // otherwise argument-free.
 type listSavepointInput struct {
-	Project                string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	ComposeProject         string `json:"compose_project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
 	Session                string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	IncludeSafetySnapshots bool   `json:"include_safety_snapshots,omitempty" jsonschema:"also list the safety snapshots a rollback commits for its own undo; hidden by default"`
 	Sort                   string `json:"sort,omitempty" jsonschema:"desc (newest first, the default) or asc"`
@@ -289,7 +289,7 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 	if err != nil {
 		return nil, listOutput{}, err
 	}
-	svc, release, err := h.openSavepointStoreService(ctx, in.Project, in.Session)
+	svc, release, err := h.openSavepointStoreService(ctx, in.ComposeProject, in.Session)
 	if err != nil {
 		return nil, listOutput{}, err
 	}
@@ -310,18 +310,18 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 // removeSavepointInput selects savepoints to remove, either by explicit refs or by
 // retention rules (the two modes are mutually exclusive).
 type removeSavepointInput struct {
-	Project      string   `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
-	Session      string   `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
-	Refs         []string `json:"refs,omitempty" jsonschema:"savepoints to delete, each by id or name; cannot be combined with the retention fields"`
-	RetainRecent int      `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest"`
-	RetainFor    string   `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
-	BeforeDate   string   `json:"before_date,omitempty" jsonschema:"delete savepoints created before this RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z"`
-	DryRun       bool     `json:"dry_run,omitempty" jsonschema:"report what would be deleted without deleting anything"`
+	ComposeProject string   `json:"compose_project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	Session        string   `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
+	Refs           []string `json:"refs,omitempty" jsonschema:"savepoints to delete, each by id or name; cannot be combined with the retention fields"`
+	RetainRecent   int      `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest"`
+	RetainFor      string   `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
+	BeforeDate     string   `json:"before_date,omitempty" jsonschema:"delete savepoints created before this RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z"`
+	DryRun         bool     `json:"dry_run,omitempty" jsonschema:"report what would be deleted without deleting anything"`
 }
 
 // removeSavepoints deletes the selected savepoints and reports what went.
 func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in removeSavepointInput) (*mcpsdk.CallToolResult, model.RemoveResult, error) {
-	svc, release, err := h.openSavepointStoreService(ctx, in.Project, in.Session)
+	svc, release, err := h.openSavepointStoreService(ctx, in.ComposeProject, in.Session)
 	if err != nil {
 		return nil, model.RemoveResult{}, err
 	}
@@ -342,10 +342,10 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 
 // rollbackInput is rollback's input schema.
 type rollbackInput struct {
-	Project     string `json:"project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
-	Session     string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
-	Ref         string `json:"ref" jsonschema:"the savepoint to restore: its id, its name, or the literal 'latest'"`
-	WaitTimeout string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
+	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
+	Session        string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
+	Ref            string `json:"ref" jsonschema:"the savepoint to restore: its id, its name, or the literal 'latest'"`
+	WaitTimeout    string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy on restart, e.g. 2m or 90s; omit for the project's default"`
 	// A pointer: an omitted field is the project's default, not false.
 	SafetySnapshot *bool `json:"safety_snapshot,omitempty" jsonschema:"whether to capture the live state first, so the rollback can be undone; omit for the project's default"`
 }
@@ -364,7 +364,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	if err != nil {
 		return nil, model.RollbackResult{}, err
 	}
-	svc, release, err := h.openSavepointService(ctx, in.Project, in.Session)
+	svc, release, err := h.openSavepointService(ctx, in.ComposeProject, in.Session)
 	if err != nil {
 		return nil, model.RollbackResult{}, err
 	}
@@ -380,8 +380,8 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 
 // composeGenerateInput is compose_generate's input schema.
 type composeGenerateInput struct {
-	Project       string `json:"project" jsonschema:"the docker compose project to generate the file of, as docker compose ls names it"`
-	AbsolutePaths bool   `json:"absolute_paths,omitempty" jsonschema:"keep every bind source absolute instead of relative to the project's working directory"`
+	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to generate the file of, as docker compose ls names it"`
+	AbsolutePaths  bool   `json:"absolute_paths,omitempty" jsonschema:"keep every bind source absolute instead of relative to the project's working directory"`
 }
 
 // composeGenerateOutput is the compose file and what it declares.
@@ -393,7 +393,7 @@ type composeGenerateOutput struct {
 
 // generateComposeMCP returns the compose file of a running compose project.
 func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in composeGenerateInput) (*mcpsdk.CallToolResult, composeGenerateOutput, error) {
-	svc, release, err := h.openToolsService(ctx, in.Project)
+	svc, release, err := h.openToolsService(ctx, in.ComposeProject)
 	if err != nil {
 		return nil, composeGenerateOutput{}, err
 	}
@@ -401,7 +401,7 @@ func (h *MCPHandler) generateComposeMCP(ctx context.Context, _ *mcpsdk.CallToolR
 
 	generated, err := svc.GenerateCompose(ctx, model.GenerateComposeRequest{AbsolutePaths: in.AbsolutePaths})
 	if err != nil {
-		return nil, composeGenerateOutput{}, composeProjectAbsentError(err, "the project argument")
+		return nil, composeGenerateOutput{}, composeProjectAbsentError(err, "the compose_project argument")
 	}
 	return nil, composeGenerateOutput{ComposeProject: generated.ComposeProject, Services: generated.Services, Spec: string(generated.Spec)}, nil
 }
@@ -604,9 +604,9 @@ func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService,
 	return svc, release, nil
 }
 
-// openToolsService builds the tools commands for project, for one tool call.
-func (h *MCPHandler) openToolsService(ctx context.Context, project string) (MCPToolsService, func(), error) {
-	svc, release, err := h.factories.Tools(ctx, project)
+// openToolsService builds the tools commands for composeProject, for one tool call.
+func (h *MCPHandler) openToolsService(ctx context.Context, composeProject string) (MCPToolsService, func(), error) {
+	svc, release, err := h.factories.Tools(ctx, composeProject)
 	if err != nil {
 		return nil, nil, mcpError(err)
 	}

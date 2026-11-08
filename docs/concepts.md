@@ -55,14 +55,14 @@ An explicit id still reaches it. That asymmetry is the point: rolling back to a 
 
 Two different things, and conflating them is the most common source of confusion.
 
-**The compose project** is what arcave acts on — what `docker compose ls` lists. You name it per invocation with `-p/--project-name` or `ARCAVE_PROJECT_NAME`. It is deliberately **not** a config key: one directory may hold several compose projects, and a persisted name would pin arcave to one of them.
+**The compose project** is what arcave acts on — what `docker compose ls` lists. You name it per invocation with `-p/--project-name` or `ARCAVE_COMPOSE_PROJECT_NAME`. It is deliberately **not** a config key: one directory may hold several compose projects, and a persisted name would pin arcave to one of them.
 
 **The arcave project** is the *storage tenant* — `project.name` in `.arcave/config.yaml`. It scopes the savepoint store, so several compose projects can share one configured storage path without colliding.
 
 They are frequently the same string. They do not have to be.
 
 :::warning
-`ARCAVE_PROJECT_NAME` sets both. It is read directly as the compose project's name, and viper also maps it onto the `project.name` config key. Exporting it therefore retargets the storage tenant as well — see [Environment variables](reference/environment_variables.md).
+`ARCAVE_PROJECT_NAME` is the `project.name` config key, the storage tenant, not the compose project: exporting it retargets the store. The compose project's variable is `ARCAVE_COMPOSE_PROJECT_NAME` — see [Environment variables](reference/environment_variables.md).
 :::
 
 ## Session

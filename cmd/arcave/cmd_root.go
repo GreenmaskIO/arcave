@@ -31,8 +31,9 @@ import (
 )
 
 const (
-	// projectNameEnv is the environment counterpart of -p/--project-name.
-	projectNameEnv = "ARCAVE_PROJECT_NAME"
+	// composeProjectEnv is the environment counterpart of -p/--project-name; ARCAVE_PROJECT_NAME is
+	// the config key project.name.
+	composeProjectEnv = "ARCAVE_COMPOSE_PROJECT_NAME"
 	// sessionEnv is the environment counterpart of --session.
 	sessionEnv = "ARCAVE_SESSION"
 )
@@ -46,9 +47,9 @@ var (
 	configFound    bool          // whether .arcave/config.yaml existed
 	rootConfigFile string        // the --config flag's target, read before projectCfg exists
 
-	// projectName is the compose project every project-bound command operates on. It
+	// composeProjectFlag is the compose project every project-bound command operates on. It
 	// is no config key: one project directory may hold several compose projects.
-	projectName string
+	composeProjectFlag string
 	// sessionRef names the session, by id or name, every project-bound command works in;
 	// empty is the current session, else model.DefaultSession.
 	sessionRef string
@@ -112,19 +113,7 @@ func initRoot(cmd *cobra.Command) error {
 	}
 	setupViper(cfgViper, configPath)
 
-	// The flag feeds no config key, so viper never reads the environment for it.
-	if projectName == "" {
-		projectName = os.Getenv(projectNameEnv)
-	}
-	if sessionRef == "" {
-		sessionRef = os.Getenv(sessionEnv)
-	}
-	if progressMode == "" {
-		progressMode = os.Getenv(progressEnv)
-	}
-	if resultFormat == "" {
-		resultFormat = os.Getenv(formatEnv)
-	}
+	readFlagEnvs()
 
 	if isInitCommand {
 		projectCfg, configFound, err = resolveWithoutFile(cfgViper, projectRoot, configPath)
@@ -146,7 +135,7 @@ func initRoot(cmd *cobra.Command) error {
 	}
 	result := resultOptions{
 		format:         format,
-		composeProject: projectName,
+		composeProject: composeProjectFlag,
 		session:        sessionRef,
 		profile:        colorprofile.Detect(os.Stdout, os.Environ()),
 	}
@@ -166,6 +155,27 @@ func initRoot(cmd *cobra.Command) error {
 	utils.BridgeLogrus(logger, logger.GetLevel())
 	warnIgnoredCDCKeys(logger, projectCfg.Backends.CDC)
 	return nil
+}
+
+// flagEnvs pairs each flag that feeds no config key with its environment counterpart: viper never
+// reads the environment for them.
+var flagEnvs = []struct {
+	value *string
+	env   string
+}{
+	{value: &composeProjectFlag, env: composeProjectEnv},
+	{value: &sessionRef, env: sessionEnv},
+	{value: &progressMode, env: progressEnv},
+	{value: &resultFormat, env: formatEnv},
+}
+
+// readFlagEnvs fills every flag of flagEnvs left empty from its environment variable.
+func readFlagEnvs() {
+	for _, flagEnv := range flagEnvs {
+		if *flagEnv.value == "" {
+			*flagEnv.value = os.Getenv(flagEnv.env)
+		}
+	}
 }
 
 // warnIgnoredCDCKeys warns, once per run, of the tcp transport's keys set under another.
@@ -191,10 +201,10 @@ func requireConfig() error {
 
 // requireComposeProject is the compose project -p names; a command bound to one gets its name here.
 func requireComposeProject() (model.DockerComposeProjectName, error) {
-	if projectName == "" {
-		return "", fmt.Errorf("no compose project named: pass -p/--project-name, or set %s", projectNameEnv)
+	if composeProjectFlag == "" {
+		return "", fmt.Errorf("no compose project named: pass -p/--project-name, or set %s", composeProjectEnv)
 	}
-	return model.DockerComposeProjectName(projectName), nil
+	return model.DockerComposeProjectName(composeProjectFlag), nil
 }
 
 // resolveSession turns a --session value into the id of a session that exists, for a command that
@@ -218,8 +228,8 @@ func init() {
 	persistentFlags := rootCmd.PersistentFlags()
 	persistentFlags.StringVar(&rootConfigFile, "config", "", "config file path")
 	// Unbound, like --config: it steers one run rather than describing the project.
-	persistentFlags.StringVarP(&projectName, "project-name", "p", "",
-		fmt.Sprintf("Docker Compose project to operate on, as 'docker compose ls' names it (env %s)", projectNameEnv))
+	persistentFlags.StringVarP(&composeProjectFlag, "project-name", "p", "",
+		fmt.Sprintf("Docker Compose project to operate on, as 'docker compose ls' names it (env %s)", composeProjectEnv))
 	persistentFlags.StringVar(&sessionRef, "session", "",
 		fmt.Sprintf("Session to work in, by name or id (default: the current session, see 'arcave session set', else %q; env %s)",
 			model.DefaultSessionName, sessionEnv))

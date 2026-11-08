@@ -1,7 +1,7 @@
 ---
 title: Environment variables
-description: The ARCAVE_ variables arcave reads — every config key has one — the two different things ARCAVE_PROJECT_NAME names, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS and ARCAVE_ENCRYPTION_KEY.
-keywords: [arcave environment variables, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS, ARCAVE_ENCRYPTION_KEY, config keys, docker compose]
+description: The ARCAVE_ variables arcave reads — every config key has one — ARCAVE_COMPOSE_PROJECT_NAME, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS and ARCAVE_ENCRYPTION_KEY.
+keywords: [arcave environment variables, ARCAVE_COMPOSE_PROJECT_NAME, ARCAVE_PROJECT_NAME, ARCAVE_SESSION, ARCAVE_FORMAT, ARCAVE_PROGRESS, ARCAVE_ENCRYPTION_KEY, config keys, docker compose]
 ---
 
 # Environment variables
@@ -18,26 +18,25 @@ ARCAVE_SNAPSHOT_BACKEND=cdc arcave -p myapp savepoint create nightly
 
 No variable reaches the file `arcave init` writes — it is a template of the defaults and `--name`; `ARCAVE_LOG_LEVEL` and `ARCAVE_LOG_FORMAT` steer only its own log.
 
-## `ARCAVE_PROJECT_NAME`
+## `ARCAVE_COMPOSE_PROJECT_NAME`
 
-This one variable names two different things.
+The compose project `savepoint create`, `savepoint list`, `savepoint remove`, `rollback` and `tools generate-compose` act on — the same thing `-p/--project-name` names, as `docker compose ls` shows it, and beaten by it. It is not a config key: one directory may hold several compose projects. `gc` ignores it, since it covers every compose project of a session.
 
-* **The compose project**, which `savepoint create`, `savepoint list`, `savepoint remove` and `rollback` act on — the same thing `-p/--project-name` names, as `docker compose ls` shows it.
-* **The storage tenant** `project.name`, the segment of the store path that keeps two projects sharing one storage location apart.
-
-They are usually the same string, and then this is invisible. When they must differ, pass `-p` on the command line and leave the variable unset:
-
-```shell title="One compose project, one tenant — the ordinary case"
-export ARCAVE_PROJECT_NAME=myapp
+```shell title="Name the compose project once per shell"
+export ARCAVE_COMPOSE_PROJECT_NAME=myapp
 arcave savepoint create nightly
 ```
 
 ```shell title="Two compose projects under one tenant"
-arcave -p myapp-blue savepoint create nightly
-arcave -p myapp-green savepoint create nightly
+ARCAVE_COMPOSE_PROJECT_NAME=myapp-blue arcave savepoint create nightly
+ARCAVE_COMPOSE_PROJECT_NAME=myapp-green arcave savepoint create nightly
 ```
 
-Both compose projects store under the tenant `project.name` from the config file, in [store roots](storage_layout.md) that differ in their last segment. Exporting `ARCAVE_PROJECT_NAME=myapp-blue` instead would have moved the tenant too, and the green project's savepoints would have gone somewhere else.
+Both compose projects store under the tenant `project.name` from the config file, in [store roots](storage_layout.md) that differ in their last segment.
+
+## `ARCAVE_PROJECT_NAME`
+
+The storage tenant `project.name`, by the rule every config key follows: the segment of the store path that keeps two projects sharing one storage location apart. It names no compose project. Exporting it moves every command that opens the store — the `session` commands and `gc` included — to another tenant, where the savepoints taken under the old one are not seen.
 
 ## `ARCAVE_SESSION`
 

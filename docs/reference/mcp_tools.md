@@ -20,7 +20,7 @@ Captures a savepoint. The services are stopped for the capture and started again
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose project, as `docker compose ls` names it. |
+| `compose_project` | yes | The compose project, as `docker compose ls` names it. |
 | `session` | no | The session to work in for this call only. |
 | `name` | no | A short name to refer to the savepoint by. Ids are assigned by arcave. |
 | `description` | no | What this savepoint is being taken before. |
@@ -52,7 +52,7 @@ Reads the store. Stops nothing, and takes no lock.
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose project. |
+| `compose_project` | yes | The compose project. |
 | `session` | no | The session to work in for this call only. |
 | `include_safety_snapshots` | no | Also list the safety snapshots a rollback commits of the live state before it overwrites it. Hidden by default. |
 | `sort` | no | `desc` (the default) lists the newest first, `asc` the oldest. Any other value is refused. |
@@ -75,7 +75,7 @@ Deletes savepoints and the data they hold. Permanent.
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose project. |
+| `compose_project` | yes | The compose project. |
 | `session` | no | The session to work in for this call only. |
 | `refs` | no | Savepoints to delete, each by id or name. Cannot be combined with the retention fields. |
 | `retain_recent` | no | Keep this many newest savepoints and delete the rest. |
@@ -100,7 +100,7 @@ Returns the environment to a savepoint. Destructive: every volume it covers is o
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose project. |
+| `compose_project` | yes | The compose project. |
 | `session` | no | The session to work in for this call only. |
 | `ref` | yes | The savepoint to return to: its id, its name, or the literal `latest`. |
 | `wait_timeout` | no | How long to wait for services to become healthy on restart. Omit for the project's own bound. |
@@ -202,7 +202,7 @@ this server is pinned to session "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31" by --ses
 
 | Argument | Required | Description |
 |---|---|---|
-| `project` | yes | The compose project to generate the file of. |
+| `compose_project` | yes | The compose project to generate the file of. |
 | `absolute_paths` | no | Keep every bind source absolute instead of relative to the compose project's working directory. |
 
 Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose file, as YAML>"}`. Read-only, and works in no session: see [`arcave tools generate-compose`](cli/tools_generate_compose.md). The file carries every environment value the containers run with, secrets included.

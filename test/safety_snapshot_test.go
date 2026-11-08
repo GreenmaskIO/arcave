@@ -237,12 +237,12 @@ func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	cs, err := client.Connect(env.ctx, &mcpsdk.CommandTransport{Command: command}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cs.Close() })
-	callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"project": env.project, "name": "v1"})
+	callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "v1"})
 
 	// Act
-	byDefault := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{"project": env.project, "ref": "v1"})
+	byDefault := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{"compose_project": env.project, "ref": "v1"})
 	asked := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{
-		"project": env.project, "ref": "v1", "safety_snapshot": true,
+		"compose_project": env.project, "ref": "v1", "safety_snapshot": true,
 	})
 
 	// Assert

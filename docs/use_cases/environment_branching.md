@@ -14,7 +14,7 @@ Branch your environment roughly the way you branch your code: fork a line off a 
 
 In arcave a branch is a [session](../sessions.md) — an independent line of savepoints. A fork copies every savepoint of the session it starts from, and nothing written on one line reaches the other. It is not a copy-on-write clone and there is no second environment running beside the first — but for the thing developers actually want from database branching on a laptop, it gets most of the way there with nothing but Docker.
 
-The commands below assume the compose project is named in the shell, `export ARCAVE_PROJECT_NAME=myapp`, or with `-p myapp` on each `savepoint` and `rollback` command.
+The commands below assume the compose project is named in the shell, `export ARCAVE_COMPOSE_PROJECT_NAME=myapp`, or with `-p myapp` on each `savepoint` and `rollback` command.
 
 ## The workflow
 

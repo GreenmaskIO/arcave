@@ -197,7 +197,7 @@ Neither is a default. A `remove` with nothing to go on would be a command that d
 #!/usr/bin/env bash
 set -euo pipefail
 
-export ARCAVE_PROJECT_NAME=arcave-demo
+export ARCAVE_COMPOSE_PROJECT_NAME=arcave-demo
 
 arcave --log-format json savepoint remove --retain-for 7d --retain-recent 5
 arcave --log-format json gc

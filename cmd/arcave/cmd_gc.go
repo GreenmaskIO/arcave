@@ -46,7 +46,7 @@ func runGC(cmd *cobra.Command, _ []string) error {
 	if err := requireConfig(); err != nil {
 		return err
 	}
-	// The environment's ARCAVE_PROJECT_NAME is kept for the savepoint commands and ignored here.
+	// The environment's ARCAVE_COMPOSE_PROJECT_NAME is kept for the savepoint commands and ignored here.
 	if cmd.Flags().Changed("project-name") {
 		return errors.New("gc works on a session, every compose project in it: drop -p/--project-name")
 	}
