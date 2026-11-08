@@ -22,6 +22,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/cli"
 )
 
+// rollbackSafetySnapshotFlag turns the safety snapshot on; its no- negation turns it off.
+const rollbackSafetySnapshotFlag = "safety-snapshot"
+
 var rollbackCmd = &cobra.Command{
 	Use:   "rollback [savepoint-id|name|latest]",
 	Short: "Restore the environment to a specified savepoint",
@@ -56,8 +59,11 @@ func runRollback(cmd *cobra.Command, args []string) error {
 func init() {
 	// The wait before a revert is compose.wait_timeout, set by rootCmd's persistent --wait-timeout.
 	flags := rollbackCmd.Flags()
-	flags.Bool("safety-snapshot", true,
-		"Capture the live volumes and writable layers first, so the rollback can be undone; false captures neither: faster, but after a failure the same rollback must be run again")
-	viperBind(cfgViper, flags, map[string]string{"safety-snapshot": "rollback.safety_snapshot"})
+	flags.Bool(rollbackSafetySnapshotFlag, true,
+		"Capture the live volumes and writable layers first, so the rollback can be undone (the default; overrides rollback.safety_snapshot: false)")
+	flags.Bool(negatedFlagName(rollbackSafetySnapshotFlag), false,
+		"Capture neither the live volumes nor the writable layers: faster, but nothing can undo the rollback, and after a failure the same rollback must be run again")
+	viperBindToggle(cfgViper, flags, rollbackSafetySnapshotFlag, "rollback.safety_snapshot")
+	rollbackCmd.MarkFlagsMutuallyExclusive(rollbackSafetySnapshotFlag, negatedFlagName(rollbackSafetySnapshotFlag))
 	rootCmd.AddCommand(rollbackCmd)
 }

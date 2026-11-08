@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **`arcave rollback --no-safety-snapshot`.** Skipping the safety snapshot is now a plain switch. `--safety-snapshot` takes one even when `rollback.safety_snapshot: false` is set in the config, and the two flags cannot be passed together.
+
 ## v0.1.0-alpha.4 — 2026-11-08
 
 Run arcave on Podman, undo a rollback, and skip the safety snapshot when a rollback has to be fast. arcave now drives compose 5.7.

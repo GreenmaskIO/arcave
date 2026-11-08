@@ -86,12 +86,12 @@ Not before. Until then it is the last copy of the pre-rollback state.
 
 | Phase | What it means |
 |---|---|
-| `recreating` | Died between the teardown and the containers existing again. The volumes are untouched. Under `--safety-snapshot=false` the teardown itself may have failed, with the project still running: if `docker compose ps` shows it whole, removing `.arcave/inflight.json` keeps it. |
+| `recreating` | Died between the teardown and the containers existing again. The volumes are untouched. Under `--no-safety-snapshot` the teardown itself may have failed, with the project still running: if `docker compose ps` shows it whole, removing `.arcave/inflight.json` keeps it. |
 | `restoring` | Died while writing volumes. The environment is partly overwritten. |
 | `restore-done` | Every volume was written back; only the start did not finish. Starting the project and removing `.arcave/inflight.json` is enough, if that is what you want. A failed rollback of a project with no containers has removed what it created, so it reads `restoring` instead. |
 | `inconsistent` | The automatic replay failed too. The safety snapshot is retained and is the last copy of the pre-rollback state. |
 
-**A rollback that took no safety snapshot** — of a project that had no containers, never started or taken down, or one run with `--safety-snapshot=false` — has nothing to return to. The hint says so, and names the savepoint the rollback was applying:
+**A rollback that took no safety snapshot** — of a project that had no containers, never started or taken down, or one run with `--no-safety-snapshot` — has nothing to return to. The hint says so, and names the savepoint the rollback was applying:
 
 ```text
 … a rollback that took no safety snapshot was interrupted; volumes may be half-restored; recover with `arcave rollback --session 00000000-0000-0000-0000-000000000001 -p myapp 019e843e-1650-7000-8000-000000000000`

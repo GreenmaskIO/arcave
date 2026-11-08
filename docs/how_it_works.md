@@ -206,7 +206,7 @@ No rollback deletes its safety snapshot, whatever happens to it. The result of o
 
 Only [`arcave gc`](reference/cli/gc.md) retires them, past the newest [`gc.safety_snapshots.retain_recent`](reference/configuration.md#gc) of each compose project, and it runs only when you run it: until then every rollback leaves one more. `arcave savepoint remove <id>` drops one by hand.
 
-[`rollback.safety_snapshot: false`](reference/configuration.md#rollback), or `arcave rollback --safety-snapshot=false`, skips it whole, volumes and writable layers alike, for a rollback that needs to be fast and has nothing worth keeping. Nothing can undo that rollback, and a failure has nothing to replay: arcave leaves the project as the failure found it, with the marker standing, until you run the same rollback again.
+[`rollback.safety_snapshot: false`](reference/configuration.md#rollback), or `arcave rollback --no-safety-snapshot`, skips it whole, volumes and writable layers alike, for a rollback that needs to be fast and has nothing worth keeping. Nothing can undo that rollback, and a failure has nothing to replay: arcave leaves the project as the failure found it, with the marker standing, until you run the same rollback again.
 
 With the `cdc` backend the safety capture is an increment in the same per-volume repository, on the same host and the same path, which is exactly what restic picks a parent by. The undo therefore costs almost nothing. Retiring the safety snapshot leaves its restic snapshots in the repository, as `savepoint remove` does; the next [`arcave gc`](reference/cli/gc.md) forgets them and prunes what only they held.
 
