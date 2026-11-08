@@ -82,25 +82,6 @@ func TestResolveConfig(t *testing.T) {
 			},
 		},
 		{
-			name:      "the negation wins over the file and the variable",
-			file:      "rollback:\n  safety_snapshot: true\n",
-			env:       map[string]string{"ARCAVE_ROLLBACK_SAFETY_SNAPSHOT": "true"},
-			flags:     map[string]string{"no-safety-snapshot": "true"},
-			wantFound: true,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.True(t, cfg.Rollback.SkipSafetySnapshot())
-			},
-		},
-		{
-			name:      "the negation set false takes the snapshot",
-			file:      "rollback:\n  safety_snapshot: false\n",
-			flags:     map[string]string{"no-safety-snapshot": "false"},
-			wantFound: true,
-			verify: func(t *testing.T, _ string, cfg config.Config) {
-				assert.False(t, cfg.Rollback.SkipSafetySnapshot())
-			},
-		},
-		{
 			name: "reads the nested sections",
 			file: "project:\n  name: proj\n" +
 				"docker:\n  host: unix:///tmp/d.sock\n" +
@@ -390,9 +371,8 @@ func boundFlags(t *testing.T, v *viper.Viper) *pflag.FlagSet {
 	fs.Duration("stop-timeout", config.DefaultStopTimeout, "")
 	fs.String("compose-progress", config.ProgressLog, "")
 	fs.Bool("safety-snapshot", true, "")
-	fs.Bool("no-safety-snapshot", false, "")
-	viperBindToggle(v, fs, "safety-snapshot", "rollback.safety_snapshot")
 	viperBind(v, fs, map[string]string{
+		"safety-snapshot":  "rollback.safety_snapshot",
 		"log-level":        "log.level",
 		"log-format":       "log.format",
 		"wait-timeout":     "compose.wait_timeout",
