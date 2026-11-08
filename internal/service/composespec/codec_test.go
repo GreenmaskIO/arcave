@@ -230,6 +230,26 @@ func TestCodec_MarshalParse_SharedNamespaces(t *testing.T) {
 	assert.Equal(t, string(spec), string(again))
 }
 
+// A long value stays on one line: a fold would reflow a capture stamp across lines.
+func TestCodec_Marshal_DoesNotWrapLongValues(t *testing.T) {
+	// Arrange
+	const stamp = "false; origin=label; source=arcave.mounts.exclude=/src on service app, which the user wrote"
+	project := &types.Project{
+		Name: "demo",
+		Services: types.Services{"app": {
+			Name:          "app",
+			ContainerSpec: types.ContainerSpec{Image: "busybox", Labels: types.Labels{"io.arcave.capture.mount./src": stamp}},
+		}},
+	}
+
+	// Act
+	spec, err := NewCodec().Marshal(project)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Contains(t, string(spec), "io.arcave.capture.mount./src: "+stamp+"\n")
+}
+
 func TestCodec_Marshal_NoProject(t *testing.T) {
 	// Act
 	_, err := NewCodec().Marshal(nil)

@@ -109,6 +109,26 @@ func TestComposeFileCodec_Marshal_RelativeBinds(t *testing.T) {
 	assert.Equal(t, "/srv/demo/conf", project.Services["app"].Volumes[0].Source, "the input is not modified")
 }
 
+// A long value stays on one line: a fold would reflow a capture stamp across lines.
+func TestComposeFileCodec_Marshal_DoesNotWrapLongValues(t *testing.T) {
+	// Arrange
+	const stamp = "false; origin=label; source=arcave.mounts.exclude=/src on service app, which the user wrote"
+	project := &types.Project{
+		Name: "demo",
+		Services: types.Services{"app": {
+			Name:          "app",
+			ContainerSpec: types.ContainerSpec{Image: "busybox", Labels: types.Labels{"io.arcave.capture.mount./src": stamp}},
+		}},
+	}
+
+	// Act
+	spec, err := NewComposeFileCodec().Marshal(project)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Contains(t, string(spec), "io.arcave.capture.mount./src: "+stamp+"\n")
+}
+
 func TestComposeFileCodec_Marshal_NoProject(t *testing.T) {
 	// Act
 	_, err := NewComposeFileCodec().Marshal(nil)

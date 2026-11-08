@@ -50,7 +50,7 @@ func (s *ComposeFileCodec) Marshal(project *types.Project) ([]byte, error) {
 			composeFile.Extensions[key] = value
 		}
 	}
-	spec, err := composeFile.MarshalYAML()
+	spec, err := marshalYAML(&composeFile)
 	if err != nil {
 		return nil, fmt.Errorf("render compose file: %w", err)
 	}
