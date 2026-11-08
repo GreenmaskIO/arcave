@@ -90,7 +90,7 @@ declares, with no import; `cmd/arcave` wires the concrete types in.
 
 - `model`: domain types and sentinel errors. Imports no arcave package.
 - `repository`: storage CRUD, no business logic.
-- `client`: the outside world (Docker API, compose). Imports only `model`.
+- `client`: the outside world (Docker API, libpod, compose). Imports only `model`; `client/podman` also extends `client/docker`.
 - `service`: business logic. Reaches repositories and clients only through interfaces.
 - `cli`: adapters that parse input, call a service and print the result. Besides `model`, it
   imports only `config` and `utils`.

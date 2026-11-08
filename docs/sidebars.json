@@ -218,6 +218,11 @@
       "items": [
         {
           "type": "doc",
+          "id": "release_notes/arcave_0_1_0_alpha_4",
+          "label": "arcave 0.1.0-alpha.4"
+        },
+        {
+          "type": "doc",
           "id": "release_notes/arcave_0_1_0_alpha_3",
           "label": "arcave 0.1.0-alpha.3"
         },

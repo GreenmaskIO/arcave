@@ -76,7 +76,9 @@ trust.
 ### Rollback
 
 A rollback overwrites the project's volumes and recreates its containers. On a running
-project, arcave takes a safety snapshot first and reverts to it if the rollback fails.
+project, arcave takes a safety snapshot first, unless `rollback.safety_snapshot` is off, and
+reverts to it if the rollback fails. The snapshot stays in the store with what it captured
+until `arcave gc` retires it or `arcave savepoint remove` drops it.
 
 ### Local network services
 
