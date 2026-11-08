@@ -51,7 +51,9 @@ export ARCAVE_PROJECT_NAME=arcave-demo
 # 4. Write .arcave/config.yaml, then select the cdc backend in it: set
 #    `snapshot.backend: cdc`, by hand or with the line below (works with GNU
 #    and BSD sed). The backends.cdc defaults apply without being written out.
-#    .arcave/ is gitignored, so this is a step you run once per clone.
+#    .arcave/ is gitignored, so this is a step you run once per clone. A
+#    config an earlier arcave wrote may be refused: delete it and run this
+#    step again.
 ../../bin/arcave init
 sed -i.bak 's/backend: fullcopy/backend: cdc/' .arcave/config.yaml && rm .arcave/config.yaml.bak
 
@@ -76,8 +78,9 @@ proving arcave restored both named volumes and the anonymous volume together.
 ## How it works
 
 The store is `.arcave/storage/`, and everything this demo writes sits under
-`.arcave/storage/arcave/projects/arcave-demo/sessions/00000000-0000-0000-0000-000000000001/compose/arcave-demo/`
-— the arcave project, the `baseline` session, and the compose project. Below,
+`.arcave/storage/arcave/projects/demo/sessions/00000000-0000-0000-0000-000000000001/compose/arcave-demo/`
+— the arcave project (`init` names it after the directory), the `baseline`
+session, and the compose project. Below,
 `<root>` stands for that directory.
 
 - `arcave savepoint create` stops the services, then backs each volume up with
@@ -96,7 +99,9 @@ The store is `.arcave/storage/`, and everything this demo writes sits under
   rebuilds the containers from the savepoint's spec and layers, restores each
   volume and restarts. If a step fails or a service never comes up healthy, it
   replays the safety snapshot, so a failed rollback leaves the environment where
-  it started. On success the safety snapshot is dropped.
+  it started. On success the safety snapshot stays: rolling back to it undoes
+  the rollback, and `arcave gc` retires it past
+  `gc.safety_snapshots.retain_recent`.
 - cdc restores incrementally by default (`backends.cdc.restore_mode:
   incremental`): restic writes only what differs from the savepoint and deletes
   what the savepoint does not hold. Set it to `wipe` to clear each volume and
@@ -118,8 +123,9 @@ docker images 'arcave/*'              # the tags a rollback created; remove them
   in `docker-compose.yaml`.
 - Rollback is **destructive**: every volume it restores ends up exactly as the
   savepoint recorded it, so a change made after the savepoint is gone for good.
-- After a rollback each container runs on an `arcave/…:sp-<savepoint-id>-<rollback-id>` tag
-  holding its restored writable layer. A later `docker compose up` that
+- After a rollback each container runs on an `arcave/…:sp-<savepoint-id>` tag
+  holding its restored writable layer; `arcave gc` removes the tag once no
+  container uses it. A later `docker compose up` that
   recreates the containers puts them back on the compose file's images and drops
   those layers; roll back again to restore them.
 - The first `savepoint create` pulls `restic/restic:0.19.1` (the image
