@@ -46,7 +46,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	var opened closers
 	defer opened.release(ctx)
 
-	svc, err := openStatusService(ctx, projectRoot, projectCfg, composeProject, &opened)
+	svc, err := openStatusService(projectRoot, projectCfg, composeProject, &opened)
 	if err != nil {
 		return fmt.Errorf("init status dependencies: %w", err)
 	}

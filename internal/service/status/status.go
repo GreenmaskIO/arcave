@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+package status
 
 import (
 	"context"
@@ -23,6 +23,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/greenmaskio/storages"
+	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -46,14 +47,24 @@ type inflightMarkerReader interface {
 	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
 }
 
+// SessionReader lists an arcave project's committed sessions; the DI root opens one per store.
+type SessionReader interface {
+	ListSessions(ctx context.Context) ([]model.Session, error)
+}
+
+// currentSessionReader reads the current-session pointer.
+type currentSessionReader interface {
+	Get(ctx context.Context) (id model.SessionID, found bool, err error)
+}
+
 // SavepointLoader reads the records of a compose project's savepoints by id; the DI root opens one
 // per store.
 type SavepointLoader interface {
 	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
 }
 
-// StatusDeps are StatusService's collaborators.
-type StatusDeps struct {
+// Deps are Service's collaborators.
+type Deps struct {
 	ComposeContainers composeContainersReader
 	Inflight          inflightMarkerReader
 	// Current is the current-session pointer.
@@ -70,9 +81,9 @@ type StatusDeps struct {
 	ComposeProject model.DockerComposeProjectName
 }
 
-// StatusService reports what the daemon runs for one compose project. It takes no lock, writes
+// Service reports what the daemon runs for one compose project. It takes no lock, writes
 // nothing, and reads the store only to add to what the daemon's labels say.
-type StatusService struct {
+type Service struct {
 	composeContainers      composeContainersReader
 	inflight               inflightMarkerReader
 	current                currentSessionReader
@@ -83,9 +94,9 @@ type StatusService struct {
 	composeProject         model.DockerComposeProjectName
 }
 
-// NewStatusService builds a StatusService from deps.
-func NewStatusService(deps StatusDeps) *StatusService {
-	return &StatusService{
+// New builds a Service from deps.
+func New(deps Deps) *Service {
+	return &Service{
 		composeContainers:      deps.ComposeContainers,
 		inflight:               deps.Inflight,
 		current:                deps.Current,
@@ -114,7 +125,7 @@ type deployedRecord struct {
 // Status reports the compose project as the daemon runs it and what the store adds. An unreadable
 // daemon, or a session req names that does not exist, fails it; an unreadable store, current session
 // or marker returns it with model.ErrStatusPartial.
-func (s *StatusService) Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error) {
+func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error) {
 	var (
 		checkedAt        = time.Now().UTC()
 		containers       model.ComposeProjectContainers
@@ -151,6 +162,7 @@ func (s *StatusService) Status(ctx context.Context, req model.StatusRequest) (mo
 		Notices: newStatusNotices(statusFacts{
 			checkedAt:     checkedAt,
 			arcaveProject: s.arcaveProject,
+			ref:           req.Session,
 			state:         state,
 			marker:        marker,
 			deployed:      deployed,
@@ -167,7 +179,7 @@ func (s *StatusService) Status(ctx context.Context, req model.StatusRequest) (mo
 
 // readContainers reads the compose project's containers, again when one went between the listing
 // and its inspect, the only read that can miss: a rollback in flight removes and rebuilds them.
-func (s *StatusService) readContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
+func (s *Service) readContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
 	for attempt := 1; ; attempt++ {
 		containers, err := s.composeContainers.ReadContainers(ctx)
 		switch {
@@ -182,7 +194,7 @@ func (s *StatusService) readContainers(ctx context.Context) (model.ComposeProjec
 }
 
 // readInflightMarker reads this compose project's inflight marker; another's is not this one's.
-func (s *StatusService) readInflightMarker(ctx context.Context) (*model.InflightMarker, []model.StatusUnreadable) {
+func (s *Service) readInflightMarker(ctx context.Context) (*model.InflightMarker, []model.StatusUnreadable) {
 	marker, found, err := s.inflight.Get(ctx)
 	switch {
 	case err != nil:
@@ -199,7 +211,7 @@ func (s *StatusService) readInflightMarker(ctx context.Context) (*model.Inflight
 
 // readStoreView resolves the session the user works in and reads the deployed savepoint's record.
 // A ref naming no session is its error.
-func (s *StatusService) readStoreView(
+func (s *Service) readStoreView(
 	ctx context.Context, ref string, deployment *model.SavepointDeployment,
 ) (storeView, error) {
 	store, err := s.openArcaveProjectStore(ctx)
@@ -226,7 +238,7 @@ func (s *StatusService) readStoreView(
 
 // readResolvedSession resolves ref as every command does. A ref naming no session, or several, is
 // the user's to fix and the error; any other failure is one thing the status could not read.
-func (s *StatusService) readResolvedSession(
+func (s *Service) readResolvedSession(
 	ctx context.Context, sessions SessionReader, ref string,
 ) (*model.SessionRef, []model.StatusUnreadable, error) {
 	session, err := resolveSession(ctx, sessions, s.current, ref)
@@ -247,12 +259,66 @@ func (s *StatusService) readResolvedSession(
 	}
 }
 
+// resolveSession resolves ref over sessions and the pointer current: the session ref names, else
+// the current session, or the default when no pointer is set. A copy of core's.
+func resolveSession(
+	ctx context.Context, sessions SessionReader, current currentSessionReader, ref string,
+) (model.Session, error) {
+	if ref != "" {
+		listed, err := sessions.ListSessions(ctx)
+		if err != nil {
+			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
+		}
+		session, err := model.FindSessionByRef(listed, ref)
+		if err != nil {
+			return model.Session{}, err
+		}
+		logResolved(ctx, session, "ref", ref)
+		return session, nil
+	}
+	id, found, err := readCurrentSession(ctx, current)
+	if err != nil {
+		return model.Session{}, err
+	}
+	if !found {
+		logResolved(ctx, model.DefaultSessionRecord, "default", "")
+		return model.DefaultSessionRecord, nil
+	}
+	listed, err := sessions.ListSessions(ctx)
+	if err != nil {
+		return model.Session{}, fmt.Errorf("listing sessions: %w", err)
+	}
+	if session, found := model.FindSessionByID(listed, id.String()); found {
+		logResolved(ctx, session, "pointer", "")
+		return session, nil
+	}
+	return model.Session{}, fmt.Errorf("%w: %s, named by %s/current_session; "+
+		"run 'arcave session unset' or 'arcave session set <session>'", model.ErrCurrentSessionNotFound, id, model.StateDir)
+}
+
+// logResolved records which session a command works in and what named it: a ref, the pointer
+// or the default.
+func logResolved(ctx context.Context, session model.Session, by, ref string) {
+	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Str("name", session.Name).
+		Str("by", by).Str("ref", ref).Msg("session resolved")
+}
+
+// readCurrentSession reads the current-session pointer, naming the way out of an unreadable one.
+func readCurrentSession(ctx context.Context, current currentSessionReader) (model.SessionID, bool, error) {
+	id, found, err := current.Get(ctx)
+	if err != nil {
+		return model.SessionID{}, false, fmt.Errorf("%w; run 'arcave session unset' or 'arcave session set <session>'", err)
+	}
+	zerolog.Ctx(ctx).Debug().Bool("found", found).Str("session", id.String()).Msg("current-session pointer read")
+	return id, found, nil
+}
+
 // readDeployedRecord reads the deployed savepoint's record in its own session; a session removed
 // since holds none, so it reads missing. Another arcave project's store is not this one's to read.
-func (s *StatusService) readDeployedRecord(
+func (s *Service) readDeployedRecord(
 	ctx context.Context, store storages.Navigator, deployment *model.SavepointDeployment,
 ) deployedRecord {
-	if deployment == nil || deployment.ArcaveProject != s.arcaveProject {
+	if !s.readsRecordOf(deployment) {
 		return deployedRecord{}
 	}
 	savepoints, err := s.loadSavepoint(ctx, store, deployment.Session.ID, deployment.Savepoint.ID)
@@ -274,7 +340,7 @@ func (s *StatusService) readDeployedRecord(
 
 // loadSavepoint reads the record of savepoint id of the compose project in session; none when it
 // has no record.
-func (s *StatusService) loadSavepoint(
+func (s *Service) loadSavepoint(
 	ctx context.Context, store storages.Navigator, session model.SessionID, id model.SavepointID,
 ) ([]model.Savepoint, error) {
 	sessionStore, err := storefactory.Session(store, session)
@@ -294,11 +360,16 @@ func (s *StatusService) loadSavepoint(
 
 // newUnreadableRecord is the record of a deployment the store could not be read for; none for one of
 // another arcave project, whose record is not read either way.
-func (s *StatusService) newUnreadableRecord(deployment *model.SavepointDeployment) model.DeploymentRecord {
-	if deployment == nil || deployment.ArcaveProject != s.arcaveProject {
+func (s *Service) newUnreadableRecord(deployment *model.SavepointDeployment) model.DeploymentRecord {
+	if !s.readsRecordOf(deployment) {
 		return ""
 	}
 	return model.DeploymentRecordUnreadable
+}
+
+// readsRecordOf reports whether the status reads deployment's record: one of this arcave project.
+func (s *Service) readsRecordOf(deployment *model.SavepointDeployment) bool {
+	return deployment != nil && deployment.ArcaveProject == s.arcaveProject
 }
 
 func newStoreUnreadable(err error) model.StatusUnreadable {

@@ -75,6 +75,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/sessionlock"
+	"github.com/greenmaskio/arcave/internal/service/status"
 	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils"
@@ -548,9 +549,8 @@ func openComposeFileService(
 // openStatusService wires status for composeProject; the store opens lazily, so one that fails
 // only makes the status partial.
 func openStatusService(
-	ctx context.Context, projectPath string, cfg config.Config, composeProject model.DockerComposeProjectName,
-	opened *closers,
-) (*core.StatusService, error) {
+	projectPath string, cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
+) (*status.Service, error) {
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
 	}
@@ -560,7 +560,7 @@ func openStatusService(
 	if err != nil {
 		return nil, err
 	}
-	return core.NewStatusService(core.StatusDeps{
+	return status.New(status.Deps{
 		ComposeContainers: introspect.NewInspector(daemon.api, composeProject),
 		Inflight:          inflightrepo.New(projectPath),
 		Current:           currentsession.New(projectPath),
@@ -1022,12 +1022,12 @@ func openGCService(
 }
 
 // newSessionReader is the session repository of an arcave project's store, as a reader.
-func newSessionReader(store storages.Storager) core.SessionReader {
+func newSessionReader(store storages.Storager) status.SessionReader {
 	return sessionrepo.New(store)
 }
 
 // newSavepointLoader is the savepoint repository of a compose project's store, as status reads it.
-func newSavepointLoader(store storages.Storager) core.SavepointLoader {
+func newSavepointLoader(store storages.Storager) status.SavepointLoader {
 	return sprepo.New(store)
 }
 

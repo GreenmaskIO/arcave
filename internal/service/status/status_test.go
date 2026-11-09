@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+package status
 
 import (
 	"context"
@@ -43,6 +43,7 @@ var (
 	statusCheckedAt = time.Date(2026, 11, 7, 17, 14, 0, 0, time.UTC)
 	statusStarted   = time.Date(2026, 11, 7, 14, 2, 30, 0, time.UTC)
 	statusFeat      = model.Session{ID: model.SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x01}, Name: "feat"}
+	statusFeatTwin  = model.Session{ID: model.SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x02}, Name: "feat"}
 	statusDeployed  = model.Savepoint{
 		ID:             "019e843e-1650-7000-8000-000000000000",
 		Name:           "before-migration",
@@ -368,7 +369,7 @@ func TestNewComposeProjectState(t *testing.T) {
 	}
 }
 
-func TestStatusService_Status(t *testing.T) {
+func TestService_Status(t *testing.T) {
 	// Status reads the clock itself: a container's times are set off it, so an age reads the same
 	// however long the run takes.
 	now := time.Now().UTC()
@@ -394,7 +395,7 @@ func TestStatusService_Status(t *testing.T) {
 	}
 	safety := model.Savepoint{
 		ID: "019e8500-0000-7000-8000-000000000000", Name: "safety-snapshot-x",
-		Labels: newSafetySnapshotLabels(), CreatedAt: statusDeployed.CreatedAt.Add(time.Hour),
+		Labels: map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}, CreatedAt: statusDeployed.CreatedAt.Add(time.Hour),
 	}
 	tests := []struct {
 		name string
@@ -406,8 +407,10 @@ func TestStatusService_Status(t *testing.T) {
 		stored   []model.Savepoint
 		sessions []model.Session
 		pointer  *model.SessionID
-		ref      string
-		marker   *model.InflightMarker
+		// pointerErr is the current-session pointer's read failing.
+		pointerErr error
+		ref        string
+		marker     *model.InflightMarker
 		// markerErr is the inflight marker's read failing.
 		markerErr error
 		storeErr  error
@@ -416,6 +419,8 @@ func TestStatusService_Status(t *testing.T) {
 		savepointsErr error
 		verify        func(t *testing.T, status model.ComposeProjectStatus)
 		wantErr       error
+		// wantAmbiguous expects the error to name a session name several sessions carry.
+		wantAmbiguous bool
 	}{
 		{
 			name:   "a rollback deployed every container and the store holds it",
@@ -656,6 +661,56 @@ func TestStatusService_Status(t *testing.T) {
 			},
 		},
 		{
+			name:     "a session named by id on the request",
+			labels:   []map[string]string{baselineDeployment.Labels()},
+			state:    runningStateAt(started),
+			stored:   []model.Savepoint{statusDeployed},
+			sessions: []model.Session{statusFeat},
+			ref:      statusFeat.ID.String(),
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				assert.Equal(t, &model.SessionRef{ID: statusFeat.ID, Name: statusFeat.Name}, status.Session)
+			},
+		},
+		{
+			name:     "a session ref outranks the pointer",
+			labels:   []map[string]string{baselineDeployment.Labels()},
+			state:    runningStateAt(started),
+			stored:   []model.Savepoint{statusDeployed},
+			sessions: []model.Session{statusFeat},
+			pointer:  &statusFeat.ID,
+			ref:      model.DefaultSessionName,
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				assert.Equal(t, &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}, status.Session)
+			},
+		},
+		{
+			name:     "a session name two sessions carry is the user's error",
+			labels:   []map[string]string{baselineDeployment.Labels()},
+			state:    runningStateAt(started),
+			stored:   []model.Savepoint{statusDeployed},
+			sessions: []model.Session{statusFeat, statusFeatTwin},
+			ref:      statusFeat.Name,
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				assert.Equal(t, model.ComposeProjectStatus{}, status)
+			},
+			wantAmbiguous: true,
+		},
+		{
+			name:       "a pointer that cannot be read is partial",
+			labels:     []map[string]string{baselineDeployment.Labels()},
+			state:      runningStateAt(started),
+			stored:     []model.Savepoint{statusDeployed},
+			pointerErr: errors.New("current_session: not a session id"),
+			wantErr:    model.ErrStatusPartial,
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				assert.Nil(t, status.Session)
+				assert.Equal(t, []model.StatusUnreadable{{
+					Source: model.StatusUnreadableSession,
+					Error:  "current_session: not a session id; run 'arcave session unset' or 'arcave session set <session>'",
+				}}, status.Unreadable)
+			},
+		},
+		{
 			name:    "a session ref that names none is the user's error",
 			labels:  []map[string]string{baselineDeployment.Labels()},
 			state:   runningStateAt(started),
@@ -699,6 +754,22 @@ func TestStatusService_Status(t *testing.T) {
 					Source: model.StatusUnreadableSession,
 					Error:  "listing sessions: list failed",
 				}}, status.Unreadable)
+				assertNotice(t, status.Notices, model.NoticeCodeSessionUnresolved,
+					"the current session could not be resolved: listing sessions: list failed")
+			},
+		},
+		{
+			name:        "a session named on the request whose sessions cannot be listed names it",
+			labels:      []map[string]string{baselineDeployment.Labels()},
+			state:       runningStateAt(started),
+			stored:      []model.Savepoint{statusDeployed},
+			ref:         "feat",
+			sessionsErr: errors.New("list failed"),
+			wantErr:     model.ErrStatusPartial,
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				assert.Nil(t, status.Session)
+				assertNotice(t, status.Notices, model.NoticeCodeSessionUnresolved,
+					`session "feat" could not be resolved: listing sessions: list failed`)
 			},
 		},
 		{
@@ -758,10 +829,10 @@ func TestStatusService_Status(t *testing.T) {
 			} else {
 				marker.On("Get", mock.Anything).Return(nil, false, tt.markerErr).Once()
 			}
-			svc := NewStatusService(StatusDeps{
+			svc := New(Deps{
 				ComposeContainers: reader,
 				Inflight:          marker,
-				Current:           &fakePointer{id: tt.pointer},
+				Current:           &fakePointer{id: tt.pointer, err: tt.pointerErr},
 				OpenArcaveProjectStore: func(context.Context) (storages.Storager, error) {
 					if tt.storeErr != nil {
 						return nil, tt.storeErr
@@ -788,9 +859,13 @@ func TestStatusService_Status(t *testing.T) {
 			status, err := svc.Status(ctx, model.StatusRequest{Session: tt.ref})
 
 			// Assert
-			if tt.wantErr != nil {
+			var ambiguous *model.AmbiguousSessionNameError
+			switch {
+			case tt.wantAmbiguous:
+				require.ErrorAs(t, err, &ambiguous)
+			case tt.wantErr != nil:
 				require.ErrorIs(t, err, tt.wantErr)
-			} else {
+			default:
 				require.NoError(t, err)
 			}
 			tt.verify(t, status)
@@ -800,7 +875,7 @@ func TestStatusService_Status(t *testing.T) {
 	}
 }
 
-func TestStatusService_readContainers(t *testing.T) {
+func TestService_readContainers(t *testing.T) {
 	gone := fmt.Errorf("inspect container c1: %w", cerrdefs.ErrNotFound)
 	refused := errors.New("daemon unreachable")
 	read := model.ComposeProjectContainers{Services: []model.ServiceContainers{{Name: demoService}}}
@@ -829,7 +904,7 @@ func TestStatusService_readContainers(t *testing.T) {
 				calls = append(calls, reader.On("ReadContainers", mock.Anything).Return(containers, answer).Once())
 			}
 			mock.InOrder(calls...)
-			svc := NewStatusService(StatusDeps{ComposeContainers: reader})
+			svc := New(Deps{ComposeContainers: reader})
 
 			// Act
 			got, err := svc.readContainers(context.Background())
@@ -846,11 +921,11 @@ func TestStatusService_readContainers(t *testing.T) {
 	}
 }
 
-func TestStatusService_Status_ADaemonThatCannotBeReadFailsIt(t *testing.T) {
+func TestService_Status_ADaemonThatCannotBeReadFailsIt(t *testing.T) {
 	// Arrange: nothing past the daemon is read, so nothing else is expected.
 	reader := &mockContainersReader{}
 	reader.On("ReadContainers", mock.Anything).Return(model.ComposeProjectContainers{}, errors.New("daemon unreachable")).Once()
-	svc := NewStatusService(StatusDeps{
+	svc := New(Deps{
 		ComposeContainers: reader,
 		ComposeProject:    demoProject,
 	})

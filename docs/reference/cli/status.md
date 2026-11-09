@@ -101,7 +101,7 @@ A warning states what is so, and ends with its code in brackets; the JSON carrie
 |---|---|---|
 | `rollback-pending` | The inflight marker stands: a rollback is running, or was interrupted. | Once no arcave command is running, recover as [the troubleshooting page](../troubleshooting.md#an-interrupted-rollback) says; `rollback_in_flight.recover` is the savepoint a rollback to recovers it. A rollback started while the other is still at work is refused, so trying is safe. |
 | `store-unreadable` | The store could not be read; the result shows the daemon alone and the command exits `1`. | Check `storage` and `encryption.key`. |
-| `session-unresolved` | The current session (`.arcave/current_session`) names a session removed since. | `arcave session unset`, or `arcave session set <session>`. |
+| `session-unresolved` | The session could not be resolved: the current session (`.arcave/current_session`) names a session removed since, or the sessions could not be listed. The message names the `--session` given, else the current session. | For a removed session, `arcave session unset`, or `arcave session set <session>`; for a listing that failed, as `store-unreadable`. |
 | `inflight-marker-unreadable` | `.arcave/inflight.json` does not parse. | See [the troubleshooting page](../troubleshooting.md#an-interrupted-rollback). |
 | `deployment-labels-unreadable` | What arcave marked a container with does not parse: edited by hand, or written by another arcave. It counts as deployed by none. | — |
 | `deployed-savepoint-gone` | The deployed savepoint, or its whole session, was removed since — by `savepoint remove`, `session remove`, or a gc retiring a safety snapshot: no rollback can return to it. | `arcave savepoint create` keeps what runs now. |

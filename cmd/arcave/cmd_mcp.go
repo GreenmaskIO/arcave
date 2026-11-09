@@ -128,7 +128,7 @@ func mcpGCServiceFactory(ctx context.Context, sessionRef string) (cli.MCPGCServi
 // mcpStatusServiceFactory wires the status of the compose project a tool call named.
 func mcpStatusServiceFactory(ctx context.Context, composeProject string) (cli.MCPStatusService, func(), error) {
 	var opened closers
-	svc, err := openStatusService(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
+	svc, err := openStatusService(projectRoot, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, fmt.Errorf("init status dependencies: %w", err)

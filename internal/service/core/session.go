@@ -42,16 +42,6 @@ type sessionRepository interface {
 	SessionSize(ctx context.Context, id model.SessionID) (int64, error)
 }
 
-// SessionReader lists an arcave project's committed sessions; the DI root opens one per store.
-type SessionReader interface {
-	ListSessions(ctx context.Context) ([]model.Session, error)
-}
-
-// currentSessionReader reads the current-session pointer.
-type currentSessionReader interface {
-	Get(ctx context.Context) (id model.SessionID, found bool, err error)
-}
-
 // currentSessionPointer is .arcave/current_session: the session a command works in when it
 // names none.
 type currentSessionPointer interface {
@@ -144,26 +134,19 @@ func NewSessionService(deps SessionDeps) *SessionService {
 // ResolveSession finds the session ref names: by name first, then by id. "" is the current
 // session, or the default when no pointer is set; a pointer to a deleted session is refused.
 func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
-	return resolveSession(ctx, s.sessions, s.current, ref)
-}
-
-// resolveSession is ResolveSession over sessions and the pointer current.
-func resolveSession(
-	ctx context.Context, sessions SessionReader, current currentSessionReader, ref string,
-) (model.Session, error) {
 	if ref != "" {
-		listed, err := sessions.ListSessions(ctx)
+		sessions, err := s.sessions.ListSessions(ctx)
 		if err != nil {
 			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
 		}
-		session, err := findSessionByRef(listed, ref)
+		session, err := model.FindSessionByRef(sessions, ref)
 		if err != nil {
 			return model.Session{}, err
 		}
 		logResolved(ctx, session, "ref", ref)
 		return session, nil
 	}
-	id, found, err := readCurrentSession(ctx, current)
+	id, found, err := s.readCurrent(ctx)
 	if err != nil {
 		return model.Session{}, err
 	}
@@ -171,11 +154,11 @@ func resolveSession(
 		logResolved(ctx, model.DefaultSessionRecord, "default", "")
 		return model.DefaultSessionRecord, nil
 	}
-	listed, err := sessions.ListSessions(ctx)
+	sessions, err := s.sessions.ListSessions(ctx)
 	if err != nil {
 		return model.Session{}, fmt.Errorf("listing sessions: %w", err)
 	}
-	if session, found := findSessionByID(listed, id.String()); found {
+	if session, found := model.FindSessionByID(sessions, id.String()); found {
 		logResolved(ctx, session, "pointer", "")
 		return session, nil
 	}
@@ -200,7 +183,7 @@ func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Sess
 		if err != nil {
 			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
 		}
-		session, err := findSessionByRef(sessions, ref)
+		session, err := model.FindSessionByRef(sessions, ref)
 		if err != nil {
 			return model.Session{}, err
 		}
@@ -291,7 +274,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 				Msg("session created")
 			return session, nil
 		}
-		source, err := findSessionByRef(sessions, req.From)
+		source, err := model.FindSessionByRef(sessions, req.From)
 		if err != nil {
 			return model.Session{}, err
 		}
@@ -455,9 +438,9 @@ func (s *SessionService) requireNotInUse(
 	return false, nil
 }
 
-// readCurrentSession reads the current-session pointer, naming the way out of an unreadable one.
-func readCurrentSession(ctx context.Context, current currentSessionReader) (model.SessionID, bool, error) {
-	id, found, err := current.Get(ctx)
+// readCurrent reads the current-session pointer, naming the way out of an unreadable one.
+func (s *SessionService) readCurrent(ctx context.Context) (model.SessionID, bool, error) {
+	id, found, err := s.current.Get(ctx)
 	if err != nil {
 		return model.SessionID{}, false, fmt.Errorf("%w; run 'arcave session unset' or 'arcave session set <session>'", err)
 	}
@@ -468,7 +451,7 @@ func readCurrentSession(ctx context.Context, current currentSessionReader) (mode
 // readCurrentOrNone reads the pointer for a command it only informs: an unreadable one is
 // logged and read as none.
 func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID, bool) {
-	id, found, err := readCurrentSession(ctx, s.current)
+	id, found, err := s.readCurrent(ctx)
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
 		return model.SessionID{}, false
@@ -480,14 +463,14 @@ func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID
 // when ref names none or the pointer cannot be read.
 func (s *SessionService) findCurrent(ctx context.Context, sessions []model.Session, ref string) model.SessionID {
 	if ref != "" {
-		session, err := findSessionByRef(sessions, ref)
+		session, err := model.FindSessionByRef(sessions, ref)
 		if err != nil {
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("marking the current session")
 			return model.SessionID{}
 		}
 		return session.ID
 	}
-	id, found, err := readCurrentSession(ctx, s.current)
+	id, found, err := s.readCurrent(ctx)
 	switch {
 	case err != nil:
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
@@ -497,49 +480,6 @@ func (s *SessionService) findCurrent(ctx context.Context, sessions []model.Sessi
 	default:
 		return id
 	}
-}
-
-// findSessionByRef finds the session ref names among sessions: by name first, then by id.
-func findSessionByRef(sessions []model.Session, ref string) (model.Session, error) {
-	if session, found, err := findSessionByName(sessions, ref); err != nil || found {
-		return session, err
-	}
-	if session, found := findSessionByID(sessions, ref); found {
-		return session, nil
-	}
-	return model.Session{}, fmt.Errorf("%w: %q", model.ErrSessionNotFound, ref)
-}
-
-// findSessionByName finds the one session carrying name; several carrying it is an error.
-func findSessionByName(sessions []model.Session, name string) (model.Session, bool, error) {
-	var named []model.Session
-	for _, session := range sessions {
-		if session.Name == name {
-			named = append(named, session)
-		}
-	}
-	switch len(named) {
-	case 0:
-		return model.Session{}, false, nil
-	case 1:
-		return named[0], true, nil
-	default:
-		ids := make([]model.SessionID, len(named))
-		for i, session := range named {
-			ids[i] = session.ID
-		}
-		return model.Session{}, false, &model.AmbiguousSessionNameError{Name: name, IDs: ids}
-	}
-}
-
-// findSessionByID finds the session whose id is ref.
-func findSessionByID(sessions []model.Session, ref string) (model.Session, bool) {
-	for _, session := range sessions {
-		if session.ID.String() == ref {
-			return session, true
-		}
-	}
-	return model.Session{}, false
 }
 
 // summarize counts what the session holds, safety snapshots excluded, and measures its tree.
@@ -688,10 +628,10 @@ func requireFreeName(sessions []model.Session, name string) error {
 	if name == "" {
 		return nil
 	}
-	if _, found, err := findSessionByName(sessions, name); found || err != nil {
+	if _, found, err := model.FindSessionByName(sessions, name); found || err != nil {
 		return fmt.Errorf("%w: %q", model.ErrSessionNameTaken, name)
 	}
-	if session, found := findSessionByID(sessions, name); found {
+	if session, found := model.FindSessionByID(sessions, name); found {
 		return fmt.Errorf("%w: %q is the id of session %q", model.ErrSessionNameTaken, name, session.Name)
 	}
 	return nil

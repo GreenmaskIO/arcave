@@ -67,8 +67,7 @@ type SavepointDeployment struct {
 	ServiceReplicas map[string][]int
 }
 
-// Labels spells the deployment out as labels: every key, blank where there is no value, so the
-// labels of an earlier deployment a layer carries are all overwritten.
+// Labels spells the deployment out as labels: every key, blank where there is no value.
 func (m SavepointDeployment) Labels() map[string]string {
 	isSafetySnapshot := ""
 	if m.Savepoint.IsSafetySnapshot {
@@ -85,6 +84,16 @@ func (m SavepointDeployment) Labels() map[string]string {
 		string(SystemLabelDeploymentSavepointIsSafetySnapshot): isSafetySnapshot,
 		string(SystemLabelDeploymentServiceReplicas):           formatServiceReplicas(m.ServiceReplicas),
 	}
+}
+
+// NewBlankDeploymentLabels is every deployment key blank: what a committed layer carries, so a
+// container created from it outside arcave names no deployment.
+func NewBlankDeploymentLabels() map[string]string {
+	labels := map[string]string{}
+	for key := range maps.Keys(SavepointDeployment{}.Labels()) {
+		labels[key] = ""
+	}
+	return labels
 }
 
 // ParseSavepointDeployment reads the deployment labels name; ok is false when they name no savepoint.

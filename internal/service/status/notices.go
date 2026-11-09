@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+package status
 
 import (
 	"fmt"
@@ -29,12 +29,14 @@ type statusFacts struct {
 	checkedAt time.Time
 	// arcaveProject is the one the config names.
 	arcaveProject model.ArcaveProjectName
-	state         model.ComposeProjectState
-	marker        *model.InflightMarker
-	deployed      deployedContainers
-	view          storeView
-	services      []model.ServiceStatus
-	unreadable    []model.StatusUnreadable
+	// ref is the request's --session, empty when none was given.
+	ref        string
+	state      model.ComposeProjectState
+	marker     *model.InflightMarker
+	deployed   deployedContainers
+	view       storeView
+	services   []model.ServiceStatus
+	unreadable []model.StatusUnreadable
 }
 
 // newStatusNotices is one notice per thing that is wrong or worth knowing, the severe first. A
@@ -45,7 +47,7 @@ func newStatusNotices(facts statusFacts) []model.Notice {
 		notices = append(notices, newInflightNotice(*facts.marker))
 	}
 	for _, unreadable := range facts.unreadable {
-		notices = append(notices, newUnreadableNotice(unreadable))
+		notices = append(notices, newUnreadableNotice(unreadable, facts.ref))
 	}
 	notices = append(notices, facts.deployed.notices...)
 	if deployment := facts.deployed.deployment; deployment != nil {
@@ -92,8 +94,9 @@ func formatInflightPhase(phase model.InflightPhase) string {
 	}
 }
 
-// newUnreadableNotice names what the status could not read: it shows the daemon alone for it.
-func newUnreadableNotice(unreadable model.StatusUnreadable) model.Notice {
+// newUnreadableNotice names what the status could not read: it shows the daemon alone for it. ref
+// is the request's --session, empty when none was given.
+func newUnreadableNotice(unreadable model.StatusUnreadable, ref string) model.Notice {
 	switch unreadable.Source {
 	case model.StatusUnreadableStore:
 		return model.Notice{
@@ -103,7 +106,7 @@ func newUnreadableNotice(unreadable model.StatusUnreadable) model.Notice {
 	case model.StatusUnreadableSession:
 		return model.Notice{
 			Code:    model.NoticeCodeSessionUnresolved,
-			Message: "the current session could not be resolved: " + unreadable.Error,
+			Message: newSessionUnresolvedMessage(ref, unreadable.Error),
 		}
 	default:
 		return model.Notice{
@@ -111,6 +114,14 @@ func newUnreadableNotice(unreadable model.StatusUnreadable) model.Notice {
 			Message: "the inflight marker could not be read: " + unreadable.Error,
 		}
 	}
+}
+
+// newSessionUnresolvedMessage names the session the status could not resolve: ref, or the current one.
+func newSessionUnresolvedMessage(ref, cause string) string {
+	if ref == "" {
+		return "the current session could not be resolved: " + cause
+	}
+	return fmt.Sprintf("session %q could not be resolved: %s", ref, cause)
 }
 
 // newUnreadableLabelsNotice names a container whose deployment labels do not parse: edited by hand,

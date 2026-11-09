@@ -15,6 +15,8 @@
 package model
 
 import (
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -134,6 +136,21 @@ func TestSavepointDeployment_Labels_SubSecond(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, deployment.DeployedAt, parsed.DeployedAt, "two builds within one second are told apart")
+}
+
+func TestNewBlankDeploymentLabels(t *testing.T) {
+	// Act
+	labels := NewBlankDeploymentLabels()
+	_, ok, err := ParseSavepointDeployment(labels)
+
+	// Assert
+	assert.Equal(t, slices.Sorted(maps.Keys(demoDeployment().Labels())), slices.Sorted(maps.Keys(labels)),
+		"every key a deployment writes")
+	for key, value := range labels {
+		assert.Empty(t, value, key)
+	}
+	require.NoError(t, err)
+	assert.False(t, ok, "blank labels name no deployment")
 }
 
 func TestParseSavepointDeployment(t *testing.T) {

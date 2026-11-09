@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package core
+package status
 
 import (
 	"cmp"
@@ -63,8 +63,9 @@ type deployedContainers struct {
 }
 
 // findDeployments reads every container's deployment labels, the latest build being the
-// deployment: a container created outside arcave from a restored layer inherits an earlier one,
-// and counts as built by none. Labels that cannot be read are warned of and count the same.
+// deployment; a container carrying another counts as built by none. A layer is committed with the
+// labels blank, so one created outside arcave carries none. Labels that cannot be read are warned
+// of and count the same.
 func findDeployments(containers model.ComposeProjectContainers) deployedContainers {
 	var (
 		deployment *model.SavepointDeployment
