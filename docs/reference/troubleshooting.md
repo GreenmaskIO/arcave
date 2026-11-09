@@ -376,7 +376,7 @@ Each is refused before anything is stopped. Export the key the store was encrypt
 ## Turning encryption on for a project with data
 
 ```text
-init dependencies: open the store: the arcave project holds data written without encryption: turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting
+init dependencies: open the store: the arcave project holds data written without encryption (turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting)
 ```
 
 **What happened.** `encryption.enabled: true` was set over an arcave project that already holds savepoints or sessions written without encryption. arcave encrypts nothing in place, so it refuses the project rather than mark it encrypted and leave its data unreadable. Nothing was written: the data is where it was. `arcave status` reports the same refusal as an unreadable store and exits `1`.

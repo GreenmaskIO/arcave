@@ -29,8 +29,8 @@ type markerRepository interface {
 	Put(ctx context.Context, marker model.EncryptionMarker) error
 }
 
-// projectContents tells whether the arcave project holds anything but its marker.
-type projectContents interface {
+// arcaveProjectContents tells whether the arcave project holds anything but its marker.
+type arcaveProjectContents interface {
 	HoldsData(ctx context.Context) (bool, error)
 }
 
@@ -46,22 +46,22 @@ func RequirePlain(ctx context.Context, markers markerRepository) error {
 	return nil
 }
 
-// RequireEncrypted admits an arcave project for identity and writes nothing: one marked for
-// another key is model.ErrWrongStoreKey, an unmarked one holding data model.ErrStoreHoldsPlainData,
-// and an unmarked empty one stays unmarked until EncryptedAdmission.AdmitWrite.
+// RequireEncrypted refuses a project marked for another key (model.ErrWrongStoreKey) or unmarked
+// and holding data (model.ErrStoreHoldsPlainData). It writes nothing.
 func RequireEncrypted(
-	ctx context.Context, markers markerRepository, contents projectContents, identity *age.X25519Identity,
+	ctx context.Context, markers markerRepository, contents arcaveProjectContents, identity *age.X25519Identity,
 ) error {
 	_, err := requireRecipient(ctx, markers, contents, identity)
 	return err
 }
 
-// PlainAdmission admits a write to a plain arcave project: under the workflow's lock, it refuses
-// one an encrypted host has marked since it was opened, as RequirePlain does.
+// PlainAdmission admits a write to a plain arcave project, refusing one an encrypted host has
+// marked since it was opened.
 type PlainAdmission struct {
 	markers markerRepository
 }
 
+// NewPlainAdmission returns a PlainAdmission over markers.
 func NewPlainAdmission(markers markerRepository) *PlainAdmission {
 	return &PlainAdmission{markers: markers}
 }
@@ -71,16 +71,16 @@ func (s *PlainAdmission) AdmitWrite(ctx context.Context) error {
 	return RequirePlain(ctx, s.markers)
 }
 
-// EncryptedAdmission admits a write to an encrypted arcave project, marking an empty one for
-// identity: only a workflow that writes calls it, so a command that writes nothing never marks.
+// EncryptedAdmission admits a write to an encrypted arcave project, marking an empty one for identity.
 type EncryptedAdmission struct {
 	markers  markerRepository
-	contents projectContents
+	contents arcaveProjectContents
 	identity *age.X25519Identity
 }
 
+// NewEncryptedAdmission returns an EncryptedAdmission for identity.
 func NewEncryptedAdmission(
-	markers markerRepository, contents projectContents, identity *age.X25519Identity,
+	markers markerRepository, contents arcaveProjectContents, identity *age.X25519Identity,
 ) *EncryptedAdmission {
 	return &EncryptedAdmission{
 		markers:  markers,
@@ -101,7 +101,7 @@ func (s *EncryptedAdmission) AdmitWrite(ctx context.Context) error {
 // requireRecipient refuses a project marked for another key, or an unmarked one holding data;
 // found reports a marker for identity.
 func requireRecipient(
-	ctx context.Context, markers markerRepository, contents projectContents, identity *age.X25519Identity,
+	ctx context.Context, markers markerRepository, contents arcaveProjectContents, identity *age.X25519Identity,
 ) (found bool, err error) {
 	marker, found, err := markers.Get(ctx)
 	if err != nil {

@@ -237,6 +237,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	svc := core.New(core.Deps{
 		ArcaveProject:      "arcave-image-rollback-tenant",
 		SessionLocker:      newStoreLocker(store, model.DefaultSession),
+		WriteAdmission:     newPlainAdmission(store),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   inspector,

@@ -59,6 +59,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -1609,7 +1610,7 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 
 // An open writes nothing under encryption; only the admission a writing workflow asks for marks the
 // project, and only an empty one.
-func TestOpenArcaveProjectStore_WriteAdmission(t *testing.T) {
+func TestOpenedArcaveProject_writeAdmission(t *testing.T) {
 	key := newTestStoreKey(t)
 	tests := []struct {
 		name       string
@@ -1671,27 +1672,87 @@ func TestOpenArcaveProjectStore_WriteAdmission(t *testing.T) {
 // The session commands are wired with the project's write admission: on an empty encrypted
 // project a listing marks nothing, and a session create marks it.
 func TestOpenSessionService_WriteAdmission(t *testing.T) {
-	// Arrange
-	ctx := zerolog.Nop().WithContext(context.Background())
-	projectPath := t.TempDir()
-	cfg := newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: newTestStoreKey(t)})
-	var opened closers
-	t.Cleanup(func() { opened.release(ctx) })
-	svc, err := openSessionService(ctx, projectPath, cfg, &opened)
-	require.NoError(t, err)
-	marker := filepath.Join(arcaveProjectPath(projectPath), "encryption.json")
+	tests := []struct {
+		name       string
+		run        func(ctx context.Context, svc *core.SessionService) error
+		wantMarked bool
+	}{
+		{
+			name: "a listing marks nothing",
+			run: func(ctx context.Context, svc *core.SessionService) error {
+				_, err := svc.ListSessions(ctx, model.ListSessionsRequest{})
+				return err
+			},
+		},
+		{
+			name: "a session create marks the project",
+			run: func(ctx context.Context, svc *core.SessionService) error {
+				_, err := svc.CreateSession(ctx, model.CreateSessionRequest{Name: "exp"})
+				return err
+			},
+			wantMarked: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := zerolog.Nop().WithContext(context.Background())
+			projectPath := t.TempDir()
+			cfg := newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: newTestStoreKey(t)})
+			var opened closers
+			t.Cleanup(func() { opened.release(ctx) })
+			svc, err := openSessionService(ctx, projectPath, cfg, &opened)
+			require.NoError(t, err)
 
-	// Act
-	_, listErr := svc.ListSessions(ctx, model.ListSessionsRequest{})
-	_, listedMarkerErr := os.Stat(marker)
-	_, createErr := svc.CreateSession(ctx, model.CreateSessionRequest{Name: "exp"})
-	_, createdMarkerErr := os.Stat(marker)
+			// Act
+			err = tt.run(ctx, svc)
 
-	// Assert
-	require.NoError(t, listErr)
-	assert.ErrorIs(t, listedMarkerErr, fs.ErrNotExist, "a listing marks nothing")
-	require.NoError(t, createErr)
-	assert.NoError(t, createdMarkerErr, "a session create marks the project")
+			// Assert
+			require.NoError(t, err)
+			_, statErr := os.Stat(filepath.Join(arcaveProjectPath(projectPath), "encryption.json"))
+			if tt.wantMarked {
+				assert.NoError(t, statErr)
+			} else {
+				assert.ErrorIs(t, statErr, fs.ErrNotExist)
+			}
+		})
+	}
+}
+
+// writeAdmissionFunc is a writeAdmission over a function.
+type writeAdmissionFunc func(ctx context.Context) error
+
+func (f writeAdmissionFunc) AdmitWrite(ctx context.Context) error { return f(ctx) }
+
+func TestFixedAdmission_AdmitWrite(t *testing.T) {
+	errStore := errors.New("store unreachable")
+	tests := []struct {
+		name    string
+		err     error
+		wantErr error
+		wantMsg string
+	}{
+		{name: "an admitted write"},
+		{name: "a refusal carries its fix", err: model.ErrStoreEncrypted, wantErr: model.ErrStoreEncrypted, wantMsg: "the store is encrypted (set encryption.enabled: true and encryption.key)"},
+		{name: "any other failure is returned as is", err: errStore, wantErr: errStore, wantMsg: "store unreachable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			admission := fixedAdmission{admission: writeAdmissionFunc(func(context.Context) error { return tt.err })}
+
+			// Act
+			err := admission.AdmitWrite(t.Context())
+
+			// Assert
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.EqualError(t, err, tt.wantMsg)
+		})
+	}
 }
 
 // arcaveProjectPath is where the directory storage of newEncryptionConfig keeps the demo arcave project.

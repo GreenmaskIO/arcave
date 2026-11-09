@@ -551,7 +551,7 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 
 // A workflow that writes the store admits its writes under the project lock, before the first; one
 // that does not never asks.
-func TestSessionService_WriteAdmission(t *testing.T) {
+func TestSessionService_withWriteUnlock(t *testing.T) {
 	tests := []struct {
 		name   string
 		writes bool
@@ -586,13 +586,18 @@ func TestSessionService_WriteAdmission(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: a writer's admission refuses, so it writes nothing; a reader's has no expectation.
 			locker := &mockLocker{}
-			locker.On("Acquire", mock.Anything).Return(nil).Maybe()
-			locker.On("Release").Return(nil).Maybe()
 			admission := &mockWriteAdmission{}
 			repo := &mockSessionRepo{}
 			if tt.writes {
-				admission.On("AdmitWrite", mock.Anything).Return(model.ErrStoreHoldsPlainData).Once()
+				mock.InOrder(
+					locker.On("Acquire", mock.Anything).Return(nil).Once(),
+					admission.On("AdmitWrite", mock.Anything).Return(model.ErrStoreHoldsPlainData).Once(),
+					locker.On("Release").Return(nil).Once(),
+				)
 			} else {
+				// A reader may take the project lock (set, unset); it never asks for an admission.
+				locker.On("Acquire", mock.Anything).Return(nil).Maybe()
+				locker.On("Release").Return(nil).Maybe()
 				repo.On("ListSessions", mock.Anything).Return([]model.Session(nil), errListStore).Maybe()
 			}
 			svc := NewSessionService(SessionDeps{
@@ -612,13 +617,14 @@ func TestSessionService_WriteAdmission(t *testing.T) {
 				require.ErrorIs(t, err, model.ErrStoreHoldsPlainData)
 			}
 			admission.AssertExpectations(t)
+			locker.AssertExpectations(t)
 			repo.AssertExpectations(t)
 		})
 	}
 }
 
 func TestSavepointStoreService_ListSavepoints_AdmitsNoWrite(t *testing.T) {
-	// Arrange: a admission with no expectation fails on any call.
+	// Arrange: an admission with no expectation fails on any call.
 	admission := &mockWriteAdmission{}
 	repo := &mockSavepointRepo{}
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{}, nil).Once()

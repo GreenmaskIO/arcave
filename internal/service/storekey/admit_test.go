@@ -20,7 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"filippo.io/age"
 	"github.com/greenmaskio/storages/inmemory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -50,164 +49,186 @@ func TestRequirePlain(t *testing.T) {
 
 			// Act
 			err := RequirePlain(t.Context(), encryptionmarker.New(store))
-			admitErr := NewPlainAdmission(encryptionmarker.New(store)).AdmitWrite(t.Context())
 
 			// Assert
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
-				require.ErrorIs(t, admitErr, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			require.NoError(t, admitErr)
 		})
 	}
 }
 
-// projectContentsMock is the arcave project's listing.
-type projectContentsMock struct {
+func TestPlainAdmission_AdmitWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		marker  *model.EncryptionMarker
+		wantErr error
+	}{
+		{name: "an unmarked project"},
+		{name: "a project an encrypted host marked since", marker: &model.EncryptionMarker{Recipient: "age1other"}, wantErr: model.ErrStoreEncrypted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: no Put expectation, so a write fails the test.
+			markers := &markersMock{}
+			markers.On("Get", mock.Anything).Return(tt.marker, nil).Once()
+
+			// Act
+			err := NewPlainAdmission(markers).AdmitWrite(t.Context())
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			markers.AssertExpectations(t)
+		})
+	}
+}
+
+// arcaveProjectContentsMock doubles arcaveProjectContents.
+type arcaveProjectContentsMock struct {
 	mock.Mock
 }
 
-func (m *projectContentsMock) HoldsData(ctx context.Context) (bool, error) {
+func (m *arcaveProjectContentsMock) HoldsData(ctx context.Context) (bool, error) {
 	args := m.Called(ctx)
 	return args.Bool(0), args.Error(1)
 }
 
-// failingMarkers is a marker repository whose every call fails.
-type failingMarkers struct {
-	getErr error
-	putErr error
-	put    bool
+// markersMock doubles markerRepository; Get returns the *model.EncryptionMarker it is handed, nil
+// for none.
+type markersMock struct {
+	mock.Mock
 }
 
-func (m *failingMarkers) Get(context.Context) (model.EncryptionMarker, bool, error) {
-	return model.EncryptionMarker{}, false, m.getErr
+func (m *markersMock) Get(ctx context.Context) (model.EncryptionMarker, bool, error) {
+	args := m.Called(ctx)
+	if err := args.Error(1); err != nil {
+		return model.EncryptionMarker{}, false, err
+	}
+	marker, _ := args.Get(0).(*model.EncryptionMarker)
+	if marker == nil {
+		return model.EncryptionMarker{}, false, nil
+	}
+	return *marker, true, nil
 }
 
-func (m *failingMarkers) Put(context.Context, model.EncryptionMarker) error {
-	m.put = true
-	return m.putErr
+func (m *markersMock) Put(ctx context.Context, marker model.EncryptionMarker) error {
+	return m.Called(ctx, marker).Error(0)
 }
 
-// admitWrite is EncryptedAdmission.AdmitWrite in the shape of RequireEncrypted.
-func admitWrite(ctx context.Context, markers markerRepository, contents projectContents, identity *age.X25519Identity) error {
-	return NewEncryptedAdmission(markers, contents, identity).AdmitWrite(ctx)
-}
+var errStore = errors.New("store unreachable")
 
-func TestAdmission(t *testing.T) {
+func TestRequireEncrypted(t *testing.T) {
 	identity, err := ParseKey(newTestKey(t))
 	require.NoError(t, err)
 	ours := identity.Recipient().String()
-	type admission func(context.Context, markerRepository, projectContents, *age.X25519Identity) error
-	admissions := []struct {
-		name   string
-		admit  admission
-		writes bool
-	}{
-		{name: "reader", admit: RequireEncrypted},
-		{name: "writer", admit: admitWrite, writes: true},
-	}
 	tests := []struct {
 		name      string
-		marker    string
+		marker    *model.EncryptionMarker
+		getErr    error
 		holdsData *bool
+		holdsErr  error
 		wantErr   error
-		// wantMarker is the recipient left stored, by a writer when it differs.
-		wantMarker       string
-		wantWriterMarker string
+		wantMsg   string
 	}{
+		{name: "marked for the key", marker: &model.EncryptionMarker{Recipient: ours}},
 		{
-			name:       "marked for the key",
-			marker:     `{"recipient":"` + ours + `"}`,
-			wantMarker: ours,
+			name:    "marked for another key",
+			marker:  &model.EncryptionMarker{Recipient: "age1other"},
+			wantErr: model.ErrWrongStoreKey,
+			wantMsg: "age1other",
 		},
-		{
-			name:       "marked for another key",
-			marker:     `{"recipient":"age1other"}`,
-			wantErr:    model.ErrWrongStoreKey,
-			wantMarker: "age1other",
-		},
-		{
-			name:             "unmarked and empty",
-			holdsData:        utils.New(false),
-			wantWriterMarker: ours,
-		},
-		{
-			name:      "unmarked and holding data",
-			holdsData: utils.New(true),
-			wantErr:   model.ErrStoreHoldsPlainData,
-		},
+		{name: "unmarked and empty stays unmarked", holdsData: utils.New(false)},
+		{name: "unmarked and holding data", holdsData: utils.New(true), wantErr: model.ErrStoreHoldsPlainData},
+		{name: "the marker unreadable", getErr: errStore, wantErr: errStore},
+		{name: "the listing failing", holdsData: utils.New(false), holdsErr: errStore, wantErr: errStore},
 	}
-	for _, adm := range admissions {
-		for _, tt := range tests {
-			t.Run(adm.name+"/"+tt.name, func(t *testing.T) {
-				// Arrange
-				store := inmemory.New("")
-				if tt.marker != "" {
-					require.NoError(t, store.PutObject(t.Context(), encryptionmarker.FileName, strings.NewReader(tt.marker)))
-				}
-				contents := &projectContentsMock{}
-				if tt.holdsData != nil {
-					contents.On("HoldsData", mock.Anything).Return(*tt.holdsData, nil).Once()
-				}
-				wantMarker := tt.wantMarker
-				if adm.writes && tt.wantWriterMarker != "" {
-					wantMarker = tt.wantWriterMarker
-				}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: no Put expectation, so a write fails the test.
+			markers := &markersMock{}
+			contents := &arcaveProjectContentsMock{}
+			calls := []*mock.Call{markers.On("Get", mock.Anything).Return(tt.marker, tt.getErr).Once()}
+			if tt.holdsData != nil {
+				calls = append(calls, contents.On("HoldsData", mock.Anything).Return(*tt.holdsData, tt.holdsErr).Once())
+			}
+			mock.InOrder(calls...)
 
-				// Act
-				err := adm.admit(t.Context(), encryptionmarker.New(store), contents, identity)
+			// Act
+			err := RequireEncrypted(t.Context(), markers, contents, identity)
 
-				// Assert
-				if tt.wantErr != nil {
-					require.ErrorIs(t, err, tt.wantErr)
-				} else {
-					require.NoError(t, err)
-				}
-				marker, found, err := encryptionmarker.New(store).Get(t.Context())
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMsg)
+			} else {
 				require.NoError(t, err)
-				assert.Equal(t, wantMarker != "", found)
-				assert.Equal(t, wantMarker, marker.Recipient)
-				contents.AssertExpectations(t)
-			})
-		}
+			}
+			markers.AssertExpectations(t)
+			contents.AssertExpectations(t)
+		})
 	}
 }
 
-func TestAdmission_Failures(t *testing.T) {
+func TestEncryptedAdmission_AdmitWrite(t *testing.T) {
 	identity, err := ParseKey(newTestKey(t))
 	require.NoError(t, err)
-	errStore := errors.New("store unreachable")
-	type admission func(context.Context, markerRepository, projectContents, *age.X25519Identity) error
+	ours := identity.Recipient().String()
 	tests := []struct {
 		name      string
-		admit     admission
-		markers   *failingMarkers
+		marker    *model.EncryptionMarker
+		getErr    error
+		holdsData *bool
 		holdsErr  error
-		wantHolds bool
-		wantPut   bool
+		// put expects the marker for the key written, failing with putErr.
+		put     bool
+		putErr  error
+		wantErr error
+		wantMsg string
 	}{
-		{name: "reader, the marker unreadable", admit: RequireEncrypted, markers: &failingMarkers{getErr: errStore}},
-		{name: "writer, the marker unreadable", admit: admitWrite, markers: &failingMarkers{getErr: errStore}},
-		{name: "reader, the listing failing", admit: RequireEncrypted, markers: &failingMarkers{}, holdsErr: errStore, wantHolds: true},
-		{name: "writer, the listing failing", admit: admitWrite, markers: &failingMarkers{}, holdsErr: errStore, wantHolds: true},
-		{name: "writer, the marker unwritable", admit: admitWrite, markers: &failingMarkers{putErr: errStore}, wantHolds: true, wantPut: true},
+		{name: "marked for the key is not marked again", marker: &model.EncryptionMarker{Recipient: ours}},
+		{
+			name:    "marked for another key",
+			marker:  &model.EncryptionMarker{Recipient: "age1other"},
+			wantErr: model.ErrWrongStoreKey,
+			wantMsg: "age1other",
+		},
+		{name: "unmarked and empty is marked", holdsData: utils.New(false), put: true},
+		{name: "unmarked and holding data", holdsData: utils.New(true), wantErr: model.ErrStoreHoldsPlainData},
+		{name: "the marker unreadable", getErr: errStore, wantErr: errStore},
+		{name: "the listing failing", holdsData: utils.New(false), holdsErr: errStore, wantErr: errStore},
+		{name: "the marker unwritable", holdsData: utils.New(false), put: true, putErr: errStore, wantErr: errStore},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			contents := &projectContentsMock{}
-			if tt.wantHolds {
-				contents.On("HoldsData", mock.Anything).Return(false, tt.holdsErr).Once()
+			markers := &markersMock{}
+			contents := &arcaveProjectContentsMock{}
+			calls := []*mock.Call{markers.On("Get", mock.Anything).Return(tt.marker, tt.getErr).Once()}
+			if tt.holdsData != nil {
+				calls = append(calls, contents.On("HoldsData", mock.Anything).Return(*tt.holdsData, tt.holdsErr).Once())
 			}
+			if tt.put {
+				calls = append(calls, markers.On("Put", mock.Anything, model.EncryptionMarker{Recipient: ours}).Return(tt.putErr).Once())
+			}
+			mock.InOrder(calls...)
 
 			// Act
-			err := tt.admit(t.Context(), tt.markers, contents, identity)
+			err := NewEncryptedAdmission(markers, contents, identity).AdmitWrite(t.Context())
 
 			// Assert
-			require.ErrorIs(t, err, errStore)
-			assert.Equal(t, tt.wantPut, tt.markers.put)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMsg)
+			} else {
+				require.NoError(t, err)
+			}
+			markers.AssertExpectations(t)
 			contents.AssertExpectations(t)
 		})
 	}

@@ -250,9 +250,13 @@ func TestGarbageCollector_GarbageCollect_LockLostMidway(t *testing.T) {
 
 func TestGarbageCollector_GarbageCollect_AWriteRefused(t *testing.T) {
 	// Arrange: the admission refuses under the project lock, so the session is never locked.
-	locker := newHeldLocker()
+	locker := &mockLocker{}
 	admission := &mockWriteAdmission{}
-	admission.On("AdmitWrite", mock.Anything).Return(model.ErrStoreHoldsPlainData).Once()
+	mock.InOrder(
+		locker.On("Acquire", mock.Anything).Return(nil).Once(),
+		admission.On("AdmitWrite", mock.Anything).Return(model.ErrStoreHoldsPlainData).Once(),
+		locker.On("Release").Return(nil).Once(),
+	)
 	sessionLocker := &mockSessionLocker{}
 	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), &mockSessions{}, locker, &mockInflight{})
 	deps.WriteAdmission = admission

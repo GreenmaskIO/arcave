@@ -67,4 +67,3 @@ func TestRollback_StartsAOneShotNobodyAwaits(t *testing.T) {
 	assert.Equal(t, container.StateExited, migrate.Inspect.State.Status)
 	assert.Equal(t, 0, migrate.Inspect.State.ExitCode)
 }
-

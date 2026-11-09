@@ -295,7 +295,7 @@ To encrypt a store: make a key with `age-keygen`, export it as `ARCAVE_ENCRYPTIO
 **Encryption starts on an empty arcave project.** arcave encrypts nothing in place, so an arcave project that already holds data written without encryption is refused under `encryption.enabled: true`, by every command, and nothing is written to it — see [the troubleshooting page](troubleshooting.md#turning-encryption-on-for-a-project-with-data). Start an encrypted one under another `project.name`, or at another storage location. Every other mismatch is refused before anything is stopped too:
 
 ```text
-open the store: the arcave project holds data written without encryption: turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting
+open the store: the arcave project holds data written without encryption (turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting)
 open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
