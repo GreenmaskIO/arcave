@@ -83,6 +83,7 @@ func TestService_performSavepoint_HeartbeatLostCommitsNothing(t *testing.T) {
 	// Every beat but the first fails, so the deadline passes on a tick.
 	repo := &mockSavepointRepo{}
 	svc := New(Deps{
+		ArcaveProject: demoArcaveProject,
 		SessionLocker: fakeSessionLocker{},
 		SavepointRepo: repo, Store: &failingAfterFirstPutStore{Storager: store},
 		HeartbeatInterval: 10 * time.Millisecond, HeartbeatStaleAfter: 30 * time.Millisecond,

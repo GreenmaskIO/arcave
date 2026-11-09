@@ -1,0 +1,12 @@
+myapp · stopped · savepoint before-migration (01a188c4-1650-7000-8000-000000000001)
+  session    baseline
+  deployed   2026-11-07 14:02 (3h 12m ago)
+  savepoint  taken 2026-10-29 19:45 (8d 21h ago) · restored 3 volumes, 2 layers
+             the schema before 0042
+
+SERVICE  REPLICAS  STATE     UP  PORTS
+db       0/1       exited 0  —   127.0.0.1:5432→5432/tcp
+
+Warnings (2)
+  ! db-1 exited with code 0 4m ago [replica-exited]
+  ! no container runs [compose-project-stopped]

@@ -57,3 +57,16 @@ func AdmitEncrypted(ctx context.Context, markers markerRepository, identity *age
 	}
 	return nil
 }
+
+// RequireKey refuses an arcave project marked for another key with model.ErrWrongStoreKey and
+// writes nothing: an unmarked one stays unmarked, for a reader that must not change the store.
+func RequireKey(ctx context.Context, markers markerRepository, identity *age.X25519Identity) error {
+	marker, found, err := markers.Get(ctx)
+	if err != nil {
+		return err
+	}
+	if found && marker.Recipient != identity.Recipient().String() {
+		return fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
+	}
+	return nil
+}

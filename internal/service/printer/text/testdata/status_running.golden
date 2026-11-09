@@ -1,0 +1,10 @@
+myapp · running · savepoint before-migration (01a188c4-1650-7000-8000-000000000001)
+  session    baseline
+  deployed   2026-11-07 14:02 (3h 12m ago)
+  savepoint  taken 2026-10-29 19:45 (8d 21h ago) · restored 3 volumes, 2 layers
+             the schema before 0042
+
+SERVICE  REPLICAS  STATE      UP      PORTS
+db       1/1       healthy    3h 11m  127.0.0.1:5432→5432/tcp
+web      2/2       running    3h 11m  0.0.0.0:8080→80/tcp
+migrate  1/1       completed  —

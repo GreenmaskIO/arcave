@@ -87,6 +87,15 @@ type MCPGCService interface {
 // plus the release the tool call invokes on return.
 type MCPGCServiceFactory func(ctx context.Context, session string) (svc MCPGCService, release func(), err error)
 
+// MCPStatusService is the MCP adapter's view of status.
+type MCPStatusService interface {
+	Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error)
+}
+
+// MCPStatusServiceFactory builds a status for one compose project, plus the release the tool call
+// invokes on return; the service resolves the session itself.
+type MCPStatusServiceFactory func(ctx context.Context, composeProject string) (svc MCPStatusService, release func(), err error)
+
 // MCPFactories builds what each family of tools runs on, once per tool call.
 type MCPFactories struct {
 	Savepoint      MCPSavepointServiceFactory
@@ -94,6 +103,7 @@ type MCPFactories struct {
 	Session        MCPSessionServiceFactory
 	Tools          MCPToolsServiceFactory
 	GC             MCPGCServiceFactory
+	Status         MCPStatusServiceFactory
 }
 
 // RollbackConfig is the project's config as the rollback tool reads it; a call may override
@@ -216,6 +226,11 @@ const (
 		"A deleted image's layers go on the next run; a removed savepoint's restic snapshots " +
 		"are forgotten and pruned; a restored layer tag goes once no container uses it. " +
 		"A busy project is refused: retry when its command finishes."
+	descStatus = "What the daemon runs for a compose project: which savepoint a rollback deployed and when, " +
+		"whether every recorded replica is up and healthy, the published ports, and a rollback in progress or " +
+		"interrupted. Call it before tests, after a rollback, or when something looks wrong; it reads only. " +
+		"state sums it up; notices say what is wrong, severe first, each with a stable code to act on. A store " +
+		"that cannot be read leaves unreadable non-empty and the daemon's part whole; a session naming none fails it."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +
@@ -446,6 +461,30 @@ func (h *MCPHandler) garbageCollectMCP(
 	return nil, model.GarbageCollectResult{}, mcpError(err)
 }
 
+// statusInput is status's input schema.
+type statusInput struct {
+	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to look at, as docker compose ls names it"`
+	Session        string `json:"session,omitempty" jsonschema:"the session the user works in, by name or id; default the pinned or current session"`
+}
+
+// statusMCP reports what the daemon runs for the compose project.
+func (h *MCPHandler) statusMCP(
+	ctx context.Context, _ *mcpsdk.CallToolRequest, in statusInput,
+) (*mcpsdk.CallToolResult, model.ComposeProjectStatus, error) {
+	svc, release, err := h.factories.Status(ctx, in.ComposeProject)
+	if err != nil {
+		return nil, model.ComposeProjectStatus{}, mcpError(err)
+	}
+	defer release()
+
+	status, err := svc.Status(ctx, model.StatusRequest{Session: cmp.Or(in.Session, h.pinRef())})
+	if err != nil && !errors.Is(err, model.ErrStatusPartial) {
+		return nil, model.ComposeProjectStatus{}, mcpError(err)
+	}
+	// A partial status is still a report: what could not be read is in its unreadable.
+	return nil, status, nil
+}
+
 // sessionListInput is session_list's input schema.
 type sessionListInput struct {
 	All  bool   `json:"all,omitempty" jsonschema:"also list session trees without a record: forks cloning, failed or left incomplete"`
@@ -657,6 +696,12 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_unset", Description: descSessionUnset,
 		OutputSchema: newOutputSchema[model.Session]()}, h.unsetSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "compose_generate", Description: descComposeGenerate}, h.generateComposeMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:         "status",
+		Description:  descStatus,
+		Annotations:  &mcpsdk.ToolAnnotations{ReadOnlyHint: true},
+		OutputSchema: newOutputSchema[model.ComposeProjectStatus](),
+	}, h.statusMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name:         "gc",
 		Description:  descGC,

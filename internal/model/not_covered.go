@@ -63,14 +63,19 @@ func (m NotCovered) IsEmpty() bool {
 		len(m.ReplicaGaps) == 0 && len(m.UnresolvedImages) == 0 && len(m.WritableLayers) == 0 && len(m.Images) == 0
 }
 
-// Notice is one thing a savepoint does not hold, for a reader: what it is, and what to change
-// when there is something to.
+// Notice is one thing a savepoint does not hold or a status finds, for a reader: what it is, and,
+// on a savepoint's, what to change when there is something to.
 type Notice struct {
-	Message string `json:"message"`
-	Hint    string `json:"hint,omitempty"`
+	// Code names the condition, stable for a machine to act on; empty where none is defined.
+	Code    NoticeCode `json:"code,omitempty"`
+	Message string     `json:"message"`
+	Hint    string     `json:"hint,omitempty"`
 	// Severe marks a notice that puts the data at risk; a reader lists it first.
 	Severe bool `json:"severe,omitempty"`
 }
+
+// NoticeCode names the condition a notice reports.
+type NoticeCode string
 
 // Notices spells out what is left out, one notice per entry: the severe first, then in the order
 // of the fields.

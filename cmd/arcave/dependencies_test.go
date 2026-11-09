@@ -1596,6 +1596,48 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyArcaveProjectStore(t *testing.T) {
+	key := newTestStoreKey(t)
+	tests := []struct {
+		name    string
+		marked  string // the key the project is marked for; empty for none
+		wantErr error
+	}{
+		{name: "an unmarked project stays unmarked"},
+		{name: "a project marked for the key", marked: key},
+		{name: "a project marked for another key", marked: newTestStoreKey(t), wantErr: model.ErrWrongStoreKey},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			projectPath := t.TempDir()
+			if tt.marked != "" {
+				var marking closers
+				_, err := openArcaveProjectStore(t.Context(),
+					newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: tt.marked}), projectPath, &marking)
+				require.NoError(t, err)
+				marking.release(t.Context())
+			}
+			before := listTree(t, arcaveProjectPath(projectPath))
+
+			var opened closers
+			t.Cleanup(func() { opened.release(context.Background()) })
+
+			// Act
+			_, err := openReadOnlyArcaveProjectStore(t.Context(),
+				newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath, &opened)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "a read-only open writes nothing")
+		})
+	}
+}
+
 // arcaveProjectPath is where the directory storage of newEncryptionConfig keeps the demo arcave project.
 func arcaveProjectPath(projectPath string) string {
 	return filepath.Join(projectPath, ".arcave", "storage", "arcave", "projects", "demo")

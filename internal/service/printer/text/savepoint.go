@@ -53,7 +53,7 @@ func (s *Printer) formatSavepoints(savepoints []model.Savepoint) string {
 		rows = append(rows, []string{
 			formatSavepointName(savepoint),
 			savepoint.ID.String(),
-			savepoint.CreatedAt.In(s.opts.Location).Format("2006-01-02 15:04"),
+			s.formatTime(savepoint.CreatedAt),
 			strconv.Itoa(len(savepoint.Stats)),
 			strconv.Itoa(len(savepoint.WritableLayers)),
 			formatSize(newStoredBytes(savepoint)),
@@ -113,7 +113,7 @@ func (s *Printer) formatRemove(response model.RemoveResult) string {
 	fmt.Fprintf(&b, "%s %s:\n", verb, formatCount(len(response.Removed), "savepoint"))
 	for _, savepoint := range response.Removed {
 		fmt.Fprintf(&b, "  %s · %s · %s\n", formatSavepointName(savepoint), savepoint.ID,
-			savepoint.CreatedAt.In(s.opts.Location).Format("2006-01-02 15:04"))
+			s.formatTime(savepoint.CreatedAt))
 	}
 	return b.String()
 }

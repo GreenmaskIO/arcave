@@ -27,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/internal/service/sessionref"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -68,8 +69,8 @@ type SessionDeps struct {
 	// Store is the arcave project store a fork's heartbeat is written into and read from, and a
 	// session's savepoints are listed off.
 	Store storages.Navigator
-	// NewSavepoints opens the savepoints of a compose project's store.
-	NewSavepoints func(store storages.Storager) SavepointReader
+	// NewSavepointReader opens the savepoints of a compose project's store.
+	NewSavepointReader func(store storages.Storager) SavepointReader
 	// NewSessionLocker opens the lock of one session.
 	NewSessionLocker func(id model.SessionID) (model.SessionLocker, error)
 	// RunnerInfo identifies this process in a fork's heartbeat.
@@ -126,7 +127,7 @@ func NewSessionService(deps SessionDeps) *SessionService {
 			return heartbeat.NewReader(sessionStore).SetStaleAfter(staleAfter), nil
 		},
 		sessionSavepoints: func(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error) {
-			return readSessionSavepoints(ctx, deps.Store, deps.NewSavepoints, id)
+			return readSessionSavepoints(ctx, deps.Store, deps.NewSavepointReader, id)
 		},
 	}
 }
@@ -134,43 +135,7 @@ func NewSessionService(deps SessionDeps) *SessionService {
 // ResolveSession finds the session ref names: by name first, then by id. "" is the current
 // session, or the default when no pointer is set; a pointer to a deleted session is refused.
 func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
-	if ref != "" {
-		sessions, err := s.sessions.ListSessions(ctx)
-		if err != nil {
-			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
-		}
-		session, err := findSessionByRef(sessions, ref)
-		if err != nil {
-			return model.Session{}, err
-		}
-		logResolved(ctx, session, "ref", ref)
-		return session, nil
-	}
-	id, found, err := s.readCurrent(ctx)
-	if err != nil {
-		return model.Session{}, err
-	}
-	if !found {
-		logResolved(ctx, model.DefaultSessionRecord, "default", "")
-		return model.DefaultSessionRecord, nil
-	}
-	sessions, err := s.sessions.ListSessions(ctx)
-	if err != nil {
-		return model.Session{}, fmt.Errorf("listing sessions: %w", err)
-	}
-	if session, found := findSessionByID(sessions, id.String()); found {
-		logResolved(ctx, session, "pointer", "")
-		return session, nil
-	}
-	return model.Session{}, fmt.Errorf("%w: %s, named by %s/current_session; "+
-		"run 'arcave session unset' or 'arcave session set <session>'", model.ErrCurrentSessionNotFound, id, model.StateDir)
-}
-
-// logResolved records which session a command works in and what named it: a ref, the pointer
-// or the default.
-func logResolved(ctx context.Context, session model.Session, by, ref string) {
-	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Str("name", session.Name).
-		Str("by", by).Str("ref", ref).Msg("session resolved")
+	return sessionref.Resolve(ctx, s.sessions, s.current, ref)
 }
 
 // SetSession makes the session ref names the current one.
@@ -183,7 +148,7 @@ func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Sess
 		if err != nil {
 			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
 		}
-		session, err := findSessionByRef(sessions, ref)
+		session, err := model.FindSessionByRef(sessions, ref)
 		if err != nil {
 			return model.Session{}, err
 		}
@@ -274,7 +239,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 				Msg("session created")
 			return session, nil
 		}
-		source, err := findSessionByRef(sessions, req.From)
+		source, err := model.FindSessionByRef(sessions, req.From)
 		if err != nil {
 			return model.Session{}, err
 		}
@@ -438,20 +403,10 @@ func (s *SessionService) requireNotInUse(
 	return false, nil
 }
 
-// readCurrent reads the current-session pointer, naming the way out of an unreadable one.
-func (s *SessionService) readCurrent(ctx context.Context) (model.SessionID, bool, error) {
-	id, found, err := s.current.Get(ctx)
-	if err != nil {
-		return model.SessionID{}, false, fmt.Errorf("%w; run 'arcave session unset' or 'arcave session set <session>'", err)
-	}
-	zerolog.Ctx(ctx).Debug().Bool("found", found).Str("session", id.String()).Msg("current-session pointer read")
-	return id, found, nil
-}
-
 // readCurrentOrNone reads the pointer for a command it only informs: an unreadable one is
 // logged and read as none.
 func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID, bool) {
-	id, found, err := s.readCurrent(ctx)
+	id, found, err := sessionref.ReadCurrent(ctx, s.current)
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
 		return model.SessionID{}, false
@@ -463,14 +418,14 @@ func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID
 // when ref names none or the pointer cannot be read.
 func (s *SessionService) findCurrent(ctx context.Context, sessions []model.Session, ref string) model.SessionID {
 	if ref != "" {
-		session, err := findSessionByRef(sessions, ref)
+		session, err := model.FindSessionByRef(sessions, ref)
 		if err != nil {
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("marking the current session")
 			return model.SessionID{}
 		}
 		return session.ID
 	}
-	id, found, err := s.readCurrent(ctx)
+	id, found, err := sessionref.ReadCurrent(ctx, s.current)
 	switch {
 	case err != nil:
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
@@ -480,49 +435,6 @@ func (s *SessionService) findCurrent(ctx context.Context, sessions []model.Sessi
 	default:
 		return id
 	}
-}
-
-// findSessionByRef finds the session ref names among sessions: by name first, then by id.
-func findSessionByRef(sessions []model.Session, ref string) (model.Session, error) {
-	if session, found, err := findSessionByName(sessions, ref); err != nil || found {
-		return session, err
-	}
-	if session, found := findSessionByID(sessions, ref); found {
-		return session, nil
-	}
-	return model.Session{}, fmt.Errorf("%w: %q", model.ErrSessionNotFound, ref)
-}
-
-// findSessionByName finds the one session carrying name; several carrying it is an error.
-func findSessionByName(sessions []model.Session, name string) (model.Session, bool, error) {
-	var named []model.Session
-	for _, session := range sessions {
-		if session.Name == name {
-			named = append(named, session)
-		}
-	}
-	switch len(named) {
-	case 0:
-		return model.Session{}, false, nil
-	case 1:
-		return named[0], true, nil
-	default:
-		ids := make([]model.SessionID, len(named))
-		for i, session := range named {
-			ids[i] = session.ID
-		}
-		return model.Session{}, false, &model.AmbiguousSessionNameError{Name: name, IDs: ids}
-	}
-}
-
-// findSessionByID finds the session whose id is ref.
-func findSessionByID(sessions []model.Session, ref string) (model.Session, bool) {
-	for _, session := range sessions {
-		if session.ID.String() == ref {
-			return session, true
-		}
-	}
-	return model.Session{}, false
 }
 
 // summarize counts what the session holds, safety snapshots excluded, and measures its tree.
@@ -560,7 +472,7 @@ func (s *SessionService) summarize(ctx context.Context, session model.Session) (
 // readSessionSavepoints lists every committed savepoint of session id, grouped by compose
 // project and ordered by its name; a compose project holding none is left out.
 func readSessionSavepoints(
-	ctx context.Context, store storages.Navigator, newSavepoints func(storages.Storager) SavepointReader,
+	ctx context.Context, store storages.Navigator, newSavepointReader func(storages.Storager) SavepointReader,
 	id model.SessionID,
 ) ([]model.ComposeProjectSavepoints, error) {
 	sessionStore, err := storefactory.Session(store, id)
@@ -577,7 +489,7 @@ func readSessionSavepoints(
 		if err != nil {
 			return nil, fmt.Errorf("open compose project %s: %w", name, err)
 		}
-		savepoints, err := newSavepoints(composeProjectStore).ListSavepoints(ctx)
+		savepoints, err := newSavepointReader(composeProjectStore).ListSavepoints(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list savepoints of compose project %s: %w", name, err)
 		}
@@ -671,10 +583,10 @@ func requireFreeName(sessions []model.Session, name string) error {
 	if name == "" {
 		return nil
 	}
-	if _, found, err := findSessionByName(sessions, name); found || err != nil {
+	if _, found, err := model.FindSessionByName(sessions, name); found || err != nil {
 		return fmt.Errorf("%w: %q", model.ErrSessionNameTaken, name)
 	}
-	if session, found := findSessionByID(sessions, name); found {
+	if session, found := model.FindSessionByID(sessions, name); found {
 		return fmt.Errorf("%w: %q is the id of session %q", model.ErrSessionNameTaken, name, session.Name)
 	}
 	return nil
@@ -697,7 +609,7 @@ func (s *SessionService) forkUnderSourceLock(ctx context.Context, session model.
 	_, err = withSessionLock(ctx, locker, model.SessionLockOperationSessionFork,
 		func(ctx context.Context, grantedLock model.GrantedSessionLock) (struct{}, error) {
 			// The source may have been removed while the fork waited for its lock.
-			if err := requireSession(ctx, s.sessions, source); err != nil {
+			if _, err := readSessionRef(ctx, s.sessions, source); err != nil {
 				return struct{}{}, err
 			}
 			return struct{}{}, s.forkSession(ctx, grantedLock, session)

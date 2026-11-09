@@ -98,6 +98,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
+		ArcaveProject:      "arcave-oci-tenant",
 		SessionLocker:      newStoreLocker(composeProjectStore, model.DefaultSession),
 		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),

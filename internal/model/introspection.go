@@ -205,6 +205,9 @@ type Container struct {
 	// service this is, counted from 1.
 	Number int
 	Labels map[string]string
+	// Replaces is the name of the container compose recreated this one over; empty for one it
+	// created anew.
+	Replaces string
 	// Inspect is what `docker container inspect` reports, verbatim.
 	Inspect container.InspectResponse
 }
@@ -308,4 +311,21 @@ type IntrospectionResult struct {
 	// Referenced are the containers outside the project a replica names in container: network,
 	// ipc or pid mode or in volumes_from, keyed by id, verbatim. One the daemon no longer has is absent.
 	Referenced map[string]container.InspectResponse
+}
+
+// ComposeProjectContainers is a compose project's containers alone, nothing they mount or run on:
+// what a status reads.
+type ComposeProjectContainers struct {
+	// Services are the services the daemon holds a replica of, sorted by name.
+	Services []ServiceContainers
+}
+
+// ServiceContainers is one service's replicas.
+type ServiceContainers struct {
+	Name string
+	// AwaitsCompletion are the services this one waits on to complete successfully, as compose
+	// recorded its depends_on on the first replica.
+	AwaitsCompletion []string
+	// Containers are the service's replicas, sorted by Number.
+	Containers []Container
 }

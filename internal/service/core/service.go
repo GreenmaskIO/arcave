@@ -134,6 +134,8 @@ type Deps struct {
 	Store              storages.Storager
 	// CaptureDefaults are the backends a unit no arcave.* label names is captured by.
 	CaptureDefaults capturepolicy.CaptureDefaults
+	// ArcaveProject is the arcave project Store belongs to, which a rollback's deployment labels name.
+	ArcaveProject model.ArcaveProjectName
 	// Session is the session Store belongs to; zero means model.DefaultSession.
 	Session model.SessionID
 	// ComposeProject is the compose project Store belongs to.
@@ -173,6 +175,7 @@ type Service struct {
 	snapshotBackendRegistry model.SnapshotBackendRegistry
 	store                   storages.Storager
 	captureDefaults         capturepolicy.CaptureDefaults
+	arcaveProject           model.ArcaveProjectName
 	daemonVersion           string
 	minDaemonMajor          int
 	maxConcurrentOperations int
@@ -203,6 +206,7 @@ func New(deps Deps) *Service {
 		snapshotBackendRegistry: deps.BackendRegistry,
 		store:                   deps.Store,
 		captureDefaults:         deps.CaptureDefaults,
+		arcaveProject:           deps.ArcaveProject,
 		daemonVersion:           deps.DaemonVersion,
 		minDaemonMajor:          deps.MinDaemonMajor,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
@@ -257,20 +261,26 @@ func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, 
 	return fn()
 }
 
-// requireSession refuses a session other than the default that has no record: one resolved
-// outside the lock may have been removed since.
-func requireSession(ctx context.Context, sessions sessionLookup, id model.SessionID) error {
+// readSessionRef names session id as its record does, refusing one other than the default that
+// has no record: one resolved outside the lock may have been removed since.
+func readSessionRef(ctx context.Context, sessions sessionLookup, id model.SessionID) (model.SessionRef, error) {
 	if id == model.DefaultSession {
-		return nil
+		return model.SessionRef{
+			ID:   model.DefaultSession,
+			Name: model.DefaultSessionName,
+		}, nil
 	}
-	_, found, err := sessions.LoadSession(ctx, id)
+	session, found, err := sessions.LoadSession(ctx, id)
 	if err != nil {
-		return fmt.Errorf("checking session %s: %w", id, err)
+		return model.SessionRef{}, fmt.Errorf("checking session %s: %w", id, err)
 	}
 	if !found {
-		return fmt.Errorf("%w: %s", model.ErrSessionNotFound, id)
+		return model.SessionRef{}, fmt.Errorf("%w: %s", model.ErrSessionNotFound, id)
 	}
-	return nil
+	return model.SessionRef{
+		ID:   session.ID,
+		Name: session.Name,
+	}, nil
 }
 
 // fanOutLimit turns a configured concurrency into an errgroup limit, where a

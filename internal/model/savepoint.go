@@ -85,6 +85,11 @@ func (m Savepoint) Notices() []Notice {
 			Severe:  true,
 		})
 	}
+	return SortSevereFirst(notices)
+}
+
+// SortSevereFirst orders notices severe first, keeping their order otherwise.
+func SortSevereFirst(notices []Notice) []Notice {
 	return slices.SortedStableFunc(slices.Values(notices), func(a, b Notice) int {
 		return compareSevere(a.Severe, b.Severe)
 	})

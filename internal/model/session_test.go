@@ -60,3 +60,51 @@ func TestSession_JSON_FromNamesASessionOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"id":"`+DefaultSession.String()+`","name":"feat","from":{"session":"`+DefaultSession.String()+`"}}`, string(data))
 }
+
+func TestFindSessionByRef(t *testing.T) {
+	var (
+		feat  = Session{ID: SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x01}, Name: "feat"}
+		fix   = Session{ID: SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x02}, Name: "fix"}
+		other = Session{ID: SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x03}, Name: "feat"}
+	)
+	// shadow carries fix's id as its name: a name is looked up before an id.
+	shadow := Session{ID: SessionID{0x01, 0x9a, 0x70, 0, 0, 0, 0x70, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x04}, Name: fix.ID.String()}
+	tests := []struct {
+		name          string
+		sessions      []Session
+		ref           string
+		want          Session
+		wantErr       error
+		wantAmbiguous *AmbiguousSessionNameError
+	}{
+		{name: "by name", sessions: []Session{feat, fix}, ref: "fix", want: fix},
+		{name: "by id", sessions: []Session{feat, fix}, ref: feat.ID.String(), want: feat},
+		{name: "a name shadows another session's id", sessions: []Session{fix, shadow}, ref: fix.ID.String(), want: shadow},
+		{name: "none", sessions: []Session{feat}, ref: "nope", wantErr: ErrSessionNotFound},
+		{
+			name:          "two carrying the name",
+			sessions:      []Session{feat, fix, other},
+			ref:           "feat",
+			wantAmbiguous: &AmbiguousSessionNameError{Name: "feat", IDs: []SessionID{feat.ID, other.ID}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got, err := FindSessionByRef(tt.sessions, tt.ref)
+
+			// Assert
+			switch {
+			case tt.wantAmbiguous != nil:
+				var ambiguous *AmbiguousSessionNameError
+				require.ErrorAs(t, err, &ambiguous)
+				assert.Equal(t, tt.wantAmbiguous, ambiguous)
+			case tt.wantErr != nil:
+				assert.ErrorIs(t, err, tt.wantErr)
+			default:
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

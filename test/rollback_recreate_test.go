@@ -315,6 +315,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	require.NoError(t, err)
 
 	svc := core.New(core.Deps{
+		ArcaveProject:      "arcave-recreate-tenant",
 		SessionLocker:      newStoreLocker(store, model.DefaultSession),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),

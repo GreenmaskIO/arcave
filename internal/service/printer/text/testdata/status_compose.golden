@@ -1,0 +1,5 @@
+myapp · running · not deployed by arcave
+  session    baseline
+
+SERVICE  REPLICAS  STATE    UP      PORTS
+db       1         running  3h 11m  127.0.0.1:5432→5432/tcp

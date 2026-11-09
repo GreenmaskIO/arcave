@@ -25,7 +25,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`tools generate-compose`](tools_generate_compose.md) | Writes a docker compose file for a running compose project, from what the daemon reports. |
 | [`gc`](gc.md) | Finds and deletes the garbage arcave left in a session's store and in the Docker daemon. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |
-| [`status`](status.md) | Planned. Registered, and returns `not implemented`. |
+| [`status`](status.md) | Shows what the daemon runs for a compose project: the savepoint a rollback deployed, every replica's state and ports, and a rollback in progress or interrupted. Reads only. |
 | `completion` | Cobra's shell-completion script generator, for bash, zsh, fish and PowerShell. |
 
 Short aliases: `savepoint` also answers to `save` and `sp`, every `list` to `ls`, and every `remove` to `rm` — `arcave sp ls` is `arcave savepoint list`.
@@ -34,7 +34,7 @@ Short aliases: `savepoint` also answers to `save` and `sp`, every `list` to `ls`
 
 | Flag | Default | Config key | Description |
 |---|---|---|---|
-| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`, `mcp`, `status` and the `session` commands; an MCP tool call names its compose project itself. Read from `ARCAVE_COMPOSE_PROJECT_NAME` when the flag is absent. |
+| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`, `mcp`, `gc` and the `session` commands; an MCP tool call names its compose project itself. Read from `ARCAVE_COMPOSE_PROJECT_NAME` when the flag is absent. |
 | `--session` | the current session, else `baseline` | *(none)* | The session to work in, by id or by name. Read from `ARCAVE_SESSION` when the flag is absent; with neither, the current session `arcave session set` chose, else `baseline`. See [`arcave session`](session.md#naming-the-session-a-command-works-in). |
 | `--config` | `.arcave/config.yaml` | *(none)* | Path to the config file. |
 | `--log-level` | `warn` above the live tree, else `info` | `log.level` | `debug`, `info` or `warn`. |

@@ -63,7 +63,7 @@ func (s *GarbageCollector) readComposeProjectScope(
 		return ComposeProjectScope{}, nil, fmt.Errorf("list compose project %s: %w", name, err)
 	}
 	trees = newSavepointTrees(objects)
-	if savepoints, err = s.newSavepoints(store).LoadSavepoints(ctx, trees); err != nil {
+	if savepoints, err = s.newSavepointReader(store).LoadSavepoints(ctx, trees); err != nil {
 		return ComposeProjectScope{}, nil, fmt.Errorf("read savepoints of compose project %s: %w", name, err)
 	}
 	return ComposeProjectScope{

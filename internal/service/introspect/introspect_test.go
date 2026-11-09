@@ -442,6 +442,7 @@ func TestInspector_Introspect_DesktopBindSource(t *testing.T) {
 func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	// Arrange
 	second := summary("c-web-2", "web", "nginx:1", 2)
+	second.Labels[api.ContainerReplaceLabel] = "demo-web-2-old"
 	first := summary("c-web-1", "web", "nginx:1", 1)
 	oneoff := summary("c-web-run", "web", "nginx:1", 1)
 	oneoff.Labels[api.OneoffLabel] = "True"
@@ -463,7 +464,103 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 	assert.Equal(t, 1, got.Project.Services[0].Containers[0].Number, "replicas sort by number")
 	assert.Equal(t, 2, got.Project.Services[0].Containers[1].Number)
 	assert.Equal(t, "c-web-1", got.Project.Services[0].Containers[0].Name)
+	assert.Equal(t, "demo-web-2-old", got.Project.Services[0].Containers[1].Replaces,
+		"a replica compose recreated names the one it replaced")
 	daemon.AssertExpectations(t)
+}
+
+func TestInspector_ReadContainers(t *testing.T) {
+	// Arrange: two services, one waiting on the other to complete, a hook's runner and a one-off,
+	// in one listing.
+	web := summary("c-web-1", "web", "nginx:1", 1)
+	web.Labels[api.DependenciesLabel] = "migrate:service_completed_successfully:false"
+	migrate := summary("c-migrate-1", "migrate", "nginx:1", 1)
+	runner := summary("c-web-hook", "web", "nginx:1", 0)
+	maps.Copy(runner.Labels, map[string]string{api.HookLabel: "pre_start", api.HookIndexLabel: "0"})
+	oneoff := summary("c-web-run", "web", "nginx:1", 1)
+	oneoff.Labels[api.OneoffLabel] = "True"
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(web, migrate, runner, oneoff)
+	daemon.expectInspect("c-migrate-1", "c-web-1")
+
+	// Act: no volume, network or image is read, so none is expected.
+	got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Services, 2)
+	assert.Equal(t, "migrate", got.Services[0].Name)
+	assert.Nil(t, got.Services[0].AwaitsCompletion)
+	assert.Equal(t, "web", got.Services[1].Name)
+	assert.Equal(t, []string{"migrate"}, got.Services[1].AwaitsCompletion)
+	require.Len(t, got.Services[1].Containers, 1, "neither a hook's runner nor a one-off is a replica")
+	assert.Equal(t, "c-web-1", got.Services[1].Containers[0].ID)
+	daemon.AssertExpectations(t)
+}
+
+func TestInspector_ReadContainers_GoneUnderTheRead(t *testing.T) {
+	// Arrange: web-2 and the only migrate replica go between the listing and their inspect, as a
+	// rollback rebuilding them removes them.
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(
+		summary("c-web-1", "web", "nginx:1", 1),
+		summary("c-web-2", "web", "nginx:1", 2),
+		summary("c-migrate-1", "migrate", "nginx:1", 1),
+	)
+	daemon.expectInspect("c-web-1")
+	for _, id := range []string{"c-web-2", "c-migrate-1"} {
+		daemon.On("ContainerInspect", mock.Anything, id, client.ContainerInspectOptions{}).
+			Return(container.InspectResponse{}, cerrdefs.ErrNotFound).Once()
+	}
+
+	// Act
+	got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Services, 1, "a service with no container left is left out")
+	assert.Equal(t, "web", got.Services[0].Name)
+	require.Len(t, got.Services[0].Containers, 1)
+	assert.Equal(t, "c-web-1", got.Services[0].Containers[0].ID)
+	daemon.AssertExpectations(t)
+}
+
+func TestInspector_ReadContainers_DaemonFailures(t *testing.T) {
+	daemonErr := errors.New("daemon refused")
+	tests := []struct {
+		name  string
+		setup func(daemon *mockDockerAPI)
+	}{
+		{
+			name: "the listing",
+			setup: func(daemon *mockDockerAPI) {
+				daemon.On("ContainerList", mock.Anything, mock.Anything).Return(nil, daemonErr).Once()
+			},
+		},
+		{
+			name: "a replica's inspect",
+			setup: func(daemon *mockDockerAPI) {
+				daemon.expectContainers(summary("c-web-1", "web", "nginx:1", 1))
+				daemon.On("ContainerInspect", mock.Anything, "c-web-1", client.ContainerInspectOptions{}).
+					Return(container.InspectResponse{}, daemonErr).Once()
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			tt.setup(daemon)
+
+			// Act
+			got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+
+			// Assert
+			require.ErrorIs(t, err, daemonErr)
+			assert.Equal(t, model.ComposeProjectContainers{}, got)
+			daemon.AssertExpectations(t)
+		})
+	}
 }
 
 func TestKeepProjectContainers(t *testing.T) {
@@ -1210,6 +1307,29 @@ func TestContainerName(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseAwaitsCompletion(t *testing.T) {
+	tests := []struct {
+		name  string
+		label string
+		want  []string
+	}{
+		{name: "no label"},
+		{name: "a dependency waited on to start or be healthy", label: "db:service_healthy:false,cache:service_started:true"},
+		{
+			name:  "several entries",
+			label: "db:service_healthy:false,migrate:service_completed_successfully:true,seed:service_completed_successfully:false",
+			want:  []string{"migrate", "seed"},
+		},
+		{name: "an older label with no restart part", label: "migrate:service_completed_successfully", want: []string{"migrate"}},
+		{name: "an older label with the service alone", label: "db"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseAwaitsCompletion(tt.label))
 		})
 	}
 }

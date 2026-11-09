@@ -105,3 +105,48 @@ func TestAdmitEncrypted(t *testing.T) {
 		})
 	}
 }
+
+func TestRequireKey(t *testing.T) {
+	identity, err := ParseKey(newTestKey(t))
+	require.NoError(t, err)
+	ours := identity.Recipient().String()
+	tests := []struct {
+		name       string
+		marker     string
+		wantErr    error
+		wantMarker string
+	}{
+		{name: "an unmarked project stays unmarked"},
+		{name: "a project marked for the key", marker: `{"recipient":"` + ours + `"}`, wantMarker: ours},
+		{
+			name:       "a project marked for another key",
+			marker:     `{"recipient":"age1other"}`,
+			wantErr:    model.ErrWrongStoreKey,
+			wantMarker: "age1other",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			store := inmemory.New("")
+			if tt.marker != "" {
+				require.NoError(t, store.PutObject(t.Context(), encryptionmarker.FileName, strings.NewReader(tt.marker)))
+			}
+
+			// Act
+			err := RequireKey(t.Context(), encryptionmarker.New(store), identity)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.ErrorContains(t, err, tt.wantMarker)
+			} else {
+				require.NoError(t, err)
+			}
+			marker, found, err := encryptionmarker.New(store).Get(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, tt.marker != "", found)
+			assert.Equal(t, tt.wantMarker, marker.Recipient)
+		})
+	}
+}

@@ -70,6 +70,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -131,6 +132,7 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -198,10 +200,10 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 			}}, r.NotCovered)
 	})).Return(nil).Once()
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restore := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
-	start := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	start := runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 
 	// The containers it commits exist only between the stop and the teardown.
 	mock.InOrder(stop, snapshotSafety, upstreamSafety, captureSafety, specSafety, commitSafety, down, create,
@@ -213,6 +215,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -277,7 +280,7 @@ func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
 		return r.IsSafetySnapshot() && len(r.WritableLayers) == 1
 	})).Return(nil).Once()
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
@@ -306,6 +309,7 @@ func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -360,6 +364,7 @@ func TestService_Rollback_SkippedSafetySnapshotCapturesNoLayer(t *testing.T) {
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(backend, nil).Once()
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -427,6 +432,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -512,6 +518,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:      demoArcaveProject,
 		SessionLocker:      fakeSessionLocker{},
 		VolumeRemover:      &mockVolumeRemover{},
 		SavepointRepo:      repo,
@@ -564,10 +571,10 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	expectSafetySnapshotCommit(repo, record.ID)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	// The spec goes to the rebuild untouched: nothing was retargeted.
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
-	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -575,6 +582,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:      demoArcaveProject,
 		SessionLocker:      fakeSessionLocker{},
 		VolumeRemover:      &mockVolumeRemover{},
 		SavepointRepo:      repo,
@@ -622,6 +630,7 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 	registry.On("New", matchSpec(store, demoVolume().ObjectID)).Return(&mockBackend{volume: demoVolume()}, nil).Twice()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -664,6 +673,7 @@ func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
 	runner := &mockComposeRunner{}
 	repo := emptySavepointRepo()
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -712,6 +722,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 	runner := &mockComposeRunner{}
 	inflight := &fakeInflight{}
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,

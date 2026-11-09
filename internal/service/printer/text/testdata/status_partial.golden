@@ -1,0 +1,12 @@
+myapp · running · savepoint before-migration (01a188c4-1650-7000-8000-000000000001)
+  deployed   2026-11-07 14:02 (3h 12m ago)
+  from       session baseline
+  savepoint  taken 2026-10-29 19:45 (8d 21h ago)
+
+SERVICE  REPLICAS  STATE      UP      PORTS
+db       1/1       healthy    3h 11m  127.0.0.1:5432→5432/tcp
+web      2/2       running    3h 11m  0.0.0.0:8080→80/tcp
+migrate  1/1       completed  —
+
+Warnings (1)
+  ! the store could not be read: the store is encrypted; showing the daemon alone [store-unreadable]

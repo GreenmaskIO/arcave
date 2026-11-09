@@ -480,6 +480,25 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		DataKind: model.GarbageDataKindImageLayers, ComposeProject: "demo",
 		Summary: model.GarbageSummary{Aborted: "1 manifests of committed savepoints cannot be read"},
 	}}, Total: model.GarbageTotal{Aborted: 1}}
+	// A partial status is still a report; its session ids marshal as the strings the schema says.
+	deployedAt := time.Date(2026, 11, 7, 14, 2, 0, 0, time.UTC)
+	status := model.ComposeProjectStatus{
+		ComposeProject: "demo", CheckedAt: deployedAt.Add(time.Hour), State: model.ComposeProjectStateRunning,
+		Session: &model.SessionRef{ID: handlerSession, Name: "feat"},
+		Deployment: &model.DeploymentStatus{
+			Source: model.DeploymentSourceSavepoint, DeployedAt: deployedAt,
+			Session: model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+			Savepoint: &model.DeployedSavepointStatus{DeployedSavepoint: model.DeployedSavepoint{
+				ID:        savepoint.ID,
+				Name:      savepoint.Name,
+				CreatedAt: deployedAt.Add(-time.Hour),
+			}},
+			Record: model.DeploymentRecordUnreadable,
+		},
+		Services: []model.ServiceStatus{{Name: "db", State: model.ReplicaStateRunning, ReplicasUp: 1,
+			Replicas: []model.ReplicaStatus{{Number: 1, State: model.ReplicaStateRunning}}}},
+		Unreadable: []model.StatusUnreadable{{Source: model.StatusUnreadableStore, Error: "unreachable"}},
+	}
 	layers := []model.WritableLayerRestoreResult{{Service: "db", Replica: 1, ContainerName: "demo-db-1",
 		ImageID: model.ImageDigestID("sha256:" + strings.Repeat("a", 64)), Tag: "arcave/demo-db-1-postgres-16:sp-v1"}}
 	tests := []struct {
@@ -545,6 +564,10 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				}).
 					Return(gcResult, model.ErrGarbageCollectPartial).Once()
 			}, want: gcResult},
+		{tool: "status", args: map[string]any{"compose_project": "demo", "session": "feat"},
+			setup: func(svc *mockService) {
+				svc.On("Status", mock.Anything, model.StatusRequest{Session: "feat"}).Return(status, model.ErrStatusPartial).Once()
+			}, want: status},
 	}
 
 	// Arrange: one server for every case, over the SDK's own transport, so its schema checks run.
@@ -570,6 +593,9 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 			return svc, func() {}, nil
 		},
 		GC: func(context.Context, string) (MCPGCService, func(), error) {
+			return svc, func() {}, nil
+		},
+		Status: func(context.Context, string) (MCPStatusService, func(), error) {
 			return svc, func() {}, nil
 		},
 	}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
@@ -668,6 +694,54 @@ func TestMCPHandler_garbageCollectMCP(t *testing.T) {
 				require.NoError(t, err)
 			}
 			assert.Equal(t, tt.wantIsError, res != nil && res.IsError)
+			assert.Equal(t, tt.want, got)
+			svc.AssertExpectations(t)
+		})
+	}
+}
+
+func TestMCPHandler_statusMCP(t *testing.T) {
+	pinned := model.NewSessionID()
+	status := model.ComposeProjectStatus{ComposeProject: "demo", State: model.ComposeProjectStateRunning}
+	daemonErr := errors.New("daemon unreachable")
+	tests := []struct {
+		name        string
+		in          statusInput
+		pinned      model.SessionID
+		wantSession string
+		svcErr      error
+		wantErr     error
+		want        model.ComposeProjectStatus
+	}{
+		{name: "the status", in: statusInput{ComposeProject: "demo"}, want: status},
+		{name: "the session named on the call", in: statusInput{ComposeProject: "demo", Session: "feat"}, wantSession: "feat", want: status},
+		{name: "else the pin", in: statusInput{ComposeProject: "demo"}, pinned: pinned, wantSession: pinned.String(), want: status},
+		{
+			name: "a partial status is a result, not a tool error", in: statusInput{ComposeProject: "demo"},
+			svcErr: model.ErrStatusPartial, want: status,
+		},
+		{name: "a daemon that cannot be read is the call's error", in: statusInput{ComposeProject: "demo"}, svcErr: daemonErr, wantErr: daemonErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("Status", mock.Anything, model.StatusRequest{Session: tt.wantSession}).Return(status, tt.svcErr).Once()
+			h := NewMCPHandler(MCPFactories{Status: func(_ context.Context, composeProject string) (MCPStatusService, func(), error) {
+				require.Equal(t, "demo", composeProject)
+				return svc, func() {}, nil
+			}}, tt.pinned, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+
+			// Act
+			res, got, err := h.statusMCP(context.Background(), nil, tt.in)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Nil(t, res)
 			assert.Equal(t, tt.want, got)
 			svc.AssertExpectations(t)
 		})

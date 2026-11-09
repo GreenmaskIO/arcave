@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -55,10 +56,10 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 	commitSafety := expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	// The teardown takes the live compose project down; the rebuild puts back the recorded one.
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, rolledBackTo(demoTargetSpec, record), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
-	up := runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	up := runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 
 	// The whole workflow: stop → back up the live state, write its spec and commit
 	// its record → tear the compose project down → rebuild it from the savepoint's spec →
@@ -85,6 +86,7 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -115,6 +117,21 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 // A failed restore reverts through the very backend instances that took the
 // backup: the .Once builds above pin one safety instance, so the revert's
 // Restore can only land on the one whose Snapshot wrote the backup.
+func TestService_Rollback_RefusesNoArcaveProject(t *testing.T) {
+	// Arrange
+	locker := &mockSessionLocker{}
+	svc := New(Deps{SessionLocker: locker})
+
+	// Act
+	_, err := svc.Rollback(context.Background(), model.RollbackRequest{
+		ID: ptrID("019e843e-1650-7000-8000-000000000000"),
+	})
+
+	// Assert
+	require.ErrorContains(t, err, "invalid arcave project name")
+	locker.AssertExpectations(t)
+}
+
 func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	// Arrange
 	vol := demoVolume()
@@ -136,18 +153,19 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 	specSafety := expectSpecCommit(repo)
 	commitSafety := expectSafetySnapshotCommit(repo, "019e843e-1650-7000-8000-000000000000")
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
 		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
 		Return(errors.New("restore boom")).Once()
 	// The revert rebuilds the compose project the backup was taken of and replays it under the
 	// id its capture reported; a successful revert drops the backup too.
 	downForRevert := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	createForRevert := runner.On("Create", mock.Anything, demoSpec, demoRestoredVolumes).Return(nil).Once()
+	// Labelled as the safety snapshot deployed.
+	createForRevert := runner.On("Create", mock.Anything, deployedSafetySnapshot(demoSpec, &safetySnapshotID), demoRestoredVolumes).Return(nil).Once()
 	restoreSafety := safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
 		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
 	})).Return(nil).Once()
-	up := runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
+	up := runner.On("Start", mock.Anything, deployedSafetySnapshot(demoSpec, &safetySnapshotID), 60*time.Second).Return(nil).Once()
 
 	// Stop → backup, spec and commit → tear down and rebuild → the failed restore,
 	// then the revert: tear down and rebuild again → replay → restart.
@@ -171,6 +189,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -210,11 +229,11 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
 	// The rollback rebuilds the savepoint's compose project; the revert rebuilds the live one.
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
-	runner.On("Create", mock.Anything, demoSpec, demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Return(nil).Once()
 	// The first start is the failed health check; the second is the revert's restart.
-	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(errors.New("unhealthy")).Once()
-	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
+	runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(errors.New("unhealthy")).Once()
+	runner.On("Start", mock.Anything, deployed(demoSpec), 60*time.Second).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -246,6 +265,7 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -283,8 +303,8 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
-	runner.On("Create", mock.Anything, demoSpec, demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -317,6 +337,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -381,6 +402,7 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -428,8 +450,8 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
-	runner.On("Create", mock.Anything, demoSpec, demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -463,6 +485,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -522,13 +545,13 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
-	runner.On("Create", mock.Anything, demoSpec, demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Return(nil).Once()
 	// The first start fails the health check, which drives Rollback into revert; the
 	// second is revert's own restart, the one under test.
-	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Run(captureCtx).
+	runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Run(captureCtx).
 		Return(errors.New("unhealthy")).Once()
-	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Run(captureCtx).Return(nil).Once()
+	runner.On("Start", mock.Anything, deployed(demoSpec), 60*time.Second).Run(captureCtx).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -560,6 +583,7 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -595,8 +619,8 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil)
-	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil)
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil)
+	runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil)
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -625,6 +649,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -682,6 +707,7 @@ func TestService_Rollback_RejectsAnUnsafeIDBeforeAnyBackend(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -733,8 +759,8 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil)
-	runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil)
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil)
+	runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil)
 
 	docker := &fakeVolumeStreamer{payload: "live bytes"}
 	registry, err := NewSnapshotBackendRegistry(fullcopy.NewFactory(docker, fullcopy.CompressionNone))
@@ -752,6 +778,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 
 	// The capture the restore reads, at the key the backend renders.
@@ -896,6 +923,7 @@ func TestService_Rollback_RefusesASavepointWithNoSpec(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            nil,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -942,8 +970,8 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil)
-	runner.On("Create", mock.Anything, demoTargetSpec, []string(nil)).Return(nil)
-	runner.On("Start", mock.Anything, demoTargetSpec, time.Duration(0)).Return(nil)
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), []string(nil)).Return(nil)
+	runner.On("Start", mock.Anything, deployed(demoTargetSpec), time.Duration(0)).Return(nil)
 
 	savepointBackend := &mockBackend{volume: anonVol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -979,6 +1007,7 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -1031,6 +1060,7 @@ func coldStartDeps(t *testing.T, record model.Savepoint) (Deps, *mockSavepointRe
 		Inflight:         &fakeInflight{},
 		Store:            newDirStore(t),
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 		DaemonVersion:    "27.3.1",
 		MinDaemonMajor:   25,
 	}, repo, inspector
@@ -1062,7 +1092,14 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 		SnapshotID: record.ID, Layer: demoWritableLayer(), Tag: demoRestoredTag(1),
 	}).Return(demoWritableLayerRestoreResult(), nil).Once()
 	runner := &mockComposeRunner{}
-	target := matchRetargetedImage(demoService, demoRestoredTag(1))
+	// Retargeted at the restored layer, and labelled with the session the rollback runs in.
+	exp := model.SessionRef{ID: demoSession, Name: "exp"}
+	target := mock.MatchedBy(func(project *types.Project) bool {
+		service, ok := project.Services[demoService]
+		deployment, labelled, err := model.ParseSavepointDeployment(service.Labels)
+		return ok && service.Image == demoRestoredTag(1) && service.PullPolicy == types.PullPolicyNever &&
+			err == nil && labelled && deployment.Session == exp && deployment.Savepoint.ID == record.ID
+	})
 	create := runner.On("Create", mock.Anything, target, demoRestoredVolumes).Return(nil).Once()
 	backend := &mockBackend{volume: vol}
 	restoreVolume := backend.On("Restore", mock.Anything,
@@ -1077,6 +1114,9 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 	volumeRemover := &mockVolumeRemover{}
 	deps.Inflight, deps.ImageBackend, deps.ComposeRunner = inflight, images, runner
 	deps.BackendRegistry, deps.VolumeRemover = registry, volumeRemover
+	sessions := &mockSessionRepo{}
+	sessions.On("LoadSession", mock.Anything, demoSession).Return(model.Session{ID: demoSession, Name: "exp"}, true, nil).Once()
+	deps.Session, deps.Sessions = demoSession, sessions
 	svc := New(deps)
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -1099,6 +1139,7 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 	registry.AssertExpectations(t)
 	backend.AssertExpectations(t)
 	volumeRemover.AssertExpectations(t)
+	sessions.AssertExpectations(t)
 }
 
 // Refusing a surviving volume refuses before anything is loaded or created: the image
@@ -1343,9 +1384,9 @@ func TestService_Rollback_InterruptedRestoreReverts(t *testing.T) {
 	runner := &mockComposeRunner{}
 	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	runner.On("Down", mock.Anything, demoSpec).Return(nil).Twice()
-	runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
-	runner.On("Create", mock.Anything, demoSpec, demoRestoredVolumes).Run(liveErr(&revertErrs)).Return(nil).Once()
-	runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Run(liveErr(&revertErrs)).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
+	runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Run(liveErr(&revertErrs)).Return(nil).Once()
+	runner.On("Start", mock.Anything, deployed(demoSpec), 60*time.Second).Run(liveErr(&revertErrs)).Return(nil).Once()
 
 	savepointBackend := &mockBackend{volume: vol}
 	savepointBackend.On("Restore", mock.Anything,
@@ -1379,6 +1420,7 @@ func TestService_Rollback_InterruptedRestoreReverts(t *testing.T) {
 		Inflight:         inflight,
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	})
 
 	// Act
@@ -1478,6 +1520,7 @@ func TestService_Rollback_InterruptBeforeTheTeardownRestarts(t *testing.T) {
 				Inflight:         inflight,
 				Store:            store,
 				CaptureDefaults:  demoCaptureDefaults,
+				ArcaveProject:    demoArcaveProject,
 			})
 
 			// Act
@@ -1569,6 +1612,7 @@ func newNoSnapshotService(t *testing.T, record model.Savepoint, inflight infligh
 		Inflight:         inflight,
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:    demoArcaveProject,
 	}), doubles
 }
 
@@ -1630,11 +1674,11 @@ func TestService_Rollback_SkipsTheSafetySnapshot(t *testing.T) {
 			putRecreating := inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRecreating)).
 				Run(func(mock.Arguments) { warnedBeforeMarker = len(warned.msgs) }).Return(nil).Once()
 			down := doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
-			create := doubles.runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+			create := doubles.runner.On("Create", mock.Anything, rolledBackTo(demoTargetSpec, record), demoRestoredVolumes).Return(nil).Once()
 			putRestoring := inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRestoring)).Return(nil).Once()
 			restore := doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
 			putDone := inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRestoreDone)).Return(nil).Once()
-			start := doubles.runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+			start := doubles.runner.On("Start", mock.Anything, rolledBackTo(demoTargetSpec, record), 60*time.Second).Return(nil).Once()
 			clearMarker := inflight.On("Clear", mock.Anything).Return(tt.clearErr).Once()
 			mock.InOrder(gate, putRecreating, down, create, putRestoring, restore, putDone, start, clearMarker)
 
@@ -1706,7 +1750,7 @@ func TestService_Rollback_NoSafetySnapshotFailureKeepsTheMarker(t *testing.T) {
 				doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(tt.downErr).Once(),
 			}
 			if tt.downErr == nil {
-				calls = append(calls, doubles.runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(tt.createErr).Once())
+				calls = append(calls, doubles.runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(tt.createErr).Once())
 			}
 			if tt.downErr == nil && tt.createErr == nil {
 				restore := doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(tt.restoreErr).Once()
@@ -1716,7 +1760,7 @@ func TestService_Rollback_NoSafetySnapshotFailureKeepsTheMarker(t *testing.T) {
 				calls = append(calls, restore)
 			}
 			if tt.downErr == nil && tt.createErr == nil && tt.restoreErr == nil {
-				calls = append(calls, doubles.runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(tt.startErr).Once())
+				calls = append(calls, doubles.runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(tt.startErr).Once())
 			}
 			mock.InOrder(calls...)
 
@@ -1760,9 +1804,9 @@ func TestService_Rollback_NoSafetySnapshotCleansUpPastAnInterrupt(t *testing.T) 
 	defer cancel()
 	notCancelled := mock.MatchedBy(func(ctx context.Context) bool { return ctx.Err() == nil })
 	doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
-	doubles.runner.On("Create", mock.Anything, demoTargetSpec, []string(nil)).Return(nil).Once()
+	doubles.runner.On("Create", mock.Anything, deployed(demoTargetSpec), []string(nil)).Return(nil).Once()
 	doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
-	start := doubles.runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).
+	start := doubles.runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).
 		Run(func(mock.Arguments) { cancel() }).Return(nil).Once()
 	remove := doubles.volumeRemover.On("RemoveVolume", notCancelled, "9f8e7d").Return(nil).Once()
 	mock.InOrder(start, remove)
@@ -1794,11 +1838,11 @@ func TestService_Rollback_NoSafetySnapshotFailureRecoversAsAColdStart(t *testing
 	mock.InOrder(
 		doubles.inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil).Once(),
 		doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once(),
-		doubles.runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(errors.New("create boom")).Once(),
+		doubles.runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(errors.New("create boom")).Once(),
 		doubles.inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once(),
-		doubles.runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once(),
+		doubles.runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once(),
 		doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once(),
-		doubles.runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once(),
+		doubles.runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once(),
 	)
 	ctx := zerolog.Nop().WithContext(context.Background())
 	req := model.RollbackRequest{
@@ -1870,11 +1914,11 @@ func TestService_Rollback_RecoveringLiveTakesNoSafetySnapshot(t *testing.T) {
 			gate := inflight.On("Get", mock.Anything).Return(standing, true, nil).Once()
 			opening := inflight.On("Put", mock.Anything, isInflightMarkerOf(record.ID, model.InflightRestoring, standing.Safety)).Return(nil).Once()
 			down := doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
-			create := doubles.runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+			create := doubles.runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 			restoring := inflight.On("Put", mock.Anything, isInflightMarkerOf(record.ID, model.InflightRestoring, standing.Safety)).Return(nil).Once()
 			restore := doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
 			done := inflight.On("Put", mock.Anything, isInflightMarkerOf(record.ID, model.InflightRestoreDone, standing.Safety)).Return(nil).Once()
-			start := doubles.runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+			start := doubles.runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 			clearMarker := inflight.On("Clear", mock.Anything).Return(nil).Once()
 			mock.InOrder(gate, opening, down, create, restoring, restore, done, start, clearMarker)
 			ctx := zerolog.Nop().WithContext(context.Background())
@@ -1911,9 +1955,9 @@ func TestService_Rollback_NoSnapshotMarkerRecoversToAnotherSavepoint(t *testing.
 	var marked model.InflightMarker
 	down := doubles.runner.On("Down", mock.Anything, demoTargetSpec).
 		Run(func(mock.Arguments) { marked, _, _ = inflight.Get(context.Background()) }).Return(nil).Once()
-	create := doubles.runner.On("Create", mock.Anything, demoTargetSpec, demoRestoredVolumes).Return(nil).Once()
+	create := doubles.runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restore := doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
-	start := doubles.runner.On("Start", mock.Anything, demoTargetSpec, 60*time.Second).Return(nil).Once()
+	start := doubles.runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
 	mock.InOrder(down, create, restore, start)
 	ctx := zerolog.Nop().WithContext(context.Background())
 

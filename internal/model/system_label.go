@@ -20,6 +20,9 @@ const SystemLabelPrefix = "io.arcave."
 // CaptureStampLabelPrefix opens every capture stamp.
 const CaptureStampLabelPrefix = SystemLabelPrefix + "capture."
 
+// DeploymentLabelPrefix opens every label a rollback puts on the containers it builds.
+const DeploymentLabelPrefix = SystemLabelPrefix + "deployment."
+
 // SystemLabel is a label arcave writes itself: a capture stamp on a service of a savepoint's
 // spec, or a label on an image it committed.
 type SystemLabel string
@@ -42,6 +45,32 @@ const (
 	SystemLabelArcaveProject  SystemLabel = SystemLabelPrefix + "arcave-project"
 	SystemLabelComposeProject SystemLabel = SystemLabelPrefix + "compose-project"
 )
+
+// The labels a rollback puts on every container it builds, SavepointDeployment spelled out.
+const (
+	SystemLabelDeploymentDeployedAt                SystemLabel = DeploymentLabelPrefix + "deployed-at"
+	SystemLabelDeploymentArcaveProject             SystemLabel = DeploymentLabelPrefix + "arcave-project"
+	SystemLabelDeploymentSessionID                 SystemLabel = DeploymentLabelPrefix + "session-id"
+	SystemLabelDeploymentSessionName               SystemLabel = DeploymentLabelPrefix + "session-name"
+	SystemLabelDeploymentSavepointID               SystemLabel = DeploymentLabelPrefix + "savepoint-id"
+	SystemLabelDeploymentSavepointName             SystemLabel = DeploymentLabelPrefix + "savepoint-name"
+	SystemLabelDeploymentSavepointCreatedAt        SystemLabel = DeploymentLabelPrefix + "savepoint-created-at"
+	SystemLabelDeploymentSavepointIsSafetySnapshot SystemLabel = DeploymentLabelPrefix + "savepoint-is-safety-snapshot"
+	SystemLabelDeploymentServiceReplicas           SystemLabel = DeploymentLabelPrefix + "service-replicas"
+)
+
+// deploymentLabels are every label SavepointDeployment.Labels writes.
+var deploymentLabels = []SystemLabel{
+	SystemLabelDeploymentDeployedAt,
+	SystemLabelDeploymentArcaveProject,
+	SystemLabelDeploymentSessionID,
+	SystemLabelDeploymentSessionName,
+	SystemLabelDeploymentSavepointID,
+	SystemLabelDeploymentSavepointName,
+	SystemLabelDeploymentSavepointCreatedAt,
+	SystemLabelDeploymentSavepointIsSafetySnapshot,
+	SystemLabelDeploymentServiceReplicas,
+}
 
 // NewMountStampLabel is the capture stamp of the volume or bind a service mounts at target.
 func NewMountStampLabel(target string) SystemLabel {

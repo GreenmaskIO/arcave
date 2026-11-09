@@ -166,6 +166,8 @@ Warnings (1)
 
 Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per savepoint under a row per replica. A rollback to the same savepoint again puts the same tag back. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
 
+Every container the rollback builds carries `io.arcave.deployment.*` labels: when it was built, the session and the savepoint by id and name, when the savepoint was taken and whether it is a safety snapshot, and the replicas it recorded. [`arcave status`](status.md) reads them to tell what is deployed and what was rebuilt outside arcave since; no network or volume gets them, since compose would take a label it did not write for a change and recreate them.
+
 ## Errors
 
 | Condition | What happens |

@@ -56,10 +56,19 @@ var demoOwner = model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}
 
 func demoUpstreamLabels() map[string]string {
 	return map[string]string{
-		string(model.SystemLabelArcaveProject):  "app",
-		string(model.SystemLabelComposeProject): "demo",
-		string(model.SystemLabelBaseImageID):    upstreamID.String(),
-		string(model.SystemLabelBaseImageRef):   "postgres:16",
+		string(model.SystemLabelArcaveProject):                       "app",
+		string(model.SystemLabelComposeProject):                      "demo",
+		string(model.SystemLabelBaseImageID):                         upstreamID.String(),
+		string(model.SystemLabelBaseImageRef):                        "postgres:16",
+		string(model.SystemLabelDeploymentDeployedAt):                "",
+		string(model.SystemLabelDeploymentArcaveProject):             "",
+		string(model.SystemLabelDeploymentSessionID):                 "",
+		string(model.SystemLabelDeploymentSessionName):               "",
+		string(model.SystemLabelDeploymentSavepointID):               "",
+		string(model.SystemLabelDeploymentSavepointName):             "",
+		string(model.SystemLabelDeploymentSavepointCreatedAt):        "",
+		string(model.SystemLabelDeploymentSavepointIsSafetySnapshot): "",
+		string(model.SystemLabelDeploymentServiceReplicas):           "",
 	}
 }
 
@@ -308,7 +317,10 @@ func TestCopier_CaptureWritableLayer_StampsNoUpstreamItWasNotTold(t *testing.T) 
 	// Arrange: a broken chain leaves the upstream unknown; the origin is always known.
 	ctx := zerolog.Nop().WithContext(context.Background())
 	engine := &mockImageEngine{}
-	engine.On("CommitContainer", mock.Anything, containerID, commitNote, demoOwner.Labels()).
+	labels := demoUpstreamLabels()
+	delete(labels, string(model.SystemLabelBaseImageID))
+	delete(labels, string(model.SystemLabelBaseImageRef))
+	engine.On("CommitContainer", mock.Anything, containerID, commitNote, labels).
 		Return(imageID, nil).Once()
 	engine.On("SaveImage", mock.Anything, imageID).
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()

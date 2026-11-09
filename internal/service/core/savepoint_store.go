@@ -112,7 +112,7 @@ func (s *SavepointStoreService) RemoveSavepoints(ctx context.Context, req model.
 	}
 
 	return locked(ctx, s, model.SessionLockOperationSavepointRemove,
-		func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.RemoveResult, error) {
+		func(ctx context.Context, grantedLock model.GrantedSessionLock, _ model.SessionRef) (model.RemoveResult, error) {
 			// The gate guards the safety snapshot too: while an interrupted rollback is unresolved,
 			// that snapshot is the way back, and no selector may delete it.
 			if _, err := s.requireNoInflight(ctx, ""); err != nil {
@@ -124,18 +124,19 @@ func (s *SavepointStoreService) RemoveSavepoints(ctx context.Context, req model.
 
 // locked runs a workflow with the project lock and the session's lock held, once its session is
 // known to still exist: one deleted since the command resolved it must not be written into again.
-// fn gets the session lock and its context.
+// fn gets the session lock, its context and the session as its record names it.
 func locked[T any](
 	ctx context.Context, s *SavepointStoreService, operation model.SessionLockOperation,
-	fn func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error),
+	fn func(ctx context.Context, grantedLock model.GrantedSessionLock, session model.SessionRef) (T, error),
 ) (T, error) {
 	return withUnlock(ctx, s.projectLocker, func() (T, error) {
 		return withSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
-			if err := requireSession(ctx, s.sessions, s.session); err != nil {
+			session, err := readSessionRef(ctx, s.sessions, s.session)
+			if err != nil {
 				var zero T
 				return zero, err
 			}
-			return fn(ctx, grantedLock)
+			return fn(ctx, grantedLock, session)
 		})
 	})
 }

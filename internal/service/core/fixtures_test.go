@@ -16,12 +16,14 @@ package core
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -30,6 +32,9 @@ import (
 
 // The project every workflow test runs against: one service mounting one named
 // volume.
+// demoArcaveProject is the arcave project the deployment labels name.
+const demoArcaveProject model.ArcaveProjectName = "demo-arcave"
+
 const (
 	demoProject    = "demo"
 	demoService    = "db"
@@ -357,3 +362,77 @@ func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.Savepoi
 func ptrID(id model.SavepointID) *model.SavepointID { return &id }
 
 func ptrBool(b bool) *bool { return &b }
+
+// deployed matches the project a rollback builds from spec: spec with every service carrying the
+// deployment labels.
+func deployed(spec *types.Project) any {
+	return mock.MatchedBy(func(project *types.Project) bool {
+		for _, service := range project.Services {
+			if service.Labels[string(model.SystemLabelDeploymentSavepointID)] == "" {
+				return false
+			}
+		}
+		return assert.ObjectsAreEqual(spec, withoutDeploymentLabels(project))
+	})
+}
+
+// rolledBackTo matches what deployed does, labelled as savepoint of the default session deployed.
+func rolledBackTo(spec *types.Project, savepoint model.Savepoint) any {
+	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
+		return deployment.Savepoint.ID == savepoint.ID && deployment.Savepoint.Name == savepoint.Name &&
+			!deployment.Savepoint.IsSafetySnapshot && deployment.Session == defaultSessionRef &&
+			deployment.ArcaveProject == demoArcaveProject
+	})
+}
+
+// deployedSafetySnapshot matches what deployed does, labelled as the safety snapshot *id of the
+// default session deployed: a revert. id is read at the match, once the capture has set it.
+func deployedSafetySnapshot(spec *types.Project, id *model.SavepointID) any {
+	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
+		return deployment.Savepoint.ID == *id && deployment.Savepoint.IsSafetySnapshot &&
+			deployment.Session == defaultSessionRef && deployment.ArcaveProject == demoArcaveProject
+	})
+}
+
+// defaultSessionRef is the default session as the deployment labels name it.
+var defaultSessionRef = model.SessionRef{
+	ID:   model.DefaultSession,
+	Name: model.DefaultSessionName,
+}
+
+// deployedAs matches what deployed does, every service's labels read back into a deployment want
+// accepts.
+func deployedAs(spec *types.Project, want func(model.SavepointDeployment) bool) any {
+	return mock.MatchedBy(func(project *types.Project) bool {
+		for _, service := range project.Services {
+			deployment, ok, err := model.ParseSavepointDeployment(service.Labels)
+			if err != nil || !ok || !want(deployment) {
+				return false
+			}
+		}
+		return assert.ObjectsAreEqual(spec, withoutDeploymentLabels(project))
+	})
+}
+
+// withoutDeploymentLabels is project with the deployment labels a rollback adds taken off again.
+func withoutDeploymentLabels(project *types.Project) *types.Project {
+	stripped := *project
+	stripped.Services = nil
+	if len(project.Services) > 0 {
+		stripped.Services = make(types.Services, len(project.Services))
+	}
+	for name, service := range project.Services {
+		labels := types.Labels{}
+		for key, value := range service.Labels {
+			if !strings.HasPrefix(key, model.DeploymentLabelPrefix) {
+				labels[key] = value
+			}
+		}
+		if len(labels) == 0 {
+			labels = nil
+		}
+		service.Labels = labels
+		stripped.Services[name] = service
+	}
+	return &stripped
+}

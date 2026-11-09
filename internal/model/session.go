@@ -35,6 +35,20 @@ type SessionOrigin struct {
 	Session SessionID `json:"session"`
 }
 
+// SessionRef names a session by id and by the name it carried.
+type SessionRef struct {
+	ID   SessionID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// String names the session by its name, by its id when it has none.
+func (m SessionRef) String() string {
+	if m.Name != "" {
+		return m.Name
+	}
+	return m.ID.String()
+}
+
 // ComposeProjectSavepoints is one compose project's committed savepoints, an entry
 // of a session-wide listing.
 type ComposeProjectSavepoints struct {
@@ -123,4 +137,47 @@ type RemoveSessionResponse struct {
 // ForkHeartbeatData is a fork heartbeat's data.
 type ForkHeartbeatData struct {
 	From SessionID `json:"from"`
+}
+
+// FindSessionByRef finds the session ref names among sessions: by name first, then by id.
+func FindSessionByRef(sessions []Session, ref string) (Session, error) {
+	if session, found, err := FindSessionByName(sessions, ref); err != nil || found {
+		return session, err
+	}
+	if session, found := FindSessionByID(sessions, ref); found {
+		return session, nil
+	}
+	return Session{}, fmt.Errorf("%w: %q", ErrSessionNotFound, ref)
+}
+
+// FindSessionByName finds the one session carrying name; several carrying it is an error.
+func FindSessionByName(sessions []Session, name string) (Session, bool, error) {
+	var named []Session
+	for _, session := range sessions {
+		if session.Name == name {
+			named = append(named, session)
+		}
+	}
+	switch len(named) {
+	case 0:
+		return Session{}, false, nil
+	case 1:
+		return named[0], true, nil
+	default:
+		ids := make([]SessionID, len(named))
+		for i, session := range named {
+			ids[i] = session.ID
+		}
+		return Session{}, false, &AmbiguousSessionNameError{Name: name, IDs: ids}
+	}
+}
+
+// FindSessionByID finds the session whose id is ref.
+func FindSessionByID(sessions []Session, ref string) (Session, bool) {
+	for _, session := range sessions {
+		if session.ID.String() == ref {
+			return session, true
+		}
+	}
+	return Session{}, false
 }
