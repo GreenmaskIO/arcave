@@ -47,6 +47,18 @@ func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 
 // mockSessionLocker doubles model.SessionLocker; Lock hands out the *mockGrantedSessionLock it
 // returns, with the caller's context.
+// fakeWriteAdmission admits every write, for tests that are not about the admission.
+type fakeWriteAdmission struct{}
+
+func (fakeWriteAdmission) AdmitWrite(context.Context) error { return nil }
+
+// mockWriteAdmission doubles writeAdmission.
+type mockWriteAdmission struct{ mock.Mock }
+
+func (m *mockWriteAdmission) AdmitWrite(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
 type mockSessionLocker struct{ mock.Mock }
 
 func (m *mockSessionLocker) Lock(

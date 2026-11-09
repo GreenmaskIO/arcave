@@ -40,6 +40,12 @@ type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
 }
 
+// writeAdmission admits the run's writes to the arcave project's store, under the project lock and
+// before the first: the session's lock, a dry run's included.
+type writeAdmission interface {
+	AdmitWrite(ctx context.Context) error
+}
+
 // inflightMarkers reads the interrupted-rollback marker.
 type inflightMarkers interface {
 	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
@@ -55,6 +61,8 @@ type Deps struct {
 	// NewSavepointReader opens the savepoints of a compose project's store.
 	NewSavepointReader func(store storages.Storager) SavepointReader
 	Locker             projectLocker
+	// WriteAdmission admits the run's writes to the arcave project's store, before the first.
+	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole run.
 	SessionLocker model.SessionLocker
 	Inflight      inflightMarkers
@@ -77,6 +85,7 @@ type GarbageCollector struct {
 	sessions                 sessionLookup
 	newSavepointReader       func(store storages.Storager) SavepointReader
 	locker                   projectLocker
+	writeAdmission           writeAdmission
 	sessionLocker            model.SessionLocker
 	inflight                 inflightMarkers
 	daemonCollectors         []DaemonCollector
@@ -93,6 +102,7 @@ func New(deps Deps) *GarbageCollector {
 		sessions:                 deps.Sessions,
 		newSavepointReader:       deps.NewSavepointReader,
 		locker:                   deps.Locker,
+		writeAdmission:           deps.WriteAdmission,
 		sessionLocker:            deps.SessionLocker,
 		inflight:                 deps.Inflight,
 		daemonCollectors:         deps.DaemonCollectors,
@@ -115,6 +125,9 @@ func (s *GarbageCollector) GarbageCollect(
 	}
 	collectors := s.readCollectorSet(ctx, req.DataKinds)
 	return withUnlock(ctx, s.locker, func() (model.GarbageCollectResult, error) {
+		if err := s.writeAdmission.AdmitWrite(ctx); err != nil {
+			return model.GarbageCollectResult{}, fmt.Errorf("admit the write: %w", err)
+		}
 		return withSessionLock(ctx, s.sessionLocker, func(ctx context.Context, grantedLock model.GrantedSessionLock) (
 			model.GarbageCollectResult, error,
 		) {

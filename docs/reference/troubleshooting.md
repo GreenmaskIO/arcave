@@ -373,6 +373,23 @@ init dependencies: open the store: the store is encrypted (set encryption.enable
 
 Each is refused before anything is stopped. Export the key the store was encrypted to as `ARCAVE_ENCRYPTION_KEY`, in the form `AGE-SECRET-KEY-1…`, and keep `encryption.enabled: true` in the config. A lost key can't be recovered. See [`encryption`](configuration.md#encryption).
 
+## Turning encryption on for a project with data
+
+```text
+init dependencies: open the store: the arcave project holds data written without encryption: turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting
+```
+
+**What happened.** `encryption.enabled: true` was set over an arcave project that already holds savepoints or sessions written without encryption. arcave encrypts nothing in place, so it refuses the project rather than mark it encrypted and leave its data unreadable. Nothing was written: the data is where it was. `arcave status` reports the same refusal as an unreadable store and exits `1`.
+
+**Way out 1 — keep the project plain.** Turn `encryption.enabled` off again (or unset `ARCAVE_ENCRYPTION_ENABLED`); every command works as before.
+
+**Way out 2 — move what you need into an encrypted project, by hand.** For each savepoint you want to keep:
+
+1. With encryption off and the old `project.name`, `arcave rollback <savepoint>`.
+2. With encryption on and a new `project.name`, `arcave savepoint create <name>`.
+
+Ids, creation times and safety snapshots do not carry over. Remove the old project's tree from the store once you no longer need it.
+
 ## An unknown key fails the command
 
 ```text

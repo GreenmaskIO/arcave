@@ -29,6 +29,11 @@ type markerRepository interface {
 	Put(ctx context.Context, marker model.EncryptionMarker) error
 }
 
+// projectContents tells whether the arcave project holds anything but its marker.
+type projectContents interface {
+	HoldsData(ctx context.Context) (bool, error)
+}
+
 // RequirePlain refuses an arcave project an encrypted host has marked: model.ErrStoreEncrypted.
 func RequirePlain(ctx context.Context, markers markerRepository) error {
 	_, found, err := markers.Get(ctx)
@@ -41,32 +46,79 @@ func RequirePlain(ctx context.Context, markers markerRepository) error {
 	return nil
 }
 
-// AdmitEncrypted marks an unmarked arcave project for identity and refuses one marked for
-// another key with model.ErrWrongStoreKey.
-func AdmitEncrypted(ctx context.Context, markers markerRepository, identity *age.X25519Identity) error {
-	marker, found, err := markers.Get(ctx)
-	if err != nil {
-		return err
-	}
-	recipient := identity.Recipient().String()
-	switch {
-	case !found:
-		return markers.Put(ctx, model.EncryptionMarker{Recipient: recipient})
-	case marker.Recipient != recipient:
-		return fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
-	}
-	return nil
+// RequireEncrypted admits an arcave project for identity and writes nothing: one marked for
+// another key is model.ErrWrongStoreKey, an unmarked one holding data model.ErrStoreHoldsPlainData,
+// and an unmarked empty one stays unmarked until EncryptedAdmission.AdmitWrite.
+func RequireEncrypted(
+	ctx context.Context, markers markerRepository, contents projectContents, identity *age.X25519Identity,
+) error {
+	_, err := requireRecipient(ctx, markers, contents, identity)
+	return err
 }
 
-// RequireKey refuses an arcave project marked for another key with model.ErrWrongStoreKey and
-// writes nothing: an unmarked one stays unmarked, for a reader that must not change the store.
-func RequireKey(ctx context.Context, markers markerRepository, identity *age.X25519Identity) error {
-	marker, found, err := markers.Get(ctx)
-	if err != nil {
+// PlainAdmission admits a write to a plain arcave project: under the workflow's lock, it refuses
+// one an encrypted host has marked since it was opened, as RequirePlain does.
+type PlainAdmission struct {
+	markers markerRepository
+}
+
+func NewPlainAdmission(markers markerRepository) *PlainAdmission {
+	return &PlainAdmission{markers: markers}
+}
+
+// AdmitWrite refuses a marked project with model.ErrStoreEncrypted.
+func (s *PlainAdmission) AdmitWrite(ctx context.Context) error {
+	return RequirePlain(ctx, s.markers)
+}
+
+// EncryptedAdmission admits a write to an encrypted arcave project, marking an empty one for
+// identity: only a workflow that writes calls it, so a command that writes nothing never marks.
+type EncryptedAdmission struct {
+	markers  markerRepository
+	contents projectContents
+	identity *age.X25519Identity
+}
+
+func NewEncryptedAdmission(
+	markers markerRepository, contents projectContents, identity *age.X25519Identity,
+) *EncryptedAdmission {
+	return &EncryptedAdmission{
+		markers:  markers,
+		contents: contents,
+		identity: identity,
+	}
+}
+
+// AdmitWrite refuses as RequireEncrypted does, and marks an unmarked empty project.
+func (s *EncryptedAdmission) AdmitWrite(ctx context.Context) error {
+	found, err := requireRecipient(ctx, s.markers, s.contents, s.identity)
+	if err != nil || found {
 		return err
 	}
-	if found && marker.Recipient != identity.Recipient().String() {
-		return fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
+	return s.markers.Put(ctx, model.EncryptionMarker{Recipient: s.identity.Recipient().String()})
+}
+
+// requireRecipient refuses a project marked for another key, or an unmarked one holding data;
+// found reports a marker for identity.
+func requireRecipient(
+	ctx context.Context, markers markerRepository, contents projectContents, identity *age.X25519Identity,
+) (found bool, err error) {
+	marker, found, err := markers.Get(ctx)
+	if err != nil {
+		return false, err
 	}
-	return nil
+	if found {
+		if marker.Recipient != identity.Recipient().String() {
+			return false, fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
+		}
+		return true, nil
+	}
+	holdsData, err := contents.HoldsData(ctx)
+	if err != nil {
+		return false, err
+	}
+	if holdsData {
+		return false, model.ErrStoreHoldsPlainData
+	}
+	return false, nil
 }

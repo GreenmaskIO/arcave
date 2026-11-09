@@ -75,6 +75,7 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -178,6 +179,7 @@ func TestService_Rollback_RevertsOnFailedRestore(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -254,6 +256,7 @@ func TestService_Rollback_RevertsOnUnhealthy(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -326,6 +329,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -391,6 +395,7 @@ func TestService_Rollback_FailedSafetySnapshotAbortsAndRestarts(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -474,6 +479,7 @@ func TestService_Rollback_RetainedSafetySnapshotIsAListableSavepoint(t *testing.
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -572,6 +578,7 @@ func TestService_Rollback_RevertRestartsWithLiveContext(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -638,6 +645,7 @@ func TestService_Rollback_LogsAreAttributedPerVolume(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -696,6 +704,7 @@ func TestService_Rollback_RejectsAnUnsafeIDBeforeAnyBackend(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -767,6 +776,7 @@ func TestService_Rollback_OverRealStore(t *testing.T) {
 	require.NoError(t, err)
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -912,6 +922,7 @@ func TestService_Rollback_RefusesASavepointWithNoSpec(t *testing.T) {
 	runner := &mockComposeRunner{}
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -995,6 +1006,7 @@ func TestService_Rollback_ReapsTheOrphanedAnonymousVolumes(t *testing.T) {
 
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    remover,
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -1048,6 +1060,7 @@ func coldStartDeps(t *testing.T, record model.Savepoint) (Deps, *mockSavepointRe
 	codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil).Maybe()
 	return Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -1409,6 +1422,7 @@ func TestService_Rollback_InterruptedRestoreReverts(t *testing.T) {
 	inflight := &fakeInflight{}
 	svc := New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -1509,6 +1523,7 @@ func TestService_Rollback_InterruptBeforeTheTeardownRestarts(t *testing.T) {
 			inflight := &fakeInflight{}
 			svc := New(Deps{
 				SessionLocker:    fakeSessionLocker{},
+				WriteAdmission:   fakeWriteAdmission{},
 				VolumeRemover:    &mockVolumeRemover{},
 				SavepointRepo:    repo,
 				ProjectLocker:    locker,
@@ -1601,6 +1616,7 @@ func newNoSnapshotService(t *testing.T, record model.Savepoint, inflight infligh
 	}
 	return New(Deps{
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    doubles.volumeRemover,
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,

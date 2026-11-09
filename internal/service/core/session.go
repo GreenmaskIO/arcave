@@ -63,7 +63,9 @@ type heartbeatReader interface {
 type SessionDeps struct {
 	Sessions sessionRepository
 	Locker   projectLocker
-	Inflight inflightMarkers
+	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
+	WriteAdmission writeAdmission
+	Inflight       inflightMarkers
 	// Current is the current-session pointer.
 	Current currentSessionPointer
 	// Store is the arcave project store a fork's heartbeat is written into and read from, and a
@@ -86,6 +88,7 @@ type SessionDeps struct {
 type SessionService struct {
 	sessions   sessionRepository
 	locker     projectLocker
+	admission  writeAdmission
 	inflight   inflightMarkers
 	current    currentSessionPointer
 	runnerInfo heartbeat.RunnerInfo
@@ -106,6 +109,7 @@ func NewSessionService(deps SessionDeps) *SessionService {
 	return &SessionService{
 		sessions:            deps.Sessions,
 		locker:              deps.Locker,
+		admission:           deps.WriteAdmission,
 		inflight:            deps.Inflight,
 		current:             deps.Current,
 		runnerInfo:          deps.RunnerInfo,
@@ -215,7 +219,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 	if err := req.Validate(); err != nil {
 		return model.Session{}, err
 	}
-	return withUnlock(ctx, s.locker, func() (model.Session, error) {
+	return withWriteUnlock(ctx, s.locker, s.admission, func() (model.Session, error) {
 		var sessions []model.Session
 		if req.Name != "" || req.From != "" {
 			var err error
@@ -268,7 +272,7 @@ func (s *SessionService) RemoveSession(
 	if req.Session == "" {
 		return model.RemoveSessionResponse{}, model.ErrNoSessionRef
 	}
-	return withUnlock(ctx, s.locker, func() (model.RemoveSessionResponse, error) {
+	return withWriteUnlock(ctx, s.locker, s.admission, func() (model.RemoveSessionResponse, error) {
 		id, err := s.findRemovable(ctx, req)
 		if err != nil {
 			return model.RemoveSessionResponse{}, err

@@ -106,6 +106,7 @@ func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDouble
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -199,11 +200,12 @@ func TestService_RemoveSavepoints_Progress(t *testing.T) {
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
 	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
 	svc := New(Deps{
-		ArcaveProject: demoArcaveProject,
-		ProjectLocker: locker,
-		SessionLocker: fakeSessionLocker{},
-		SavepointRepo: repo,
-		Inflight:      &fakeInflight{},
+		ArcaveProject:  demoArcaveProject,
+		ProjectLocker:  locker,
+		SessionLocker:  fakeSessionLocker{},
+		WriteAdmission: fakeWriteAdmission{},
+		SavepointRepo:  repo,
+		Inflight:       &fakeInflight{},
 	})
 
 	// Act
