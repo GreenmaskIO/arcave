@@ -72,16 +72,6 @@ func TestPrinter_Print_Status(t *testing.T) {
 			}(),
 		},
 		{
-			name: "status_replaced_undated",
-			status: func() model.ComposeProjectStatus {
-				status := newRunningStatus()
-				status.Deployment.Source = model.DeploymentSourceMixed
-				status.Deployment.DeployedAt = nil
-				status.Deployment.Replaced = 2
-				return status
-			}(),
-		},
-		{
 			name: "status_compose",
 			status: model.ComposeProjectStatus{
 				ComposeProject: "myapp",
@@ -196,14 +186,16 @@ func newRunningStatus() model.ComposeProjectStatus {
 		Session:        &baseline,
 		Deployment: &model.DeploymentStatus{
 			Source:     model.DeploymentSourceSavepoint,
-			DeployedAt: &deployedAt,
-			Session:    &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+			DeployedAt: deployedAt,
+			Session:    model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
 			Savepoint: &model.DeployedSavepointStatus{
-				ID:          savepointID,
-				Name:        "before-migration",
+				DeployedSavepoint: model.DeployedSavepoint{
+					ID:        savepointID,
+					Name:      "before-migration",
+					CreatedAt: createdAt,
+				},
 				Description: "the schema before 0042",
-				CreatedAt:   &createdAt,
-				Restored:    &model.DeploymentCounts{Volumes: 3, WritableLayers: 2},
+				Restored:    &model.RestoredCounts{Volumes: 3, WritableLayers: 2},
 			},
 			Record: model.DeploymentRecordFound,
 		},

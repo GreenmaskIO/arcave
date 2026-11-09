@@ -83,30 +83,30 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 				"io.arcave.deployment.service-replicas":             "db=1,3;migrate=1",
 			},
 		},
+		{
+			name: "no names and no replicas",
+			deployment: SavepointDeployment{
+				DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
+				ArcaveProject: "demo",
+				Session:       SessionRef{ID: DefaultSession},
+				Savepoint: DeployedSavepoint{
+					ID:        "019e843e-1650-7000-8000-000000000000",
+					CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
+				},
+			},
+			want: map[string]string{
+				"io.arcave.deployment.deployed-at":                  "2026-11-07T14:02:11Z",
+				"io.arcave.deployment.arcave-project":               "demo",
+				"io.arcave.deployment.session-id":                   DefaultSession.String(),
+				"io.arcave.deployment.session-name":                 "",
+				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
+				"io.arcave.deployment.savepoint-name":               "",
+				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
+				"io.arcave.deployment.savepoint-is-safety-snapshot": "",
+				"io.arcave.deployment.service-replicas":             "",
+			},
+		},
 	}
-	tests = append(tests, struct {
-		name       string
-		deployment SavepointDeployment
-		want       map[string]string
-	}{
-		name: "blank where there is no value",
-		deployment: SavepointDeployment{
-			ArcaveProject: "demo",
-			Session:       SessionRef{ID: DefaultSession},
-			Savepoint:     DeployedSavepoint{ID: "019e843e-1650-7000-8000-000000000000"},
-		},
-		want: map[string]string{
-			"io.arcave.deployment.deployed-at":                  "",
-			"io.arcave.deployment.arcave-project":               "demo",
-			"io.arcave.deployment.session-id":                   DefaultSession.String(),
-			"io.arcave.deployment.session-name":                 "",
-			"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
-			"io.arcave.deployment.savepoint-name":               "",
-			"io.arcave.deployment.savepoint-created-at":         "",
-			"io.arcave.deployment.savepoint-is-safety-snapshot": "",
-			"io.arcave.deployment.service-replicas":             "",
-		},
-	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
@@ -192,6 +192,16 @@ func TestParseSavepointDeployment(t *testing.T) {
 			wantErr: string(SystemLabelDeploymentDeployedAt),
 		},
 		{
+			name:    "no time",
+			labels:  withLabel(SystemLabelDeploymentDeployedAt, ""),
+			wantErr: string(SystemLabelDeploymentDeployedAt),
+		},
+		{
+			name:    "no savepoint time",
+			labels:  withLabel(SystemLabelDeploymentSavepointCreatedAt, ""),
+			wantErr: string(SystemLabelDeploymentSavepointCreatedAt),
+		},
+		{
 			name:    "a broken savepoint time",
 			labels:  withLabel(SystemLabelDeploymentSavepointCreatedAt, "yesterday"),
 			wantErr: string(SystemLabelDeploymentSavepointCreatedAt),
@@ -233,7 +243,7 @@ func TestParseServiceReplicas(t *testing.T) {
 		{name: "blank is none"},
 		{name: "one service", value: "db=1", want: map[string][]int{"db": {1}}},
 		{name: "a gap", value: "db=1,3;web=2", want: map[string][]int{"db": {1, 3}, "web": {2}}},
-		{name: "a service with none", value: "db=", want: map[string][]int{"db": {}}},
+		{name: "a service with none", value: "db=", wantErr: "no positive number"},
 		{name: "no number", value: "db", wantErr: "want <service>="},
 		{name: "no service", value: "=1", wantErr: "want <service>="},
 		{name: "no positive number", value: "db=0", wantErr: "no positive number"},

@@ -430,15 +430,17 @@ func TestService_Status(t *testing.T) {
 				assert.False(t, status.CheckedAt.Before(now), "checked when it runs")
 				assert.Equal(t, &model.DeploymentStatus{
 					Source:        model.DeploymentSourceSavepoint,
-					DeployedAt:    &baselineDeployment.DeployedAt,
+					DeployedAt:    baselineDeployment.DeployedAt,
 					ArcaveProject: demoArcaveProject,
-					Session:       &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+					Session:       model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
 					Savepoint: &model.DeployedSavepointStatus{
-						ID:          statusDeployed.ID,
-						Name:        statusDeployed.Name,
-						CreatedAt:   &statusDeployed.CreatedAt,
+						DeployedSavepoint: model.DeployedSavepoint{
+							ID:        statusDeployed.ID,
+							Name:      statusDeployed.Name,
+							CreatedAt: statusDeployed.CreatedAt,
+						},
 						Description: statusDeployed.Description,
-						Restored:    &model.DeploymentCounts{Volumes: 1, WritableLayers: 1},
+						Restored:    &model.RestoredCounts{Volumes: 1, WritableLayers: 1},
 					},
 					Record: model.DeploymentRecordFound,
 				}, status.Deployment, "the labels say what was deployed, the record what it restored")
@@ -641,7 +643,7 @@ func TestService_Status(t *testing.T) {
 			stored: []model.Savepoint{statusDeployed, safety},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
-				assert.True(t, status.Deployment.Savepoint.SafetySnapshot)
+				assert.True(t, status.Deployment.Savepoint.IsSafetySnapshot)
 				assert.Equal(t, []model.Notice{{
 					Code:    model.NoticeCodeSafetySnapshotDeployed,
 					Message: "running safety-snapshot-x (019e8500-0000-7000-8000-000000000000), the safety snapshot of a rollback",

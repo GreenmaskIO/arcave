@@ -80,12 +80,10 @@ func formatDeploymentSource(deployment model.DeploymentStatus) string {
 	switch savepoint := deployment.Savepoint; {
 	case savepoint == nil:
 		return "not deployed by arcave"
-	case savepoint.SafetySnapshot:
+	case savepoint.IsSafetySnapshot:
 		return "safety snapshot " + savepoint.ID.String()
-	case savepoint.Name == "":
-		return "savepoint " + savepoint.ID.String()
 	default:
-		return "savepoint " + savepoint.Name + " (" + savepoint.ID.String() + ")"
+		return "savepoint " + savepoint.String()
 	}
 }
 
@@ -123,45 +121,31 @@ func (s *Printer) newDeploymentSummary(
 ) []summaryLine {
 	var (
 		savepoint = *deployment.Savepoint
-		deployed  []string
-		taken     []string
+		deployed  = []string{s.formatStatusTime(deployment.DeployedAt, checkedAt)}
+		taken     = []string{"taken " + s.formatStatusTime(savepoint.CreatedAt, checkedAt)}
 		lines     []summaryLine
 	)
-	if deployment.DeployedAt != nil {
-		deployed = append(deployed, s.formatStatusTime(*deployment.DeployedAt, checkedAt))
-	}
 	if deployment.Replaced > 0 {
-		replaced := formatCount(deployment.Replaced, "container") + " replaced"
-		if deployment.DeployedAt != nil {
-			replaced += " since"
-		}
-		deployed = append(deployed, replaced)
-	}
-	if savepoint.CreatedAt != nil {
-		taken = append(taken, "taken "+s.formatStatusTime(*savepoint.CreatedAt, checkedAt))
+		deployed = append(deployed, formatCount(deployment.Replaced, "container")+" replaced since")
 	}
 	if restored := savepoint.Restored; restored != nil {
 		taken = append(taken, "restored "+formatCount(restored.Volumes, "volume")+", "+
 			formatCount(restored.WritableLayers, "layer"))
 	}
-	if len(deployed) > 0 {
-		lines = append(lines, summaryLine{
-			key:   "deployed",
-			value: strings.Join(deployed, " · "),
-		})
-	}
-	if deployment.Session != nil && (session == nil || session.ID != deployment.Session.ID) {
+	lines = append(lines, summaryLine{
+		key:   "deployed",
+		value: strings.Join(deployed, " · "),
+	})
+	if session == nil || session.ID != deployment.Session.ID {
 		lines = append(lines, summaryLine{
 			key:   "from",
 			value: "session " + deployment.Session.String(),
 		})
 	}
-	if len(taken) > 0 {
-		lines = append(lines, summaryLine{
-			key:   "savepoint",
-			value: strings.Join(taken, " · "),
-		})
-	}
+	lines = append(lines, summaryLine{
+		key:   "savepoint",
+		value: strings.Join(taken, " · "),
+	})
 	if savepoint.Description != "" {
 		lines = append(lines, summaryLine{value: savepoint.Description})
 	}

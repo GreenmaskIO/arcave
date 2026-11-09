@@ -132,7 +132,7 @@ func TestStatus_AfterRollback(t *testing.T) {
 	require.NotNil(t, status.Deployment.Savepoint)
 	assert.Equal(t, savepoint.ID, status.Deployment.Savepoint.ID)
 	assert.Equal(t, "sp1", status.Deployment.Savepoint.Name)
-	assert.Equal(t, &model.DeploymentCounts{
+	assert.Equal(t, &model.RestoredCounts{
 		Volumes:        len(savepoint.Stats),
 		WritableLayers: len(savepoint.WritableLayers),
 	}, status.Deployment.Savepoint.Restored, "the record says what was restored")

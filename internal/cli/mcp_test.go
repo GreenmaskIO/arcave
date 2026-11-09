@@ -486,10 +486,14 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		ComposeProject: "demo", CheckedAt: deployedAt.Add(time.Hour), State: model.ComposeProjectStateRunning,
 		Session: &model.SessionRef{ID: handlerSession, Name: "feat"},
 		Deployment: &model.DeploymentStatus{
-			Source: model.DeploymentSourceSavepoint, DeployedAt: &deployedAt,
-			Session:   &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
-			Savepoint: &model.DeployedSavepointStatus{ID: savepoint.ID, Name: savepoint.Name},
-			Record:    model.DeploymentRecordUnreadable,
+			Source: model.DeploymentSourceSavepoint, DeployedAt: deployedAt,
+			Session: model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+			Savepoint: &model.DeployedSavepointStatus{DeployedSavepoint: model.DeployedSavepoint{
+				ID:        savepoint.ID,
+				Name:      savepoint.Name,
+				CreatedAt: deployedAt.Add(-time.Hour),
+			}},
+			Record: model.DeploymentRecordUnreadable,
 		},
 		Services: []model.ServiceStatus{{Name: "db", State: model.ReplicaStateRunning, ReplicasUp: 1,
 			Replicas: []model.ReplicaStatus{{Number: 1, State: model.ReplicaStateRunning}}}},

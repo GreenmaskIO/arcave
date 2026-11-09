@@ -35,6 +35,20 @@ type SessionOrigin struct {
 	Session SessionID `json:"session"`
 }
 
+// SessionRef names a session by id and by the name it carried.
+type SessionRef struct {
+	ID   SessionID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// String names the session by its name, by its id when it has none.
+func (m SessionRef) String() string {
+	if m.Name != "" {
+		return m.Name
+	}
+	return m.ID.String()
+}
+
 // ComposeProjectSavepoints is one compose project's committed savepoints, an entry
 // of a session-wide listing.
 type ComposeProjectSavepoints struct {

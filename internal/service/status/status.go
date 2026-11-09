@@ -402,27 +402,24 @@ func newDeploymentStatus(
 	var (
 		deployment  = deployments.latest
 		description string
-		restored    *model.DeploymentCounts
+		restored    *model.RestoredCounts
 	)
 	if view.savepoint != nil {
 		description = view.savepoint.Description
-		restored = &model.DeploymentCounts{
+		restored = &model.RestoredCounts{
 			Volumes:        len(view.savepoint.Stats),
 			WritableLayers: len(view.savepoint.WritableLayers),
 		}
 	}
 	return &model.DeploymentStatus{
 		Source:        deployments.source,
-		DeployedAt:    newOptionalTime(deployment.DeployedAt),
+		DeployedAt:    deployment.DeployedAt,
 		ArcaveProject: deployment.ArcaveProject,
-		Session:       &deployment.Session,
+		Session:       deployment.Session,
 		Savepoint: &model.DeployedSavepointStatus{
-			ID:             deployment.Savepoint.ID,
-			Name:           deployment.Savepoint.Name,
-			CreatedAt:      newOptionalTime(deployment.Savepoint.CreatedAt),
-			SafetySnapshot: deployment.Savepoint.IsSafetySnapshot,
-			Description:    description,
-			Restored:       restored,
+			DeployedSavepoint: deployment.Savepoint,
+			Description:       description,
+			Restored:          restored,
 		},
 		Replaced: countRecreated(services),
 		Record:   view.record,
@@ -440,12 +437,4 @@ func countRecreated(services []model.ServiceStatus) int {
 		}
 	}
 	return recreated
-}
-
-// newOptionalTime is t, nil when zero.
-func newOptionalTime(t time.Time) *time.Time {
-	if t.IsZero() {
-		return nil
-	}
-	return &t
 }

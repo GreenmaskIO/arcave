@@ -31,7 +31,7 @@ func newSavepointDeployment(
 	project *types.Project, recorded []recordedReplica,
 ) model.SavepointDeployment {
 	return model.SavepointDeployment{
-		DeployedAt:    time.Now().UTC(),
+		DeployedAt:    time.Now(),
 		ArcaveProject: arcaveProject,
 		Session:       session,
 		Savepoint: model.DeployedSavepoint{

@@ -159,11 +159,11 @@ type ComposeProjectStatus struct {
 // holds the source alone; otherwise the deployment the containers carry, as their labels spell it.
 type DeploymentStatus struct {
 	Source     DeploymentSource `json:"source"`
-	DeployedAt *time.Time       `json:"deployed_at,omitempty"`
+	DeployedAt time.Time        `json:"deployed_at,omitzero"`
 	// ArcaveProject is the arcave project whose store holds Session.
 	ArcaveProject ArcaveProjectName `json:"arcave_project,omitempty"`
 	// Session is the session the deployed savepoint was rolled back from.
-	Session   *SessionRef              `json:"session,omitempty"`
+	Session   SessionRef               `json:"session,omitzero"`
 	Savepoint *DeployedSavepointStatus `json:"savepoint,omitempty"`
 	// Replaced counts the replicas the savepoint recorded that were recreated outside arcave since.
 	Replaced int `json:"replaced,omitempty"`
@@ -175,13 +175,16 @@ type DeploymentStatus struct {
 // DeployedSavepointStatus is the savepoint a deployment was built from: what its labels say, and
 // what its record adds while the store holds it.
 type DeployedSavepointStatus struct {
-	ID             SavepointID `json:"id"`
-	Name           string      `json:"name,omitempty"`
-	CreatedAt      *time.Time  `json:"created_at,omitempty"`
-	SafetySnapshot bool        `json:"safety_snapshot"`
+	DeployedSavepoint
 	// Description and Restored are the record's; empty when it was not found.
-	Description string            `json:"description,omitempty"`
-	Restored    *DeploymentCounts `json:"restored,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Restored    *RestoredCounts `json:"restored,omitempty"`
+}
+
+// RestoredCounts counts the volumes and the writable layers a savepoint's record restores.
+type RestoredCounts struct {
+	Volumes        int `json:"volumes"`
+	WritableLayers int `json:"writable_layers"`
 }
 
 // ServiceStatus is one service: the deployed savepoint's, the daemon's, or both.

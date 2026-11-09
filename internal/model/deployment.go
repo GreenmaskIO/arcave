@@ -15,6 +15,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -26,27 +27,16 @@ import (
 // labelFlagSet is a flag label that is set; blank is one that is not.
 const labelFlagSet = "true"
 
-// SessionRef names a session by id and by the name it carried.
-type SessionRef struct {
-	ID   SessionID `json:"id"`
-	Name string    `json:"name"`
-}
-
-// String names the session by its name, by its id when it has none.
-func (m SessionRef) String() string {
-	if m.Name != "" {
-		return m.Name
-	}
-	return m.ID.String()
-}
+// errLabelBlank refuses a blank label a deployment cannot do without.
+var errLabelBlank = errors.New("must not be blank")
 
 // DeployedSavepoint is what a deployment says of the savepoint it was built from, as its record
 // read when it was built.
 type DeployedSavepoint struct {
-	ID               SavepointID
-	Name             string
-	CreatedAt        time.Time
-	IsSafetySnapshot bool
+	ID               SavepointID `json:"id"`
+	Name             string      `json:"name,omitempty"`
+	CreatedAt        time.Time   `json:"created_at"`
+	IsSafetySnapshot bool        `json:"safety_snapshot"`
 }
 
 // String names the savepoint by its name and id, by its id when it has no name.
@@ -55,12 +45,6 @@ func (m DeployedSavepoint) String() string {
 		return m.ID.String()
 	}
 	return m.Name + " (" + m.ID.String() + ")"
-}
-
-// DeploymentCounts counts the volumes and the writable layers of a deployment.
-type DeploymentCounts struct {
-	Volumes        int `json:"volumes"`
-	WritableLayers int `json:"writable_layers"`
 }
 
 // SavepointDeployment is one build of a compose project from a savepoint, as the labels of every
@@ -75,7 +59,7 @@ type SavepointDeployment struct {
 	ServiceReplicas map[string][]int
 }
 
-// Labels spells the deployment out as labels: every key, blank where there is no value.
+// Labels spells the deployment out as labels, every key present.
 func (m SavepointDeployment) Labels() map[string]string {
 	isSafetySnapshot := ""
 	if m.Savepoint.IsSafetySnapshot {
@@ -97,14 +81,15 @@ func (m SavepointDeployment) Labels() map[string]string {
 // NewBlankDeploymentLabels is every deployment key blank: what a committed layer carries, so a
 // container created from it outside arcave names no deployment.
 func NewBlankDeploymentLabels() map[string]string {
-	labels := map[string]string{}
-	for key := range maps.Keys(SavepointDeployment{}.Labels()) {
+	labels := SavepointDeployment{}.Labels()
+	for key := range labels {
 		labels[key] = ""
 	}
 	return labels
 }
 
 // ParseSavepointDeployment reads the deployment labels name; ok is false when they name no savepoint.
+// A deployment is read whole: every label but the names must be set.
 func ParseSavepointDeployment(labels map[string]string) (SavepointDeployment, bool, error) {
 	get := func(key SystemLabel) string { return labels[string(key)] }
 	if get(SystemLabelDeploymentSavepointID) == "" {
@@ -121,25 +106,25 @@ func ParseSavepointDeployment(labels map[string]string) (SavepointDeployment, bo
 		err              error
 	)
 	if err = savepointID.Validate(); err != nil {
-		return SavepointDeployment{}, false, fmt.Errorf("%s: %w", SystemLabelDeploymentSavepointID, err)
+		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointID, err)
 	}
 	if deployedAt, err = parseLabelTime(get(SystemLabelDeploymentDeployedAt)); err != nil {
-		return SavepointDeployment{}, false, fmt.Errorf("%s: %w", SystemLabelDeploymentDeployedAt, err)
+		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentDeployedAt, err)
 	}
 	if err = arcaveProject.Validate(); err != nil {
-		return SavepointDeployment{}, false, fmt.Errorf("%s: %w", SystemLabelDeploymentArcaveProject, err)
+		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentArcaveProject, err)
 	}
 	if session, err = ParseSessionID(get(SystemLabelDeploymentSessionID)); err != nil {
-		return SavepointDeployment{}, false, fmt.Errorf("%s: %w", SystemLabelDeploymentSessionID, err)
+		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSessionID, err)
 	}
 	if createdAt, err = parseLabelTime(get(SystemLabelDeploymentSavepointCreatedAt)); err != nil {
-		return SavepointDeployment{}, false, fmt.Errorf("%s: %w", SystemLabelDeploymentSavepointCreatedAt, err)
+		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointCreatedAt, err)
 	}
 	if isSafetySnapshot, err = parseLabelFlag(get(SystemLabelDeploymentSavepointIsSafetySnapshot)); err != nil {
-		return SavepointDeployment{}, false, fmt.Errorf("%s: %w", SystemLabelDeploymentSavepointIsSafetySnapshot, err)
+		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointIsSafetySnapshot, err)
 	}
 	if replicas, err = parseServiceReplicas(get(SystemLabelDeploymentServiceReplicas)); err != nil {
-		return SavepointDeployment{}, false, fmt.Errorf("%s: %w", SystemLabelDeploymentServiceReplicas, err)
+		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentServiceReplicas, err)
 	}
 	return SavepointDeployment{
 		DeployedAt:    deployedAt,
@@ -158,6 +143,10 @@ func ParseSavepointDeployment(labels map[string]string) (SavepointDeployment, bo
 	}, true, nil
 }
 
+func newLabelError(key SystemLabel, err error) error {
+	return fmt.Errorf("%s: %w", key, err)
+}
+
 func formatLabelTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -167,7 +156,7 @@ func formatLabelTime(t time.Time) string {
 
 func parseLabelTime(value string) (time.Time, error) {
 	if value == "" {
-		return time.Time{}, nil
+		return time.Time{}, errLabelBlank
 	}
 	return time.Parse(time.RFC3339Nano, value)
 }
@@ -198,7 +187,8 @@ func formatServiceReplicas(replicas map[string][]int) string {
 	return strings.Join(entries, ";")
 }
 
-// parseServiceReplicas reads what formatServiceReplicas spells; nil for blank.
+// parseServiceReplicas reads what formatServiceReplicas spells; nil for blank, a deployment of no
+// service.
 func parseServiceReplicas(value string) (map[string][]int, error) {
 	if value == "" {
 		return nil, nil
@@ -213,10 +203,6 @@ func parseServiceReplicas(value string) (map[string][]int, error) {
 			return nil, fmt.Errorf("service %q named twice", service)
 		}
 		numbers := []int{}
-		if list == "" {
-			replicas[service] = numbers
-			continue
-		}
 		for field := range strings.SplitSeq(list, ",") {
 			number, err := strconv.Atoi(field)
 			if err != nil || number < 1 || strconv.Itoa(number) != field {
