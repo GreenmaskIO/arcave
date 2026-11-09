@@ -304,10 +304,10 @@ func formatExitCause(replica model.ReplicaStatus) string {
 }
 
 // newDriftNotice says a replica is not what the rollback built: recreated outside arcave since,
-// or added after it.
+// or added after it; none for one whose labels do not parse, which another notice names.
 func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStatus) (model.Notice, bool) {
 	deployment := facts.deployments.latest
-	if deployment == nil || replica.InDeployment {
+	if deployment == nil || replica.InDeployment || facts.deployments.isUnreadable(service, replica.Number) {
 		return model.Notice{}, false
 	}
 	name := formatStatusReplica(service, replica.Number)

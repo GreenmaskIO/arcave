@@ -105,7 +105,7 @@ func (s *Printer) newStatusSummary(status model.ComposeProjectStatus) []summaryL
 	if session := status.Session; session != nil {
 		lines = append(lines, summaryLine{
 			key:   "session",
-			value: session.Name,
+			value: session.String(),
 		})
 	}
 	if deployment := newShownDeployment(status); deployment != nil && deployment.Savepoint != nil {

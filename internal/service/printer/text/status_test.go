@@ -159,6 +159,15 @@ func TestPrinter_Print_Status(t *testing.T) {
 				return status
 			}(),
 		},
+		{
+			name: "status_unnamed_session",
+			status: func() model.ComposeProjectStatus {
+				status := newRunningStatus()
+				status.Session = &model.SessionRef{ID: sessionID}
+				status.Deployment.Session = model.SessionRef{ID: sessionID}
+				return status
+			}(),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

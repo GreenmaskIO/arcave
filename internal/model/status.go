@@ -30,7 +30,7 @@ const (
 	// ComposeProjectStateAbsent is a compose project with no container.
 	ComposeProjectStateAbsent ComposeProjectState = "absent"
 	// ComposeProjectStateStopped is one no container of runs, and one at least is stopped, a
-	// completed job aside.
+	// completed job aside, with none missing, paused, restarting, dead or being removed.
 	ComposeProjectStateStopped ComposeProjectState = "stopped"
 	// ComposeProjectStateDegraded is one a replica of is missing, failing or unhealthy: exited with a
 	// code other than 0, restarting, never started, paused, dead or being removed.

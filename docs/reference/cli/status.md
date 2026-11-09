@@ -32,7 +32,7 @@ One word sums the compose project up — the first that applies:
 |---|---|
 | `rollback-pending` | `.arcave/inflight.json` names this compose project: a rollback is running, or was interrupted. `status` cannot tell the two apart. The marker is host-local: from another machine an interrupted rollback reads `absent` or `degraded` instead — see [Limitations](../limitations.md). |
 | `absent` | No container. |
-| `stopped` | No container runs, and one at least exited or was never started — a completed job aside. |
+| `stopped` | No container runs, one at least exited or was never started (a completed job aside), and no replica is missing, paused, restarting, dead or being removed. |
 | `degraded` | A recorded replica is missing, exited with a code other than `0`, restarting, paused, created and never started, dead, being removed, or unhealthy. |
 | `starting` | Nothing is wrong, but a healthcheck is still starting. |
 | `running` | Every replica runs — healthy where it has a healthcheck —, completed its job, or exited `0`. |
@@ -46,7 +46,7 @@ An unhealthy compose project is not an error: `status` exits `0` whatever the st
 After a rollback:
 
 ```text
-myapp · running · savepoint before-migration · 019e843e-1650-7000-8000-000000000000
+myapp · running · savepoint before-migration (019e843e-1650-7000-8000-000000000000)
   session    baseline
   deployed   2026-11-07 14:02 (3h 12m ago)
   savepoint  taken 2026-11-06 19:41 (18h 33m ago) · restored 3 volumes, 2 layers
@@ -63,7 +63,7 @@ migrate  1/1       completed  —
 Something failed, something rebuilt outside arcave:
 
 ```text
-myapp · degraded · savepoint before-migration · 019e843e-1650-7000-8000-000000000000
+myapp · degraded · savepoint before-migration (019e843e-1650-7000-8000-000000000000)
   session    baseline
   deployed   2026-11-07 14:02 (3h 12m ago) · 1 container replaced since
   ...

@@ -19,12 +19,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"testing"
 	"time"
 
-	cerrdefs "github.com/containerd/errdefs"
 	"github.com/greenmaskio/storages"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -347,9 +347,14 @@ func TestNewComposeProjectState(t *testing.T) {
 		{name: "every replica up", replicas: []model.ReplicaStatus{running, running}, want: model.ComposeProjectStateRunning},
 		{name: "a marker with no container", pending: true, want: model.ComposeProjectStateRollbackPending},
 		{
-			name:     "every container stopped outranks one missing",
+			name:     "one missing beside every container stopped is degraded",
 			replicas: []model.ReplicaStatus{{State: model.ReplicaStateExited}, {State: model.ReplicaStateMissing}},
-			want:     model.ComposeProjectStateStopped,
+			want:     model.ComposeProjectStateDegraded,
+		},
+		{
+			name:     "one dead beside every container stopped is degraded",
+			replicas: []model.ReplicaStatus{{State: model.ReplicaStateExited, ExitCode: 137}, {State: model.ReplicaStateDead}},
+			want:     model.ComposeProjectStateDegraded,
 		},
 		{
 			name: "an unhealthy replica outranks a starting one",
@@ -461,6 +466,18 @@ func TestService_Status(t *testing.T) {
 				assert.Equal(t, model.ComposeProjectStateRunning, status.State)
 				assertNotice(t, status.Notices, model.NoticeCodeReplicaRecreated, "db-2 was recreated outside arcave 3h 11m ago "+
 					"(compose replaced demo-db-2): the writable layer the rollback restored is gone; volumes are untouched")
+			},
+		},
+		{
+			name:   "a replica whose labels do not parse is not called recreated",
+			labels: []map[string]string{twoReplicas.Labels(), corruptDeployedAt(twoReplicas.Labels())},
+			state:  runningStateAt(started),
+			stored: []model.Savepoint{twoLayers},
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				require.NotNil(t, status.Deployment)
+				assert.Zero(t, status.Deployment.Replaced, "whether the deployment built it is unknown")
+				require.Len(t, status.Notices, 1, "the unreadable labels alone: %v", status.Notices)
+				assert.Equal(t, model.NoticeCodeDeploymentLabelsUnreadable, status.Notices[0].Code)
 			},
 		},
 		{
@@ -876,52 +893,6 @@ func TestService_Status(t *testing.T) {
 	}
 }
 
-func TestService_readContainers(t *testing.T) {
-	gone := fmt.Errorf("inspect container c1: %w", cerrdefs.ErrNotFound)
-	refused := errors.New("daemon unreachable")
-	read := model.ComposeProjectContainers{Services: []model.ServiceContainers{{Name: demoService}}}
-	tests := []struct {
-		name string
-		// answers are what each read fails with, in order; nil reads read.
-		answers []error
-		want    model.ComposeProjectContainers
-		wantErr error
-	}{
-		{name: "a whole read", answers: []error{nil}, want: read},
-		{name: "two containers gone under the read, then a whole one", answers: []error{gone, gone, nil}, want: read},
-		{name: "three are the compose project changing", answers: []error{gone, gone, gone}, wantErr: errComposeProjectChanging},
-		{name: "any other failure is not read again", answers: []error{refused}, wantErr: refused},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			reader := &mockContainersReader{}
-			calls := make([]*mock.Call, 0, len(tt.answers))
-			for _, answer := range tt.answers {
-				containers := read
-				if answer != nil {
-					containers = model.ComposeProjectContainers{}
-				}
-				calls = append(calls, reader.On("ReadContainers", mock.Anything).Return(containers, answer).Once())
-			}
-			mock.InOrder(calls...)
-			svc := New(Deps{ComposeContainers: reader})
-
-			// Act
-			got, err := svc.readContainers(context.Background())
-
-			// Assert
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.Equal(t, tt.want, got)
-			reader.AssertExpectations(t)
-		})
-	}
-}
-
 func TestService_Status_ADaemonThatCannotBeReadFailsIt(t *testing.T) {
 	// Arrange: nothing past the daemon is read, so nothing else is expected.
 	reader := &mockContainersReader{}
@@ -1251,4 +1222,11 @@ func TestNewReplicaNotices(t *testing.T) {
 			assert.Equal(t, tt.want, notices)
 		})
 	}
+}
+
+// corruptDeployedAt is labels with a deployment time that does not parse.
+func corruptDeployedAt(labels map[string]string) map[string]string {
+	corrupt := maps.Clone(labels)
+	corrupt[string(model.SystemLabelDeploymentDeployedAt)] = "not-a-time"
+	return corrupt
 }

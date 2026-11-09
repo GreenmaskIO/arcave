@@ -112,6 +112,14 @@ func findDeployments(containers model.ComposeProjectContainers) containerDeploym
 	}
 }
 
+// isUnreadable reports whether the replica numbered number of service carries deployment labels
+// that do not parse: whether the deployment built it is unknown.
+func (d containerDeployments) isUnreadable(service string, number int) bool {
+	return slices.ContainsFunc(d.unreadable, func(labels unreadableLabels) bool {
+		return labels.service == service && labels.replica == number
+	})
+}
+
 // isSameDeployment reports whether a and b are one build: the same savepoint, session and arcave
 // project deployed at the same instant.
 func isSameDeployment(a, b model.SavepointDeployment) bool {
@@ -346,14 +354,14 @@ func parseDaemonTime(value string) *time.Time {
 // that applies.
 func newComposeProjectState(rollbackPending bool, services []model.ServiceStatus) model.ComposeProjectState {
 	var (
-		live, running, stopped int
-		degraded, starting     bool
+		live, running, stopped     int
+		broken, degraded, starting bool
 	)
 	for _, service := range services {
 		for _, replica := range service.Replicas {
 			switch replica.State {
 			case model.ReplicaStateMissing:
-				degraded = true
+				broken = true
 				continue
 			case model.ReplicaStateRunning:
 				running++
@@ -367,7 +375,7 @@ func newComposeProjectState(rollbackPending bool, services []model.ServiceStatus
 				degraded = true
 			default:
 				// Paused, restarting, dead or being removed: not stopped, and not doing its work.
-				degraded = true
+				broken = true
 			}
 			live++
 			degraded = degraded || replica.Health == model.ReplicaHealthUnhealthy
@@ -379,9 +387,9 @@ func newComposeProjectState(rollbackPending bool, services []model.ServiceStatus
 		return model.ComposeProjectStateRollbackPending
 	case live == 0:
 		return model.ComposeProjectStateAbsent
-	case running == 0 && stopped > 0:
+	case running == 0 && stopped > 0 && !broken:
 		return model.ComposeProjectStateStopped
-	case degraded:
+	case broken, degraded:
 		return model.ComposeProjectStateDegraded
 	case starting:
 		return model.ComposeProjectStateStarting

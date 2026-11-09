@@ -498,6 +498,33 @@ func TestInspector_ReadContainers(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
+func TestInspector_ReadContainers_GoneUnderTheRead(t *testing.T) {
+	// Arrange: web-2 and the only migrate replica go between the listing and their inspect, as a
+	// rollback rebuilding them removes them.
+	daemon := &mockDockerAPI{}
+	daemon.expectContainers(
+		summary("c-web-1", "web", "nginx:1", 1),
+		summary("c-web-2", "web", "nginx:1", 2),
+		summary("c-migrate-1", "migrate", "nginx:1", 1),
+	)
+	daemon.expectInspect("c-web-1")
+	for _, id := range []string{"c-web-2", "c-migrate-1"} {
+		daemon.On("ContainerInspect", mock.Anything, id, client.ContainerInspectOptions{}).
+			Return(container.InspectResponse{}, cerrdefs.ErrNotFound).Once()
+	}
+
+	// Act
+	got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
+
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, got.Services, 1, "a service with no container left is left out")
+	assert.Equal(t, "web", got.Services[0].Name)
+	require.Len(t, got.Services[0].Containers, 1)
+	assert.Equal(t, "c-web-1", got.Services[0].Containers[0].ID)
+	daemon.AssertExpectations(t)
+}
+
 func TestInspector_ReadContainers_DaemonFailures(t *testing.T) {
 	daemonErr := errors.New("daemon refused")
 	tests := []struct {

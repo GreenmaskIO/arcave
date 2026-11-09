@@ -128,7 +128,8 @@ func (s *Inspector) Introspect(ctx context.Context) (model.IntrospectionResult, 
 }
 
 // ReadContainers reports the compose project's replicas and the services each waits on to complete,
-// nothing they mount or run on. None means never started or taken down.
+// nothing they mount or run on. None means never started or taken down. A container gone between
+// the listing and its inspect is left out, and a service with none left with it.
 func (s *Inspector) ReadContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
 	listed, err := s.listContainers(ctx)
 	if err != nil {
@@ -137,10 +138,13 @@ func (s *Inspector) ReadContainers(ctx context.Context) (model.ComposeProjectCon
 	byService := groupByService(keepProjectContainers(listed))
 	services := make([]model.ServiceContainers, 0, len(byService))
 	for _, name := range slices.Sorted(maps.Keys(byService)) {
-		containers, err := s.readContainers(ctx, byService[name])
+		containers, err := s.readPresentContainers(ctx, byService[name])
 		if err != nil {
 			return model.ComposeProjectContainers{}, fmt.Errorf("read service %q of compose project %q: %w",
 				name, s.composeProject, err)
+		}
+		if len(containers) == 0 {
+			continue
 		}
 		services = append(services, model.ServiceContainers{
 			Name:             name,
@@ -297,20 +301,47 @@ func (s *Inspector) replicaMounts(
 func (s *Inspector) readContainers(ctx context.Context, group []container.Summary) ([]model.Container, error) {
 	containers := make([]model.Container, 0, len(group))
 	for _, summary := range group {
-		inspected, err := s.api.ContainerInspect(ctx, summary.ID, client.ContainerInspectOptions{})
+		inspected, err := s.readContainer(ctx, summary)
 		if err != nil {
-			return nil, fmt.Errorf("inspect container %s: %w", summary.ID, err)
+			return nil, err
 		}
-		containers = append(containers, model.Container{
-			ID:       summary.ID,
-			Name:     containerName(summary.Names),
-			Number:   replicaNumber(summary.Labels),
-			Labels:   summary.Labels,
-			Replaces: summary.Labels[api.ContainerReplaceLabel],
-			Inspect:  inspected.Container,
-		})
+		containers = append(containers, inspected)
 	}
 	return containers, nil
+}
+
+// readPresentContainers inspects every container of group the daemon still holds: one removed
+// since the listing is skipped.
+func (s *Inspector) readPresentContainers(ctx context.Context, group []container.Summary) ([]model.Container, error) {
+	containers := make([]model.Container, 0, len(group))
+	for _, summary := range group {
+		inspected, err := s.readContainer(ctx, summary)
+		switch {
+		case cerrdefs.IsNotFound(err):
+			zerolog.Ctx(ctx).Debug().Str("container", summary.ID).Msg("container gone since the listing")
+		case err != nil:
+			return nil, err
+		default:
+			containers = append(containers, inspected)
+		}
+	}
+	return containers, nil
+}
+
+// readContainer inspects the container summary lists.
+func (s *Inspector) readContainer(ctx context.Context, summary container.Summary) (model.Container, error) {
+	inspected, err := s.api.ContainerInspect(ctx, summary.ID, client.ContainerInspectOptions{})
+	if err != nil {
+		return model.Container{}, fmt.Errorf("inspect container %s: %w", summary.ID, err)
+	}
+	return model.Container{
+		ID:       summary.ID,
+		Name:     containerName(summary.Names),
+		Number:   replicaNumber(summary.Labels),
+		Labels:   summary.Labels,
+		Replaces: summary.Labels[api.ContainerReplaceLabel],
+		Inspect:  inspected.Container,
+	}, nil
 }
 
 // parseAwaitsCompletion reads compose's depends_on label, service:condition:restart entries

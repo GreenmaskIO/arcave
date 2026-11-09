@@ -20,21 +20,12 @@ import (
 	"fmt"
 	"time"
 
-	cerrdefs "github.com/containerd/errdefs"
 	"github.com/greenmaskio/storages"
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/sessionref"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
-
-// statusReadAttempts bounds the reads of a compose project a rollback is rebuilding: a container
-// listed and gone before its inspect is read again, not reported.
-const statusReadAttempts = 3
-
-// errComposeProjectChanging refuses a status of a compose project whose containers kept changing
-// under the read.
-var errComposeProjectChanging = errors.New("the compose project changed while status read it; run it again")
 
 // composeContainersReader reads a compose project's containers alone.
 type composeContainersReader interface {
@@ -134,7 +125,7 @@ func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.Co
 		state            model.ComposeProjectState
 		err              error
 	)
-	if containers, err = s.readContainers(ctx); err != nil {
+	if containers, err = s.composeContainers.ReadContainers(ctx); err != nil {
 		return model.ComposeProjectStatus{}, err
 	}
 	deployments = findDeployments(containers)
@@ -170,22 +161,6 @@ func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.Co
 		return status, model.ErrStatusPartial
 	}
 	return status, nil
-}
-
-// readContainers reads the compose project's containers, again when one went between the listing
-// and its inspect, the only read that can miss: a rollback in flight removes and rebuilds them.
-func (s *Service) readContainers(ctx context.Context) (model.ComposeProjectContainers, error) {
-	for attempt := 1; ; attempt++ {
-		containers, err := s.composeContainers.ReadContainers(ctx)
-		switch {
-		case err == nil:
-			return containers, nil
-		case !cerrdefs.IsNotFound(err):
-			return model.ComposeProjectContainers{}, err
-		case attempt == statusReadAttempts:
-			return model.ComposeProjectContainers{}, fmt.Errorf("%w: %w", errComposeProjectChanging, err)
-		}
-	}
 }
 
 // readInflightMarker reads this compose project's inflight marker; another's is not this one's.
@@ -232,7 +207,7 @@ func (s *Service) readStoreView(
 func (s *Service) readResolvedSession(
 	ctx context.Context, sessions SessionReader, ref string,
 ) (*model.SessionRef, *model.StatusUnreadable, error) {
-	session, err := resolveSession(ctx, sessions, s.current, ref)
+	session, err := sessionref.Resolve(ctx, sessions, s.current, ref)
 	var ambiguous *model.AmbiguousSessionNameError
 	switch {
 	case err == nil:
@@ -245,60 +220,6 @@ func (s *Service) readResolvedSession(
 	default:
 		return nil, newUnreadable(model.StatusUnreadableSession, err), nil
 	}
-}
-
-// resolveSession resolves ref over sessions and the pointer current: the session ref names, else
-// the current session, or the default when no pointer is set. A copy of core's.
-func resolveSession(
-	ctx context.Context, sessions SessionReader, current currentSessionReader, ref string,
-) (model.Session, error) {
-	if ref != "" {
-		listed, err := sessions.ListSessions(ctx)
-		if err != nil {
-			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
-		}
-		session, err := model.FindSessionByRef(listed, ref)
-		if err != nil {
-			return model.Session{}, err
-		}
-		logResolved(ctx, session, "ref", ref)
-		return session, nil
-	}
-	id, found, err := readCurrentSession(ctx, current)
-	if err != nil {
-		return model.Session{}, err
-	}
-	if !found {
-		logResolved(ctx, model.DefaultSessionRecord, "default", "")
-		return model.DefaultSessionRecord, nil
-	}
-	listed, err := sessions.ListSessions(ctx)
-	if err != nil {
-		return model.Session{}, fmt.Errorf("listing sessions: %w", err)
-	}
-	if session, found := model.FindSessionByID(listed, id.String()); found {
-		logResolved(ctx, session, "pointer", "")
-		return session, nil
-	}
-	return model.Session{}, fmt.Errorf("%w: %s, named by %s/current_session; "+
-		"run 'arcave session unset' or 'arcave session set <session>'", model.ErrCurrentSessionNotFound, id, model.StateDir)
-}
-
-// logResolved records which session a command works in and what named it: a ref, the pointer
-// or the default.
-func logResolved(ctx context.Context, session model.Session, by, ref string) {
-	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Str("name", session.Name).
-		Str("by", by).Str("ref", ref).Msg("session resolved")
-}
-
-// readCurrentSession reads the current-session pointer, naming the way out of an unreadable one.
-func readCurrentSession(ctx context.Context, current currentSessionReader) (model.SessionID, bool, error) {
-	id, found, err := current.Get(ctx)
-	if err != nil {
-		return model.SessionID{}, false, fmt.Errorf("%w; run 'arcave session unset' or 'arcave session set <session>'", err)
-	}
-	zerolog.Ctx(ctx).Debug().Bool("found", found).Str("session", id.String()).Msg("current-session pointer read")
-	return id, found, nil
 }
 
 // readDeployedSavepoint reads the deployed savepoint's record in its own session; nil for none, a
@@ -421,17 +342,18 @@ func newDeploymentStatus(
 			Description:       description,
 			Restored:          restored,
 		},
-		Replaced: countRecreated(services),
+		Replaced: countRecreated(deployments, services),
 		Record:   view.record,
 	}
 }
 
-// countRecreated counts the replicas recreated outside arcave since the deployment.
-func countRecreated(services []model.ServiceStatus) int {
+// countRecreated counts the replicas recreated outside arcave since the deployment, none whose
+// labels do not parse among them.
+func countRecreated(deployments containerDeployments, services []model.ServiceStatus) int {
 	recreated := 0
 	for _, service := range services {
 		for _, replica := range service.Replicas {
-			if isRecreated(replica) {
+			if isRecreated(replica) && !deployments.isUnreadable(service.Name, replica.Number) {
 				recreated++
 			}
 		}
