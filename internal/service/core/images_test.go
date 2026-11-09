@@ -72,6 +72,7 @@ func TestService_CreateSavepoint_CommitsTheWritableLayers(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -134,6 +135,7 @@ func TestService_CreateSavepoint_FailedImageCaptureCommitsNothing(t *testing.T) 
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -217,6 +219,7 @@ func TestService_Rollback_SafetySnapshotCommitsTheWritableLayers(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -311,6 +314,7 @@ func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -366,6 +370,7 @@ func TestService_Rollback_SkippedSafetySnapshotCapturesNoLayer(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -434,6 +439,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -520,6 +526,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:      demoArcaveProject,
 		SessionLocker:      fakeSessionLocker{},
+		WriteAdmission:     fakeWriteAdmission{},
 		VolumeRemover:      &mockVolumeRemover{},
 		SavepointRepo:      repo,
 		ProjectLocker:      locker,
@@ -584,6 +591,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:      demoArcaveProject,
 		SessionLocker:      fakeSessionLocker{},
+		WriteAdmission:     fakeWriteAdmission{},
 		VolumeRemover:      &mockVolumeRemover{},
 		SavepointRepo:      repo,
 		ProjectLocker:      locker,
@@ -632,6 +640,7 @@ func TestService_Rollback_FailedImageLoadStopsNothing(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -675,6 +684,7 @@ func TestService_CreateSavepoint_UnsupportedDaemonStopsNothing(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -724,6 +734,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,

@@ -236,6 +236,16 @@ func ArcaveProject(root storages.Navigator, name model.ArcaveProjectName) (stora
 	return joinKind(root, namespaceProjects, name.String())
 }
 
+// ArcaveProjectHoldsData reports whether the arcave project holds anything but its marker:
+// everything arcave writes there lies in a directory below it, sessions/ included.
+func ArcaveProjectHoldsData(ctx context.Context, arcaveProjectStore storages.Navigator) (bool, error) {
+	_, dirs, err := arcaveProjectStore.ListDir(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list the arcave project: %w", err)
+	}
+	return len(dirs) > 0, nil
+}
+
 // Encrypt wraps an arcave project store so that every object below it is an age file to identity.
 func Encrypt(arcaveProjectStore storages.Storager, identity *age.X25519Identity) (storages.Storager, error) {
 	store, err := encrypted.New(arcaveProjectStore, identity)

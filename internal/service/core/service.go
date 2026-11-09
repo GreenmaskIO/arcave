@@ -48,6 +48,12 @@ type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
 }
 
+// writeAdmission admits a workflow's writes to the arcave project's store, under the project lock
+// and before the first: an encrypted one is marked for its key then.
+type writeAdmission interface {
+	AdmitWrite(ctx context.Context) error
+}
+
 // composeIntrospector reports the live compose project it was bound to at construction.
 type composeIntrospector interface {
 	Introspect(ctx context.Context) (model.IntrospectionResult, error)
@@ -119,6 +125,8 @@ type inflightMarkers interface {
 type Deps struct {
 	SavepointRepo savepointRepository
 	ProjectLocker projectLocker
+	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
+	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
 	SessionLocker      model.SessionLocker
 	ComposeInspector   composeIntrospector
@@ -189,6 +197,7 @@ func New(deps Deps) *Service {
 		SavepointStoreService: NewSavepointStoreService(SavepointStoreDeps{
 			SavepointRepo:  deps.SavepointRepo,
 			ProjectLocker:  deps.ProjectLocker,
+			WriteAdmission: deps.WriteAdmission,
 			SessionLocker:  deps.SessionLocker,
 			Inflight:       deps.Inflight,
 			Session:        deps.Session,
@@ -259,6 +268,20 @@ func withUnlock[T any](ctx context.Context, locker projectLocker, fn func() (T, 
 		}
 	}()
 	return fn()
+}
+
+// withWriteUnlock is withUnlock for a workflow that writes the store: its writes are admitted
+// under the lock, before fn's first.
+func withWriteUnlock[T any](
+	ctx context.Context, locker projectLocker, admission writeAdmission, fn func() (T, error),
+) (T, error) {
+	return withUnlock(ctx, locker, func() (T, error) {
+		if err := admission.AdmitWrite(ctx); err != nil {
+			var zero T
+			return zero, fmt.Errorf("admit the write: %w", err)
+		}
+		return fn()
+	})
 }
 
 // readSessionRef names session id as its record does, refusing one other than the default that

@@ -91,6 +91,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 			Store:              arcaveProjectStore,
 			NewSavepointReader: newSavepointReader,
 			NewSessionLocker:   newSessionLockerFactory(arcaveProjectStore),
+			WriteAdmission:     newPlainAdmission(arcaveProjectStore),
 		}),
 		inflight: inflight,
 	}
@@ -356,6 +357,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	svc := core.New(core.Deps{
 		ArcaveProject:      sessionArcaveProject,
 		SessionLocker:      newSessionLocker(t, arcaveProjectStore, session),
+		WriteAdmission:     newPlainAdmission(arcaveProjectStore),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(e.projectRoot),
 		ComposeInspector:   inspector,

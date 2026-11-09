@@ -100,6 +100,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	svc := core.New(core.Deps{
 		ArcaveProject:      "arcave-oci-tenant",
 		SessionLocker:      newStoreLocker(composeProjectStore, model.DefaultSession),
+		WriteAdmission:     newPlainAdmission(composeProjectStore),
 		SavepointRepo:      sprepo.New(composeProjectStore),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),

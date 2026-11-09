@@ -170,6 +170,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	svc := core.New(core.Deps{
 		ArcaveProject:      "arcave-image-tenant",
 		SessionLocker:      newStoreLocker(store, model.DefaultSession),
+		WriteAdmission:     newPlainAdmission(store),
 		SavepointRepo:      sprepo.New(store),
 		ProjectLocker:      lock.New(projectRoot),
 		ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),

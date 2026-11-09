@@ -105,6 +105,18 @@ func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 	return func() error { return m.MethodCalled("Release").Error(0) }, nil
 }
 
+// fakeWriteAdmission admits every write, for tests that are not about the admission.
+type fakeWriteAdmission struct{}
+
+func (fakeWriteAdmission) AdmitWrite(context.Context) error { return nil }
+
+// mockWriteAdmission doubles writeAdmission.
+type mockWriteAdmission struct{ mock.Mock }
+
+func (m *mockWriteAdmission) AdmitWrite(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
 // fakeSessionLocker always grants the session's lock, and the lock always holds, so tests that
 // are not about it carry no expectations.
 type fakeSessionLocker struct{}

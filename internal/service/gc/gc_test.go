@@ -75,12 +75,13 @@ func newDeps(
 	session model.SessionID, store storages.Navigator, sessions *mockSessions, locker *mockLocker, inflight *mockInflight,
 ) Deps {
 	return Deps{
-		Store:         store,
-		Session:       session,
-		Sessions:      sessions,
-		Locker:        locker,
-		SessionLocker: fakeSessionLocker{},
-		Inflight:      inflight,
+		Store:          store,
+		Session:        session,
+		Sessions:       sessions,
+		Locker:         locker,
+		WriteAdmission: fakeWriteAdmission{},
+		SessionLocker:  fakeSessionLocker{},
+		Inflight:       inflight,
 	}
 }
 
@@ -170,15 +171,19 @@ func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
 	sessions := &mockSessions{}
 	grantedLock := &mockGrantedSessionLock{}
 	demoSavepoints := &mockSavepointReader{}
+	admission := &mockWriteAdmission{}
 	acquire := locker.On("Acquire", mock.Anything).Return(nil).Once()
+	// A dry run writes too: the session's lock.
+	admit := admission.On("AdmitWrite", mock.Anything).Return(nil).Once()
 	lock := sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationGarbageCollect).Return(grantedLock, nil).Once()
 	under := sessions.On("LoadSession", mock.Anything, gcSession).Return(model.Session{ID: gcSession}, true, nil).Once()
 	records := demoSavepoints.On("LoadSavepoints", mock.Anything, noTrees).Return([]model.Savepoint{}, nil).Once()
 	free := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	release := locker.On("Release").Return(nil).Once()
-	mock.InOrder(acquire, lock, under, records, free, release)
+	mock.InOrder(acquire, admit, lock, under, records, free, release)
 	trees := newEmptyCollector(model.GarbageDataKindSavepointData, model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}})
 	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, locker, newNoMarker())
+	deps.WriteAdmission = admission
 	deps.SessionLocker = sessionLocker
 	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
@@ -190,6 +195,7 @@ func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	locker.AssertExpectations(t)
+	admission.AssertExpectations(t)
 	sessionLocker.AssertExpectations(t)
 	grantedLock.AssertExpectations(t)
 	sessions.AssertExpectations(t)
@@ -240,6 +246,31 @@ func TestGarbageCollector_GarbageCollect_LockLostMidway(t *testing.T) {
 			treeEraser.AssertExpectations(t)
 		})
 	}
+}
+
+func TestGarbageCollector_GarbageCollect_AWriteRefused(t *testing.T) {
+	// Arrange: the admission refuses under the project lock, so the session is never locked.
+	locker := &mockLocker{}
+	admission := &mockWriteAdmission{}
+	mock.InOrder(
+		locker.On("Acquire", mock.Anything).Return(nil).Once(),
+		admission.On("AdmitWrite", mock.Anything).Return(model.ErrStoreHoldsPlainData).Once(),
+		locker.On("Release").Return(nil).Once(),
+	)
+	sessionLocker := &mockSessionLocker{}
+	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), &mockSessions{}, locker, &mockInflight{})
+	deps.WriteAdmission = admission
+	deps.SessionLocker = sessionLocker
+	svc := New(deps)
+
+	// Act
+	_, err := svc.GarbageCollect(context.Background(), model.GarbageCollectRequest{DryRun: true})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrStoreHoldsPlainData)
+	locker.AssertExpectations(t)
+	admission.AssertExpectations(t)
+	sessionLocker.AssertExpectations(t)
 }
 
 func TestGarbageCollector_GarbageCollect_RefusedWhileSessionLocked(t *testing.T) {

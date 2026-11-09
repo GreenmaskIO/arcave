@@ -113,6 +113,7 @@ func (c *closers) release(ctx context.Context) {
 // sessionScope is the arcave project's store and the session a command works in.
 type sessionScope struct {
 	arcaveProjectStore storages.Storager
+	writeAdmission     writeAdmission
 	sessions           *sessionrepo.Repository
 	sessionID          model.SessionID
 	sessionLocker      *sessionlock.Locker
@@ -122,21 +123,22 @@ type sessionScope struct {
 func openSessionScope(
 	ctx context.Context, cfg config.Config, projectPath, sessionRef string, opened *closers,
 ) (sessionScope, error) {
-	arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 	if err != nil {
 		return sessionScope{}, err
 	}
-	sessions := sessionrepo.New(arcaveProjectStore)
-	session, err := newSessionService(projectPath, arcaveProjectStore, sessions).ResolveSession(ctx, sessionRef)
+	sessions := sessionrepo.New(arcaveProject.store)
+	session, err := newSessionService(projectPath, arcaveProject, sessions).ResolveSession(ctx, sessionRef)
 	if err != nil {
 		return sessionScope{}, fmt.Errorf("resolve session: %w", err)
 	}
-	sessionLocker, err := newSessionLocker(arcaveProjectStore, session.ID)
+	sessionLocker, err := newSessionLocker(arcaveProject.store, session.ID)
 	if err != nil {
 		return sessionScope{}, fmt.Errorf("open the session lock: %w", err)
 	}
 	return sessionScope{
-		arcaveProjectStore: arcaveProjectStore,
+		arcaveProjectStore: arcaveProject.store,
+		writeAdmission:     arcaveProject.writeAdmission,
 		sessions:           sessions,
 		sessionID:          session.ID,
 		sessionLocker:      sessionLocker,
@@ -240,8 +242,9 @@ func openSavepointService(
 	// One repository over the one store, so every record travels with its data. The
 	// locker is bound to the project root here, so the service never names a path.
 	return core.New(core.Deps{
-		SavepointRepo: sprepo.New(scope.store),
-		ProjectLocker: lock.New(projectPath),
+		SavepointRepo:  sprepo.New(scope.store),
+		ProjectLocker:  lock.New(projectPath),
+		WriteAdmission: scope.writeAdmission,
 		// The session's lock in the store, which the flock beside it cannot be across hosts.
 		SessionLocker:    scope.sessionLocker,
 		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
@@ -290,6 +293,7 @@ func openSavepointStoreService(
 	return core.NewSavepointStoreService(core.SavepointStoreDeps{
 		SavepointRepo:  sprepo.New(scope.store),
 		ProjectLocker:  lock.New(projectPath),
+		WriteAdmission: scope.writeAdmission,
 		SessionLocker:  scope.sessionLocker,
 		Inflight:       inflightrepo.New(projectPath),
 		Session:        scope.sessionID,
@@ -565,7 +569,11 @@ func openStatusService(
 		Inflight:          inflightrepo.New(projectPath),
 		Current:           currentsession.New(projectPath),
 		OpenArcaveProjectStore: func(ctx context.Context) (storages.Storager, error) {
-			return openReadOnlyArcaveProjectStore(ctx, cfg, projectPath, opened)
+			arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
+			if err != nil {
+				return nil, err
+			}
+			return arcaveProject.store, nil
 		},
 		NewSessionReader:   newSessionReader,
 		NewSavepointLoader: newSavepointLoader,
@@ -579,26 +587,27 @@ func openStatusService(
 func openSessionService(
 	ctx context.Context, projectPath string, cfg config.Config, opened *closers,
 ) (*core.SessionService, error) {
-	arcaveProjectStore, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
+	arcaveProject, err := openArcaveProjectStore(ctx, cfg, projectPath, opened)
 	if err != nil {
 		return nil, err
 	}
-	return newSessionService(projectPath, arcaveProjectStore, sessionrepo.New(arcaveProjectStore)), nil
+	return newSessionService(projectPath, arcaveProject, sessionrepo.New(arcaveProject.store)), nil
 }
 
 // newSessionService wires the session commands over the arcave project's store.
 func newSessionService(
-	projectPath string, arcaveProjectStore storages.Storager, sessions *sessionrepo.Repository,
+	projectPath string, arcaveProject openedArcaveProject, sessions *sessionrepo.Repository,
 ) *core.SessionService {
 	return core.NewSessionService(core.SessionDeps{
 		Sessions:           sessions,
 		Locker:             lock.New(projectPath),
+		WriteAdmission:     arcaveProject.writeAdmission,
 		Inflight:           inflightrepo.New(projectPath),
 		Current:            currentsession.New(projectPath),
-		Store:              arcaveProjectStore,
+		Store:              arcaveProject.store,
 		NewSavepointReader: newSavepointReader,
 		NewSessionLocker: func(id model.SessionID) (model.SessionLocker, error) {
-			return newSessionLocker(arcaveProjectStore, id)
+			return newSessionLocker(arcaveProject.store, id)
 		},
 		RunnerInfo: newRunnerInfo(),
 	})
@@ -622,83 +631,110 @@ func newRunnerInfo() heartbeat.RunnerInfo {
 	return heartbeat.RunnerInfo{Host: host, PID: os.Getpid(), ArcaveVersion: version}
 }
 
-// openArcaveProjectStore opens the store root, whose closer goes on opened, and descends to the
-// arcave project, encrypted to encryption.key under encryption.enabled; an unmarked project is
-// marked for the key.
+// writeAdmission admits a workflow's writes to the arcave project's store: storekey's
+// PlainAdmission or EncryptedAdmission, as the encryption section opened it.
+type writeAdmission interface {
+	AdmitWrite(ctx context.Context) error
+}
+
+// openedArcaveProject is the arcave project's store and what admits a workflow's writes to it.
+type openedArcaveProject struct {
+	store          storages.Storager
+	writeAdmission writeAdmission
+}
+
+// openArcaveProjectStore opens the store root onto opened and descends to the arcave project,
+// encrypted under encryption.enabled. It writes nothing; writeAdmission marks the project.
 func openArcaveProjectStore(
 	ctx context.Context, cfg config.Config, projectPath string, opened *closers,
-) (storages.Storager, error) {
-	return openArcaveProjectRoot(ctx, cfg, projectPath, opened, admitEncrypted)
-}
-
-// openReadOnlyArcaveProjectStore is openArcaveProjectStore for a command that writes nothing: an
-// unmarked arcave project stays unmarked.
-func openReadOnlyArcaveProjectStore(
-	ctx context.Context, cfg config.Config, projectPath string, opened *closers,
-) (storages.Storager, error) {
-	return openArcaveProjectRoot(ctx, cfg, projectPath, opened, requireKey)
-}
-
-// keyAdmission admits an arcave project's marker for an encrypted host.
-type keyAdmission func(ctx context.Context, markers *encryptionmarker.Repository, identity *age.X25519Identity) error
-
-// admitEncrypted is storekey.AdmitEncrypted, which marks an unmarked arcave project.
-func admitEncrypted(ctx context.Context, markers *encryptionmarker.Repository, identity *age.X25519Identity) error {
-	return storekey.AdmitEncrypted(ctx, markers, identity)
-}
-
-// requireKey is storekey.RequireKey, which writes nothing.
-func requireKey(ctx context.Context, markers *encryptionmarker.Repository, identity *age.X25519Identity) error {
-	return storekey.RequireKey(ctx, markers, identity)
-}
-
-func openArcaveProjectRoot(
-	ctx context.Context, cfg config.Config, projectPath string, opened *closers, admit keyAdmission,
-) (storages.Storager, error) {
+) (openedArcaveProject, error) {
 	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
 	if err != nil {
-		return nil, fmt.Errorf("initialise store root: %w", err)
+		return openedArcaveProject{}, fmt.Errorf("initialise store root: %w", err)
 	}
 	opened.add("store root", root)
-	return openArcaveProject(ctx, cfg, root, admit)
+	return openArcaveProject(ctx, cfg, root)
 }
 
-func openArcaveProject(
-	ctx context.Context, cfg config.Config, root storages.Storager, admit keyAdmission,
-) (storages.Storager, error) {
+func openArcaveProject(ctx context.Context, cfg config.Config, root storages.Storager) (openedArcaveProject, error) {
 	var (
 		plain    storages.Storager
+		store    storages.Storager
 		identity *age.X25519Identity
 		err      error
 	)
 	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
-		return nil, fmt.Errorf("initialise arcave project store: %w", err)
+		return openedArcaveProject{}, fmt.Errorf("initialise arcave project store: %w", err)
 	}
 	markers := encryptionmarker.New(plain)
 	if !cfg.Encryption.Enabled {
 		if err = storekey.RequirePlain(ctx, markers); err != nil {
-			return nil, newStoreKeyError(err)
+			return openedArcaveProject{}, newStoreKeyError(err)
 		}
-		return plain, nil
+		return openedArcaveProject{
+			store:          plain,
+			writeAdmission: fixedAdmission{admission: storekey.NewPlainAdmission(markers)},
+		}, nil
 	}
 	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
-		return nil, newStoreKeyError(err)
+		return openedArcaveProject{}, newStoreKeyError(err)
 	}
-	if err = admit(ctx, markers, identity); err != nil {
-		return nil, newStoreKeyError(err)
+	contents := arcaveProjectContents{store: plain}
+	if err = storekey.RequireEncrypted(ctx, markers, contents, identity); err != nil {
+		return openedArcaveProject{}, newStoreKeyError(err)
 	}
-	return storefactory.Encrypt(plain, identity)
+	if store, err = storefactory.Encrypt(plain, identity); err != nil {
+		return openedArcaveProject{}, err
+	}
+	return openedArcaveProject{
+		store:          store,
+		writeAdmission: fixedAdmission{admission: storekey.NewEncryptedAdmission(markers, contents, identity)},
+	}, nil
+}
+
+// fixedAdmission adds the fix to a write refused under the lock, as an open's refusal carries it.
+type fixedAdmission struct {
+	admission writeAdmission
+}
+
+func (a fixedAdmission) AdmitWrite(ctx context.Context) error {
+	err := a.admission.AdmitWrite(ctx)
+	if fix, ok := storeKeyFix(err); ok {
+		return fmt.Errorf("%w (%s)", err, fix)
+	}
+	return err
+}
+
+// arcaveProjectContents is the plain arcave project store's listing, for storekey.
+type arcaveProjectContents struct {
+	store storages.Navigator
+}
+
+// HoldsData reports whether the arcave project holds anything but its marker.
+func (c arcaveProjectContents) HoldsData(ctx context.Context) (bool, error) {
+	return storefactory.ArcaveProjectHoldsData(ctx, c.store)
 }
 
 // newStoreKeyError adds the fix to a store the encryption section does not open.
 func newStoreKeyError(err error) error {
+	if fix, ok := storeKeyFix(err); ok {
+		return fmt.Errorf("open the store: %w (%s)", err, fix)
+	}
+	return fmt.Errorf("open the arcave project store: %w", err)
+}
+
+// storeKeyFix is what to do about a store the encryption section refuses; false for any other error.
+func storeKeyFix(err error) (string, bool) {
 	switch {
 	case errors.Is(err, model.ErrInvalidStoreKey), errors.Is(err, model.ErrWrongStoreKey):
-		return fmt.Errorf("open the store: %w (check encryption.key, "+encryptionKeyEnv+" by default)", err)
+		return "check encryption.key, " + encryptionKeyEnv + " by default", true
 	case errors.Is(err, model.ErrStoreEncrypted):
-		return fmt.Errorf("open the store: %w (set encryption.enabled: true and encryption.key)", err)
+		return "set encryption.enabled: true and encryption.key", true
+	case errors.Is(err, model.ErrStoreHoldsPlainData):
+		return "turn encryption.enabled off to use it, or start an encrypted one under another project.name — " +
+			"see \"Turning encryption on for a project with data\" in troubleshooting", true
 	default:
-		return fmt.Errorf("open the arcave project store: %w", err)
+		return "", false
 	}
 }
 
@@ -1010,6 +1046,7 @@ func openGCService(
 		Sessions:                 scope.sessions,
 		NewSavepointReader:       newGCSavepointReader,
 		Locker:                   lock.New(projectPath),
+		WriteAdmission:           scope.writeAdmission,
 		SessionLocker:            scope.sessionLocker,
 		Inflight:                 inflightrepo.New(projectPath),
 		DaemonCollectors:         newDaemonCollectors(cfg, engine),

@@ -288,13 +288,14 @@ export ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…
 
 To encrypt a store: make a key with `age-keygen`, export it as `ARCAVE_ENCRYPTION_KEY=AGE-SECRET-KEY-1…`, and set `encryption.enabled: true` in `.arcave/config.yaml`. [`arcave init`](cli/init.md) writes no `encryption` section; the key stays in the environment, which beats a `key:` line in the file.
 
-**The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command writes. Every host sharing the store needs the same key. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repositories go through the same layer; restic's own password stays the fixed one it has on a plain store.
+**The key is yours; arcave keeps no copy of it.** The store holds only its public half, in `projects/<project>/encryption.json`, which the first encrypted command that writes to the store puts there — a reading one, `status` or `savepoint list` say, never does. Every host sharing the store needs the same key. Each arcave project is encrypted to one key; every session and compose project of it shares it, so a fork copies encrypted objects as they are. Restic's repositories go through the same layer; restic's own password stays the fixed one it has on a plain store.
 
 **Lose the key and the store is lost**, as with age and restic. There is no recovery key. Every object is a standard age file, so `age -d -i` decrypts one by hand with the key.
 
-**No marker is no encryption.** The first encrypted command marks the arcave project whatever it holds: arcave encrypts nothing in place, so an unencrypted project it is switched on over is marked and its data left unreadable. Start an encrypted store at an empty location. Every other mismatch is refused before anything is stopped:
+**Encryption starts on an empty arcave project.** arcave encrypts nothing in place, so an arcave project that already holds data written without encryption is refused under `encryption.enabled: true`, by every command, and nothing is written to it — see [the troubleshooting page](troubleshooting.md#turning-encryption-on-for-a-project-with-data). Start an encrypted one under another `project.name`, or at another storage location. Every other mismatch is refused before anything is stopped too:
 
 ```text
+open the store: the arcave project holds data written without encryption (turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting)
 open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
 open the store: the store is encrypted (set encryption.enabled: true and encryption.key)

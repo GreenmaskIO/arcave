@@ -22,8 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/sessionlock"
+	"github.com/greenmaskio/arcave/internal/service/storekey"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -45,6 +47,11 @@ func newSessionLocker(t *testing.T, arcaveProjectStore storages.Navigator, sessi
 	locker, err := openSessionLocker(arcaveProjectStore, session)
 	require.NoError(t, err)
 	return locker
+}
+
+// newPlainAdmission admits writes to a plain arcave project store, as the DI root does.
+func newPlainAdmission(arcaveProjectStore storages.Storager) *storekey.PlainAdmission {
+	return storekey.NewPlainAdmission(encryptionmarker.New(arcaveProjectStore))
 }
 
 // newStoreLocker is a session lock kept at the root of store, for a test that holds no arcave

@@ -64,6 +64,7 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -98,10 +99,11 @@ func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
 	expectLock(locker)
 	repo := &mockSavepointRepo{}
 	svc := New(Deps{
-		ArcaveProject: demoArcaveProject,
-		SessionLocker: fakeSessionLocker{},
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
+		ArcaveProject:  demoArcaveProject,
+		SessionLocker:  fakeSessionLocker{},
+		WriteAdmission: fakeWriteAdmission{},
+		VolumeRemover:  &mockVolumeRemover{},
+		SavepointRepo:  repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, BackendRegistry: nil, Inflight: standingMarker(t, model.InflightInconsistent),
 		Store: nil, CaptureDefaults: demoCaptureDefaults,
 	})
@@ -132,6 +134,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -185,6 +188,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -271,6 +275,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -338,6 +343,7 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -411,6 +417,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -580,7 +587,7 @@ func TestService_CreateSavepoint_RefusesADeletedSession(t *testing.T) {
 	expectLock(locker)
 	sessions := &mockSessionRepo{}
 	sessions.On("LoadSession", mock.Anything, demoSession).Return(model.Session{}, false, nil).Once()
-	svc := New(Deps{SessionLocker: fakeSessionLocker{}, ProjectLocker: locker, Session: demoSession, Sessions: sessions, Inflight: &fakeInflight{}})
+	svc := New(Deps{SessionLocker: fakeSessionLocker{}, WriteAdmission: fakeWriteAdmission{}, ProjectLocker: locker, Session: demoSession, Sessions: sessions, Inflight: &fakeInflight{}})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act

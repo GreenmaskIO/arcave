@@ -356,3 +356,52 @@ func TestSessionLock(t *testing.T) {
 		require.ErrorIs(t, err, model.ErrInvalidSessionID)
 	})
 }
+
+func TestArcaveProjectHoldsData(t *testing.T) {
+	tests := []struct {
+		name string
+		keys []string
+		want bool
+	}{
+		{name: "a project never written to"},
+		{name: "a project holding its marker alone", keys: []string{"encryption.json"}},
+		{name: "a project holding a session lock", keys: []string{"sessions/x.lock.json"}, want: true},
+		{name: "a project holding a session", keys: []string{"sessions/x/session.json"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			rootStore, err := Root(t.Context(), directoryStorage("snaps"), t.TempDir())
+			require.NoError(t, err)
+			arcaveProjectStore, err := ArcaveProject(rootStore, testArcaveProject)
+			require.NoError(t, err)
+			for _, key := range tt.keys {
+				require.NoError(t, arcaveProjectStore.PutObject(t.Context(), key, strings.NewReader("{}")))
+			}
+
+			// Act
+			got, err := ArcaveProjectHoldsData(t.Context(), arcaveProjectStore)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	t.Run("descending to the session lock writes nothing", func(t *testing.T) {
+		// Arrange
+		rootStore, err := Root(t.Context(), directoryStorage("snaps"), t.TempDir())
+		require.NoError(t, err)
+		arcaveProjectStore, err := ArcaveProject(rootStore, testArcaveProject)
+		require.NoError(t, err)
+		_, _, err = SessionLock(arcaveProjectStore, model.DefaultSession)
+		require.NoError(t, err)
+
+		// Act
+		got, err := ArcaveProjectHoldsData(t.Context(), arcaveProjectStore)
+
+		// Assert
+		require.NoError(t, err)
+		assert.False(t, got)
+	})
+}

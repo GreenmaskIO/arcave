@@ -118,6 +118,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -207,6 +208,7 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -279,6 +281,7 @@ func TestService_CreateSavepoint_AnonymousVolumePerReplica(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -336,6 +339,7 @@ func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -379,6 +383,7 @@ func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheComposeProjectRunnin
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    emptySavepointRepo(),
 		ProjectLocker:    locker,
@@ -419,6 +424,7 @@ func TestService_CreateSavepoint_UnknownBackend(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -470,6 +476,7 @@ func TestService_CreateSavepoint_UncommittedOnFailure(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -538,6 +545,7 @@ func TestService_CreateSavepoint_RetainsWhatAPartialCaptureWrote(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -594,6 +602,7 @@ func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    emptySavepointRepo(),
 		ProjectLocker:    locker,
@@ -635,6 +644,7 @@ func TestService_CreateSavepoint_ComposeProjectAbsent(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    emptySavepointRepo(),
 		ProjectLocker:    locker,
@@ -694,6 +704,7 @@ func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
 			svc := New(Deps{
 				ArcaveProject:    demoArcaveProject,
 				SessionLocker:    fakeSessionLocker{},
+				WriteAdmission:   fakeWriteAdmission{},
 				SavepointRepo:    repo,
 				ProjectLocker:    locker,
 				ComposeInspector: inspector,
@@ -827,6 +838,7 @@ func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -881,6 +893,7 @@ func TestService_CreateSavepoint_CreatesTheIDFromTheClock(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -958,6 +971,7 @@ func TestService_CreateSavepoint_CommittedWhenStartFails(t *testing.T) {
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
 		ProjectLocker:    locker,
@@ -1109,9 +1123,10 @@ func TestService_RemoveSavepoints(t *testing.T) {
 
 	// No daemon collaborator at all: savepoint remove runs where no daemon does.
 	svc := New(Deps{
-		ArcaveProject: demoArcaveProject,
-		SessionLocker: fakeSessionLocker{},
-		SavepointRepo: repo, ProjectLocker: locker,
+		ArcaveProject:  demoArcaveProject,
+		SessionLocker:  fakeSessionLocker{},
+		WriteAdmission: fakeWriteAdmission{},
+		SavepointRepo:  repo, ProjectLocker: locker,
 		Inflight: &fakeInflight{}, CaptureDefaults: demoCaptureDefaults,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -1138,10 +1153,11 @@ func TestService_RemoveSavepoints_DeleteFailureNamesTheOrphan(t *testing.T) {
 	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(errors.New("remove boom")).Once()
 
 	svc := New(Deps{
-		ArcaveProject: demoArcaveProject,
-		SessionLocker: fakeSessionLocker{},
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
+		ArcaveProject:  demoArcaveProject,
+		SessionLocker:  fakeSessionLocker{},
+		WriteAdmission: fakeWriteAdmission{},
+		VolumeRemover:  &mockVolumeRemover{},
+		SavepointRepo:  repo, ProjectLocker: locker, ComposeInspector: nil,
 		ComposeRunner: nil, Inflight: &fakeInflight{},
 		CaptureDefaults: demoCaptureDefaults,
 	})
@@ -1714,6 +1730,7 @@ func TestService_CreateSavepoint_RestartsAfterAnInterrupt(t *testing.T) {
 			svc := New(Deps{
 				ArcaveProject:    demoArcaveProject,
 				SessionLocker:    fakeSessionLocker{},
+				WriteAdmission:   fakeWriteAdmission{},
 				VolumeRemover:    &mockVolumeRemover{},
 				SavepointRepo:    emptySavepointRepo(),
 				ProjectLocker:    locker,

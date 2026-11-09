@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -1502,7 +1504,8 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 		created, err := openArcaveProjectStore(t.Context(),
 			newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath, &opened)
 		require.NoError(t, err)
-		require.NoError(t, created.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
+		require.NoError(t, created.writeAdmission.AdmitWrite(t.Context()))
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("a secret")))
 	}
 	plain := func(t *testing.T, projectPath string) {
 		t.Helper()
@@ -1510,7 +1513,8 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 		defer opened.release(t.Context())
 		created, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath, &opened)
 		require.NoError(t, err)
-		require.NoError(t, created.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
+		require.NoError(t, created.writeAdmission.AdmitWrite(t.Context()))
+		require.NoError(t, created.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
 	}
 	tests := []struct {
 		name       string
@@ -1559,6 +1563,13 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			},
 		},
 		{
+			name:       "a plain store with encryption on",
+			stored:     plain,
+			encryption: config.Encryption{Enabled: true, Key: key},
+			wantErr:    model.ErrStoreHoldsPlainData,
+			wantMsg:    "turn encryption.enabled off to use it",
+		},
+		{
 			name:       "a plain store with the key exported and encryption off",
 			stored:     plain,
 			encryption: config.Encryption{Key: key},
@@ -1578,7 +1589,7 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			t.Cleanup(func() { opened.release(context.Background()) })
 
 			// Act
-			store, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath, &opened)
+			project, err := openArcaveProjectStore(t.Context(), newEncryptionConfig(t, projectPath, tt.encryption), projectPath, &opened)
 
 			// Assert
 			if tt.wantErr != nil {
@@ -1591,49 +1602,155 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			tt.verify(t, projectPath, store)
+			assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "an open writes nothing")
+			tt.verify(t, projectPath, project.store)
 		})
 	}
 }
 
-func TestOpenReadOnlyArcaveProjectStore(t *testing.T) {
+// An open writes nothing under encryption; only the admission a writing workflow asks for marks the
+// project, and only an empty one.
+func TestOpenedArcaveProject_writeAdmission(t *testing.T) {
 	key := newTestStoreKey(t)
 	tests := []struct {
-		name    string
-		marked  string // the key the project is marked for; empty for none
-		wantErr error
+		name       string
+		marked     string // the key the project is marked for; empty for none
+		plainData  bool   // the project holds a session written without encryption
+		wantErr    error
+		wantMarked bool // AdmitWrite writes the marker
 	}{
-		{name: "an unmarked project stays unmarked"},
+		{name: "an empty project is marked by a write's admission alone", wantMarked: true},
 		{name: "a project marked for the key", marked: key},
 		{name: "a project marked for another key", marked: newTestStoreKey(t), wantErr: model.ErrWrongStoreKey},
+		{name: "a project holding plain data", plainData: true, wantErr: model.ErrStoreHoldsPlainData},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			projectPath := t.TempDir()
+			var setup closers
 			if tt.marked != "" {
-				var marking closers
-				_, err := openArcaveProjectStore(t.Context(),
-					newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: tt.marked}), projectPath, &marking)
+				project, err := openArcaveProjectStore(t.Context(),
+					newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: tt.marked}), projectPath, &setup)
 				require.NoError(t, err)
-				marking.release(t.Context())
+				require.NoError(t, project.writeAdmission.AdmitWrite(t.Context()))
 			}
+			if tt.plainData {
+				project, err := openArcaveProjectStore(t.Context(),
+					newEncryptionConfig(t, projectPath, config.Encryption{}), projectPath, &setup)
+				require.NoError(t, err)
+				require.NoError(t, project.store.PutObject(t.Context(), "sessions/x/session.json", strings.NewReader("{}")))
+			}
+			setup.release(t.Context())
 			before := listTree(t, arcaveProjectPath(projectPath))
-
 			var opened closers
 			t.Cleanup(func() { opened.release(context.Background()) })
 
 			// Act
-			_, err := openReadOnlyArcaveProjectStore(t.Context(),
+			project, err := openArcaveProjectStore(t.Context(),
 				newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath, &opened)
 
 			// Assert
+			assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "an open writes nothing")
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
-			} else {
-				require.NoError(t, err)
+				return
 			}
-			assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "a read-only open writes nothing")
+			require.NoError(t, err)
+			require.NoError(t, project.writeAdmission.AdmitWrite(t.Context()))
+			after := listTree(t, arcaveProjectPath(projectPath))
+			if !tt.wantMarked {
+				assert.Equal(t, before, after, "a marked project is not marked again")
+				return
+			}
+			assert.Equal(t, []string{filepath.Join(arcaveProjectPath(projectPath), "encryption.json")},
+				slices.Collect(maps.Keys(after)))
+		})
+	}
+}
+
+// The session commands are wired with the project's write admission: on an empty encrypted
+// project a listing marks nothing, and a session create marks it.
+func TestOpenSessionService_WriteAdmission(t *testing.T) {
+	tests := []struct {
+		name       string
+		run        func(ctx context.Context, svc *core.SessionService) error
+		wantMarked bool
+	}{
+		{
+			name: "a listing marks nothing",
+			run: func(ctx context.Context, svc *core.SessionService) error {
+				_, err := svc.ListSessions(ctx, model.ListSessionsRequest{})
+				return err
+			},
+		},
+		{
+			name: "a session create marks the project",
+			run: func(ctx context.Context, svc *core.SessionService) error {
+				_, err := svc.CreateSession(ctx, model.CreateSessionRequest{Name: "exp"})
+				return err
+			},
+			wantMarked: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			ctx := zerolog.Nop().WithContext(context.Background())
+			projectPath := t.TempDir()
+			cfg := newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: newTestStoreKey(t)})
+			var opened closers
+			t.Cleanup(func() { opened.release(ctx) })
+			svc, err := openSessionService(ctx, projectPath, cfg, &opened)
+			require.NoError(t, err)
+
+			// Act
+			err = tt.run(ctx, svc)
+
+			// Assert
+			require.NoError(t, err)
+			_, statErr := os.Stat(filepath.Join(arcaveProjectPath(projectPath), "encryption.json"))
+			if tt.wantMarked {
+				assert.NoError(t, statErr)
+			} else {
+				assert.ErrorIs(t, statErr, fs.ErrNotExist)
+			}
+		})
+	}
+}
+
+// writeAdmissionFunc is a writeAdmission over a function.
+type writeAdmissionFunc func(ctx context.Context) error
+
+func (f writeAdmissionFunc) AdmitWrite(ctx context.Context) error { return f(ctx) }
+
+func TestFixedAdmission_AdmitWrite(t *testing.T) {
+	errStore := errors.New("store unreachable")
+	tests := []struct {
+		name    string
+		err     error
+		wantErr error
+		wantMsg string
+	}{
+		{name: "an admitted write"},
+		{name: "a refusal carries its fix", err: model.ErrStoreEncrypted, wantErr: model.ErrStoreEncrypted, wantMsg: "the store is encrypted (set encryption.enabled: true and encryption.key)"},
+		{name: "any other failure is returned as is", err: errStore, wantErr: errStore, wantMsg: "store unreachable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			admission := fixedAdmission{admission: writeAdmissionFunc(func(context.Context) error { return tt.err })}
+
+			// Act
+			err := admission.AdmitWrite(t.Context())
+
+			// Assert
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.EqualError(t, err, tt.wantMsg)
 		})
 	}
 }

@@ -172,11 +172,13 @@ func TestService_locked(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: the first read under the locks fails, so the workflow stops there.
 			locker := &mockLocker{}
+			admission := &mockWriteAdmission{}
 			sessionLocker := &mockSessionLocker{}
 			repo := &mockSavepointRepo{}
 			grantedLock := &mockGrantedSessionLock{}
 			calls := []*mock.Call{
 				locker.On("Acquire", mock.Anything).Return(nil).Once(),
+				admission.On("AdmitWrite", mock.Anything).Return(nil).Once(),
 				sessionLocker.On("Lock", mock.Anything, tt.operation).Return(grantedLock, nil).Once(),
 			}
 			calls = append(calls,
@@ -186,11 +188,12 @@ func TestService_locked(t *testing.T) {
 			)
 			mock.InOrder(calls...)
 			svc := New(Deps{
-				ArcaveProject: demoArcaveProject,
-				ProjectLocker: locker,
-				SessionLocker: sessionLocker,
-				SavepointRepo: repo,
-				Inflight:      &fakeInflight{},
+				ArcaveProject:  demoArcaveProject,
+				ProjectLocker:  locker,
+				WriteAdmission: admission,
+				SessionLocker:  sessionLocker,
+				SavepointRepo:  repo,
+				Inflight:       &fakeInflight{},
 			})
 
 			// Act
@@ -199,11 +202,41 @@ func TestService_locked(t *testing.T) {
 			// Assert
 			require.ErrorIs(t, err, errListStore)
 			locker.AssertExpectations(t)
+			admission.AssertExpectations(t)
 			sessionLocker.AssertExpectations(t)
 			grantedLock.AssertExpectations(t)
 			repo.AssertExpectations(t)
 		})
 	}
+}
+
+func TestService_locked_AWriteRefused(t *testing.T) {
+	// Arrange: the admission refuses under the project lock, so the session is never locked.
+	locker := &mockLocker{}
+	admission := &mockWriteAdmission{}
+	sessionLocker := &mockSessionLocker{}
+	mock.InOrder(
+		locker.On("Acquire", mock.Anything).Return(nil).Once(),
+		admission.On("AdmitWrite", mock.Anything).Return(model.ErrStoreHoldsPlainData).Once(),
+		locker.On("Release").Return(nil).Once(),
+	)
+	svc := New(Deps{
+		ArcaveProject:  demoArcaveProject,
+		ProjectLocker:  locker,
+		WriteAdmission: admission,
+		SessionLocker:  sessionLocker,
+		SavepointRepo:  &mockSavepointRepo{},
+		Inflight:       &fakeInflight{},
+	})
+
+	// Act
+	_, err := svc.CreateSavepoint(newLockTestContext(), model.CreateSavepointRequest{Name: "sp"})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrStoreHoldsPlainData)
+	locker.AssertExpectations(t)
+	admission.AssertExpectations(t)
+	sessionLocker.AssertExpectations(t)
 }
 
 func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
@@ -220,6 +253,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 		ArcaveProject:    demoArcaveProject,
 		ProjectLocker:    locker,
 		SessionLocker:    sessionLocker,
+		WriteAdmission:   fakeWriteAdmission{},
 		ComposeInspector: inspector,
 		Inflight:         &fakeInflight{},
 	})
@@ -333,6 +367,7 @@ func TestSessionService_RemoveSession_SessionLock(t *testing.T) {
 				grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 			}
 			svc := NewSessionService(SessionDeps{
+				WriteAdmission:   fakeWriteAdmission{},
 				NewSessionLocker: func(model.SessionID) (model.SessionLocker, error) { return sessionLocker, nil },
 				Current:          &fakePointer{},
 				Sessions:         repo,
@@ -374,6 +409,7 @@ func TestSessionService_CreateSession_CloneLostLockCommitsNothing(t *testing.T) 
 	grantedLock.On("Verify", mock.Anything).Return(model.ErrSessionLockLost).Once()
 	grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	svc := NewSessionService(SessionDeps{
+		WriteAdmission:   fakeWriteAdmission{},
 		NewSessionLocker: func(model.SessionID) (model.SessionLocker, error) { return sessionLocker, nil },
 		Current:          &fakePointer{},
 		Sessions:         repo,
@@ -410,6 +446,7 @@ func TestSessionService_CreateSession_CloneOfASourceRemovedMeanwhile(t *testing.
 	free := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	mock.InOrder(lock, check, free)
 	svc := NewSessionService(SessionDeps{
+		WriteAdmission:   fakeWriteAdmission{},
 		NewSessionLocker: func(model.SessionID) (model.SessionLocker, error) { return sessionLocker, nil },
 		Current:          &fakePointer{},
 		Sessions:         repo,
@@ -493,11 +530,12 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	unlock := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	mock.InOrder(lock, list, verify, unlock)
 	svc := New(Deps{
-		ArcaveProject: demoArcaveProject,
-		ProjectLocker: locker,
-		SessionLocker: sessionLocker,
-		SavepointRepo: repo,
-		Inflight:      &fakeInflight{},
+		WriteAdmission: fakeWriteAdmission{},
+		ArcaveProject:  demoArcaveProject,
+		ProjectLocker:  locker,
+		SessionLocker:  sessionLocker,
+		SavepointRepo:  repo,
+		Inflight:       &fakeInflight{},
 	})
 
 	// Act
@@ -509,4 +547,94 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	sessionLocker.AssertExpectations(t)
 	grantedLock.AssertExpectations(t)
 	locker.AssertExpectations(t)
+}
+
+// A workflow that writes the store admits its writes under the project lock, before the first; one
+// that does not never asks.
+func TestSessionService_withWriteUnlock(t *testing.T) {
+	tests := []struct {
+		name   string
+		writes bool
+		run    func(svc *SessionService) error
+	}{
+		{name: "session create", writes: true, run: func(svc *SessionService) error {
+			_, err := svc.CreateSession(newLockTestContext(), model.CreateSessionRequest{Name: "exp"})
+			return err
+		}},
+		{name: "session remove", writes: true, run: func(svc *SessionService) error {
+			_, err := svc.RemoveSession(newLockTestContext(), model.RemoveSessionRequest{Session: "exp"})
+			return err
+		}},
+		{name: "session list", run: func(svc *SessionService) error {
+			_, err := svc.ListSessions(newLockTestContext(), model.ListSessionsRequest{})
+			return err
+		}},
+		{name: "session set", run: func(svc *SessionService) error {
+			_, err := svc.SetSession(newLockTestContext(), "exp")
+			return err
+		}},
+		{name: "session unset", run: func(svc *SessionService) error {
+			_, err := svc.UnsetSession(newLockTestContext())
+			return err
+		}},
+		{name: "session current", run: func(svc *SessionService) error {
+			_, err := svc.ResolveSession(newLockTestContext(), "exp")
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: a writer's admission refuses, so it writes nothing; a reader's has no expectation.
+			locker := &mockLocker{}
+			admission := &mockWriteAdmission{}
+			repo := &mockSessionRepo{}
+			if tt.writes {
+				mock.InOrder(
+					locker.On("Acquire", mock.Anything).Return(nil).Once(),
+					admission.On("AdmitWrite", mock.Anything).Return(model.ErrStoreHoldsPlainData).Once(),
+					locker.On("Release").Return(nil).Once(),
+				)
+			} else {
+				// A reader may take the project lock (set, unset); it never asks for an admission.
+				locker.On("Acquire", mock.Anything).Return(nil).Maybe()
+				locker.On("Release").Return(nil).Maybe()
+				repo.On("ListSessions", mock.Anything).Return([]model.Session(nil), errListStore).Maybe()
+			}
+			svc := NewSessionService(SessionDeps{
+				NewSessionLocker: newFakeSessionLocker,
+				Current:          &fakePointer{},
+				Sessions:         repo,
+				Locker:           locker,
+				WriteAdmission:   admission,
+				Inflight:         &fakeInflight{},
+			})
+
+			// Act
+			err := tt.run(svc)
+
+			// Assert
+			if tt.writes {
+				require.ErrorIs(t, err, model.ErrStoreHoldsPlainData)
+			}
+			admission.AssertExpectations(t)
+			locker.AssertExpectations(t)
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSavepointStoreService_ListSavepoints_AdmitsNoWrite(t *testing.T) {
+	// Arrange: an admission with no expectation fails on any call.
+	admission := &mockWriteAdmission{}
+	repo := &mockSavepointRepo{}
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{}, nil).Once()
+	svc := NewSavepointStoreService(SavepointStoreDeps{SavepointRepo: repo, WriteAdmission: admission})
+
+	// Act
+	_, err := svc.ListSavepoints(newLockTestContext(), model.ListRequest{Sort: model.SortDesc})
+
+	// Assert
+	require.NoError(t, err)
+	admission.AssertExpectations(t)
+	repo.AssertExpectations(t)
 }

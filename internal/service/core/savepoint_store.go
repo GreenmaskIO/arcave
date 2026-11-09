@@ -38,6 +38,8 @@ const maxParallelRemovals = 5
 type SavepointStoreDeps struct {
 	SavepointRepo savepointRepository
 	ProjectLocker projectLocker
+	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
+	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
 	SessionLocker model.SessionLocker
 	Inflight      inflightMarkers
@@ -54,6 +56,7 @@ type SavepointStoreDeps struct {
 type SavepointStoreService struct {
 	savepointRepo  savepointRepository
 	projectLocker  projectLocker
+	writeAdmission writeAdmission
 	sessionLocker  model.SessionLocker
 	inflightMarker inflightMarkers
 	session        model.SessionID
@@ -68,6 +71,7 @@ func NewSavepointStoreService(deps SavepointStoreDeps) *SavepointStoreService {
 	return &SavepointStoreService{
 		savepointRepo:  deps.SavepointRepo,
 		projectLocker:  deps.ProjectLocker,
+		writeAdmission: deps.WriteAdmission,
 		sessionLocker:  deps.SessionLocker,
 		inflightMarker: deps.Inflight,
 		session:        deps.Session,
@@ -129,7 +133,7 @@ func locked[T any](
 	ctx context.Context, s *SavepointStoreService, operation model.SessionLockOperation,
 	fn func(ctx context.Context, grantedLock model.GrantedSessionLock, session model.SessionRef) (T, error),
 ) (T, error) {
-	return withUnlock(ctx, s.projectLocker, func() (T, error) {
+	return withWriteUnlock(ctx, s.projectLocker, s.writeAdmission, func() (T, error) {
 		return withSessionLock(ctx, s.sessionLocker, operation, func(ctx context.Context, grantedLock model.GrantedSessionLock) (T, error) {
 			session, err := readSessionRef(ctx, s.sessions, s.session)
 			if err != nil {

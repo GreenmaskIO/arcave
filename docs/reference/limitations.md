@@ -143,7 +143,7 @@ On Docker Desktop for macOS with VirtioFS file sharing, the `cdc` backend can fa
 - **Anything from whoever can write**: they can delete objects, or put one encrypted object under another's name.
 - **The host**: the key in `.arcave/config.yaml` when it is written there literally, the process environment, and the images in the Docker daemon — a writable layer holding a secret is encrypted in the store, not in the daemon.
 
-A lost key cannot be recovered, and an unencrypted store is not encrypted in place: switching encryption on over one marks it as encrypted and leaves what it held unreadable. Start an encrypted store at an empty location.
+A lost key cannot be recovered, and an unencrypted arcave project is not encrypted in place: switching encryption on over one that holds data is refused, by reading and writing commands alike, and leaves it as it was. Encryption starts on an empty arcave project; moving savepoints across is [by hand](troubleshooting.md#turning-encryption-on-for-a-project-with-data).
 
 ## SFTP storage does not check host keys
 
