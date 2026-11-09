@@ -66,12 +66,12 @@ func TestFindDeployments(t *testing.T) {
 	broken := deployment.Labels()
 	broken[string(model.SystemLabelDeploymentSessionID)] = "nope"
 	tests := []struct {
-		name         string
-		labels       [][]map[string]string // per service, per replica
-		wantSource   model.DeploymentSource
-		wantDeployed bool
-		wantLabelled int
-		wantNotices  int
+		name           string
+		labels         [][]map[string]string // per service, per replica
+		wantSource     model.DeploymentSource
+		wantDeployed   bool
+		wantLabelled   int
+		wantUnreadable int
 	}{
 		{name: "no container is no source"},
 		{
@@ -108,12 +108,12 @@ func TestFindDeployments(t *testing.T) {
 			wantLabelled: 2,
 		},
 		{
-			name:         "unreadable labels are warned of and count as none",
-			labels:       [][]map[string]string{{deployment.Labels(), broken}},
-			wantSource:   model.DeploymentSourceMixed,
-			wantDeployed: true,
-			wantLabelled: 1,
-			wantNotices:  1,
+			name:           "unreadable labels are kept apart and count as none",
+			labels:         [][]map[string]string{{deployment.Labels(), broken}},
+			wantSource:     model.DeploymentSourceMixed,
+			wantDeployed:   true,
+			wantLabelled:   1,
+			wantUnreadable: 1,
 		},
 	}
 	for _, tt := range tests {
@@ -129,21 +129,18 @@ func TestFindDeployments(t *testing.T) {
 			}
 
 			// Act
-			deployed := findDeployments(model.ComposeProjectContainers{Services: services})
+			deployments := findDeployments(model.ComposeProjectContainers{Services: services})
 
 			// Assert
-			assert.Equal(t, tt.wantSource, deployed.source)
+			assert.Equal(t, tt.wantSource, deployments.source)
 			if tt.wantDeployed {
-				require.NotNil(t, deployed.deployment)
-				assert.Equal(t, deployment, *deployed.deployment)
+				require.NotNil(t, deployments.latest)
+				assert.Equal(t, deployment, *deployments.latest)
 			} else {
-				assert.Nil(t, deployed.deployment)
+				assert.Nil(t, deployments.latest)
 			}
-			assert.Len(t, deployed.builtByLatest, tt.wantLabelled)
-			assert.Len(t, deployed.notices, tt.wantNotices)
-			for _, notice := range deployed.notices {
-				assert.Equal(t, model.NoticeCodeDeploymentLabelsUnreadable, notice.Code)
-			}
+			assert.Len(t, deployments.builtByLatest, tt.wantLabelled)
+			assert.Len(t, deployments.unreadable, tt.wantUnreadable)
 		})
 	}
 }
@@ -188,6 +185,7 @@ func TestNewServiceState(t *testing.T) {
 		{name: "every replica completed", replicas: []model.ReplicaStatus{completed, completed}, want: model.ReplicaStateCompleted},
 		{name: "a completed replica beside a running one runs", replicas: []model.ReplicaStatus{completed, running}, want: model.ReplicaStateRunning},
 		{name: "an exited replica outranks a completed one", replicas: []model.ReplicaStatus{completed, exited}, want: model.ReplicaStateExited},
+		{name: "a service with no replica runs", want: model.ReplicaStateRunning},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -262,11 +260,11 @@ func TestNewServiceStatuses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			containers := model.ComposeProjectContainers{Services: tt.services}
-			deployed := findDeployments(containers)
-			require.Equal(t, tt.deployment != nil, deployed.deployment != nil)
+			deployments := findDeployments(containers)
+			require.Equal(t, tt.deployment != nil, deployments.latest != nil)
 
 			// Act
-			services := newServiceStatuses(containers, deployed)
+			services := newServiceStatuses(containers, deployments)
 
 			// Assert
 			assert.Equal(t, tt.want, withoutReplicaTimes(services))
@@ -1063,6 +1061,24 @@ func TestNewInflightNotice(t *testing.T) {
 	}
 }
 
+func TestNewStatusNotices_UnreadableLabels(t *testing.T) {
+	// Arrange
+	facts := statusFacts{deployments: containerDeployments{unreadable: []unreadableLabels{{
+		service: demoService,
+		replica: 2,
+		err:     errors.New("bad time"),
+	}}}}
+
+	// Act
+	notices := newStatusNotices(facts)
+
+	// Assert
+	assert.Equal(t, []model.Notice{{
+		Code:    model.NoticeCodeDeploymentLabelsUnreadable,
+		Message: "db-2 carries unreadable deployment labels: bad time; read as deployed by none",
+	}}, notices)
+}
+
 func TestNewRollbackInFlight_Recover(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1220,9 +1236,9 @@ func TestNewReplicaNotices(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			facts := statusFacts{
-				checkedAt: statusCheckedAt,
-				deployed:  deployedContainers{deployment: &deployment},
-				view:      storeView{deployedRecord: deployedRecord{savepoint: tt.record}},
+				checkedAt:   statusCheckedAt,
+				deployments: containerDeployments{latest: &deployment},
+				view:        storeView{savepoint: tt.record},
 			}
 
 			// Act

@@ -49,6 +49,14 @@ type DeployedSavepoint struct {
 	IsSafetySnapshot bool
 }
 
+// String names the savepoint by its name and id, by its id when it has no name.
+func (m DeployedSavepoint) String() string {
+	if m.Name == "" {
+		return m.ID.String()
+	}
+	return m.Name + " (" + m.ID.String() + ")"
+}
+
 // DeploymentCounts counts the volumes and the writable layers of a deployment.
 type DeploymentCounts struct {
 	Volumes        int `json:"volumes"`

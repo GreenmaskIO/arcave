@@ -30,13 +30,13 @@ type statusFacts struct {
 	// arcaveProject is the one the config names.
 	arcaveProject model.ArcaveProjectName
 	// ref is the request's --session, empty when none was given.
-	ref        string
-	state      model.ComposeProjectState
-	marker     *model.InflightMarker
-	deployed   deployedContainers
-	view       storeView
-	services   []model.ServiceStatus
-	unreadable []model.StatusUnreadable
+	ref         string
+	state       model.ComposeProjectState
+	marker      *model.InflightMarker
+	deployments containerDeployments
+	view        storeView
+	services    []model.ServiceStatus
+	unreadable  []model.StatusUnreadable
 }
 
 // newStatusNotices is one notice per thing that is wrong or worth knowing, the severe first. A
@@ -49,8 +49,10 @@ func newStatusNotices(facts statusFacts) []model.Notice {
 	for _, unreadable := range facts.unreadable {
 		notices = append(notices, newUnreadableNotice(unreadable, facts.ref))
 	}
-	notices = append(notices, facts.deployed.notices...)
-	if deployment := facts.deployed.deployment; deployment != nil {
+	for _, labels := range facts.deployments.unreadable {
+		notices = append(notices, newUnreadableLabelsNotice(labels))
+	}
+	if deployment := facts.deployments.latest; deployment != nil {
 		notices = append(notices, newDeploymentNotices(facts, *deployment)...)
 	}
 	for _, service := range facts.services {
@@ -126,11 +128,11 @@ func newSessionUnresolvedMessage(ref, cause string) string {
 
 // newUnreadableLabelsNotice names a container whose deployment labels do not parse: edited by hand,
 // or written by another arcave.
-func newUnreadableLabelsNotice(service string, replica model.Container, err error) model.Notice {
+func newUnreadableLabelsNotice(labels unreadableLabels) model.Notice {
 	return model.Notice{
 		Code: model.NoticeCodeDeploymentLabelsUnreadable,
 		Message: fmt.Sprintf("%s carries unreadable deployment labels: %s; read as deployed by none",
-			formatStatusReplica(service, replica.Number), err),
+			formatStatusReplica(labels.service, labels.replica), labels.err),
 	}
 }
 
@@ -147,14 +149,14 @@ func newDeploymentNotices(facts statusFacts, deployment model.SavepointDeploymen
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeOtherArcaveProject,
 			Message: fmt.Sprintf("running savepoint %s of arcave project %s; arcave commands act on arcave project %s",
-				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name),
+				deployment.Savepoint,
 				deployment.ArcaveProject, facts.arcaveProject),
 		})
 	case current != nil && current.ID != deployment.Session.ID:
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeOtherSession,
 			Message: fmt.Sprintf("running savepoint %s of session %s; arcave commands act on session %s",
-				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name),
+				deployment.Savepoint,
 				deployment.Session, current.String()),
 		})
 	}
@@ -162,7 +164,7 @@ func newDeploymentNotices(facts statusFacts, deployment model.SavepointDeploymen
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeSafetySnapshotDeployed,
 			Message: fmt.Sprintf("running %s, the safety snapshot of a rollback",
-				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name)),
+				deployment.Savepoint),
 		})
 	}
 	switch {
@@ -170,7 +172,7 @@ func newDeploymentNotices(facts statusFacts, deployment model.SavepointDeploymen
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeDeployedSavepointGone,
 			Message: fmt.Sprintf("savepoint %s is no longer in session %s",
-				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name), deployment.Session),
+				deployment.Savepoint, deployment.Session),
 		})
 	case facts.view.savepoint != nil && facts.view.savepoint.NotCovered != nil:
 		notices = append(notices, newNotRestoredNotices(*facts.view.savepoint.NotCovered)...)
@@ -223,7 +225,7 @@ func newReplicaNotices(facts statusFacts, service string, replica model.ReplicaS
 		return []model.Notice{{
 			Code: model.NoticeCodeReplicaMissing,
 			Message: fmt.Sprintf("%s is missing: savepoint %s recorded it", name,
-				formatSavepointName(facts.deployed.deployment.Savepoint.ID, facts.deployed.deployment.Savepoint.Name)),
+				facts.deployments.latest.Savepoint),
 			Severe: true,
 		}}
 	case model.ReplicaStateExited:
@@ -304,7 +306,7 @@ func formatExitCause(replica model.ReplicaStatus) string {
 // newDriftNotice says a replica is not what the rollback built: recreated outside arcave since,
 // or added after it.
 func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStatus) (model.Notice, bool) {
-	deployment := facts.deployed.deployment
+	deployment := facts.deployments.latest
 	if deployment == nil || replica.InDeployment {
 		return model.Notice{}, false
 	}
@@ -313,7 +315,7 @@ func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStat
 		return model.Notice{
 			Code: model.NoticeCodeReplicaAdded,
 			Message: fmt.Sprintf("%s is not in savepoint %s: added after the rollback", name,
-				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name)),
+				deployment.Savepoint),
 		}, true
 	}
 	var message strings.Builder
@@ -342,14 +344,6 @@ func restoredLayer(savepoint *model.Savepoint, service string, number int) bool 
 // formatStatusReplica names a replica as compose numbers it: service-n.
 func formatStatusReplica(service string, number int) string {
 	return service + "-" + strconv.Itoa(number)
-}
-
-// formatSavepointName names a savepoint by its name and id, by its id when it has no name.
-func formatSavepointName(id model.SavepointID, name string) string {
-	if name == "" {
-		return id.String()
-	}
-	return name + " (" + id.String() + ")"
 }
 
 // formatStatusTime is " <age> ago" at checkedAt; empty for no time. An age reads the same in every

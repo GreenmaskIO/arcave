@@ -55,14 +55,14 @@ const (
 	DeploymentSourceCompose DeploymentSource = "compose"
 )
 
-// DeploymentRecord says whether the store still holds the savepoint a rollback deployed.
-type DeploymentRecord string
+// DeploymentRecordState says whether the store still holds the savepoint a rollback deployed.
+type DeploymentRecordState string
 
 const (
-	DeploymentRecordFound   DeploymentRecord = "found"
-	DeploymentRecordMissing DeploymentRecord = "missing"
+	DeploymentRecordFound   DeploymentRecordState = "found"
+	DeploymentRecordMissing DeploymentRecordState = "missing"
 	// DeploymentRecordUnreadable is a store that could not be read.
-	DeploymentRecordUnreadable DeploymentRecord = "unreadable"
+	DeploymentRecordUnreadable DeploymentRecordState = "unreadable"
 )
 
 // ReplicaState is one replica in one word, as the daemon reports it.
@@ -167,7 +167,7 @@ type DeploymentStatus struct {
 	Savepoint *DeployedSavepointStatus `json:"savepoint,omitempty"`
 	// Record says whether that session still holds the savepoint; empty when the store was not
 	// read for it.
-	Record DeploymentRecord `json:"record,omitempty"`
+	Record DeploymentRecordState `json:"record,omitempty"`
 }
 
 // DeployedSavepointStatus is the savepoint a deployment was built from: what its labels say, and

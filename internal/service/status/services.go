@@ -29,10 +29,10 @@ import (
 )
 
 // replicaStateRank orders the replica states from the best to the worst: a service is as bad as
-// its worst replica.
+// its worst replica, and completed only when every one is.
 var replicaStateRank = map[model.ReplicaState]int{
-	model.ReplicaStateRunning:    0,
-	model.ReplicaStateCompleted:  1,
+	model.ReplicaStateCompleted:  0,
+	model.ReplicaStateRunning:    1,
 	model.ReplicaStateExited:     2,
 	model.ReplicaStateRestarting: 3,
 	model.ReplicaStateCreated:    4,
@@ -50,31 +50,35 @@ var replicaHealthRank = map[model.ReplicaHealth]int{
 	model.ReplicaHealthUnhealthy: 3,
 }
 
-// deployedContainers is what the containers' labels say built them.
-type deployedContainers struct {
+// containerDeployments is what the containers' labels say built them.
+type containerDeployments struct {
 	// source is empty for a compose project with no container.
 	source model.DeploymentSource
-	// deployment is the latest deployment the containers carry; nil for none.
-	deployment *model.SavepointDeployment
+	// latest is the latest deployment the containers carry; nil for none.
+	latest *model.SavepointDeployment
 	// builtByLatest holds the id of every container that deployment built.
 	builtByLatest map[string]bool
-	// notices name the containers whose labels could not be read.
-	notices []model.Notice
+	// unreadable are the replicas whose deployment labels do not parse.
+	unreadable []unreadableLabels
 }
 
-// findDeployments reads every container's deployment labels, the latest build being the
-// deployment; a container carrying another counts as built by none. A layer is committed with the
-// labels blank, so one created outside arcave carries none. Labels that cannot be read are warned
-// of and count the same.
-func findDeployments(containers model.ComposeProjectContainers) deployedContainers {
+// unreadableLabels is a replica whose deployment labels do not parse.
+type unreadableLabels struct {
+	service string
+	replica int
+	err     error
+}
+
+// findDeployments reads every container's deployment labels, the latest build being the deployment;
+// a container carrying another, none or unreadable ones counts as built by none.
+func findDeployments(containers model.ComposeProjectContainers) containerDeployments {
 	var (
-		deployment *model.SavepointDeployment
+		latest *model.SavepointDeployment
 		// deploymentByContainer is the deployment each container's labels name, by container id.
 		deploymentByContainer = map[string]model.SavepointDeployment{}
-		// builtByLatest holds the id of every container the latest deployment built.
-		builtByLatest = map[string]bool{}
-		notices       []model.Notice
-		total         int
+		builtByLatest         = map[string]bool{}
+		unreadable            []unreadableLabels
+		total                 int
 	)
 	for _, service := range containers.Services {
 		for _, replica := range service.Containers {
@@ -82,25 +86,29 @@ func findDeployments(containers model.ComposeProjectContainers) deployedContaine
 			labels, ok, err := model.ParseSavepointDeployment(replica.Labels)
 			switch {
 			case err != nil:
-				notices = append(notices, newUnreadableLabelsNotice(service.Name, replica, err))
+				unreadable = append(unreadable, unreadableLabels{
+					service: service.Name,
+					replica: replica.Number,
+					err:     err,
+				})
 			case ok:
 				deploymentByContainer[replica.ID] = labels
-				if deployment == nil || labels.DeployedAt.After(deployment.DeployedAt) {
-					deployment = &labels
+				if latest == nil || labels.DeployedAt.After(latest.DeployedAt) {
+					latest = &labels
 				}
 			}
 		}
 	}
 	for id, labels := range deploymentByContainer {
-		if isSameDeployment(labels, *deployment) {
+		if isSameDeployment(labels, *latest) {
 			builtByLatest[id] = true
 		}
 	}
-	return deployedContainers{
+	return containerDeployments{
 		source:        newDeploymentSource(total, len(builtByLatest)),
-		deployment:    deployment,
+		latest:        latest,
 		builtByLatest: builtByLatest,
-		notices:       notices,
+		unreadable:    unreadable,
 	}
 }
 
@@ -128,14 +136,14 @@ func newDeploymentSource(total, labelled int) model.DeploymentSource {
 }
 
 // newServiceStatuses is every service the daemon runs or the deployment recorded, by name.
-func newServiceStatuses(containers model.ComposeProjectContainers, deployed deployedContainers) []model.ServiceStatus {
+func newServiceStatuses(containers model.ComposeProjectContainers, deployments containerDeployments) []model.ServiceStatus {
 	var (
 		live     = map[string][]model.Container{}
 		jobs     = newJobServices(containers)
 		recorded map[string][]int
 	)
-	if deployed.deployment != nil {
-		recorded = deployed.deployment.ServiceReplicas
+	if deployments.latest != nil {
+		recorded = deployments.latest.ServiceReplicas
 	}
 	for _, service := range containers.Services {
 		live[service.Name] = service.Containers
@@ -149,7 +157,7 @@ func newServiceStatuses(containers model.ComposeProjectContainers, deployed depl
 	}
 	services := make([]model.ServiceStatus, 0, len(names))
 	for _, name := range slices.Sorted(maps.Keys(names)) {
-		services = append(services, newServiceStatus(name, live[name], recorded[name], jobs[name], deployed))
+		services = append(services, newServiceStatus(name, live[name], recorded[name], jobs[name], deployments.builtByLatest))
 	}
 	return services
 }
@@ -169,13 +177,13 @@ func newJobServices(containers model.ComposeProjectContainers) map[string]bool {
 // newServiceStatus is one service: its live replicas, and every replica the deployment recorded
 // that the daemon does not hold; job marks one whose exit 0 is its success.
 func newServiceStatus(
-	name string, containers []model.Container, recorded []int, job bool, deployed deployedContainers,
+	name string, containers []model.Container, recorded []int, job bool, builtByLatest map[string]bool,
 ) model.ServiceStatus {
 	replicas := make([]model.ReplicaStatus, 0, max(len(containers), len(recorded)))
 	held := map[int]bool{}
 	for _, replica := range containers {
 		held[replica.Number] = true
-		replicas = append(replicas, newReplicaStatus(replica, job, deployed.builtByLatest[replica.ID],
+		replicas = append(replicas, newReplicaStatus(replica, job, builtByLatest[replica.ID],
 			slices.Contains(recorded, replica.Number)))
 	}
 	for _, number := range recorded {
@@ -269,18 +277,12 @@ func newReplicaHealth(state container.State) model.ReplicaHealth {
 
 // newServiceState is the worst of the replicas' states; completed only when every one is.
 func newServiceState(replicas []model.ReplicaStatus) model.ReplicaState {
-	if len(replicas) > 0 && !slices.ContainsFunc(replicas, func(replica model.ReplicaStatus) bool {
-		return replica.State != model.ReplicaStateCompleted
-	}) {
-		return model.ReplicaStateCompleted
+	if len(replicas) == 0 {
+		return model.ReplicaStateRunning
 	}
-	worst := model.ReplicaStateRunning
-	for _, replica := range replicas {
-		if replica.State != model.ReplicaStateCompleted && replicaStateRank[replica.State] > replicaStateRank[worst] {
-			worst = replica.State
-		}
-	}
-	return worst
+	return slices.MaxFunc(replicas, func(a, b model.ReplicaStatus) int {
+		return cmp.Compare(replicaStateRank[a.State], replicaStateRank[b.State])
+	}).State
 }
 
 // newServiceHealth is the worst of the replicas' healthchecks.
