@@ -165,6 +165,8 @@ type DeploymentStatus struct {
 	// Session is the session the deployed savepoint was rolled back from.
 	Session   *SessionRef              `json:"session,omitempty"`
 	Savepoint *DeployedSavepointStatus `json:"savepoint,omitempty"`
+	// Replaced counts the replicas the savepoint recorded that were recreated outside arcave since.
+	Replaced int `json:"replaced,omitempty"`
 	// Record says whether that session still holds the savepoint; empty when the store was not
 	// read for it.
 	Record DeploymentRecordState `json:"record,omitempty"`

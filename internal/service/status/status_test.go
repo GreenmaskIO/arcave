@@ -455,6 +455,7 @@ func TestService_Status(t *testing.T) {
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				require.NotNil(t, status.Deployment)
 				assert.Equal(t, model.DeploymentSourceMixed, status.Deployment.Source)
+				assert.Equal(t, 1, status.Deployment.Replaced, "the replica the notice names, and no other")
 				assert.Equal(t, model.ComposeProjectStateRunning, status.State)
 				assertNotice(t, status.Notices, model.NoticeCodeReplicaRecreated, "db-2 was recreated outside arcave 3h 11m ago "+
 					"(compose replaced demo-db-2): the writable layer the rollback restored is gone; volumes are untouched")

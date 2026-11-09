@@ -1,4 +1,4 @@
-myapp · degraded · savepoint before-migration · 01a188c4-1650-7000-8000-000000000001
+myapp · degraded · savepoint before-migration (01a188c4-1650-7000-8000-000000000001)
   session    baseline
   deployed   2026-11-07 14:02 (3h 12m ago) · 1 container replaced since
   savepoint  taken 2026-10-29 19:45 (8d 21h ago) · restored 3 volumes, 2 layers

@@ -51,6 +51,7 @@ func TestPrinter_Print_Status(t *testing.T) {
 				status := newRunningStatus()
 				status.State = model.ComposeProjectStateDegraded
 				status.Deployment.Source = model.DeploymentSourceMixed
+				status.Deployment.Replaced = 1
 				status.Services[0].Health = model.ReplicaHealthUnhealthy
 				status.Services[0].Replicas[0].Health = model.ReplicaHealthUnhealthy
 				status.Services[1].Replicas[1].InDeployment = false
@@ -67,6 +68,16 @@ func TestPrinter_Print_Status(t *testing.T) {
 					{Code: model.NoticeCodeReplicaRecreated, Message: "web-2 was recreated outside arcave 34m ago " +
 						"(compose replaced myapp-web-2): the writable layer the rollback restored is gone; volumes are untouched"},
 				}
+				return status
+			}(),
+		},
+		{
+			name: "status_replaced_undated",
+			status: func() model.ComposeProjectStatus {
+				status := newRunningStatus()
+				status.Deployment.Source = model.DeploymentSourceMixed
+				status.Deployment.DeployedAt = nil
+				status.Deployment.Replaced = 2
 				return status
 			}(),
 		},

@@ -43,7 +43,7 @@ func (s *Printer) formatSessions(sessions []model.SessionSummary) string {
 		}
 		created := "-"
 		if !session.CreatedAt.IsZero() {
-			created = session.CreatedAt.In(s.opts.Location).Format("2006-01-02 15:04")
+			created = s.formatTime(session.CreatedAt)
 		}
 		name := session.Name
 		if name == "" {

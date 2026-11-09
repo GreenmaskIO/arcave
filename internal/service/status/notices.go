@@ -318,6 +318,9 @@ func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStat
 				deployment.Savepoint),
 		}, true
 	}
+	if !isRecreated(replica) {
+		return model.Notice{}, false
+	}
 	var message strings.Builder
 	fmt.Fprintf(&message, "%s was recreated outside arcave%s", name, formatStatusTime(replica.CreatedAt, facts.checkedAt))
 	if replica.Replaces != "" {
@@ -331,6 +334,12 @@ func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStat
 		Code:    model.NoticeCodeReplicaRecreated,
 		Message: message.String(),
 	}, true
+}
+
+// isRecreated reports whether the replica is one the deployed savepoint recorded that something
+// other than the deployment built since.
+func isRecreated(replica model.ReplicaStatus) bool {
+	return replica.InSavepoint && !replica.InDeployment && replica.State != model.ReplicaStateMissing
 }
 
 // restoredLayer reports whether the deployed savepoint's record holds a writable layer of the

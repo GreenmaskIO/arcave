@@ -29,6 +29,9 @@ import (
 	jsonprinter "github.com/greenmaskio/arcave/internal/service/printer/json"
 )
 
+// timeLayout is how a result shows a moment, to the minute.
+const timeLayout = "2006-01-02 15:04"
+
 var (
 	styleTitle         = lipgloss.NewStyle().Bold(true)
 	styleWarningsTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Yellow)
@@ -110,6 +113,11 @@ func (s *Printer) newCommand(composeBound bool, args ...string) string {
 		parts = append(parts, quote(arg))
 	}
 	return strings.Join(parts, " ")
+}
+
+// formatTime is t in the printer's zone, to the minute.
+func (s *Printer) formatTime(t time.Time) string {
+	return t.In(s.opts.Location).Format(timeLayout)
 }
 
 // quote wraps an argument a shell would split or expand in single quotes.

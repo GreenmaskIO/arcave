@@ -24,25 +24,28 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// statusTimeLayout is how a status shows a moment, its age beside it.
-const statusTimeLayout = "2006-01-02 15:04"
+// summaryLine is one line of a status's summary: a key and its value, the key blank for a line
+// that goes on the one above.
+type summaryLine struct {
+	key   string
+	value string
+}
 
 // formatStatus renders what the daemon runs: a title, a summary, the services, the warnings.
 func (s *Printer) formatStatus(status model.ComposeProjectStatus) string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render(formatStatusTitle(status)) + "\n")
 	for _, line := range s.newStatusSummary(status) {
-		//nolint:errcheck // a strings.Builder does not fail a write
-		_, _ = fmt.Fprintf(&b, "  %-10s %s\n", line[0], line[1])
+		fmt.Fprintf(&b, "  %-10s %s\n", line.key, line.value)
 	}
 	if len(status.Services) > 0 {
-		b.WriteString("\n" + s.formatServiceTable(status))
+		b.WriteString("\n" + formatServiceTable(status.Services, status.CheckedAt))
 	}
 	b.WriteString(formatNotices(status.Notices))
 	return b.String()
 }
 
-// formatStatusTitle is the compose project, its state, and the savepoint it runs.
+// formatStatusTitle is the compose project, its state, and what it runs.
 func formatStatusTitle(status model.ComposeProjectStatus) string {
 	parts := []string{status.ComposeProject.String()}
 	switch status.State {
@@ -56,87 +59,119 @@ func formatStatusTitle(status model.ComposeProjectStatus) string {
 	default:
 		parts = append(parts, string(status.State))
 	}
-	deployment := status.Deployment
-	switch {
-	case deployment == nil || status.State == model.ComposeProjectStateRollbackPending:
-	case deployment.Savepoint == nil:
-		parts = append(parts, "not deployed by arcave")
-	case deployment.Savepoint.SafetySnapshot:
-		parts = append(parts, "safety snapshot "+deployment.Savepoint.ID.String())
-	default:
-		parts = append(parts, "savepoint "+formatDeployedName(*deployment.Savepoint))
+	if deployment := newShownDeployment(status); deployment != nil {
+		parts = append(parts, formatDeploymentSource(*deployment))
 	}
 	return strings.Join(parts, " · ")
 }
 
-// formatDeployedName is a savepoint's name and id, its id alone when it has no name.
-func formatDeployedName(savepoint model.DeployedSavepointStatus) string {
-	if savepoint.Name == "" {
-		return savepoint.ID.String()
+// newShownDeployment is the deployment a status shows; nil when nothing runs, or while a rollback
+// is pending, which is replacing it.
+func newShownDeployment(status model.ComposeProjectStatus) *model.DeploymentStatus {
+	if status.State == model.ComposeProjectStateRollbackPending {
+		return nil
 	}
-	return savepoint.Name + " · " + savepoint.ID.String()
+	return status.Deployment
 }
 
-// newStatusSummary is the summary's lines, each a key and its value.
-func (s *Printer) newStatusSummary(status model.ComposeProjectStatus) [][2]string {
-	var lines [][2]string
+// formatDeploymentSource names what the containers run: the savepoint as the notices name it, a
+// safety snapshot by its id alone, since its name is the id of the savepoint it was taken before.
+func formatDeploymentSource(deployment model.DeploymentStatus) string {
+	switch savepoint := deployment.Savepoint; {
+	case savepoint == nil:
+		return "not deployed by arcave"
+	case savepoint.SafetySnapshot:
+		return "safety snapshot " + savepoint.ID.String()
+	case savepoint.Name == "":
+		return "savepoint " + savepoint.ID.String()
+	default:
+		return "savepoint " + savepoint.Name + " (" + savepoint.ID.String() + ")"
+	}
+}
+
+// newStatusSummary is the summary's lines: the rollback in flight, the session, the deployment.
+func (s *Printer) newStatusSummary(status model.ComposeProjectStatus) []summaryLine {
+	var lines []summaryLine
 	if inFlight := status.RollbackInFlight; inFlight != nil {
-		lines = append(lines, [2]string{"phase", string(inFlight.Phase) + ", since " + s.formatStatusTime(inFlight.At, status.CheckedAt)})
+		lines = append(lines, summaryLine{
+			key:   "phase",
+			value: string(inFlight.Phase) + ", since " + s.formatStatusTime(inFlight.At, status.CheckedAt),
+		})
 		if inFlight.Safety != "" {
-			lines = append(lines, [2]string{"safety", inFlight.Safety.String()})
+			lines = append(lines, summaryLine{
+				key:   "safety",
+				value: inFlight.Safety.String(),
+			})
 		}
 	}
 	if session := status.Session; session != nil {
-		lines = append(lines, [2]string{"session", session.Name})
+		lines = append(lines, summaryLine{
+			key:   "session",
+			value: session.Name,
+		})
 	}
-	deployment := status.Deployment
-	if deployment != nil && deployment.Savepoint != nil && status.State != model.ComposeProjectStateRollbackPending {
-		lines = append(lines, s.newDeploymentSummary(status, *deployment)...)
+	if deployment := newShownDeployment(status); deployment != nil && deployment.Savepoint != nil {
+		lines = append(lines, s.newDeploymentSummary(status.CheckedAt, status.Session, *deployment)...)
 	}
 	return lines
 }
 
 // newDeploymentSummary is what the summary says of the deployment: when, from what session, and
 // what the savepoint's record says it restored.
-func (s *Printer) newDeploymentSummary(status model.ComposeProjectStatus, deployment model.DeploymentStatus) [][2]string {
+func (s *Printer) newDeploymentSummary(
+	checkedAt time.Time, session *model.SessionRef, deployment model.DeploymentStatus,
+) []summaryLine {
 	var (
 		savepoint = *deployment.Savepoint
 		deployed  []string
 		taken     []string
+		lines     []summaryLine
 	)
 	if deployment.DeployedAt != nil {
-		deployed = append(deployed, s.formatStatusTime(*deployment.DeployedAt, status.CheckedAt))
+		deployed = append(deployed, s.formatStatusTime(*deployment.DeployedAt, checkedAt))
 	}
-	if replaced := countReplaced(status.Services); replaced > 0 {
-		deployed = append(deployed, formatCount(replaced, "container")+" replaced since")
+	if deployment.Replaced > 0 {
+		replaced := formatCount(deployment.Replaced, "container") + " replaced"
+		if deployment.DeployedAt != nil {
+			replaced += " since"
+		}
+		deployed = append(deployed, replaced)
 	}
 	if savepoint.CreatedAt != nil {
-		taken = append(taken, "taken "+s.formatStatusTime(*savepoint.CreatedAt, status.CheckedAt))
+		taken = append(taken, "taken "+s.formatStatusTime(*savepoint.CreatedAt, checkedAt))
 	}
 	if restored := savepoint.Restored; restored != nil {
 		taken = append(taken, "restored "+formatCount(restored.Volumes, "volume")+", "+
 			formatCount(restored.WritableLayers, "layer"))
 	}
-	var lines [][2]string
 	if len(deployed) > 0 {
-		lines = append(lines, [2]string{"deployed", strings.Join(deployed, " · ")})
+		lines = append(lines, summaryLine{
+			key:   "deployed",
+			value: strings.Join(deployed, " · "),
+		})
 	}
-	if deployment.Session != nil && (status.Session == nil || status.Session.ID != deployment.Session.ID) {
-		lines = append(lines, [2]string{"from", "session " + deployment.Session.String()})
+	if deployment.Session != nil && (session == nil || session.ID != deployment.Session.ID) {
+		lines = append(lines, summaryLine{
+			key:   "from",
+			value: "session " + deployment.Session.String(),
+		})
 	}
 	if len(taken) > 0 {
-		lines = append(lines, [2]string{"savepoint", strings.Join(taken, " · ")})
+		lines = append(lines, summaryLine{
+			key:   "savepoint",
+			value: strings.Join(taken, " · "),
+		})
 	}
 	if savepoint.Description != "" {
-		lines = append(lines, [2]string{"", savepoint.Description})
+		lines = append(lines, summaryLine{value: savepoint.Description})
 	}
 	return lines
 }
 
 // formatServiceTable lays the services out one per row.
-func (s *Printer) formatServiceTable(status model.ComposeProjectStatus) string {
-	rows := make([][]string, 0, len(status.Services))
-	for _, service := range status.Services {
+func formatServiceTable(services []model.ServiceStatus, checkedAt time.Time) string {
+	rows := make([][]string, 0, len(services))
+	for _, service := range services {
 		replicas := strconv.Itoa(service.ReplicasUp)
 		if service.ReplicasExpected > 0 {
 			replicas += "/" + strconv.Itoa(service.ReplicasExpected)
@@ -145,7 +180,7 @@ func (s *Printer) formatServiceTable(status model.ComposeProjectStatus) string {
 			service.Name,
 			replicas,
 			formatServiceState(service),
-			formatServiceUp(service, status.CheckedAt),
+			formatServiceUp(service, checkedAt),
 			formatServicePorts(service),
 		})
 	}
@@ -192,28 +227,18 @@ func formatServiceUp(service model.ServiceStatus, checkedAt time.Time) string {
 // formatServicePorts lists the ports the service publishes once each: one bound on both 0.0.0.0
 // and :: is one port to a reader, one bound on two given addresses two.
 func formatServicePorts(service model.ServiceStatus) string {
-	type binding struct {
-		hostIP        string
-		hostPort      int
-		containerPort int
-		protocol      string
-	}
 	var (
-		seen  = map[binding]bool{}
+		seen  = map[model.PublishedPort]struct{}{}
 		ports []string
 	)
 	for _, replica := range service.Replicas {
 		for _, port := range replica.Ports {
-			key := binding{
-				hostIP:        newBindingHostIP(port.HostIP),
-				hostPort:      port.HostPort,
-				containerPort: port.ContainerPort,
-				protocol:      port.Protocol,
-			}
-			if seen[key] {
+			key := port
+			key.HostIP = toBindingHostIP(port.HostIP)
+			if _, ok := seen[key]; ok {
 				continue
 			}
-			seen[key] = true
+			seen[key] = struct{}{}
 			host := strconv.Itoa(port.HostPort)
 			if port.HostIP != "" {
 				host = port.HostIP + ":" + host
@@ -224,8 +249,8 @@ func formatServicePorts(service model.ServiceStatus) string {
 	return strings.Join(ports, ", ")
 }
 
-// newBindingHostIP is hostIP as a port's identity reads it: every unspecified address is one.
-func newBindingHostIP(hostIP string) string {
+// toBindingHostIP is hostIP as a port's identity reads it: every unspecified address is one.
+func toBindingHostIP(hostIP string) string {
 	addr, err := netip.ParseAddr(hostIP)
 	if err != nil || addr.IsUnspecified() {
 		return ""
@@ -233,20 +258,7 @@ func newBindingHostIP(hostIP string) string {
 	return addr.String()
 }
 
-// countReplaced counts the replicas the deployed savepoint recorded that something else rebuilt.
-func countReplaced(services []model.ServiceStatus) int {
-	replaced := 0
-	for _, service := range services {
-		for _, replica := range service.Replicas {
-			if replica.InSavepoint && !replica.InDeployment && replica.State != model.ReplicaStateMissing {
-				replaced++
-			}
-		}
-	}
-	return replaced
-}
-
 // formatStatusTime is t in the printer's zone and its age at checkedAt.
 func (s *Printer) formatStatusTime(t, checkedAt time.Time) string {
-	return t.In(s.opts.Location).Format(statusTimeLayout) + " (" + model.FormatAge(checkedAt.Sub(t)) + " ago)"
+	return s.formatTime(t) + " (" + model.FormatAge(checkedAt.Sub(t)) + " ago)"
 }

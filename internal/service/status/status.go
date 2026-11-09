@@ -150,7 +150,7 @@ func (s *Service) Status(ctx context.Context, req model.StatusRequest) (model.Co
 		CheckedAt:        checkedAt,
 		State:            state,
 		Session:          view.session,
-		Deployment:       newDeploymentStatus(deployments, view),
+		Deployment:       newDeploymentStatus(deployments, view, services),
 		Services:         services,
 		RollbackInFlight: newRollbackInFlight(marker),
 		Unreadable:       unreadable,
@@ -390,7 +390,9 @@ func newRollbackInFlight(marker *model.InflightMarker) *model.RollbackInFlight {
 
 // newDeploymentStatus is what built the containers, and what the deployed savepoint's record adds;
 // nil for a compose project with none.
-func newDeploymentStatus(deployments containerDeployments, view storeView) *model.DeploymentStatus {
+func newDeploymentStatus(
+	deployments containerDeployments, view storeView, services []model.ServiceStatus,
+) *model.DeploymentStatus {
 	switch {
 	case deployments.source == "":
 		return nil
@@ -422,8 +424,22 @@ func newDeploymentStatus(deployments containerDeployments, view storeView) *mode
 			Description:    description,
 			Restored:       restored,
 		},
-		Record: view.record,
+		Replaced: countRecreated(services),
+		Record:   view.record,
 	}
+}
+
+// countRecreated counts the replicas recreated outside arcave since the deployment.
+func countRecreated(services []model.ServiceStatus) int {
+	recreated := 0
+	for _, service := range services {
+		for _, replica := range service.Replicas {
+			if isRecreated(replica) {
+				recreated++
+			}
+		}
+	}
+	return recreated
 }
 
 // newOptionalTime is t, nil when zero.
