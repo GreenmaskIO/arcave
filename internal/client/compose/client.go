@@ -135,22 +135,14 @@ func (c *Client) Create(ctx context.Context, project *types.Project, restoredVol
 	})
 }
 
-// Start starts all project services and waits until they are healthy; a waitTimeout <= 0
+// Start starts all project services and waits until they are ready; a waitTimeout <= 0
 // falls back to Options. Start rather than Up: what Create built must not be recreated under it.
-// A project with a disabled healthcheck is waited for by Start itself: compose refuses one.
+// It waits itself: compose's --wait refuses a one-shot that exited 0 and a disabled healthcheck.
 func (c *Client) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	defer c.routeEvents(ctx)()
 	waitTimeout = c.waitTimeoutOr(waitTimeout)
 	zerolog.Ctx(ctx).Debug().Str("wait_timeout", waitTimeout.String()).
-		Msg("waiting for services to become healthy")
-
-	if !healthCheckDisabled(project) {
-		return c.api.Start(ctx, project.Name, api.StartOptions{
-			Project:     project,
-			Wait:        true,
-			WaitTimeout: waitTimeout,
-		})
-	}
+		Msg("waiting for services to become ready")
 
 	// WaitTimeout still bounds the depends_on waits compose runs while it starts.
 	if err := c.api.Start(ctx, project.Name, api.StartOptions{Project: project, WaitTimeout: waitTimeout}); err != nil {
@@ -303,29 +295,16 @@ func withComposeLabels(project *types.Project) *types.Project {
 	return &stamped
 }
 
-// healthCheckDisabled reports a service compose creates with a healthcheck of NONE: its
-// start --wait refuses one, having no health to read.
-func healthCheckDisabled(project *types.Project) bool {
-	for _, service := range project.Services {
-		check := service.HealthCheck
-		if check != nil && (check.Disable || (len(check.Test) > 0 && check.Test[0] == "NONE")) {
-			return true
-		}
-	}
-	return false
-}
-
-// waitReady waits as compose's start --wait does: healthy where a health is reported, running
-// where none is. A one-shot others wait to complete is skipped; Start has already waited for it.
+// waitReady waits until every container is ready: running, and healthy where a health is
+// reported, or exited 0 — right after Start, a container that exited 0 has done its work.
 func (c *Client) waitReady(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, waitTimeout)
 	defer cancel()
 
-	oneShots := completionAwaited(project)
 	ticker := time.NewTicker(c.pollInterval)
 	defer ticker.Stop()
 	for {
-		ready, err := c.containersReady(ctx, project, oneShots)
+		ready, err := c.containersReady(ctx, project)
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			return fmt.Errorf("application not healthy after %s", waitTimeout)
@@ -341,22 +320,9 @@ func (c *Client) waitReady(ctx context.Context, project *types.Project, waitTime
 	}
 }
 
-// completionAwaited are the services another depends on with service_completed_successfully.
-func completionAwaited(project *types.Project) map[string]bool {
-	oneShots := map[string]bool{}
-	for _, dependent := range project.Services {
-		for name, dependency := range dependent.DependsOn {
-			if dependency.Condition == types.ServiceConditionCompletedSuccessfully {
-				oneShots[name] = true
-			}
-		}
-	}
-	return oneShots
-}
-
-// containersReady reads the project's containers once: ready when every one runs and none
-// reports a health short of healthy; an exited or unhealthy one fails.
-func (c *Client) containersReady(ctx context.Context, project *types.Project, oneShots map[string]bool) (bool, error) {
+// containersReady reads the project's containers once: ready when each runs, healthy where a
+// health is reported, or exited 0; a non-zero exit, a dead or an unhealthy container fails.
+func (c *Client) containersReady(ctx context.Context, project *types.Project) (bool, error) {
 	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project, All: true})
 	if err != nil {
 		return false, err
@@ -364,12 +330,14 @@ func (c *Client) containersReady(ctx context.Context, project *types.Project, on
 
 	ready := true
 	for _, summary := range containers {
-		if oneShots[summary.Service] {
-			continue
-		}
 		switch summary.State {
-		case container.StateExited, container.StateDead:
-			return false, fmt.Errorf("container %s exited (%d)", summary.Name, summary.ExitCode)
+		case container.StateExited:
+			if summary.ExitCode != 0 {
+				return false, fmt.Errorf("container %s exited (%d)", summary.Name, summary.ExitCode)
+			}
+			continue
+		case container.StateDead:
+			return false, fmt.Errorf("container %s is dead", summary.Name)
 		case container.StateRunning:
 		default:
 			ready = false

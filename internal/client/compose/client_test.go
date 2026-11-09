@@ -305,72 +305,9 @@ func TestClient_Create_StampsComposeLabels(t *testing.T) {
 	composeAPI.AssertExpectations(t)
 }
 
+// Start starts without compose's --wait and waits itself: running, healthy where a health is
+// reported, or exited 0.
 func TestClient_Start(t *testing.T) {
-	tests := []struct {
-		name        string
-		opts        Options
-		waitTimeout time.Duration
-		startErr    error
-		wantTimeout time.Duration
-		wantErr     error
-		verify      func(t *testing.T, composeAPI *mockComposeAPI)
-	}{
-		{
-			name:        "a caller's own bound wins over the configured one",
-			opts:        testOptions,
-			waitTimeout: 30 * time.Second,
-			wantTimeout: 30 * time.Second,
-		},
-		{
-			// An MCP tool call omitting wait_timeout lands here: the project's
-			// configured bound applies, not the package fallback.
-			name:        "falls back to the configured bound when zero",
-			opts:        testOptions,
-			waitTimeout: 0,
-			wantTimeout: 45 * time.Second,
-		},
-		{
-			name:        "falls back to the package default when neither is set",
-			waitTimeout: 0,
-			wantTimeout: defaultStartWaitTimeout,
-		},
-		{
-			name:        "falls back when negative",
-			waitTimeout: -1,
-			wantTimeout: defaultStartWaitTimeout,
-		},
-		{
-			name:     "a compose failure reaches the caller",
-			startErr: errCompose,
-			wantErr:  errCompose,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			composeAPI := &mockComposeAPI{}
-			composeAPI.On("Start", mock.Anything, "demo", mock.Anything).Return(tt.startErr).Maybe()
-			c := NewClient(composeAPI, tt.opts)
-
-			// Act
-			err := c.Start(context.Background(), fixtureProject(), tt.waitTimeout)
-
-			// Assert
-			assertError(t, err, tt.wantErr, "")
-			if tt.verify != nil {
-				tt.verify(t, composeAPI)
-			}
-			if tt.wantErr == nil {
-				assertStartOptions(t, composeAPI, tt.wantTimeout)
-			}
-		})
-	}
-}
-
-// A disabled healthcheck leaves the container no health, and compose's start --wait refuses
-// it: Start starts without Wait and waits itself, running where no health is reported.
-func TestClient_Start_HealthCheckDisabled(t *testing.T) {
 	running := func(service string) api.ContainerSummary {
 		return api.ContainerSummary{Name: "demo-" + service + "-1", Service: service, State: "running"}
 	}
@@ -381,87 +318,116 @@ func TestClient_Start_HealthCheckDisabled(t *testing.T) {
 	exited := func(service string, code int) api.ContainerSummary {
 		return api.ContainerSummary{Name: "demo-" + service + "-1", Service: service, State: "exited", ExitCode: code}
 	}
+	ready := [][]api.ContainerSummary{{running("app"), withHealth(running("db"), "healthy")}}
 
 	tests := []struct {
 		name        string
-		project     *types.Project
+		opts        Options
 		waitTimeout time.Duration
 		startErr    error
 		polls       [][]api.ContainerSummary
 		psErr       error
+		wantTimeout time.Duration
 		wantErr     error
 		wantErrMsg  string
 	}{
 		{
-			name:    "a running replica without health is ready",
-			project: disabledHealthProject(&types.HealthCheckConfig{Disable: true}),
-			polls:   [][]api.ContainerSummary{{running("web"), withHealth(running("db"), "healthy")}},
+			name:        "a caller's own bound wins over the configured one",
+			opts:        testOptions,
+			waitTimeout: 30 * time.Second,
+			polls:       ready,
+			wantTimeout: 30 * time.Second,
 		},
 		{
-			name:    "a test of NONE is a disabled healthcheck too",
-			project: disabledHealthProject(&types.HealthCheckConfig{Test: types.HealthCheckTest{"NONE"}}),
-			polls:   [][]api.ContainerSummary{{running("web"), withHealth(running("db"), "healthy")}},
+			// An MCP tool call omitting wait_timeout lands here: the project's
+			// configured bound applies, not the package fallback.
+			name:        "falls back to the configured bound when zero",
+			opts:        testOptions,
+			polls:       ready,
+			wantTimeout: 45 * time.Second,
 		},
 		{
-			name:    "waits for a replica still created and a health still starting",
-			project: disabledHealthProject(&types.HealthCheckConfig{Disable: true}),
+			name:        "falls back to the package default when neither is set",
+			polls:       ready,
+			wantTimeout: defaultStartWaitTimeout,
+		},
+		{
+			name:        "falls back when negative",
+			waitTimeout: -1,
+			polls:       ready,
+			wantTimeout: defaultStartWaitTimeout,
+		},
+		{
+			name: "waits for a replica still created, restarting or a health still starting",
+			opts: testOptions,
 			polls: [][]api.ContainerSummary{
-				{{Service: "web", State: "created"}, withHealth(running("db"), "starting")},
-				{running("web"), withHealth(running("db"), "starting")},
-				{running("web"), withHealth(running("db"), "healthy")},
+				{{Service: "app", State: "created"}, withHealth(running("db"), "starting")},
+				{{Service: "app", State: "restarting"}, withHealth(running("db"), "starting")},
+				{running("app"), withHealth(running("db"), "healthy")},
 			},
+			wantTimeout: 45 * time.Second,
 		},
 		{
-			name:       "a replica that exited on start fails the wait",
-			project:    disabledHealthProject(&types.HealthCheckConfig{Disable: true}),
-			polls:      [][]api.ContainerSummary{{exited("web", 1), withHealth(running("db"), "healthy")}},
-			wantErrMsg: "container demo-web-1 exited (1)",
+			// A migrate or seed no service waits on: compose's --wait refuses its exit.
+			name:        "a container that exited 0 is ready",
+			opts:        testOptions,
+			polls:       [][]api.ContainerSummary{{exited("app", 0), withHealth(running("db"), "healthy")}},
+			wantTimeout: 45 * time.Second,
 		},
 		{
-			name:       "an unhealthy replica fails the wait",
-			project:    disabledHealthProject(&types.HealthCheckConfig{Disable: true}),
-			polls:      [][]api.ContainerSummary{{running("web"), withHealth(running("db"), "unhealthy")}},
-			wantErrMsg: "container demo-db-1 is unhealthy",
+			name:        "a container that exited non-zero fails the wait",
+			opts:        testOptions,
+			polls:       [][]api.ContainerSummary{{exited("app", 1), withHealth(running("db"), "healthy")}},
+			wantTimeout: 45 * time.Second,
+			wantErrMsg:  "container demo-app-1 exited (1)",
 		},
 		{
-			// Start has already waited for it to complete; its exit is not a failure.
-			name:    "a one-shot another depends on to complete is not waited to run",
-			project: oneShotProject(),
-			polls: [][]api.ContainerSummary{
-				{exited("migrate", 0), {Service: "web", State: "created"}},
-				{exited("migrate", 0), running("web")},
-			},
+			name:        "a dead container fails the wait",
+			opts:        testOptions,
+			polls:       [][]api.ContainerSummary{{{Name: "demo-app-1", Service: "app", State: "dead"}}},
+			wantTimeout: 45 * time.Second,
+			wantErrMsg:  "container demo-app-1 is dead",
+		},
+		{
+			name:        "an unhealthy container fails the wait",
+			opts:        testOptions,
+			polls:       [][]api.ContainerSummary{{running("app"), withHealth(running("db"), "unhealthy")}},
+			wantTimeout: 45 * time.Second,
+			wantErrMsg:  "container demo-db-1 is unhealthy",
 		},
 		{
 			name:        "gives up once the bound has passed",
-			project:     disabledHealthProject(&types.HealthCheckConfig{Disable: true}),
 			waitTimeout: time.Millisecond,
-			polls:       nil, // every read reports a replica still starting
+			polls:       nil, // every read reports a health still starting
+			wantTimeout: time.Millisecond,
 			wantErrMsg:  "application not healthy after 1ms",
 		},
 		{
-			name:     "a compose failure reaches the caller unwaited",
-			project:  disabledHealthProject(&types.HealthCheckConfig{Disable: true}),
-			startErr: errCompose,
-			wantErr:  errCompose,
+			name:        "a compose failure reaches the caller unwaited",
+			opts:        testOptions,
+			startErr:    errCompose,
+			wantTimeout: 45 * time.Second,
+			wantErr:     errCompose,
 		},
 		{
-			name:    "a failed read reaches the caller",
-			project: disabledHealthProject(&types.HealthCheckConfig{Disable: true}),
-			psErr:   errCompose,
-			wantErr: errCompose,
+			name:        "a failed read reaches the caller",
+			opts:        testOptions,
+			psErr:       errCompose,
+			wantTimeout: 45 * time.Second,
+			wantErr:     errCompose,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
+			project := fixtureProject()
 			composeAPI := &mockComposeAPI{}
 			start := composeAPI.On("Start", mock.Anything, "demo", mock.MatchedBy(func(opts api.StartOptions) bool {
-				return !opts.Wait && opts.WaitTimeout > 0 && opts.Project == tt.project
+				return !opts.Wait && opts.WaitTimeout == tt.wantTimeout && opts.Project == project
 			})).Return(tt.startErr).Once()
 			psOptions := mock.MatchedBy(func(opts api.PsOptions) bool {
-				return opts.All && opts.Project == tt.project
+				return opts.All && opts.Project == project
 			})
 			switch {
 			case tt.startErr != nil:
@@ -469,17 +435,17 @@ func TestClient_Start_HealthCheckDisabled(t *testing.T) {
 				composeAPI.On("Ps", mock.Anything, "demo", psOptions).Return(nil, tt.psErr).Once().NotBefore(start)
 			case tt.polls == nil:
 				composeAPI.On("Ps", mock.Anything, "demo", psOptions).
-					Return([]api.ContainerSummary{withHealth(running("db"), "starting"), running("web")}, nil).NotBefore(start)
+					Return([]api.ContainerSummary{withHealth(running("db"), "starting"), running("app")}, nil).NotBefore(start)
 			default:
 				for _, poll := range tt.polls {
 					composeAPI.On("Ps", mock.Anything, "demo", psOptions).Return(poll, nil).Once().NotBefore(start)
 				}
 			}
-			c := NewClient(composeAPI, testOptions)
+			c := NewClient(composeAPI, tt.opts)
 			c.pollInterval = time.Millisecond
 
 			// Act
-			err := c.Start(context.Background(), tt.project, tt.waitTimeout)
+			err := c.Start(context.Background(), project, tt.waitTimeout)
 
 			// Assert
 			if tt.wantErrMsg != "" {
@@ -490,17 +456,6 @@ func TestClient_Start_HealthCheckDisabled(t *testing.T) {
 			composeAPI.AssertExpectations(t)
 		})
 	}
-}
-
-// assertStartOptions pins what every successful Start asks compose for: without Wait
-// it would return before the services are healthy.
-func assertStartOptions(t *testing.T, composeAPI *mockComposeAPI, wantTimeout time.Duration) {
-	t.Helper()
-	opts := composeAPI.startCall(t)
-	require.NotNil(t, opts.Project)
-	assert.Equal(t, "demo", opts.Project.Name)
-	assert.True(t, opts.Wait)
-	assert.Equal(t, wantTimeout, opts.WaitTimeout)
 }
 
 // fixtureProject is the two-service project a call is handed.
@@ -530,33 +485,6 @@ func graceProject(grace map[string]time.Duration) *types.Project {
 // psRunning matches the read of the containers running before a stop.
 func psRunning(project *types.Project) any {
 	return mock.MatchedBy(func(opts api.PsOptions) bool { return !opts.All && opts.Project == project })
-}
-
-// disabledHealthProject is a web whose healthcheck is check, beside a db that runs its own.
-func disabledHealthProject(check *types.HealthCheckConfig) *types.Project {
-	return &types.Project{
-		Name: "demo",
-		Services: types.Services{
-			"web": {Name: "web", Image: "busybox", HealthCheck: check},
-			"db":  {Name: "db", Image: "postgres:16"},
-		},
-	}
-}
-
-// oneShotProject is a web with its healthcheck disabled, waiting on a migrate to complete.
-func oneShotProject() *types.Project {
-	return &types.Project{
-		Name: "demo",
-		Services: types.Services{
-			"migrate": {Name: "migrate", Image: "busybox"},
-			"web": {
-				Name: "web", Image: "busybox", HealthCheck: &types.HealthCheckConfig{Disable: true},
-				DependsOn: types.DependsOnConfig{
-					"migrate": {Condition: types.ServiceConditionCompletedSuccessfully, Required: true},
-				},
-			},
-		},
-	}
 }
 
 // mockComposeAPI is the dockerComposeAPI double: it records what arcave asks compose
@@ -617,13 +545,6 @@ func assertError(t *testing.T, err, wantErr error, wantErrMsg string) {
 	if wantErrMsg != "" {
 		assert.Contains(t, err.Error(), wantErrMsg)
 	}
-}
-
-// startCall returns the options of the one recorded Start call.
-func (m *mockComposeAPI) startCall(t *testing.T) api.StartOptions {
-	t.Helper()
-	call := m.calledOnce(t, "Start")
-	return call.Arguments.Get(2).(api.StartOptions)
 }
 
 func (m *mockComposeAPI) calledOnce(t *testing.T, method string) mock.Call {
