@@ -104,6 +104,7 @@ func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDouble
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -198,6 +199,7 @@ func TestService_RemoveSavepoints_Progress(t *testing.T) {
 	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
 	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
 	svc := New(Deps{
+		ArcaveProject: demoArcaveProject,
 		ProjectLocker: locker,
 		SessionLocker: fakeSessionLocker{},
 		SavepointRepo: repo,
@@ -352,7 +354,7 @@ func TestWarn(t *testing.T) {
 		},
 		{
 			name:   "a safety snapshot is not",
-			labels: newSafetySnapshotLabels(demoRecord().ID),
+			labels: newSafetySnapshotLabels(),
 			want:   []bool{false},
 		},
 	}

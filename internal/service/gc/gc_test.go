@@ -180,7 +180,7 @@ func TestGarbageCollector_GarbageCollect_HoldsTheSessionLock(t *testing.T) {
 	trees := newEmptyCollector(model.GarbageDataKindSavepointData, model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}})
 	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, locker, newNoMarker())
 	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 	svc := New(deps)
 
@@ -220,7 +220,7 @@ func TestGarbageCollector_GarbageCollect_LockLostMidway(t *testing.T) {
 			treeEraser := newMockEraser(model.GarbageActionDeleteTree)
 			deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, newHeldLocker(), newNoMarker())
 			deps.SessionLocker = sessionLocker
-			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 			deps.ComposeProjectErasers = []ComposeProjectEraser{treeEraser}
 			svc := New(deps)
@@ -298,7 +298,7 @@ func TestGarbageCollector_GarbageCollect(t *testing.T) {
 	}).Return(model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 	locker := newHeldLocker()
 	deps := newDeps(gcSession, newGCStore(t, gcSession, "demo"), sessions, locker, inflight)
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.DaemonCollectors = []DaemonCollector{tags}
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs, trees}
 	svc := New(deps)
@@ -362,7 +362,7 @@ func TestGarbageCollector_GarbageCollect_FailuresStayInTheirReport(t *testing.T)
 		Return(model.OCIImageStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 	store := newGCStore(t, model.DefaultSession, "broken", "demo")
 	deps := newDeps(model.DefaultSession, store, &mockSessions{}, newHeldLocker(), newNoMarker())
-	deps.NewSavepoints = newSavepointsInOrder(t, brokenSavepoints, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, brokenSavepoints, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs, images}
 	svc := New(deps)
 
@@ -445,7 +445,7 @@ func TestGarbageCollector_GarbageCollect_UnjudgedIsPartial(t *testing.T) {
 	}}, nil).Once()
 	store := newGCStore(t, model.DefaultSession, "demo")
 	deps := newDeps(model.DefaultSession, store, &mockSessions{}, newHeldLocker(), newNoMarker())
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{restic}
 	svc := New(deps)
 
@@ -533,7 +533,7 @@ func TestGarbageCollector_GarbageCollect_UncommittedTreesAreDead(t *testing.T) {
 				return scope.ComposeProject == "demo" && assert.ObjectsAreEqual(tt.wantDead, scope.Dead)
 			})).Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 			deps := newDeps(model.DefaultSession, store, &mockSessions{}, newHeldLocker(), newNoMarker())
-			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 			svc := New(deps)
 
@@ -619,7 +619,7 @@ func TestGarbageCollector_GarbageCollect_SelectsDataKinds(t *testing.T) {
 			tags.On("Find", mock.Anything, forComposeProjects("demo")).
 				Return(model.DockerLayerTagStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Maybe()
 			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, newHeldLocker(), newNoMarker())
-			deps.NewSavepoints = newSavepointsInOrder(t, readers...)
+			deps.NewSavepointReader = newSavepointsInOrder(t, readers...)
 			deps.DaemonCollectors = []DaemonCollector{tags}
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{
 				newEmptyCollector(model.GarbageDataKindSavepointData, model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}),
@@ -686,7 +686,7 @@ func TestGarbageCollector_GarbageCollect_ProbeFails(t *testing.T) {
 			blobs.On("Find", mock.Anything, mock.MatchedBy(func(scope ComposeProjectScope) bool { return scope.ComposeProject == "demo" })).
 				Return(model.OCIBlobStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, newHeldLocker(), newNoMarker())
-			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 			deps.DaemonCollectors = []DaemonCollector{tags}
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs, restic}
 			svc := New(deps)
@@ -760,7 +760,7 @@ func TestGarbageCollector_GarbageCollect_ListsAllButTheUnlistedNamespaces(t *tes
 		return slices.Equal(wantNames, names)
 	})).Return(model.SavepointDirectoryStat{GarbageFindings: model.GarbageFindings{Ops: []model.GarbageOp{}}}, nil).Once()
 	deps := newDeps(model.DefaultSession, store, &mockSessions{}, newHeldLocker(), newNoMarker())
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 	deps.UnlistedNamespaces = []string{"restic"}
 	svc := New(deps)
@@ -881,7 +881,7 @@ func TestGarbageCollector_GarbageCollect_DryRunDeletesNothing(t *testing.T) {
 	restic.On("Find", mock.Anything, inComposeProject("demo")).Return(deadSnapStat, nil).Once()
 	locker, inflight := newHeldLocker(), newNoMarker()
 	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, restic}
 	deps.DaemonCollectors = []DaemonCollector{tags}
 	deps.ComposeProjectErasers = []ComposeProjectEraser{treeEraser}
@@ -969,7 +969,7 @@ func TestGarbageCollector_GarbageCollect_Deletes(t *testing.T) {
 	locker, inflight := newHeldLocker(), newNoMarker()
 	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo", "other"), &mockSessions{}, locker, inflight)
 	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints, otherSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints, otherSavepoints)
 	deps.DaemonCollectors = []DaemonCollector{tags}
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, images, restic}
 	deps.DaemonErasers = []DaemonEraser{tagEraser}
@@ -1035,7 +1035,7 @@ func TestGarbageCollector_GarbageCollect_VerifyRefusesTheDaemon(t *testing.T) {
 	locker, inflight := newHeldLocker(), newNoMarker()
 	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
 	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.DaemonCollectors = []DaemonCollector{tags}
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 	deps.DaemonErasers = []DaemonEraser{tagEraser}
@@ -1095,7 +1095,7 @@ func TestGarbageCollector_GarbageCollect_VerifyRefuses(t *testing.T) {
 	locker, inflight := newHeldLocker(), newNoMarker()
 	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo", "other"), &mockSessions{}, locker, inflight)
 	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints, otherSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints, otherSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, images, blobs}
 	deps.ComposeProjectErasers = erasers
 	svc := New(deps)
@@ -1229,7 +1229,7 @@ func TestGarbageCollector_GarbageCollect_DeletesAReport(t *testing.T) {
 			locker, inflight := newHeldLocker(), newNoMarker()
 			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
 			deps.SessionLocker = sessionLocker
-			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{blobs}
 			deps.ComposeProjectErasers = []ComposeProjectEraser{objectEraser}
 			svc := New(deps)
@@ -1328,7 +1328,7 @@ func TestGarbageCollector_GarbageCollect_LockLostAfterTheLastDeletion(t *testing
 	locker, inflight := newHeldLocker(), newNoMarker()
 	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
 	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 	deps.ComposeProjectErasers = []ComposeProjectEraser{treeEraser, newMockEraser(model.GarbageActionDeleteImage)}
 	svc := New(deps)
@@ -1375,7 +1375,7 @@ func TestGarbageCollector_GarbageCollect_LockLostWhileDeleting(t *testing.T) {
 	locker, inflight := newHeldLocker(), newNoMarker()
 	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
 	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees, images}
 	deps.ComposeProjectErasers = []ComposeProjectEraser{treeEraser, newMockEraser(model.GarbageActionDeleteImage)}
 	svc := New(deps)
@@ -1430,7 +1430,7 @@ func TestGarbageCollector_GarbageCollect_OnlyReportsWhatNoEraserCarriesOut(t *te
 			locker, inflight := newHeldLocker(), newNoMarker()
 			deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
 			deps.SessionLocker = sessionLocker
-			deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+			deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 			deps.ComposeProjectCollectors = []ComposeProjectCollector{collector}
 			deps.ComposeProjectErasers = []ComposeProjectEraser{objectEraser, treeEraser}
 			svc := New(deps)
@@ -1553,7 +1553,7 @@ func testGarbageCollectLockLostFailingTheLastDeletion(
 	locker, inflight := newHeldLocker(), newNoMarker()
 	deps := newDeps(model.DefaultSession, newGCStore(t, model.DefaultSession, "demo"), &mockSessions{}, locker, inflight)
 	deps.SessionLocker = sessionLocker
-	deps.NewSavepoints = newSavepointsInOrder(t, demoSavepoints)
+	deps.NewSavepointReader = newSavepointsInOrder(t, demoSavepoints)
 	deps.ComposeProjectCollectors = []ComposeProjectCollector{trees}
 	deps.ComposeProjectErasers = []ComposeProjectEraser{treeEraser}
 	svc := New(deps)

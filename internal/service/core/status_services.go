@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -55,63 +54,72 @@ var replicaHealthRank = map[model.ReplicaHealth]int{
 type deployedContainers struct {
 	// source is empty for a compose project with no container.
 	source model.DeploymentSource
-	// primary is the deployment most containers carry, the newest on a tie; nil for none.
-	primary *model.SavepointDeployment
-	// deployments is the deployment each labelled container carries, by container id.
-	deployments map[string]model.DeploymentID
+	// deployment is the latest deployment the containers carry; nil for none.
+	deployment *model.SavepointDeployment
+	// builtByLatest holds the id of every container that deployment built.
+	builtByLatest map[string]bool
 	// notices name the containers whose labels could not be read.
 	notices []model.Notice
 }
 
-// findDeployments reads every container's deployment labels; one that cannot be read is warned
-// of and counts as built by no deployment.
+// findDeployments reads every container's deployment labels, the latest build being the
+// deployment: a container created outside arcave from a restored layer inherits an earlier one,
+// and counts as built by none. Labels that cannot be read are warned of and count the same.
 func findDeployments(containers model.ComposeProjectContainers) deployedContainers {
 	var (
-		deployments = map[string]model.DeploymentID{}
-		byID        = map[model.DeploymentID]model.SavepointDeployment{}
-		counts      = map[model.DeploymentID]int{}
-		notices     []model.Notice
-		total       int
+		deployment *model.SavepointDeployment
+		// deploymentByContainer is the deployment each container's labels name, by container id.
+		deploymentByContainer = map[string]model.SavepointDeployment{}
+		// builtByLatest holds the id of every container the latest deployment built.
+		builtByLatest = map[string]bool{}
+		notices       []model.Notice
+		total         int
 	)
 	for _, service := range containers.Services {
 		for _, replica := range service.Containers {
 			total++
-			deployment, ok, err := model.ParseSavepointDeployment(replica.Labels)
+			labels, ok, err := model.ParseSavepointDeployment(replica.Labels)
 			switch {
 			case err != nil:
 				notices = append(notices, newUnreadableLabelsNotice(service.Name, replica, err))
 			case ok:
-				deployments[replica.ID] = deployment.ID
-				byID[deployment.ID] = deployment
-				counts[deployment.ID]++
+				deploymentByContainer[replica.ID] = labels
+				if deployment == nil || labels.DeployedAt.After(deployment.DeployedAt) {
+					deployment = &labels
+				}
 			}
 		}
 	}
-	var primary *model.SavepointDeployment
-	for _, id := range slices.Sorted(maps.Keys(counts)) {
-		if primary == nil || counts[id] >= counts[primary.ID] {
-			deployment := byID[id]
-			primary = &deployment
+	for id, labels := range deploymentByContainer {
+		if isSameDeployment(labels, *deployment) {
+			builtByLatest[id] = true
 		}
 	}
 	return deployedContainers{
-		source:      newDeploymentSource(total, primary, counts),
-		primary:     primary,
-		deployments: deployments,
-		notices:     notices,
+		source:        newDeploymentSource(total, len(builtByLatest)),
+		deployment:    deployment,
+		builtByLatest: builtByLatest,
+		notices:       notices,
 	}
 }
 
-// newDeploymentSource says what built the total containers, primary having built counts[its id].
-func newDeploymentSource(
-	total int, primary *model.SavepointDeployment, counts map[model.DeploymentID]int,
-) model.DeploymentSource {
+// isSameDeployment reports whether a and b are one build: the same savepoint, session and arcave
+// project deployed at the same instant.
+func isSameDeployment(a, b model.SavepointDeployment) bool {
+	return a.DeployedAt.Equal(b.DeployedAt) &&
+		a.ArcaveProject == b.ArcaveProject &&
+		a.Session.ID == b.Session.ID &&
+		a.Savepoint.ID == b.Savepoint.ID
+}
+
+// newDeploymentSource says what built the total containers, labelled of them by a rollback.
+func newDeploymentSource(total, labelled int) model.DeploymentSource {
 	switch {
 	case total == 0:
 		return ""
-	case primary == nil:
+	case labelled == 0:
 		return model.DeploymentSourceCompose
-	case counts[primary.ID] == total:
+	case labelled == total:
 		return model.DeploymentSourceSavepoint
 	default:
 		return model.DeploymentSourceMixed
@@ -123,23 +131,23 @@ func newServiceStatuses(containers model.ComposeProjectContainers, deployed depl
 	var (
 		live     = map[string][]model.Container{}
 		jobs     = newJobServices(containers)
-		recorded map[string]model.DeployedService
+		recorded map[string][]int
 	)
-	if deployed.primary != nil {
-		recorded = deployed.primary.Manifest.Services
+	if deployed.deployment != nil {
+		recorded = deployed.deployment.ServiceReplicas
 	}
 	for _, service := range containers.Services {
 		live[service.Name] = service.Containers
 	}
-	names := slices.Sorted(maps.Keys(live))
-	for name := range recorded {
-		if _, ok := live[name]; !ok {
-			names = append(names, name)
-		}
+	names := map[string]bool{}
+	for name := range live {
+		names[name] = true
 	}
-	slices.Sort(names)
+	for name := range recorded {
+		names[name] = true
+	}
 	services := make([]model.ServiceStatus, 0, len(names))
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(names)) {
 		services = append(services, newServiceStatus(name, live[name], recorded[name], jobs[name], deployed))
 	}
 	return services
@@ -150,10 +158,8 @@ func newServiceStatuses(containers model.ComposeProjectContainers, deployed depl
 func newJobServices(containers model.ComposeProjectContainers) map[string]bool {
 	jobs := map[string]bool{}
 	for _, service := range containers.Services {
-		for name, condition := range service.DependsOn {
-			if condition == types.ServiceConditionCompletedSuccessfully {
-				jobs[name] = true
-			}
+		for _, awaited := range service.AwaitsCompletion {
+			jobs[awaited] = true
 		}
 	}
 	return jobs
@@ -162,17 +168,16 @@ func newJobServices(containers model.ComposeProjectContainers) map[string]bool {
 // newServiceStatus is one service: its live replicas, and every replica the deployment recorded
 // that the daemon does not hold; job marks one whose exit 0 is its success.
 func newServiceStatus(
-	name string, containers []model.Container, recorded model.DeployedService, job bool, deployed deployedContainers,
+	name string, containers []model.Container, recorded []int, job bool, deployed deployedContainers,
 ) model.ServiceStatus {
-	replicas := make([]model.ReplicaStatus, 0, max(len(containers), len(recorded.Replicas)))
+	replicas := make([]model.ReplicaStatus, 0, max(len(containers), len(recorded)))
 	held := map[int]bool{}
 	for _, replica := range containers {
 		held[replica.Number] = true
-		inDeployment := deployed.primary != nil && deployed.deployments[replica.ID] == deployed.primary.ID
-		replicas = append(replicas, newReplicaStatus(replica, job, inDeployment,
-			slices.Contains(recorded.Replicas, replica.Number)))
+		replicas = append(replicas, newReplicaStatus(replica, job, deployed.builtByLatest[replica.ID],
+			slices.Contains(recorded, replica.Number)))
 	}
-	for _, number := range recorded.Replicas {
+	for _, number := range recorded {
 		if !held[number] {
 			replicas = append(replicas, model.ReplicaStatus{
 				Number:      number,
@@ -192,7 +197,7 @@ func newServiceStatus(
 		Name:             name,
 		State:            newServiceState(replicas),
 		Health:           newServiceHealth(replicas),
-		ReplicasExpected: len(recorded.Replicas),
+		ReplicasExpected: len(recorded),
 		ReplicasUp:       up,
 		Replicas:         replicas,
 	}
@@ -204,12 +209,8 @@ func newReplicaStatus(replica model.Container, job, inDeployment, inSavepoint bo
 	var (
 		inspect = replica.Inspect
 		state   = cmp.Or(inspect.State, &container.State{})
-		image   string
 		failing int
 	)
-	if inspect.Config != nil {
-		image = inspect.Config.Image
-	}
 	if state.Health != nil {
 		failing = state.Health.FailingStreak
 	}
@@ -226,7 +227,6 @@ func newReplicaStatus(replica model.Container, job, inDeployment, inSavepoint bo
 		CreatedAt:     parseDaemonTime(inspect.Created),
 		StartedAt:     parseDaemonTime(state.StartedAt),
 		FinishedAt:    parseDaemonTime(state.FinishedAt),
-		Image:         image,
 		Replaces:      replica.Replaces,
 		InDeployment:  inDeployment,
 		InSavepoint:   inSavepoint,
@@ -359,8 +359,11 @@ func newComposeProjectState(rollbackPending bool, services []model.ServiceStatus
 				// An exit 0 is a finished job or a server stopped by hand alike: it degrades nothing.
 				stopped++
 				degraded = degraded || replica.ExitCode != 0
-			default:
+			case model.ReplicaStateCreated:
 				stopped++
+				degraded = true
+			default:
+				// Paused, restarting, dead or being removed: not stopped, and not doing its work.
 				degraded = true
 			}
 			live++

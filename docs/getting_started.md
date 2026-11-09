@@ -313,7 +313,7 @@ arcave status
 ```text title="stdout"
 myapp · running · savepoint before-migration · 019e843e-1650-7000-8000-000000000000
   session    baseline
-  deployed   2026-06-01 19:52 (12s ago) by rollback
+  deployed   2026-06-01 19:52 (12s ago)
   savepoint  taken 2026-06-01 19:41 (11m ago) · restored 1 volume, 1 layer
 
 SERVICE  REPLICAS  STATE    UP   PORTS

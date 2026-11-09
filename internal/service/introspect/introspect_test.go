@@ -470,7 +470,8 @@ func TestInspector_Introspect_GroupsReplicas(t *testing.T) {
 }
 
 func TestInspector_ReadContainers(t *testing.T) {
-	// Arrange: two replicas, one depending on a job, and a hook's runner, in one listing.
+	// Arrange: two services, one waiting on the other to complete, a hook's runner and a one-off,
+	// in one listing.
 	web := summary("c-web-1", "web", "nginx:1", 1)
 	web.Labels[api.DependenciesLabel] = "migrate:service_completed_successfully:false"
 	migrate := summary("c-migrate-1", "migrate", "nginx:1", 1)
@@ -480,7 +481,7 @@ func TestInspector_ReadContainers(t *testing.T) {
 	oneoff.Labels[api.OneoffLabel] = "True"
 	daemon := &mockDockerAPI{}
 	daemon.expectContainers(web, migrate, runner, oneoff)
-	daemon.expectInspect("c-migrate-1", "c-web-1", "c-web-hook")
+	daemon.expectInspect("c-migrate-1", "c-web-1")
 
 	// Act: no volume, network or image is read, so none is expected.
 	got, err := NewInspector(daemon, composeProject).ReadContainers(context.Background())
@@ -489,19 +490,11 @@ func TestInspector_ReadContainers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Services, 2)
 	assert.Equal(t, "migrate", got.Services[0].Name)
-	assert.Nil(t, got.Services[0].DependsOn)
+	assert.Nil(t, got.Services[0].AwaitsCompletion)
 	assert.Equal(t, "web", got.Services[1].Name)
-	assert.Equal(t, map[string]string{"migrate": "service_completed_successfully"}, got.Services[1].DependsOn)
+	assert.Equal(t, []string{"migrate"}, got.Services[1].AwaitsCompletion)
 	require.Len(t, got.Services[1].Containers, 1, "neither a hook's runner nor a one-off is a replica")
 	assert.Equal(t, "c-web-1", got.Services[1].Containers[0].ID)
-	require.Len(t, got.HookRunners, 1)
-	assert.Equal(t, model.HookRunner{
-		Service:   "web",
-		Hook:      "pre_start",
-		Index:     "0",
-		Container: got.HookRunners[0].Container,
-	}, got.HookRunners[0])
-	assert.Equal(t, "c-web-hook", got.HookRunners[0].Container.ID)
 	daemon.AssertExpectations(t)
 }
 
@@ -539,29 +532,6 @@ func TestInspector_ReadContainers_DaemonFailures(t *testing.T) {
 			require.ErrorIs(t, err, daemonErr)
 			assert.Equal(t, model.ComposeProjectContainers{}, got)
 			daemon.AssertExpectations(t)
-		})
-	}
-}
-
-func TestParseDependsOn(t *testing.T) {
-	tests := []struct {
-		name  string
-		label string
-		want  map[string]string
-	}{
-		{name: "no label"},
-		{name: "one entry", label: "db:service_healthy:false", want: map[string]string{"db": "service_healthy"}},
-		{
-			name:  "several entries",
-			label: "db:service_healthy:false,migrate:service_completed_successfully:true",
-			want:  map[string]string{"db": "service_healthy", "migrate": "service_completed_successfully"},
-		},
-		{name: "an older label with no restart part", label: "db:service_started", want: map[string]string{"db": "service_started"}},
-		{name: "an older label with the service alone", label: "db", want: map[string]string{"db": ""}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, parseDependsOn(tt.label))
 		})
 	}
 }
@@ -840,7 +810,7 @@ func TestInspector_Introspect_NoContainers(t *testing.T) {
 	}{
 		{name: "the daemon holds none"},
 		{name: "only one-off containers are left", containers: []container.Summary{oneoff}},
-		{name: "only a failed pre_start hook is left, which the pass does not inspect", containers: []container.Summary{hook}},
+		{name: "only a failed pre_start hook is left", containers: []container.Summary{hook}},
 	}
 
 	for _, tt := range tests {
@@ -1310,6 +1280,29 @@ func TestContainerName(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseAwaitsCompletion(t *testing.T) {
+	tests := []struct {
+		name  string
+		label string
+		want  []string
+	}{
+		{name: "no label"},
+		{name: "a dependency waited on to start or be healthy", label: "db:service_healthy:false,cache:service_started:true"},
+		{
+			name:  "several entries",
+			label: "db:service_healthy:false,migrate:service_completed_successfully:true,seed:service_completed_successfully:false",
+			want:  []string{"migrate", "seed"},
+		},
+		{name: "an older label with no restart part", label: "migrate:service_completed_successfully", want: []string{"migrate"}},
+		{name: "an older label with the service alone", label: "db"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseAwaitsCompletion(tt.label))
 		})
 	}
 }

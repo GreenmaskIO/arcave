@@ -1493,47 +1493,6 @@ func TestClosers_release(t *testing.T) {
 	server.AssertExpectations(t)
 }
 
-func TestOpenArcaveProjectStoreForReading(t *testing.T) {
-	key := newTestStoreKey(t)
-	tests := []struct {
-		name    string
-		marked  bool
-		wantMsg string
-	}{
-		{name: "an unmarked project under encryption is refused and left unmarked", wantMsg: "not encrypted yet"},
-		{name: "a project marked for the key opens", marked: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			projectPath := t.TempDir()
-			cfg := newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key})
-			if tt.marked {
-				var opened closers
-				_, err := openArcaveProjectStore(t.Context(), cfg, projectPath, &opened)
-				opened.release(t.Context())
-				require.NoError(t, err)
-			}
-			before := listTree(t, projectPath)
-			var opened closers
-			defer opened.release(t.Context())
-
-			// Act
-			store, err := openArcaveProjectStoreForReading(t.Context(), cfg, projectPath, &opened)
-
-			// Assert
-			if tt.wantMsg != "" {
-				require.ErrorContains(t, err, tt.wantMsg)
-				assert.Nil(t, store)
-			} else {
-				require.NoError(t, err)
-				assert.NotNil(t, store)
-			}
-			assert.Equal(t, before, listTree(t, projectPath), "reading writes nothing, the marker least of all")
-		})
-	}
-}
-
 func TestOpenArcaveProjectStore(t *testing.T) {
 	key := newTestStoreKey(t)
 	encrypted := func(t *testing.T, projectPath string) {
@@ -1633,6 +1592,48 @@ func TestOpenArcaveProjectStore(t *testing.T) {
 			}
 			require.NoError(t, err)
 			tt.verify(t, projectPath, store)
+		})
+	}
+}
+
+func TestOpenReadOnlyArcaveProjectStore(t *testing.T) {
+	key := newTestStoreKey(t)
+	tests := []struct {
+		name    string
+		marked  string // the key the project is marked for; empty for none
+		wantErr error
+	}{
+		{name: "an unmarked project stays unmarked"},
+		{name: "a project marked for the key", marked: key},
+		{name: "a project marked for another key", marked: newTestStoreKey(t), wantErr: model.ErrWrongStoreKey},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			projectPath := t.TempDir()
+			if tt.marked != "" {
+				var marking closers
+				_, err := openArcaveProjectStore(t.Context(),
+					newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: tt.marked}), projectPath, &marking)
+				require.NoError(t, err)
+				marking.release(t.Context())
+			}
+			before := listTree(t, arcaveProjectPath(projectPath))
+
+			var opened closers
+			t.Cleanup(func() { opened.release(context.Background()) })
+
+			// Act
+			_, err := openReadOnlyArcaveProjectStore(t.Context(),
+				newEncryptionConfig(t, projectPath, config.Encryption{Enabled: true, Key: key}), projectPath, &opened)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, before, listTree(t, arcaveProjectPath(projectPath)), "a read-only open writes nothing")
 		})
 	}
 }

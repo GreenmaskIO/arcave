@@ -29,10 +29,6 @@ const (
 	SavepointLabelSafetySnapshotValue = "true"
 )
 
-// SavepointLabelSafetySnapshotFor names, on a safety snapshot, the savepoint the rollback it
-// undoes restored.
-const SavepointLabelSafetySnapshotFor = "arcave-safety-snapshot-for"
-
 // SpecFormatComposeYAML is the format of a savepoint's spec artifact: a compose
 // document, loadable by compose's own loader.
 const SpecFormatComposeYAML = "compose-yaml"

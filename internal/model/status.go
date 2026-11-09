@@ -65,19 +65,6 @@ const (
 	DeploymentRecordUnreadable DeploymentRecord = "unreadable"
 )
 
-// SessionResolution says what named the session a command works in.
-type SessionResolution string
-
-const (
-	// SessionResolutionRef is a session the command named: --session, ARCAVE_SESSION, the MCP
-	// argument or the server's pin.
-	SessionResolutionRef SessionResolution = "ref"
-	// SessionResolutionPointer is the current session `session set` named.
-	SessionResolutionPointer SessionResolution = "pointer"
-	// SessionResolutionDefault is the default session, no pointer being set.
-	SessionResolutionDefault SessionResolution = "default"
-)
-
 // ReplicaState is one replica in one word, as the daemon reports it.
 type ReplicaState string
 
@@ -122,15 +109,12 @@ const (
 	NoticeCodeSessionUnresolved          NoticeCode = "session-unresolved"
 	NoticeCodeInflightMarkerUnreadable   NoticeCode = "inflight-marker-unreadable"
 	NoticeCodeDeploymentLabelsUnreadable NoticeCode = "deployment-labels-unreadable"
-	NoticeCodeOtherArcaveProject         NoticeCode = "other-arcave-project"
-	NoticeCodeDeployedSessionGone        NoticeCode = "deployed-session-gone"
 	NoticeCodeDeployedSavepointGone      NoticeCode = "deployed-savepoint-gone"
+	NoticeCodeOtherArcaveProject         NoticeCode = "other-arcave-project"
 	NoticeCodeOtherSession               NoticeCode = "other-session"
-	NoticeCodeReverted                   NoticeCode = "reverted"
 	NoticeCodeSafetySnapshotDeployed     NoticeCode = "safety-snapshot-deployed"
 	NoticeCodeVolumeNotRestored          NoticeCode = "volume-not-restored"
 	NoticeCodeLayerNotRestored           NoticeCode = "layer-not-restored"
-	NoticeCodeNotRestoredTruncated       NoticeCode = "not-restored-truncated"
 	NoticeCodeReplicaMissing             NoticeCode = "replica-missing"
 	NoticeCodeReplicaExited              NoticeCode = "replica-exited"
 	NoticeCodeReplicaDead                NoticeCode = "replica-dead"
@@ -142,7 +126,6 @@ const (
 	NoticeCodeReplicaUnhealthy           NoticeCode = "replica-unhealthy"
 	NoticeCodeReplicaRecreated           NoticeCode = "replica-recreated"
 	NoticeCodeReplicaAdded               NoticeCode = "replica-added"
-	NoticeCodeHookFailed                 NoticeCode = "hook-failed"
 	NoticeCodeComposeProjectStopped      NoticeCode = "compose-project-stopped"
 )
 
@@ -160,16 +143,10 @@ type ComposeProjectStatus struct {
 	CheckedAt time.Time           `json:"checked_at"`
 	State     ComposeProjectState `json:"state"`
 	// Session is the session arcave commands work in; nil when it could not be resolved.
-	Session *ResolvedSession `json:"session"`
+	Session *SessionRef `json:"session"`
 	// Deployment is what built the containers; nil for a compose project with none.
 	Deployment *DeploymentStatus `json:"deployment"`
-	// LatestSavepoint, SavepointCount and NewerThanDeployed read the deployed savepoint's session
-	// if the store holds it, else the current one; safety snapshots are not counted.
-	LatestSavepoint *LatestSavepoint `json:"latest_savepoint"`
-	SavepointCount  int              `json:"savepoint_count"`
-	// NewerThanDeployed counts the savepoints taken after the deployed one; nil with none deployed.
-	NewerThanDeployed *int            `json:"newer_than_deployed,omitempty"`
-	Services          []ServiceStatus `json:"services"`
+	Services   []ServiceStatus   `json:"services"`
 	// RollbackInFlight is the inflight marker of this compose project: a rollback running, or
 	// interrupted, which a status does not tell apart.
 	RollbackInFlight *RollbackInFlight `json:"rollback_in_flight"`
@@ -178,53 +155,31 @@ type ComposeProjectStatus struct {
 	Notices    []Notice           `json:"notices"`
 }
 
-// ResolvedSession is the session arcave commands work in, and what named it.
-type ResolvedSession struct {
-	ID         SessionID         `json:"id"`
-	Name       string            `json:"name"`
-	ResolvedBy SessionResolution `json:"resolved_by"`
-}
-
 // DeploymentStatus is what built a compose project's containers. Under DeploymentSourceCompose it
-// holds the source alone; otherwise the deployment most containers carry, as their labels spell it.
+// holds the source alone; otherwise the deployment the containers carry, as their labels spell it.
 type DeploymentStatus struct {
-	Source        DeploymentSource  `json:"source"`
-	ID            DeploymentID      `json:"id,omitempty"`
-	DeployedAt    *time.Time        `json:"deployed_at,omitempty"`
-	Origin        DeploymentOrigin  `json:"origin,omitempty"`
+	Source     DeploymentSource `json:"source"`
+	DeployedAt *time.Time       `json:"deployed_at,omitempty"`
+	// ArcaveProject is the arcave project whose store holds Session.
 	ArcaveProject ArcaveProjectName `json:"arcave_project,omitempty"`
-	// RevertedFrom is the savepoint a failed rollback was restoring when Origin is a revert.
-	RevertedFrom *SavepointRef `json:"reverted_from,omitempty"`
 	// Session is the session the deployed savepoint was rolled back from.
 	Session   *SessionRef              `json:"session,omitempty"`
 	Savepoint *DeployedSavepointStatus `json:"savepoint,omitempty"`
 	// Record says whether that session still holds the savepoint; empty when the store was not
 	// read for it.
 	Record DeploymentRecord `json:"record,omitempty"`
-	// Host and ArcaveVersion name the host and the arcave that ran the rollback.
-	Host          string `json:"host,omitempty"`
-	ArcaveVersion string `json:"arcave_version,omitempty"`
 }
 
-// DeployedSavepointStatus is the savepoint a deployment was built from, as it was when it was.
+// DeployedSavepointStatus is the savepoint a deployment was built from: what its labels say, and
+// what its record adds while the store holds it.
 type DeployedSavepointStatus struct {
 	ID             SavepointID `json:"id"`
 	Name           string      `json:"name,omitempty"`
-	Description    string      `json:"description,omitempty"`
 	CreatedAt      *time.Time  `json:"created_at,omitempty"`
 	SafetySnapshot bool        `json:"safety_snapshot"`
-	// SafetySnapshotFor is the savepoint the rollback a safety snapshot undoes restored.
-	SafetySnapshotFor SavepointID      `json:"safety_snapshot_for,omitempty"`
-	Restored          DeploymentCounts `json:"restored"`
-	NotRestored       DeploymentCounts `json:"not_restored"`
-}
-
-// LatestSavepoint is the newest savepoint of a session's compose project.
-type LatestSavepoint struct {
-	Session   SessionID   `json:"session"`
-	ID        SavepointID `json:"id"`
-	Name      string      `json:"name,omitempty"`
-	CreatedAt time.Time   `json:"created_at"`
+	// Description and Restored are the record's; empty when it was not found.
+	Description string            `json:"description,omitempty"`
+	Restored    *DeploymentCounts `json:"restored,omitempty"`
 }
 
 // ServiceStatus is one service: the deployed savepoint's, the daemon's, or both.
@@ -256,7 +211,6 @@ type ReplicaStatus struct {
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	FinishedAt    *time.Time `json:"finished_at,omitempty"`
-	Image         string     `json:"image,omitempty"`
 	// Replaces is the container compose recreated this one over.
 	Replaces string `json:"replaces,omitempty"`
 	// InDeployment marks a container the deployment built; InSavepoint a replica the deployed

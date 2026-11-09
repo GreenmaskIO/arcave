@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -55,19 +54,13 @@ func demoRequest() model.WritableLayerCaptureRequest {
 
 var demoOwner = model.LayerOrigin{ArcaveProject: "app", ComposeProject: "demo"}
 
-// demoUpstreamLabels are the labels a commit over the upstream carries, every deployment label blank.
 func demoUpstreamLabels() map[string]string {
-	labels := demoOwnerLabels()
-	labels[string(model.SystemLabelBaseImageID)] = upstreamID.String()
-	labels[string(model.SystemLabelBaseImageRef)] = "postgres:16"
-	return labels
-}
-
-// demoOwnerLabels are the labels a commit over no known upstream carries.
-func demoOwnerLabels() map[string]string {
-	labels := model.NewBlankDeploymentLabels()
-	maps.Copy(labels, demoOwner.Labels())
-	return labels
+	return map[string]string{
+		string(model.SystemLabelArcaveProject):  "app",
+		string(model.SystemLabelComposeProject): "demo",
+		string(model.SystemLabelBaseImageID):    upstreamID.String(),
+		string(model.SystemLabelBaseImageRef):   "postgres:16",
+	}
 }
 
 func demoUpstream() model.Image {
@@ -315,7 +308,7 @@ func TestCopier_CaptureWritableLayer_StampsNoUpstreamItWasNotTold(t *testing.T) 
 	// Arrange: a broken chain leaves the upstream unknown; the origin is always known.
 	ctx := zerolog.Nop().WithContext(context.Background())
 	engine := &mockImageEngine{}
-	engine.On("CommitContainer", mock.Anything, containerID, commitNote, demoOwnerLabels()).
+	engine.On("CommitContainer", mock.Anything, containerID, commitNote, demoOwner.Labels()).
 		Return(imageID, nil).Once()
 	engine.On("SaveImage", mock.Anything, imageID).
 		Return(io.NopCloser(strings.NewReader("archive")), nil).Once()

@@ -67,10 +67,10 @@ func newMCPFactories() cli.MCPFactories {
 // mcpSavepointServiceFactory wires the savepoint workflows for a tool call's compose project and
 // session ("" is the current one), the daemon connected, plus the release closing them.
 func mcpSavepointServiceFactory(
-	ctx context.Context, project, sessionRef string,
+	ctx context.Context, composeProject, sessionRef string,
 ) (cli.MCPSavepointService, func(), error) {
 	var opened closers
-	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(project), &opened)
+	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, fmt.Errorf("init dependencies: %w", err)
@@ -81,10 +81,10 @@ func mcpSavepointServiceFactory(
 // mcpSavepointStoreServiceFactory is mcpSavepointServiceFactory for a tool that reads or deletes
 // in the store alone: nothing that reaches the daemon is built.
 func mcpSavepointStoreServiceFactory(
-	ctx context.Context, project, sessionRef string,
+	ctx context.Context, composeProject, sessionRef string,
 ) (cli.MCPSavepointStoreService, func(), error) {
 	var opened closers
-	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(project), &opened)
+	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, fmt.Errorf("init dependencies: %w", err)
@@ -104,9 +104,9 @@ func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(
 }
 
 // mcpToolsServiceFactory wires the tools commands for the compose project a tool call named.
-func mcpToolsServiceFactory(ctx context.Context, project string) (cli.MCPToolsService, func(), error) {
+func mcpToolsServiceFactory(ctx context.Context, composeProject string) (cli.MCPToolsService, func(), error) {
 	var opened closers
-	svc, err := openComposeFileService(ctx, projectCfg, model.DockerComposeProjectName(project), &opened)
+	svc, err := openComposeFileService(ctx, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, fmt.Errorf("init tools dependencies: %w", err)
@@ -126,9 +126,9 @@ func mcpGCServiceFactory(ctx context.Context, sessionRef string) (cli.MCPGCServi
 }
 
 // mcpStatusServiceFactory wires the status of the compose project a tool call named.
-func mcpStatusServiceFactory(ctx context.Context, project string) (cli.MCPStatusService, func(), error) {
+func mcpStatusServiceFactory(ctx context.Context, composeProject string) (cli.MCPStatusService, func(), error) {
 	var opened closers
-	svc, err := openStatusService(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(project), &opened)
+	svc, err := openStatusService(ctx, projectRoot, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, fmt.Errorf("init status dependencies: %w", err)

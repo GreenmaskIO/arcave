@@ -27,56 +27,34 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
-func TestNewDeploymentManifest(t *testing.T) {
-	scaleTwo := 2
+func TestNewDeployedReplicas(t *testing.T) {
+	// Arrange
+	scaleTwo, scaleZero := 2, 0
 	project := &types.Project{Name: demoProject, Services: types.Services{
-		"db":  {Name: "db"},
-		"web": {Name: "web", Scale: &scaleTwo},
-		"app": {Name: "app", DependsOn: types.DependsOnConfig{
-			"migrate": {Condition: types.ServiceConditionCompletedSuccessfully},
-			"db":      {Condition: types.ServiceConditionHealthy},
-		}},
+		"db":      {Name: "db"},
+		"web":     {Name: "web", Scale: &scaleTwo},
+		"app":     {Name: "app"},
 		"migrate": {Name: "migrate"},
+		"idle":    {Name: "idle", Scale: &scaleZero},
 	}}
-	excludedCache := model.SkippedVolume{Volume: "demo_cache", Reason: model.SkipReasonExcluded}
-	skippedLayer := model.SkippedWritableLayer{Service: "db", Replica: 3, Container: "demo-db-3", Reason: model.SkipReasonExcluded}
-	savepoint := model.Savepoint{
-		ID:    demoRecord().ID,
-		Stats: []model.SnapshotStat{{Volume: demoVolume()}},
-		WritableLayers: []model.WritableLayer{
-			{Service: "db", Replica: 1},
-			{Service: "app", Replica: 1},
-		},
-		NotCovered: &model.NotCovered{
-			Mounts: []model.SkippedVolume{
-				excludedCache,
-				{Service: "db", Target: "/tmp", Reason: model.SkipReasonTmpfs},
-			},
-			WritableLayers: []model.SkippedWritableLayer{skippedLayer},
-		},
+	recorded := []recordedReplica{
+		{service: "db", number: 3},
+		{service: "db", number: 1},
+		{service: "app", number: 1},
 	}
 
 	// Act
-	manifest := newDeploymentManifest(savepoint, project)
+	replicas := newDeployedReplicas(project, recorded)
 
 	// Assert
-	assert.Equal(t, model.DeploymentManifest{
-		Services: map[string]model.DeployedService{
-			"db":      {Replicas: []int{1, 3}, Layers: []int{1}},
-			"web":     {Replicas: []int{1, 2}},
-			"app":     {Replicas: []int{1}, Layers: []int{1}},
-			"migrate": {Replicas: []int{1}},
-		},
-		Restored: model.DeploymentCounts{Volumes: 1, WritableLayers: 2},
-		LeftOut:  model.DeploymentCounts{Volumes: 1, WritableLayers: 1},
-		NotRestored: model.DeploymentNotRestored{
-			Mounts:         []model.SkippedVolume{excludedCache},
-			WritableLayers: []model.SkippedWritableLayer{skippedLayer},
-		},
-	}, manifest, "a recorded gap stays, a service recorded with no replica runs at its scale, a tmpfs is no loss")
+	assert.Equal(t, map[string][]int{
+		"db":      {1, 3},
+		"web":     {1, 2},
+		"app":     {1},
+		"migrate": {1},
+	}, replicas, "a recorded gap stays, a service recorded with no replica runs at its scale, one scaled to none is left out")
 }
 
 func TestWithDeploymentLabels(t *testing.T) {
@@ -91,10 +69,10 @@ func TestWithDeploymentLabels(t *testing.T) {
 	}
 
 	// Act
-	labeled := withDeploymentLabels(project, map[string]string{string(model.SystemLabelDeploymentID): "id"})
+	labeled := withDeploymentLabels(project, map[string]string{string(model.SystemLabelDeploymentSavepointID): "id"})
 
 	// Assert
-	assert.Equal(t, types.Labels{"keep": "me", string(model.SystemLabelDeploymentID): "id"},
+	assert.Equal(t, types.Labels{"keep": "me", string(model.SystemLabelDeploymentSavepointID): "id"},
 		labeled.Services[demoService].Labels)
 	assert.Equal(t, types.Labels{"keep": "me"}, project.Services[demoService].Labels, "the project handed in is left as it is")
 	assert.Nil(t, labeled.Volumes["db"].Labels, "a volume's labels are in compose's config hash")
@@ -103,32 +81,24 @@ func TestWithDeploymentLabels(t *testing.T) {
 
 func TestService_buildFromSavepoint(t *testing.T) {
 	record := demoRecord()
-	deployedAt := time.Date(2026, 11, 7, 14, 2, 0, 0, time.UTC)
-	failed := model.Savepoint{ID: "019e9000-0000-7000-8000-000000000000", Name: "after-fix"}
+	failed := model.SavepointID("019e9000-0000-7000-8000-000000000000")
+	session := model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}
 	tests := []struct {
-		name             string
-		savepoint        model.Savepoint
-		revertedFrom     *model.Savepoint
-		wantOrigin       model.DeploymentOrigin
-		wantRevertedFrom model.SavepointRef
-		wantMarkerTarget model.SavepointID
+		name                 string
+		savepoint            model.Savepoint
+		markerTarget         model.SavepointID
+		wantIsSafetySnapshot bool
 	}{
 		{
-			name:             "a rollback deploys its savepoint",
-			savepoint:        record,
-			wantOrigin:       model.DeploymentOriginRollback,
-			wantMarkerTarget: record.ID,
+			name:         "a rollback deploys its savepoint",
+			savepoint:    record,
+			markerTarget: record.ID,
 		},
 		{
-			name:         "a revert deploys the safety snapshot and names the rollback it undid",
-			savepoint:    demoSafetySnapshot(),
-			revertedFrom: &failed,
-			wantOrigin:   model.DeploymentOriginRevert,
-			wantRevertedFrom: model.SavepointRef{
-				ID:   failed.ID,
-				Name: failed.Name,
-			},
-			wantMarkerTarget: failed.ID,
+			name:                 "a revert deploys the safety snapshot, the marker naming the rollback it undid",
+			savepoint:            demoSafetySnapshot(),
+			markerTarget:         failed,
+			wantIsSafetySnapshot: true,
 		},
 	}
 	for _, tt := range tests {
@@ -156,16 +126,17 @@ func TestService_buildFromSavepoint(t *testing.T) {
 			svc := New(Deps{
 				ComposeRunner: runner,
 				Inflight:      inflight,
+				ArcaveProject: demoArcaveProject,
 				Session:       model.DefaultSession,
-				SessionName:   model.DefaultSessionName,
-				ArcaveProject: "app",
-				RunnerInfo:    heartbeat.RunnerInfo{Host: "laptop", ArcaveVersion: "v0.1.0"},
-				Now:           func() time.Time { return deployedAt },
 			})
 			ctx := zerolog.Nop().WithContext(context.Background())
+			before := time.Now().UTC().Truncate(time.Second)
 
 			// Act
-			err := svc.buildFromSavepoint(ctx, savepoint, tt.revertedFrom, rollbackTarget{project: target}, "", time.Minute)
+			err := svc.buildFromSavepoint(ctx, savepoint, rollbackTarget{
+				project: target,
+				session: session,
+			}, tt.markerTarget, "", time.Minute)
 
 			// Assert
 			require.NoError(t, err)
@@ -173,19 +144,21 @@ func TestService_buildFromSavepoint(t *testing.T) {
 			deployment, ok, err := model.ParseSavepointDeployment(created.Services["db"].Labels)
 			require.NoError(t, err)
 			require.True(t, ok)
-			assert.Equal(t, model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}, deployment.Session)
-			assert.Equal(t, model.ArcaveProjectName("app"), deployment.ArcaveProject)
-			assert.Equal(t, savepoint.ID, deployment.Savepoint.ID)
-			assert.Equal(t, savepoint.Name, deployment.Savepoint.Name)
-			assert.Equal(t, tt.wantOrigin, deployment.Origin)
-			assert.Equal(t, tt.wantRevertedFrom, deployment.RevertedFrom)
-			assert.Equal(t, "laptop", deployment.Host)
-			assert.Equal(t, deployedAt, deployment.At)
+			assert.Equal(t, demoArcaveProject, deployment.ArcaveProject)
+			assert.Equal(t, session, deployment.Session)
+			assert.Equal(t, model.DeployedSavepoint{
+				ID:               savepoint.ID,
+				Name:             savepoint.Name,
+				CreatedAt:        savepoint.CreatedAt.UTC().Truncate(time.Second),
+				IsSafetySnapshot: tt.wantIsSafetySnapshot,
+			}, deployment.Savepoint)
+			assert.Equal(t, map[string][]int{"db": {1}, "web": {1}}, deployment.ServiceReplicas)
+			assert.False(t, deployment.DeployedAt.Before(before), "dated when it is built")
 			assert.Equal(t, created.Services["db"].Labels, created.Services["web"].Labels,
 				"every service carries the one deployment")
 			assert.Equal(t, created, started, "the project started is the one created")
 			assert.Nil(t, target.Services["db"].Labels, "the target the caller holds is left unlabelled")
-			assert.Equal(t, tt.wantMarkerTarget, inflight.marker.Target)
+			assert.Equal(t, tt.markerTarget, inflight.marker.Target)
 			runner.AssertExpectations(t)
 		})
 	}

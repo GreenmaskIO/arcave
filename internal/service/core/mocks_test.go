@@ -269,12 +269,14 @@ func (m *mockContainersReader) ReadContainers(ctx context.Context) (model.Compos
 	return args.Get(0).(model.ComposeProjectContainers), args.Error(1)
 }
 
-// failingReader is a SessionReader and a SavepointReader whose every listing fails with err.
+// failingReader is a SessionReader and a SavepointLoader whose every read fails with err.
 type failingReader struct{ err error }
 
 func (f failingReader) ListSessions(context.Context) ([]model.Session, error) { return nil, f.err }
 
-func (f failingReader) ListSavepoints(context.Context) ([]model.Savepoint, error) { return nil, f.err }
+func (f failingReader) LoadSavepoints(context.Context, []model.SavepointID) ([]model.Savepoint, error) {
+	return nil, f.err
+}
 
 type mockAssembler struct{ mock.Mock }
 

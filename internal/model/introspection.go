@@ -212,16 +212,6 @@ type Container struct {
 	Inspect container.InspectResponse
 }
 
-// HookRunner is a container compose ran a service's lifecycle hook in; one that failed stays
-// until `compose down`, the only trace of the failure.
-type HookRunner struct {
-	Service string
-	// Hook is the hook's kind, pre_start; Index its place among the service's hooks of that kind.
-	Hook      string
-	Index     string
-	Container Container
-}
-
 // ImageID is the id of the image the container runs on; empty when the daemon
 // reported none or one that is no digest.
 func (m Container) ImageID() ImageDigestID {
@@ -328,17 +318,14 @@ type IntrospectionResult struct {
 type ComposeProjectContainers struct {
 	// Services are the services the daemon holds a replica of, sorted by name.
 	Services []ServiceContainers
-	// HookRunners are the containers compose ran a service's lifecycle hook in, which no service
-	// counts as a replica.
-	HookRunners []HookRunner
 }
 
 // ServiceContainers is one service's replicas.
 type ServiceContainers struct {
 	Name string
-	// DependsOn is the condition the service waits on each service it depends on for, as compose
-	// recorded it on the first replica.
-	DependsOn map[string]string
+	// AwaitsCompletion are the services this one waits on to complete successfully, as compose
+	// recorded its depends_on on the first replica.
+	AwaitsCompletion []string
 	// Containers are the service's replicas, sorted by Number.
 	Containers []Container
 }

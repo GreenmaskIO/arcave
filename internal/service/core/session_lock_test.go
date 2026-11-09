@@ -186,6 +186,7 @@ func TestService_locked(t *testing.T) {
 			)
 			mock.InOrder(calls...)
 			svc := New(Deps{
+				ArcaveProject: demoArcaveProject,
 				ProjectLocker: locker,
 				SessionLocker: sessionLocker,
 				SavepointRepo: repo,
@@ -216,6 +217,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 	mock.InOrder(acquire, lock, release)
 	inspector := &mockInspector{}
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		ProjectLocker:    locker,
 		SessionLocker:    sessionLocker,
 		ComposeInspector: inspector,
@@ -270,6 +272,7 @@ func TestService_performSavepoint_SessionLock(t *testing.T) {
 			}
 			mock.InOrder(calls...)
 			svc := New(Deps{
+				ArcaveProject: demoArcaveProject,
 				SavepointRepo: repo,
 				Store:         store,
 			})
@@ -490,6 +493,7 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	unlock := grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	mock.InOrder(lock, list, verify, unlock)
 	svc := New(Deps{
+		ArcaveProject: demoArcaveProject,
 		ProjectLocker: locker,
 		SessionLocker: sessionLocker,
 		SavepointRepo: repo,

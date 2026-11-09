@@ -1,6 +1,5 @@
 myapp · running · not deployed by arcave
   session    baseline
-  latest     savepoint after-fix · 2026-11-07 16:14 (1h 00m ago)
 
 SERVICE  REPLICAS  STATE    UP      PORTS
 db       1         running  3h 11m  127.0.0.1:5432→5432/tcp

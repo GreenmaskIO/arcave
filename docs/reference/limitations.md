@@ -63,7 +63,9 @@ Running `docker compose up` by hand after a rollback recreates the containers fr
 
 ## A deployment lives in the daemon
 
-A rollback labels the containers it builds with `io.arcave.deployment.*`, and `status` reads what is deployed off those labels. They live in the daemon the rollback ran against: another daemon (`DOCKER_HOST`) holds none. They are plain text there, the savepoint's name and description included, under `encryption.enabled` too: anyone who can `docker inspect` the containers reads them.
+A rollback labels the containers it builds, and `status` reads what is deployed off those labels. They live in the daemon the rollback ran against: another daemon (`DOCKER_HOST`) holds none. They are plain text there, the session's and the savepoint's names included, under `encryption.enabled` too: anyone who can `docker inspect` the containers reads them.
+
+The inflight marker an interrupted rollback leaves, `.arcave/inflight.json`, is local to the machine that ran the rollback. `status` on another machine, or against another daemon, does not see it: an interrupted rollback reads there as `absent` or `degraded`, not `rollback-pending`.
 
 ## Some volumes are captured differently than you might expect
 

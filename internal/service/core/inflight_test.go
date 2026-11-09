@@ -62,6 +62,7 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	runner := &mockComposeRunner{}
 	registry := &mockRegistry{}
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -97,6 +98,7 @@ func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
 	expectLock(locker)
 	repo := &mockSavepointRepo{}
 	svc := New(Deps{
+		ArcaveProject: demoArcaveProject,
 		SessionLocker: fakeSessionLocker{},
 		VolumeRemover: &mockVolumeRemover{},
 		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
@@ -128,6 +130,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	runner := &mockComposeRunner{}
 	registry := &mockRegistry{}
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -180,6 +183,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -265,6 +269,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -331,6 +336,7 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,
@@ -403,6 +409,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
 
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		VolumeRemover:    &mockVolumeRemover{},
 		SavepointRepo:    repo,

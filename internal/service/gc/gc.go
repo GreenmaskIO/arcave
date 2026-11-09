@@ -52,9 +52,9 @@ type Deps struct {
 	// Session is the session the gc looks at; zero means model.DefaultSession.
 	Session  model.SessionID
 	Sessions sessionLookup
-	// NewSavepoints opens the savepoints of a compose project's store.
-	NewSavepoints func(store storages.Storager) SavepointReader
-	Locker        projectLocker
+	// NewSavepointReader opens the savepoints of a compose project's store.
+	NewSavepointReader func(store storages.Storager) SavepointReader
+	Locker             projectLocker
 	// SessionLocker holds Session's lock in the store for the whole run.
 	SessionLocker model.SessionLocker
 	Inflight      inflightMarkers
@@ -75,7 +75,7 @@ type GarbageCollector struct {
 	store                    storages.Navigator
 	session                  model.SessionID
 	sessions                 sessionLookup
-	newSavepoints            func(store storages.Storager) SavepointReader
+	newSavepointReader       func(store storages.Storager) SavepointReader
 	locker                   projectLocker
 	sessionLocker            model.SessionLocker
 	inflight                 inflightMarkers
@@ -91,7 +91,7 @@ func New(deps Deps) *GarbageCollector {
 		store:                    deps.Store,
 		session:                  cmp.Or(deps.Session, model.DefaultSession),
 		sessions:                 deps.Sessions,
-		newSavepoints:            deps.NewSavepoints,
+		newSavepointReader:       deps.NewSavepointReader,
 		locker:                   deps.Locker,
 		sessionLocker:            deps.SessionLocker,
 		inflight:                 deps.Inflight,

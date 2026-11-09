@@ -47,7 +47,7 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 	})
 	defer func() { step.End(err) }()
 	return locked(ctx, s.SavepointStoreService, model.SessionLockOperationSavepointCreate,
-		func(ctx context.Context, grantedLock model.GrantedSessionLock) (model.Savepoint, error) {
+		func(ctx context.Context, grantedLock model.GrantedSessionLock, _ model.SessionRef) (model.Savepoint, error) {
 			return s.createSavepoint(ctx, grantedLock, req)
 		})
 }

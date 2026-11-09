@@ -34,7 +34,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
-	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 // statusSpec is a compose project with a healthchecked service publishing a port, a scaled one, and
@@ -133,7 +132,10 @@ func TestStatus_AfterRollback(t *testing.T) {
 	require.NotNil(t, status.Deployment.Savepoint)
 	assert.Equal(t, savepoint.ID, status.Deployment.Savepoint.ID)
 	assert.Equal(t, "sp1", status.Deployment.Savepoint.Name)
-	assert.Equal(t, utils.New(0), status.NewerThanDeployed)
+	assert.Equal(t, &model.DeploymentCounts{
+		Volumes:        len(savepoint.Stats),
+		WritableLayers: len(savepoint.WritableLayers),
+	}, status.Deployment.Savepoint.Restored, "the record says what was restored")
 	byName := map[string]model.ServiceStatus{}
 	for _, service := range status.Services {
 		byName[service.Name] = service
@@ -142,7 +144,10 @@ func TestStatus_AfterRollback(t *testing.T) {
 			assert.True(t, replica.InSavepoint, "%s-%d is the savepoint's", service.Name, replica.Number)
 		}
 	}
+	require.Len(t, byName["migrate"].Replicas, 1)
 	assert.Equal(t, model.ReplicaStateCompleted, byName["migrate"].State, "a job another waits on completed")
+	assert.Equal(t, 0, byName["migrate"].Replicas[0].ExitCode)
+	assert.Equal(t, 1, byName["migrate"].ReplicasUp)
 	assert.Equal(t, 2, byName["web"].ReplicasExpected)
 	assert.Equal(t, 2, byName["web"].ReplicasUp)
 	require.Len(t, byName["db"].Replicas, 1)
@@ -165,33 +170,26 @@ func TestStatus_AfterRollback(t *testing.T) {
 }
 
 // assertDeploymentLabelsOnContainersAlone pins where a rollback puts its labels: on every replica,
-// on no network or volume, and blank on a restored layer's image.
+// on no network or volume.
 func assertDeploymentLabelsOnContainersAlone(t *testing.T, env *statusEnv, status model.ComposeProjectStatus) {
 	t.Helper()
 
-	key := string(model.SystemLabelDeploymentID)
+	key := string(model.SystemLabelDeploymentSavepointID)
 	for _, service := range status.Services {
 		for _, replica := range service.Replicas {
 			inspected, err := env.daemon.ContainerInspect(env.ctx, replica.ContainerID, client.ContainerInspectOptions{})
 			require.NoError(t, err)
-			assert.Equal(t, string(status.Deployment.ID), inspected.Container.Config.Labels[key],
+			assert.Equal(t, status.Deployment.Savepoint.ID.String(), inspected.Container.Config.Labels[key],
 				"%s carries the deployment", replica.Container)
-			if !model.ImageRef(inspected.Container.Config.Image).IsRestoredLayerTag() {
-				continue
-			}
-			image, err := env.daemon.ImageInspect(env.ctx, inspected.Container.Image)
-			require.NoError(t, err)
-			require.Contains(t, image.Config.Labels, key, "a restored layer carries the deployment labels")
-			assert.Empty(t, image.Config.Labels[key], "blank")
 		}
 	}
-	project := api.ProjectLabel + "=" + env.project
-	networks, err := env.daemon.NetworkList(env.ctx, client.NetworkListOptions{Filters: make(client.Filters).Add("label", project)})
+	composeProjectFilter := api.ProjectLabel + "=" + env.project
+	networks, err := env.daemon.NetworkList(env.ctx, client.NetworkListOptions{Filters: make(client.Filters).Add("label", composeProjectFilter)})
 	require.NoError(t, err)
 	for _, network := range networks.Items {
 		assert.NotContains(t, network.Labels, key, "network %s", network.Name)
 	}
-	volumes, err := env.daemon.VolumeList(env.ctx, client.VolumeListOptions{Filters: make(client.Filters).Add("label", project)})
+	volumes, err := env.daemon.VolumeList(env.ctx, client.VolumeListOptions{Filters: make(client.Filters).Add("label", composeProjectFilter)})
 	require.NoError(t, err)
 	for _, volume := range volumes.Items {
 		assert.NotContains(t, volume.Labels, key, "volume %s", volume.Name)
@@ -207,7 +205,7 @@ func TestStatus_DetectsDrift(t *testing.T) {
 	env.run(t, "rollback", "sp1")
 	before := env.status(t)
 	web1 := findReplica(t, before, "web", 1)
-	// Killed, not stopped: an exit 0 degrades nothing, since a status cannot tell it from a job's.
+	// Killed, not stopped: an exit 0 of a service no other waits on degrades nothing.
 	_, err := env.daemon.ContainerStop(env.ctx, web1.ContainerID, client.ContainerStopOptions{Signal: "SIGKILL"})
 	require.NoError(t, err)
 
@@ -272,7 +270,7 @@ func TestStatus_Absent(t *testing.T) {
 
 	// Arrange
 	env := newStatusEnv(t)
-	savepoint := decode[model.Savepoint](t, env.run(t, "savepoint", "create", "sp1"))
+	env.run(t, "savepoint", "create", "sp1")
 	env.down(t)
 
 	// Act
@@ -282,11 +280,11 @@ func TestStatus_Absent(t *testing.T) {
 	// Assert
 	assert.Equal(t, model.ComposeProjectStateAbsent, status.State)
 	assert.Nil(t, status.Deployment)
-	require.NotNil(t, status.LatestSavepoint)
-	assert.Equal(t, savepoint.ID, status.LatestSavepoint.ID)
+	assert.Empty(t, status.Services)
+	assert.Equal(t, &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}, status.Session)
 	assert.Contains(t, text, env.project+" · not running")
-	assert.Contains(t, text, "latest     savepoint sp1 ·")
-	assert.NotContains(t, text, "rollback latest", "a status prints no command to run")
+	assert.Contains(t, text, "session    "+model.DefaultSessionName)
+	assert.NotContains(t, text, "arcave ", "a status prints no command to run")
 }
 
 func TestStatus_SessionNamingNone(t *testing.T) {

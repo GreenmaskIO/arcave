@@ -47,6 +47,7 @@ func TestService_prepare_LabelsDecideTheImages(t *testing.T) {
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(&mockBackend{volume: demoVolume()}, nil).Once()
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		ComposeInspector: inspector,
 		ProjectAssembler: assemblerFor(introspection),
@@ -84,6 +85,7 @@ func TestService_prepare_OldDaemonIsRefusedWithoutALayer(t *testing.T) {
 	// No expectation on the registry: the refusal comes before any backend is built.
 	registry := &mockRegistry{}
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		ComposeInspector: inspector,
 		BackendRegistry:  registry,
@@ -195,6 +197,7 @@ func TestService_prepare_InvalidLabelStopsNothing(t *testing.T) {
 	// No expectation on the assembler: the refusal comes first.
 	assembler := &mockAssembler{}
 	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
 		SessionLocker:    fakeSessionLocker{},
 		ComposeInspector: inspector,
 		ProjectAssembler: assembler,

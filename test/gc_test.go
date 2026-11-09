@@ -300,7 +300,7 @@ func (e *sessionEnv) newGarbageCollector(
 		Store:                    arcaveProjectStore,
 		Session:                  session,
 		Sessions:                 sessionrepo.New(arcaveProjectStore),
-		NewSavepoints:            newGCSavepointReader,
+		NewSavepointReader:       newGCSavepointReader,
 		Locker:                   lock.New(e.projectRoot),
 		SessionLocker:            newSessionLocker(t, arcaveProjectStore, session),
 		Inflight:                 inflightrepo.New(e.projectRoot),
@@ -340,7 +340,7 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	svc := gc.New(gc.Deps{
 		Store:                    arcaveProjectStore,
 		Sessions:                 sessionrepo.New(arcaveProjectStore),
-		NewSavepoints:            newGCSavepointReader,
+		NewSavepointReader:       newGCSavepointReader,
 		Locker:                   lock.New(env.projectRoot),
 		SessionLocker:            newSessionLocker(t, arcaveProjectStore, model.DefaultSession),
 		Inflight:                 inflightrepo.New(env.projectRoot),
@@ -462,7 +462,7 @@ func newCDCGarbageCollector(t *testing.T, env *cdcEnv) *gc.GarbageCollector {
 	return gc.New(gc.Deps{
 		Store:                    arcaveProjectStore,
 		Sessions:                 sessionrepo.New(arcaveProjectStore),
-		NewSavepoints:            newGCSavepointReader,
+		NewSavepointReader:       newGCSavepointReader,
 		Locker:                   lock.New(env.projectRoot),
 		SessionLocker:            newSessionLocker(t, arcaveProjectStore, model.DefaultSession),
 		Inflight:                 inflightrepo.New(env.projectRoot),

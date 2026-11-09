@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -29,10 +30,9 @@ var (
 	checkedAt  = time.Date(2026, 11, 7, 17, 14, 0, 0, time.UTC)
 	deployedAt = time.Date(2026, 11, 7, 14, 2, 0, 0, time.UTC)
 	startedAt  = deployedAt.Add(30 * time.Second)
-	baseline   = model.ResolvedSession{
-		ID:         model.DefaultSession,
-		Name:       model.DefaultSessionName,
-		ResolvedBy: model.SessionResolutionDefault,
+	baseline   = model.SessionRef{
+		ID:   model.DefaultSession,
+		Name: model.DefaultSessionName,
 	}
 )
 
@@ -78,10 +78,6 @@ func TestPrinter_Print_Status(t *testing.T) {
 				State:          model.ComposeProjectStateRunning,
 				Session:        &baseline,
 				Deployment:     &model.DeploymentStatus{Source: model.DeploymentSourceCompose},
-				LatestSavepoint: &model.LatestSavepoint{
-					Session: model.DefaultSession, ID: savepointID, Name: "after-fix", CreatedAt: checkedAt.Add(-time.Hour),
-				},
-				SavepointCount: 4,
 				Services: []model.ServiceStatus{{
 					Name: "db", State: model.ReplicaStateRunning, ReplicasUp: 1,
 					Replicas: []model.ReplicaStatus{newRunningReplica("myapp-db-1", 1, publishedPort("127.0.0.1", 5432, 5432))},
@@ -95,10 +91,6 @@ func TestPrinter_Print_Status(t *testing.T) {
 				CheckedAt:      checkedAt,
 				State:          model.ComposeProjectStateAbsent,
 				Session:        &baseline,
-				LatestSavepoint: &model.LatestSavepoint{
-					Session: model.DefaultSession, ID: savepointID, Name: "after-fix", CreatedAt: checkedAt.Add(-time.Hour),
-				},
-				SavepointCount: 4,
 			},
 		},
 		{
@@ -142,8 +134,9 @@ func TestPrinter_Print_Status(t *testing.T) {
 			name: "status_partial",
 			status: func() model.ComposeProjectStatus {
 				status := newRunningStatus()
-				status.Session, status.LatestSavepoint, status.SavepointCount, status.NewerThanDeployed = nil, nil, 0, nil
+				status.Session = nil
 				status.Deployment.Record = model.DeploymentRecordUnreadable
+				status.Deployment.Savepoint.Description, status.Deployment.Savepoint.Restored = "", nil
 				status.Unreadable = []model.StatusUnreadable{{Source: model.StatusUnreadableStore, Error: "the store is encrypted"}}
 				status.Notices = []model.Notice{{
 					Code:    model.NoticeCodeStoreUnreadable,
@@ -156,7 +149,7 @@ func TestPrinter_Print_Status(t *testing.T) {
 			name: "status_other_session",
 			status: func() model.ComposeProjectStatus {
 				status := newRunningStatus()
-				status.Session = &model.ResolvedSession{ID: sessionID, Name: "feat", ResolvedBy: model.SessionResolutionPointer}
+				status.Session = &model.SessionRef{ID: sessionID, Name: "feat"}
 				status.Notices = []model.Notice{{
 					Code: model.NoticeCodeOtherSession,
 					Message: "running savepoint before-migration (" + savepointID.String() + ") of session baseline; " +
@@ -182,36 +175,27 @@ func TestPrinter_Print_Status(t *testing.T) {
 	}
 }
 
-// newRunningStatus is a compose project a rollback deployed, every replica up.
+// newRunningStatus is a compose project a rollback deployed, every replica up but a job that
+// finished.
 func newRunningStatus() model.ComposeProjectStatus {
-	newer := 1
 	return model.ComposeProjectStatus{
 		ComposeProject: "myapp",
 		CheckedAt:      checkedAt,
 		State:          model.ComposeProjectStateRunning,
 		Session:        &baseline,
 		Deployment: &model.DeploymentStatus{
-			Source:        model.DeploymentSourceSavepoint,
-			ID:            "019ea000-0000-7000-8000-000000000000",
-			DeployedAt:    &deployedAt,
-			Origin:        model.DeploymentOriginRollback,
-			ArcaveProject: "app",
-			Session:       &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+			Source:     model.DeploymentSourceSavepoint,
+			DeployedAt: &deployedAt,
+			Session:    &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
 			Savepoint: &model.DeployedSavepointStatus{
 				ID:          savepointID,
 				Name:        "before-migration",
 				Description: "the schema before 0042",
 				CreatedAt:   &createdAt,
-				Restored:    model.DeploymentCounts{Volumes: 3, WritableLayers: 2},
+				Restored:    &model.DeploymentCounts{Volumes: 3, WritableLayers: 2},
 			},
 			Record: model.DeploymentRecordFound,
 		},
-		LatestSavepoint: &model.LatestSavepoint{
-			Session: model.DefaultSession, ID: "01a1a000-0000-7000-8000-000000000003", Name: "after-fix",
-			CreatedAt: checkedAt.Add(-time.Hour),
-		},
-		SavepointCount:    4,
-		NewerThanDeployed: &newer,
 		Services: []model.ServiceStatus{
 			{
 				Name: "db", State: model.ReplicaStateRunning, Health: model.ReplicaHealthHealthy,
@@ -259,5 +243,86 @@ func publishedPort(hostIP string, hostPort, containerPort int) model.PublishedPo
 		Protocol:      "tcp",
 		HostIP:        netip.MustParseAddr(hostIP).String(),
 		HostPort:      hostPort,
+	}
+}
+
+func TestFormatServicePorts(t *testing.T) {
+	tests := []struct {
+		name  string
+		ports []model.PublishedPort
+		want  string
+	}{
+		{name: "none"},
+		{
+			name:  "one port on both unspecified addresses is one",
+			ports: []model.PublishedPort{publishedPort("0.0.0.0", 8080, 80), publishedPort("::", 8080, 80)},
+			want:  "0.0.0.0:8080→80/tcp",
+		},
+		{
+			name:  "one port on two given addresses is two",
+			ports: []model.PublishedPort{publishedPort("127.0.0.1", 5432, 5432), publishedPort("192.168.1.5", 5432, 5432)},
+			want:  "127.0.0.1:5432→5432/tcp, 192.168.1.5:5432→5432/tcp",
+		},
+		{
+			name:  "a port with no address",
+			ports: []model.PublishedPort{{ContainerPort: 80, Protocol: "udp", HostPort: 8080}},
+			want:  "8080→80/udp",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			service := model.ServiceStatus{Replicas: []model.ReplicaStatus{newRunningReplica("demo-web-1", 1, tt.ports...)}}
+
+			// Act
+			got := formatServicePorts(service)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFormatServiceState(t *testing.T) {
+	tests := []struct {
+		name    string
+		service model.ServiceStatus
+		want    string
+	}{
+		{
+			name: "every replica exited 0",
+			service: model.ServiceStatus{State: model.ReplicaStateExited, Replicas: []model.ReplicaStatus{
+				{Number: 1, State: model.ReplicaStateExited},
+				{Number: 2, State: model.ReplicaStateExited},
+			}},
+			want: "exited 0",
+		},
+		{
+			name: "a failing replica after one that exited 0",
+			service: model.ServiceStatus{State: model.ReplicaStateExited, Replicas: []model.ReplicaStatus{
+				{Number: 1, State: model.ReplicaStateExited},
+				{Number: 2, State: model.ReplicaStateExited, ExitCode: 137},
+			}},
+			want: "exited 137",
+		},
+		{
+			name:    "running with a healthcheck",
+			service: model.ServiceStatus{State: model.ReplicaStateRunning, Health: model.ReplicaHealthHealthy},
+			want:    "healthy",
+		},
+		{
+			name:    "running with none",
+			service: model.ServiceStatus{State: model.ReplicaStateRunning},
+			want:    "running",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := formatServiceState(tt.service)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
 	}
 }

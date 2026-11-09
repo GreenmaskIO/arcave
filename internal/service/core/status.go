@@ -46,24 +46,28 @@ type inflightMarkerReader interface {
 	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
 }
 
+// SavepointLoader reads the records of a compose project's savepoints by id; the DI root opens one
+// per store.
+type SavepointLoader interface {
+	LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error)
+}
+
 // StatusDeps are StatusService's collaborators.
 type StatusDeps struct {
 	ComposeContainers composeContainersReader
 	Inflight          inflightMarkerReader
 	// Current is the current-session pointer.
 	Current currentSessionReader
-	// OpenArcaveProjectStore opens the arcave project's store for reading when a status needs it:
-	// one that does not open makes the status partial, not a failure.
+	// OpenArcaveProjectStore opens the arcave project's store when a status needs it: one that does
+	// not open makes the status partial, not a failure.
 	OpenArcaveProjectStore func(ctx context.Context) (storages.Storager, error)
-	// NewSessions and NewSavepoints read the sessions of an arcave project's store and the
-	// savepoints of a compose project's.
-	NewSessions   func(store storages.Storager) SessionReader
-	NewSavepoints func(store storages.Storager) SavepointReader
-	// ArcaveProject is the arcave project the config names; ComposeProject the one -p names.
+	// NewSessionReader builds a SessionReader over an arcave project's store, NewSavepointLoader a
+	// SavepointLoader over a compose project's.
+	NewSessionReader   func(store storages.Storager) SessionReader
+	NewSavepointLoader func(store storages.Storager) SavepointLoader
+	// ArcaveProject is the one the config names; ComposeProject the one -p names.
 	ArcaveProject  model.ArcaveProjectName
 	ComposeProject model.DockerComposeProjectName
-	// Now is the clock CheckedAt is read off.
-	Now func() time.Time
 }
 
 // StatusService reports what the daemon runs for one compose project. It takes no lock, writes
@@ -73,48 +77,38 @@ type StatusService struct {
 	inflight               inflightMarkerReader
 	current                currentSessionReader
 	openArcaveProjectStore func(ctx context.Context) (storages.Storager, error)
-	newSessions            func(store storages.Storager) SessionReader
-	newSavepoints          func(store storages.Storager) SavepointReader
+	newSessionReader       func(store storages.Storager) SessionReader
+	newSavepointLoader     func(store storages.Storager) SavepointLoader
 	arcaveProject          model.ArcaveProjectName
 	composeProject         model.DockerComposeProjectName
-	now                    func() time.Time
 }
 
+// NewStatusService builds a StatusService from deps.
 func NewStatusService(deps StatusDeps) *StatusService {
 	return &StatusService{
 		composeContainers:      deps.ComposeContainers,
 		inflight:               deps.Inflight,
 		current:                deps.Current,
 		openArcaveProjectStore: deps.OpenArcaveProjectStore,
-		newSessions:            deps.NewSessions,
-		newSavepoints:          deps.NewSavepoints,
+		newSessionReader:       deps.NewSessionReader,
+		newSavepointLoader:     deps.NewSavepointLoader,
 		arcaveProject:          deps.ArcaveProject,
 		composeProject:         deps.ComposeProject,
-		now:                    deps.Now,
 	}
 }
 
 // storeView is what the store adds to the daemon's answer.
 type storeView struct {
-	session *model.ResolvedSession
+	session *model.SessionRef
 	deployedRecord
 }
 
-// deployedRecord is what the store holds of the deployed savepoint, and the savepoints counted
-// beside it.
+// deployedRecord is whether the store holds the deployed savepoint, and its record when it does.
 type deployedRecord struct {
 	record model.DeploymentRecord
-	// listing is the compose project's savepoints in the deployed savepoint's session while the
-	// store holds that session, else in the session commands work in; nil when neither was read.
-	listing    *savepointListing
-	notices    []model.Notice
+	// savepoint is the deployed savepoint's record; nil unless record is found.
+	savepoint  *model.Savepoint
 	unreadable []model.StatusUnreadable
-}
-
-// savepointListing is one session's savepoints of the compose project.
-type savepointListing struct {
-	session    model.SessionID
-	savepoints []model.Savepoint
 }
 
 // Status reports the compose project as the daemon runs it and what the store adds. An unreadable
@@ -122,50 +116,47 @@ type savepointListing struct {
 // or marker returns it with model.ErrStatusPartial.
 func (s *StatusService) Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error) {
 	var (
-		checkedAt  = s.now().UTC()
-		containers model.ComposeProjectContainers
-		view       storeView
-		err        error
+		checkedAt        = time.Now().UTC()
+		containers       model.ComposeProjectContainers
+		deployed         deployedContainers
+		services         []model.ServiceStatus
+		marker           *model.InflightMarker
+		markerUnreadable []model.StatusUnreadable
+		view             storeView
+		unreadable       []model.StatusUnreadable
+		state            model.ComposeProjectState
+		err              error
 	)
 	if containers, err = s.readContainers(ctx); err != nil {
 		return model.ComposeProjectStatus{}, err
 	}
-	var (
-		deployed                 = findDeployments(containers)
-		services                 = newServiceStatuses(containers, deployed)
-		marker, markerUnreadable = s.readInflightMarker(ctx)
-	)
-	if view, err = s.readStoreView(ctx, req.Session, deployed.primary); err != nil {
+	deployed = findDeployments(containers)
+	services = newServiceStatuses(containers, deployed)
+	marker, markerUnreadable = s.readInflightMarker(ctx)
+	if view, err = s.readStoreView(ctx, req.Session, deployed.deployment); err != nil {
 		return model.ComposeProjectStatus{}, err
 	}
-	var (
-		unreadable           = slices.Concat([]model.StatusUnreadable{}, markerUnreadable, view.unreadable)
-		state                = newComposeProjectState(marker != nil, services)
-		latest, count, newer = newSavepointCounts(view.listing, deployed.primary, s.arcaveProject)
-	)
+	// Non-nil, so none marshals as [], not null: slices.Concat of empty slices is nil.
+	unreadable = append(append([]model.StatusUnreadable{}, markerUnreadable...), view.unreadable...)
+	state = newComposeProjectState(marker != nil, services)
 	status := model.ComposeProjectStatus{
-		ComposeProject:    s.composeProject,
-		CheckedAt:         checkedAt,
-		State:             state,
-		Session:           view.session,
-		Deployment:        newDeploymentStatus(deployed, view.record),
-		LatestSavepoint:   latest,
-		SavepointCount:    count,
-		NewerThanDeployed: newer,
-		Services:          services,
-		RollbackInFlight:  newRollbackInFlight(marker),
-		Unreadable:        unreadable,
+		ComposeProject:   s.composeProject,
+		CheckedAt:        checkedAt,
+		State:            state,
+		Session:          view.session,
+		Deployment:       newDeploymentStatus(deployed, view.deployedRecord),
+		Services:         services,
+		RollbackInFlight: newRollbackInFlight(marker),
+		Unreadable:       unreadable,
 		Notices: newStatusNotices(statusFacts{
-			arcaveProject:  s.arcaveProject,
-			composeProject: s.composeProject,
-			checkedAt:      checkedAt,
-			state:          state,
-			marker:         marker,
-			deployed:       deployed,
-			view:           view,
-			services:       services,
-			hookRunners:    containers.HookRunners,
-			unreadable:     unreadable,
+			checkedAt:     checkedAt,
+			arcaveProject: s.arcaveProject,
+			state:         state,
+			marker:        marker,
+			deployed:      deployed,
+			view:          view,
+			services:      services,
+			unreadable:    unreadable,
 		}),
 	}
 	if len(unreadable) > 0 {
@@ -206,30 +197,28 @@ func (s *StatusService) readInflightMarker(ctx context.Context) (*model.Inflight
 	}
 }
 
-// readStoreView resolves the session the user works in and reads what the store holds of the
-// deployed savepoint, or of that session with none deployed. A ref naming no session is its error.
+// readStoreView resolves the session the user works in and reads the deployed savepoint's record.
+// A ref naming no session is its error.
 func (s *StatusService) readStoreView(
 	ctx context.Context, ref string, deployment *model.SavepointDeployment,
 ) (storeView, error) {
 	store, err := s.openArcaveProjectStore(ctx)
 	if err != nil {
 		return storeView{deployedRecord: deployedRecord{
-			record:     newUnreadableRecord(deployment),
+			record:     s.newUnreadableRecord(deployment),
 			unreadable: []model.StatusUnreadable{newStoreUnreadable(err)},
 		}}, nil
 	}
-	sessions := s.newSessions(store)
-	session, sessionUnreadable, err := s.readResolvedSession(ctx, sessions, ref)
+	session, sessionUnreadable, err := s.readResolvedSession(ctx, s.newSessionReader(store), ref)
 	if err != nil {
 		return storeView{}, err
 	}
-	deployed := s.readDeployedRecord(ctx, store, sessions, session, deployment)
+	deployed := s.readDeployedRecord(ctx, store, deployment)
 	return storeView{
 		session: session,
 		deployedRecord: deployedRecord{
 			record:     deployed.record,
-			listing:    deployed.listing,
-			notices:    deployed.notices,
+			savepoint:  deployed.savepoint,
 			unreadable: slices.Concat(sessionUnreadable, deployed.unreadable),
 		},
 	}, nil
@@ -239,15 +228,14 @@ func (s *StatusService) readStoreView(
 // the user's to fix and the error; any other failure is one thing the status could not read.
 func (s *StatusService) readResolvedSession(
 	ctx context.Context, sessions SessionReader, ref string,
-) (*model.ResolvedSession, []model.StatusUnreadable, error) {
-	session, resolvedBy, err := resolveSession(ctx, sessions, s.current, ref)
+) (*model.SessionRef, []model.StatusUnreadable, error) {
+	session, err := resolveSession(ctx, sessions, s.current, ref)
 	var ambiguous *model.AmbiguousSessionNameError
 	switch {
 	case err == nil:
-		return &model.ResolvedSession{
-			ID:         session.ID,
-			Name:       session.Name,
-			ResolvedBy: resolvedBy,
+		return &model.SessionRef{
+			ID:   session.ID,
+			Name: session.Name,
 		}, nil, nil
 	case errors.Is(err, model.ErrSessionNotFound), errors.As(err, &ambiguous):
 		return nil, nil, err
@@ -259,121 +247,55 @@ func (s *StatusService) readResolvedSession(
 	}
 }
 
-// readDeployedRecord tells whether the deployed savepoint's session still holds it and lists that
-// session, else the session the user works in.
+// readDeployedRecord reads the deployed savepoint's record in its own session; a session removed
+// since holds none, so it reads missing. Another arcave project's store is not this one's to read.
 func (s *StatusService) readDeployedRecord(
-	ctx context.Context, store storages.Storager, sessions SessionReader,
-	current *model.ResolvedSession, deployment *model.SavepointDeployment,
+	ctx context.Context, store storages.Navigator, deployment *model.SavepointDeployment,
 ) deployedRecord {
+	if deployment == nil || deployment.ArcaveProject != s.arcaveProject {
+		return deployedRecord{}
+	}
+	savepoints, err := s.loadSavepoint(ctx, store, deployment.Session.ID, deployment.Savepoint.ID)
 	switch {
-	case deployment == nil:
-		listing, unreadable := s.readCurrentSavepoints(ctx, store, current)
-		return deployedRecord{
-			listing:    listing,
-			unreadable: unreadable,
-		}
-	case deployment.ArcaveProject != s.arcaveProject:
-		listing, unreadable := s.readCurrentSavepoints(ctx, store, current)
-		return deployedRecord{
-			listing:    listing,
-			notices:    []model.Notice{newOtherArcaveProjectNotice(deployment.ArcaveProject)},
-			unreadable: unreadable,
-		}
-	}
-
-	exists, err := s.sessionExists(ctx, sessions, current, deployment.Session.ID)
-	if err != nil {
+	case err != nil:
 		return deployedRecord{
 			record:     model.DeploymentRecordUnreadable,
 			unreadable: []model.StatusUnreadable{newStoreUnreadable(err)},
 		}
-	}
-	if !exists {
-		listing, unreadable := s.readCurrentSavepoints(ctx, store, current)
+	case len(savepoints) == 0:
+		return deployedRecord{record: model.DeploymentRecordMissing}
+	default:
 		return deployedRecord{
-			record:     model.DeploymentRecordMissing,
-			listing:    listing,
-			notices:    []model.Notice{newSessionGoneNotice(deployment.Session)},
-			unreadable: unreadable,
+			record:    model.DeploymentRecordFound,
+			savepoint: &savepoints[0],
 		}
-	}
-	listing, err := s.readSavepoints(ctx, store, deployment.Session.ID)
-	if err != nil {
-		return deployedRecord{
-			record:     model.DeploymentRecordUnreadable,
-			unreadable: []model.StatusUnreadable{newStoreUnreadable(err)},
-		}
-	}
-	if !slices.ContainsFunc(listing.savepoints, func(savepoint model.Savepoint) bool {
-		return savepoint.ID == deployment.Savepoint.ID
-	}) {
-		return deployedRecord{
-			record:  model.DeploymentRecordMissing,
-			listing: listing,
-			notices: []model.Notice{newSavepointGoneNotice(*deployment)},
-		}
-	}
-	return deployedRecord{
-		record:  model.DeploymentRecordFound,
-		listing: listing,
 	}
 }
 
-// readCurrentSavepoints lists the session the user works in; nothing when it was not resolved.
-func (s *StatusService) readCurrentSavepoints(
-	ctx context.Context, store storages.Navigator, current *model.ResolvedSession,
-) (*savepointListing, []model.StatusUnreadable) {
-	if current == nil {
-		return nil, nil
-	}
-	listing, err := s.readSavepoints(ctx, store, current.ID)
+// loadSavepoint reads the record of savepoint id of the compose project in session; none when it
+// has no record.
+func (s *StatusService) loadSavepoint(
+	ctx context.Context, store storages.Navigator, session model.SessionID, id model.SavepointID,
+) ([]model.Savepoint, error) {
+	sessionStore, err := storefactory.Session(store, session)
 	if err != nil {
-		return nil, []model.StatusUnreadable{newStoreUnreadable(err)}
-	}
-	return listing, nil
-}
-
-// sessionExists tells whether the store holds session id: the default always, the session the
-// user works in as resolved, any other by a listing.
-func (s *StatusService) sessionExists(
-	ctx context.Context, sessions SessionReader, current *model.ResolvedSession, id model.SessionID,
-) (bool, error) {
-	if id == model.DefaultSession || (current != nil && current.ID == id) {
-		return true, nil
-	}
-	listed, err := sessions.ListSessions(ctx)
-	if err != nil {
-		return false, fmt.Errorf("listing sessions: %w", err)
-	}
-	_, found := findSessionByID(listed, id.String())
-	return found, nil
-}
-
-// readSavepoints lists the compose project's savepoints in session id, safety snapshots included.
-func (s *StatusService) readSavepoints(
-	ctx context.Context, store storages.Navigator, id model.SessionID,
-) (*savepointListing, error) {
-	sessionStore, err := storefactory.Session(store, id)
-	if err != nil {
-		return nil, fmt.Errorf("open session %s: %w", id, err)
+		return nil, fmt.Errorf("open session %s: %w", session, err)
 	}
 	composeProjectStore, err := storefactory.ComposeProject(sessionStore, s.composeProject)
 	if err != nil {
 		return nil, fmt.Errorf("open compose project %s: %w", s.composeProject, err)
 	}
-	savepoints, err := s.newSavepoints(composeProjectStore).ListSavepoints(ctx)
+	savepoints, err := s.newSavepointLoader(composeProjectStore).LoadSavepoints(ctx, []model.SavepointID{id})
 	if err != nil {
-		return nil, fmt.Errorf("list savepoints of compose project %s: %w", s.composeProject, err)
+		return nil, fmt.Errorf("read savepoint %s of compose project %s: %w", id, s.composeProject, err)
 	}
-	return &savepointListing{
-		session:    id,
-		savepoints: savepoints,
-	}, nil
+	return savepoints, nil
 }
 
-// newUnreadableRecord is the record of a deployment the store could not be read for.
-func newUnreadableRecord(deployment *model.SavepointDeployment) model.DeploymentRecord {
-	if deployment == nil {
+// newUnreadableRecord is the record of a deployment the store could not be read for; none for one of
+// another arcave project, whose record is not read either way.
+func (s *StatusService) newUnreadableRecord(deployment *model.SavepointDeployment) model.DeploymentRecord {
+	if deployment == nil || deployment.ArcaveProject != s.arcaveProject {
 		return ""
 	}
 	return model.DeploymentRecordUnreadable
@@ -384,49 +306,6 @@ func newStoreUnreadable(err error) model.StatusUnreadable {
 		Source: model.StatusUnreadableStore,
 		Error:  err.Error(),
 	}
-}
-
-// newSavepointCounts is the listing's newest savepoint, its count and, in the deployed savepoint's
-// session of arcaveProject, how many are newer than it; safety snapshots are not counted.
-func newSavepointCounts(
-	listing *savepointListing, deployment *model.SavepointDeployment, arcaveProject model.ArcaveProjectName,
-) (*model.LatestSavepoint, int, *int) {
-	if listing == nil {
-		return nil, 0, nil
-	}
-	if deployment != nil && (deployment.ArcaveProject != arcaveProject || deployment.Session.ID != listing.session) {
-		deployment = nil
-	}
-	var (
-		latest *model.Savepoint
-		count  int
-		newer  int
-	)
-	for _, savepoint := range listing.savepoints {
-		if savepoint.IsSafetySnapshot() {
-			continue
-		}
-		count++
-		if deployment != nil && savepoint.ID > deployment.Savepoint.ID {
-			newer++
-		}
-		if latest == nil || savepoint.ID > latest.ID {
-			latest = &savepoint
-		}
-	}
-	var newerThanDeployed *int
-	if deployment != nil {
-		newerThanDeployed = &newer
-	}
-	if latest == nil {
-		return nil, count, newerThanDeployed
-	}
-	return &model.LatestSavepoint{
-		Session:   listing.session,
-		ID:        latest.ID,
-		Name:      latest.Name,
-		CreatedAt: latest.CreatedAt,
-	}, count, newerThanDeployed
 }
 
 // newRollbackInFlight is the marker as a status reports it.
@@ -444,42 +323,41 @@ func newRollbackInFlight(marker *model.InflightMarker) *model.RollbackInFlight {
 	}
 }
 
-// newDeploymentStatus is what built the containers; nil for a compose project with none.
-func newDeploymentStatus(deployed deployedContainers, record model.DeploymentRecord) *model.DeploymentStatus {
+// newDeploymentStatus is what built the containers, and what the deployed savepoint's record adds;
+// nil for a compose project with none.
+func newDeploymentStatus(deployed deployedContainers, record deployedRecord) *model.DeploymentStatus {
 	switch {
 	case deployed.source == "":
 		return nil
-	case deployed.primary == nil:
+	case deployed.deployment == nil:
 		return &model.DeploymentStatus{Source: deployed.source}
 	}
 	var (
-		deployment   = deployed.primary
-		revertedFrom *model.SavepointRef
+		deployment  = deployed.deployment
+		description string
+		restored    *model.DeploymentCounts
 	)
-	if deployment.Origin == model.DeploymentOriginRevert {
-		revertedFrom = &deployment.RevertedFrom
+	if record.savepoint != nil {
+		description = record.savepoint.Description
+		restored = &model.DeploymentCounts{
+			Volumes:        len(record.savepoint.Stats),
+			WritableLayers: len(record.savepoint.WritableLayers),
+		}
 	}
 	return &model.DeploymentStatus{
 		Source:        deployed.source,
-		ID:            deployment.ID,
-		DeployedAt:    newOptionalTime(deployment.At),
-		Origin:        deployment.Origin,
+		DeployedAt:    newOptionalTime(deployment.DeployedAt),
 		ArcaveProject: deployment.ArcaveProject,
-		RevertedFrom:  revertedFrom,
 		Session:       &deployment.Session,
 		Savepoint: &model.DeployedSavepointStatus{
-			ID:                deployment.Savepoint.ID,
-			Name:              deployment.Savepoint.Name,
-			Description:       deployment.Savepoint.Description,
-			CreatedAt:         newOptionalTime(deployment.Savepoint.CreatedAt),
-			SafetySnapshot:    deployment.Savepoint.IsSafetySnapshot(),
-			SafetySnapshotFor: deployment.Savepoint.SafetySnapshotFor,
-			Restored:          deployment.Manifest.Restored,
-			NotRestored:       deployment.Manifest.LeftOut,
+			ID:             deployment.Savepoint.ID,
+			Name:           deployment.Savepoint.Name,
+			CreatedAt:      newOptionalTime(deployment.Savepoint.CreatedAt),
+			SafetySnapshot: deployment.Savepoint.IsSafetySnapshot,
+			Description:    description,
+			Restored:       restored,
 		},
-		Record:        record,
-		Host:          deployment.Host,
-		ArcaveVersion: deployment.ArcaveVersion,
+		Record: record.record,
 	}
 }
 

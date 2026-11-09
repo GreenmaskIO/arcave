@@ -542,8 +542,8 @@ func TestUserLabels(t *testing.T) {
 			// A deployment is the containers', never the spec's: the next savepoint must not carry it.
 			name: "the deployment a rollback labelled the container with is dropped",
 			labels: map[string]string{
-				string(model.SystemLabelDeploymentID):        "019ea000-0000-7000-8000-000000000000",
-				string(model.SystemLabelDeploymentSavepoint): "019e843e-1650-7000-8000-000000000000",
+				string(model.SystemLabelDeploymentDeployedAt):  "2026-11-07T14:02:11Z",
+				string(model.SystemLabelDeploymentSavepointID): "019e843e-1650-7000-8000-000000000000",
 				"tier": "data",
 			},
 			want: types.Labels{"tier": "data"},

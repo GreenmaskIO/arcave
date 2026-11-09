@@ -15,11 +15,8 @@
 package model
 
 import (
-	"fmt"
-	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,51 +24,87 @@ import (
 
 func demoDeployment() SavepointDeployment {
 	return SavepointDeployment{
-		ID:            "019ea000-0000-7000-8000-000000000000",
-		At:            time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
-		Origin:        DeploymentOriginRollback,
-		ArcaveProject: "app",
+		DeployedAt:    time.Date(2026, 11, 7, 14, 2, 11, 0, time.UTC),
+		ArcaveProject: "demo",
 		Session: SessionRef{
 			ID:   DefaultSession,
 			Name: DefaultSessionName,
 		},
 		Savepoint: DeployedSavepoint{
-			ID:          "019e843e-1650-7000-8000-000000000000",
-			Name:        "before-migration",
-			Description: "the schema before 0042",
-			CreatedAt:   time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
+			ID:        "019e843e-1650-7000-8000-000000000000",
+			Name:      "before-migration",
+			CreatedAt: time.Date(2026, 11, 6, 19, 41, 0, 0, time.UTC),
 		},
-		Manifest: DeploymentManifest{
-			Services: map[string]DeployedService{
-				"db":      {Replicas: []int{1}, Layers: []int{1}},
-				"migrate": {Replicas: []int{1}},
-			},
-			Restored: DeploymentCounts{Volumes: 1, WritableLayers: 1},
-			LeftOut:  DeploymentCounts{Volumes: 0, WritableLayers: 0},
+		ServiceReplicas: map[string][]int{
+			"db":      {1, 3},
+			"migrate": {1},
 		},
-		ArcaveVersion: "v0.1.0",
-		Host:          "laptop",
 	}
 }
 
 func TestSavepointDeployment_Labels(t *testing.T) {
-	revert := demoDeployment()
-	revert.Origin = DeploymentOriginRevert
-	revert.RevertedFrom = SavepointRef{ID: "019e9000-0000-7000-8000-000000000000", Name: "after-fix"}
-	revert.Savepoint.SafetySnapshotFor = "019e9000-0000-7000-8000-000000000000"
+	safetySnapshot := demoDeployment()
+	safetySnapshot.Savepoint.Name = "safety-snapshot-019e843e-1650-7000-8000-000000000000"
+	safetySnapshot.Savepoint.IsSafetySnapshot = true
 	tests := []struct {
 		name       string
 		deployment SavepointDeployment
+		want       map[string]string
 	}{
 		{
-			name:       "a rollback reads back as it was written",
+			name:       "a savepoint a user took",
 			deployment: demoDeployment(),
+			want: map[string]string{
+				"io.arcave.deployment.deployed-at":                  "2026-11-07T14:02:11Z",
+				"io.arcave.deployment.arcave-project":               "demo",
+				"io.arcave.deployment.session-id":                   DefaultSession.String(),
+				"io.arcave.deployment.session-name":                 DefaultSessionName,
+				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
+				"io.arcave.deployment.savepoint-name":               "before-migration",
+				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
+				"io.arcave.deployment.savepoint-is-safety-snapshot": "",
+				"io.arcave.deployment.service-replicas":             "db=1,3;migrate=1",
+			},
 		},
 		{
-			name:       "a revert carries the rollback it undid and the one its safety snapshot was for",
-			deployment: revert,
+			name:       "a safety snapshot",
+			deployment: safetySnapshot,
+			want: map[string]string{
+				"io.arcave.deployment.deployed-at":                  "2026-11-07T14:02:11Z",
+				"io.arcave.deployment.arcave-project":               "demo",
+				"io.arcave.deployment.session-id":                   DefaultSession.String(),
+				"io.arcave.deployment.session-name":                 DefaultSessionName,
+				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
+				"io.arcave.deployment.savepoint-name":               "safety-snapshot-019e843e-1650-7000-8000-000000000000",
+				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
+				"io.arcave.deployment.savepoint-is-safety-snapshot": "true",
+				"io.arcave.deployment.service-replicas":             "db=1,3;migrate=1",
+			},
 		},
 	}
+	tests = append(tests, struct {
+		name       string
+		deployment SavepointDeployment
+		want       map[string]string
+	}{
+		name: "blank where there is no value",
+		deployment: SavepointDeployment{
+			ArcaveProject: "demo",
+			Session:       SessionRef{ID: DefaultSession},
+			Savepoint:     DeployedSavepoint{ID: "019e843e-1650-7000-8000-000000000000"},
+		},
+		want: map[string]string{
+			"io.arcave.deployment.deployed-at":                  "",
+			"io.arcave.deployment.arcave-project":               "demo",
+			"io.arcave.deployment.session-id":                   DefaultSession.String(),
+			"io.arcave.deployment.session-name":                 "",
+			"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
+			"io.arcave.deployment.savepoint-name":               "",
+			"io.arcave.deployment.savepoint-created-at":         "",
+			"io.arcave.deployment.savepoint-is-safety-snapshot": "",
+			"io.arcave.deployment.service-replicas":             "",
+		},
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
@@ -79,85 +112,35 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 			parsed, ok, err := ParseSavepointDeployment(labels)
 
 			// Assert
+			assert.Equal(t, tt.want, labels, "every key is written, blank or not")
 			require.NoError(t, err)
 			require.True(t, ok)
-			assert.Equal(t, tt.deployment, parsed)
-			assert.Len(t, labels, len(deploymentLabels), "every key is written, blank or not")
+			assert.Equal(t, tt.deployment, parsed, "the labels read back as they were written")
 		})
 	}
 }
 
-func TestSavepointDeployment_Labels_Bounds(t *testing.T) {
-	// Arrange: every value past its bound.
+func TestSavepointDeployment_Labels_SubSecond(t *testing.T) {
+	// Arrange
 	deployment := demoDeployment()
-	deployment.Savepoint.Description = "first line\n\tsecond line " + strings.Repeat("ж", 300)
-	for i := range 40 {
-		deployment.Manifest.NotRestored.WritableLayers = append(deployment.Manifest.NotRestored.WritableLayers,
-			SkippedWritableLayer{Service: "web", Replica: i + 1, Container: "demo-web", Reason: SkipReasonExcluded})
-	}
-
-	// Act
-	parsed, ok, err := ParseSavepointDeployment(deployment.Labels())
-
-	// Assert
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, maxLabelDescriptionRunes, utf8.RuneCountInString(parsed.Savepoint.Description))
-	assert.True(t, strings.HasPrefix(parsed.Savepoint.Description, "first line second line жж"),
-		"the description is one line: %q", parsed.Savepoint.Description)
-	assert.True(t, strings.HasSuffix(parsed.Savepoint.Description, "…"))
-	assert.Len(t, parsed.Manifest.NotRestored.WritableLayers, maxLabelNotRestoredEntries)
-	assert.True(t, parsed.Manifest.NotRestored.Truncated)
-}
-
-func TestSavepointDeployment_Labels_ManifestPastItsBound(t *testing.T) {
-	// Arrange: a detail long enough that even the cut lists overflow the manifest's bound.
-	deployment := demoDeployment()
-	for i := range maxLabelNotRestoredEntries {
-		deployment.Manifest.NotRestored.Mounts = append(deployment.Manifest.NotRestored.Mounts,
-			SkippedVolume{Service: "web", Replica: i + 1, Target: "/cache", Reason: SkipReasonExcluded,
-				Detail: strings.Repeat("d", 1000)})
-	}
-	deployment.Manifest.LeftOut = DeploymentCounts{Volumes: maxLabelNotRestoredEntries}
-
-	// Act
-	parsed, ok, err := ParseSavepointDeployment(deployment.Labels())
-
-	// Assert
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, DeploymentNotRestored{Truncated: true}, parsed.Manifest.NotRestored)
-	assert.Equal(t, deployment.Manifest.Services, parsed.Manifest.Services, "the replicas stay whatever is dropped")
-	assert.Equal(t, deployment.Manifest.LeftOut, parsed.Manifest.LeftOut, "and so do the counts of what is")
-}
-
-func TestSavepointDeployment_Labels_ServicesPastTheBound(t *testing.T) {
-	// Arrange: so many services with layers that only their replicas fit.
-	deployment := demoDeployment()
-	deployment.Manifest.Services = map[string]DeployedService{}
-	for i := range 300 {
-		deployment.Manifest.Services[fmt.Sprintf("service-with-a-long-name-%03d", i)] = DeployedService{
-			Replicas: []int{1, 2},
-			Layers:   []int{1, 2},
-		}
-	}
+	deployment.DeployedAt = deployment.DeployedAt.Add(250 * time.Millisecond)
 
 	// Act
 	labels := deployment.Labels()
 	parsed, ok, err := ParseSavepointDeployment(labels)
 
 	// Assert
+	assert.Equal(t, "2026-11-07T14:02:11.25Z", labels[string(SystemLabelDeploymentDeployedAt)])
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.LessOrEqual(t, len(labels[string(SystemLabelDeploymentManifest)]), maxLabelManifestBytes)
-	assert.True(t, parsed.Manifest.NotRestored.Truncated)
-	for name, service := range parsed.Manifest.Services {
-		assert.Equal(t, DeployedService{Replicas: []int{1, 2}}, service, "%s keeps its replicas alone", name)
-	}
-	assert.Len(t, parsed.Manifest.Services, 300)
+	assert.Equal(t, deployment.DeployedAt, parsed.DeployedAt, "two builds within one second are told apart")
 }
 
 func TestParseSavepointDeployment(t *testing.T) {
+	blank := demoDeployment().Labels()
+	for key := range blank {
+		blank[key] = ""
+	}
 	tests := []struct {
 		name    string
 		labels  map[string]string
@@ -169,42 +152,27 @@ func TestParseSavepointDeployment(t *testing.T) {
 		},
 		{
 			name:   "blank labels are no deployment",
-			labels: NewBlankDeploymentLabels(),
-		},
-		{
-			name:    "a broken id",
-			labels:  withLabel(SystemLabelDeploymentID, "not-a-uuid"),
-			wantErr: "invalid deployment id",
-		},
-		{
-			name:    "a broken session",
-			labels:  withLabel(SystemLabelDeploymentSession, "nope"),
-			wantErr: string(SystemLabelDeploymentSession),
-		},
-		{
-			name:    "a broken time",
-			labels:  withLabel(SystemLabelDeploymentAt, "yesterday"),
-			wantErr: string(SystemLabelDeploymentAt),
-		},
-		{
-			name:    "an unknown origin",
-			labels:  withLabel(SystemLabelDeploymentOrigin, "deploy"),
-			wantErr: "unknown origin",
-		},
-		{
-			name:    "a revert naming no rollback",
-			labels:  withLabel(SystemLabelDeploymentOrigin, string(DeploymentOriginRevert)),
-			wantErr: string(SystemLabelDeploymentRevertedFrom),
-		},
-		{
-			name:    "a broken arcave project",
-			labels:  withLabel(SystemLabelDeploymentArcaveProject, "../x"),
-			wantErr: string(SystemLabelDeploymentArcaveProject),
+			labels: blank,
 		},
 		{
 			name:    "a broken savepoint",
-			labels:  withLabel(SystemLabelDeploymentSavepoint, "nope"),
-			wantErr: string(SystemLabelDeploymentSavepoint),
+			labels:  withLabel(SystemLabelDeploymentSavepointID, "nope"),
+			wantErr: string(SystemLabelDeploymentSavepointID),
+		},
+		{
+			name:    "a broken arcave project",
+			labels:  withLabel(SystemLabelDeploymentArcaveProject, ""),
+			wantErr: string(SystemLabelDeploymentArcaveProject),
+		},
+		{
+			name:    "a broken session",
+			labels:  withLabel(SystemLabelDeploymentSessionID, "nope"),
+			wantErr: string(SystemLabelDeploymentSessionID),
+		},
+		{
+			name:    "a broken time",
+			labels:  withLabel(SystemLabelDeploymentDeployedAt, "yesterday"),
+			wantErr: string(SystemLabelDeploymentDeployedAt),
 		},
 		{
 			name:    "a broken savepoint time",
@@ -212,14 +180,14 @@ func TestParseSavepointDeployment(t *testing.T) {
 			wantErr: string(SystemLabelDeploymentSavepointCreatedAt),
 		},
 		{
-			name:    "a broken safety snapshot's savepoint",
-			labels:  withLabel(SystemLabelDeploymentSafetySnapshotFor, "nope"),
-			wantErr: string(SystemLabelDeploymentSafetySnapshotFor),
+			name:    "a broken flag",
+			labels:  withLabel(SystemLabelDeploymentSavepointIsSafetySnapshot, "yes"),
+			wantErr: string(SystemLabelDeploymentSavepointIsSafetySnapshot),
 		},
 		{
-			name:    "a broken manifest",
-			labels:  withLabel(SystemLabelDeploymentManifest, "{"),
-			wantErr: string(SystemLabelDeploymentManifest),
+			name:    "broken replicas",
+			labels:  withLabel(SystemLabelDeploymentServiceReplicas, "db"),
+			wantErr: string(SystemLabelDeploymentServiceReplicas),
 		},
 	}
 	for _, tt := range tests {
@@ -230,10 +198,45 @@ func TestParseSavepointDeployment(t *testing.T) {
 			// Assert
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestParseServiceReplicas(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    map[string][]int
+		wantErr string
+	}{
+		{name: "blank is none"},
+		{name: "one service", value: "db=1", want: map[string][]int{"db": {1}}},
+		{name: "a gap", value: "db=1,3;web=2", want: map[string][]int{"db": {1, 3}, "web": {2}}},
+		{name: "a service with none", value: "db=", want: map[string][]int{"db": {}}},
+		{name: "no number", value: "db", wantErr: "want <service>="},
+		{name: "no service", value: "=1", wantErr: "want <service>="},
+		{name: "no positive number", value: "db=0", wantErr: "no positive number"},
+		{name: "not a number", value: "db=one", wantErr: "no positive number"},
+		{name: "a service named twice", value: "db=1;db=2", wantErr: "named twice"},
+		{name: "a replica named twice", value: "db=1,1", wantErr: "named twice"},
+		{name: "a number spelled otherwise than it is written", value: "db=01", wantErr: "no positive number"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got, err := parseServiceReplicas(tt.value)
+
+			// Assert
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			assert.False(t, ok)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

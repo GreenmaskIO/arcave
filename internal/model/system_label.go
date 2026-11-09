@@ -46,35 +46,18 @@ const (
 	SystemLabelComposeProject SystemLabel = SystemLabelPrefix + "compose-project"
 )
 
-// The labels a rollback puts on every container it builds, SavepointDeployment spelled out; a
-// layer committed off such a container carries every one blank.
+// The labels a rollback puts on every container it builds, SavepointDeployment spelled out.
 const (
-	SystemLabelDeploymentID                   SystemLabel = DeploymentLabelPrefix + "id"
-	SystemLabelDeploymentAt                   SystemLabel = DeploymentLabelPrefix + "at"
-	SystemLabelDeploymentOrigin               SystemLabel = DeploymentLabelPrefix + "origin"
-	SystemLabelDeploymentArcaveProject        SystemLabel = DeploymentLabelPrefix + "arcave-project"
-	SystemLabelDeploymentSession              SystemLabel = DeploymentLabelPrefix + "session"
-	SystemLabelDeploymentSessionName          SystemLabel = DeploymentLabelPrefix + "session-name"
-	SystemLabelDeploymentSavepoint            SystemLabel = DeploymentLabelPrefix + "savepoint"
-	SystemLabelDeploymentSavepointName        SystemLabel = DeploymentLabelPrefix + "savepoint-name"
-	SystemLabelDeploymentSavepointDescription SystemLabel = DeploymentLabelPrefix + "savepoint-description"
-	SystemLabelDeploymentSavepointCreatedAt   SystemLabel = DeploymentLabelPrefix + "savepoint-created-at"
-	SystemLabelDeploymentSafetySnapshotFor    SystemLabel = DeploymentLabelPrefix + "savepoint-safety-snapshot-for"
-	SystemLabelDeploymentRevertedFrom         SystemLabel = DeploymentLabelPrefix + "reverted-from"
-	SystemLabelDeploymentRevertedFromName     SystemLabel = DeploymentLabelPrefix + "reverted-from-name"
-	SystemLabelDeploymentManifest             SystemLabel = DeploymentLabelPrefix + "manifest"
-	SystemLabelDeploymentArcaveVersion        SystemLabel = DeploymentLabelPrefix + "arcave-version"
-	SystemLabelDeploymentHost                 SystemLabel = DeploymentLabelPrefix + "host"
+	SystemLabelDeploymentDeployedAt                SystemLabel = DeploymentLabelPrefix + "deployed-at"
+	SystemLabelDeploymentArcaveProject             SystemLabel = DeploymentLabelPrefix + "arcave-project"
+	SystemLabelDeploymentSessionID                 SystemLabel = DeploymentLabelPrefix + "session-id"
+	SystemLabelDeploymentSessionName               SystemLabel = DeploymentLabelPrefix + "session-name"
+	SystemLabelDeploymentSavepointID               SystemLabel = DeploymentLabelPrefix + "savepoint-id"
+	SystemLabelDeploymentSavepointName             SystemLabel = DeploymentLabelPrefix + "savepoint-name"
+	SystemLabelDeploymentSavepointCreatedAt        SystemLabel = DeploymentLabelPrefix + "savepoint-created-at"
+	SystemLabelDeploymentSavepointIsSafetySnapshot SystemLabel = DeploymentLabelPrefix + "savepoint-is-safety-snapshot"
+	SystemLabelDeploymentServiceReplicas           SystemLabel = DeploymentLabelPrefix + "service-replicas"
 )
-
-// deploymentLabels are every deployment label, in the order Labels writes them.
-var deploymentLabels = []SystemLabel{
-	SystemLabelDeploymentID, SystemLabelDeploymentAt, SystemLabelDeploymentOrigin, SystemLabelDeploymentArcaveProject,
-	SystemLabelDeploymentSession, SystemLabelDeploymentSessionName, SystemLabelDeploymentSavepoint,
-	SystemLabelDeploymentSavepointName, SystemLabelDeploymentSavepointDescription, SystemLabelDeploymentSavepointCreatedAt,
-	SystemLabelDeploymentSafetySnapshotFor, SystemLabelDeploymentRevertedFrom, SystemLabelDeploymentRevertedFromName,
-	SystemLabelDeploymentManifest, SystemLabelDeploymentArcaveVersion, SystemLabelDeploymentHost,
-}
 
 // NewMountStampLabel is the capture stamp of the volume or bind a service mounts at target.
 func NewMountStampLabel(target string) SystemLabel {

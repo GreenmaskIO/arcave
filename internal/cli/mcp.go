@@ -94,7 +94,7 @@ type MCPStatusService interface {
 
 // MCPStatusServiceFactory builds a status for one compose project, plus the release the tool call
 // invokes on return; the service resolves the session itself.
-type MCPStatusServiceFactory func(ctx context.Context, project string) (svc MCPStatusService, release func(), err error)
+type MCPStatusServiceFactory func(ctx context.Context, composeProject string) (svc MCPStatusService, release func(), err error)
 
 // MCPFactories builds what each family of tools runs on, once per tool call.
 type MCPFactories struct {
@@ -463,15 +463,15 @@ func (h *MCPHandler) garbageCollectMCP(
 
 // statusInput is status's input schema.
 type statusInput struct {
-	Project string `json:"project" jsonschema:"the docker compose project to look at, as docker compose ls names it"`
-	Session string `json:"session,omitempty" jsonschema:"the session the user works in, by name or id; default the pinned or current session"`
+	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to look at, as docker compose ls names it"`
+	Session        string `json:"session,omitempty" jsonschema:"the session the user works in, by name or id; default the pinned or current session"`
 }
 
 // statusMCP reports what the daemon runs for the compose project.
 func (h *MCPHandler) statusMCP(
 	ctx context.Context, _ *mcpsdk.CallToolRequest, in statusInput,
 ) (*mcpsdk.CallToolResult, model.ComposeProjectStatus, error) {
-	svc, release, err := h.factories.Status(ctx, in.Project)
+	svc, release, err := h.factories.Status(ctx, in.ComposeProject)
 	if err != nil {
 		return nil, model.ComposeProjectStatus{}, mcpError(err)
 	}
@@ -479,7 +479,7 @@ func (h *MCPHandler) statusMCP(
 
 	status, err := svc.Status(ctx, model.StatusRequest{Session: cmp.Or(in.Session, h.pinRef())})
 	if err != nil && !errors.Is(err, model.ErrStatusPartial) {
-		return nil, model.ComposeProjectStatus{}, err
+		return nil, model.ComposeProjectStatus{}, mcpError(err)
 	}
 	// A partial status is still a report: what could not be read is in its unreadable.
 	return nil, status, nil

@@ -16,7 +16,6 @@ package storekey
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"filippo.io/age"
@@ -24,23 +23,14 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// errNotEncryptedYet refuses to read an arcave project no encrypted host has marked: what it holds
-// is plain, and reading it encrypted reads nothing.
-var errNotEncryptedYet = errors.New("the store is not encrypted yet: an encrypted arcave command marks it on its first write")
-
-// markerReader reads the arcave project's encryption.json.
-type markerReader interface {
-	Get(ctx context.Context) (model.EncryptionMarker, bool, error)
-}
-
 // markerRepository is the arcave project's encryption.json.
 type markerRepository interface {
-	markerReader
+	Get(ctx context.Context) (model.EncryptionMarker, bool, error)
 	Put(ctx context.Context, marker model.EncryptionMarker) error
 }
 
 // RequirePlain refuses an arcave project an encrypted host has marked: model.ErrStoreEncrypted.
-func RequirePlain(ctx context.Context, markers markerReader) error {
+func RequirePlain(ctx context.Context, markers markerRepository) error {
 	_, found, err := markers.Get(ctx)
 	if err != nil {
 		return err
@@ -54,34 +44,29 @@ func RequirePlain(ctx context.Context, markers markerReader) error {
 // AdmitEncrypted marks an unmarked arcave project for identity and refuses one marked for
 // another key with model.ErrWrongStoreKey.
 func AdmitEncrypted(ctx context.Context, markers markerRepository, identity *age.X25519Identity) error {
-	found, err := requireRecipient(ctx, markers, identity)
-	if err != nil || found {
-		return err
-	}
-	return markers.Put(ctx, model.EncryptionMarker{Recipient: identity.Recipient().String()})
-}
-
-// RequireEncrypted is AdmitEncrypted for a reader: it refuses an unmarked arcave project instead of
-// marking it, and writes nothing.
-func RequireEncrypted(ctx context.Context, markers markerReader, identity *age.X25519Identity) error {
-	found, err := requireRecipient(ctx, markers, identity)
+	marker, found, err := markers.Get(ctx)
 	if err != nil {
 		return err
 	}
-	if !found {
-		return errNotEncryptedYet
+	recipient := identity.Recipient().String()
+	switch {
+	case !found:
+		return markers.Put(ctx, model.EncryptionMarker{Recipient: recipient})
+	case marker.Recipient != recipient:
+		return fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
 	}
 	return nil
 }
 
-// requireRecipient refuses a marker naming another key than identity's; found is false for none.
-func requireRecipient(ctx context.Context, markers markerReader, identity *age.X25519Identity) (found bool, err error) {
+// RequireKey refuses an arcave project marked for another key with model.ErrWrongStoreKey and
+// writes nothing: an unmarked one stays unmarked, for a reader that must not change the store.
+func RequireKey(ctx context.Context, markers markerRepository, identity *age.X25519Identity) error {
 	marker, found, err := markers.Get(ctx)
-	if err != nil || !found {
-		return false, err
+	if err != nil {
+		return err
 	}
-	if marker.Recipient != identity.Recipient().String() {
-		return true, fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
+	if found && marker.Recipient != identity.Recipient().String() {
+		return fmt.Errorf("%w: %s", model.ErrWrongStoreKey, marker.Recipient)
 	}
-	return true, nil
+	return nil
 }

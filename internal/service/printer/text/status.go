@@ -16,7 +16,7 @@ package text
 
 import (
 	"fmt"
-	"slices"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -93,45 +93,42 @@ func (s *Printer) newStatusSummary(status model.ComposeProjectStatus) [][2]strin
 	if deployment != nil && deployment.Savepoint != nil && status.State != model.ComposeProjectStateRollbackPending {
 		lines = append(lines, s.newDeploymentSummary(status, *deployment)...)
 	}
-	if latest := status.LatestSavepoint; latest != nil && (deployment == nil || deployment.Savepoint == nil) {
-		value := "savepoint " + formatNameOrID(latest.Name, latest.ID) + " · " + s.formatStatusTime(latest.CreatedAt, status.CheckedAt)
-		if status.State == model.ComposeProjectStateAbsent {
-			value += " · " + formatCount(status.SavepointCount, "savepoint")
-		}
-		lines = append(lines, [2]string{"latest", value})
-	}
 	return lines
 }
 
-// newDeploymentSummary is what the summary says of the deployment: when and how, from what, and
-// what was taken since.
+// newDeploymentSummary is what the summary says of the deployment: when, from what session, and
+// what the savepoint's record says it restored.
 func (s *Printer) newDeploymentSummary(status model.ComposeProjectStatus, deployment model.DeploymentStatus) [][2]string {
-	savepoint := *deployment.Savepoint
-	deployed := "by " + string(deployment.Origin)
+	var (
+		savepoint = *deployment.Savepoint
+		deployed  []string
+		taken     []string
+	)
 	if deployment.DeployedAt != nil {
-		deployed = s.formatStatusTime(*deployment.DeployedAt, status.CheckedAt) + " " + deployed
+		deployed = append(deployed, s.formatStatusTime(*deployment.DeployedAt, status.CheckedAt))
 	}
 	if replaced := countReplaced(status.Services); replaced > 0 {
-		deployed += " · " + formatCount(replaced, "container") + " replaced since"
+		deployed = append(deployed, formatCount(replaced, "container")+" replaced since")
 	}
-	lines := [][2]string{{"deployed", deployed}}
+	if savepoint.CreatedAt != nil {
+		taken = append(taken, "taken "+s.formatStatusTime(*savepoint.CreatedAt, status.CheckedAt))
+	}
+	if restored := savepoint.Restored; restored != nil {
+		taken = append(taken, "restored "+formatCount(restored.Volumes, "volume")+", "+
+			formatCount(restored.WritableLayers, "layer"))
+	}
+	var lines [][2]string
+	if len(deployed) > 0 {
+		lines = append(lines, [2]string{"deployed", strings.Join(deployed, " · ")})
+	}
 	if deployment.Session != nil && (status.Session == nil || status.Session.ID != deployment.Session.ID) {
 		lines = append(lines, [2]string{"from", "session " + deployment.Session.String()})
 	}
-	taken := "restored " + formatCount(savepoint.Restored.Volumes, "volume") + ", " +
-		formatCount(savepoint.Restored.WritableLayers, "layer")
-	if savepoint.CreatedAt != nil {
-		taken = "taken " + s.formatStatusTime(*savepoint.CreatedAt, status.CheckedAt) + " · " + taken
+	if len(taken) > 0 {
+		lines = append(lines, [2]string{"savepoint", strings.Join(taken, " · ")})
 	}
-	lines = append(lines, [2]string{"savepoint", taken})
 	if savepoint.Description != "" {
 		lines = append(lines, [2]string{"", savepoint.Description})
-	}
-	if newer := status.NewerThanDeployed; newer != nil && *newer > 0 && status.LatestSavepoint != nil {
-		latest := status.LatestSavepoint
-		lines = append(lines, [2]string{"since", fmt.Sprintf("%s in %s: %s (%s ago)",
-			formatCount(*newer, "newer savepoint"), deployment.Session.String(),
-			formatNameOrID(latest.Name, latest.ID), model.FormatAge(status.CheckedAt.Sub(latest.CreatedAt)))})
 	}
 	return lines
 }
@@ -156,19 +153,25 @@ func (s *Printer) formatServiceTable(status model.ComposeProjectStatus) string {
 }
 
 // formatServiceState is the service's state, its health where it runs and checks one, an exit
-// code where it exited.
+// code where it exited: the first failing replica's, else 0.
 func formatServiceState(service model.ServiceStatus) string {
 	switch {
 	case service.State == model.ReplicaStateRunning && service.Health != "":
 		return string(service.Health)
 	case service.State == model.ReplicaStateExited:
-		for _, replica := range service.Replicas {
-			if replica.State == model.ReplicaStateExited {
-				return "exited " + strconv.Itoa(replica.ExitCode)
-			}
-		}
+		return "exited " + strconv.Itoa(findExitCode(service.Replicas))
 	}
 	return string(service.State)
+}
+
+// findExitCode is the exit code of the first replica that exited with one other than 0, else 0.
+func findExitCode(replicas []model.ReplicaStatus) int {
+	for _, replica := range replicas {
+		if replica.State == model.ReplicaStateExited && replica.ExitCode != 0 {
+			return replica.ExitCode
+		}
+	}
+	return 0
 }
 
 // formatServiceUp is how long the service's longest-running replica has run; a dash when none runs.
@@ -187,11 +190,13 @@ func formatServiceUp(service model.ServiceStatus, checkedAt time.Time) string {
 }
 
 // formatServicePorts lists the ports the service publishes once each: one bound on both 0.0.0.0
-// and :: is one port to a reader.
+// and :: is one port to a reader, one bound on two given addresses two.
 func formatServicePorts(service model.ServiceStatus) string {
 	type binding struct {
-		hostPort, containerPort int
-		protocol                string
+		hostIP        string
+		hostPort      int
+		containerPort int
+		protocol      string
 	}
 	var (
 		seen  = map[binding]bool{}
@@ -199,7 +204,12 @@ func formatServicePorts(service model.ServiceStatus) string {
 	)
 	for _, replica := range service.Replicas {
 		for _, port := range replica.Ports {
-			key := binding{port.HostPort, port.ContainerPort, port.Protocol}
+			key := binding{
+				hostIP:        newBindingHostIP(port.HostIP),
+				hostPort:      port.HostPort,
+				containerPort: port.ContainerPort,
+				protocol:      port.Protocol,
+			}
 			if seen[key] {
 				continue
 			}
@@ -214,13 +224,24 @@ func formatServicePorts(service model.ServiceStatus) string {
 	return strings.Join(ports, ", ")
 }
 
+// newBindingHostIP is hostIP as a port's identity reads it: every unspecified address is one.
+func newBindingHostIP(hostIP string) string {
+	addr, err := netip.ParseAddr(hostIP)
+	if err != nil || addr.IsUnspecified() {
+		return ""
+	}
+	return addr.String()
+}
+
 // countReplaced counts the replicas the deployed savepoint recorded that something else rebuilt.
 func countReplaced(services []model.ServiceStatus) int {
 	replaced := 0
 	for _, service := range services {
-		replaced += len(slices.DeleteFunc(slices.Clone(service.Replicas), func(replica model.ReplicaStatus) bool {
-			return !replica.InSavepoint || replica.InDeployment || replica.State == model.ReplicaStateMissing
-		}))
+		for _, replica := range service.Replicas {
+			if replica.InSavepoint && !replica.InDeployment && replica.State != model.ReplicaStateMissing {
+				replaced++
+			}
+		}
 	}
 	return replaced
 }
@@ -228,12 +249,4 @@ func countReplaced(services []model.ServiceStatus) int {
 // formatStatusTime is t in the printer's zone and its age at checkedAt.
 func (s *Printer) formatStatusTime(t, checkedAt time.Time) string {
 	return t.In(s.opts.Location).Format(statusTimeLayout) + " (" + model.FormatAge(checkedAt.Sub(t)) + " ago)"
-}
-
-// formatNameOrID is a savepoint's name, its id when it has none.
-func formatNameOrID(name string, id model.SavepointID) string {
-	if name != "" {
-		return name
-	}
-	return id.String()
 }

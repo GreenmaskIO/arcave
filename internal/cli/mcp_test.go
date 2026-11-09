@@ -484,9 +484,9 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	deployedAt := time.Date(2026, 11, 7, 14, 2, 0, 0, time.UTC)
 	status := model.ComposeProjectStatus{
 		ComposeProject: "demo", CheckedAt: deployedAt.Add(time.Hour), State: model.ComposeProjectStateRunning,
-		Session: &model.ResolvedSession{ID: handlerSession, Name: "feat", ResolvedBy: model.SessionResolutionRef},
+		Session: &model.SessionRef{ID: handlerSession, Name: "feat"},
 		Deployment: &model.DeploymentStatus{
-			Source: model.DeploymentSourceSavepoint, ID: "019ea000-0000-7000-8000-000000000000", DeployedAt: &deployedAt,
+			Source: model.DeploymentSourceSavepoint, DeployedAt: &deployedAt,
 			Session:   &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
 			Savepoint: &model.DeployedSavepointStatus{ID: savepoint.ID, Name: savepoint.Name},
 			Record:    model.DeploymentRecordUnreadable,
@@ -560,7 +560,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				}).
 					Return(gcResult, model.ErrGarbageCollectPartial).Once()
 			}, want: gcResult},
-		{tool: "status", args: map[string]any{"project": "demo", "session": "feat"},
+		{tool: "status", args: map[string]any{"compose_project": "demo", "session": "feat"},
 			setup: func(svc *mockService) {
 				svc.On("Status", mock.Anything, model.StatusRequest{Session: "feat"}).Return(status, model.ErrStatusPartial).Once()
 			}, want: status},
@@ -709,22 +709,22 @@ func TestMCPHandler_statusMCP(t *testing.T) {
 		wantErr     error
 		want        model.ComposeProjectStatus
 	}{
-		{name: "the status", in: statusInput{Project: "demo"}, want: status},
-		{name: "the session named on the call", in: statusInput{Project: "demo", Session: "feat"}, wantSession: "feat", want: status},
-		{name: "else the pin", in: statusInput{Project: "demo"}, pinned: pinned, wantSession: pinned.String(), want: status},
+		{name: "the status", in: statusInput{ComposeProject: "demo"}, want: status},
+		{name: "the session named on the call", in: statusInput{ComposeProject: "demo", Session: "feat"}, wantSession: "feat", want: status},
+		{name: "else the pin", in: statusInput{ComposeProject: "demo"}, pinned: pinned, wantSession: pinned.String(), want: status},
 		{
-			name: "a partial status is a result, not a tool error", in: statusInput{Project: "demo"},
+			name: "a partial status is a result, not a tool error", in: statusInput{ComposeProject: "demo"},
 			svcErr: model.ErrStatusPartial, want: status,
 		},
-		{name: "a daemon that cannot be read is the call's error", in: statusInput{Project: "demo"}, svcErr: daemonErr, wantErr: daemonErr},
+		{name: "a daemon that cannot be read is the call's error", in: statusInput{ComposeProject: "demo"}, svcErr: daemonErr, wantErr: daemonErr},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			svc := &mockService{}
 			svc.On("Status", mock.Anything, model.StatusRequest{Session: tt.wantSession}).Return(status, tt.svcErr).Once()
-			h := NewMCPHandler(MCPFactories{Status: func(_ context.Context, project string) (MCPStatusService, func(), error) {
-				require.Equal(t, "demo", project)
+			h := NewMCPHandler(MCPFactories{Status: func(_ context.Context, composeProject string) (MCPStatusService, func(), error) {
+				require.Equal(t, "demo", composeProject)
 				return svc, func() {}, nil
 			}}, tt.pinned, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
 

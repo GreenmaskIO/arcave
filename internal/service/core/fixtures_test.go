@@ -32,6 +32,9 @@ import (
 
 // The project every workflow test runs against: one service mounting one named
 // volume.
+// demoArcaveProject is the arcave project the deployment labels name.
+const demoArcaveProject model.ArcaveProjectName = "demo-arcave"
+
 const (
 	demoProject    = "demo"
 	demoService    = "db"
@@ -101,7 +104,7 @@ func demoSafetySnapshot() model.Savepoint {
 	return model.Savepoint{
 		ID:        "019e844b-7818-7000-8000-000000000000",
 		Name:      safetySnapshotName(demoRecord().ID),
-		Labels:    newSafetySnapshotLabels(demoRecord().ID),
+		Labels:    newSafetySnapshotLabels(),
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
 		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
 		Spec:      demoSpecRef(),
@@ -365,7 +368,7 @@ func ptrBool(b bool) *bool { return &b }
 func deployed(spec *types.Project) any {
 	return mock.MatchedBy(func(project *types.Project) bool {
 		for _, service := range project.Services {
-			if service.Labels[string(model.SystemLabelDeploymentID)] == "" {
+			if service.Labels[string(model.SystemLabelDeploymentSavepointID)] == "" {
 				return false
 			}
 		}
@@ -373,21 +376,28 @@ func deployed(spec *types.Project) any {
 	})
 }
 
-// rolledBackTo matches what deployed does, labelled as a rollback to savepoint.
+// rolledBackTo matches what deployed does, labelled as savepoint of the default session deployed.
 func rolledBackTo(spec *types.Project, savepoint model.Savepoint) any {
 	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
-		return deployment.Origin == model.DeploymentOriginRollback && deployment.Savepoint.ID == savepoint.ID &&
-			deployment.RevertedFrom == model.SavepointRef{}
+		return deployment.Savepoint.ID == savepoint.ID && deployment.Savepoint.Name == savepoint.Name &&
+			!deployment.Savepoint.IsSafetySnapshot && deployment.Session == defaultSessionRef &&
+			deployment.ArcaveProject == demoArcaveProject
 	})
 }
 
-// revertedFrom matches what deployed does, labelled as the revert of the rollback to target: the
-// safety snapshot deployed, target named.
-func revertedFrom(spec *types.Project, target model.Savepoint) any {
+// deployedSafetySnapshot matches what deployed does, labelled as the safety snapshot *id of the
+// default session deployed: a revert. id is read at the match, once the capture has set it.
+func deployedSafetySnapshot(spec *types.Project, id *model.SavepointID) any {
 	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
-		return deployment.Origin == model.DeploymentOriginRevert && deployment.Savepoint.SafetySnapshotFor == target.ID &&
-			deployment.RevertedFrom == model.SavepointRef{ID: target.ID, Name: target.Name}
+		return deployment.Savepoint.ID == *id && deployment.Savepoint.IsSafetySnapshot &&
+			deployment.Session == defaultSessionRef && deployment.ArcaveProject == demoArcaveProject
 	})
+}
+
+// defaultSessionRef is the default session as the deployment labels name it.
+var defaultSessionRef = model.SessionRef{
+	ID:   model.DefaultSession,
+	Name: model.DefaultSessionName,
 }
 
 // deployedAs matches what deployed does, every service's labels read back into a deployment want

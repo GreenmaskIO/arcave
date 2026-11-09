@@ -26,16 +26,15 @@ import (
 
 // statusFacts is everything a status's notices are read off.
 type statusFacts struct {
-	arcaveProject  model.ArcaveProjectName
-	composeProject model.DockerComposeProjectName
-	checkedAt      time.Time
-	state          model.ComposeProjectState
-	marker         *model.InflightMarker
-	deployed       deployedContainers
-	view           storeView
-	services       []model.ServiceStatus
-	hookRunners    []model.HookRunner
-	unreadable     []model.StatusUnreadable
+	checkedAt time.Time
+	// arcaveProject is the one the config names.
+	arcaveProject model.ArcaveProjectName
+	state         model.ComposeProjectState
+	marker        *model.InflightMarker
+	deployed      deployedContainers
+	view          storeView
+	services      []model.ServiceStatus
+	unreadable    []model.StatusUnreadable
 }
 
 // newStatusNotices is one notice per thing that is wrong or worth knowing, the severe first. A
@@ -49,18 +48,12 @@ func newStatusNotices(facts statusFacts) []model.Notice {
 		notices = append(notices, newUnreadableNotice(unreadable))
 	}
 	notices = append(notices, facts.deployed.notices...)
-	notices = append(notices, facts.view.notices...)
-	if deployment := facts.deployed.primary; deployment != nil {
+	if deployment := facts.deployed.deployment; deployment != nil {
 		notices = append(notices, newDeploymentNotices(facts, *deployment)...)
 	}
 	for _, service := range facts.services {
 		for _, replica := range service.Replicas {
 			notices = append(notices, newReplicaNotices(facts, service.Name, replica)...)
-		}
-	}
-	for _, runner := range facts.hookRunners {
-		if notice, failed := newHookRunnerNotice(runner, facts.checkedAt); failed {
-			notices = append(notices, notice)
 		}
 	}
 	if facts.state == model.ComposeProjectStateStopped {
@@ -69,7 +62,8 @@ func newStatusNotices(facts statusFacts) []model.Notice {
 			Message: "no container runs",
 		})
 	}
-	return slices.Concat([]model.Notice{}, model.SortSevereFirst(notices))
+	// Non-nil, so none marshals as [], not null: slices.Concat of empty slices is nil.
+	return append([]model.Notice{}, model.SortSevereFirst(notices)...)
 }
 
 // newInflightNotice says a rollback is running or was interrupted, which a status cannot tell apart.
@@ -91,8 +85,10 @@ func formatInflightPhase(phase model.InflightPhase) string {
 		return "while restoring the volumes"
 	case model.InflightRestoreDone:
 		return "while starting the services"
-	default:
+	case model.InflightInconsistent:
 		return "and its revert failed"
+	default:
+		return fmt.Sprintf("in phase %q", phase)
 	}
 }
 
@@ -117,92 +113,68 @@ func newUnreadableNotice(unreadable model.StatusUnreadable) model.Notice {
 	}
 }
 
-// newUnreadableLabelsNotice names a container whose deployment labels do not parse: another
-// arcave's, or edited by hand.
+// newUnreadableLabelsNotice names a container whose deployment labels do not parse: edited by hand,
+// or written by another arcave.
 func newUnreadableLabelsNotice(service string, replica model.Container, err error) model.Notice {
-	version := ""
-	if written := replica.Labels[string(model.SystemLabelDeploymentArcaveVersion)]; written != "" {
-		version = " (written by arcave " + written + ")"
-	}
 	return model.Notice{
 		Code: model.NoticeCodeDeploymentLabelsUnreadable,
-		Message: fmt.Sprintf("%s carries unreadable deployment labels%s: %s; read as deployed by none",
-			formatStatusReplica(service, replica.Number), version, err),
+		Message: fmt.Sprintf("%s carries unreadable deployment labels: %s; read as deployed by none",
+			formatStatusReplica(service, replica.Number), err),
 	}
 }
 
-// newOtherArcaveProjectNotice says the deployment is another arcave project's, whose store this
-// checkout does not open.
-func newOtherArcaveProjectNotice(arcaveProject model.ArcaveProjectName) model.Notice {
-	return model.Notice{
-		Code:    model.NoticeCodeOtherArcaveProject,
-		Message: fmt.Sprintf("deployed by arcave project %s, whose store this one does not read", arcaveProject),
-	}
-}
-
-// newSessionGoneNotice says the deployed savepoint's session is removed.
-func newSessionGoneNotice(session model.SessionRef) model.Notice {
-	return model.Notice{
-		Code:    model.NoticeCodeDeployedSessionGone,
-		Message: fmt.Sprintf("session %s the rollback came from no longer exists, nor its savepoints", session),
-	}
-}
-
-// newSavepointGoneNotice says the deployed savepoint is removed from its session.
-func newSavepointGoneNotice(deployment model.SavepointDeployment) model.Notice {
-	return model.Notice{
-		Code:    model.NoticeCodeDeployedSavepointGone,
-		Message: fmt.Sprintf("savepoint %s is no longer in session %s", deployment.Savepoint.ID, deployment.Session),
-	}
-}
-
-// newDeploymentNotices are what the deployment itself says: another session than the one commands
-// work in, a revert or a safety snapshot deployed, and what the savepoint did not put back.
+// newDeploymentNotices are what the deployment itself says: another arcave project or session than
+// the one commands work in, a safety snapshot deployed, a savepoint the store no longer holds, and
+// what the savepoint's record says it did not put back.
 func newDeploymentNotices(facts statusFacts, deployment model.SavepointDeployment) []model.Notice {
-	var notices []model.Notice
-	if current := facts.view.session; current != nil && current.ID != deployment.Session.ID &&
-		deployment.ArcaveProject == facts.arcaveProject {
+	var (
+		notices []model.Notice
+		current = facts.view.session
+	)
+	switch {
+	case deployment.ArcaveProject != facts.arcaveProject:
+		notices = append(notices, model.Notice{
+			Code: model.NoticeCodeOtherArcaveProject,
+			Message: fmt.Sprintf("running savepoint %s of arcave project %s; arcave commands act on arcave project %s",
+				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name),
+				deployment.ArcaveProject, facts.arcaveProject),
+		})
+	case current != nil && current.ID != deployment.Session.ID:
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeOtherSession,
 			Message: fmt.Sprintf("running savepoint %s of session %s; arcave commands act on session %s",
 				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name),
-				deployment.Session, formatResolvedSession(*current)),
+				deployment.Session, current.String()),
 		})
 	}
-	if notice, ok := newSafetySnapshotNotice(deployment); ok {
-		notices = append(notices, notice)
+	if deployment.Savepoint.IsSafetySnapshot {
+		notices = append(notices, model.Notice{
+			Code: model.NoticeCodeSafetySnapshotDeployed,
+			Message: fmt.Sprintf("running %s, the safety snapshot of a rollback",
+				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name)),
+		})
 	}
-	return append(notices, newNotRestoredNotices(deployment.Manifest.NotRestored)...)
+	switch {
+	case facts.view.record == model.DeploymentRecordMissing:
+		notices = append(notices, model.Notice{
+			Code: model.NoticeCodeDeployedSavepointGone,
+			Message: fmt.Sprintf("savepoint %s is no longer in session %s",
+				formatSavepointName(deployment.Savepoint.ID, deployment.Savepoint.Name), deployment.Session),
+		})
+	case facts.view.savepoint != nil && facts.view.savepoint.NotCovered != nil:
+		notices = append(notices, newNotRestoredNotices(*facts.view.savepoint.NotCovered)...)
+	}
+	return notices
 }
 
-// newSafetySnapshotNotice says the deployment is a rollback's undo, not a savepoint a user took.
-func newSafetySnapshotNotice(deployment model.SavepointDeployment) (model.Notice, bool) {
-	switch restoring := deployment.Savepoint.SafetySnapshotFor; {
-	case deployment.Origin == model.DeploymentOriginRevert:
-		return model.Notice{
-			Code: model.NoticeCodeReverted,
-			Message: fmt.Sprintf("the rollback to %s failed and was reverted to the state before it",
-				formatSavepointName(deployment.RevertedFrom.ID, deployment.RevertedFrom.Name)),
-		}, true
-	case !deployment.Savepoint.IsSafetySnapshot():
-		return model.Notice{}, false
-	case restoring == "":
-		return model.Notice{
-			Code:    model.NoticeCodeSafetySnapshotDeployed,
-			Message: "running the safety snapshot of a rollback",
-		}, true
-	default:
-		return model.Notice{
-			Code:    model.NoticeCodeSafetySnapshotDeployed,
-			Message: fmt.Sprintf("running the safety snapshot of the rollback to %s", restoring),
-		}, true
-	}
-}
-
-// newNotRestoredNotices say what the deployed savepoint left out, so the rollback did not put back.
-func newNotRestoredNotices(notRestored model.DeploymentNotRestored) []model.Notice {
+// newNotRestoredNotices say what the deployed savepoint's record left out, so the rollback did not
+// put back: a mount a label or the config excluded, and a writable layer.
+func newNotRestoredNotices(notCovered model.NotCovered) []model.Notice {
 	var notices []model.Notice
-	for _, mount := range notRestored.Mounts {
+	for _, mount := range notCovered.Mounts {
+		if mount.Reason != model.SkipReasonExcluded {
+			continue
+		}
 		var message string
 		switch {
 		case mount.Volume != "":
@@ -219,17 +191,11 @@ func newNotRestoredNotices(notRestored model.DeploymentNotRestored) []model.Noti
 			Message: message,
 		})
 	}
-	for _, layer := range notRestored.WritableLayers {
+	for _, layer := range notCovered.WritableLayers {
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeLayerNotRestored,
 			Message: fmt.Sprintf("%s's writable layer was not in the savepoint: it started fresh from its image",
 				formatStatusReplica(layer.Service, layer.Replica)),
-		})
-	}
-	if notRestored.Truncated {
-		notices = append(notices, model.Notice{
-			Code:    model.NoticeCodeNotRestoredTruncated,
-			Message: "the deployment labels name only part of what the savepoint left out",
 		})
 	}
 	return notices
@@ -246,7 +212,7 @@ func newReplicaNotices(facts statusFacts, service string, replica model.ReplicaS
 		return []model.Notice{{
 			Code: model.NoticeCodeReplicaMissing,
 			Message: fmt.Sprintf("%s is missing: savepoint %s recorded it", name,
-				formatSavepointName(facts.deployed.primary.Savepoint.ID, facts.deployed.primary.Savepoint.Name)),
+				formatSavepointName(facts.deployed.deployment.Savepoint.ID, facts.deployed.deployment.Savepoint.Name)),
 			Severe: true,
 		}}
 	case model.ReplicaStateExited:
@@ -327,7 +293,7 @@ func formatExitCause(replica model.ReplicaStatus) string {
 // newDriftNotice says a replica is not what the rollback built: recreated outside arcave since,
 // or added after it.
 func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStatus) (model.Notice, bool) {
-	deployment := facts.deployed.primary
+	deployment := facts.deployed.deployment
 	if deployment == nil || replica.InDeployment {
 		return model.Notice{}, false
 	}
@@ -344,7 +310,7 @@ func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStat
 	if replica.Replaces != "" {
 		fmt.Fprintf(&message, " (compose replaced %s)", replica.Replaces)
 	}
-	if slices.Contains(deployment.Manifest.Services[service].Layers, replica.Number) {
+	if restoredLayer(facts.view.savepoint, service, replica.Number) {
 		message.WriteString(": the writable layer the rollback restored is gone")
 	}
 	message.WriteString("; volumes are untouched")
@@ -354,32 +320,17 @@ func newDriftNotice(facts statusFacts, service string, replica model.ReplicaStat
 	}, true
 }
 
-// newHookRunnerNotice says a service's lifecycle hook failed; failed is false for one that did not.
-func newHookRunnerNotice(runner model.HookRunner, checkedAt time.Time) (_ model.Notice, failed bool) {
-	state := runner.Container.Inspect.State
-	if state == nil || state.Running || state.ExitCode == 0 {
-		return model.Notice{}, false
-	}
-	return model.Notice{
-		Code: model.NoticeCodeHookFailed,
-		Message: fmt.Sprintf("the %s hook %s of %s failed with code %d%s; its container is %s",
-			runner.Hook, runner.Index, runner.Service, state.ExitCode,
-			formatStatusTime(parseDaemonTime(state.FinishedAt), checkedAt), runner.Container.Name),
-		Severe: true,
-	}, true
+// restoredLayer reports whether the deployed savepoint's record holds a writable layer of the
+// replica numbered number; false with no record.
+func restoredLayer(savepoint *model.Savepoint, service string, number int) bool {
+	return savepoint != nil && slices.ContainsFunc(savepoint.WritableLayers, func(layer model.WritableLayer) bool {
+		return layer.Service == service && layer.Replica == number
+	})
 }
 
 // formatStatusReplica names a replica as compose numbers it: service-n.
 func formatStatusReplica(service string, number int) string {
 	return service + "-" + strconv.Itoa(number)
-}
-
-// formatResolvedSession names the session the user works in, by its name or its id.
-func formatResolvedSession(session model.ResolvedSession) string {
-	return model.SessionRef{
-		ID:   session.ID,
-		Name: session.Name,
-	}.String()
 }
 
 // formatSavepointName names a savepoint by its name and id, by its id when it has no name.

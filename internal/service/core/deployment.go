@@ -17,114 +17,53 @@ package core
 import (
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// newSavepointDeployment is the build of project from savepoint this process is about to run;
-// revertedFrom is the savepoint a failed rollback was restoring, nil for a rollback.
-func (s *Service) newSavepointDeployment(
-	savepoint model.Savepoint, revertedFrom *model.Savepoint, project *types.Project,
+// newSavepointDeployment is the build of project from savepoint of session in arcaveProject this
+// process is about to run, its replicas the ones recorded.
+func newSavepointDeployment(
+	arcaveProject model.ArcaveProjectName, session model.SessionRef, savepoint model.Savepoint,
+	project *types.Project, recorded []recordedReplica,
 ) model.SavepointDeployment {
-	origin, reverted := model.DeploymentOriginRollback, model.SavepointRef{}
-	if revertedFrom != nil {
-		origin, reverted = model.DeploymentOriginRevert, model.SavepointRef{
-			ID:   revertedFrom.ID,
-			Name: revertedFrom.Name,
-		}
-	}
 	return model.SavepointDeployment{
-		ID:            model.NewDeploymentID(),
-		At:            s.now().UTC(),
-		Origin:        origin,
-		ArcaveProject: s.arcaveProject,
-		Session: model.SessionRef{
-			ID:   s.session,
-			Name: s.sessionName,
-		},
+		DeployedAt:    time.Now().UTC(),
+		ArcaveProject: arcaveProject,
+		Session:       session,
 		Savepoint: model.DeployedSavepoint{
-			ID:                savepoint.ID,
-			Name:              savepoint.Name,
-			Description:       savepoint.Description,
-			CreatedAt:         savepoint.CreatedAt,
-			SafetySnapshotFor: newSafetySnapshotFor(savepoint),
+			ID:               savepoint.ID,
+			Name:             savepoint.Name,
+			CreatedAt:        savepoint.CreatedAt,
+			IsSafetySnapshot: savepoint.IsSafetySnapshot(),
 		},
-		RevertedFrom:  reverted,
-		Manifest:      newDeploymentManifest(savepoint, project),
-		ArcaveVersion: s.runnerInfo.ArcaveVersion,
-		Host:          s.runnerInfo.Host,
+		ServiceReplicas: newDeployedReplicas(project, recorded),
 	}
 }
 
-// newSafetySnapshotFor is the savepoint the rollback a safety snapshot undoes restored; empty for a
-// savepoint a user took.
-func newSafetySnapshotFor(savepoint model.Savepoint) model.SavepointID {
-	if !savepoint.IsSafetySnapshot() {
-		return ""
+// newDeployedReplicas are the replica numbers each service of project is built with: the recorded
+// ones, else the service's scale; a service scaled to none is left out.
+func newDeployedReplicas(project *types.Project, recorded []recordedReplica) map[string][]int {
+	numbers := map[string][]int{}
+	for _, replica := range recorded {
+		numbers[replica.service] = append(numbers[replica.service], replica.number)
 	}
-	return model.SavepointID(savepoint.Labels[model.SavepointLabelSafetySnapshotFor])
-}
-
-// newDeploymentManifest is what building project from savepoint runs: each service's recorded
-// replicas, the scale for a service the savepoint recorded none of, and what it left out.
-func newDeploymentManifest(savepoint model.Savepoint, project *types.Project) model.DeploymentManifest {
-	var (
-		recorded    = map[string][]int{}
-		layers      = map[string][]int{}
-		notRestored model.DeploymentNotRestored
-	)
-	for _, layer := range savepoint.WritableLayers {
-		recorded[layer.Service] = append(recorded[layer.Service], layer.Replica)
-		layers[layer.Service] = append(layers[layer.Service], layer.Replica)
-	}
-	if savepoint.NotCovered != nil {
-		for _, skipped := range savepoint.NotCovered.WritableLayers {
-			recorded[skipped.Service] = append(recorded[skipped.Service], skipped.Replica)
-		}
-		notRestored = model.DeploymentNotRestored{
-			Mounts:         newExcludedMounts(savepoint.NotCovered.Mounts),
-			WritableLayers: savepoint.NotCovered.WritableLayers,
-		}
-	}
-	leftOut := model.DeploymentCounts{
-		Volumes:        len(notRestored.Mounts),
-		WritableLayers: len(notRestored.WritableLayers),
-	}
-	services := make(map[string]model.DeployedService, len(project.Services))
+	replicas := make(map[string][]int, len(project.Services))
 	for name, service := range project.Services {
-		replicas := slices.Sorted(slices.Values(recorded[name]))
-		if len(replicas) == 0 {
+		serviceNumbers := slices.Sorted(slices.Values(numbers[name]))
+		if len(serviceNumbers) == 0 {
 			for number := range service.GetScale() {
-				replicas = append(replicas, number+1)
+				serviceNumbers = append(serviceNumbers, number+1)
 			}
 		}
-		services[name] = model.DeployedService{
-			Replicas: replicas,
-			Layers:   slices.Sorted(slices.Values(layers[name])),
+		if len(serviceNumbers) > 0 {
+			replicas[name] = serviceNumbers
 		}
 	}
-	return model.DeploymentManifest{
-		Services: services,
-		Restored: model.DeploymentCounts{
-			Volumes:        len(savepoint.Stats),
-			WritableLayers: len(savepoint.WritableLayers),
-		},
-		LeftOut:     leftOut,
-		NotRestored: notRestored,
-	}
-}
-
-// newExcludedMounts are the mounts a label or the config left out of the savepoint.
-func newExcludedMounts(mounts []model.SkippedVolume) []model.SkippedVolume {
-	var excluded []model.SkippedVolume
-	for _, mount := range mounts {
-		if mount.Reason == model.SkipReasonExcluded {
-			excluded = append(excluded, mount)
-		}
-	}
-	return excluded
+	return replicas
 }
 
 // withDeploymentLabels is a copy of project whose every service carries labels; the project and

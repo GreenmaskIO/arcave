@@ -15,9 +15,15 @@
 package core
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/arcave/internal/model"
 )
 
 func TestFanOutLimit(t *testing.T) {
@@ -38,6 +44,70 @@ func TestFanOutLimit(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestReadSessionRef(t *testing.T) {
+	loadErr := errors.New("store unreachable")
+	tests := []struct {
+		name    string
+		id      model.SessionID
+		setup   func(sessions *mockSessionRepo)
+		want    model.SessionRef
+		wantErr error
+	}{
+		{
+			name: "the default reads no record",
+			id:   model.DefaultSession,
+			want: model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+		},
+		{
+			name: "a session is named as its record names it",
+			id:   demoSession,
+			setup: func(sessions *mockSessionRepo) {
+				sessions.On("LoadSession", mock.Anything, demoSession).
+					Return(model.Session{ID: demoSession, Name: "exp"}, true, nil).Once()
+			},
+			want: model.SessionRef{ID: demoSession, Name: "exp"},
+		},
+		{
+			name: "a session with no record is gone",
+			id:   demoSession,
+			setup: func(sessions *mockSessionRepo) {
+				sessions.On("LoadSession", mock.Anything, demoSession).Return(model.Session{}, false, nil).Once()
+			},
+			wantErr: model.ErrSessionNotFound,
+		},
+		{
+			name: "a record that cannot be read",
+			id:   demoSession,
+			setup: func(sessions *mockSessionRepo) {
+				sessions.On("LoadSession", mock.Anything, demoSession).Return(model.Session{}, false, loadErr).Once()
+			},
+			wantErr: loadErr,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			sessions := &mockSessionRepo{}
+			if tt.setup != nil {
+				tt.setup(sessions)
+			}
+
+			// Act
+			got, err := readSessionRef(context.Background(), sessions, tt.id)
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Equal(t, model.SessionRef{}, got)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+			sessions.AssertExpectations(t)
 		})
 	}
 }

@@ -24,7 +24,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"path"
 	"strconv"
 	"strings"
@@ -203,11 +202,10 @@ func (s *Copier) CaptureWritableLayer(ctx context.Context, req model.WritableLay
 	}, nil
 }
 
-// newLayerLabels are the labels a commit carries: the origin, the upstream when known, and every
-// deployment label blank, so a container run from the layer reads as deployed by none.
+// newLayerLabels are the labels a commit carries: the origin, and the upstream; none for an
+// upstream that is unknown, so a layer never names one it was not told.
 func (s *Copier) newLayerLabels(container model.ContainerRef) map[string]string {
-	labels := model.NewBlankDeploymentLabels()
-	maps.Copy(labels, s.origin.Labels())
+	labels := s.origin.Labels()
 	if container.UpstreamImageID != "" {
 		labels[string(model.SystemLabelBaseImageID)] = container.UpstreamImageID.String()
 	}

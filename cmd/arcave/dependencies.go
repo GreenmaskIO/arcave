@@ -113,7 +113,7 @@ func (c *closers) release(ctx context.Context) {
 type sessionScope struct {
 	arcaveProjectStore storages.Storager
 	sessions           *sessionrepo.Repository
-	session            model.Session
+	sessionID          model.SessionID
 	sessionLocker      *sessionlock.Locker
 }
 
@@ -137,7 +137,7 @@ func openSessionScope(
 	return sessionScope{
 		arcaveProjectStore: arcaveProjectStore,
 		sessions:           sessions,
-		session:            session,
+		sessionID:          session.ID,
 		sessionLocker:      sessionLocker,
 	}, nil
 }
@@ -160,7 +160,7 @@ func openComposeProjectScope(
 	if err != nil {
 		return composeProjectScope{}, err
 	}
-	sessionStore, err := storefactory.Session(scope.arcaveProjectStore, scope.session.ID)
+	sessionStore, err := storefactory.Session(scope.arcaveProjectStore, scope.sessionID)
 	if err != nil {
 		return composeProjectScope{}, fmt.Errorf("initialise session store: %w", err)
 	}
@@ -267,11 +267,9 @@ func openSavepointService(
 		Inflight:        inflightrepo.New(projectPath),
 		Store:           scope.store,
 		CaptureDefaults: newCaptureDefaults(cfg),
-		Session:         scope.session.ID,
-		SessionName:     scope.session.Name,
 		ArcaveProject:   model.ArcaveProjectName(cfg.Project.Name),
+		Session:         scope.sessionID,
 		ComposeProject:  composeProject,
-		Now:             time.Now,
 		// Re-checked under the lock: a session deleted since --session was resolved.
 		Sessions:   scope.sessions,
 		RunnerInfo: newRunnerInfo(),
@@ -293,7 +291,7 @@ func openSavepointStoreService(
 		ProjectLocker:  lock.New(projectPath),
 		SessionLocker:  scope.sessionLocker,
 		Inflight:       inflightrepo.New(projectPath),
-		Session:        scope.session.ID,
+		Session:        scope.sessionID,
 		ComposeProject: composeProject,
 		Sessions:       scope.sessions,
 	}), nil
@@ -547,8 +545,8 @@ func openComposeFileService(
 	}), nil
 }
 
-// openStatusService wires status for composeProject; the store opens lazily, read-only, so one that
-// fails only makes the status partial.
+// openStatusService wires status for composeProject; the store opens lazily, so one that fails
+// only makes the status partial.
 func openStatusService(
 	ctx context.Context, projectPath string, cfg config.Config, composeProject model.DockerComposeProjectName,
 	opened *closers,
@@ -556,27 +554,23 @@ func openStatusService(
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
 	}
-	// Nothing here runs compose, so the CLI's progress channel goes nowhere.
+	// Nothing here runs compose, so the CLI's progress channel goes nowhere. No runtime profile:
+	// the container list and the compat inspect read alike on every engine.
 	daemon, err := connectDaemon(cfg.Docker, io.Discard, opened)
 	if err != nil {
 		return nil, err
 	}
-	profile, err := readRuntimeProfile(ctx, daemon)
-	if err != nil {
-		return nil, err
-	}
 	return core.NewStatusService(core.StatusDeps{
-		ComposeContainers: introspect.NewInspector(profile.api, composeProject),
+		ComposeContainers: introspect.NewInspector(daemon.api, composeProject),
 		Inflight:          inflightrepo.New(projectPath),
 		Current:           currentsession.New(projectPath),
 		OpenArcaveProjectStore: func(ctx context.Context) (storages.Storager, error) {
-			return openArcaveProjectStoreForReading(ctx, cfg, projectPath, opened)
+			return openReadOnlyArcaveProjectStore(ctx, cfg, projectPath, opened)
 		},
-		NewSessions:    newSessionReader,
-		NewSavepoints:  newSavepointReader,
-		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
-		ComposeProject: composeProject,
-		Now:            time.Now,
+		NewSessionReader:   newSessionReader,
+		NewSavepointLoader: newSavepointLoader,
+		ArcaveProject:      model.ArcaveProjectName(cfg.Project.Name),
+		ComposeProject:     composeProject,
 	}), nil
 }
 
@@ -597,12 +591,12 @@ func newSessionService(
 	projectPath string, arcaveProjectStore storages.Storager, sessions *sessionrepo.Repository,
 ) *core.SessionService {
 	return core.NewSessionService(core.SessionDeps{
-		Sessions:      sessions,
-		Locker:        lock.New(projectPath),
-		Inflight:      inflightrepo.New(projectPath),
-		Current:       currentsession.New(projectPath),
-		Store:         arcaveProjectStore,
-		NewSavepoints: newSavepointReader,
+		Sessions:           sessions,
+		Locker:             lock.New(projectPath),
+		Inflight:           inflightrepo.New(projectPath),
+		Current:            currentsession.New(projectPath),
+		Store:              arcaveProjectStore,
+		NewSavepointReader: newSavepointReader,
 		NewSessionLocker: func(id model.SessionID) (model.SessionLocker, error) {
 			return newSessionLocker(arcaveProjectStore, id)
 		},
@@ -629,36 +623,54 @@ func newRunnerInfo() heartbeat.RunnerInfo {
 }
 
 // openArcaveProjectStore opens the store root, whose closer goes on opened, and descends to the
-// arcave project, encrypted to encryption.key under encryption.enabled; the first encrypted host
-// marks an unmarked project.
+// arcave project, encrypted to encryption.key under encryption.enabled; an unmarked project is
+// marked for the key.
 func openArcaveProjectStore(
 	ctx context.Context, cfg config.Config, projectPath string, opened *closers,
 ) (storages.Storager, error) {
-	return openArcaveProjectStoreWith(ctx, cfg, projectPath, opened, true)
+	return openArcaveProjectRoot(ctx, cfg, projectPath, opened, admitEncrypted)
 }
 
-// openArcaveProjectStoreForReading is openArcaveProjectStore for a command that writes nothing: an
-// encrypted arcave project no host has marked yet is refused rather than marked.
-func openArcaveProjectStoreForReading(
+// openReadOnlyArcaveProjectStore is openArcaveProjectStore for a command that writes nothing: an
+// unmarked arcave project stays unmarked.
+func openReadOnlyArcaveProjectStore(
 	ctx context.Context, cfg config.Config, projectPath string, opened *closers,
 ) (storages.Storager, error) {
-	return openArcaveProjectStoreWith(ctx, cfg, projectPath, opened, false)
+	return openArcaveProjectRoot(ctx, cfg, projectPath, opened, requireKey)
 }
 
-// openArcaveProjectStoreWith opens the store root and the arcave project, encrypted once the
-// encryption section is admitted; markUnmarked marks an encrypted project no host has marked yet.
-func openArcaveProjectStoreWith(
-	ctx context.Context, cfg config.Config, projectPath string, opened *closers, markUnmarked bool,
+// keyAdmission admits an arcave project's marker for an encrypted host.
+type keyAdmission func(ctx context.Context, markers *encryptionmarker.Repository, identity *age.X25519Identity) error
+
+// admitEncrypted is storekey.AdmitEncrypted, which marks an unmarked arcave project.
+func admitEncrypted(ctx context.Context, markers *encryptionmarker.Repository, identity *age.X25519Identity) error {
+	return storekey.AdmitEncrypted(ctx, markers, identity)
+}
+
+// requireKey is storekey.RequireKey, which writes nothing.
+func requireKey(ctx context.Context, markers *encryptionmarker.Repository, identity *age.X25519Identity) error {
+	return storekey.RequireKey(ctx, markers, identity)
+}
+
+func openArcaveProjectRoot(
+	ctx context.Context, cfg config.Config, projectPath string, opened *closers, admit keyAdmission,
 ) (storages.Storager, error) {
-	var (
-		root, plain storages.Storager
-		identity    *age.X25519Identity
-		err         error
-	)
-	if root, err = storefactory.Root(ctx, cfg.Storage, projectPath); err != nil {
+	root, err := storefactory.Root(ctx, cfg.Storage, projectPath)
+	if err != nil {
 		return nil, fmt.Errorf("initialise store root: %w", err)
 	}
 	opened.add("store root", root)
+	return openArcaveProject(ctx, cfg, root, admit)
+}
+
+func openArcaveProject(
+	ctx context.Context, cfg config.Config, root storages.Storager, admit keyAdmission,
+) (storages.Storager, error) {
+	var (
+		plain    storages.Storager
+		identity *age.X25519Identity
+		err      error
+	)
 	if plain, err = storefactory.ArcaveProject(root, model.ArcaveProjectName(cfg.Project.Name)); err != nil {
 		return nil, fmt.Errorf("initialise arcave project store: %w", err)
 	}
@@ -672,12 +684,7 @@ func openArcaveProjectStoreWith(
 	if identity, err = storekey.ParseKey(cfg.Encryption.Key); err != nil {
 		return nil, newStoreKeyError(err)
 	}
-	if markUnmarked {
-		err = storekey.AdmitEncrypted(ctx, markers, identity)
-	} else {
-		err = storekey.RequireEncrypted(ctx, markers, identity)
-	}
-	if err != nil {
+	if err = admit(ctx, markers, identity); err != nil {
 		return nil, newStoreKeyError(err)
 	}
 	return storefactory.Encrypt(plain, identity)
@@ -999,9 +1006,9 @@ func openGCService(
 	engine := docker.NewEngine(daemon.api)
 	return gc.New(gc.Deps{
 		Store:                    scope.arcaveProjectStore,
-		Session:                  scope.session.ID,
+		Session:                  scope.sessionID,
 		Sessions:                 scope.sessions,
-		NewSavepoints:            newGCSavepointReader,
+		NewSavepointReader:       newGCSavepointReader,
 		Locker:                   lock.New(projectPath),
 		SessionLocker:            scope.sessionLocker,
 		Inflight:                 inflightrepo.New(projectPath),
@@ -1017,6 +1024,11 @@ func openGCService(
 // newSessionReader is the session repository of an arcave project's store, as a reader.
 func newSessionReader(store storages.Storager) core.SessionReader {
 	return sessionrepo.New(store)
+}
+
+// newSavepointLoader is the savepoint repository of a compose project's store, as status reads it.
+func newSavepointLoader(store storages.Storager) core.SavepointLoader {
+	return sprepo.New(store)
 }
 
 // newSavepointReader is the savepoint repository of a compose project's store, as a service
