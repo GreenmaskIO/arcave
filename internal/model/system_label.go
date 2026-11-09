@@ -59,6 +59,19 @@ const (
 	SystemLabelDeploymentServiceReplicas           SystemLabel = DeploymentLabelPrefix + "service-replicas"
 )
 
+// deploymentLabels are every label SavepointDeployment.Labels writes.
+var deploymentLabels = []SystemLabel{
+	SystemLabelDeploymentDeployedAt,
+	SystemLabelDeploymentArcaveProject,
+	SystemLabelDeploymentSessionID,
+	SystemLabelDeploymentSessionName,
+	SystemLabelDeploymentSavepointID,
+	SystemLabelDeploymentSavepointName,
+	SystemLabelDeploymentSavepointCreatedAt,
+	SystemLabelDeploymentSavepointIsSafetySnapshot,
+	SystemLabelDeploymentServiceReplicas,
+}
+
 // NewMountStampLabel is the capture stamp of the volume or bind a service mounts at target.
 func NewMountStampLabel(target string) SystemLabel {
 	return SystemLabel(CaptureStampLabelPrefix + "mount." + target)

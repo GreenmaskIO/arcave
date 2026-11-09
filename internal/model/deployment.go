@@ -24,9 +24,6 @@ import (
 	"time"
 )
 
-// labelFlagSet is a flag label that is set; blank is one that is not.
-const labelFlagSet = "true"
-
 // errLabelBlank refuses a blank label a deployment cannot do without.
 var errLabelBlank = errors.New("must not be blank")
 
@@ -61,10 +58,6 @@ type SavepointDeployment struct {
 
 // Labels spells the deployment out as labels, every key present.
 func (m SavepointDeployment) Labels() map[string]string {
-	isSafetySnapshot := ""
-	if m.Savepoint.IsSafetySnapshot {
-		isSafetySnapshot = labelFlagSet
-	}
 	return map[string]string{
 		string(SystemLabelDeploymentDeployedAt):                formatLabelTime(m.DeployedAt),
 		string(SystemLabelDeploymentArcaveProject):             m.ArcaveProject.String(),
@@ -73,7 +66,7 @@ func (m SavepointDeployment) Labels() map[string]string {
 		string(SystemLabelDeploymentSavepointID):               m.Savepoint.ID.String(),
 		string(SystemLabelDeploymentSavepointName):             m.Savepoint.Name,
 		string(SystemLabelDeploymentSavepointCreatedAt):        formatLabelTime(m.Savepoint.CreatedAt),
-		string(SystemLabelDeploymentSavepointIsSafetySnapshot): isSafetySnapshot,
+		string(SystemLabelDeploymentSavepointIsSafetySnapshot): strconv.FormatBool(m.Savepoint.IsSafetySnapshot),
 		string(SystemLabelDeploymentServiceReplicas):           formatServiceReplicas(m.ServiceReplicas),
 	}
 }
@@ -81,15 +74,15 @@ func (m SavepointDeployment) Labels() map[string]string {
 // NewBlankDeploymentLabels is every deployment key blank: what a committed layer carries, so a
 // container created from it outside arcave names no deployment.
 func NewBlankDeploymentLabels() map[string]string {
-	labels := SavepointDeployment{}.Labels()
-	for key := range labels {
-		labels[key] = ""
+	labels := make(map[string]string, len(deploymentLabels))
+	for _, key := range deploymentLabels {
+		labels[string(key)] = ""
 	}
 	return labels
 }
 
-// ParseSavepointDeployment reads the deployment labels name; ok is false when they name no savepoint.
-// A deployment is read whole: every label but the names must be set.
+// ParseSavepointDeployment reads the deployment the labels name; ok is false when they name no
+// savepoint. Blank names and replicas are allowed, any other blank label is an error.
 func ParseSavepointDeployment(labels map[string]string) (SavepointDeployment, bool, error) {
 	get := func(key SystemLabel) string { return labels[string(key)] }
 	if get(SystemLabelDeploymentSavepointID) == "" {
@@ -120,7 +113,7 @@ func ParseSavepointDeployment(labels map[string]string) (SavepointDeployment, bo
 	if createdAt, err = parseLabelTime(get(SystemLabelDeploymentSavepointCreatedAt)); err != nil {
 		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointCreatedAt, err)
 	}
-	if isSafetySnapshot, err = parseLabelFlag(get(SystemLabelDeploymentSavepointIsSafetySnapshot)); err != nil {
+	if isSafetySnapshot, err = strconv.ParseBool(get(SystemLabelDeploymentSavepointIsSafetySnapshot)); err != nil {
 		return SavepointDeployment{}, false, newLabelError(SystemLabelDeploymentSavepointIsSafetySnapshot, err)
 	}
 	if replicas, err = parseServiceReplicas(get(SystemLabelDeploymentServiceReplicas)); err != nil {
@@ -148,9 +141,6 @@ func newLabelError(key SystemLabel, err error) error {
 }
 
 func formatLabelTime(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
@@ -161,23 +151,14 @@ func parseLabelTime(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, value)
 }
 
-// parseLabelFlag reads a flag label: labelFlagSet or blank.
-func parseLabelFlag(value string) (bool, error) {
-	switch value {
-	case "":
-		return false, nil
-	case labelFlagSet:
-		return true, nil
-	default:
-		return false, fmt.Errorf("want %q or blank, got %q", labelFlagSet, value)
-	}
-}
-
-// formatServiceReplicas spells replicas as db=1,3;web=1, services by name; a compose service name
-// holds none of "=;,".
+// formatServiceReplicas spells replicas as db=1,3;web=1, services by name, a service with none left
+// out; a compose service name holds none of "=;,".
 func formatServiceReplicas(replicas map[string][]int) string {
 	entries := make([]string, 0, len(replicas))
 	for _, service := range slices.Sorted(maps.Keys(replicas)) {
+		if len(replicas[service]) == 0 {
+			continue
+		}
 		numbers := make([]string, 0, len(replicas[service]))
 		for _, number := range replicas[service] {
 			numbers = append(numbers, strconv.Itoa(number))

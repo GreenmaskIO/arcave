@@ -64,7 +64,7 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
 				"io.arcave.deployment.savepoint-name":               "before-migration",
 				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
-				"io.arcave.deployment.savepoint-is-safety-snapshot": "",
+				"io.arcave.deployment.savepoint-is-safety-snapshot": "false",
 				"io.arcave.deployment.service-replicas":             "db=1,3;migrate=1",
 			},
 		},
@@ -102,7 +102,7 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
 				"io.arcave.deployment.savepoint-name":               "",
 				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
-				"io.arcave.deployment.savepoint-is-safety-snapshot": "",
+				"io.arcave.deployment.savepoint-is-safety-snapshot": "false",
 				"io.arcave.deployment.service-replicas":             "",
 			},
 		},
@@ -212,6 +212,11 @@ func TestParseSavepointDeployment(t *testing.T) {
 			wantErr: string(SystemLabelDeploymentSavepointIsSafetySnapshot),
 		},
 		{
+			name:    "no flag",
+			labels:  withLabel(SystemLabelDeploymentSavepointIsSafetySnapshot, ""),
+			wantErr: string(SystemLabelDeploymentSavepointIsSafetySnapshot),
+		},
+		{
 			name:    "broken replicas",
 			labels:  withLabel(SystemLabelDeploymentServiceReplicas, "db"),
 			wantErr: string(SystemLabelDeploymentServiceReplicas),
@@ -264,6 +269,29 @@ func TestParseServiceReplicas(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFormatServiceReplicas(t *testing.T) {
+	tests := []struct {
+		name     string
+		replicas map[string][]int
+		want     string
+	}{
+		{name: "none"},
+		{name: "a gap", replicas: map[string][]int{"web": {2}, "db": {1, 3}}, want: "db=1,3;web=2"},
+		{name: "a service with none is left out", replicas: map[string][]int{"db": {1}, "web": {}}, want: "db=1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := formatServiceReplicas(tt.replicas)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+			_, err := parseServiceReplicas(got)
+			assert.NoError(t, err, "what is spelled reads back")
 		})
 	}
 }
