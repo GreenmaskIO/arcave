@@ -54,12 +54,12 @@ It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child proc
 
 | Tool | What it does |
 |---|---|
-| `savepoint_create` | Capture the environment. Takes `project`, and optionally `session`, `name`, `description`, `wait_timeout`. |
-| `savepoint_list` | List savepoints, newest first. Takes `project`, optionally `session`, `include_safety_snapshots`, `sort` (`desc` or `asc`). |
-| `savepoint_remove` | Delete by `refs` — ids or names — or by `retain_recent` / `retain_for` / `before_date`. Takes `project`, optionally `session`. Supports `dry_run`. |
-| `rollback` | Restore to `ref` — an id, a name, or `latest`. Takes `project`, optionally `session`, `wait_timeout`. |
+| `savepoint_create` | Capture the environment. Takes `compose_project`, and optionally `session`, `name`, `description`, `wait_timeout`. |
+| `savepoint_list` | List savepoints, newest first. Takes `compose_project`, optionally `session`, `include_safety_snapshots`, `sort` (`desc` or `asc`). |
+| `savepoint_remove` | Delete by `refs` — ids or names — or by `retain_recent` / `retain_for` / `before_date`. Takes `compose_project`, optionally `session`. Supports `dry_run`. |
+| `rollback` | Restore to `ref` — an id, a name, or `latest`. Takes `compose_project`, optionally `session`, `wait_timeout`. |
 
-Every savepoint tool takes `project` explicitly: one server serves many compose projects, and the agent names the one it means per call. `session` picks the [session](../sessions.md) for that call only; without it the tool works in the current one.
+Every savepoint tool takes `compose_project` explicitly: one server serves many compose projects, and the agent names the one it means per call. `session` picks the [session](../sessions.md) for that call only; without it the tool works in the current one.
 
 Two more keep the store and the project in view: `gc` reclaims the space removed savepoints held — it only reports unless `dry_run` is `false` — and `compose_generate` returns a compose file rebuilt from the running project.
 

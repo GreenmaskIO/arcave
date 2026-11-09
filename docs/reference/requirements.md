@@ -97,7 +97,7 @@ One `docker compose up -d` answers both for `savepoint create`.
 
 ## An initialised project
 
-Every command but `init` needs `.arcave/config.yaml` under the working directory. The `savepoint` commands and `rollback` also need a compose project named with `-p/--project-name` or `ARCAVE_PROJECT_NAME`; the `session` commands and `mcp` do not.
+Every command but `init` needs `.arcave/config.yaml` under the working directory. The `savepoint` commands and `rollback` also need a compose project named with `-p/--project-name` or `ARCAVE_COMPOSE_PROJECT_NAME`; the `session` commands and `mcp` do not.
 
 ## For the `cdc` backend only
 

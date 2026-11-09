@@ -90,7 +90,7 @@ You will want `.arcave/` in your `.gitignore`.
 Every command that touches a compose project needs to know which one. Set it once for the shell instead of passing `-p` every time:
 
 ```shell
-export ARCAVE_PROJECT_NAME=myapp
+export ARCAVE_COMPOSE_PROJECT_NAME=myapp
 ```
 
 :::note

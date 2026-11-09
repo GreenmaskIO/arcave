@@ -54,7 +54,7 @@ stdout carries a summary:
 
 | Condition | What happens |
 |---|---|
-| No compose project named | `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME` |
+| No compose project named | `no compose project named: pass -p/--project-name, or set ARCAVE_COMPOSE_PROJECT_NAME` |
 | The compose project has no container | `compose project "demo": no containers found: bring the compose project up once, or name another project with -p` |
 | The output file exists | `… already exists: pass --force to overwrite it` |
 

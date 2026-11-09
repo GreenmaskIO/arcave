@@ -56,7 +56,7 @@ curl -fsSL https://greenmask.io/arcave/install.sh | bash
 # 2. Bring your compose project up and initialise arcave in it
 docker compose up -d
 arcave init
-export ARCAVE_PROJECT_NAME=myapp     # as `docker compose ls` names it
+export ARCAVE_COMPOSE_PROJECT_NAME=myapp     # as `docker compose ls` names it
 
 # 3. Save the state you want to come back to
 arcave savepoint create before-migration

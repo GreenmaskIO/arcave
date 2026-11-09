@@ -146,7 +146,7 @@ This is the point of whole-project capture. A `pg_restore` would have given you 
 #!/usr/bin/env bash
 set -euo pipefail
 
-export ARCAVE_PROJECT_NAME=arcave-demo
+export ARCAVE_COMPOSE_PROJECT_NAME=arcave-demo
 
 arcave rollback clean          # reset BEFORE, not after
 ./integration-tests.sh

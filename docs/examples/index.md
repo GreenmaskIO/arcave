@@ -74,10 +74,10 @@ Every service defines a **health check**. arcave waits for them after each resta
 ```shell
 docker compose up -d --wait
 arcave init
-export ARCAVE_PROJECT_NAME=arcave-demo
+export ARCAVE_COMPOSE_PROJECT_NAME=arcave-demo
 ```
 
-`ARCAVE_PROJECT_NAME` names the compose project, as `name:` declares it in the compose file, so the commands below need no `-p`. The variable also sets `project.name`, the storage tenant, so savepoints are stored under `arcave-demo` too — see [Concepts](../concepts.md#the-compose-project-versus-the-storage-tenant).
+`ARCAVE_COMPOSE_PROJECT_NAME` names the compose project, as `name:` declares it in the compose file, so the commands below need no `-p`. Savepoints are stored under the tenant `project.name` from the config — see [Concepts](../concepts.md#the-compose-project-versus-the-storage-tenant).
 
 ## The examples
 

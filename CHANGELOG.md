@@ -5,6 +5,8 @@
 ### Breaking changes
 
 - **`arcave rollback --no-safety-snapshot` replaces `--safety-snapshot=false`.** Both flags are plain switches now and take no value: `--safety-snapshot` takes a safety snapshot even under `rollback.safety_snapshot: false`, `--no-safety-snapshot` takes none, and the two cannot be passed together. Without either, the config decides.
+- **`ARCAVE_COMPOSE_PROJECT_NAME` names the compose project.** `ARCAVE_PROJECT_NAME` no longer does: it is only the config key `project.name`, the storage tenant, as every `ARCAVE_<KEY>` is. A shell that exports it keeps its tenant and now has to name the compose project with `-p` or the new variable.
+- **The MCP tools' `project` argument is `compose_project`.**
 
 ## v0.1.0-alpha.4 — 2026-11-08
 

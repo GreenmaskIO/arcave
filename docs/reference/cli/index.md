@@ -34,7 +34,7 @@ Short aliases: `savepoint` also answers to `save` and `sp`, every `list` to `ls`
 
 | Flag | Default | Config key | Description |
 |---|---|---|---|
-| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`, `mcp`, `status` and the `session` commands; an MCP tool call names its compose project itself. Read from `ARCAVE_PROJECT_NAME` when the flag is absent. |
+| `-p`, `--project-name` | — | *(none)* | The compose project to act on, as `docker compose ls` names it. Required by every command but `init`, `mcp`, `status` and the `session` commands; an MCP tool call names its compose project itself. Read from `ARCAVE_COMPOSE_PROJECT_NAME` when the flag is absent. |
 | `--session` | the current session, else `baseline` | *(none)* | The session to work in, by id or by name. Read from `ARCAVE_SESSION` when the flag is absent; with neither, the current session `arcave session set` chose, else `baseline`. See [`arcave session`](session.md#naming-the-session-a-command-works-in). |
 | `--config` | `.arcave/config.yaml` | *(none)* | Path to the config file. |
 | `--log-level` | `warn` above the live tree, else `info` | `log.level` | `debug`, `info` or `warn`. |
@@ -64,17 +64,17 @@ arcave -p myapp savepoint create before-migration
 ```
 
 ```shell title="Once per shell"
-export ARCAVE_PROJECT_NAME=myapp
+export ARCAVE_COMPOSE_PROJECT_NAME=myapp
 arcave savepoint create before-migration
 ```
 
 Without either:
 
 ```text
-no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME
+no compose project named: pass -p/--project-name, or set ARCAVE_COMPOSE_PROJECT_NAME
 ```
 
-`ARCAVE_PROJECT_NAME` names two different things at once. [Environment variables](../environment_variables.md#arcave_project_name) owns that, and is the page to read before exporting it.
+`ARCAVE_PROJECT_NAME` is another thing: the storage tenant `project.name`. See [Environment variables](../environment_variables.md#arcave_project_name).
 
 ## What a command needs
 

@@ -55,11 +55,11 @@ Twelve tools:
 | `gc` | Reclaim the space removed savepoints held; reports only unless `dry_run` is `false` |
 | `compose_generate` | A compose file rebuilt from the running project |
 
-The four savepoint tools and `compose_generate` take `project` explicitly — one server serves many compose projects, and the agent names the one it means per call. The four savepoint tools also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `project`: a session holds every compose project of the directory.
+The four savepoint tools and `compose_generate` take `compose_project` explicitly — one server serves many compose projects, and the agent names the one it means per call. The four savepoint tools also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `compose_project`: a session holds every compose project of the directory.
 
 ```json title="A savepoint_create call"
 {
-  "project": "arcave-demo",
+  "compose_project": "arcave-demo",
   "name": "attempt-1",
   "description": "before rewriting the orders schema"
 }
@@ -67,7 +67,7 @@ The four savepoint tools and `compose_generate` take `project` explicitly — on
 
 ```json title="A rollback call"
 {
-  "project": "arcave-demo",
+  "compose_project": "arcave-demo",
   "ref": "attempt-1"
 }
 ```
@@ -85,7 +85,7 @@ To keep the agent's checkpoints apart from yours, give it a session of its own:
 
 ```json title="A savepoint_create call in that session"
 {
-  "project": "arcave-demo",
+  "compose_project": "arcave-demo",
   "session": "agent",
   "name": "attempt-1"
 }
@@ -96,11 +96,11 @@ Or pin the whole server to it with `"args": ["mcp", "--session", "agent"]`; a pi
 ## 4. The loop the agent runs
 
 ```text
-1.  savepoint_create  { project, name: "attempt-N" }
+1.  savepoint_create  { compose_project, name: "attempt-N" }
 2.  Apply the change — migration, schema rewrite, data transformation
 3.  Run the tests
 4.  Passed?  continue, and snapshot again before the next change
-    Failed?  rollback { project, ref: "attempt-N" } and try another approach
+    Failed?  rollback { compose_project, ref: "attempt-N" } and try another approach
 ```
 
 Because the environment resets between attempts, attempt 4 is genuinely attempt 4 — not attempt 1 plus the debris of three failures.
@@ -109,7 +109,7 @@ Because the environment resets between attempts, attempt 4 is genuinely attempt 
 
 ```json title="savepoint_create with an explicit bound"
 {
-  "project": "arcave-demo",
+  "compose_project": "arcave-demo",
   "name": "attempt-3",
   "wait_timeout": "5m"
 }
@@ -139,14 +139,14 @@ Each record is one step event, named by its path in the workflow's tree, and als
 
 ```json title="savepoint_remove"
 {
-  "project": "arcave-demo",
+  "compose_project": "arcave-demo",
   "retain_recent": 3
 }
 ```
 
 ```json title="Preview first"
 {
-  "project": "arcave-demo",
+  "compose_project": "arcave-demo",
   "retain_recent": 3,
   "dry_run": true
 }
@@ -160,7 +160,7 @@ Each record is one step event, named by its path in the workflow's tree, and als
 }
 ```
 
-gc covers every compose project of the session, so it takes no `project`. See [`arcave gc`](../reference/cli/gc.md).
+gc covers every compose project of the session, so it takes no `compose_project`. See [`arcave gc`](../reference/cli/gc.md).
 
 ## 8. Make the loop cheap
 

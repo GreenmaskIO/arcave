@@ -17,6 +17,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -369,4 +370,75 @@ func writeConfig(t *testing.T, root, body string) {
 	dir := filepath.Join(root, ".arcave")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o644))
+}
+
+// A variable that feeds no config key never spells ARCAVE_<KEY> of one, or the key would take it.
+func TestReadFlagEnvs_NameNoConfigKey(t *testing.T) {
+	keyEnvs := make(map[string]string)
+	for _, key := range config.Keys() {
+		keyEnvs["ARCAVE_"+strings.ToUpper(strings.ReplaceAll(key, ".", "_"))] = key
+	}
+
+	for _, env := range []string{composeProjectEnv, sessionEnv, progressEnv, formatEnv} {
+		t.Run(env, func(t *testing.T) {
+			key, collides := keyEnvs[env]
+
+			assert.False(t, collides, "%s is the variable of config key %q", env, key)
+		})
+	}
+}
+
+// ARCAVE_COMPOSE_PROJECT_NAME names the compose project alone, ARCAVE_PROJECT_NAME project.name alone.
+func TestReadFlagEnvs(t *testing.T) {
+	tests := []struct {
+		name               string
+		flag               string
+		env                map[string]string
+		wantComposeProject string
+		wantArcaveProject  string
+	}{
+		{
+			name:               "the compose project's variable",
+			env:                map[string]string{composeProjectEnv: "x"},
+			wantComposeProject: "x",
+			wantArcaveProject:  "fromfile",
+		},
+		{
+			name:              "project.name's variable",
+			env:               map[string]string{"ARCAVE_PROJECT_NAME": "y"},
+			wantArcaveProject: "y",
+		},
+		{
+			name:               "the flag wins over the compose project's variable",
+			flag:               "z",
+			env:                map[string]string{composeProjectEnv: "x", "ARCAVE_PROJECT_NAME": "y"},
+			wantComposeProject: "z",
+			wantArcaveProject:  "y",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			root := t.TempDir()
+			writeConfig(t, root, "project:\n  name: fromfile\n")
+			t.Setenv(composeProjectEnv, "")
+			t.Setenv("ARCAVE_PROJECT_NAME", "")
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			saved := composeProjectFlag
+			t.Cleanup(func() { composeProjectFlag = saved })
+			composeProjectFlag = tt.flag
+
+			// Act
+			readFlagEnvs()
+			cfg, _, err := resolveConfig(testViper(root), root)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantComposeProject, composeProjectFlag)
+			assert.Equal(t, tt.wantArcaveProject, cfg.Project.Name)
+		})
+	}
 }

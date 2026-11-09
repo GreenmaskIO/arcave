@@ -132,7 +132,7 @@ arcave init                                                    # initialise here
 arcave --config /path/to/.arcave/config.yaml savepoint list    # or point at it
 ```
 
-## `no compose project named: pass -p/--project-name, or set ARCAVE_PROJECT_NAME`
+## `no compose project named: pass -p/--project-name, or set ARCAVE_COMPOSE_PROJECT_NAME`
 
 The `savepoint` commands and `rollback` act on one compose project, and nothing guesses which.
 
@@ -140,7 +140,7 @@ The `savepoint` commands and `rollback` act on one compose project, and nothing 
 arcave -p myapp savepoint list
 ```
 
-The name is what `docker compose ls` shows in the first column: the compose file's `name:` if it declares one, and the directory name otherwise. Before exporting `ARCAVE_PROJECT_NAME`, read what else [it names](environment_variables.md#arcave_project_name).
+The name is what `docker compose ls` shows in the first column: the compose file's `name:` if it declares one, and the directory name otherwise. Export it as `ARCAVE_COMPOSE_PROJECT_NAME`, not `ARCAVE_PROJECT_NAME`: that one is the [storage tenant](environment_variables.md#arcave_project_name).
 
 ## `compose project "myapp": no containers found`
 

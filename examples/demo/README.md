@@ -46,7 +46,7 @@ open http://localhost:8080            # macOS; otherwise just browse there
 
 # 3. Name the compose project for arcave. The compose file pins it as
 #    `name: arcave-demo`; arcave reads no compose file, so it needs the name.
-export ARCAVE_PROJECT_NAME=arcave-demo
+export ARCAVE_COMPOSE_PROJECT_NAME=arcave-demo
 
 # 4. Write .arcave/config.yaml, then select the cdc backend in it: set
 #    `snapshot.backend: cdc`, by hand or with the line below (works with GNU

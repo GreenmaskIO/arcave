@@ -310,9 +310,9 @@ func TestMCP_SavepointsFollowTheCurrentSession(t *testing.T) {
 	env.withComposeProject(t)
 	initArcave(t, env)
 	cs := newMCPClient(t, env)
-	project := map[string]any{"project": env.project}
+	project := map[string]any{"compose_project": env.project}
 	with := func(kv ...any) map[string]any {
-		args := map[string]any{"project": env.project}
+		args := map[string]any{"compose_project": env.project}
 		for i := 0; i < len(kv); i += 2 {
 			args[kv[i].(string)] = kv[i+1]
 		}
@@ -362,15 +362,15 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	cs := newMCPClient(t, env)
 	compose := env.in(t, model.DefaultSession)
 	compose.write(t, compose.replicas(t)[0], "v1")
-	v1 := callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"project": env.project, "name": "v1"})
+	v1 := callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "v1"})
 	compose.write(t, compose.replicas(t)[0], "v2")
 
 	// Act: a removed safety snapshot leaves a restic snapshot for the gc.
-	rolledBack := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{"project": env.project, "ref": "v1"})
+	rolledBack := callTool[model.RollbackResult](t, cs, "rollback", map[string]any{"compose_project": env.project, "ref": "v1"})
 	require.NotEmpty(t, rolledBack.SafetySnapshot)
 	callTool[model.RemoveResult](t, cs, "savepoint_remove", map[string]any{
-		"project": env.project,
-		"refs":    []string{rolledBack.SafetySnapshot.String()},
+		"compose_project": env.project,
+		"refs":            []string{rolledBack.SafetySnapshot.String()},
 	})
 	collected := callTool[mcpGCReports](t, cs, "gc", map[string]any{
 		"dry_run": false,
