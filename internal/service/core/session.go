@@ -27,6 +27,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/internal/service/sessionref"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -134,43 +135,7 @@ func NewSessionService(deps SessionDeps) *SessionService {
 // ResolveSession finds the session ref names: by name first, then by id. "" is the current
 // session, or the default when no pointer is set; a pointer to a deleted session is refused.
 func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
-	if ref != "" {
-		sessions, err := s.sessions.ListSessions(ctx)
-		if err != nil {
-			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
-		}
-		session, err := model.FindSessionByRef(sessions, ref)
-		if err != nil {
-			return model.Session{}, err
-		}
-		logResolved(ctx, session, "ref", ref)
-		return session, nil
-	}
-	id, found, err := s.readCurrent(ctx)
-	if err != nil {
-		return model.Session{}, err
-	}
-	if !found {
-		logResolved(ctx, model.DefaultSessionRecord, "default", "")
-		return model.DefaultSessionRecord, nil
-	}
-	sessions, err := s.sessions.ListSessions(ctx)
-	if err != nil {
-		return model.Session{}, fmt.Errorf("listing sessions: %w", err)
-	}
-	if session, found := model.FindSessionByID(sessions, id.String()); found {
-		logResolved(ctx, session, "pointer", "")
-		return session, nil
-	}
-	return model.Session{}, fmt.Errorf("%w: %s, named by %s/current_session; "+
-		"run 'arcave session unset' or 'arcave session set <session>'", model.ErrCurrentSessionNotFound, id, model.StateDir)
-}
-
-// logResolved records which session a command works in and what named it: a ref, the pointer
-// or the default.
-func logResolved(ctx context.Context, session model.Session, by, ref string) {
-	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Str("name", session.Name).
-		Str("by", by).Str("ref", ref).Msg("session resolved")
+	return sessionref.Resolve(ctx, s.sessions, s.current, ref)
 }
 
 // SetSession makes the session ref names the current one.
@@ -438,20 +403,10 @@ func (s *SessionService) requireNotInUse(
 	return false, nil
 }
 
-// readCurrent reads the current-session pointer, naming the way out of an unreadable one.
-func (s *SessionService) readCurrent(ctx context.Context) (model.SessionID, bool, error) {
-	id, found, err := s.current.Get(ctx)
-	if err != nil {
-		return model.SessionID{}, false, fmt.Errorf("%w; run 'arcave session unset' or 'arcave session set <session>'", err)
-	}
-	zerolog.Ctx(ctx).Debug().Bool("found", found).Str("session", id.String()).Msg("current-session pointer read")
-	return id, found, nil
-}
-
 // readCurrentOrNone reads the pointer for a command it only informs: an unreadable one is
 // logged and read as none.
 func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID, bool) {
-	id, found, err := s.readCurrent(ctx)
+	id, found, err := sessionref.ReadCurrent(ctx, s.current)
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
 		return model.SessionID{}, false
@@ -470,7 +425,7 @@ func (s *SessionService) findCurrent(ctx context.Context, sessions []model.Sessi
 		}
 		return session.ID
 	}
-	id, found, err := s.readCurrent(ctx)
+	id, found, err := sessionref.ReadCurrent(ctx, s.current)
 	switch {
 	case err != nil:
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
