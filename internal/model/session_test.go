@@ -33,6 +33,8 @@ func TestCreateSessionRequest_Validate(t *testing.T) {
 		{name: "a branch-like name", reqName: "feat/add-new-table"},
 		{name: "blank", reqName: "  ", wantErr: true},
 		{name: "a uuid-shaped name", reqName: "0f9c2f4a-6d3e-4b6f-9a2c-1d5e8b7a4c31"},
+		{name: "the current keyword", reqName: RefCurrent, wantErr: true},
+		{name: "the latest keyword", reqName: RefLatest, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,6 +106,53 @@ func TestFindSessionByRef(t *testing.T) {
 			default:
 				require.NoError(t, err)
 			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFindLatestSession(t *testing.T) {
+	older := Session{ID: SessionID{0x01, 0x9a, 0, 0, 0, 0, 0x70, 0, 0x80}}
+	newer := Session{ID: SessionID{0x01, 0x9b, 0, 0, 0, 0, 0x70, 0, 0x80}}
+	tests := []struct {
+		name      string
+		sessions  []Session
+		want      Session
+		wantFound bool
+	}{
+		{name: "none"},
+		{name: "the default alone", sessions: []Session{DefaultSessionRecord}, want: DefaultSessionRecord, wantFound: true},
+		{name: "the greatest id, in any order", sessions: []Session{newer, DefaultSessionRecord, older},
+			want: newer, wantFound: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got, found := FindLatestSession(tt.sessions)
+
+			// Assert
+			assert.Equal(t, tt.wantFound, found)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSessionRefSource_IsOverride(t *testing.T) {
+	tests := []struct {
+		source SessionRefSource
+		want   bool
+	}{
+		{source: SessionRefSourceFlag, want: true},
+		{source: SessionRefSourceEnv, want: true},
+		{source: SessionRefSourcePointer},
+		{source: SessionRefSourceDefault},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.source), func(t *testing.T) {
+			// Act
+			got := tt.source.IsOverride()
+
+			// Assert
 			assert.Equal(t, tt.want, got)
 		})
 	}

@@ -84,6 +84,7 @@ func TestRepository_Get_HandWritten(t *testing.T) {
 			// Assert: a pointer that cannot be read refuses rather than reads as absent.
 			if tt.wantErr {
 				require.ErrorIs(t, err, model.ErrInvalidSessionID)
+				require.ErrorIs(t, err, model.ErrCurrentSessionUnreadable)
 				assert.False(t, found)
 				return
 			}
@@ -92,6 +93,19 @@ func TestRepository_Get_HandWritten(t *testing.T) {
 			assert.Equal(t, "019e843e-1650-7000-8000-000000000000", got.String())
 		})
 	}
+}
+
+func TestRepository_Get_Unreadable(t *testing.T) {
+	// Arrange: a directory where the pointer file should be cannot be read as one.
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".arcave", pointerFile), 0o755))
+
+	// Act
+	_, found, err := New(root).Get(context.Background())
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrCurrentSessionUnreadable)
+	assert.False(t, found)
 }
 
 func TestRepository_Put_LeavesOnlyThePointer(t *testing.T) {

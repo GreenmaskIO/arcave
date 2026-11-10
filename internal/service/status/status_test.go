@@ -724,7 +724,7 @@ func TestService_Status(t *testing.T) {
 				assert.Nil(t, status.Session)
 				assert.Equal(t, []model.StatusUnreadable{{
 					Source: model.StatusUnreadableSession,
-					Error:  "current_session: not a session id; run 'arcave session unset' or 'arcave session set <session>'",
+					Error:  "current_session: not a session id",
 				}}, status.Unreadable)
 			},
 		},
@@ -735,6 +735,17 @@ func TestService_Status(t *testing.T) {
 			stored:  []model.Savepoint{statusDeployed},
 			ref:     "nope",
 			wantErr: model.ErrSessionNotFound,
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				assert.Equal(t, model.ComposeProjectStatus{}, status)
+			},
+		},
+		{
+			name:    "a keyword session ref is the user's error",
+			labels:  []map[string]string{baselineDeployment.Labels()},
+			state:   runningStateAt(started),
+			stored:  []model.Savepoint{statusDeployed},
+			ref:     model.RefCurrent,
+			wantErr: model.ErrSessionRefKeyword,
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStatus{}, status)
 			},

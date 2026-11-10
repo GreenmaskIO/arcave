@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -439,6 +440,30 @@ func TestReadFlagEnvs(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantComposeProject, composeProjectFlag)
 			assert.Equal(t, tt.wantArcaveProject, cfg.Project.Name)
+		})
+	}
+}
+
+func TestReadSessionRef(t *testing.T) {
+	tests := []struct {
+		name       string
+		flag, env  string
+		wantRef    string
+		wantSource model.SessionRefSource
+	}{
+		{name: "neither"},
+		{name: "the variable", env: "feat", wantRef: "feat", wantSource: model.SessionRefSourceEnv},
+		{name: "the flag outranks the variable", flag: "exp", env: "feat", wantRef: "exp",
+			wantSource: model.SessionRefSourceFlag},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			ref, source := readSessionRef(tt.flag, tt.env)
+
+			// Assert
+			assert.Equal(t, tt.wantRef, ref)
+			assert.Equal(t, tt.wantSource, source)
 		})
 	}
 }

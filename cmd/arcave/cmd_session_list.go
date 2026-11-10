@@ -55,7 +55,7 @@ func runSessionList(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("init session dependencies: %w", err)
 	}
 	return cli.NewSessionListHandler(svc, loadRunOutput()).SessionList(ctx,
-		model.ListSessionsRequest{All: sessionListAll, Ref: sessionRef, Sort: order})
+		model.ListSessionsRequest{All: sessionListAll, Current: currentSessionRef(), Sort: order})
 }
 
 func init() {

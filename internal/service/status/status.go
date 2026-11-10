@@ -202,8 +202,8 @@ func (s *Service) readStoreView(
 	}, nil
 }
 
-// readResolvedSession resolves ref as every command does. A ref naming no session, or several, is
-// the user's to fix and the error; any other failure is one thing the status could not read.
+// readResolvedSession resolves ref as every command does. A ref naming no session, several, or a
+// keyword is the user's to fix and the error; any other failure is one thing the status could not read.
 func (s *Service) readResolvedSession(
 	ctx context.Context, sessions SessionReader, ref string,
 ) (*model.SessionRef, *model.StatusUnreadable, error) {
@@ -215,7 +215,8 @@ func (s *Service) readResolvedSession(
 			ID:   session.ID,
 			Name: session.Name,
 		}, nil, nil
-	case errors.Is(err, model.ErrSessionNotFound), errors.As(err, &ambiguous):
+	case errors.Is(err, model.ErrSessionNotFound), errors.Is(err, model.ErrSessionRefKeyword),
+		errors.As(err, &ambiguous):
 		return nil, nil, err
 	default:
 		return nil, newUnreadable(model.StatusUnreadableSession, err), nil

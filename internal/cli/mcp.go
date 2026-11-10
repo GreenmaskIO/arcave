@@ -58,7 +58,8 @@ type MCPSavepointStoreServiceFactory func(
 
 // MCPSessionService is the MCP adapter's view of the session commands.
 type MCPSessionService interface {
-	ResolveSession(ctx context.Context, ref string) (model.Session, error)
+	CurrentSession(ctx context.Context, ref model.CurrentSessionRef) (model.CurrentSession, error)
+	ShowSession(ctx context.Context, req model.ShowSessionRequest) (model.SessionDetail, error)
 	ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error)
 	CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error)
 	RemoveSession(ctx context.Context, req model.RemoveSessionRequest) (model.RemoveSessionResponse, error)
@@ -118,17 +119,20 @@ type RollbackConfig struct {
 type MCPHandler struct {
 	factories      MCPFactories
 	pinnedSession  model.SessionID
+	pinSource      model.SessionRefSource
 	rollbackConfig RollbackConfig
 }
 
 // NewMCPHandler builds the MCP adapter; pinnedSession is the session the server was started in, zero to
-// follow the current one.
+// follow the current one, and pinSource what named it.
 func NewMCPHandler(
-	factories MCPFactories, pinnedSession model.SessionID, rollbackConfig RollbackConfig,
+	factories MCPFactories, pinnedSession model.SessionID, pinSource model.SessionRefSource,
+	rollbackConfig RollbackConfig,
 ) *MCPHandler {
 	return &MCPHandler{
 		factories:      factories,
 		pinnedSession:  pinnedSession,
+		pinSource:      pinSource,
 		rollbackConfig: rollbackConfig,
 	}
 }
@@ -139,7 +143,7 @@ func (h *MCPHandler) openSavepointService(
 ) (MCPSavepointService, func(), error) {
 	svc, release, err := h.factories.Savepoint(ctx, composeProject, cmp.Or(session, h.pinRef()))
 	if err != nil {
-		return nil, nil, mcpError(err)
+		return nil, nil, h.mcpError(err)
 	}
 	return svc, release, nil
 }
@@ -150,7 +154,7 @@ func (h *MCPHandler) openSavepointStoreService(
 ) (MCPSavepointStoreService, func(), error) {
 	svc, release, err := h.factories.SavepointStore(ctx, composeProject, cmp.Or(session, h.pinRef()))
 	if err != nil {
-		return nil, nil, mcpError(err)
+		return nil, nil, h.mcpError(err)
 	}
 	return svc, release, nil
 }
@@ -194,9 +198,9 @@ const (
 		"after a failure the same rollback must be run again. " +
 		"Services are stopped and started again."
 	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — newest " +
-		"first unless sort is asc, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current " +
+		"first unless sort is asc, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current_source " +
 		"marks the session the other tools work in when they are given no session — the one session_current " +
-		"names. all adds session trees " +
+		"names — and says what named it, as session_current does. all adds session trees " +
 		"without a record — forks still cloning, failed or left incomplete — with their status."
 	descSessionCreate = "Create a session: empty, or with from a copy (fork) of another session — every " +
 		"compose project and savepoint it holds. A fork copies the whole session, so it costs that session's " +
@@ -213,7 +217,9 @@ const (
 		"was started with --session: pass session per call instead."
 	descSessionCurrent = "Show the session tool calls work in when they are given no session: the one the " +
 		"server was started with --session, else the current session, else the default (baseline). Read-only. " +
-		"Fails when the current session no longer exists; session_unset or session_set repairs it."
+		"current_source says which: source flag or env for the pin the server was started with, pointer for the " +
+		"current session session_set made, default for none; overrides names the session the pin hides, " +
+		"when it hides another. Fails when the current session no longer exists; session_unset or session_set repairs it."
 	descComposeGenerate = "Generate a docker compose file for a running compose project, from what the Docker " +
 		"daemon reports about its containers, volumes and networks — for a project whose compose file is lost, " +
 		"or was never written. Read-only: nothing is stopped or written, and the file is returned as spec. " +
@@ -231,6 +237,12 @@ const (
 		"interrupted. Call it before tests, after a rollback, or when something looks wrong; it reads only. " +
 		"state sums it up; notices say what is wrong, severe first, each with a stable code to act on. A store " +
 		"that cannot be read leaves unreadable non-empty and the daemon's part whole; a session naming none fails it."
+	descSessionShow = "Show one session — by name or id, latest for the newest, else the pinned or current one, " +
+		"which current_source says where it was named — and its committed " +
+		"savepoints, grouped by compose project: compose projects by name, savepoints newest first, each the " +
+		"full record savepoint_list returns, safety snapshots among them; " +
+		"savepoint_count and safety_snapshot_count count each apart. " +
+		"Read-only; reads only the store, never the daemon."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +
@@ -264,7 +276,7 @@ func (h *MCPHandler) createSavepointMCP(ctx context.Context, _ *mcpsdk.CallToolR
 		WaitTimeout: waitTimeout,
 	})
 	if err != nil {
-		return nil, model.Savepoint{}, mcpError(composeProjectAbsentError(err, "the compose_project argument"))
+		return nil, model.Savepoint{}, h.mcpError(composeProjectAbsentError(err, "the compose_project argument"))
 	}
 	return nil, savepoint, nil
 }
@@ -312,7 +324,7 @@ func (h *MCPHandler) listSavepointsMCP(ctx context.Context, _ *mcpsdk.CallToolRe
 
 	savepoints, err := svc.ListSavepoints(ctx, model.ListRequest{IncludeSafetySnapshots: in.IncludeSafetySnapshots, Sort: order})
 	if err != nil {
-		return nil, listOutput{}, mcpError(err)
+		return nil, listOutput{}, h.mcpError(err)
 	}
 	// A non-nil empty slice marshals as [] rather than null, so an agent reading
 	// the result never has to tell "no savepoints" from "no such field".
@@ -350,7 +362,7 @@ func (h *MCPHandler) removeSavepointsMCP(ctx context.Context, _ *mcpsdk.CallTool
 		DryRun:       in.DryRun,
 	})
 	if err != nil {
-		return nil, model.RemoveResult{}, mcpError(removeUsageError(err))
+		return nil, model.RemoveResult{}, h.mcpError(removeUsageError(err))
 	}
 	return nil, res, nil
 }
@@ -388,7 +400,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	skipSafetySnapshot := in.skipSafetySnapshot(h.rollbackConfig.SkipSafetySnapshot)
 	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.rollbackConfig.LeftoverVolumes, skipSafetySnapshot))
 	if err != nil {
-		return nil, model.RollbackResult{}, mcpError(err)
+		return nil, model.RollbackResult{}, h.mcpError(err)
 	}
 	return nil, res, nil
 }
@@ -441,7 +453,7 @@ func (h *MCPHandler) garbageCollectMCP(
 	}
 	svc, release, err := h.factories.GC(ctx, cmp.Or(in.Session, h.pinRef()))
 	if err != nil {
-		return nil, model.GarbageCollectResult{}, mcpError(err)
+		return nil, model.GarbageCollectResult{}, h.mcpError(err)
 	}
 	defer release()
 
@@ -451,14 +463,14 @@ func (h *MCPHandler) garbageCollectMCP(
 		// A gc stopped midway through deleting fails, but what it had deleted must still be seen.
 		return &mcpsdk.CallToolResult{
 			IsError: true,
-			Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: mcpError(err).Error()}},
+			Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: h.mcpError(err).Error()}},
 		}, result, nil
 	}
 	if err == nil || errors.Is(err, model.ErrGarbageCollectPartial) {
 		// A partial gc is still a report: what could not be judged is in it, aborted or failed.
 		return nil, result, nil
 	}
-	return nil, model.GarbageCollectResult{}, mcpError(err)
+	return nil, model.GarbageCollectResult{}, h.mcpError(err)
 }
 
 // statusInput is status's input schema.
@@ -473,13 +485,13 @@ func (h *MCPHandler) statusMCP(
 ) (*mcpsdk.CallToolResult, model.ComposeProjectStatus, error) {
 	svc, release, err := h.factories.Status(ctx, in.ComposeProject)
 	if err != nil {
-		return nil, model.ComposeProjectStatus{}, mcpError(err)
+		return nil, model.ComposeProjectStatus{}, h.mcpError(err)
 	}
 	defer release()
 
 	status, err := svc.Status(ctx, model.StatusRequest{Session: cmp.Or(in.Session, h.pinRef())})
 	if err != nil && !errors.Is(err, model.ErrStatusPartial) {
-		return nil, model.ComposeProjectStatus{}, mcpError(err)
+		return nil, model.ComposeProjectStatus{}, h.mcpError(err)
 	}
 	// A partial status is still a report: what could not be read is in its unreadable.
 	return nil, status, nil
@@ -508,9 +520,13 @@ func (h *MCPHandler) listSessionsMCP(ctx context.Context, _ *mcpsdk.CallToolRequ
 	}
 	defer release()
 
-	sessions, err := svc.ListSessions(ctx, model.ListSessionsRequest{All: in.All, Ref: h.pinRef(), Sort: order})
+	sessions, err := svc.ListSessions(ctx, model.ListSessionsRequest{
+		All:     in.All,
+		Current: h.currentRef(),
+		Sort:    order,
+	})
 	if err != nil {
-		return nil, sessionListOutput{}, mcpError(err)
+		return nil, sessionListOutput{}, h.mcpError(err)
 	}
 	if sessions == nil {
 		sessions = []model.SessionSummary{}
@@ -518,10 +534,33 @@ func (h *MCPHandler) listSessionsMCP(ctx context.Context, _ *mcpsdk.CallToolRequ
 	return nil, sessionListOutput{Sessions: sessions}, nil
 }
 
+// sessionShowInput is session_show's input schema.
+type sessionShowInput struct {
+	Session string `json:"session,omitempty" jsonschema:"the session to show, by name or id, current or latest; default current, the pinned or current session"`
+}
+
+// showSessionMCP reports one session's savepoints by compose project.
+func (h *MCPHandler) showSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionShowInput) (*mcpsdk.CallToolResult, model.SessionDetail, error) {
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, model.SessionDetail{}, err
+	}
+	defer release()
+
+	detail, err := svc.ShowSession(ctx, model.ShowSessionRequest{
+		Session: in.Session,
+		Current: h.currentRef(),
+	})
+	if err != nil {
+		return nil, model.SessionDetail{}, h.mcpError(err)
+	}
+	return nil, detail, nil
+}
+
 // sessionCreateInput is session_create's input schema.
 type sessionCreateInput struct {
 	Name string `json:"name,omitempty" jsonschema:"a name for the session, unique within the arcave project; ids are assigned by arcave"`
-	From string `json:"from,omitempty" jsonschema:"the session to copy, by name or id; omit for an empty session"`
+	From string `json:"from,omitempty" jsonschema:"the session to copy, by name or id, current for the pinned or current one, latest for the newest; omit for an empty session"`
 }
 
 // createSessionMCP commits a session, empty or a fork of another.
@@ -532,9 +571,13 @@ func (h *MCPHandler) createSessionMCP(ctx context.Context, _ *mcpsdk.CallToolReq
 	}
 	defer release()
 
-	session, err := svc.CreateSession(ctx, model.CreateSessionRequest{Name: in.Name, From: in.From})
+	session, err := svc.CreateSession(ctx, model.CreateSessionRequest{
+		Name:    in.Name,
+		From:    in.From,
+		Current: h.currentRef(),
+	})
 	if err != nil {
-		return nil, model.Session{}, mcpError(err)
+		return nil, model.Session{}, h.mcpError(err)
 	}
 	return nil, session, nil
 }
@@ -555,7 +598,7 @@ func (h *MCPHandler) removeSessionMCP(ctx context.Context, _ *mcpsdk.CallToolReq
 
 	res, err := svc.RemoveSession(ctx, model.RemoveSessionRequest{Session: in.Session, Force: in.Force, Pinned: h.pinnedSession})
 	if err != nil {
-		return nil, model.RemoveSessionResponse{}, mcpError(err)
+		return nil, model.RemoveSessionResponse{}, h.mcpError(err)
 	}
 	return nil, res, nil
 }
@@ -578,22 +621,22 @@ func (h *MCPHandler) setSessionMCP(ctx context.Context, _ *mcpsdk.CallToolReques
 
 	session, err := svc.SetSession(ctx, in.Session)
 	if err != nil {
-		return nil, model.Session{}, mcpError(err)
+		return nil, model.Session{}, h.mcpError(err)
 	}
 	return nil, session, nil
 }
 
 // currentSessionMCP reports the session a call given no session works in.
-func (h *MCPHandler) currentSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, model.Session, error) {
+func (h *MCPHandler) currentSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, model.CurrentSession, error) {
 	svc, release, err := h.openSessionService(ctx)
 	if err != nil {
-		return nil, model.Session{}, err
+		return nil, model.CurrentSession{}, err
 	}
 	defer release()
 
-	session, err := svc.ResolveSession(ctx, h.pinRef())
+	session, err := svc.CurrentSession(ctx, h.currentRef())
 	if err != nil {
-		return nil, model.Session{}, mcpError(err)
+		return nil, model.CurrentSession{}, h.mcpError(err)
 	}
 	return nil, session, nil
 }
@@ -611,7 +654,7 @@ func (h *MCPHandler) unsetSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequ
 
 	session, err := svc.UnsetSession(ctx)
 	if err != nil {
-		return nil, model.Session{}, mcpError(err)
+		return nil, model.Session{}, h.mcpError(err)
 	}
 	return nil, session, nil
 }
@@ -626,6 +669,18 @@ func (h *MCPHandler) requireUnpinned() error {
 		"which outranks the current session: pass session on each call, or restart the server without the pin", h.pinnedSession.String())
 }
 
+// currentRef is the session a call given none works in: the pin, else the pointer, else the default.
+func (h *MCPHandler) currentRef() model.CurrentSessionRef {
+	pin := h.pinRef()
+	if pin == "" {
+		return model.CurrentSessionRef{}
+	}
+	return model.CurrentSessionRef{
+		Ref:    pin,
+		Source: h.pinSource,
+	}
+}
+
 // pinRef is the pin as a session ref, "" when the server is not pinned.
 func (h *MCPHandler) pinRef() string {
 	if h.pinnedSession == (model.SessionID{}) {
@@ -638,7 +693,7 @@ func (h *MCPHandler) pinRef() string {
 func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService, func(), error) {
 	svc, release, err := h.factories.Session(ctx)
 	if err != nil {
-		return nil, nil, mcpError(err)
+		return nil, nil, h.mcpError(err)
 	}
 	return svc, release, nil
 }
@@ -647,13 +702,14 @@ func (h *MCPHandler) openSessionService(ctx context.Context) (MCPSessionService,
 func (h *MCPHandler) openToolsService(ctx context.Context, composeProject string) (MCPToolsService, func(), error) {
 	svc, release, err := h.factories.Tools(ctx, composeProject)
 	if err != nil {
-		return nil, nil, mcpError(err)
+		return nil, nil, h.mcpError(err)
 	}
 	return svc, release, nil
 }
 
-// mcpError names what holds the project or session lock, so an agent waits instead of retrying blind.
-func mcpError(err error) error {
+// mcpError names what holds the project or session lock, so an agent waits instead of retrying blind,
+// and adds the fix to a current-session error as this server can take it.
+func (h *MCPHandler) mcpError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrProjectLocked):
 		return fmt.Errorf("%w: a session fork holds the lock for its whole copy, as does a savepoint or "+
@@ -662,7 +718,10 @@ func mcpError(err error) error {
 		return fmt.Errorf("%w: another arcave command, possibly on another machine sharing the store, works in "+
 			"this session; retry when it finishes", err)
 	}
-	return err
+	if h.pinnedSession != (model.SessionID{}) {
+		return sessionFixError(err, mcpPinnedSessionFixHints)
+	}
+	return sessionFixError(err, mcpSessionFixHints)
 }
 
 // MCPRun serves the tools over stdio until the host closes stdin or ctx is cancelled. A
@@ -685,12 +744,18 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_list", Description: descSessionList,
 		OutputSchema: newOutputSchema[sessionListOutput]()}, h.listSessionsMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:         "session_show",
+		Description:  descSessionShow,
+		Annotations:  &mcpsdk.ToolAnnotations{ReadOnlyHint: true},
+		OutputSchema: newOutputSchema[model.SessionDetail](),
+	}, h.showSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_create", Description: descSessionCreate,
 		OutputSchema: newOutputSchema[model.Session]()}, h.createSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_remove", Description: descSessionRemove,
 		OutputSchema: newOutputSchema[model.RemoveSessionResponse]()}, h.removeSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_current", Description: descSessionCurrent,
-		OutputSchema: newOutputSchema[model.Session]()}, h.currentSessionMCP)
+		OutputSchema: newOutputSchema[model.CurrentSession]()}, h.currentSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_set", Description: descSessionSet,
 		OutputSchema: newOutputSchema[model.Session]()}, h.setSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_unset", Description: descSessionUnset,

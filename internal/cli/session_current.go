@@ -21,7 +21,7 @@ import (
 )
 
 type sessionCurrentService interface {
-	ResolveSession(ctx context.Context, ref string) (model.Session, error)
+	CurrentSession(ctx context.Context, ref model.CurrentSessionRef) (model.CurrentSession, error)
 }
 
 type SessionCurrentHandler struct {
@@ -35,8 +35,8 @@ func NewSessionCurrentHandler(svc sessionCurrentService, printer printer) *Sessi
 
 // SessionCurrent prints the session a command works in: ref when set, else the current session,
 // else the default.
-func (h *SessionCurrentHandler) SessionCurrent(ctx context.Context, ref string) error {
-	session, err := h.svc.ResolveSession(ctx, ref)
+func (h *SessionCurrentHandler) SessionCurrent(ctx context.Context, ref model.CurrentSessionRef) error {
+	session, err := h.svc.CurrentSession(ctx, ref)
 	if err != nil {
 		return err
 	}

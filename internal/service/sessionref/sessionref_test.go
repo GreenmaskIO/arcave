@@ -17,6 +17,7 @@ package sessionref
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -37,6 +38,18 @@ var (
 	errPointer = errors.New("decoding the current session")
 )
 
+// listed is the arcave project's sessions every resolve reads.
+var listed = Listed{model.DefaultSessionRecord, exp}
+
+// mockCurrent is a strict pointer reader: a test expecting no read sets no expectation.
+type mockCurrent struct{ mock.Mock }
+
+func (m *mockCurrent) Get(ctx context.Context) (model.SessionID, bool, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(model.SessionID), args.Bool(1), args.Error(2)
+}
+
+// mockLister is a strict session lister: a test expecting no listing sets no expectation.
 type mockLister struct{ mock.Mock }
 
 func (m *mockLister) ListSessions(ctx context.Context) ([]model.Session, error) {
@@ -57,31 +70,26 @@ func TestResolve(t *testing.T) {
 		name    string
 		ref     string
 		current fakeCurrent
-		list    bool // whether ListSessions is expected
 		want    model.Session
 		wantErr error
 	}{
 		{name: "no ref and no pointer is the default", want: model.DefaultSessionRecord},
-		{name: "a name", ref: "exp", list: true, want: exp},
-		{name: "an id", ref: exp.ID.String(), list: true, want: exp},
-		{name: "an unknown ref", ref: "nope", list: true, wantErr: model.ErrSessionNotFound},
+		{name: "a name", ref: "exp", want: exp},
+		{name: "an id", ref: exp.ID.String(), want: exp},
+		{name: "an unknown ref", ref: "nope", wantErr: model.ErrSessionNotFound},
 		{name: "a ref outranks a dangling pointer", ref: "baseline", current: fakeCurrent{id: gone, found: true},
-			list: true, want: model.DefaultSessionRecord},
-		{name: "a pointer to a session", current: fakeCurrent{id: exp.ID, found: true}, list: true, want: exp},
+			want: model.DefaultSessionRecord},
+		{name: "a pointer to a session", current: fakeCurrent{id: exp.ID, found: true}, want: exp},
 		{name: "a pointer to a deleted session is refused", current: fakeCurrent{id: gone, found: true},
-			list: true, wantErr: model.ErrCurrentSessionNotFound},
+			wantErr: model.ErrCurrentSessionNotFound},
 		{name: "an unreadable pointer is refused", current: fakeCurrent{err: errPointer}, wantErr: errPointer},
+		{name: "current is refused", ref: model.RefCurrent, wantErr: model.ErrSessionRefKeyword},
+		{name: "latest is refused", ref: model.RefLatest, wantErr: model.ErrSessionRefKeyword},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			sessions := &mockLister{}
-			if tt.list {
-				sessions.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord, exp}, nil).Once()
-			}
-
 			// Act
-			got, err := Resolve(context.Background(), sessions, tt.current, tt.ref)
+			got, err := Resolve(context.Background(), listed, tt.current, tt.ref)
 
 			// Assert
 			if tt.wantErr != nil {
@@ -90,18 +98,137 @@ func TestResolve(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tt.want, got)
 			}
-			sessions.AssertExpectations(t)
 		})
 	}
 }
 
-func TestReadCurrent_UnreadableNamesTheWayOut(t *testing.T) {
+// The default named by no ref and no pointer reads no session record.
+func TestResolve_DefaultListsNothing(t *testing.T) {
+	// Arrange
+	sessions := &mockLister{}
+
 	// Act
-	_, _, err := ReadCurrent(context.Background(), fakeCurrent{err: errPointer})
+	got, err := Resolve(context.Background(), sessions, fakeCurrent{}, "")
 
 	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, model.DefaultSessionRecord, got)
+	sessions.AssertExpectations(t)
+}
+
+func TestResolve_ListingFails(t *testing.T) {
+	// Arrange
+	errList := errors.New("reading session.json")
+	sessions := &mockLister{}
+	sessions.On("ListSessions", mock.Anything).Return([]model.Session(nil), errList).Once()
+
+	// Act
+	_, err := Resolve(context.Background(), sessions, fakeCurrent{}, "exp")
+
+	// Assert
+	require.ErrorIs(t, err, errList)
+	sessions.AssertExpectations(t)
+}
+
+func TestResolveCurrent_Source(t *testing.T) {
+	baseline := &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}
+	tests := []struct {
+		name    string
+		ref     model.CurrentSessionRef
+		current fakeCurrent
+		want    model.CurrentSessionSource
+	}{
+		{name: "no ref and no pointer", want: model.CurrentSessionSource{Source: model.SessionRefSourceDefault}},
+		{name: "the pointer", current: fakeCurrent{id: exp.ID, found: true},
+			want: model.CurrentSessionSource{Source: model.SessionRefSourcePointer}},
+		{name: "the variable over no pointer overrides the default",
+			ref:  model.CurrentSessionRef{Ref: "exp", Source: model.SessionRefSourceEnv},
+			want: model.CurrentSessionSource{Source: model.SessionRefSourceEnv, Overrides: baseline}},
+		{name: "the flag over the pointer overrides it",
+			ref:     model.CurrentSessionRef{Ref: model.DefaultSessionName, Source: model.SessionRefSourceFlag},
+			current: fakeCurrent{id: exp.ID, found: true},
+			want: model.CurrentSessionSource{Source: model.SessionRefSourceFlag,
+				Overrides: &model.SessionRef{ID: exp.ID, Name: exp.Name}}},
+		{name: "a flag naming what the pointer names overrides nothing",
+			ref:     model.CurrentSessionRef{Ref: "exp", Source: model.SessionRefSourceFlag},
+			current: fakeCurrent{id: exp.ID, found: true},
+			want:    model.CurrentSessionSource{Source: model.SessionRefSourceFlag}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			_, got, err := ResolveCurrent(context.Background(), listed, tt.current, tt.ref)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// A ref no flag or variable gave — a positional one, status's — reads no pointer and overrides nothing.
+func TestResolveCurrent_RefWithoutSourceReadsNoPointer(t *testing.T) {
+	// Arrange
+	current := &mockCurrent{}
+
+	// Act
+	session, source, err := ResolveCurrent(context.Background(), listed, current, model.CurrentSessionRef{Ref: "exp"})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, exp, session)
+	assert.Nil(t, source.Overrides)
+	current.AssertExpectations(t)
+}
+
+func TestFindOverridden(t *testing.T) {
+	tests := []struct {
+		name    string
+		current fakeCurrent
+		chosen  model.SessionID
+		want    *model.SessionRef
+	}{
+		{name: "no pointer: the default", chosen: exp.ID,
+			want: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}},
+		{name: "a pointer to another session", current: fakeCurrent{id: exp.ID, found: true},
+			chosen: model.DefaultSession, want: &model.SessionRef{ID: exp.ID, Name: exp.Name}},
+		{name: "a pointer to the chosen session", current: fakeCurrent{id: exp.ID, found: true}, chosen: exp.ID},
+		{name: "no pointer, the default chosen", chosen: model.DefaultSession},
+		{name: "a dangling pointer", current: fakeCurrent{id: gone, found: true}, chosen: exp.ID},
+		{name: "an unreadable pointer", current: fakeCurrent{err: errPointer}, chosen: exp.ID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := FindOverridden(context.Background(), listed, tt.current, tt.chosen)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestNewCurrentNotFoundError(t *testing.T) {
+	// Act
+	err := NewCurrentNotFoundError(gone)
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrCurrentSessionNotFound)
+	assert.Equal(t, "the current session no longer exists: "+gone.String()+", named by "+model.StateDir+
+		"/current_session", err.Error())
+}
+
+func TestReadCurrent_Unreadable(t *testing.T) {
+	// Arrange
+	unreadable := fmt.Errorf("%w: decoding current_session: %w", model.ErrCurrentSessionUnreadable, errPointer)
+
+	// Act
+	_, _, err := ReadCurrent(context.Background(), fakeCurrent{err: unreadable})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrCurrentSessionUnreadable)
 	require.ErrorIs(t, err, errPointer)
-	assert.Contains(t, err.Error(), "arcave session unset")
+	assert.NotContains(t, err.Error(), "arcave session")
 }
 
 func mustSessionID(s string) model.SessionID {

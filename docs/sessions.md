@@ -18,6 +18,7 @@ A **session** is an independent line of savepoints inside a project. A session s
 |---|---|
 | `arcave session set <session>` | Makes `<session>` the current one. |
 | `arcave session current` | Shows the current session. |
+| `arcave session show [<session>]` | Shows a session's savepoints, every compose project's at once. |
 | `arcave session unset` | Goes back to `baseline`. |
 
 The current session is recorded in `.arcave/current_session`, so it holds for this project directory on this host only. A current session that has since been deleted is an error, never a silent fall back to `baseline`, and deleting the current session takes `--force`, which also clears it.

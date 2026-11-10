@@ -43,7 +43,7 @@ func runSessionCurrent(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("init session dependencies: %w", err)
 	}
-	return cli.NewSessionCurrentHandler(svc, loadRunOutput()).SessionCurrent(ctx, sessionRef)
+	return cli.NewSessionCurrentHandler(svc, loadRunOutput()).SessionCurrent(ctx, currentSessionRef())
 }
 
 func init() {

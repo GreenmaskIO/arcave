@@ -136,10 +136,22 @@ func NewSessionService(deps SessionDeps) *SessionService {
 	}
 }
 
-// ResolveSession finds the session ref names: by name first, then by id. "" is the current
-// session, or the default when no pointer is set; a pointer to a deleted session is refused.
+// ResolveSession finds the session ref names, as sessionref.Resolve does.
 func (s *SessionService) ResolveSession(ctx context.Context, ref string) (model.Session, error) {
 	return sessionref.Resolve(ctx, s.sessions, s.current, ref)
+}
+
+// CurrentSession finds the session a command works in when it names none, as ResolveSession does
+// for ref, and where it was named.
+func (s *SessionService) CurrentSession(ctx context.Context, ref model.CurrentSessionRef) (model.CurrentSession, error) {
+	session, source, err := sessionref.ResolveCurrent(ctx, s.sessions, s.current, ref)
+	if err != nil {
+		return model.CurrentSession{}, err
+	}
+	return model.CurrentSession{
+		Session:       session,
+		CurrentSource: source,
+	}, nil
 }
 
 // SetSession makes the session ref names the current one.
@@ -152,7 +164,7 @@ func (s *SessionService) SetSession(ctx context.Context, ref string) (model.Sess
 		if err != nil {
 			return model.Session{}, fmt.Errorf("listing sessions: %w", err)
 		}
-		session, err := model.FindSessionByRef(sessions, ref)
+		session, err := sessionref.Resolve(ctx, sessionref.Listed(sessions), s.current, ref)
 		if err != nil {
 			return model.Session{}, err
 		}
@@ -177,24 +189,27 @@ func (s *SessionService) UnsetSession(ctx context.Context) (model.Session, error
 	})
 }
 
-// ListSessions returns every session in req.Sort's order; the default, created by no one, is
-// the oldest.
-// req.All adds the trees without a record, each with the status its heartbeat gives it; the
-// session req.Ref resolves to is marked current.
+// ListSessions returns every session in req.Sort's order, the default the oldest, the one req.Current
+// names marked current; req.All adds the trees without a record, with their heartbeat's status.
 func (s *SessionService) ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error) {
 	sessions, err := s.sessions.ListSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
-	current := s.findCurrent(ctx, sessions, req.Ref)
+	current, source, err := s.findCurrent(ctx, sessions, req.Current)
+	if err != nil {
+		return nil, err
+	}
 	summaries := make([]model.SessionSummary, 0, len(sessions))
 	for _, session := range sessions {
-		summary, err := s.summarize(ctx, session)
+		mark := sessionMark{status: model.SessionStatusReady}
+		if session.ID == current {
+			mark.current = source
+		}
+		summary, err := s.summarize(ctx, session, mark)
 		if err != nil {
 			return nil, err
 		}
-		summary.Status = model.SessionStatusReady
-		summary.Current = session.ID == current
 		summaries = append(summaries, summary)
 	}
 	if req.All {
@@ -243,7 +258,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req model.CreateSess
 				Msg("session created")
 			return session, nil
 		}
-		source, err := model.FindSessionByRef(sessions, req.From)
+		source, err := s.findForkSource(ctx, sessions, req)
 		if err != nil {
 			return model.Session{}, err
 		}
@@ -314,7 +329,7 @@ func (s *SessionService) RemoveSession(
 		} else if current {
 			if err := s.current.Clear(ctx); err != nil {
 				zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).
-					Msg("the deleted session is still the current one; run 'arcave session unset'")
+					Msg("the deleted session is still the current one")
 			} else {
 				zerolog.Ctx(ctx).Info().Str("session", id.String()).
 					Msg("the deleted session was the current one; commands now work in the default session")
@@ -397,14 +412,25 @@ func (s *SessionService) requireNotInUse(
 		return current, nil
 	}
 	if current {
-		return false, fmt.Errorf("%w: %s; switch with 'arcave session set <session>' or 'arcave session unset' "+
-			"first, or force it to delete it and clear the pointer", model.ErrCurrentSessionDelete, id)
+		return false, fmt.Errorf("%w: %s", model.ErrCurrentSessionDelete, id)
 	}
 	if req.Pinned == id {
-		return false, fmt.Errorf("%w: %s is the session this MCP server is pinned to; force it to delete it anyway",
-			model.ErrCurrentSessionDelete, id)
+		return false, fmt.Errorf("%w: %s is the session this MCP server is pinned to", model.ErrCurrentSessionDelete, id)
 	}
 	return false, nil
+}
+
+// findForkSource is the session req.From names among sessions: RefCurrent the one req.Current
+// names, RefLatest the newest.
+func (s *SessionService) findForkSource(
+	ctx context.Context, sessions []model.Session, req model.CreateSessionRequest,
+) (model.Session, error) {
+	switch req.From {
+	case model.RefCurrent:
+		return sessionref.Resolve(ctx, sessionref.Listed(sessions), s.current, req.Current.Ref)
+	default:
+		return findNamedSession(sessions, req.From)
+	}
 }
 
 // readCurrentOrNone reads the pointer for a command it only informs: an unreadable one is
@@ -418,31 +444,36 @@ func (s *SessionService) readCurrentOrNone(ctx context.Context) (model.SessionID
 	return id, found
 }
 
-// findCurrent is the session ref resolves to among sessions, or the current session for ""; zero
-// when ref names none or the pointer cannot be read.
-func (s *SessionService) findCurrent(ctx context.Context, sessions []model.Session, ref string) model.SessionID {
-	if ref != "" {
-		session, err := model.FindSessionByRef(sessions, ref)
-		if err != nil {
-			zerolog.Ctx(ctx).Warn().Err(err).Msg("marking the current session")
-			return model.SessionID{}
-		}
-		return session.ID
-	}
-	id, found, err := sessionref.ReadCurrent(ctx, s.current)
+// findCurrent is the session ref names among sessions, or the current session for an empty ref, and
+// where it was named. A keyword is refused; a ref naming no session, or a pointer that cannot be read
+// or followed, marks none, with a warning.
+func (s *SessionService) findCurrent(
+	ctx context.Context, sessions []model.Session, ref model.CurrentSessionRef,
+) (model.SessionID, *model.CurrentSessionSource, error) {
+	session, source, err := sessionref.ResolveCurrent(ctx, sessionref.Listed(sessions), s.current, ref)
 	switch {
+	case errors.Is(err, model.ErrSessionRefKeyword):
+		return model.SessionID{}, nil, err
 	case err != nil:
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("reading the current session")
-		return model.SessionID{}
-	case !found:
-		return model.DefaultSession
-	default:
-		return id
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("marking the current session")
+		return model.SessionID{}, nil, nil
 	}
+	return session.ID, &source, nil
+}
+
+// sessionMark is what a listing says of a session beside what it holds.
+type sessionMark struct {
+	status model.SessionStatus
+	// errText is why a tree without a record failed, or could not be read.
+	errText string
+	// current is where the current session was named; nil for any other.
+	current *model.CurrentSessionSource
 }
 
 // summarize counts what the session holds, safety snapshots excluded, and measures its tree.
-func (s *SessionService) summarize(ctx context.Context, session model.Session) (model.SessionSummary, error) {
+func (s *SessionService) summarize(
+	ctx context.Context, session model.Session, mark sessionMark,
+) (model.SessionSummary, error) {
 	groups, err := s.sessionSavepoints(ctx, session.ID)
 	if err != nil {
 		return model.SessionSummary{}, fmt.Errorf("session %s: %w", session.ID, err)
@@ -451,26 +482,38 @@ func (s *SessionService) summarize(ctx context.Context, session model.Session) (
 	if err != nil {
 		return model.SessionSummary{}, err
 	}
-	var (
-		composeProjects = []model.DockerComposeProjectName{}
-		savepointCount  int
-	)
+	composeProjects := make([]model.DockerComposeProjectName, 0, len(groups))
 	for _, group := range groups {
 		composeProjects = append(composeProjects, group.ComposeProject)
+	}
+	savepointCount, safetyCount := countSavepoints(groups)
+	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Int("compose_projects", len(groups)).
+		Int("savepoints", savepointCount).Int("safety_snapshots", safetyCount).Int64("size_bytes", size).
+		Msg("session summarized")
+	return model.SessionSummary{
+		Session:             session,
+		Status:              mark.status,
+		CurrentSource:       mark.current,
+		Error:               mark.errText,
+		ComposeProjects:     composeProjects,
+		SavepointCount:      savepointCount,
+		SafetySnapshotCount: safetyCount,
+		SizeBytes:           size,
+	}, nil
+}
+
+// countSavepoints counts the savepoints of groups apart from their safety snapshots.
+func countSavepoints(groups []model.ComposeProjectSavepoints) (savepoints, safetySnapshots int) {
+	for _, group := range groups {
 		for _, savepoint := range group.Savepoints {
-			if !savepoint.IsSafetySnapshot() {
-				savepointCount++
+			if savepoint.IsSafetySnapshot() {
+				safetySnapshots++
+			} else {
+				savepoints++
 			}
 		}
 	}
-	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Int("compose_projects", len(groups)).
-		Int("savepoints", savepointCount).Int64("size_bytes", size).Msg("session summarized")
-	return model.SessionSummary{
-		Session:         session,
-		ComposeProjects: composeProjects,
-		SavepointCount:  savepointCount,
-		SizeBytes:       size,
-	}, nil
+	return savepoints, safetySnapshots
 }
 
 // readSessionSavepoints lists every committed savepoint of session id, grouped by compose
@@ -519,18 +562,23 @@ func (s *SessionService) listUncommitted(ctx context.Context) ([]model.SessionSu
 	for _, id := range ids {
 		status, beat, readErr := s.readTreeStatus(ctx, id)
 		session := model.Session{ID: id, CreatedAt: beat.StartedAt, From: newForkOrigin(beat)}
-		summary, err := s.summarize(ctx, session)
+		mark := sessionMark{status: status}
+		switch status {
+		case model.SessionStatusFailed:
+			mark.errText = beat.Error
+		case model.SessionStatusUnknown:
+			mark.errText = readErr.Error()
+		}
+		summary, err := s.summarize(ctx, session, mark)
 		if err != nil {
 			// A tree still being written may hold a half-copied record; keep its row.
 			zerolog.Ctx(ctx).Warn().Err(err).Str("session", id.String()).Msg("summarizing a session tree without a record")
-			summary = model.SessionSummary{Session: session, ComposeProjects: []model.DockerComposeProjectName{}}
-		}
-		summary.Status = status
-		switch status {
-		case model.SessionStatusFailed:
-			summary.Error = beat.Error
-		case model.SessionStatusUnknown:
-			summary.Error = readErr.Error()
+			summary = model.SessionSummary{
+				Session:         session,
+				Status:          mark.status,
+				Error:           mark.errText,
+				ComposeProjects: []model.DockerComposeProjectName{},
+			}
 		}
 		summaries = append(summaries, summary)
 	}

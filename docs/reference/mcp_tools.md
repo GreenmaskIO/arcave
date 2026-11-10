@@ -1,12 +1,12 @@
 ---
 title: MCP tools
-description: The twelve tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, the six session tools, gc and compose_generate — their arguments, their output shapes, and where they differ from the CLI.
+description: The fourteen tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, the seven session tools, gc, status and compose_generate — their arguments, their output shapes, and where they differ from the CLI.
 keywords: [arcave MCP tools, savepoint_create, rollback, session_create, AI agent, model context protocol]
 ---
 
 # MCP tools
 
-[`arcave mcp`](cli/mcp.md) exposes twelve tools: four for savepoints, six for sessions, [`gc`](#gc) and [`compose_generate`](#compose_generate). Each savepoint tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
+[`arcave mcp`](cli/mcp.md) exposes fourteen tools: four for savepoints, seven for sessions, [`gc`](#gc), [`status`](#status) and [`compose_generate`](#compose_generate). Each savepoint tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
 
 Every tool runs the workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a rollback of a running project that fails replays its safety snapshot. What an agent takes, you list; what you take, an agent rolls back to.
 
@@ -138,14 +138,27 @@ Lists the arcave project's sessions. Read-only, and takes no lock.
   "sessions": [
     { "id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "agent-work", "created_at": "2026-10-10T12:00:00Z",
       "from": { "session": "00000000-0000-0000-0000-000000000001" },
-      "status": "ready", "current": true, "savepoint_count": 1, "compose_projects": ["myapp"], "size_bytes": 734003396 },
+      "status": "ready", "current_source": { "source": "flag",
+        "overrides": { "id": "00000000-0000-0000-0000-000000000001", "name": "baseline" } },
+      "savepoint_count": 1, "safety_snapshot_count": 0, "compose_projects": ["myapp"], "size_bytes": 734003396 },
     { "id": "00000000-0000-0000-0000-000000000001", "name": "baseline",
-      "status": "ready", "current": false, "savepoint_count": 2, "compose_projects": ["myapp"], "size_bytes": 734003200 }
+      "status": "ready", "savepoint_count": 2, "safety_snapshot_count": 0,
+      "compose_projects": ["myapp"], "size_bytes": 734003200 }
   ]
 }
 ```
 
-`current` marks the session a call given no `session` works in — the pinned session on a pinned server. The entries are those of [`session list`](cli/session.md#session-list).
+`current_source` marks the session a call given no `session` works in — the pinned session on a pinned server — and says what named it, as in [`session_current`](#session_current). The entries are those of [`session list`](cli/session.md#session-list).
+
+## `session_show`
+
+One session and its committed savepoints, grouped by compose project: compose projects by name, savepoints newest first, safety snapshots among them. Read-only, takes no lock, and reads the store alone — never the daemon.
+
+| Argument | Required | Description |
+|---|---|---|
+| `session` | no | The session to show, by name or id, `latest` for the newest. Omit, or pass `current`, for the pinned or current session. |
+
+Returns the object [`session show`](cli/session.md#session-show) prints as JSON. `current_source` marks the session a call given no `session` works in, as in `session_list`, and says what named it, as in `session_current`.
 
 ## `session_create`
 
@@ -154,7 +167,7 @@ Creates a session: empty, or with `from` a copy of another session — every com
 | Argument | Required | Description |
 |---|---|---|
 | `name` | no | A name for the session, unique within the arcave project. |
-| `from` | no | The session to copy, by name or id. Omit for an empty session. |
+| `from` | no | The session to copy, by name or id; `current` for the pinned or current one, `latest` for the newest. Omit for an empty session. |
 
 Returns the session record:
 
@@ -176,9 +189,19 @@ Deletes a session and every savepoint it holds, permanently. A compose project r
 { "session": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "removed": true, "freed_bytes": 734003396 }
 ```
 
+Without `force`, the current session and the one the server is pinned to are refused:
+
+```text
+session is the current session: 019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31 is the session this MCP server is pinned to; pass force to delete it anyway
+```
+
 ## `session_current`
 
-Takes no arguments. Returns the record of the session a call given no `session` works in: the pinned session, else the current session, else `baseline`. Read-only. It fails when the current session no longer exists; `session_unset` or `session_set` repairs that.
+Takes no arguments. Returns the record of the session a call given no `session` works in — the pinned session, else the current session, else `baseline` — with `current_source` saying which: `{"source": "flag" | "env"}` for the pin, by what named it when the server started, `{"source": "pointer"}` for the current session, `{"source": "default"}` for none. On a pinned server `overrides` names the session the pin hides — the current session, else `baseline` — when it is another one. Read-only. It fails when the current session no longer exists, or its pointer cannot be read; `session_unset` or `session_set` repairs that:
+
+```text
+the current session no longer exists: <id>, named by .arcave/current_session; call session_unset or session_set
+```
 
 ## `session_set`
 

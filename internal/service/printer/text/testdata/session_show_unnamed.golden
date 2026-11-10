@@ -1,0 +1,9 @@
+Session 019a2b3c-4d5e-7000-8000-000000000007 · current (ARCAVE_SESSION)
+  From       019a2b3c-4d5e-7000-8000-000000000009
+  Savepoints 1
+
+Current session overridden by ARCAVE_SESSION; without it: baseline.
+
+shop
+  NAME   ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+  test3  01a188c4-1650-7000-8000-000000000001  2026-10-29 19:45  4        1       48.9 MB  3

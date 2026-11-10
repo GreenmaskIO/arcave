@@ -48,6 +48,11 @@ func (s *Printer) formatSavepoints(savepoints []model.Savepoint) string {
 	if len(savepoints) == 0 {
 		return "No savepoints.\n"
 	}
+	return s.formatSavepointTable(savepoints)
+}
+
+// formatSavepointTable is savepoints as a table, in the order given.
+func (s *Printer) formatSavepointTable(savepoints []model.Savepoint) string {
 	rows := make([][]string, 0, len(savepoints))
 	for _, savepoint := range savepoints {
 		rows = append(rows, []string{

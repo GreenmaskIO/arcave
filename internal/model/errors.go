@@ -80,11 +80,15 @@ var (
 	// ErrSessionStatusUnknown refuses to delete a tree whose heartbeat cannot be read or reports
 	// another operation in progress, unless forced.
 	ErrSessionStatusUnknown = errors.New("session tree status is unknown")
+	// ErrSessionRefKeyword refuses a keyword where a session must be named by name or id.
+	ErrSessionRefKeyword = errors.New("current and latest name a session to show or copy, never the session a command works in")
 	// ErrNoSessionRef refuses a command that must name a session but names none.
 	ErrNoSessionRef = errors.New("no session named")
 	// ErrCurrentSessionNotFound reports a current-session pointer naming a session that no
 	// longer exists.
 	ErrCurrentSessionNotFound = errors.New("the current session no longer exists")
+	// ErrCurrentSessionUnreadable reports a current-session pointer that cannot be read.
+	ErrCurrentSessionUnreadable = errors.New("the current-session pointer cannot be read")
 	// ErrCurrentSessionDelete refuses to delete the session the current-session pointer names, or
 	// the one an MCP server is pinned to, unless forced.
 	ErrCurrentSessionDelete = errors.New("session is the current session")
