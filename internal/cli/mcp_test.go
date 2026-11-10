@@ -459,16 +459,44 @@ func TestMCPHandler_PinnedSessionTools(t *testing.T) {
 		Return([]model.SessionSummary(nil), nil).Once()
 	svc.On("RemoveSession", mock.Anything, model.RemoveSessionRequest{Session: "feat", Pinned: handlerSession}).
 		Return(model.RemoveSessionResponse{}, model.ErrCurrentSessionDelete).Once()
+	pin := handlerSession.String()
+	svc.On("ShowSession", mock.Anything, model.ShowSessionRequest{Session: pin, Ref: pin}).
+		Return(model.SessionDetail{}, nil).Once()
+	svc.On("ShowSession", mock.Anything, model.ShowSessionRequest{Session: "feat", Ref: pin}).
+		Return(model.SessionDetail{}, nil).Once()
 	released := false
 	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, handlerSession, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
 
 	// Act
 	_, _, listErr := h.listSessionsMCP(context.Background(), nil, sessionListInput{})
 	_, _, deleteErr := h.removeSessionMCP(context.Background(), nil, sessionRemoveInput{Session: "feat"})
+	_, _, showPinErr := h.showSessionMCP(context.Background(), nil, sessionShowInput{})
+	_, _, showOtherErr := h.showSessionMCP(context.Background(), nil, sessionShowInput{Session: "feat"})
 
-	// Assert: the listing marks the pin, and the pin is protected like the current session.
+	// Assert: the listing and a show mark the pin, a show with no session shows it, and the pin is
+	// protected like the current session.
 	require.NoError(t, listErr)
+	require.NoError(t, showPinErr)
+	require.NoError(t, showOtherErr)
 	require.ErrorIs(t, deleteErr, model.ErrCurrentSessionDelete)
+	svc.AssertExpectations(t)
+}
+
+func TestMCPHandler_ShowSessionMCP_ServiceError(t *testing.T) {
+	// Arrange
+	svc := &mockService{}
+	svc.On("ShowSession", mock.Anything, model.ShowSessionRequest{Session: "nowhere"}).
+		Return(model.SessionDetail{}, model.ErrSessionNotFound).Once()
+	released := false
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+
+	// Act
+	_, out, err := h.showSessionMCP(context.Background(), nil, sessionShowInput{Session: "nowhere"})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionNotFound)
+	assert.Equal(t, model.SessionDetail{}, out)
+	assert.True(t, released)
 	svc.AssertExpectations(t)
 }
 
@@ -501,6 +529,14 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	}
 	layers := []model.WritableLayerRestoreResult{{Service: "db", Replica: 1, ContainerName: "demo-db-1",
 		ImageID: model.ImageDigestID("sha256:" + strings.Repeat("a", 64)), Tag: "arcave/demo-db-1-postgres-16:sp-v1"}}
+	detail := model.SessionDetail{
+		Session: record,
+		ComposeProjects: []model.ComposeProjectSavepoints{{
+			ComposeProject: "demo",
+			Savepoints:     []model.Savepoint{savepoint},
+		}},
+		CheckedAt: savepoint.CreatedAt,
+	}
 	tests := []struct {
 		tool               string
 		args               map[string]any
@@ -531,6 +567,11 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true, Sort: model.SortDesc}).
 					Return([]model.SessionSummary{{Session: record, Status: model.SessionStatusReady, Current: true}}, nil).Once()
 			}, want: sessionListOutput{Sessions: []model.SessionSummary{{Session: record, Status: model.SessionStatusReady, Current: true}}}},
+		{tool: "session_show", args: map[string]any{"session": "feat", "include_safety_snapshots": true},
+			setup: func(svc *mockService) {
+				svc.On("ShowSession", mock.Anything, model.ShowSessionRequest{Session: "feat", IncludeSafetySnapshots: true}).
+					Return(detail, nil).Once()
+			}, want: detail},
 		{tool: "session_create", args: map[string]any{"name": "feat", "from": "baseline"},
 			setup: func(svc *mockService) {
 				svc.On("CreateSession", mock.Anything, model.CreateSessionRequest{Name: "feat", From: "baseline"}).Return(record, nil).Once()

@@ -89,6 +89,8 @@ func (s *Printer) Print(v any) error {
 		text = formatSession(v)
 	case []model.SessionSummary:
 		text = s.formatSessions(v)
+	case model.SessionDetail:
+		text = s.formatSessionDetail(v)
 	case model.RemoveSessionResponse:
 		text = formatRemoveSession(v)
 	case model.ComposeProjectStatus:

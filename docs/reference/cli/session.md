@@ -20,6 +20,7 @@ None of the `session` commands touches the Docker daemon, and none of them takes
 ```text title="Synopsis"
 arcave session create [--name <name>] [--from <session>]
 arcave session list [--all] [--sort desc|asc]
+arcave session show [--include-safety-snapshots] [<id|name>]
 arcave session remove [--force] <id|name>
 arcave session set <id|name>
 arcave session unset
@@ -37,7 +38,7 @@ Every command works in exactly one session. The first of these that is set names
 | Current session | `arcave session set feat/add-new-table`, kept in `.arcave/current_session` |
 | None of them | `baseline`, the default session |
 
-Each form takes an id or a name: arcave looks the value up as a name first, then as an id. **Creating a session does not switch you into it** — run `session set` to make it the current one.
+Each form takes an id or a name: arcave looks the value up as a name first, then as an id. **Creating a session does not switch you into it** — run `session set` to make it the current one. [`session show`](#session-show) lists what a session holds, every compose project at once.
 
 The current session is local to the host: `.arcave/current_session` sits beside `.arcave/config.yaml` and is not in the store, so another machine reading the same store keeps its own. If the session it names has been deleted, commands that name no session are refused rather than quietly falling back to `baseline`:
 
@@ -86,9 +87,9 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 <TabItem value="terminal" label="Terminal" default>
 
 ```text title="stdout"
-  NAME                ID                                    STATUS  CREATED           SAVEPOINTS  SIZE
-* feat/add-new-table  019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31  ready   2026-10-10 12:00  3           292 MB
-  baseline            00000000-0000-0000-0000-000000000001  ready   -                 2           251 MB
+  NAME                ID                                    STATUS  CREATED           SAVEPOINTS  SIZE    COMPOSE PROJECTS
+* feat/add-new-table  019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31  ready   2026-10-10 12:00  3           292 MB  shop
+  baseline            00000000-0000-0000-0000-000000000001  ready   -                 2           251 MB  shop
 ```
 
 </TabItem>
@@ -98,14 +99,70 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 [
   {"id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table",
    "created_at": "2026-10-10T12:00:00Z", "from": {"session": "00000000-0000-0000-0000-000000000001"},
-   "status": "ready", "current": true, "savepoint_count": 3, "compose_projects": ["shop"], "size_bytes": 291585156},
+   "status": "ready", "current": true, "savepoint_count": 3, "safety_snapshot_count": 0, "compose_projects": ["shop"], "size_bytes": 291585156},
   {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline",
-   "status": "ready", "current": false, "savepoint_count": 2, "compose_projects": ["shop"], "size_bytes": 250689663}
+   "status": "ready", "current": false, "savepoint_count": 2, "safety_snapshot_count": 0, "compose_projects": ["shop"], "size_bytes": 250689663}
 ]
 ```
 
 </TabItem>
 </Tabs>
+
+## `session show`
+
+One session and its committed savepoints, grouped by compose project — every compose project of the session at once, so it takes no `-p`. The session is the one the argument names, by id or name; without one, the session a command works in ([above](#naming-the-session-a-command-works-in)). The argument outranks `--session`, which still marks `current` — and fails the command when it names no session.
+
+Compose projects come by name, and each one's savepoints newest first, in the columns of [`savepoint list`](savepoint_list.md). Safety snapshots are hidden; `--include-safety-snapshots` shows them, as it does for `savepoint list`. A compose project left with no savepoint to show is not shown. It reads the store alone — no daemon, no lock — and writes nothing.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--include-safety-snapshots` | `false` | Also show the safety snapshots a rollback takes of the live state. |
+
+<Tabs groupId="output">
+<TabItem value="terminal" label="Terminal" default>
+
+```text title="stdout"
+Session feat/add-new-table · 019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31 · current
+  Created    2026-10-10 12:00 (2h 05m ago)
+  From       00000000-0000-0000-0000-000000000001
+             baseline
+  Savepoints 3 (+1 safety)
+
+blog
+  NAME  ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+  init  019a0c30-1b2c-7d3e-8f40-5a6b7c8d9e01  2026-10-10 12:10  1        0       48.0 MB  -
+
+shop
+  NAME              ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+  before-migration  019a0c3a-2c3d-7e4f-9051-6b7c8d9e0f12  2026-10-10 12:55  2        1       1.20 GB  -
+  seed              019a0c31-3d4e-7f50-a162-7c8d9e0f1a23  2026-10-10 12:15  2        1       1.10 GB  -
+```
+
+`Savepoints` counts the whole session, safety snapshots apart, whether they are shown or not. An empty session prints `No savepoints in this session yet.` below its header; one holding only safety snapshots says they are hidden and that `--include-safety-snapshots` shows them.
+
+</TabItem>
+<TabItem value="json" label="JSON">
+
+```json title="stdout"
+{
+  "session": {"id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table",
+              "created_at": "2026-10-10T12:00:00Z", "from": {"session": "00000000-0000-0000-0000-000000000001"}},
+  "current": true,
+  "from": {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline"},
+  "savepoint_count": 3,
+  "safety_snapshot_count": 1,
+  "compose_projects": [
+    {"compose_project": "blog", "savepoints": [ … ]},
+    {"compose_project": "shop", "savepoints": [ … ]}
+  ],
+  "checked_at": "2026-10-10T14:05:00Z"
+}
+```
+
+</TabItem>
+</Tabs>
+
+`from` is the session this one was forked from, by id and by the name it carries now — left out for a session forked from none; `name` is `""` for a source without a name or since removed, and the text output then prints its id alone, else the name below the id. `current` means what it means in `session list`. Each savepoint is the whole record [`savepoint list`](savepoint_list.md) prints. `compose_projects` is `[]` for an empty session, never `null`.
 
 ## `session remove`
 

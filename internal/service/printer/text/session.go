@@ -17,6 +17,7 @@ package text
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/greenmaskio/arcave/internal/model"
 )
@@ -54,11 +55,37 @@ func (s *Printer) formatSessions(sessions []model.SessionSummary) string {
 			session.ID.String(),
 			string(session.Status),
 			created,
-			strconv.Itoa(session.SavepointCount),
+			formatSavepointCount(session.SavepointCount, session.SafetySnapshotCount),
 			formatSize(session.SizeBytes),
+			formatComposeProjectNames(session.ComposeProjects),
 		})
 	}
-	return formatTable([]string{"  NAME", "ID", "STATUS", "CREATED", "SAVEPOINTS", "SIZE"}, rows)
+	return formatTable([]string{"  NAME", "ID", "STATUS", "CREATED", "SAVEPOINTS", "SIZE", "COMPOSE PROJECTS"}, rows)
+}
+
+// formatSavepointCount is the savepoints counted, the safety snapshots added when any.
+func formatSavepointCount(savepoints, safetySnapshots int) string {
+	if safetySnapshots == 0 {
+		return strconv.Itoa(savepoints)
+	}
+	return fmt.Sprintf("%d (+%d safety)", savepoints, safetySnapshots)
+}
+
+// formatComposeProjectNames names up to two compose projects and counts the rest.
+func formatComposeProjectNames(names []model.DockerComposeProjectName) string {
+	const shown = 2
+	if len(names) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, shown)
+	for _, name := range names[:min(len(names), shown)] {
+		parts = append(parts, name.String())
+	}
+	line := strings.Join(parts, ", ")
+	if len(names) > shown {
+		line += fmt.Sprintf(" +%d", len(names)-shown)
+	}
+	return line
 }
 
 // formatRemoveSession is the session a remove took and what it freed.
@@ -67,4 +94,60 @@ func formatRemoveSession(response model.RemoveSessionResponse) string {
 		return fmt.Sprintf("Session %s was not removed.\n", response.Session)
 	}
 	return fmt.Sprintf("Removed session %s · freed %s\n", response.Session, formatSize(response.FreedBytes))
+}
+
+// formatSessionDetail is one session: a title, then each compose project's savepoints as a table.
+func (s *Printer) formatSessionDetail(detail model.SessionDetail) string {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render(formatSessionDetailTitle(detail)) + "\n")
+	if !detail.Session.CreatedAt.IsZero() {
+		fmt.Fprintf(&b, "  %-10s %s (%s ago)\n", "Created", s.formatTime(detail.Session.CreatedAt),
+			model.FormatAge(detail.CheckedAt.Sub(detail.Session.CreatedAt)))
+	}
+	if detail.From != nil {
+		fmt.Fprintf(&b, "  %-10s %s\n", "From", detail.From.ID)
+		if detail.From.Name != "" {
+			fmt.Fprintf(&b, "  %-10s %s\n", "", detail.From.Name)
+		}
+	}
+	fmt.Fprintf(&b, "  %-10s %s\n", "Savepoints",
+		formatSavepointCount(detail.SavepointCount, detail.SafetySnapshotCount))
+	switch {
+	case len(detail.ComposeProjects) == 0 && detail.SafetySnapshotCount > 0:
+		b.WriteString("\nNo savepoints shown: safety snapshots are hidden; --include-safety-snapshots shows them.\n")
+		return b.String()
+	case len(detail.ComposeProjects) == 0:
+		b.WriteString("\nNo savepoints in this session yet.\n")
+		return b.String()
+	}
+	for _, group := range detail.ComposeProjects {
+		b.WriteString("\n" + styleTitle.Render(group.ComposeProject.String()) + "\n")
+		b.WriteString(indentLines(s.formatSavepointTable(group.Savepoints), "  "))
+	}
+	return b.String()
+}
+
+// formatSessionDetailTitle is the session's name, its id, and whether it is the current one.
+func formatSessionDetailTitle(detail model.SessionDetail) string {
+	parts := []string{"Session"}
+	if detail.Session.Name != "" {
+		parts = append(parts, detail.Session.Name+" ·")
+	}
+	parts = append(parts, detail.Session.ID.String())
+	if detail.Current {
+		parts = append(parts, "· current")
+	}
+	return strings.Join(parts, " ")
+}
+
+// indentLines prefixes every line of text with indent.
+func indentLines(text, indent string) string {
+	lines := strings.SplitAfter(text, "\n")
+	var b strings.Builder
+	for _, line := range lines {
+		if line != "" {
+			b.WriteString(indent + line)
+		}
+	}
+	return b.String()
 }

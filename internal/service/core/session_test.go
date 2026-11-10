@@ -251,7 +251,7 @@ func TestSessionService_ListSessions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []model.SessionSummary{
 		{Session: model.DefaultSessionRecord, Status: model.SessionStatusReady, Current: true, SavepointCount: 2,
-			ComposeProjects: []model.DockerComposeProjectName{"blog", "shop"}, SizeBytes: 2048},
+			SafetySnapshotCount: 1, ComposeProjects: []model.DockerComposeProjectName{"blog", "shop"}, SizeBytes: 2048},
 		{Session: older, Status: model.SessionStatusReady, ComposeProjects: []model.DockerComposeProjectName{}},
 		{Session: newer, Status: model.SessionStatusReady, SavepointCount: 1,
 			ComposeProjects: []model.DockerComposeProjectName{"shop"}, SizeBytes: 512},

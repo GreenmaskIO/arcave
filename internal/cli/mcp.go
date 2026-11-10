@@ -59,6 +59,7 @@ type MCPSavepointStoreServiceFactory func(
 // MCPSessionService is the MCP adapter's view of the session commands.
 type MCPSessionService interface {
 	ResolveSession(ctx context.Context, ref string) (model.Session, error)
+	ShowSession(ctx context.Context, req model.ShowSessionRequest) (model.SessionDetail, error)
 	ListSessions(ctx context.Context, req model.ListSessionsRequest) ([]model.SessionSummary, error)
 	CreateSession(ctx context.Context, req model.CreateSessionRequest) (model.Session, error)
 	RemoveSession(ctx context.Context, req model.RemoveSessionRequest) (model.RemoveSessionResponse, error)
@@ -231,6 +232,11 @@ const (
 		"interrupted. Call it before tests, after a rollback, or when something looks wrong; it reads only. " +
 		"state sums it up; notices say what is wrong, severe first, each with a stable code to act on. A store " +
 		"that cannot be read leaves unreadable non-empty and the daemon's part whole; a session naming none fails it."
+	descSessionShow = "Show one session — by name or id, else the pinned or current one — and its committed " +
+		"savepoints, grouped by compose project: compose projects by name, savepoints newest first, each the " +
+		"full record savepoint_list returns. Safety snapshots are left out unless include_safety_snapshots; " +
+		"savepoint_count and safety_snapshot_count count the whole session either way. " +
+		"Read-only; reads only the store, never the daemon."
 	descSessionUnset = "Clear the current session: every later tool call that is given no session works in " +
 		"the default session (baseline) again, and so do the user's own arcave commands in this project " +
 		"directory. It is also the way out when the current session no longer exists. Refused when the " +
@@ -518,6 +524,31 @@ func (h *MCPHandler) listSessionsMCP(ctx context.Context, _ *mcpsdk.CallToolRequ
 	return nil, sessionListOutput{Sessions: sessions}, nil
 }
 
+// sessionShowInput is session_show's input schema.
+type sessionShowInput struct {
+	Session                string `json:"session,omitempty" jsonschema:"the session to show, by name or id; default the pinned or current session"`
+	IncludeSafetySnapshots bool   `json:"include_safety_snapshots,omitempty" jsonschema:"also show the safety snapshots a rollback commits for its own undo; hidden by default"`
+}
+
+// showSessionMCP reports one session's savepoints by compose project.
+func (h *MCPHandler) showSessionMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in sessionShowInput) (*mcpsdk.CallToolResult, model.SessionDetail, error) {
+	svc, release, err := h.openSessionService(ctx)
+	if err != nil {
+		return nil, model.SessionDetail{}, err
+	}
+	defer release()
+
+	detail, err := svc.ShowSession(ctx, model.ShowSessionRequest{
+		Session:                cmp.Or(in.Session, h.pinRef()),
+		Ref:                    h.pinRef(),
+		IncludeSafetySnapshots: in.IncludeSafetySnapshots,
+	})
+	if err != nil {
+		return nil, model.SessionDetail{}, mcpError(err)
+	}
+	return nil, detail, nil
+}
+
 // sessionCreateInput is session_create's input schema.
 type sessionCreateInput struct {
 	Name string `json:"name,omitempty" jsonschema:"a name for the session, unique within the arcave project; ids are assigned by arcave"`
@@ -685,6 +716,12 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_list", Description: descSessionList,
 		OutputSchema: newOutputSchema[sessionListOutput]()}, h.listSessionsMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:         "session_show",
+		Description:  descSessionShow,
+		Annotations:  &mcpsdk.ToolAnnotations{ReadOnlyHint: true},
+		OutputSchema: newOutputSchema[model.SessionDetail](),
+	}, h.showSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_create", Description: descSessionCreate,
 		OutputSchema: newOutputSchema[model.Session]()}, h.createSessionMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_remove", Description: descSessionRemove,

@@ -160,3 +160,38 @@ func TestSessionCurrentHandler_SessionCurrent(t *testing.T) {
 	assert.Equal(t, []any{record}, p.printed())
 	svc.AssertExpectations(t)
 }
+
+func TestSessionShowHandler_SessionShow(t *testing.T) {
+	detail := model.SessionDetail{Session: model.DefaultSessionRecord, Current: true}
+	printErr := errors.New("stdout closed")
+	tests := []struct {
+		name        string
+		detail      model.SessionDetail
+		showErr     error
+		printerErr  error
+		wantErr     error
+		wantPrinted []any
+	}{
+		{name: "prints the session", detail: detail, wantPrinted: []any{detail}},
+		{name: "service error skips printing", showErr: model.ErrSessionNotFound, wantErr: model.ErrSessionNotFound},
+		{name: "printer error surfaces", detail: detail, printerErr: printErr, wantErr: printErr, wantPrinted: []any{detail}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			p := &capturePrinter{}
+			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
+			svc := &mockService{}
+			req := model.ShowSessionRequest{Session: "feat", IncludeSafetySnapshots: true}
+			svc.On("ShowSession", mock.Anything, req).Return(tt.detail, tt.showErr).Once()
+
+			// Act
+			err := NewSessionShowHandler(svc, p).SessionShow(context.Background(), req)
+
+			// Assert
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantPrinted, p.printed())
+			svc.AssertExpectations(t)
+		})
+	}
+}

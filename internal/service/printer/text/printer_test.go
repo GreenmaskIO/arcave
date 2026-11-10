@@ -40,8 +40,9 @@ const (
 )
 
 var (
-	createdAt = time.Date(2026, 10, 29, 19, 45, 35, 0, time.UTC)
-	sessionID = model.SessionID{0x01, 0x9a, 0x2b, 0x3c, 0x4d, 0x5e, 0x70, 0x00, 0x80, 0x00, 0, 0, 0, 0, 0, 0x07}
+	createdAt        = time.Date(2026, 10, 29, 19, 45, 35, 0, time.UTC)
+	sessionID        = model.SessionID{0x01, 0x9a, 0x2b, 0x3c, 0x4d, 0x5e, 0x70, 0x00, 0x80, 0x00, 0, 0, 0, 0, 0, 0x07}
+	removedSessionID = model.SessionID{0x01, 0x9a, 0x2b, 0x3c, 0x4d, 0x5e, 0x70, 0x00, 0x80, 0x00, 0, 0, 0, 0, 0, 0x09}
 )
 
 func TestPrinter_Print(t *testing.T) {
@@ -193,10 +194,12 @@ func TestPrinter_Print(t *testing.T) {
 			name: "session_list",
 			result: []model.SessionSummary{
 				{
-					Session:        model.DefaultSessionRecord,
-					Status:         model.SessionStatusReady,
-					SavepointCount: 3,
-					SizeBytes:      1_250_000_000,
+					Session:             model.DefaultSessionRecord,
+					Status:              model.SessionStatusReady,
+					SavepointCount:      3,
+					SafetySnapshotCount: 1,
+					SizeBytes:           1_250_000_000,
+					ComposeProjects:     []model.DockerComposeProjectName{"blog", "shop", "tools"},
 				},
 				{
 					Session: model.Session{
@@ -204,11 +207,95 @@ func TestPrinter_Print(t *testing.T) {
 						Name:      "feature",
 						CreatedAt: createdAt,
 					},
-					Status:         model.SessionStatusReady,
-					Current:        true,
-					SavepointCount: 1,
-					SizeBytes:      48_800_000,
+					Status:          model.SessionStatusReady,
+					Current:         true,
+					SavepointCount:  1,
+					SizeBytes:       48_800_000,
+					ComposeProjects: []model.DockerComposeProjectName{"shop"},
 				},
+				{
+					Session: model.Session{
+						ID:        sessionID,
+						Name:      "empty",
+						CreatedAt: createdAt.Add(time.Hour),
+					},
+					Status:          model.SessionStatusReady,
+					ComposeProjects: []model.DockerComposeProjectName{},
+				},
+			},
+		},
+		{
+			name: "session_show",
+			opts: Options{Session: "baseline"},
+			result: model.SessionDetail{
+				Session: model.Session{
+					ID:        sessionID,
+					Name:      "feature x",
+					CreatedAt: createdAt,
+					From:      &model.SessionOrigin{Session: model.DefaultSession},
+				},
+				From:                &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+				SavepointCount:      2,
+				SafetySnapshotCount: 1,
+				ComposeProjects: []model.ComposeProjectSavepoints{
+					{
+						ComposeProject: "blog",
+						Savepoints: []model.Savepoint{{
+							ID:        safetyID,
+							Name:      "init",
+							CreatedAt: createdAt.Add(time.Hour),
+							Stats: []model.SnapshotStat{
+								{Volume: namedVolume("blog_db"), SizeBytes: 48_000_000, StoredBytes: 48_000_000},
+							},
+						}},
+					},
+					{
+						ComposeProject: "shop",
+						Savepoints: []model.Savepoint{
+							{
+								ID:        safetyID,
+								Labels:    map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue},
+								CreatedAt: createdAt.Add(2 * time.Hour),
+							},
+							newSavepoint(),
+						},
+					},
+				},
+				CheckedAt: createdAt.Add(3 * time.Hour),
+			},
+		},
+		{
+			name: "session_show_empty",
+			result: model.SessionDetail{
+				Session:         model.DefaultSessionRecord,
+				Current:         true,
+				ComposeProjects: []model.ComposeProjectSavepoints{},
+				CheckedAt:       createdAt,
+			},
+		},
+		{
+			name: "session_show_hidden",
+			result: model.SessionDetail{
+				Session:             model.DefaultSessionRecord,
+				Current:             true,
+				SafetySnapshotCount: 2,
+				ComposeProjects:     []model.ComposeProjectSavepoints{},
+				CheckedAt:           createdAt,
+			},
+		},
+		{
+			name: "session_show_unnamed",
+			result: model.SessionDetail{
+				Session: model.Session{ID: sessionID, From: &model.SessionOrigin{Session: removedSessionID}},
+				Current: true,
+				// The session it was forked from is gone: its id alone.
+				From:           &model.SessionRef{ID: removedSessionID},
+				SavepointCount: 1,
+				ComposeProjects: []model.ComposeProjectSavepoints{{
+					ComposeProject: "shop",
+					Savepoints:     []model.Savepoint{newSavepoint()},
+				}},
+				CheckedAt: createdAt.Add(time.Minute),
 			},
 		},
 		{

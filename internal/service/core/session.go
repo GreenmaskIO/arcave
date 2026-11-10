@@ -451,26 +451,35 @@ func (s *SessionService) summarize(ctx context.Context, session model.Session) (
 	if err != nil {
 		return model.SessionSummary{}, err
 	}
-	var (
-		composeProjects = []model.DockerComposeProjectName{}
-		savepointCount  int
-	)
+	composeProjects := make([]model.DockerComposeProjectName, 0, len(groups))
 	for _, group := range groups {
 		composeProjects = append(composeProjects, group.ComposeProject)
+	}
+	savepointCount, safetyCount := countSavepoints(groups)
+	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Int("compose_projects", len(groups)).
+		Int("savepoints", savepointCount).Int("safety_snapshots", safetyCount).Int64("size_bytes", size).
+		Msg("session summarized")
+	return model.SessionSummary{
+		Session:             session,
+		ComposeProjects:     composeProjects,
+		SavepointCount:      savepointCount,
+		SafetySnapshotCount: safetyCount,
+		SizeBytes:           size,
+	}, nil
+}
+
+// countSavepoints counts the savepoints of groups apart from their safety snapshots.
+func countSavepoints(groups []model.ComposeProjectSavepoints) (savepoints, safetySnapshots int) {
+	for _, group := range groups {
 		for _, savepoint := range group.Savepoints {
-			if !savepoint.IsSafetySnapshot() {
-				savepointCount++
+			if savepoint.IsSafetySnapshot() {
+				safetySnapshots++
+			} else {
+				savepoints++
 			}
 		}
 	}
-	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Int("compose_projects", len(groups)).
-		Int("savepoints", savepointCount).Int64("size_bytes", size).Msg("session summarized")
-	return model.SessionSummary{
-		Session:         session,
-		ComposeProjects: composeProjects,
-		SavepointCount:  savepointCount,
-		SizeBytes:       size,
-	}, nil
+	return savepoints, safetySnapshots
 }
 
 // readSessionSavepoints lists every committed savepoint of session id, grouped by compose

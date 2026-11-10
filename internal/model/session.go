@@ -85,7 +85,10 @@ type SessionSummary struct {
 	// heartbeat could not be read.
 	Error string `json:"error,omitempty"`
 	// SavepointCount counts the session's savepoints, safety snapshots excluded.
-	SavepointCount  int                        `json:"savepoint_count"`
+	SavepointCount int `json:"savepoint_count"`
+	// SafetySnapshotCount counts the session's safety snapshots.
+	SafetySnapshotCount int `json:"safety_snapshot_count"`
+	// ComposeProjects are the compose projects holding a savepoint or a safety snapshot, by name.
 	ComposeProjects []DockerComposeProjectName `json:"compose_projects"`
 	// SizeBytes is what the session's tree occupies in the store: what deleting it frees.
 	SizeBytes int64 `json:"size_bytes"`
@@ -180,4 +183,31 @@ func FindSessionByID(sessions []Session, ref string) (Session, bool) {
 		}
 	}
 	return Session{}, false
+}
+
+// ShowSessionRequest carries what ShowSession needs.
+type ShowSessionRequest struct {
+	// Session names the session by name or id; empty is the current session, else the default.
+	Session string
+	// Ref marks as current the session it names; empty marks the current session.
+	Ref string
+	// IncludeSafetySnapshots shows the safety snapshots too.
+	IncludeSafetySnapshots bool
+}
+
+// SessionDetail is one session and its committed savepoints, by compose project.
+type SessionDetail struct {
+	Session Session `json:"session"`
+	// Current marks the session commands work in when they name none, as a session listing does.
+	Current bool `json:"current"`
+	// From is the session this one was forked from, by id and its name now; no name once removed.
+	From *SessionRef `json:"from,omitempty"`
+	// SavepointCount counts the session's savepoints, safety snapshots excluded, shown or not.
+	SavepointCount int `json:"savepoint_count"`
+	// SafetySnapshotCount counts the session's safety snapshots, shown or not.
+	SafetySnapshotCount int `json:"safety_snapshot_count"`
+	// ComposeProjects are the compose projects holding a savepoint shown, by name, newest first within.
+	ComposeProjects []ComposeProjectSavepoints `json:"compose_projects"`
+	// CheckedAt is when the session was read; ages are counted to it.
+	CheckedAt time.Time `json:"checked_at"`
 }
