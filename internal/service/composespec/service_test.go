@@ -597,7 +597,7 @@ func TestNewServiceConfig_DaemonDefaults(t *testing.T) {
 		},
 		{
 			name: "Docker Desktop's stop timeout is left out",
-			info: system.Info{OperatingSystem: desktopOperatingSystem},
+			info: system.Info{OperatingSystem: "Docker Desktop"},
 			stop: stopTimeout(desktopStopTimeout),
 			verify: func(t *testing.T, cfg types.ServiceConfig) {
 				assert.Nil(t, cfg.StopGracePeriod)

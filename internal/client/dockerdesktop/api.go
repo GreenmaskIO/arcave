@@ -27,9 +27,6 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// OperatingSystem is what `docker info` reports on Docker Desktop.
-const OperatingSystem = "Docker Desktop"
-
 // vmHostMount is where Docker Desktop's VM on macOS mounts the host's root; a VM's path under
 // another root, as on Windows, is left as it is.
 const vmHostMount = "/host_mnt"

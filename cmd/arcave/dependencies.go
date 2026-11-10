@@ -405,7 +405,7 @@ func newRuntimeProfile(
 			assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 		}, nil
 	default:
-		if info.OperatingSystem == dockerdesktop.OperatingSystem {
+		if model.IsDockerDesktop(info) {
 			api = dockerdesktop.NewAPI(api)
 		}
 		engine := docker.NewEngine(api)

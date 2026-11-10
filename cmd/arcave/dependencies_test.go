@@ -1097,7 +1097,7 @@ func TestNewRuntimeProfile(t *testing.T) {
 	podmanAPI := podman.NewAPI(api, libpodClient)
 	podmanEngine := docker.NewEngine(podmanAPI)
 	desktopInfo := info
-	desktopInfo.OperatingSystem = dockerdesktop.OperatingSystem
+	desktopInfo.OperatingSystem = "Docker Desktop"
 	desktopAPI := dockerdesktop.NewAPI(api)
 	desktopEngine := docker.NewEngine(desktopAPI)
 	podmanProfile := runtimeProfile{

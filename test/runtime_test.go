@@ -67,7 +67,7 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 		}
 	}
 	var dockerAPI client.APIClient = api
-	if info.OperatingSystem == dockerdesktop.OperatingSystem {
+	if model.IsDockerDesktop(info) {
 		dockerAPI = dockerdesktop.NewAPI(api)
 	}
 	engine := dockerclient.NewEngine(dockerAPI)

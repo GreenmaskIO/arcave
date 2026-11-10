@@ -29,7 +29,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/client/dockerdesktop"
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
@@ -150,7 +149,7 @@ func newDesktopDaemon(t *testing.T) *client.Client {
 	daemon := newDaemonClient(t)
 	answer, err := daemon.Info(context.Background(), client.InfoOptions{})
 	require.NoError(t, err)
-	if answer.Info.OperatingSystem != dockerdesktop.OperatingSystem {
+	if !model.IsDockerDesktop(answer.Info) {
 		t.Skipf("the daemon is %q, not Docker Desktop", answer.Info.OperatingSystem)
 	}
 	return daemon

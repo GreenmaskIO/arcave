@@ -21,11 +21,9 @@ import (
 
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/client"
-)
 
-// desktopOperatingSystem is how Docker Desktop names itself in the daemon's
-// system info, whatever host it runs on.
-const desktopOperatingSystem = "Docker Desktop"
+	"github.com/greenmaskio/arcave/internal/model"
+)
 
 // HostLoopbackShared reports whether a container run with host networking
 // shares this process's loopback: true only when arcave and a native Linux
@@ -43,5 +41,5 @@ func (e *Engine) HostLoopbackShared(ctx context.Context) (bool, error) {
 // and the daemon's loopback is still the VM's.
 func sharesHostLoopback(localOS string, info system.Info) bool {
 	return localOS == "linux" && info.OSType == "linux" &&
-		info.OperatingSystem != desktopOperatingSystem
+		!model.IsDockerDesktop(info)
 }
