@@ -159,6 +159,64 @@ services:
 ` + defaultNetwork,
 		},
 		{
+			// Docker Desktop names a bind on the host or on its VM by the order compose asked for the
+			// source's mounts in; the heir's bind is still the source's, declared once.
+			name: "volumes_from a bind beside a volume",
+			compose: `
+services:
+  db:
+    image: "{{busybox}}"
+    command: [sleep, infinity]
+    volumes:
+      - {type: volume, source: shared, target: /data, volume: {subpath: sub}}
+      - {type: bind, source: ./conf, target: /conf, bind: {create_host_path: false}}
+  app: {image: "{{busybox}}", command: [sleep, infinity], volumes_from: [db]}
+volumes:
+  shared: {name: "{{project}}-shared", external: true}
+`,
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
+services:
+  db:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes:
+      - {type: bind, source: "{{dir}}/conf", target: /conf, bind: {create_host_path: false}}
+      - {type: volume, source: "{{project}}-shared", target: /data, volume: {subpath: sub}}
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes_from: [db]
+    depends_on: {db: {condition: service_started, required: true}}
+volumes:
+  "{{project}}-shared": {name: "{{project}}-shared", external: true}
+` + defaultNetwork,
+				// Podman reports its default propagation as declared (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  db:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes:
+      - {type: bind, source: "{{dir}}/conf", target: /conf, bind: {propagation: private, create_host_path: false}}
+      - {type: volume, source: "{{project}}-shared", target: /data, volume: {subpath: sub}}
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes_from: [db]
+    depends_on: {db: {condition: service_started, required: true}}
+volumes:
+  "{{project}}-shared": {name: "{{project}}-shared", external: true}
+` + defaultNetwork,
+			},
+			files: map[string]string{"conf/.keep": ""},
+			setup: func(t *testing.T, e *fidelityEnv) { e.createOutsideVolume(t, "shared", "mkdir /data/sub") },
+		},
+		{
 			// H2: side shares the first replica's volume, not one of its own.
 			name: "volumes_from a replicated service",
 			compose: `

@@ -13,12 +13,13 @@
 // limitations under the License.
 
 // Package dockerdesktop reaches a Docker Desktop daemon where its Docker API falls short: an
-// inspect spelling every bind on its host path, as the daemon was asked for it.
+// inspect naming every bind on the host alike, whatever order its mounts were asked for in.
 package dockerdesktop
 
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -38,7 +39,7 @@ var sourceLabelPrefixes = []string{
 	"desktop.docker.io/mounts/",
 }
 
-// API is the Docker API of a Docker Desktop daemon, its inspect spelling binds on the host.
+// API is the Docker API of a Docker Desktop daemon, its inspect naming binds on the host.
 type API struct {
 	client.APIClient
 }
@@ -48,37 +49,66 @@ func NewAPI(api client.APIClient) *API {
 	return &API{APIClient: api}
 }
 
-// ContainerInspect is the inspect, Raw included, with each bind on its host path: the one Docker
-// Desktop recorded in its labels, else the VM's path with its host mount cut off. Docker Desktop
-// spells a bind back itself only while no mount of another type comes before it. The container
-// list is read only for an inspect naming a VM's path.
+// ContainerInspect is the inspect with each bind request on the host path Docker Desktop recorded,
+// else on the VM's path cut of its host mount, and each bind mount on the directory it is on the
+// host. Raw stays as the daemon answered.
 func (a *API) ContainerInspect(
 	ctx context.Context, containerID string, options client.ContainerInspectOptions,
 ) (client.ContainerInspectResult, error) {
-	inspect, err := a.APIClient.ContainerInspect(ctx, containerID, options)
-	if err != nil {
+	var (
+		inspect client.ContainerInspectResult
+		labels  map[string]string
+		err     error
+	)
+	if inspect, err = a.APIClient.ContainerInspect(ctx, containerID, options); err != nil {
 		return client.ContainerInspectResult{}, err
 	}
-	if !namesVMPath(inspect.Container) {
-		return inspect, nil
+	resolved := withResolvedMounts(inspect.Container)
+	if !namesVMPath(resolved) {
+		return client.ContainerInspectResult{
+			Container: resolved,
+			Raw:       inspect.Raw,
+		}, nil
 	}
-	labels, err := a.readListedLabels(ctx, inspect.Container.ID)
-	if err != nil {
+	if labels, err = a.readListedLabels(ctx, inspect.Container.ID); err != nil {
 		return client.ContainerInspectResult{}, err
 	}
 	return client.ContainerInspectResult{
-		Container: withHostSources(inspect.Container, parseHostSources(labels)),
+		Container: withHostSources(resolved, parseHostSources(labels)),
 		Raw:       inspect.Raw,
 	}, nil
 }
 
-// namesVMPath reports whether any bind of inspect is on a path of Docker Desktop's VM.
-func namesVMPath(inspect container.InspectResponse) bool {
-	for _, mountPoint := range inspect.Mounts {
-		if mountPoint.Type == mount.TypeBind && isVMPath(mountPoint.Source) {
-			return true
+// withResolvedMounts is inspect with each bind mount on the directory it is on the host: Docker
+// Desktop names one by its VM's path or by the host's, by the order the mounts were asked for in,
+// so a bind inherited through volumes_from may be named otherwise than its source's.
+func withResolvedMounts(inspect container.InspectResponse) container.InspectResponse {
+	mounts := slices.Clone(inspect.Mounts)
+	for i := range mounts {
+		if mounts[i].Type == mount.TypeBind {
+			mounts[i].Source = resolveHostDir(mounts[i].Source)
 		}
 	}
+	inspect.Mounts = mounts
+	return inspect
+}
+
+// resolveHostDir is the directory a bind is on the host, symlinks resolved as Docker Desktop
+// resolves them; a path it cannot resolve, gone from this host, stays as it is.
+func resolveHostDir(source string) string {
+	if isVMPath(source) {
+		return strings.TrimPrefix(source, vmHostMount)
+	}
+	resolved, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return source
+	}
+	return resolved
+}
+
+// namesVMPath reports whether any bind request of inspect is on a path of Docker Desktop's VM:
+// Docker Desktop spells one back itself only while no mount of another type comes before it.
+func namesVMPath(inspect container.InspectResponse) bool {
 	if inspect.HostConfig == nil {
 		return false
 	}
@@ -144,9 +174,12 @@ func parseHostSources(labels map[string]string) map[string]string {
 	return byTarget
 }
 
-// withHostSources is inspect with each bind on its host path, in the bind and mount requests and
-// in the mounts; the inspect it came from is left as it was.
+// withHostSources is inspect with each bind request on its host path; the inspect it came from is
+// left as it was.
 func withHostSources(inspect container.InspectResponse, hostSources map[string]string) container.InspectResponse {
+	if inspect.HostConfig == nil {
+		return inspect
+	}
 	hostSource := func(target, source string) string {
 		if !isVMPath(source) {
 			return source
@@ -155,17 +188,6 @@ func withHostSources(inspect container.InspectResponse, hostSources map[string]s
 			return recorded
 		}
 		return strings.TrimPrefix(source, vmHostMount)
-	}
-
-	mounts := slices.Clone(inspect.Mounts)
-	for i := range mounts {
-		if mounts[i].Type == mount.TypeBind {
-			mounts[i].Source = hostSource(mounts[i].Destination, mounts[i].Source)
-		}
-	}
-	inspect.Mounts = mounts
-	if inspect.HostConfig == nil {
-		return inspect
 	}
 
 	hostConfig := *inspect.HostConfig

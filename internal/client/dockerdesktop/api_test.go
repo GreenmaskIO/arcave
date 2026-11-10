@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -64,7 +65,8 @@ func newRecordedDaemon(t *testing.T) *client.Client {
 	return api
 }
 
-// What a real Docker Desktop answered, off the wire, comes out with every bind as it was asked for.
+// What a real Docker Desktop answered, off the wire, comes out with every bind request as it was
+// asked for, and every bind mount on the directory it is on the host.
 func TestAPI_ContainerInspect_RecordedDaemon(t *testing.T) {
 	// Arrange
 	api := NewAPI(newRecordedDaemon(t))
@@ -94,8 +96,8 @@ func TestAPI_ContainerInspect_RecordedDaemon(t *testing.T) {
 		sources[mountPoint.Destination] = mountPoint.Source
 	}
 	assert.Equal(t, map[string]string{
-		"/conf": "/tmp/arcave-desktop-fixture/conf",
-		"/data": "/tmp/arcave-desktop-fixture/link",
+		"/conf": "/private/tmp/arcave-desktop-fixture/conf",
+		"/data": "/private/tmp/arcave-desktop-fixture/data",
 		"/m":    "/var/lib/docker/volumes/arcave-desktop-fixture/_data",
 		"/v":    "/var/lib/docker/volumes/arcave-desktop-fixture/_data",
 	}, sources)
@@ -106,10 +108,8 @@ func TestWithHostSources(t *testing.T) {
 	tests := []struct {
 		name        string
 		hostConfig  container.HostConfig
-		mounts      []container.MountPoint
 		hostSources map[string]string
 		want        container.HostConfig
-		wantMounts  []container.MountPoint
 	}{
 		{
 			name: "the recorded path, a symlink's included, over the VM's",
@@ -117,13 +117,11 @@ func TestWithHostSources(t *testing.T) {
 				Binds:  []string{"/host_mnt/private/tmp/conf:/conf:ro"},
 				Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host_mnt/private/tmp/data", Target: "/data"}},
 			},
-			mounts:      []container.MountPoint{{Type: mount.TypeBind, Source: "/host_mnt/private/tmp/data", Destination: "/data"}},
 			hostSources: map[string]string{"/conf": "/tmp/conf", "/data": "/tmp/link"},
 			want: container.HostConfig{
 				Binds:  []string{"/tmp/conf:/conf:ro"},
 				Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/tmp/link", Target: "/data"}},
 			},
-			wantMounts: []container.MountPoint{{Type: mount.TypeBind, Source: "/tmp/link", Destination: "/data"}},
 		},
 		{
 			name: "with nothing recorded, the VM's path without its host mount",
@@ -131,15 +129,13 @@ func TestWithHostSources(t *testing.T) {
 				Binds:  []string{"/host_mnt/Users/dev/conf:/conf"},
 				Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/host_mnt/private/var/data", Target: "/data"}},
 			},
-			mounts: []container.MountPoint{{Type: mount.TypeBind, Source: "/host_mnt/private/var/data", Destination: "/data"}},
 			want: container.HostConfig{
 				Binds:  []string{"/Users/dev/conf:/conf"},
 				Mounts: []mount.Mount{{Type: mount.TypeBind, Source: "/private/var/data", Target: "/data"}},
 			},
-			wantMounts: []container.MountPoint{{Type: mount.TypeBind, Source: "/private/var/data", Destination: "/data"}},
 		},
 		{
-			name: "a host path, another VM's path and a volume stay",
+			name: "a host path, another VM's path, a volume and what is no request stay",
 			hostConfig: container.HostConfig{
 				Binds: []string{"/srv/conf:/conf", "data:/data", "/run/desktop/mnt/host/c/app:/app", "/host_mnt/lone"},
 				Mounts: []mount.Mount{
@@ -148,7 +144,7 @@ func TestWithHostSources(t *testing.T) {
 					{Type: mount.TypeBind, Source: "/host_mnt", Target: "/root"},
 				},
 			},
-			mounts: []container.MountPoint{{Type: mount.TypeVolume, Source: "/host_mnt/cache", Destination: "/cache"}},
+			hostSources: map[string]string{"/cache": "/srv/cache"},
 			want: container.HostConfig{
 				Binds: []string{"/srv/conf:/conf", "data:/data", "/run/desktop/mnt/host/c/app:/app", "/host_mnt/lone"},
 				Mounts: []mount.Mount{
@@ -157,7 +153,6 @@ func TestWithHostSources(t *testing.T) {
 					{Type: mount.TypeBind, Source: "/host_mnt", Target: "/root"},
 				},
 			},
-			wantMounts: []container.MountPoint{{Type: mount.TypeVolume, Source: "/host_mnt/cache", Destination: "/cache"}},
 		},
 	}
 
@@ -165,7 +160,7 @@ func TestWithHostSources(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			hostConfig := tt.hostConfig
-			mounts := slices.Clone(tt.mounts)
+			mounts := []container.MountPoint{{Type: mount.TypeBind, Source: "/host_mnt/private/tmp/data", Destination: "/data"}}
 			inspect := container.InspectResponse{HostConfig: &hostConfig, Mounts: mounts}
 
 			// Act
@@ -173,11 +168,41 @@ func TestWithHostSources(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, &tt.want, got.HostConfig)
-			assert.Equal(t, tt.wantMounts, got.Mounts)
+			assert.Equal(t, mounts, got.Mounts, "where the VM mounted each bind stays")
 			assert.Equal(t, tt.hostConfig, hostConfig, "the inspect is not rewritten in place")
-			assert.Equal(t, tt.mounts, mounts, "the inspect's mounts are not rewritten in place")
 		})
 	}
+}
+
+func TestWithResolvedMounts(t *testing.T) {
+	// Arrange
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(dir, link))
+	hostConfig := container.HostConfig{Binds: []string{link + ":/link"}}
+	mounts := []container.MountPoint{
+		{Type: mount.TypeBind, Source: "/host_mnt" + dir, Destination: "/vm"},
+		{Type: mount.TypeBind, Source: dir, Destination: "/host"},
+		{Type: mount.TypeBind, Source: link, Destination: "/link"},
+		{Type: mount.TypeBind, Source: "/gone/from/this/host", Destination: "/gone"},
+		{Type: mount.TypeVolume, Source: "/host_mnt/cache", Destination: "/cache"},
+	}
+	inspect := container.InspectResponse{HostConfig: &hostConfig, Mounts: slices.Clone(mounts)}
+
+	// Act
+	got := withResolvedMounts(inspect)
+
+	// Assert
+	assert.Equal(t, []container.MountPoint{
+		{Type: mount.TypeBind, Source: dir, Destination: "/vm"},
+		{Type: mount.TypeBind, Source: dir, Destination: "/host"},
+		{Type: mount.TypeBind, Source: dir, Destination: "/link"},
+		{Type: mount.TypeBind, Source: "/gone/from/this/host", Destination: "/gone"},
+		{Type: mount.TypeVolume, Source: "/host_mnt/cache", Destination: "/cache"},
+	}, got.Mounts, "one directory, however Docker Desktop named it")
+	assert.Equal(t, &hostConfig, got.HostConfig, "the requests stay")
+	assert.Equal(t, mounts, inspect.Mounts, "the inspect is not rewritten in place")
 }
 
 func TestWithHostSources_NoHostConfig(t *testing.T) {
@@ -187,12 +212,10 @@ func TestWithHostSources_NoHostConfig(t *testing.T) {
 	}}
 
 	// Act
-	got := withHostSources(inspect, nil)
+	got := withHostSources(inspect, map[string]string{"/srv": "/srv"})
 
 	// Assert
-	assert.Nil(t, got.HostConfig)
-	require.Len(t, got.Mounts, 1)
-	assert.Equal(t, "/srv", got.Mounts[0].Source)
+	assert.Equal(t, inspect, got)
 }
 
 func TestParseHostSources(t *testing.T) {
@@ -261,13 +284,13 @@ func TestAPI_ContainerInspect(t *testing.T) {
 			wantBinds: []string{"/srv:/srv"},
 		},
 		{
-			name: "an inspect naming no VM's path is not listed",
+			name: "an inspect asking for no VM's path is not listed",
 			setup: func(daemon *mockAPI) {
 				daemon.On("ContainerInspect", mock.Anything, "c1", client.ContainerInspectOptions{}).
 					Return(container.InspectResponse{
 						ID:         "c1",
 						HostConfig: &container.HostConfig{Binds: []string{"/srv:/srv", "data:/data"}},
-						Mounts:     []container.MountPoint{{Type: mount.TypeVolume, Source: "/host_mnt/x", Destination: "/data"}},
+						Mounts:     []container.MountPoint{{Type: mount.TypeBind, Source: "/host_mnt/srv", Destination: "/srv"}},
 					}, nil).Once()
 			},
 			wantBinds: []string{"/srv:/srv", "data:/data"},

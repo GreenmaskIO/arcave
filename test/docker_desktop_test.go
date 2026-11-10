@@ -18,6 +18,7 @@ import (
 	"context"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -85,6 +86,14 @@ func TestDockerDesktop_ContainerInspect_BindOnTheHost(t *testing.T) {
 			want: link,
 		},
 		{
+			name: "a symlink at a target spelled with a trailing slash",
+			hostConfig: container.HostConfig{Mounts: []mount.Mount{
+				{Type: mount.TypeVolume, Source: volume, Target: "/v"},
+				{Type: mount.TypeBind, Source: link, Target: desktopBindTarget + "/"},
+			}},
+			want: link,
+		},
+		{
 			name: "created on the VM's path, which Docker Desktop records nothing for",
 			hostConfig: container.HostConfig{Mounts: []mount.Mount{
 				{Type: mount.TypeVolume, Source: volume, Target: "/v"},
@@ -139,7 +148,47 @@ func TestDockerDesktop_RecreateWithImage_KeepsTheHostPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, listed.Items, 1)
-	assert.Equal(t, dir, listed.Items[0].Labels["desktop.docker.io/mounts/1/Source"], "the host path, recorded again")
+	assert.Equal(t, []string{dir}, recordedSources(listed.Items[0].Labels, desktopBindTarget), "the host path, recorded again")
+}
+
+// A container inheriting a bind through volumes_from mounts it where its source does, whatever order
+// the source asked for its mounts in, so introspection still tells an inherited bind from one of its own.
+func TestDockerDesktop_ContainerInspect_InheritedBindMountedAsItsSource(t *testing.T) {
+	t.Parallel()
+
+	daemon := newDesktopDaemon(t)
+	profile := newRuntimeProfile(t, daemon)
+	volume := "arcave-desktop-it-" + randomSuffix(t)
+	createVolume(t, daemon, volume)
+	dir := t.TempDir()
+	bind := mount.Mount{Type: mount.TypeBind, Source: dir, Target: desktopBindTarget}
+	other := mount.Mount{Type: mount.TypeVolume, Source: volume, Target: "/v"}
+	tests := []struct {
+		name   string
+		mounts []mount.Mount
+	}{
+		{name: "the bind first, which Docker Desktop names on the host", mounts: []mount.Mount{bind, other}},
+		{name: "a volume first, which has it named on the VM", mounts: []mount.Mount{other, bind}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			source := createDesktopContainer(t, daemon, container.HostConfig{Mounts: tt.mounts})
+			heir := createDesktopContainer(t, daemon, container.HostConfig{VolumesFrom: []string{source}})
+
+			// Act
+			gotSource, err := profile.api.ContainerInspect(context.Background(), source, client.ContainerInspectOptions{})
+			require.NoError(t, err)
+			gotHeir, err := profile.api.ContainerInspect(context.Background(), heir, client.ContainerInspectOptions{})
+			require.NoError(t, err)
+
+			// Assert
+			assert.Equal(t, []string{dir}, bindSources(gotSource.Container), "the source asks for the host path")
+			require.NotEmpty(t, mountedAt(gotSource.Container, desktopBindTarget))
+			assert.Equal(t, mountedAt(gotSource.Container, desktopBindTarget), mountedAt(gotHeir.Container, desktopBindTarget))
+		})
+	}
 }
 
 // newDesktopDaemon skips the test unless a Docker Desktop daemon answers.
@@ -172,16 +221,11 @@ func removeDesktopContainer(daemon *client.Client, id string) {
 	_, _ = daemon.ContainerRemove(context.Background(), id, client.ContainerRemoveOptions{Force: true})
 }
 
-// bindSources are the host paths an inspect names for desktopBindTarget, in each place it names one.
+// bindSources are the host paths an inspect's requests name for desktopBindTarget, in either API.
 func bindSources(inspect container.InspectResponse) []string {
 	sources := map[string]bool{}
-	for _, mountPoint := range inspect.Mounts {
-		if mountPoint.Destination == desktopBindTarget {
-			sources[mountPoint.Source] = true
-		}
-	}
 	for _, request := range inspect.HostConfig.Mounts {
-		if request.Target == desktopBindTarget {
+		if path.Clean(request.Target) == desktopBindTarget {
 			sources[request.Source] = true
 		}
 	}
@@ -191,4 +235,24 @@ func bindSources(inspect container.InspectResponse) []string {
 		}
 	}
 	return slices.Sorted(maps.Keys(sources))
+}
+
+// mountedAt is where the VM mounted the bind at target.
+func mountedAt(inspect container.InspectResponse, target string) string {
+	at := slices.IndexFunc(inspect.Mounts, func(m container.MountPoint) bool { return m.Destination == target })
+	if at < 0 {
+		return ""
+	}
+	return inspect.Mounts[at].Source
+}
+
+// recordedSources are the host paths Docker Desktop's labels record for a bind at target.
+func recordedSources(labels map[string]string, target string) []string {
+	var sources []string
+	for key, value := range labels {
+		if strings.HasPrefix(key, "desktop.docker.io/") && strings.HasSuffix(key, "/Target") && path.Clean(value) == target {
+			sources = append(sources, labels[strings.TrimSuffix(key, "Target")+"Source"])
+		}
+	}
+	return sources
 }

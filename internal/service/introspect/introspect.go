@@ -381,12 +381,8 @@ func (s *Inspector) readServiceVolumes(
 	volumeIndex map[string]volume.Volume,
 ) ([]model.ServiceVolume, error) {
 	declared := newDeclaredMounts(inspect)
-	inspected := newBindSources(inspect)
 	mounts := make([]model.ServiceVolume, 0, len(replica.Mounts))
 	for _, mountPoint := range replica.Mounts {
-		if source, ok := inspected[mountPoint.Destination]; ok && mountPoint.Type == mount.TypeBind {
-			mountPoint.Source = source
-		}
 		mount, err := s.readServiceVolume(ctx, mountPoint, volumeIndex)
 		if err != nil {
 			return nil, err
@@ -401,18 +397,6 @@ func (s *Inspector) readServiceVolumes(
 		return strings.Compare(a.Target, b.Target)
 	})
 	return mounts, nil
-}
-
-// newBindSources are the sources of the inspect's binds by target: the API's own spelling, which
-// the container list may not share.
-func newBindSources(inspect container.InspectResponse) map[string]string {
-	sources := make(map[string]string, len(inspect.Mounts))
-	for _, mountPoint := range inspect.Mounts {
-		if mountPoint.Type == mount.TypeBind {
-			sources[mountPoint.Destination] = mountPoint.Source
-		}
-	}
-	return sources
 }
 
 // undeclaredMounts are the mounts of a later replica the first does not declare with the
