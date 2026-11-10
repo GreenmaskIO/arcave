@@ -49,7 +49,7 @@ func TestNewDockerStamps(t *testing.T) {
 		},
 		{
 			name: "docker desktop stamps a one second stop timeout",
-			info: system.Info{OperatingSystem: desktopOperatingSystem},
+			info: system.Info{OperatingSystem: "Docker Desktop"},
 			want: func(t *testing.T, got EngineStamps) {
 				assert.Equal(t, desktopStopTimeout, got.StopTimeout)
 				assert.Nil(t, got.Runtimes, "no runtime docker info names none")

@@ -19,6 +19,9 @@ import "github.com/moby/moby/api/types/system"
 // podmanEngine is the component Podman's `docker version` names itself by.
 const podmanEngine = "Podman Engine"
 
+// dockerDesktopOperatingSystem is what `docker info` reports on Docker Desktop, whatever host it runs on.
+const dockerDesktopOperatingSystem = "Docker Desktop"
+
 // ContainerRuntimeKind is the engine behind the Docker API arcave talks to.
 type ContainerRuntimeKind string
 
@@ -47,4 +50,10 @@ func NewContainerRuntime(version string, components []system.ComponentVersion) C
 		Kind:    kind,
 		Version: version,
 	}
+}
+
+// IsDockerDesktop reports whether a `docker info` answer is Docker Desktop's: a Docker engine in a
+// VM of its own, which is no engine kind of its own.
+func IsDockerDesktop(info system.Info) bool {
+	return info.OperatingSystem == dockerDesktopOperatingSystem
 }

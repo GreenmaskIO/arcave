@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/client/dockerdesktop"
 	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
@@ -65,10 +66,14 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 			assembler: composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 		}
 	}
-	engine := dockerclient.NewEngine(api)
+	var dockerAPI client.APIClient = api
+	if model.IsDockerDesktop(info) {
+		dockerAPI = dockerdesktop.NewAPI(api)
+	}
+	engine := dockerclient.NewEngine(dockerAPI)
 	return runtimeProfile{
 		runtime:   runtime.Kind,
-		api:       api,
+		api:       dockerAPI,
 		engine:    engine,
 		volumes:   engine,
 		assembler: composespec.NewAssembler(composespec.NewDockerStamps(info)),

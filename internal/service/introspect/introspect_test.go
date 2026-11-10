@@ -363,7 +363,7 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 				Target: "/etc/cfg", Bind: &model.BindMount{CreateHostPath: true, Recursive: "writable"}},
 		},
 		{
-			name:  "a bind's source is the path compose gave, not the one Docker Desktop reports",
+			name:  "a bind's source is the path its request names, not the mount's",
 			mount: mountPoint(mount.TypeBind, "", "/host_mnt/srv/cfg", "/etc/cfg", false),
 			host:  container.HostConfig{Binds: []string{"/srv/cfg:/etc/cfg:rw"}},
 			want: model.ServiceVolume{Type: model.VolumeTypeBind, RawType: "bind", Source: "/srv/cfg",
@@ -409,34 +409,6 @@ func TestInspector_Introspect_MountOptions(t *testing.T) {
 			daemon.AssertExpectations(t)
 		})
 	}
-}
-
-func TestInspector_Introspect_DesktopBindSource(t *testing.T) {
-	// Arrange
-	bind := mountPoint(mount.TypeBind, "", "/host_mnt/private/var/conf", "/conf", true)
-	inspect := inspected("c-db-1", testImageID.String(), bind)
-	inspect.HostConfig = &container.HostConfig{Binds: []string{"/host_mnt/private/var/conf:/conf:ro"}}
-	listed := summary("c-db-1", "db", "busybox", 1, bind)
-	// Docker Desktop shows its labels in the container list only.
-	listed.Labels["desktop.docker.io/binds/0/Source"] = "/var/conf"
-	listed.Labels["desktop.docker.io/binds/0/SourceKind"] = "hostFile"
-	listed.Labels["desktop.docker.io/binds/0/Target"] = "/conf"
-	daemon := &mockDockerAPI{}
-	daemon.expectContainers(listed)
-	daemon.expectInspected(inspect)
-	daemon.expectVolumes()
-	daemon.expectNetworks()
-	daemon.expectImage(testImageID, nil)
-
-	// Act
-	got, err := NewInspector(daemon, composeProject).Introspect(context.Background())
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, []model.ServiceVolume{{Type: model.VolumeTypeBind, RawType: "bind", Source: "/var/conf",
-		Target: "/conf", ReadOnly: true, Bind: &model.BindMount{CreateHostPath: true}}},
-		got.Project.Services[0].Volumes)
-	daemon.AssertExpectations(t)
 }
 
 func TestInspector_Introspect_GroupsReplicas(t *testing.T) {

@@ -28,8 +28,6 @@ import (
 )
 
 const (
-	// desktopOperatingSystem is what `docker info` reports on Docker Desktop.
-	desktopOperatingSystem = "Docker Desktop"
 	// desktopStopTimeout is the stop timeout Docker Desktop stamps on every container
 	// created without one.
 	desktopStopTimeout = 1
@@ -94,7 +92,7 @@ type EngineNetworking struct {
 // its runtime, log driver and host name, and Docker Desktop's stop timeout.
 func NewDockerStamps(info system.Info) EngineStamps {
 	stopTimeout := 0
-	if info.OperatingSystem == desktopOperatingSystem {
+	if model.IsDockerDesktop(info) {
 		stopTimeout = desktopStopTimeout
 	}
 	return EngineStamps{

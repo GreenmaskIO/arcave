@@ -1,0 +1,86 @@
+[
+  {
+    "Id": "47e52eec6aaa60fe521a2dd9e23ef17f7441d94ba3c01a7b6b7eaf602f658bec",
+    "Names": [
+      "/arcave-desktop-fixture"
+    ],
+    "Image": "busybox",
+    "ImageID": "sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4",
+    "Command": "true",
+    "Created": 1794291588,
+    "Ports": [],
+    "Labels": {
+      "desktop.docker.io/binds/1/Source": "/tmp/arcave-desktop-fixture/conf",
+      "desktop.docker.io/binds/1/SourceKind": "hostFile",
+      "desktop.docker.io/binds/1/Target": "/conf",
+      "desktop.docker.io/mounts/1/Source": "/tmp/arcave-desktop-fixture/link",
+      "desktop.docker.io/mounts/1/SourceKind": "hostFile",
+      "desktop.docker.io/mounts/1/Target": "/data",
+      "desktop.docker.io/ports.scheme": "v2"
+    },
+    "State": "created",
+    "Status": "Created",
+    "HostConfig": {
+      "NetworkMode": "bridge"
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "bridge": {
+          "IPAMConfig": null,
+          "Links": null,
+          "Aliases": null,
+          "DriverOpts": null,
+          "GwPriority": 0,
+          "NetworkID": "",
+          "EndpointID": "",
+          "Gateway": "",
+          "IPAddress": "",
+          "MacAddress": "",
+          "IPPrefixLen": 0,
+          "IPv6Gateway": "",
+          "GlobalIPv6Address": "",
+          "GlobalIPv6PrefixLen": 0,
+          "DNSNames": null
+        }
+      }
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/host_mnt/private/tmp/arcave-desktop-fixture/conf",
+        "Destination": "/conf",
+        "Mode": "ro",
+        "RW": false,
+        "Propagation": "rprivate"
+      },
+      {
+        "Type": "bind",
+        "Source": "/host_mnt/private/tmp/arcave-desktop-fixture/data",
+        "Destination": "/data",
+        "Mode": "",
+        "RW": true,
+        "Propagation": "rprivate"
+      },
+      {
+        "Type": "volume",
+        "Name": "arcave-desktop-fixture",
+        "Source": "/var/lib/docker/volumes/arcave-desktop-fixture/_data",
+        "Destination": "/m",
+        "Driver": "local",
+        "Mode": "z",
+        "RW": true,
+        "Propagation": ""
+      },
+      {
+        "Type": "volume",
+        "Name": "arcave-desktop-fixture",
+        "Source": "/var/lib/docker/volumes/arcave-desktop-fixture/_data",
+        "Destination": "/v",
+        "Driver": "local",
+        "Mode": "z",
+        "RW": true,
+        "Propagation": ""
+      }
+    ]
+  }
+]
