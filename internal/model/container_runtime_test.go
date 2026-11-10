@@ -67,3 +67,25 @@ func TestNewContainerRuntime(t *testing.T) {
 		})
 	}
 }
+
+func TestIsDockerDesktop(t *testing.T) {
+	tests := []struct {
+		name string
+		info system.Info
+		want bool
+	}{
+		{name: "Docker Desktop", info: system.Info{OperatingSystem: "Docker Desktop"}, want: true},
+		{name: "a Linux host's Docker", info: system.Info{OperatingSystem: "Ubuntu 24.04.1 LTS"}},
+		{name: "OrbStack", info: system.Info{OperatingSystem: "OrbStack"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := IsDockerDesktop(tt.info)
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

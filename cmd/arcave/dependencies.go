@@ -44,6 +44,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/client/dockerdesktop"
 	"github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/config"
@@ -404,6 +405,9 @@ func newRuntimeProfile(
 			assembler:      composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 		}, nil
 	default:
+		if model.IsDockerDesktop(info) {
+			api = dockerdesktop.NewAPI(api)
+		}
 		engine := docker.NewEngine(api)
 		return runtimeProfile{
 			api:            api,
