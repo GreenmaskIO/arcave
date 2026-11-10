@@ -331,7 +331,6 @@ func (n normalizer) inspect(in container.InspectResponse) container.InspectRespo
 	out.Mounts = make([]container.MountPoint, len(in.Mounts))
 	for i, m := range in.Mounts {
 		m.Name = n.volumeName(m.Name)
-		m.Source = hostPath(m.Source)
 		if anonVolumeName.MatchString(in.Mounts[i].Name) {
 			m.Source = ""
 			if n.restamped {
@@ -462,18 +461,9 @@ func (n normalizer) binds(binds []string) []string {
 	out := make([]string, len(binds))
 	for i, bind := range binds {
 		source, rest, _ := strings.Cut(bind, ":")
-		out[i] = hostPath(n.volumeName(source)) + ":" + rest
+		out[i] = n.volumeName(source) + ":" + rest
 	}
 	return out
-}
-
-// hostPath undoes Docker Desktop's spelling of a host path in its VM, which it writes for
-// some binds and not for others.
-func hostPath(path string) string {
-	if rest, ok := strings.CutPrefix(path, "/host_mnt"); ok {
-		return strings.TrimPrefix(rest, "/private")
-	}
-	return path
 }
 
 // volumeName renames an anonymous volume, or any path naming one, after its replica and target.

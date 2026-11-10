@@ -1380,6 +1380,51 @@ services:
 			files: map[string]string{"data/.keep": ""},
 		},
 		{
+			// Docker Desktop spells a bind back on the host only while no mount of another type
+			// comes before it; compose sends the mount API's in no fixed order.
+			name: "bind beside a volume through the mount API",
+			compose: `
+services:
+  app:
+    image: "{{busybox}}"
+    command: [sleep, infinity]
+    volumes:
+      - {type: volume, source: shared, target: /data, volume: {subpath: sub}}
+      - {type: bind, source: ./conf, target: /conf, bind: {create_host_path: false}}
+volumes:
+  shared: {name: "{{project}}-shared", external: true}
+`,
+			wants: map[model.ContainerRuntimeKind]string{
+				model.ContainerRuntimeDocker: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes:
+      - {type: bind, source: "{{dir}}/conf", target: /conf, bind: {create_host_path: false}}
+      - {type: volume, source: "{{project}}-shared", target: /data, volume: {subpath: sub}}
+volumes:
+  "{{project}}-shared": {name: "{{project}}-shared", external: true}
+` + defaultNetwork,
+				// Podman reports its default propagation as declared (BACKLOG.md: Пределы Podman).
+				model.ContainerRuntimePodman: busyboxBase + `
+services:
+  app:
+    <<: *base
+    scale: 1
+    networks: {default: null}
+    volumes:
+      - {type: bind, source: "{{dir}}/conf", target: /conf, bind: {propagation: private, create_host_path: false}}
+      - {type: volume, source: "{{project}}-shared", target: /data, volume: {subpath: sub}}
+volumes:
+  "{{project}}-shared": {name: "{{project}}-shared", external: true}
+` + defaultNetwork,
+			},
+			files: map[string]string{"conf/.keep": ""},
+			setup: func(t *testing.T, e *fidelityEnv) { e.createOutsideVolume(t, "shared", "mkdir /data/sub") },
+		},
+		{
 			name: "read_only mounts",
 			compose: `
 services:

@@ -50,6 +50,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/client/dockerdesktop"
 	"github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/config"
@@ -1095,6 +1096,10 @@ func TestNewRuntimeProfile(t *testing.T) {
 	require.NoError(t, err)
 	podmanAPI := podman.NewAPI(api, libpodClient)
 	podmanEngine := docker.NewEngine(podmanAPI)
+	desktopInfo := info
+	desktopInfo.OperatingSystem = dockerdesktop.OperatingSystem
+	desktopAPI := dockerdesktop.NewAPI(api)
+	desktopEngine := docker.NewEngine(desktopAPI)
 	podmanProfile := runtimeProfile{
 		api:            podmanAPI,
 		engine:         podmanEngine,
@@ -1106,10 +1111,25 @@ func TestNewRuntimeProfile(t *testing.T) {
 	tests := []struct {
 		name     string
 		runtime  model.ContainerRuntime
+		info     *system.Info
 		endpoint dockercontext.Endpoint
 		want     runtimeProfile
 		wantErr  string
 	}{
+		{
+			name:     "docker desktop answers inspects through its own API",
+			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
+			info:     &desktopInfo,
+			endpoint: plain,
+			want: runtimeProfile{
+				api:            desktopAPI,
+				engine:         desktopEngine,
+				volumes:        desktopEngine,
+				version:        "29.8.2",
+				minDaemonMajor: dedupcopy.MinDaemonMajor,
+				assembler:      composespec.NewAssembler(composespec.NewDockerStamps(desktopInfo)),
+			},
+		},
 		{
 			name:     "docker",
 			runtime:  model.ContainerRuntime{Kind: model.ContainerRuntimeDocker, Version: "29.8.2"},
@@ -1191,8 +1211,14 @@ func TestNewRuntimeProfile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemonInfo := info
+			if tt.info != nil {
+				daemonInfo = *tt.info
+			}
+
 			// Act
-			got, err := newRuntimeProfile(tt.runtime, info, api, tt.endpoint)
+			got, err := newRuntimeProfile(tt.runtime, daemonInfo, api, tt.endpoint)
 
 			// Assert
 			if tt.wantErr != "" {

@@ -46,10 +46,6 @@ import (
 // anonVolumeName is the fallback for daemons that predate it.
 const anonymousVolumeLabel = "com.docker.volume.anonymous"
 
-// desktopBindLabel opens the labels Docker Desktop stamps for each bind it rewrites to its
-// VM's own path: desktop.docker.io/binds/<n>/Source and …/Target.
-const desktopBindLabel = "desktop.docker.io/binds/"
-
 // anonVolumeName matches the name the daemon generates for an anonymous volume.
 var anonVolumeName = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -384,9 +380,13 @@ func (s *Inspector) readServiceVolumes(
 	ctx context.Context, replica container.Summary, inspect container.InspectResponse,
 	volumeIndex map[string]volume.Volume,
 ) ([]model.ServiceVolume, error) {
-	declared := newDeclaredMounts(inspect, replica.Labels)
+	declared := newDeclaredMounts(inspect)
+	inspected := newBindSources(inspect)
 	mounts := make([]model.ServiceVolume, 0, len(replica.Mounts))
 	for _, mountPoint := range replica.Mounts {
+		if source, ok := inspected[mountPoint.Destination]; ok && mountPoint.Type == mount.TypeBind {
+			mountPoint.Source = source
+		}
 		mount, err := s.readServiceVolume(ctx, mountPoint, volumeIndex)
 		if err != nil {
 			return nil, err
@@ -401,6 +401,18 @@ func (s *Inspector) readServiceVolumes(
 		return strings.Compare(a.Target, b.Target)
 	})
 	return mounts, nil
+}
+
+// newBindSources are the sources of the inspect's binds by target: the API's own spelling, which
+// the container list may not share.
+func newBindSources(inspect container.InspectResponse) map[string]string {
+	sources := make(map[string]string, len(inspect.Mounts))
+	for _, mountPoint := range inspect.Mounts {
+		if mountPoint.Type == mount.TypeBind {
+			sources[mountPoint.Destination] = mountPoint.Source
+		}
+	}
+	return sources
 }
 
 // undeclaredMounts are the mounts of a later replica the first does not declare with the
@@ -480,7 +492,7 @@ func (s *Inspector) volume(ctx context.Context, name string, volumeIndex map[str
 }
 
 // declaredMount is one mount as requested, through the mount API (mountRequest) or the bind API
-// (bindRequest). source is the path compose gave; Docker Desktop reports its VM's own path in .Mounts.
+// (bindRequest). source is the path the request names.
 type declaredMount struct {
 	mountRequest *mount.Mount
 	bindRequest  *types.ServiceVolumeConfig
@@ -488,21 +500,15 @@ type declaredMount struct {
 }
 
 // newDeclaredMounts indexes the container's mount requests by target; .Mounts drops their options.
-// labels are the container's as listed: Docker Desktop's own show there, not in the inspect.
-func newDeclaredMounts(inspect container.InspectResponse, labels map[string]string) map[string]declaredMount {
+func newDeclaredMounts(inspect container.InspectResponse) map[string]declaredMount {
 	declared := map[string]declaredMount{}
 	if inspect.HostConfig == nil {
 		return declared
 	}
-	hostSources := parseDesktopBindSources(labels)
 	for _, entry := range inspect.HostConfig.Binds {
 		// An entry the parser refuses is still reported by .Mounts, only without options.
 		if bind, err := format.ParseVolume(entry); err == nil {
-			source := bind.Source
-			if hostSource, ok := hostSources[bind.Target]; ok {
-				source = hostSource
-			}
-			declared[bind.Target] = declaredMount{bindRequest: &bind, source: source}
+			declared[bind.Target] = declaredMount{bindRequest: &bind, source: bind.Source}
 		}
 	}
 	for i := range inspect.HostConfig.Mounts {
@@ -510,32 +516,6 @@ func newDeclaredMounts(inspect container.InspectResponse, labels map[string]stri
 		declared[request.Target] = declaredMount{mountRequest: request, source: request.Source}
 	}
 	return declared
-}
-
-// parseDesktopBindSources maps a bind's target to the host path Docker Desktop recorded before
-// writing its VM's own path into the bind.
-func parseDesktopBindSources(labels map[string]string) map[string]string {
-	sources, targets := map[string]string{}, map[string]string{}
-	for key, value := range labels {
-		rest, ok := strings.CutPrefix(key, desktopBindLabel)
-		if !ok {
-			continue
-		}
-		index, field, _ := strings.Cut(rest, "/")
-		switch field {
-		case "Source":
-			sources[index] = value
-		case "Target":
-			targets[index] = value
-		}
-	}
-	byTarget := make(map[string]string, len(targets))
-	for index, target := range targets {
-		if source, ok := sources[index]; ok {
-			byTarget[target] = source
-		}
-	}
-	return byTarget
 }
 
 // applyMountOptions fills mount's per-type options and source from the declared mount.
