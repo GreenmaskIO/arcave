@@ -26,51 +26,50 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/sessionref"
 )
 
-// ShowSession reports the committed savepoints of the session req.Session names, by compose
-// project, newest first, and counts them all; req.Ref marks the current session as ListSessions
-// does, and naming no session refuses it.
+// ShowSession reports the savepoints of the session req.Session names, by compose project, newest
+// first, marking it current as ListSessions does; shown as the current session, it must resolve.
 func (s *SessionService) ShowSession(ctx context.Context, req model.ShowSessionRequest) (model.SessionDetail, error) {
 	var (
-		listed          = &listedSessions{lister: s.sessions}
-		session         model.Session
-		marked          model.Session
-		current         model.SessionID
 		sessions        []model.Session
+		session         model.Session
+		source          model.CurrentSessionSource
+		current         model.SessionID
+		currentSource   *model.CurrentSessionSource
 		groups          []model.ComposeProjectSavepoints
 		composeProjects []model.ComposeProjectSavepoints
 		err             error
 	)
-	if session, err = sessionref.Resolve(ctx, listed, s.current, req.Session); err != nil {
-		return model.SessionDetail{}, err
+	if sessions, err = s.sessions.ListSessions(ctx); err != nil {
+		return model.SessionDetail{}, fmt.Errorf("listing sessions: %w", err)
 	}
-	if session.From != nil || (req.Session != req.Ref && req.Ref != "") {
-		if sessions, err = listed.ListSessions(ctx); err != nil {
-			return model.SessionDetail{}, fmt.Errorf("listing sessions: %w", err)
-		}
-	}
-	switch {
-	case req.Session == req.Ref:
-		// Resolved by the very ref that marks the current session, it is the current one.
-		current = session.ID
-	case req.Ref != "":
-		// A --session naming no session fails the command, as it fails every other.
-		if marked, err = model.FindSessionByRef(sessions, req.Ref); err != nil {
+	switch req.Session {
+	case "", model.RefCurrent:
+		if session, source, err = sessionref.ResolveCurrent(ctx, sessionref.Listed(sessions), s.current,
+			req.Current); err != nil {
 			return model.SessionDetail{}, err
 		}
-		current = marked.ID
+		currentSource = &source
 	default:
-		current = s.findCurrent(ctx, nil, "")
+		if session, err = findNamedSession(sessions, req.Session); err != nil {
+			return model.SessionDetail{}, err
+		}
+		if current, currentSource, err = s.findCurrent(ctx, sessions, req.Current); err != nil {
+			return model.SessionDetail{}, err
+		}
+		if session.ID != current {
+			currentSource = nil
+		}
 	}
 	if groups, err = s.sessionSavepoints(ctx, session.ID); err != nil {
 		return model.SessionDetail{}, err
 	}
-	composeProjects = newShownComposeProjects(groups, req.IncludeSafetySnapshots)
+	composeProjects = newShownComposeProjects(groups)
 	savepointCount, safetyCount := countSavepoints(groups)
 	zerolog.Ctx(ctx).Debug().Str("session", session.ID.String()).Int("compose_projects", len(composeProjects)).
 		Msg("session read")
 	return model.SessionDetail{
 		Session:             session,
-		Current:             session.ID == current,
+		CurrentSource:       currentSource,
 		From:                newSessionOriginRef(session.From, sessions),
 		SavepointCount:      savepointCount,
 		SafetySnapshotCount: safetyCount,
@@ -79,24 +78,14 @@ func (s *SessionService) ShowSession(ctx context.Context, req model.ShowSessionR
 	}, nil
 }
 
-// listedSessions lists the sessions once however often it is asked, so a resolve and what follows
-// it read one listing.
-type listedSessions struct {
-	lister sessionref.SessionLister
-	listed []model.Session
-	done   bool
-}
-
-func (l *listedSessions) ListSessions(ctx context.Context) ([]model.Session, error) {
-	if l.done {
-		return l.listed, nil
+// findNamedSession is the session ref names among sessions: RefLatest the newest, any other by name
+// or id.
+func findNamedSession(sessions []model.Session, ref string) (model.Session, error) {
+	if ref != model.RefLatest {
+		return model.FindSessionByRef(sessions, ref)
 	}
-	listed, err := l.lister.ListSessions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	l.listed, l.done = listed, true
-	return listed, nil
+	session, _ := model.FindLatestSession(sessions)
+	return session, nil
 }
 
 // newSessionOriginRef names the session origin points at, by the name sessions list it under; nil for
@@ -112,22 +101,11 @@ func newSessionOriginRef(origin *model.SessionOrigin, sessions []model.Session) 
 	}
 }
 
-// newShownComposeProjects is each group with its savepoints newest first, safety snapshots left out
-// unless includeSafety, and a group left with none dropped.
-func newShownComposeProjects(
-	groups []model.ComposeProjectSavepoints, includeSafety bool,
-) []model.ComposeProjectSavepoints {
+// newShownComposeProjects is each group with its savepoints newest first, safety snapshots among them.
+func newShownComposeProjects(groups []model.ComposeProjectSavepoints) []model.ComposeProjectSavepoints {
 	shown := make([]model.ComposeProjectSavepoints, 0, len(groups))
 	for _, group := range groups {
-		var savepoints []model.Savepoint
-		if includeSafety {
-			savepoints = slices.Clone(group.Savepoints)
-		} else {
-			savepoints = visibleSavepoints(group.Savepoints)
-		}
-		if len(savepoints) == 0 {
-			continue
-		}
+		savepoints := slices.Clone(group.Savepoints)
 		slices.Reverse(savepoints)
 		shown = append(shown, model.ComposeProjectSavepoints{
 			ComposeProject: group.ComposeProject,

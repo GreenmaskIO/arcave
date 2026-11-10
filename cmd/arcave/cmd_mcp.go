@@ -46,7 +46,7 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
-	return cli.NewMCPHandler(newMCPFactories(), pinnedSession, cli.RollbackConfig{
+	return cli.NewMCPHandler(newMCPFactories(), pinnedSession, sessionRefSource, cli.RollbackConfig{
 		LeftoverVolumes:    projectCfg.Rollback.Policy(),
 		SkipSafetySnapshot: projectCfg.Rollback.SkipSafetySnapshot(),
 	}).MCPRun(cmd.Context())

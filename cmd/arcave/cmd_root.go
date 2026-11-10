@@ -54,6 +54,8 @@ var (
 	// sessionRef names the session, by id or name, every project-bound command works in;
 	// empty is the current session, else model.DefaultSession.
 	sessionRef string
+	// sessionRefSource is what named sessionRef: --session or ARCAVE_SESSION; zero when empty.
+	sessionRefSource model.SessionRefSource
 	// progressMode is --progress as given; runProgressMode the mode initRoot resolved it to.
 	progressMode    string
 	runProgressMode string
@@ -162,7 +164,7 @@ func initRoot(cmd *cobra.Command) error {
 // reads the environment for them.
 func readFlagEnvs() {
 	composeProjectFlag = cmp.Or(composeProjectFlag, os.Getenv(composeProjectEnv))
-	sessionRef = cmp.Or(sessionRef, os.Getenv(sessionEnv))
+	sessionRef, sessionRefSource = readSessionRef(sessionRef, os.Getenv(sessionEnv))
 	progressMode = cmp.Or(progressMode, os.Getenv(progressEnv))
 	resultFormat = cmp.Or(resultFormat, os.Getenv(formatEnv))
 }
@@ -175,6 +177,26 @@ func warnIgnoredCDCKeys(logger zerolog.Logger, cdc *config.CDCBackend) {
 	if keys := cdc.IgnoredTCPKeys(); len(keys) > 0 {
 		logger.Warn().Strs("keys", keys).Str("transport", cdc.Transport).
 			Msg("backends.cdc keys ignored: they configure the tcp transport only")
+	}
+}
+
+// readSessionRef is the session ref --session gives, else ARCAVE_SESSION's, and what named it.
+func readSessionRef(flag, env string) (string, model.SessionRefSource) {
+	switch {
+	case flag != "":
+		return flag, model.SessionRefSourceFlag
+	case env != "":
+		return env, model.SessionRefSourceEnv
+	default:
+		return "", ""
+	}
+}
+
+// currentSessionRef is the session a command works in when it names none, and what named it.
+func currentSessionRef() model.CurrentSessionRef {
+	return model.CurrentSessionRef{
+		Ref:    sessionRef,
+		Source: sessionRefSource,
 	}
 }
 

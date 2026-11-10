@@ -23,6 +23,8 @@ import (
 	"syscall"
 
 	"github.com/rs/zerolog"
+
+	"github.com/greenmaskio/arcave/internal/cli"
 )
 
 // exitInterrupted is the shell's code for a process ended by SIGINT.
@@ -46,6 +48,7 @@ func main() {
 	err := rootCmd.ExecuteContext(ctx)
 	interrupted := ctx.Err() != nil
 	stop()
+	err = cli.WithFixHint(err)
 	// The output ends first, so the error comes after the final tree, or as the json stream's last line.
 	closeOutput(loadRunOutput(), err)
 	if err != nil {

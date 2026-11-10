@@ -51,8 +51,9 @@ func runSessionCreate(cmd *cobra.Command, _ []string) error {
 	}
 	return cli.NewSessionCreateHandler(svc, loadRunOutput()).
 		SessionCreate(ctx, model.CreateSessionRequest{
-			Name: sessionCreateName,
-			From: sessionCreateFrom,
+			Name:    sessionCreateName,
+			From:    sessionCreateFrom,
+			Current: currentSessionRef(),
 		})
 }
 
@@ -61,6 +62,6 @@ func init() {
 	sessionCreateCmd.Flags().StringVar(&sessionCreateName, "name", "",
 		"Session name, unique within the arcave project; --session accepts it in place of the id")
 	sessionCreateCmd.Flags().StringVar(&sessionCreateFrom, "from", "",
-		"Session to copy, by name or id; the copy costs that session's size")
+		"Session to copy, by name or id, current or latest; the copy costs that session's size")
 	sessionCmd.AddCommand(sessionCreateCmd)
 }

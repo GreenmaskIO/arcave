@@ -16,6 +16,7 @@ package text
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,16 +32,75 @@ func formatSession(session model.Session) string {
 	return line + "\n"
 }
 
-// formatSessions is a session listing as a table, the current one starred.
+// formatCurrentSession is the session a command works in, and what named it.
+func formatCurrentSession(current model.CurrentSession) string {
+	line := strings.TrimSuffix(formatSession(current.Session), "\n")
+	return line + " · " + formatCurrent(current.CurrentSource) + "\n"
+}
+
+// formatCurrent is "current" and what named the current session, with what an override hides.
+func formatCurrent(source model.CurrentSessionSource) string {
+	label := formatSourceLabel(source.Source)
+	if label == "" {
+		return "current"
+	}
+	if source.Overrides != nil {
+		label += "; without it: " + source.Overrides.String()
+	}
+	return "current (" + label + ")"
+}
+
+// formatOverride is a line saying a flag or the environment hides the session that would be current
+// without it; "" when it hides none, or none that can be told.
+func formatOverride(source *model.CurrentSessionSource) string {
+	if source == nil || source.Overrides == nil {
+		return ""
+	}
+	return "Current session overridden by " + formatSourceLabel(source.Source) + "; without it: " +
+		source.Overrides.String() + ".\n"
+}
+
+// formatSourceLabel names what named the current session, as the user set it.
+func formatSourceLabel(source model.SessionRefSource) string {
+	switch source {
+	case model.SessionRefSourceFlag:
+		return "--session"
+	case model.SessionRefSourceEnv:
+		return "ARCAVE_SESSION"
+	case model.SessionRefSourcePointer:
+		return "set by session set"
+	case model.SessionRefSourceDefault:
+		return "default session"
+	default:
+		return ""
+	}
+}
+
+// formatSessions is a session listing as a table, the current one starred; STATUS only when a row is
+// not ready, and a footer only when a flag or the environment overrides the current session.
 func (s *Printer) formatSessions(sessions []model.SessionSummary) string {
 	if len(sessions) == 0 {
 		return "No sessions.\n"
 	}
-	rows := make([][]string, 0, len(sessions))
+	var (
+		showStatus = slices.ContainsFunc(sessions, func(session model.SessionSummary) bool {
+			return session.Status != model.SessionStatusReady
+		})
+		header = []string{"  NAME", "ID"}
+		rows   = make([][]string, 0, len(sessions))
+		footer string
+	)
+	if showStatus {
+		header = append(header, "STATUS")
+	}
+	header = append(header, "CREATED", "SAVEPOINTS", "SIZE", "COMPOSE PROJECTS")
 	for _, session := range sessions {
 		marker := " "
-		if session.Current {
+		if session.IsCurrent() {
 			marker = "*"
+			if override := formatOverride(session.CurrentSource); override != "" {
+				footer = "\n" + override
+			}
 		}
 		created := "-"
 		if !session.CreatedAt.IsZero() {
@@ -50,17 +110,18 @@ func (s *Printer) formatSessions(sessions []model.SessionSummary) string {
 		if name == "" {
 			name = "-"
 		}
-		rows = append(rows, []string{
-			marker + " " + name,
-			session.ID.String(),
-			string(session.Status),
+		row := []string{marker + " " + name, session.ID.String()}
+		if showStatus {
+			row = append(row, string(session.Status))
+		}
+		rows = append(rows, append(row,
 			created,
 			formatSavepointCount(session.SavepointCount, session.SafetySnapshotCount),
 			formatSize(session.SizeBytes),
 			formatComposeProjectNames(session.ComposeProjects),
-		})
+		))
 	}
-	return formatTable([]string{"  NAME", "ID", "STATUS", "CREATED", "SAVEPOINTS", "SIZE", "COMPOSE PROJECTS"}, rows)
+	return formatTable(header, rows) + footer
 }
 
 // formatSavepointCount is the savepoints counted, the safety snapshots added when any.
@@ -112,11 +173,10 @@ func (s *Printer) formatSessionDetail(detail model.SessionDetail) string {
 	}
 	fmt.Fprintf(&b, "  %-10s %s\n", "Savepoints",
 		formatSavepointCount(detail.SavepointCount, detail.SafetySnapshotCount))
-	switch {
-	case len(detail.ComposeProjects) == 0 && detail.SafetySnapshotCount > 0:
-		b.WriteString("\nNo savepoints shown: safety snapshots are hidden; --include-safety-snapshots shows them.\n")
-		return b.String()
-	case len(detail.ComposeProjects) == 0:
+	if override := formatOverride(detail.CurrentSource); override != "" {
+		b.WriteString("\n" + override)
+	}
+	if len(detail.ComposeProjects) == 0 {
 		b.WriteString("\nNo savepoints in this session yet.\n")
 		return b.String()
 	}
@@ -134,8 +194,12 @@ func formatSessionDetailTitle(detail model.SessionDetail) string {
 		parts = append(parts, detail.Session.Name+" ·")
 	}
 	parts = append(parts, detail.Session.ID.String())
-	if detail.Current {
-		parts = append(parts, "· current")
+	if detail.IsCurrent() {
+		current := "· current"
+		if detail.CurrentSource.Source.IsOverride() {
+			current += " (" + formatSourceLabel(detail.CurrentSource.Source) + ")"
+		}
+		parts = append(parts, current)
 	}
 	return strings.Join(parts, " ")
 }

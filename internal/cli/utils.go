@@ -50,3 +50,46 @@ func composeProjectAbsentError(err error, selector string) error {
 	}
 	return err
 }
+
+// sessionFixHints is what an adapter tells a caller to do about the current session.
+type sessionFixHints struct {
+	// pointer is the way out of a current-session pointer that cannot be read or followed.
+	pointer string
+	// inUse is the way past a refusal to delete the session in use.
+	inUse string
+}
+
+var (
+	cliSessionFixHints = sessionFixHints{
+		pointer: "run 'arcave session unset' or 'arcave session set <session>'",
+		inUse: "switch with 'arcave session set <session>' or 'arcave session unset' first, " +
+			"or pass --force to delete it and clear the pointer",
+	}
+	mcpSessionFixHints = sessionFixHints{
+		pointer: "call session_unset or session_set",
+		inUse:   "switch with session_set or session_unset first, or pass force to delete it anyway",
+	}
+	// mcpPinnedSessionFixHints names force alone for a session in use: a pinned server refuses
+	// session_set and session_unset.
+	mcpPinnedSessionFixHints = sessionFixHints{
+		pointer: "call session_unset or session_set",
+		inUse:   "pass force to delete it anyway",
+	}
+)
+
+// WithFixHint adds the CLI's fix to a current-session error; any other passes unchanged.
+func WithFixHint(err error) error {
+	return sessionFixError(err, cliSessionFixHints)
+}
+
+// sessionFixError adds the adapter's fix to a current-session error.
+func sessionFixError(err error, hints sessionFixHints) error {
+	switch {
+	case errors.Is(err, model.ErrCurrentSessionNotFound), errors.Is(err, model.ErrCurrentSessionUnreadable):
+		return fmt.Errorf("%w; %s", err, hints.pointer)
+	case errors.Is(err, model.ErrCurrentSessionDelete):
+		return fmt.Errorf("%w; %s", err, hints.inUse)
+	default:
+		return err
+	}
+}

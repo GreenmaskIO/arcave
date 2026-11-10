@@ -1,0 +1,4 @@
+  NAME     ID                                    STATUS   CREATED           SAVEPOINTS  SIZE     COMPOSE PROJECTS
+  -        019a2b3c-4d5e-7000-8000-000000000009  cloning  -                 0           12.0 MB  -
+  -        019a2b3c-4d5e-7000-8000-00000000000a  failed   -                 0           0 B      -
+* feature  019a2b3c-4d5e-7000-8000-000000000007  ready    2026-10-29 19:45  1           48.8 MB  shop

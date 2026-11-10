@@ -20,7 +20,7 @@ None of the `session` commands touches the Docker daemon, and none of them takes
 ```text title="Synopsis"
 arcave session create [--name <name>] [--from <session>]
 arcave session list [--all] [--sort desc|asc]
-arcave session show [--include-safety-snapshots] [<id|name>]
+arcave session show [<id|name>]
 arcave session remove [--force] <id|name>
 arcave session set <id|name>
 arcave session unset
@@ -31,14 +31,16 @@ arcave session current
 
 Every command works in exactly one session. The first of these that is set names it:
 
-| Where | How |
-|---|---|
-| Flag | `--session feat/add-new-table` |
-| Environment | `export ARCAVE_SESSION=feat/add-new-table` |
-| Current session | `arcave session set feat/add-new-table`, kept in `.arcave/current_session` |
-| None of them | `baseline`, the default session |
+| Where | How | `session current` says |
+|---|---|---|
+| Flag | `--session feat/add-new-table` | `current (--session)` |
+| Environment | `export ARCAVE_SESSION=feat/add-new-table` | `current (ARCAVE_SESSION)` |
+| Current session | `arcave session set feat/add-new-table`, kept in `.arcave/current_session` | `current (set by session set)` |
+| None of them | `baseline`, the default session | `current (default session)` |
 
-Each form takes an id or a name: arcave looks the value up as a name first, then as an id. **Creating a session does not switch you into it** — run `session set` to make it the current one. [`session show`](#session-show) lists what a session holds, every compose project at once.
+Each form takes an id or a name: arcave looks the value up as a name first, then as an id. The flag and the variable **override** the current session, and that is what the output points out, so a forgotten `ARCAVE_SESSION` shows up the first time you look: `session list` adds `Current session overridden by ARCAVE_SESSION; without it: feat/add-new-table.` below its table, `session show` adds `(ARCAVE_SESSION)` to its title, and `session current` always names the source, with `; without it: …` on an override. An override that names the very session it would hide — or one whose hidden session cannot be told, the pointer broken — gets no footer in `session list`, and `session current` drops the tail. In JSON it is `current_source`: `{"source": "flag" | "env" | "pointer" | "default", "overrides": {"id": …, "name": …}}`, `overrides` only on an override that hides another session.
+
+Two words name a session by its role instead: `current`, the session a command works in when it names none, and `latest`, the newest session. They are accepted only where a session is read or copied — `session show` and `session create --from` — and refused in `--session` and `ARCAVE_SESSION`. No session may be named either. **Creating a session does not switch you into it** — run `session set` to make it the current one. [`session show`](#session-show) lists what a session holds, every compose project at once.
 
 The current session is local to the host: `.arcave/current_session` sits beside `.arcave/config.yaml` and is not in the store, so another machine reading the same store keeps its own. If the session it names has been deleted, commands that name no session are refused rather than quietly falling back to `baseline`:
 
@@ -53,7 +55,7 @@ Opens a new line of savepoints. Without `--from` it is empty. With `--from`, it 
 | Flag | Default | Description |
 |---|---|---|
 | `--name` | — | The session's name. What you address it by; the id is assigned either way. |
-| `--from` | — | The session to copy, by name or id. `baseline` is a session like any other. |
+| `--from` | — | The session to copy, by name or id; `current` for the session you work in, `latest` for the newest. `baseline` is a session like any other. |
 
 It prints the new session's record — the `session list` entry without the counts — with `from` naming the session it was copied from.
 
@@ -69,7 +71,7 @@ Four things to know before you run it.
 
 ## `session list`
 
-The project's sessions, newest first — `baseline`, created by no one, comes last — or oldest first with `--sort asc`: each one's id, name, `status`, whether it is `current` — the session a command naming none works in, or the one `--session` names —, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store. On a terminal they are a table, the current session marked `*`; in a script, a JSON array.
+The project's sessions, newest first — `baseline`, created by no one, comes last — or oldest first with `--sort asc`: each one's id, name, `status`, `current_source` on the current one — the session a command naming none works in, or the one `--session` names —, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store. On a terminal they are a table, the current session marked `*`; in a script, a JSON array.
 
 Without `--all` every session listed is `ready`. `--all` adds the session directories that never got their record — what a fork leaves while it copies, or after it failed. They have no name; address them by id.
 
@@ -87,10 +89,22 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 <TabItem value="terminal" label="Terminal" default>
 
 ```text title="stdout"
-  NAME                ID                                    STATUS  CREATED           SAVEPOINTS  SIZE    COMPOSE PROJECTS
-* feat/add-new-table  019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31  ready   2026-10-10 12:00  3           292 MB  shop
-  baseline            00000000-0000-0000-0000-000000000001  ready   -                 2           251 MB  shop
+  NAME                ID                                    CREATED           SAVEPOINTS  SIZE    COMPOSE PROJECTS
+* feat/add-new-table  019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31  2026-10-10 12:00  3           292 MB  shop
+  baseline            00000000-0000-0000-0000-000000000001  -                 2           251 MB  shop
 ```
+
+With `ARCAVE_SESSION=baseline` set over that, the star moves and the listing says what it hides:
+
+```text title="stdout"
+  NAME                ID                                    CREATED           SAVEPOINTS  SIZE    COMPOSE PROJECTS
+  feat/add-new-table  019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31  2026-10-10 12:00  3           292 MB  shop
+* baseline            00000000-0000-0000-0000-000000000001  -                 2           251 MB  shop
+
+Current session overridden by ARCAVE_SESSION; without it: feat/add-new-table.
+```
+
+`STATUS` is a column only when a row is not `ready` — under `--all`, when it finds a session directory without a record. A current-session pointer naming a deleted session stars no row; a warning on stderr says so, with the way out.
 
 </TabItem>
 <TabItem value="json" label="JSON">
@@ -99,9 +113,9 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 [
   {"id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table",
    "created_at": "2026-10-10T12:00:00Z", "from": {"session": "00000000-0000-0000-0000-000000000001"},
-   "status": "ready", "current": true, "savepoint_count": 3, "safety_snapshot_count": 0, "compose_projects": ["shop"], "size_bytes": 291585156},
+   "status": "ready", "current_source": {"source": "pointer"}, "savepoint_count": 3, "safety_snapshot_count": 0, "compose_projects": ["shop"], "size_bytes": 291585156},
   {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline",
-   "status": "ready", "current": false, "savepoint_count": 2, "safety_snapshot_count": 0, "compose_projects": ["shop"], "size_bytes": 250689663}
+   "status": "ready", "savepoint_count": 2, "safety_snapshot_count": 0, "compose_projects": ["shop"], "size_bytes": 250689663}
 ]
 ```
 
@@ -110,13 +124,9 @@ Without `--all` every session listed is `ready`. `--all` adds the session direct
 
 ## `session show`
 
-One session and its committed savepoints, grouped by compose project — every compose project of the session at once, so it takes no `-p`. The session is the one the argument names, by id or name; without one, the session a command works in ([above](#naming-the-session-a-command-works-in)). The argument outranks `--session`, which still marks `current` — and fails the command when it names no session.
+One session and its committed savepoints, grouped by compose project — every compose project of the session at once, so it takes no `-p`. The session is the one the argument names — by id or name, `latest` for the newest; without one, or with `current`, the session a command works in ([above](#naming-the-session-a-command-works-in)), its title naming the flag or the variable when one of them overrides the current session, and a line naming the session it hides. The argument outranks `--session`, which still marks the current session; one naming no session marks none, with a warning on stderr, as in `session list`.
 
-Compose projects come by name, and each one's savepoints newest first, in the columns of [`savepoint list`](savepoint_list.md). Safety snapshots are hidden; `--include-safety-snapshots` shows them, as it does for `savepoint list`. A compose project left with no savepoint to show is not shown. It reads the store alone — no daemon, no lock — and writes nothing.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--include-safety-snapshots` | `false` | Also show the safety snapshots a rollback takes of the live state. |
+Compose projects come by name, and each one's savepoints newest first, in the columns of [`savepoint list`](savepoint_list.md), safety snapshots among them, marked `(safety)`. It reads the store alone — no daemon, no lock — and writes nothing.
 
 <Tabs groupId="output">
 <TabItem value="terminal" label="Terminal" default>
@@ -134,11 +144,12 @@ blog
 
 shop
   NAME              ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+  - (safety)        019a0c4b-4e5f-7061-b273-8d9e0f1a2b34  2026-10-10 13:20  2        1       1.25 GB  -
   before-migration  019a0c3a-2c3d-7e4f-9051-6b7c8d9e0f12  2026-10-10 12:55  2        1       1.20 GB  -
   seed              019a0c31-3d4e-7f50-a162-7c8d9e0f1a23  2026-10-10 12:15  2        1       1.10 GB  -
 ```
 
-`Savepoints` counts the whole session, safety snapshots apart, whether they are shown or not. An empty session prints `No savepoints in this session yet.` below its header; one holding only safety snapshots says they are hidden and that `--include-safety-snapshots` shows them.
+`Savepoints` counts the session's savepoints, its safety snapshots apart. An empty session prints `No savepoints in this session yet.` below its header.
 
 </TabItem>
 <TabItem value="json" label="JSON">
@@ -147,7 +158,7 @@ shop
 {
   "session": {"id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table",
               "created_at": "2026-10-10T12:00:00Z", "from": {"session": "00000000-0000-0000-0000-000000000001"}},
-  "current": true,
+  "current_source": {"source": "pointer"},
   "from": {"id": "00000000-0000-0000-0000-000000000001", "name": "baseline"},
   "savepoint_count": 3,
   "safety_snapshot_count": 1,
@@ -162,7 +173,7 @@ shop
 </TabItem>
 </Tabs>
 
-`from` is the session this one was forked from, by id and by the name it carries now — left out for a session forked from none; `name` is `""` for a source without a name or since removed, and the text output then prints its id alone, else the name below the id. `current` means what it means in `session list`. Each savepoint is the whole record [`savepoint list`](savepoint_list.md) prints. `compose_projects` is `[]` for an empty session, never `null`.
+`from` is the session this one was forked from, by id and by the name it carries now — left out for a session forked from none; `name` is `""` for a source without a name or since removed, and the text output then prints its id alone, else the name below the id. `current_source` means what it means in `session list`. Each savepoint is the whole record [`savepoint list`](savepoint_list.md) prints. `compose_projects` is `[]` for an empty session, never `null`.
 
 ## `session remove`
 
@@ -197,7 +208,7 @@ Clears the current session, so commands that name none work in `baseline` again.
 
 ## `session current`
 
-Prints the record of the session a command would work in right now: the one `--session` or `ARCAVE_SESSION` names, else the current session, else `baseline`. It changes nothing and takes no lock.
+Prints the record of the session a command would work in right now — the one `--session` or `ARCAVE_SESSION` names, else the current session, else `baseline` — and which of them named it, with what an override hides: `current (ARCAVE_SESSION; without it: feat/add-new-table)` as text, `current_source` in JSON. It changes nothing and takes no lock.
 
 ```shell
 arcave session current
@@ -212,7 +223,10 @@ arcave session current
 | The name is already taken in this project | Refused: a name is what you address a session by, so two sessions cannot share one. |
 | The name is another session's id | Refused: names are looked up first, so it would hide that session's id. |
 | `--session`, `session set` or `session remove` names no session | `session not found`, naming what was given. |
+| `--session`, `ARCAVE_SESSION`, `session set` or `session remove` is `current` or `latest` | Refused: the words name a session to show or copy — `session show`'s argument, `session create --from` — never the session a command works in. |
+| `--name` is `current` or `latest` | Refused: a session named so would hide the word. |
 | The current session has been deleted | `the current session no longer exists`, with how to get out: `arcave session unset` or `arcave session set <session>`. |
+| `.arcave/current_session` holds no session id, or cannot be read | `the current-session pointer cannot be read`, with the same way out. |
 | `session remove baseline` without `--force` | Refused: the default session always exists. `--force` empties it — every savepoint it holds goes — and it stays the default session. |
 | `session remove` of a `cloning` directory without `--force` | `session is still being cloned`; nothing is deleted. |
 | `session remove` of an `unknown` directory without `--force` | `session tree status is unknown`, with why; nothing is deleted. |

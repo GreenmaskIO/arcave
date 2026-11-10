@@ -171,12 +171,13 @@ func TestSessionService_ResolveSession(t *testing.T) {
 	tests := []struct {
 		name    string
 		ref     string
-		records []model.Session // what ListSessions returns; nil expects no listing
+		records []model.Session // what ListSessions returns; nil for no listing
 		want    model.Session
 		wantErr error
 		wantIDs []model.SessionID
 	}{
-		{name: "empty is the default", ref: "", want: model.DefaultSessionRecord},
+		{name: "empty is the default, listing nothing", ref: "",
+			want: model.DefaultSessionRecord},
 		{name: "the default by name", ref: "baseline",
 			records: []model.Session{model.DefaultSessionRecord, exp}, want: model.DefaultSessionRecord},
 		{name: "the default by id", ref: model.DefaultSession.String(),
@@ -250,7 +251,8 @@ func TestSessionService_ListSessions(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []model.SessionSummary{
-		{Session: model.DefaultSessionRecord, Status: model.SessionStatusReady, Current: true, SavepointCount: 2,
+		{Session: model.DefaultSessionRecord, Status: model.SessionStatusReady,
+			CurrentSource: &model.CurrentSessionSource{Source: model.SessionRefSourceDefault}, SavepointCount: 2,
 			SafetySnapshotCount: 1, ComposeProjects: []model.DockerComposeProjectName{"blog", "shop"}, SizeBytes: 2048},
 		{Session: older, Status: model.SessionStatusReady, ComposeProjects: []model.DockerComposeProjectName{}},
 		{Session: newer, Status: model.SessionStatusReady, SavepointCount: 1,
@@ -338,7 +340,8 @@ func TestSessionService_ListSessions_All(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []model.SessionSummary{
-		{Session: model.DefaultSessionRecord, Status: model.SessionStatusReady, Current: true,
+		{Session: model.DefaultSessionRecord, Status: model.SessionStatusReady,
+			CurrentSource:   &model.CurrentSessionSource{Source: model.SessionRefSourceDefault},
 			ComposeProjects: []model.DockerComposeProjectName{}},
 		row(none, time.Time{}, nil, model.SessionStatusIncomplete, ""),
 		row(unreadable, time.Time{}, nil, model.SessionStatusUnknown, errRead.Error()),
@@ -933,23 +936,25 @@ func TestSessionService_ResolveSession_Current(t *testing.T) {
 	tests := []struct {
 		name    string
 		pointer *fakePointer
-		list    bool // whether ListSessions is expected
-		want    model.Session
-		wantErr error
+		// unlisted is a resolve that reads no session record.
+		unlisted bool
+		want     model.Session
+		wantErr  error
 	}{
-		{name: "no pointer is the default", pointer: &fakePointer{}, want: model.DefaultSessionRecord},
-		{name: "a pointer to a session", pointer: pointerAt(demoSession), list: true, want: exp},
-		{name: "a pointer to the default", pointer: pointerAt(model.DefaultSession), list: true,
+		{name: "no pointer is the default", pointer: &fakePointer{}, unlisted: true, want: model.DefaultSessionRecord},
+		{name: "a pointer to a session", pointer: pointerAt(demoSession), want: exp},
+		{name: "a pointer to the default", pointer: pointerAt(model.DefaultSession),
 			want: model.DefaultSessionRecord},
-		{name: "a pointer to a deleted session is refused", pointer: pointerAt(otherSession), list: true,
+		{name: "a pointer to a deleted session is refused", pointer: pointerAt(otherSession),
 			wantErr: model.ErrCurrentSessionNotFound},
-		{name: "an unreadable pointer is refused", pointer: &fakePointer{err: errPointer}, wantErr: errPointer},
+		{name: "an unreadable pointer is refused", pointer: &fakePointer{err: errPointer}, unlisted: true,
+			wantErr: errPointer},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			repo := &mockSessionRepo{}
-			if tt.list {
+			if !tt.unlisted {
 				repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord, exp}, nil).Once()
 			}
 			svc := NewSessionService(SessionDeps{NewSessionLocker: newFakeSessionLocker, Current: tt.pointer, Sessions: repo})
@@ -996,6 +1001,8 @@ func TestSessionService_SetSession(t *testing.T) {
 		{name: "by id", ref: demoSession.String(), want: &demoSession},
 		{name: "the default", ref: "baseline", want: &model.DefaultSession},
 		{name: "an unknown session leaves the pointer", ref: "ghost", wantErr: model.ErrSessionNotFound},
+		{name: "a keyword is refused as every resolve refuses it", ref: model.RefLatest,
+			wantErr: model.ErrSessionRefKeyword},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1161,8 +1168,8 @@ func TestSessionService_ListSessions_MarksTheCurrentSession(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	assert.False(t, got[0].Current, "the default is not current while the pointer names another")
-	assert.True(t, got[1].Current)
+	assert.False(t, got[0].IsCurrent(), "the default is not current while the pointer names another")
+	assert.True(t, got[1].IsCurrent())
 	repo.AssertExpectations(t)
 }
 
@@ -1185,16 +1192,18 @@ func TestSessionService_EmptyRefIsRefused(t *testing.T) {
 
 var errPointerUnreadable = errors.New(`decoding the current session: invalid session id "feat"`)
 
-func TestSessionService_ResolveSession_UnreadablePointerNamesTheWayOut(t *testing.T) {
+func TestSessionService_ResolveSession_UnreadablePointer(t *testing.T) {
 	// Arrange
-	svc := NewSessionService(SessionDeps{NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{err: errPointerUnreadable}, Sessions: &mockSessionRepo{}})
+	repo := &mockSessionRepo{}
+	svc := NewSessionService(SessionDeps{NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{err: errPointerUnreadable}, Sessions: repo})
 
 	// Act
 	_, err := svc.ResolveSession(context.Background(), "")
 
 	// Assert
 	require.ErrorIs(t, err, errPointerUnreadable)
-	assert.Contains(t, err.Error(), "arcave session unset")
+	assert.NotContains(t, err.Error(), "arcave session")
+	repo.AssertExpectations(t)
 }
 
 func TestSessionService_ListSessions_UnreadablePointerMarksNone(t *testing.T) {
@@ -1212,7 +1221,7 @@ func TestSessionService_ListSessions_UnreadablePointerMarksNone(t *testing.T) {
 	// Assert: the listing is how a broken pointer is diagnosed, so it still answers.
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.False(t, got[0].Current)
+	assert.False(t, got[0].IsCurrent())
 	repo.AssertExpectations(t)
 }
 
@@ -1242,17 +1251,32 @@ func TestSessionService_ListSessions_Ref(t *testing.T) {
 	exp := sessionRecord(demoSession, "exp", sessionNow)
 	tests := []struct {
 		name    string
-		ref     string
+		ref     model.CurrentSessionRef
 		pointer *fakePointer
 		want    []bool // Current per row: baseline, exp
+		// wantSource is the marked row's source; nil when none is marked.
+		wantSource *model.CurrentSessionSource
 	}{
-		{name: "no ref, no pointer: the default", pointer: &fakePointer{}, want: []bool{true, false}},
-		{name: "no ref: the pointer", pointer: pointerAt(demoSession), want: []bool{false, true}},
-		{name: "a ref by name outranks the pointer", ref: "baseline", pointer: pointerAt(demoSession),
-			want: []bool{true, false}},
-		{name: "a ref by id", ref: demoSession.String(), pointer: &fakePointer{}, want: []bool{false, true}},
-		{name: "a ref naming nothing marks none", ref: "ghost", pointer: pointerAt(demoSession),
+		{name: "no ref, no pointer: the default", pointer: &fakePointer{}, want: []bool{true, false},
+			wantSource: &model.CurrentSessionSource{Source: model.SessionRefSourceDefault}},
+		{name: "no ref: the pointer", pointer: pointerAt(demoSession), want: []bool{false, true},
+			wantSource: &model.CurrentSessionSource{Source: model.SessionRefSourcePointer}},
+		{name: "a ref by name outranks the pointer", pointer: pointerAt(demoSession), want: []bool{true, false},
+			ref: model.CurrentSessionRef{Ref: "baseline", Source: model.SessionRefSourceEnv},
+			wantSource: &model.CurrentSessionSource{Source: model.SessionRefSourceEnv,
+				Overrides: &model.SessionRef{ID: demoSession, Name: "exp"}}},
+		{name: "a ref naming what the pointer names overrides nothing", pointer: pointerAt(demoSession),
+			want:       []bool{false, true},
+			ref:        model.CurrentSessionRef{Ref: "exp", Source: model.SessionRefSourceEnv},
+			wantSource: &model.CurrentSessionSource{Source: model.SessionRefSourceEnv}},
+		{name: "a pin by id", pointer: &fakePointer{}, want: []bool{false, true},
+			ref: model.CurrentSessionRef{Ref: demoSession.String(), Source: model.SessionRefSourceFlag},
+			wantSource: &model.CurrentSessionSource{Source: model.SessionRefSourceFlag,
+				Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName}}},
+		{name: "a pointer naming a removed session marks none", pointer: pointerAt(thirdSession),
 			want: []bool{false, false}},
+		{name: "a ref naming nothing marks none", pointer: pointerAt(demoSession), want: []bool{false, false},
+			ref: model.CurrentSessionRef{Ref: "ghost", Source: model.SessionRefSourceFlag}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1265,15 +1289,24 @@ func TestSessionService_ListSessions_Ref(t *testing.T) {
 			svc.sessionSavepoints = repo.ListSessionSavepoints
 
 			// Act
-			got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Ref: tt.ref, Sort: model.SortAsc})
+			got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{Current: tt.ref, Sort: model.SortAsc})
 
 			// Assert
 			require.NoError(t, err)
-			current := make([]bool, len(got))
+			var (
+				current = make([]bool, len(got))
+				source  *model.CurrentSessionSource
+			)
 			for i, row := range got {
-				current[i] = row.Current
+				current[i] = row.IsCurrent()
+				if row.IsCurrent() {
+					source = row.CurrentSource
+				} else {
+					assert.Nil(t, row.CurrentSource, "only the current row names a source")
+				}
 			}
 			assert.Equal(t, tt.want, current)
+			assert.Equal(t, tt.wantSource, source)
 			repo.AssertExpectations(t)
 		})
 	}
@@ -1390,4 +1423,130 @@ func newSavepointsInOrder(t *testing.T, repos ...*mockSavepointReader) func(stor
 		next++
 		return repo
 	}
+}
+
+func TestSessionService_CurrentSession(t *testing.T) {
+	exp := sessionRecord(demoSession, "exp", sessionNow)
+	tests := []struct {
+		name    string
+		ref     model.CurrentSessionRef
+		pointer *fakePointer
+		// unlisted is a resolve that reads no session record.
+		unlisted bool
+		want     model.CurrentSession
+		wantErr  error
+	}{
+		{
+			name:     "no ref, no pointer: the default",
+			pointer:  &fakePointer{},
+			unlisted: true,
+			want: model.CurrentSession{
+				Session:       model.DefaultSessionRecord,
+				CurrentSource: model.CurrentSessionSource{Source: model.SessionRefSourceDefault},
+			},
+		},
+		{
+			name:    "no ref: the pointer",
+			pointer: pointerAt(demoSession),
+			want: model.CurrentSession{
+				Session:       exp,
+				CurrentSource: model.CurrentSessionSource{Source: model.SessionRefSourcePointer},
+			},
+		},
+		{
+			name:    "ARCAVE_SESSION outranks the pointer",
+			ref:     model.CurrentSessionRef{Ref: "exp", Source: model.SessionRefSourceEnv},
+			pointer: pointerAt(model.DefaultSession),
+			want: model.CurrentSession{
+				Session: exp,
+				CurrentSource: model.CurrentSessionSource{
+					Source:    model.SessionRefSourceEnv,
+					Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+				},
+			},
+		},
+		{
+			name:     "a keyword ref is refused",
+			ref:      model.CurrentSessionRef{Ref: model.RefLatest, Source: model.SessionRefSourceFlag},
+			pointer:  &fakePointer{},
+			unlisted: true,
+			wantErr:  model.ErrSessionRefKeyword,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			repo := &mockSessionRepo{}
+			if !tt.unlisted {
+				repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord, exp}, nil).Once()
+			}
+			svc := NewSessionService(SessionDeps{NewSessionLocker: newFakeSessionLocker, Current: tt.pointer, Sessions: repo})
+
+			// Act
+			got, err := svc.CurrentSession(context.Background(), tt.ref)
+
+			// Assert
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.want, got)
+			repo.AssertExpectations(t)
+		})
+	}
+}
+
+func TestSessionService_findForkSource(t *testing.T) {
+	exp := sessionRecord(demoSession, "exp", sessionNow)
+	other := sessionRecord(otherSession, "other", sessionNow)
+	sessions := []model.Session{model.DefaultSessionRecord, exp, other}
+	tests := []struct {
+		name    string
+		req     model.CreateSessionRequest
+		pointer *fakePointer
+		want    model.Session
+		wantErr error
+	}{
+		{name: "by name", req: model.CreateSessionRequest{From: "exp"}, pointer: &fakePointer{}, want: exp},
+		{name: "current: the pointer", req: model.CreateSessionRequest{From: model.RefCurrent},
+			pointer: pointerAt(demoSession), want: exp},
+		{name: "current: --session outranks the pointer", pointer: pointerAt(demoSession), want: other,
+			req: model.CreateSessionRequest{
+				From:    model.RefCurrent,
+				Current: model.CurrentSessionRef{Ref: "other", Source: model.SessionRefSourceFlag},
+			}},
+		// The ids order other last: 7d1e… sorts above 0f9c….
+		{name: "latest: the greatest id", req: model.CreateSessionRequest{From: model.RefLatest},
+			pointer: &fakePointer{}, want: other},
+		{name: "a ref naming nothing", req: model.CreateSessionRequest{From: "ghost"}, pointer: &fakePointer{},
+			wantErr: model.ErrSessionNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := NewSessionService(SessionDeps{NewSessionLocker: newFakeSessionLocker, Current: tt.pointer,
+				Sessions: &mockSessionRepo{}})
+
+			// Act
+			got, err := svc.findForkSource(context.Background(), sessions, tt.req)
+
+			// Assert
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSessionService_ListSessions_KeywordRefRefused(t *testing.T) {
+	// Arrange
+	repo := &mockSessionRepo{}
+	repo.On("ListSessions", mock.Anything).Return([]model.Session{model.DefaultSessionRecord}, nil).Once()
+	svc := NewSessionService(SessionDeps{NewSessionLocker: newFakeSessionLocker, Current: &fakePointer{}, Sessions: repo})
+
+	// Act
+	got, err := svc.ListSessions(context.Background(), model.ListSessionsRequest{
+		Current: model.CurrentSessionRef{Ref: model.RefLatest, Source: model.SessionRefSourceEnv},
+	})
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrSessionRefKeyword)
+	assert.Nil(t, got)
+	repo.AssertExpectations(t)
 }

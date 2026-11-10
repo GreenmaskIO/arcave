@@ -87,6 +87,8 @@ func (s *Printer) Print(v any) error {
 		text = s.formatGarbageCollect(v)
 	case model.Session:
 		text = formatSession(v)
+	case model.CurrentSession:
+		text = formatCurrentSession(v)
 	case []model.SessionSummary:
 		text = s.formatSessions(v)
 	case model.SessionDetail:

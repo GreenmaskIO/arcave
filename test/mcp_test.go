@@ -174,7 +174,7 @@ func (e *sessionEnv) readPointer(t *testing.T) string {
 func currentNames(list sessionListResult) []string {
 	var names []string
 	for _, s := range list.Sessions {
-		if s.Current {
+		if s.IsCurrent() {
 			names = append(names, s.Name)
 		}
 	}
@@ -204,7 +204,10 @@ func TestMCP_SessionLifecycle(t *testing.T) {
 	got := callTool[model.Session](t, cs, "session_set", map[string]any{"session": "feat"})
 	assert.Equal(t, feat.ID, got.ID)
 	assert.Equal(t, feat.ID.String(), env.readPointer(t), "the pointer holds the id")
-	assert.Equal(t, feat.ID, callTool[model.Session](t, cs, "session_current", nil).ID)
+	assert.Equal(t, model.CurrentSession{
+		Session:       feat,
+		CurrentSource: model.CurrentSessionSource{Source: model.SessionRefSourcePointer},
+	}, callTool[model.CurrentSession](t, cs, "session_current", nil), "session_set makes it current by the pointer")
 	assert.Equal(t, []string{"feat"}, currentNames(callTool[sessionListResult](t, cs, "session_list", nil)))
 
 	assert.Contains(t, callToolErr(t, cs, "session_remove", map[string]any{"session": "feat"}),
@@ -231,18 +234,56 @@ func TestMCP_PinnedServer(t *testing.T) {
 
 	// Act & Assert
 	assert.Empty(t, env.readPointer(t), "a pin is no pointer")
-	assert.Equal(t, feat.ID, callTool[model.Session](t, cs, "session_current", nil).ID)
+	assert.Equal(t, model.CurrentSession{
+		Session: feat,
+		CurrentSource: model.CurrentSessionSource{
+			Source:    model.SessionRefSourceFlag,
+			Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+		},
+	}, callTool[model.CurrentSession](t, cs, "session_current", nil), "the pin hides the default")
 	assert.Equal(t, []string{"feat"}, currentNames(callTool[sessionListResult](t, cs, "session_list", nil)),
 		"the listing marks what the tools use")
 	assert.Contains(t, callToolErr(t, cs, "session_set", map[string]any{"session": "baseline"}), "pinned")
 	assert.Contains(t, callToolErr(t, cs, "session_unset", nil), "pinned")
-	assert.Contains(t, callToolErr(t, cs, "session_remove", map[string]any{"session": "feat"}), "pinned")
+	removeMsg := callToolErr(t, cs, "session_remove", map[string]any{"session": "feat"})
+	assert.Contains(t, removeMsg, "pinned")
+	assert.Contains(t, removeMsg, "pass force")
+	assert.NotContains(t, removeMsg, "arcave")
 
 	// The pin is the session, not its name: a new "feat" is not the pinned one.
 	_, err := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
 	require.NoError(t, err)
 	env.create(t, "feat")
 	assert.Contains(t, callToolErr(t, cs, "session_current", nil), feat.ID.String())
+}
+
+func TestMCP_PinnedByTheVariableSaysSo(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newSessionEnv(t)
+	initArcave(t, env)
+	feat := env.create(t, "feat")
+	command := arcaveCommand(t, env, "mcp")
+	command.Env = append(command.Env, "ARCAVE_SESSION=feat")
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "arcave-it", Version: "0"}, nil)
+	cs, err := client.Connect(env.ctx, &mcpsdk.CommandTransport{Command: command}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cs.Close() })
+
+	// Act
+	current := callTool[model.CurrentSession](t, cs, "session_current", nil)
+	shown := callTool[model.SessionDetail](t, cs, "session_show", nil)
+
+	// Assert: a pin from the client's environment names the variable.
+	want := model.CurrentSessionSource{
+		Source:    model.SessionRefSourceEnv,
+		Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+	}
+	assert.Equal(t, feat.ID, current.ID)
+	assert.Equal(t, want, current.CurrentSource)
+	assert.Equal(t, feat.ID, shown.Session.ID)
+	assert.Equal(t, &want, shown.CurrentSource)
 }
 
 func TestMCP_DanglingPointer(t *testing.T) {
@@ -258,7 +299,8 @@ func TestMCP_DanglingPointer(t *testing.T) {
 	// Act & Assert
 	msg := callToolErr(t, cs, "session_current", nil)
 	assert.Contains(t, msg, gone.String())
-	assert.Contains(t, msg, "session unset")
+	assert.Contains(t, msg, "call session_unset or session_set")
+	assert.NotContains(t, msg, "arcave session")
 	assert.NotEmpty(t, callTool[sessionListResult](t, cs, "session_list", nil).Sessions, "the listing still answers")
 
 	assert.Equal(t, model.DefaultSession, callTool[model.Session](t, cs, "session_unset", nil).ID)

@@ -146,23 +146,30 @@ func TestSessionUnsetHandler_SessionUnset(t *testing.T) {
 
 func TestSessionCurrentHandler_SessionCurrent(t *testing.T) {
 	// Arrange
-	record := model.Session{ID: handlerSession, Name: "exp"}
+	ref := model.CurrentSessionRef{Ref: "exp", Source: model.SessionRefSourceEnv}
+	current := model.CurrentSession{
+		Session:       model.Session{ID: handlerSession, Name: "exp"},
+		CurrentSource: model.CurrentSessionSource{Source: model.SessionRefSourceEnv},
+	}
 	p := &capturePrinter{}
 	p.On("Print", mock.Anything).Return(nil).Once()
 	svc := &mockService{}
-	svc.On("ResolveSession", mock.Anything, "").Return(record, nil).Once()
+	svc.On("CurrentSession", mock.Anything, ref).Return(current, nil).Once()
 
 	// Act
-	err := NewSessionCurrentHandler(svc, p).SessionCurrent(context.Background(), "")
+	err := NewSessionCurrentHandler(svc, p).SessionCurrent(context.Background(), ref)
 
 	// Assert
 	assert.NoError(t, err)
-	assert.Equal(t, []any{record}, p.printed())
+	assert.Equal(t, []any{current}, p.printed())
 	svc.AssertExpectations(t)
 }
 
 func TestSessionShowHandler_SessionShow(t *testing.T) {
-	detail := model.SessionDetail{Session: model.DefaultSessionRecord, Current: true}
+	detail := model.SessionDetail{
+		Session:       model.DefaultSessionRecord,
+		CurrentSource: &model.CurrentSessionSource{Source: model.SessionRefSourceDefault},
+	}
 	printErr := errors.New("stdout closed")
 	tests := []struct {
 		name        string
@@ -182,7 +189,7 @@ func TestSessionShowHandler_SessionShow(t *testing.T) {
 			p := &capturePrinter{}
 			p.On("Print", mock.Anything).Return(tt.printerErr).Maybe()
 			svc := &mockService{}
-			req := model.ShowSessionRequest{Session: "feat", IncludeSafetySnapshots: true}
+			req := model.ShowSessionRequest{Session: "feat"}
 			svc.On("ShowSession", mock.Anything, req).Return(tt.detail, tt.showErr).Once()
 
 			// Act

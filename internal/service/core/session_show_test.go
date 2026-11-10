@@ -41,7 +41,14 @@ func TestSessionService_ShowSession(t *testing.T) {
 		feature = sessionRecord(otherSession, "feature", sessionNow)
 		fork    = model.Session{ID: thirdSession, Name: "fork", From: &model.SessionOrigin{Session: otherSession}}
 		// orphan is a fork whose source has since been removed.
-		orphan     = model.Session{ID: demoSession, Name: "orphan", From: &model.SessionOrigin{Session: removedSession}}
+		orphan    = model.Session{ID: demoSession, Name: "orphan", From: &model.SessionOrigin{Session: removedSession}}
+		byDefault = &model.CurrentSessionSource{Source: model.SessionRefSourceDefault}
+		byPointer = &model.CurrentSessionSource{Source: model.SessionRefSourcePointer}
+		// byFlag is --session over no pointer: it overrides the default.
+		byFlag = &model.CurrentSessionSource{
+			Source:    model.SessionRefSourceFlag,
+			Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+		}
 		errList    = errors.New("store timeout")
 		errListing = errors.New("sessions unreadable")
 		// groups are as the repository lists them: compose projects by name, savepoints oldest first.
@@ -55,12 +62,10 @@ func TestSessionService_ShowSession(t *testing.T) {
 		name string
 		// ref names the session to show, currentRef the one to mark current.
 		ref, currentRef string
-		includeSafety   bool
 		current         *model.SessionID
 		pointerErr      error
 		groups          []model.ComposeProjectSavepoints
-		// listings is how many times the sessions are listed; listingErr fails the last.
-		listings   int
+		// listingErr fails the one listing of the sessions.
 		listingErr error
 		// savepointsOf is the session whose savepoints are listed, none when zero; listErr fails it.
 		savepointsOf model.SessionID
@@ -73,35 +78,17 @@ func TestSessionService_ShowSession(t *testing.T) {
 			savepointsOf: model.DefaultSession,
 			want: model.SessionDetail{
 				Session:         model.DefaultSessionRecord,
-				Current:         true,
+				CurrentSource:   byDefault,
 				ComposeProjects: []model.ComposeProjectSavepoints{},
 			},
 		},
 		{
-			name:         "compose projects by name, savepoints newest first, safety snapshots hidden",
+			name:         "compose projects by name, savepoints newest first, safety snapshots among them",
 			savepointsOf: model.DefaultSession,
 			groups:       groups,
 			want: model.SessionDetail{
-				Session: model.DefaultSessionRecord,
-				Current: true,
-				// Counted whatever is shown.
-				SavepointCount:      3,
-				SafetySnapshotCount: 2,
-				ComposeProjects: []model.ComposeProjectSavepoints{
-					{ComposeProject: "blog", Savepoints: []model.Savepoint{older}},
-					{ComposeProject: "shop", Savepoints: []model.Savepoint{newer, older}},
-				},
-			},
-		},
-		{
-			name:          "safety snapshots shown when asked for",
-			savepointsOf:  model.DefaultSession,
-			groups:        groups,
-			includeSafety: true,
-			want: model.SessionDetail{
-				Session: model.DefaultSessionRecord,
-				Current: true,
-				// Counted whatever is shown.
+				Session:             model.DefaultSessionRecord,
+				CurrentSource:       byDefault,
 				SavepointCount:      3,
 				SafetySnapshotCount: 2,
 				ComposeProjects: []model.ComposeProjectSavepoints{
@@ -113,7 +100,6 @@ func TestSessionService_ShowSession(t *testing.T) {
 		},
 		{
 			name:         "a session other than the current one",
-			listings:     1,
 			savepointsOf: otherSession,
 			ref:          "feature",
 			want: model.SessionDetail{
@@ -123,31 +109,28 @@ func TestSessionService_ShowSession(t *testing.T) {
 		},
 		{
 			name:         "the session the pointer names",
-			listings:     1,
 			savepointsOf: otherSession,
 			ref:          "feature",
 			current:      &otherSession,
 			want: model.SessionDetail{
 				Session:         feature,
-				Current:         true,
+				CurrentSource:   byPointer,
 				ComposeProjects: []model.ComposeProjectSavepoints{},
 			},
 		},
 		{
-			name:         "the session --session names is current, listed once",
-			listings:     1,
+			name:         "the session --session names is current",
 			savepointsOf: otherSession,
 			ref:          "feature",
 			currentRef:   "feature",
 			want: model.SessionDetail{
 				Session:         feature,
-				Current:         true,
+				CurrentSource:   byFlag,
 				ComposeProjects: []model.ComposeProjectSavepoints{},
 			},
 		},
 		{
 			name:         "a session other than the one --session names",
-			listings:     1,
 			savepointsOf: otherSession,
 			ref:          "feature",
 			currentRef:   model.DefaultSessionName,
@@ -158,7 +141,6 @@ func TestSessionService_ShowSession(t *testing.T) {
 		},
 		{
 			name:         "a pointer that cannot be read marks none",
-			listings:     1,
 			savepointsOf: model.DefaultSession,
 			ref:          model.DefaultSessionName,
 			pointerErr:   errors.New("permission denied"),
@@ -169,7 +151,6 @@ func TestSessionService_ShowSession(t *testing.T) {
 		},
 		{
 			name:         "a fork names the session it was forked from",
-			listings:     1,
 			savepointsOf: thirdSession,
 			ref:          "fork",
 			want: model.SessionDetail{
@@ -180,7 +161,6 @@ func TestSessionService_ShowSession(t *testing.T) {
 		},
 		{
 			name:         "a fork of a removed session names its id alone",
-			listings:     1,
 			savepointsOf: demoSession,
 			ref:          "orphan",
 			want: model.SessionDetail{
@@ -190,17 +170,72 @@ func TestSessionService_ShowSession(t *testing.T) {
 			},
 		},
 		{
-			name:       "a --session naming no session is refused",
-			listings:   1,
-			ref:        "feature",
-			currentRef: "nowhere",
-			wantErr:    model.ErrSessionNotFound,
+			name:         "a --session naming no session marks none and shows the session named",
+			ref:          "feature",
+			currentRef:   "nowhere",
+			savepointsOf: otherSession,
+			want: model.SessionDetail{
+				Session:         feature,
+				ComposeProjects: []model.ComposeProjectSavepoints{},
+			},
 		},
 		{
-			name:     "a session that does not exist is refused",
-			listings: 1,
-			ref:      "nowhere",
-			wantErr:  model.ErrSessionNotFound,
+			name:       "a keyword in --session is refused",
+			ref:        "feature",
+			currentRef: model.RefLatest,
+			wantErr:    model.ErrSessionRefKeyword,
+		},
+		{
+			name:         "current is the session a command works in when it names none",
+			ref:          model.RefCurrent,
+			savepointsOf: model.DefaultSession,
+			want: model.SessionDetail{
+				Session:         model.DefaultSessionRecord,
+				CurrentSource:   byDefault,
+				ComposeProjects: []model.ComposeProjectSavepoints{},
+			},
+		},
+		{
+			name:         "current follows --session",
+			ref:          model.RefCurrent,
+			currentRef:   "feature",
+			savepointsOf: otherSession,
+			want: model.SessionDetail{
+				Session:         feature,
+				CurrentSource:   byFlag,
+				ComposeProjects: []model.ComposeProjectSavepoints{},
+			},
+		},
+		{
+			// The ids order feature last: 7d1e… sorts above 0f9c… and 019e….
+			name:         "latest is the session of the greatest id",
+			ref:          model.RefLatest,
+			savepointsOf: otherSession,
+			want: model.SessionDetail{
+				Session:         feature,
+				ComposeProjects: []model.ComposeProjectSavepoints{},
+			},
+		},
+		{
+			name:         "a pointer naming a removed session marks none",
+			ref:          "feature",
+			current:      &removedSession,
+			savepointsOf: otherSession,
+			want: model.SessionDetail{
+				Session:         feature,
+				ComposeProjects: []model.ComposeProjectSavepoints{},
+			},
+		},
+		{
+			name:       "a keyword in --session is refused",
+			ref:        "feature",
+			currentRef: model.RefCurrent,
+			wantErr:    model.ErrSessionRefKeyword,
+		},
+		{
+			name:    "a session that does not exist is refused",
+			ref:     "nowhere",
+			wantErr: model.ErrSessionNotFound,
 		},
 		{
 			name:         "savepoints that cannot be listed are refused",
@@ -211,7 +246,6 @@ func TestSessionService_ShowSession(t *testing.T) {
 		{
 			name:       "sessions that cannot be listed are refused",
 			ref:        "fork",
-			listings:   1,
 			listingErr: errListing,
 			wantErr:    errListing,
 		},
@@ -221,16 +255,10 @@ func TestSessionService_ShowSession(t *testing.T) {
 			// Arrange
 			repo := &mockSessionRepo{}
 			sessions := []model.Session{model.DefaultSessionRecord, feature, fork, orphan}
-			for i := range tt.listings {
-				var listingErr error
-				if i == tt.listings-1 {
-					listingErr = tt.listingErr
-				}
-				if listingErr != nil {
-					repo.On("ListSessions", mock.Anything).Return([]model.Session(nil), listingErr).Once()
-				} else {
-					repo.On("ListSessions", mock.Anything).Return(sessions, nil).Once()
-				}
+			if tt.listingErr != nil {
+				repo.On("ListSessions", mock.Anything).Return([]model.Session(nil), tt.listingErr).Once()
+			} else {
+				repo.On("ListSessions", mock.Anything).Return(sessions, nil).Once()
 			}
 			if tt.savepointsOf != (model.SessionID{}) {
 				repo.On("ListSessionSavepoints", mock.Anything, tt.savepointsOf).Return(tt.groups, tt.listErr).Once()
@@ -242,10 +270,9 @@ func TestSessionService_ShowSession(t *testing.T) {
 			}
 			svc := NewSessionService(deps)
 			svc.sessionSavepoints = repo.ListSessionSavepoints
-			req := model.ShowSessionRequest{
-				Session:                tt.ref,
-				Ref:                    tt.currentRef,
-				IncludeSafetySnapshots: tt.includeSafety,
+			req := model.ShowSessionRequest{Session: tt.ref}
+			if tt.currentRef != "" {
+				req.Current = model.CurrentSessionRef{Ref: tt.currentRef, Source: model.SessionRefSourceFlag}
 			}
 
 			// Act
@@ -271,7 +298,7 @@ func TestNewShownComposeProjects_LeavesItsInputAlone(t *testing.T) {
 	groups := []model.ComposeProjectSavepoints{{ComposeProject: "shop", Savepoints: []model.Savepoint{older, newer}}}
 
 	// Act
-	shown := newShownComposeProjects(groups, true)
+	shown := newShownComposeProjects(groups)
 
 	// Assert
 	require.Len(t, shown, 1)

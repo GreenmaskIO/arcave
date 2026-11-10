@@ -46,11 +46,11 @@ func (r *Repository) Get(_ context.Context) (id model.SessionID, found bool, err
 		return model.SessionID{}, false, nil
 	}
 	if err != nil {
-		return model.SessionID{}, false, fmt.Errorf("reading %s: %w", r.path, err)
+		return model.SessionID{}, false, fmt.Errorf("%w: reading %s: %w", model.ErrCurrentSessionUnreadable, r.path, err)
 	}
 	id, err = model.ParseSessionID(strings.TrimSpace(string(data)))
 	if err != nil {
-		return model.SessionID{}, false, fmt.Errorf("decoding %s: %w", r.path, err)
+		return model.SessionID{}, false, fmt.Errorf("%w: decoding %s: %w", model.ErrCurrentSessionUnreadable, r.path, err)
 	}
 	return id, true, nil
 }

@@ -117,6 +117,11 @@ func (m *mockService) ResolveSession(ctx context.Context, ref string) (model.Ses
 	return args.Get(0).(model.Session), args.Error(1)
 }
 
+func (m *mockService) CurrentSession(ctx context.Context, ref model.CurrentSessionRef) (model.CurrentSession, error) {
+	args := m.Called(ctx, ref)
+	return args.Get(0).(model.CurrentSession), args.Error(1)
+}
+
 func (m *mockService) ShowSession(ctx context.Context, req model.ShowSessionRequest) (model.SessionDetail, error) {
 	args := m.Called(ctx, req)
 	return args.Get(0).(model.SessionDetail), args.Error(1)

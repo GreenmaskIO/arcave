@@ -43,6 +43,7 @@ var (
 	createdAt        = time.Date(2026, 10, 29, 19, 45, 35, 0, time.UTC)
 	sessionID        = model.SessionID{0x01, 0x9a, 0x2b, 0x3c, 0x4d, 0x5e, 0x70, 0x00, 0x80, 0x00, 0, 0, 0, 0, 0, 0x07}
 	removedSessionID = model.SessionID{0x01, 0x9a, 0x2b, 0x3c, 0x4d, 0x5e, 0x70, 0x00, 0x80, 0x00, 0, 0, 0, 0, 0, 0x09}
+	failedSessionID  = model.SessionID{0x01, 0x9a, 0x2b, 0x3c, 0x4d, 0x5e, 0x70, 0x00, 0x80, 0x00, 0, 0, 0, 0, 0, 0x0a}
 )
 
 func TestPrinter_Print(t *testing.T) {
@@ -191,6 +192,27 @@ func TestPrinter_Print(t *testing.T) {
 			},
 		},
 		{
+			name: "session_current",
+			result: model.CurrentSession{
+				Session: model.Session{
+					ID:        sessionID,
+					Name:      "feature",
+					CreatedAt: createdAt,
+				},
+				CurrentSource: model.CurrentSessionSource{
+					Source:    model.SessionRefSourceFlag,
+					Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+				},
+			},
+		},
+		{
+			name: "session_current_default",
+			result: model.CurrentSession{
+				Session:       model.DefaultSessionRecord,
+				CurrentSource: model.CurrentSessionSource{Source: model.SessionRefSourceDefault},
+			},
+		},
+		{
 			name: "session_list",
 			result: []model.SessionSummary{
 				{
@@ -207,8 +229,11 @@ func TestPrinter_Print(t *testing.T) {
 						Name:      "feature",
 						CreatedAt: createdAt,
 					},
-					Status:          model.SessionStatusReady,
-					Current:         true,
+					Status: model.SessionStatusReady,
+					CurrentSource: &model.CurrentSessionSource{
+						Source:    model.SessionRefSourceEnv,
+						Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+					},
 					SavepointCount:  1,
 					SizeBytes:       48_800_000,
 					ComposeProjects: []model.DockerComposeProjectName{"shop"},
@@ -223,6 +248,49 @@ func TestPrinter_Print(t *testing.T) {
 					ComposeProjects: []model.DockerComposeProjectName{},
 				},
 			},
+		},
+		{
+			name: "session_list_all",
+			result: []model.SessionSummary{
+				{
+					Session:         model.Session{ID: removedSessionID},
+					Status:          model.SessionStatusCloning,
+					SizeBytes:       12_000_000,
+					ComposeProjects: []model.DockerComposeProjectName{},
+				},
+				{
+					Session:         model.Session{ID: failedSessionID},
+					Status:          model.SessionStatusFailed,
+					ComposeProjects: []model.DockerComposeProjectName{},
+				},
+				{
+					Session:         model.Session{ID: sessionID, Name: "feature", CreatedAt: createdAt},
+					Status:          model.SessionStatusReady,
+					CurrentSource:   &model.CurrentSessionSource{Source: model.SessionRefSourcePointer},
+					SavepointCount:  1,
+					SizeBytes:       48_800_000,
+					ComposeProjects: []model.DockerComposeProjectName{"shop"},
+				},
+			},
+		},
+		{
+			name: "session_list_default",
+			result: []model.SessionSummary{{
+				Session:         model.DefaultSessionRecord,
+				Status:          model.SessionStatusReady,
+				CurrentSource:   &model.CurrentSessionSource{Source: model.SessionRefSourceDefault},
+				ComposeProjects: []model.DockerComposeProjectName{},
+			}},
+		},
+		{
+			// --session names what the pointer names: nothing is hidden, so no footer.
+			name: "session_list_override_hides_none",
+			result: []model.SessionSummary{{
+				Session:         model.DefaultSessionRecord,
+				Status:          model.SessionStatusReady,
+				CurrentSource:   &model.CurrentSessionSource{Source: model.SessionRefSourceFlag},
+				ComposeProjects: []model.DockerComposeProjectName{},
+			}},
 		},
 		{
 			name: "session_show",
@@ -268,26 +336,19 @@ func TestPrinter_Print(t *testing.T) {
 			name: "session_show_empty",
 			result: model.SessionDetail{
 				Session:         model.DefaultSessionRecord,
-				Current:         true,
+				CurrentSource:   &model.CurrentSessionSource{Source: model.SessionRefSourceDefault},
 				ComposeProjects: []model.ComposeProjectSavepoints{},
 				CheckedAt:       createdAt,
 			},
 		},
 		{
-			name: "session_show_hidden",
-			result: model.SessionDetail{
-				Session:             model.DefaultSessionRecord,
-				Current:             true,
-				SafetySnapshotCount: 2,
-				ComposeProjects:     []model.ComposeProjectSavepoints{},
-				CheckedAt:           createdAt,
-			},
-		},
-		{
 			name: "session_show_unnamed",
 			result: model.SessionDetail{
-				Session: model.Session{ID: sessionID, From: &model.SessionOrigin{Session: removedSessionID}},
-				Current: true,
+				Session:       model.Session{ID: sessionID, From: &model.SessionOrigin{Session: removedSessionID}},
+				CurrentSource: &model.CurrentSessionSource{
+					Source:    model.SessionRefSourceEnv,
+					Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
+				},
 				// The session it was forked from is gone: its id alone.
 				From:           &model.SessionRef{ID: removedSessionID},
 				SavepointCount: 1,

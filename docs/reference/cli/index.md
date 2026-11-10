@@ -21,7 +21,7 @@ Global flags are declared on the root command, so `arcave savepoint create --wai
 | [`savepoint list`](savepoint_list.md) | Prints the project's committed savepoints. |
 | [`savepoint remove`](savepoint_remove.md) | Deletes savepoints by id or name, or by retention rules. |
 | [`rollback`](rollback.md) | Returns the environment to a savepoint, selected by id, by name, or by `latest`. |
-| [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `remove`, `set`, `unset`, `current`. |
+| [`session`](session.md) | Creates, lists, removes and switches sessions — the independent lines of savepoints inside a project: `create`, `list`, `show`, `remove`, `set`, `unset`, `current`. |
 | [`tools generate-compose`](tools_generate_compose.md) | Writes a docker compose file for a running compose project, from what the daemon reports. |
 | [`gc`](gc.md) | Finds and deletes the garbage arcave left in a session's store and in the Docker daemon. |
 | [`mcp`](mcp.md) | Serves the workflows above as MCP tools for an agent. |

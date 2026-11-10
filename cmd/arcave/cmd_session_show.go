@@ -15,7 +15,6 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -25,14 +24,12 @@ import (
 )
 
 var (
-	sessionShowIncludeSafety bool
-
 	sessionShowCmd = &cobra.Command{
-		Use:   "show [id|name]",
+		Use:   "show [id|name|current|latest]",
 		Short: "Show a session and its savepoints, by compose project",
-		Long: `Show a session — the one named, else --session or ARCAVE_SESSION, else the current session,
-else the default — and its committed savepoints, grouped by compose project: compose projects by name,
-savepoints newest first. Safety snapshots are hidden unless --include-safety-snapshots. Reads the
+		Long: `Show a session — the one named, latest for the newest, else current: --session or
+ARCAVE_SESSION, else the current session, else the default, which the output says — and its committed savepoints, grouped by compose project: compose projects by name,
+savepoints newest first, safety snapshots among them. Reads the
 store alone: no daemon, no -p.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runSessionShow,
@@ -51,21 +48,18 @@ func runSessionShow(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("init session dependencies: %w", err)
 	}
-	// The argument outranks --session, as session set's and session remove's do.
+	// The argument outranks --session, as session set's and session remove's do; none is current.
 	var named string
 	if len(args) > 0 {
 		named = args[0]
 	}
 	return cli.NewSessionShowHandler(svc, loadRunOutput()).SessionShow(ctx,
 		model.ShowSessionRequest{
-			Session:                cmp.Or(named, sessionRef),
-			Ref:                    sessionRef,
-			IncludeSafetySnapshots: sessionShowIncludeSafety,
+			Session: named,
+			Current: currentSessionRef(),
 		})
 }
 
 func init() {
-	sessionShowCmd.Flags().BoolVar(&sessionShowIncludeSafety, "include-safety-snapshots", false,
-		"also show the safety snapshots a rollback takes of the live state")
 	sessionCmd.AddCommand(sessionShowCmd)
 }
