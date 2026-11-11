@@ -113,11 +113,11 @@ func formatTotalBytes(total model.GarbageTotal) string {
 }
 
 // formatTotalFreed is what the deletions freed in all: the total when every size is known, "?"
-// when none is, else the known part, marked as SIZE marks it.
+// when nothing known was freed, else the known part, marked as SIZE marks it.
 func formatTotalFreed(result model.GarbageCollectResult) string {
 	var (
-		known          int64
-		sized, unknown int
+		known   int64
+		unknown int
 	)
 	for _, report := range result.Reports {
 		if report.Deletion == nil {
@@ -126,12 +126,11 @@ func formatTotalFreed(result model.GarbageCollectResult) string {
 		reportKnown, reportUnknown := report.Deletion.KnownFreedBytes()
 		known += reportKnown
 		unknown += reportUnknown
-		sized += len(report.Deletion.Deleted) + len(report.Deletion.Reclaimed)
 	}
-	switch unknown {
-	case 0:
+	switch {
+	case unknown == 0:
 		return formatOptionalSize(result.Total.FreedBytes)
-	case sized:
+	case known == 0:
 		return "?"
 	default:
 		return formatSize(known) + "+"
