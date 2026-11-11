@@ -30,6 +30,9 @@ import (
 // not belong in model.
 var errNoVolumesToBackUp = errors.New("no stateful volumes found; nothing to capture")
 
+// errSavepointNotFound is returned when no savepoint matches the requested id or name.
+var errSavepointNotFound = errors.New("savepoint not found")
+
 // errCaptureDirectoryNotEmpty refuses to capture into a directory that already
 // holds data. Unexported for the same reason: nothing matches on it.
 var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
@@ -136,7 +139,7 @@ func findSavepoint(savepoints []model.Savepoint, req model.RollbackRequest) (mod
 				return savepoint, nil
 			}
 		}
-		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", *req.ID)
+		return model.Savepoint{}, fmt.Errorf("%w: %s", errSavepointNotFound, *req.ID)
 	}
 
 	savepoints = visibleSavepoints(savepoints)
@@ -160,7 +163,7 @@ func findSavepoint(savepoints []model.Savepoint, req model.RollbackRequest) (mod
 	byName := findSavepointsByName(savepoints, *req.Name)
 	switch len(byName) {
 	case 0:
-		return model.Savepoint{}, fmt.Errorf("savepoint not found: %s", *req.Name)
+		return model.Savepoint{}, fmt.Errorf("%w: %s", errSavepointNotFound, *req.Name)
 	case 1:
 		return byName[0], nil
 	default:

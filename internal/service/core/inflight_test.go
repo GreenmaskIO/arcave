@@ -125,7 +125,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	// Arrange
 	record := demoRecord()
 	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	locker := &mockLocker{}
 	expectLock(locker)
 	inspector := &mockInspector{}
