@@ -36,6 +36,7 @@ import (
 	savepointrepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 func TestService_CreateSavepoint(t *testing.T) {
@@ -1071,8 +1072,14 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 			// The backup is the newest of the two, so counting it would retain it and
 			// delete the savepoint instead — exactly backwards.
 			name: "retain-recent 1 keeps the savepoint and leaves the backup alone",
-			req:  model.RemoveRequest{RetainRecent: 1, DryRun: true},
+			req:  model.RemoveRequest{RetainRecent: utils.New(1), DryRun: true},
 			want: nil,
+		},
+		{
+			// Deleting every savepoint still leaves the undo: the scan never sees it.
+			name: "retain-recent 0 takes the savepoint and leaves the backup alone",
+			req:  model.RemoveRequest{RetainRecent: utils.New(0), DryRun: true},
+			want: []model.Savepoint{record},
 		},
 		{
 			name: "an age rule sweeps neither",
@@ -1215,22 +1222,28 @@ func TestValidateRemoveRequest(t *testing.T) {
 		want error
 	}{
 		{name: "explicit ids", req: model.RemoveRequest{Refs: []string{"1"}}},
-		{name: "retain recent", req: model.RemoveRequest{RetainRecent: 2}},
+		{name: "retain recent", req: model.RemoveRequest{RetainRecent: utils.New(2)}},
+		{name: "retain recent zero is a rule", req: model.RemoveRequest{RetainRecent: utils.New(0)}},
 		{name: "retain for", req: model.RemoveRequest{RetainFor: "1d"}},
 		{
 			name: "ids and retention conflict",
-			req:  model.RemoveRequest{Refs: []string{"1"}, RetainRecent: 2},
+			req:  model.RemoveRequest{Refs: []string{"1"}, RetainRecent: utils.New(2)},
+			want: model.ErrRemoveSelectorConflict,
+		},
+		{
+			name: "ids and retain recent zero conflict",
+			req:  model.RemoveRequest{Refs: []string{"1"}, RetainRecent: utils.New(0)},
 			want: model.ErrRemoveSelectorConflict,
 		},
 		{name: "no selector at all", req: model.RemoveRequest{}, want: model.ErrRemoveNoSelector},
 		{
 			name: "negative retain recent",
-			req:  model.RemoveRequest{RetainRecent: -1},
+			req:  model.RemoveRequest{RetainRecent: utils.New(-1)},
 			want: model.ErrRetainRecentNegative,
 		},
 		{
 			name: "negative retain recent beats a conflicting id list",
-			req:  model.RemoveRequest{Refs: []string{"1"}, RetainRecent: -1},
+			req:  model.RemoveRequest{Refs: []string{"1"}, RetainRecent: utils.New(-1)},
 			want: model.ErrRetainRecentNegative,
 		},
 	}
@@ -1258,11 +1271,12 @@ func TestService_parseRetentionCutoffs(t *testing.T) {
 	beforeDate := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name    string
-		req     model.RemoveRequest
-		want    []time.Duration // a cutoff relative to now; zero means "read it from wantAbsolute"
-		wantAbs map[int]time.Time
-		wantErr bool
+		name      string
+		req       model.RemoveRequest
+		want      []time.Duration // a cutoff relative to now; zero with an entry in wantAbs means "read it from wantAbs"
+		wantAbs   map[int]time.Time
+		wantErr   bool
+		wantErrIs error
 	}{
 		{name: "no rules yields no cutoffs", req: model.RemoveRequest{}},
 		{
@@ -1284,6 +1298,17 @@ func TestService_parseRetentionCutoffs(t *testing.T) {
 		},
 		{name: "unparsable retain-for errors", req: model.RemoveRequest{RetainFor: "yesterday"}, wantErr: true},
 		{name: "unparsable before-date errors", req: model.RemoveRequest{BeforeDate: "june"}, wantErr: true},
+		{
+			name:      "negative retain-for is refused",
+			req:       model.RemoveRequest{RetainFor: "-1h"},
+			wantErr:   true,
+			wantErrIs: model.ErrRetainForNegative,
+		},
+		{
+			name: "zero retain-for cuts at now",
+			req:  model.RemoveRequest{RetainFor: "0s"},
+			want: []time.Duration{0},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1305,6 +1330,9 @@ func TestService_parseRetentionCutoffs(t *testing.T) {
 			// Assert
 			if tt.wantErr {
 				require.Error(t, err)
+				if tt.wantErrIs != nil {
+					require.ErrorIs(t, err, tt.wantErrIs)
+				}
 				return
 			}
 			require.NoError(t, err)

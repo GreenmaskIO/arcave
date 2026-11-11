@@ -191,6 +191,8 @@ Error: specify savepoint ids or names, or at least one of retain-recent, retain-
 
 Neither is a default. A `remove` with nothing to go on would be a command that deletes everything by accident.
 
+An explicit `--retain-recent 0` is not "nothing to go on": it is a rule that keeps none, and deletes every savepoint the scan sees.
+
 ## 6. Retention in a scheduled job
 
 ```shell title="prune.sh"

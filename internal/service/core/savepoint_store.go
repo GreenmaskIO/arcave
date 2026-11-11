@@ -175,13 +175,13 @@ func visibleSavepoints(savepoints []model.Savepoint) []model.Savepoint {
 // retention rules are mutually exclusive, one selector is required — with the
 // model sentinels the adapters match on.
 func validateRemoveRequest(req model.RemoveRequest) error {
-	// Before hasRetention, which counts only a positive RetainRecent: a negative
-	// would fall through and be reported as "no selector provided".
-	if req.RetainRecent < 0 {
+	// A given RetainRecent is a rule whatever its value — 0 retains none — so
+	// only its sign is checked here.
+	if req.RetainRecent != nil && *req.RetainRecent < 0 {
 		return model.ErrRetainRecentNegative
 	}
 
-	hasRetention := req.RetainRecent > 0 || req.RetainFor != "" || req.BeforeDate != ""
+	hasRetention := req.RetainRecent != nil || req.RetainFor != "" || req.BeforeDate != ""
 
 	if len(req.Refs) > 0 && hasRetention {
 		return model.ErrRemoveSelectorConflict
@@ -243,7 +243,12 @@ func (s *SavepointStoreService) selectSavepointsToRemove(
 	if err != nil {
 		return nil, nil, err
 	}
-	kept, removed = partitionSavepoints(visibleSavepoints(savepoints), req.RetainRecent, cutoffs)
+	// No recency rule and a rule of 0 retain the same: none by recency.
+	var retainRecent int
+	if req.RetainRecent != nil {
+		retainRecent = *req.RetainRecent
+	}
+	kept, removed = partitionSavepoints(visibleSavepoints(savepoints), retainRecent, cutoffs)
 	return kept, removed, nil
 }
 
@@ -255,6 +260,11 @@ func (s *SavepointStoreService) parseRetentionCutoffs(req model.RemoveRequest) (
 		retainFor, err := str2duration.ParseDuration(req.RetainFor)
 		if err != nil {
 			return nil, fmt.Errorf("invalid --retain-for %q: %w", req.RetainFor, err)
+		}
+		// Known only once parsed, so checked here rather than in validateRemoveRequest:
+		// a negative age would put the cutoff in the future and sweep everything.
+		if retainFor < 0 {
+			return nil, fmt.Errorf("%w: %q", model.ErrRetainForNegative, req.RetainFor)
 		}
 		cutoffs = append(cutoffs, time.Now().UTC().Add(-retainFor))
 	}

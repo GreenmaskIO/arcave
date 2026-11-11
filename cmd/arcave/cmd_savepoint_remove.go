@@ -16,9 +16,11 @@ package main
 
 import (
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/greenmaskio/arcave/internal/cli"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils"
 )
 
 var (
@@ -55,7 +57,7 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 	h := cli.NewSavepointRemoveHandler(svc, loadRunOutput())
 	return h.SavepointRemove(ctx, model.RemoveRequest{
 		Refs:         args,
-		RetainRecent: savepointRemoveRetainRecent,
+		RetainRecent: retainRecentFlag(cmd.Flags()),
 		RetainFor:    savepointRemoveRetainFor,
 		BeforeDate:   savepointRemoveBeforeDate,
 		DryRun:       savepointRemoveDryRun,
@@ -65,7 +67,7 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 func init() {
 	flags := savepointRemoveCmd.Flags()
 	flags.IntVar(&savepointRemoveRetainRecent, "retain-recent", 0,
-		"Retain the most recent N savepoints")
+		"Retain the most recent N savepoints; 0 retains none")
 	flags.StringVar(&savepointRemoveRetainFor, "retain-for", "",
 		"Retain savepoints for the specified duration (e.g. 1w2d3h4m5s)")
 	flags.StringVar(&savepointRemoveBeforeDate, "before-date", "",
@@ -74,4 +76,13 @@ func init() {
 		"Show savepoints that would be deleted without deleting them")
 
 	savepointCmd.AddCommand(savepointRemoveCmd)
+}
+
+// retainRecentFlag returns --retain-recent when it was given, nil otherwise: 0 is a rule that
+// retains none, not the absence of one.
+func retainRecentFlag(flags *pflag.FlagSet) *int {
+	if !flags.Changed("retain-recent") {
+		return nil
+	}
+	return utils.New(savepointRemoveRetainRecent)
 }

@@ -37,6 +37,8 @@ func removeUsageError(err error) error {
 		return errors.New("specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date")
 	case errors.Is(err, model.ErrRetainRecentNegative):
 		return errors.New("retain-recent must be zero or positive")
+	case errors.Is(err, model.ErrRetainForNegative):
+		return errors.New("retain-for must be zero or positive")
 	default:
 		return err
 	}
