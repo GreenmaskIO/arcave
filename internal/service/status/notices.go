@@ -229,6 +229,11 @@ func newReplicaNotices(facts statusFacts, service string, replica model.ReplicaS
 			Severe: true,
 		}}
 	case model.ReplicaStateExited:
+		// With every container stopped, compose-project-stopped says it once; a clean exit adds
+		// nothing to that, a failing one is still a failure.
+		if replica.ExitCode == 0 && facts.state == model.ComposeProjectStateStopped {
+			break
+		}
 		notices = append(notices, model.Notice{
 			Code: model.NoticeCodeReplicaExited,
 			Message: fmt.Sprintf("%s exited with code %d%s%s", name, replica.ExitCode, formatExitCause(replica),
