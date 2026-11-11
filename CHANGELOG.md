@@ -8,6 +8,7 @@
 - **`ARCAVE_COMPOSE_PROJECT_NAME` names the compose project.** `ARCAVE_PROJECT_NAME` no longer does: it is only the config key `project.name`, the storage tenant, as every `ARCAVE_<KEY>` is. A shell that exports it keeps its tenant and now has to name the compose project with `-p` or the new variable.
 - **The MCP tools' `project` argument is `compose_project`.**
 - **`status` says a stopped compose project once.** With every container stopped, a replica that exited 0 no longer adds a `replica-exited` notice beside `compose-project-stopped`; one that exited otherwise still does.
+- **`savepoint remove` refuses `--retain-recent 0` beside an id or name, and a negative `--retain-for`.** `0` with ids was silently ignored and is now a selector conflict, as any other retention rule there is; the same holds for `retain_recent: 0` with `refs` in the MCP `savepoint_remove` tool. `--retain-for -1h` (and `retain_for: "-1h"`) used to delete everything and is now refused with `retain-for must be zero or positive`.
 
 ### New
 
@@ -16,6 +17,7 @@
 ### Changed
 
 - **`savepoint create` no longer compares its capture with the latest savepoint's.** It warned when a unit's capture changed since then; what a savepoint does not hold is in its `not_covered`, as before, and the capture no longer reads the previous savepoint's spec from the store.
+- **`arcave savepoint remove --retain-recent 0` deletes every savepoint** of the compose project in the session the command works in, as `retain_recent: 0` does in the MCP tool; it used to be refused as no selector. Safety snapshots are untouched. Omitting the flag or the field, or sending `null`, still means no recency rule.
 
 ### Fixes
 

@@ -558,6 +558,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	}
 	tests := []struct {
 		tool               string
+		name               string // the subtest's name when a tool has several cases; empty means the tool's
 		args               map[string]any
 		setup              func(svc *mockService)
 		want               any    // the structured content, decoded into its type
@@ -576,6 +577,19 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{Refs: []string{savepoint.ID.String()}}).
 					Return(model.RemoveResult{}, nil).Once()
 			}, want: model.RemoveResult{}, wantComposeProject: "demo"},
+		// A null retain_recent is no recency rule, as omitting it is; 0 is a rule that keeps none.
+		{tool: "savepoint_remove", name: "savepoint_remove null retain_recent",
+			args: map[string]any{"compose_project": "demo", "retain_recent": nil, "before_date": "2026-06-01T00:00:00Z"},
+			setup: func(svc *mockService) {
+				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{BeforeDate: "2026-06-01T00:00:00Z"}).
+					Return(model.RemoveResult{}, nil).Once()
+			}, want: model.RemoveResult{}, wantComposeProject: "demo"},
+		{tool: "savepoint_remove", name: "savepoint_remove retain_recent 0",
+			args: map[string]any{"compose_project": "demo", "retain_recent": 0, "dry_run": true},
+			setup: func(svc *mockService) {
+				svc.On("RemoveSavepoints", mock.Anything, model.RemoveRequest{RetainRecent: utils.New(0), DryRun: true}).
+					Return(model.RemoveResult{DryRun: true}, nil).Once()
+			}, want: model.RemoveResult{DryRun: true}, wantComposeProject: "demo"},
 		{tool: "rollback", args: map[string]any{"compose_project": "demo", "ref": "latest"},
 			setup: func(svc *mockService) {
 				svc.On("Rollback", mock.Anything, mock.Anything).
@@ -677,12 +691,18 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	}
 	var want []string
 	for _, tt := range tests {
-		want = append(want, tt.tool)
+		if tt.name == "" {
+			want = append(want, tt.tool)
+		}
 	}
 	assert.ElementsMatch(t, want, names, "every tool is registered and every registered tool is covered")
 
 	for _, tt := range tests {
-		t.Run(tt.tool, func(t *testing.T) {
+		name := tt.name
+		if name == "" {
+			name = tt.tool
+		}
+		t.Run(name, func(t *testing.T) {
 			// Arrange
 			gotComposeProject = ""
 

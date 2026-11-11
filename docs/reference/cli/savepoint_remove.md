@@ -19,7 +19,7 @@ arcave savepoint remove [id|name...] [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--retain-recent` | `0` | Keep the newest N savepoints and delete the rest. |
+| `--retain-recent` | — | Keep the newest N savepoints and delete the rest; `0` keeps none. |
 | `--retain-for` | — | Keep savepoints younger than this duration, e.g. `1w2d3h4m5s`. |
 | `--before-date` | — | Delete savepoints created before this RFC3339Nano timestamp. |
 | `--dry-run` | `false` | Report what would be deleted, and delete nothing. |
@@ -45,6 +45,8 @@ arcave savepoint remove --retain-recent 5
 The two cannot be mixed, and one of them is required. Both are refusals rather than defaults: a `remove` with nothing to go on would be a command that deletes everything by accident.
 
 When several retention rules are combined, a savepoint survives if **any** one of them keeps it. `--retain-recent 5 --retain-for 30d` keeps the newest five *and* everything from the last thirty days; it does not intersect them.
+
+`--retain-recent 0` and `--retain-for 0s` delete every savepoint of this compose project in the session the command works in. Other compose projects, other sessions and [safety snapshots](#which-savepoints-a-selector-reaches) are untouched. Look with `--dry-run` first.
 
 ## Which savepoints a selector reaches
 
@@ -111,7 +113,9 @@ Deletion is permanent. It frees the savepoint's own directory; the [deduplicated
 |---|---|
 | Ids and retention rules together | `cannot combine savepoint ids or names with retain-recent/retain-for/before-date` |
 | Neither | `specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date` |
+| An id or name with `--retain-recent 0` | `cannot combine savepoint ids or names with retain-recent/retain-for/before-date` — `0` is a rule like any other. |
 | A negative `--retain-recent` | `retain-recent must be zero or positive` |
+| A negative `--retain-for`, e.g. `-1h` | `retain-for must be zero or positive` |
 | An unparseable duration | `invalid --retain-for "2 weeks": …` |
 | A bare date in `--before-date` | `invalid --before-date "2026-06-01": …` — it takes RFC3339Nano. |
 | An id or name that is not there | `savepoint(s) not found: 019e843e-1650-7000-8000-000000000000`, **and nothing is deleted**. Every such argument is named. There are no partial deletes: one typo in a list of five removes none of them. |
@@ -137,6 +141,11 @@ arcave savepoint remove --retain-for 2w
 
 ```shell title="Drop everything before a cutover"
 arcave savepoint remove --before-date 2026-06-01T00:00:00Z
+```
+
+```shell title="Delete every savepoint, keep the undos"
+arcave savepoint remove --retain-recent 0 --dry-run
+arcave savepoint remove --retain-recent 0
 ```
 
 ```shell title="Delete a safety snapshot, once the environment is right"

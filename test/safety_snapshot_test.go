@@ -222,6 +222,38 @@ func TestGC_RetainRecentFromTheEnvironment(t *testing.T) {
 	assert.Equal(t, []string{"v1"}, savepointNames(listed))
 }
 
+// savepoint remove --retain-recent 0 deletes every savepoint and still leaves the undo: the scan never sees it.
+func TestSavepointRemove_RetainRecentZero(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newSessionEnv(t)
+	env.withComposeProject(t)
+	initArcave(t, env)
+	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	compose := env.in(t, model.DefaultSession)
+	arcave := func(args ...string) []byte {
+		t.Helper()
+		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
+	}
+	compose.write(t, compose.replicas(t)[0], "v1")
+	arcave("savepoint", "create", "v1")
+	rolledBack := decode[model.RollbackResult](t, arcave("rollback", "v1"))
+	require.NotEmpty(t, rolledBack.SafetySnapshot)
+
+	// Act
+	planned := decode[model.RemoveResult](t, arcave("savepoint", "remove", "--retain-recent", "0", "--dry-run"))
+	removed := decode[model.RemoveResult](t, arcave("savepoint", "remove", "--retain-recent", "0"))
+	listed := decode[[]model.Savepoint](t, arcave("savepoint", "list", "--include-safety-snapshots"))
+
+	// Assert
+	assert.True(t, planned.DryRun)
+	assert.Equal(t, []string{"v1"}, savepointNames(planned.Removed))
+	assert.Equal(t, []string{"v1"}, savepointNames(removed.Removed))
+	assert.Equal(t, []model.SavepointID{rolledBack.SafetySnapshot}, safetySnapshots(listed))
+	assert.Len(t, listed, 1, "only the safety snapshot is left")
+}
+
 // The MCP server takes rollback.safety_snapshot for its default, and the tool's argument wins over it.
 func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	t.Parallel()

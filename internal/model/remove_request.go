@@ -17,8 +17,9 @@ package model
 // RemoveRequest selects savepoints to remove, either by refs — each a savepoint id
 // or name — or by retention rules (the two modes are mutually exclusive).
 type RemoveRequest struct {
-	Refs         []string
-	RetainRecent int
+	Refs []string
+	// RetainRecent is nil when no recency rule is given; 0 is a rule that retains none.
+	RetainRecent *int
 	RetainFor    string
 	BeforeDate   string
 	DryRun       bool

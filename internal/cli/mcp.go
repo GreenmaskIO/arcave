@@ -185,7 +185,9 @@ const (
 	descRemove = "Delete savepoints and the snapshot data they hold. Select them either by " +
 		"explicit ids, or by retention rules (retain_recent/retain_for/before_date) — the two " +
 		"modes cannot be combined, and at least one is required. Pass dry_run to see what would " +
-		"be deleted without deleting anything. Deletion is permanent."
+		"be deleted without deleting anything. Deletion is permanent. retain_recent 0 deletes every " +
+		"savepoint of this compose project in the session the call works in; other compose projects, " +
+		"other sessions and safety snapshots are untouched."
 	descRollback = "Restore the environment to a savepoint, selected by id, by name, or by the " +
 		"literal 'latest'. DESTRUCTIVE: every volume it covers is overwritten with " +
 		"the savepoint's data, so any change made since that savepoint is lost — including in " +
@@ -342,10 +344,11 @@ type removeSavepointInput struct {
 	ComposeProject string   `json:"compose_project" jsonschema:"the docker compose project to operate on, as docker compose ls names it"`
 	Session        string   `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
 	Refs           []string `json:"refs,omitempty" jsonschema:"savepoints to delete, each by id or name; cannot be combined with the retention fields"`
-	RetainRecent   int      `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest"`
-	RetainFor      string   `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
-	BeforeDate     string   `json:"before_date,omitempty" jsonschema:"delete savepoints created before this RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z"`
-	DryRun         bool     `json:"dry_run,omitempty" jsonschema:"report what would be deleted without deleting anything"`
+	// A pointer: an omitted or null field is no recency rule, 0 is a rule that keeps none.
+	RetainRecent *int   `json:"retain_recent,omitempty" jsonschema:"keep this many newest savepoints and delete the rest; 0 keeps none. Omit it rather than sending 0 when another selector is meant"`
+	RetainFor    string `json:"retain_for,omitempty" jsonschema:"keep savepoints younger than this duration, e.g. 24h or 7d, and delete the rest"`
+	BeforeDate   string `json:"before_date,omitempty" jsonschema:"delete savepoints created before this RFC 3339 timestamp, e.g. 2026-06-01T00:00:00Z"`
+	DryRun       bool   `json:"dry_run,omitempty" jsonschema:"report what would be deleted without deleting anything"`
 }
 
 // removeSavepoints deletes the selected savepoints and reports what went.

@@ -17,6 +17,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -75,6 +76,14 @@ func TestSavepointRemoveHandler_SavepointRemove(t *testing.T) {
 			svcErr:      model.ErrRetainRecentNegative,
 			printerErr:  nil,
 			wantErrMsg:  "retain-recent must be zero or positive",
+			wantPrinted: nil,
+		},
+		{
+			name:        "negative retain-for",
+			res:         model.RemoveResult{},
+			svcErr:      fmt.Errorf("%w: %q", model.ErrRetainForNegative, "-1h"),
+			printerErr:  nil,
+			wantErrMsg:  "retain-for must be zero or positive",
 			wantPrinted: nil,
 		},
 		{

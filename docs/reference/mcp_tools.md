@@ -78,12 +78,12 @@ Deletes savepoints and the data they hold. Permanent.
 | `compose_project` | yes | The compose project. |
 | `session` | no | The session to work in for this call only. |
 | `refs` | no | Savepoints to delete, each by id or name. Cannot be combined with the retention fields. |
-| `retain_recent` | no | Keep this many newest savepoints and delete the rest. |
+| `retain_recent` | no | Keep this many newest savepoints and delete the rest. `0` keeps none; `null` is the same as omitting it; omit it when another selector is meant. |
 | `retain_for` | no | Keep savepoints younger than this duration, e.g. `24h` or `7d`. |
 | `before_date` | no | Delete savepoints created before this RFC 3339 timestamp, e.g. `2026-06-01T00:00:00Z`. |
 | `dry_run` | no | Report what would be deleted, and delete nothing. |
 
-Either `refs` or the retention fields — not both, and not neither. The refusals carry the same wording the CLI uses: `cannot combine savepoint ids or names with retain-recent/retain-for/before-date`, and `specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date`.
+Either `refs` or the retention fields — not both, and not neither. `retain_recent: 0` is a retention field like any other, so with `refs` it is a conflict. The refusals carry the same wording the CLI uses: `cannot combine savepoint ids or names with retain-recent/retain-for/before-date`, and `specify savepoint ids or names, or at least one of retain-recent, retain-for or before-date`.
 
 ```json title="structured content"
 {
