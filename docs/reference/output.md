@@ -35,7 +35,7 @@ The tree is drawn on stderr and the result goes to stdout, so `ID=$(arcave savep
 ├── ✔ savepoint.capture            12.1s
 └── ✔ compose.start                 2.7s
 
-Savepoint nightly · 01a188c4 · 19:45:35 · stored 4.7 MB
+Savepoint nightly · 01a188c4-1650-7000-8000-000000000001 · 19:45:35 · stored 4.7 MB
             count     size   stored
   volumes       3  48.8 MB   4.7 MB
   layers        4   275 MB  44.1 KB

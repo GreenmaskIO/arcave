@@ -92,10 +92,10 @@ On a terminal, the final tree of the steps on stderr and a summary on stdout; in
 ├── ✔ rollback.apply                                                              3.5s
 └── ✔ rollback.cleanup                                                            0.0s
 
-Rolled back to before-migration · 019e843e · 2026-06-01 19:41:12
+Rolled back to before-migration · 019e843e-1650-7000-8000-000000000000 · 2026-06-01 19:41:12
   volumes   1
   layers    2
-  safety    019e8491
+  safety    taken
 
 Warnings (1)
   ! the containers run on the savepoint's writable layers

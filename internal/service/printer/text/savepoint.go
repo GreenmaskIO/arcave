@@ -83,12 +83,13 @@ func (s *Printer) formatRollback(response model.RollbackResult) string {
 			cells: []string{strconv.Itoa(len(response.WritableLayers))},
 		})
 	}
+	// Whether one was taken, not which: its id is in the undo command below.
 	safety := "none"
 	if response.SafetySnapshot != "" {
-		safety = formatShortID(response.SafetySnapshot.String())
+		safety = "taken"
 	}
 	b.WriteString(formatCaptureRows(nil, rows))
-	// Below the counts, not aligned with them: an id is no number.
+	// Below the counts, not aligned with them: a word is no number.
 	b.WriteString(formatCaptureLine("safety", []string{safety}, []int{0}) + "\n")
 
 	var notices []model.Notice
@@ -123,14 +124,14 @@ func (s *Printer) formatRemove(response model.RemoveResult) string {
 	return b.String()
 }
 
-// formatSavepointTitle is "<name> · <short id> · <time>", the name left out when none.
+// formatSavepointTitle is "<name> · <id> · <time>", the name left out when none.
 func (s *Printer) formatSavepointTitle(savepoint model.Savepoint, layout string) string {
 	parts := make([]string, 0, 3)
 	if savepoint.Name != "" {
 		parts = append(parts, savepoint.Name)
 	}
 	parts = append(parts,
-		formatShortID(savepoint.ID.String()),
+		savepoint.ID.String(),
 		savepoint.CreatedAt.In(s.opts.Location).Format(layout))
 	return strings.Join(parts, " · ")
 }

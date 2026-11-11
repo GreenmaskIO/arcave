@@ -199,15 +199,6 @@ func formatNotices(notices []model.Notice) string {
 	return b.String()
 }
 
-// formatShortID is the first eight characters of an id.
-func formatShortID(id string) string {
-	const shortIDLength = 8
-	if len(id) > shortIDLength {
-		return id[:shortIDLength]
-	}
-	return id
-}
-
 // formatCount is n and the noun, plural past one.
 func formatCount(n int, noun string) string {
 	if n == 1 {
