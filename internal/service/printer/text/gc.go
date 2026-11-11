@@ -57,7 +57,7 @@ func (s *Printer) formatGarbageCollect(result model.GarbageCollectResult) string
 	}
 	total := []string{"  total", strconv.Itoa(result.Total.Found), formatTotalBytes(result.Total)}
 	if !result.DryRun {
-		total = append(total, strconv.Itoa(result.Total.Deleted), formatOptionalSize(result.Total.FreedBytes))
+		total = append(total, strconv.Itoa(result.Total.Deleted), formatTotalFreed(result))
 	}
 	rows = append(rows, total)
 
@@ -110,6 +110,32 @@ func formatTotalBytes(total model.GarbageTotal) string {
 		return formatSize(total.Bytes) + "+"
 	}
 	return formatSize(total.Bytes)
+}
+
+// formatTotalFreed is what the deletions freed in all: the total when every size is known, "?"
+// when none is, else the known part, marked as SIZE marks it.
+func formatTotalFreed(result model.GarbageCollectResult) string {
+	var (
+		known          int64
+		sized, unknown int
+	)
+	for _, report := range result.Reports {
+		if report.Deletion == nil {
+			continue
+		}
+		reportKnown, reportUnknown := report.Deletion.KnownFreedBytes()
+		known += reportKnown
+		unknown += reportUnknown
+		sized += len(report.Deletion.Deleted) + len(report.Deletion.Reclaimed)
+	}
+	switch unknown {
+	case 0:
+		return formatOptionalSize(result.Total.FreedBytes)
+	case sized:
+		return "?"
+	default:
+		return formatSize(known) + "+"
+	}
 }
 
 // newGarbageNotices is what kept the gc from finishing: the warnings, what a collector could not

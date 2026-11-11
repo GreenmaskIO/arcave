@@ -15,8 +15,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
@@ -50,7 +48,7 @@ func runToolsGenerateCompose(cmd *cobra.Command, _ []string) error {
 
 	svc, err := openComposeFileService(ctx, projectCfg, composeProject, &opened)
 	if err != nil {
-		return fmt.Errorf("init tools dependencies: %w", err)
+		return err
 	}
 	h := cli.NewToolsGenerateComposeHandler(svc, loadRunOutput())
 	return h.GenerateCompose(ctx, model.GenerateComposeRequest{AbsolutePaths: toolsGenerateComposeAbsolutePaths},

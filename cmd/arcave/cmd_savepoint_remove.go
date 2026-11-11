@@ -15,8 +15,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
@@ -52,7 +50,7 @@ func runSavepointRemove(cmd *cobra.Command, args []string) error {
 
 	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {
-		return fmt.Errorf("init dependencies: %w", err)
+		return err
 	}
 	h := cli.NewSavepointRemoveHandler(svc, loadRunOutput())
 	return h.SavepointRemove(ctx, model.RemoveRequest{

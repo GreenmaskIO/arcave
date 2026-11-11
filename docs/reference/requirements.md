@@ -25,7 +25,7 @@ Podman, which names itself in `docker version`, is not held to Docker's floor: a
 The daemon must also be **reachable** for `savepoint create` and `rollback`, which ask it which engine it is before anything else. `init`, `savepoint list`, `savepoint remove` and the `session` commands reach no daemon:
 
 ```text
-init dependencies: read the daemon version: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+read the daemon version: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
 ```
 
 Which daemon, and how to reach it, is the [`docker` config section](configuration.md#docker); left empty, it reads `DOCKER_HOST` and friends.

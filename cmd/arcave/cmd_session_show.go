@@ -15,8 +15,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
@@ -46,7 +44,7 @@ func runSessionShow(cmd *cobra.Command, args []string) error {
 
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
 	if err != nil {
-		return fmt.Errorf("init session dependencies: %w", err)
+		return err
 	}
 	// The argument outranks --session, as session set's and session remove's do; none is current.
 	var named string

@@ -362,20 +362,31 @@ func (m GarbageDeletion) IsInterrupted() bool {
 
 // FreedBytes sums the deleted ops' sizes and what was reclaimed; nil when any is unknown.
 func (m GarbageDeletion) FreedBytes() *int64 {
-	var bytes int64
+	known, unknown := m.KnownFreedBytes()
+	if unknown > 0 {
+		return nil
+	}
+	return &known
+}
+
+// KnownFreedBytes sums the deleted ops' and the reclaimed sizes that are known, and counts the
+// ones that are not.
+func (m GarbageDeletion) KnownFreedBytes() (known int64, unknown int) {
 	for _, deleted := range m.Deleted {
 		if deleted.Bytes == nil {
-			return nil
+			unknown++
+			continue
 		}
-		bytes += *deleted.Bytes
+		known += *deleted.Bytes
 	}
 	for _, reclaimed := range m.Reclaimed {
 		if reclaimed.Bytes == nil {
-			return nil
+			unknown++
+			continue
 		}
-		bytes += *reclaimed.Bytes
+		known += *reclaimed.Bytes
 	}
-	return &bytes
+	return known, unknown
 }
 
 // GarbageReclaimed is what one deletion over several ops freed, a restic repository's prune.

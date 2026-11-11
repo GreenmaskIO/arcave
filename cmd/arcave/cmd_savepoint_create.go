@@ -16,7 +16,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -53,7 +52,7 @@ func runSavepointCreate(cmd *cobra.Command, args []string) error {
 
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {
-		return fmt.Errorf("init dependencies: %w", err)
+		return err
 	}
 	h := cli.NewSavepointCreateHandler(svc, loadRunOutput())
 	return h.SavepointCreate(ctx, projectCfg, name, savepointCreateDescription)

@@ -16,7 +16,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -56,7 +55,7 @@ func runRollback(cmd *cobra.Command, args []string) error {
 
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {
-		return fmt.Errorf("init dependencies: %w", err)
+		return err
 	}
 	cfg := projectCfg
 	if rollbackSafetySnapshot != nil {

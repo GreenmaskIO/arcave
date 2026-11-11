@@ -284,7 +284,7 @@ Either way the daemon is a Docker older than 25: upgrade it — see [Requirement
 ## `Cannot connect to the Docker daemon`
 
 ```text
-init dependencies: read the daemon version: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
+read the daemon version: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?
 ```
 
 `savepoint create` and `rollback` reach no daemon at the address they were given. Start the daemon, or point `DOCKER_HOST` or [`docker.host`](configuration.md#docker) at the one you use. On Podman this is the usual first error, since arcave does not read `CONTAINER_HOST`: see [Connecting to Podman](requirements.md#connecting-to-podman).
@@ -308,7 +308,7 @@ Names are unique within a compose project and session. Pick another name, or rem
 ## `the current session no longer exists`
 
 ```text
-init dependencies: resolve session: the current session no longer exists: 019e9a10-7c2e-7000-8000-000000000000, named by .arcave/current_session; run 'arcave session unset' or 'arcave session set <session>'
+resolve session: the current session no longer exists: 019e9a10-7c2e-7000-8000-000000000000, named by .arcave/current_session; run 'arcave session unset' or 'arcave session set <session>'
 ```
 
 `.arcave/current_session` names a session that was deleted, from another machine or by hand in the store. arcave refuses rather than quietly falling back to `baseline`. Run `arcave session unset` to return to `baseline`, or `arcave session set <session>` to pick another.
@@ -365,10 +365,10 @@ Build the image on one that carries a shell, or set `transport: tcp`, which runs
 ## `open the store: …` on an encrypted store
 
 ```text
-init dependencies: open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
-init dependencies: open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
-init dependencies: open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
-init dependencies: open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
+open the store: invalid store key: none set (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: invalid store key: not an age X25519 identity (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: the store is encrypted to another key: age1… (check encryption.key, ARCAVE_ENCRYPTION_KEY by default)
+open the store: the store is encrypted (set encryption.enabled: true and encryption.key)
 ```
 
 Each is refused before anything is stopped. Export the key the store was encrypted to as `ARCAVE_ENCRYPTION_KEY`, in the form `AGE-SECRET-KEY-1…`, and keep `encryption.enabled: true` in the config. A lost key can't be recovered. See [`encryption`](configuration.md#encryption).
@@ -376,7 +376,7 @@ Each is refused before anything is stopped. Export the key the store was encrypt
 ## Turning encryption on for a project with data
 
 ```text
-init dependencies: open the store: the arcave project holds data written without encryption (turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting)
+open the store: the arcave project holds data written without encryption (turn encryption.enabled off to use it, or start an encrypted one under another project.name — see "Turning encryption on for a project with data" in troubleshooting)
 ```
 
 **What happened.** `encryption.enabled: true` was set over an arcave project that already holds savepoints or sessions written without encryption. arcave encrypts nothing in place, so it refuses the project rather than mark it encrypted and leave its data unreadable. Nothing was written: the data is where it was. `arcave status` reports the same refusal as an unreadable store and exits `1`.
@@ -403,12 +403,12 @@ Unknown keys are an error, not a value quietly ignored. Check the key against [C
 ## `docker.host and docker.context are mutually exclusive`
 
 ```text
-init dependencies: initialise docker client: docker.host and docker.context are mutually exclusive: "remote" already names a daemon, so remove one of the two
+initialise docker client: docker.host and docker.context are mutually exclusive: "remote" already names a daemon, so remove one of the two
 ```
 
 Both keys name a daemon. Keep the one you mean and delete the other from the [`docker`](configuration.md#docker) section.
 
-## `init dependencies: initialise store root: open directory storage: stat /srv/arcave/myapp: no such file or directory`
+## `initialise store root: open directory storage: stat /srv/arcave/myapp: no such file or directory`
 
 An absolute `storage.directory.path` must already exist. Only a relative one materialises on first use — the asymmetry is what keeps a typo from growing a fresh tree somewhere unexpected.
 
