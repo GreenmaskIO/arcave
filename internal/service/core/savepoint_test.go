@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/directory"
 	"github.com/rs/zerolog"
@@ -37,7 +36,6 @@ import (
 	savepointrepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
-	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 func TestService_CreateSavepoint(t *testing.T) {
@@ -312,80 +310,6 @@ func TestService_CreateSavepoint_AnonymousVolumePerReplica(t *testing.T) {
 	for _, backend := range backends {
 		backend.AssertExpectations(t)
 	}
-}
-
-// A capture taken otherwise than the latest savepoint records the drift with the savepoint it
-// compares with, and warns of it in the result.
-func TestService_CreateSavepoint_RecordsTheCaptureDrift(t *testing.T) {
-	// Arrange
-	previous := demoRecord()
-	previousSpecBytes := []byte("name: demo\nservices: {app: {}}\n")
-	current := stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): excludedStamp})
-	current.Name = demoProject
-	want := &model.CaptureDrift{
-		Since:   model.SavepointRef{ID: previous.ID, Name: previous.Name},
-		Changes: []model.CaptureChange{{Service: "app", Stamp: "mount./cache", Was: fullcopyDecision, Now: leftOutDecision}},
-	}
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, current).Return([]string(nil), nil).Once()
-	runner.On("Start", mock.Anything, current, time.Duration(0)).Return(nil).Once()
-	codec := &mockCodec{}
-	codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil)
-	codec.On("Parse", mock.Anything, demoSpecBytes).Return(current, nil)
-	codec.On("Parse", mock.Anything, previousSpecBytes).Return(
-		stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): keptStamp}), nil).Once()
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{previous}, nil).Once()
-	repo.On("LoadSpec", mock.Anything, previous.ID).Return(previousSpecBytes, nil).Once()
-	expectSpecCommit(repo)
-	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return assert.ObjectsAreEqual(want, r.CaptureDrift)
-	})).Return(nil).Once()
-
-	backend := &mockBackend{volume: demoVolume()}
-	backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
-		Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        codec,
-		ComposeRunner:    runner,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	warned := &warnedRecorder{}
-	ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(warned, fixedNow))
-
-	// Act
-	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{Name: "next"})
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, want, savepoint.CaptureDrift)
-	assert.Equal(t, []string{"app captured otherwise than in savepoint sp: mount /cache fullcopy → left out"}, warned.msgs)
-	assert.Equal(t, []bool{true}, warned.inResult)
-	inspector.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	codec.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	backend.AssertExpectations(t)
 }
 
 // The backend a new savepoint captures with is the configured one, not a

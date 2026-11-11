@@ -17,7 +17,7 @@ arcave savepoint create [name] [flags]
 
 The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. The sequence is [the savepoint flow](../../how_it_works.md#the-savepoint-flow); what ends up inside is [what a savepoint covers](../../how_it_works.md#what-a-savepoint-covers).
 
-Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `not_covered`. When a unit is captured differently than in the latest savepoint, `savepoint create` warns of it before it stops anything.
+Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `not_covered`.
 
 ## Flags
 

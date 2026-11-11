@@ -156,8 +156,7 @@ The one shape four commands are built from: `savepoint create` prints it, `savep
   "writable_layers": [ … ],
   "images": [ … ],
   "spec": { "format": "compose-yaml" },
-  "not_covered": { … },
-  "capture_drift": { … }
+  "not_covered": { … }
 }
 ```
 
@@ -173,7 +172,6 @@ The one shape four commands are built from: `savepoint create` prints it, `savep
 | `images` | array | One entry per distinct image a service's `image:` names, kept so a container whose layer was left out can be rebuilt. Omitted when there are none. |
 | `spec` | object | `{"format": "compose-yaml"}` — the compose spec a rollback rebuilds the project from. |
 | `not_covered` | object | What the savepoint does **not** hold. Omitted when it holds everything. |
-| `capture_drift` | object | The units captured otherwise than in the savepoint before it. Omitted when none was, or there was none before. |
 
 What a savepoint captures follows the `capture` defaults in the config and the `arcave.*` labels in the compose file — see [Capture labels](capture_labels.md).
 
@@ -270,29 +268,6 @@ Every field is omitted when empty, and `not_covered` itself when all are.
     { "volume": "myapp_scratch", "raw_type": "volume", "reason": "excluded", "detail": "arcave.capture=false on volume myapp_scratch" }
   ],
   "services_without_volumes": ["worker"]
-}
-```
-
-### `capture_drift`
-
-`savepoint create` compares the [capture stamps](capture_labels.md) of its spec with those of the newest savepoint before it in the session, and records here every unit both carry whose decision differs: left out since, taken again, or moved to another backend. A unit only one of them has is a change of topology, not of policy, and is not listed. Each service's changes are also a warning in the result, `in_result` on the progress stream.
-
-| Field | Meaning |
-|---|---|
-| `since` | `{id, name}` — the savepoint compared with, as it was named then; `name` is `""` for an unnamed one. It may since have been removed. |
-| `changes` | `{service, stamp, was, now}` — `stamp` is the unit's stamp key past `io.arcave.capture.`: `mount.<target>`, `writable-layer` or `image`. `was` and `now` are `{capture, backend}`, `backend` omitted when the unit is left out or has none. |
-
-```json
-{
-  "since": { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean" },
-  "changes": [
-    {
-      "service": "db",
-      "stamp": "mount./var/lib/postgresql/data",
-      "was": { "capture": true, "backend": "fullcopy" },
-      "now": { "capture": true, "backend": "cdc" }
-    }
-  ]
 }
 ```
 

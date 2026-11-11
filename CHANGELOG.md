@@ -12,7 +12,10 @@
 ### New
 
 - **A rollback names the leftover volumes it overwrote.** Rolling back a compose project taken down overwrites the named volumes `compose down` kept, and no safety snapshot holds what they held. The result now lists them in `leftover_volumes` and warns of each, first and severe, on the terminal, in JSON and in the MCP tool.
-- **`savepoint create` records capture drift.** A unit captured otherwise than in the latest savepoint used to be warned of on stderr only. The result now carries `capture_drift`: the savepoint compared with and each changed unit's decision before and now.
+
+### Changed
+
+- **`savepoint create` no longer compares its capture with the latest savepoint's.** It warned when a unit's capture changed since then; what a savepoint does not hold is in its `not_covered`, as before, and the capture no longer reads the previous savepoint's spec from the store.
 
 ### Fixes
 

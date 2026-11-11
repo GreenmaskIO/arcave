@@ -129,17 +129,6 @@ func volumeOpContext(
 		WithContext(ctx)
 }
 
-// savepointMeta is what the two callers of performSavepoint tell apart: what a savepoint is
-// called and marked by, and what its call found besides the capture.
-type savepointMeta struct {
-	name        string
-	description string
-	labels      map[string]string
-	// captureDrift is what savepoint create found captured otherwise than the latest savepoint;
-	// nil for a safety snapshot, which compares with nothing.
-	captureDrift *model.CaptureDrift
-}
-
 // performSavepoint captures a fresh savepoint under a heartbeat and commits its record last,
 // once grantedLock still holds the lock; on failure it returns a zero savepoint. killed are the
 // containers the stop killed.
@@ -148,9 +137,10 @@ func (s *Service) performSavepoint(
 	grantedLock model.GrantedSessionLock,
 	working workingSet,
 	killed []string,
-	meta savepointMeta,
+	name string,
+	description string,
+	labels map[string]string,
 ) (_ model.Savepoint, err error) {
-	name, labels := meta.name, meta.labels
 	var (
 		id         = model.NewSavepointID()
 		createdAt  = time.Now()
@@ -209,7 +199,7 @@ func (s *Service) performSavepoint(
 	savepoint := model.Savepoint{
 		ID:             id,
 		Name:           name,
-		Description:    meta.description,
+		Description:    description,
 		Labels:         labels,
 		CreatedAt:      createdAt,
 		Stats:          captured.stats,
@@ -217,7 +207,6 @@ func (s *Service) performSavepoint(
 		WritableLayers: captured.writableLayers,
 		Spec:           &model.SpecRef{Format: model.SpecFormatComposeYAML},
 		NotCovered:     notCovered,
-		CaptureDrift:   meta.captureDrift,
 	}
 	if err = s.savepointRepo.SaveSavepoint(ctx, savepoint); err != nil {
 		err = fmt.Errorf("commit savepoint %s: %w", id, err)

@@ -26,7 +26,7 @@ Captures a savepoint. The services are stopped for the capture and started again
 | `description` | no | What this savepoint is being taken before. |
 | `wait_timeout` | no | How long to wait for services to become healthy on restart, e.g. `2m` or `90s`. Omit for the project's own bound. |
 
-Returns the savepoint record — the shape [Output](output.md#the-savepoint-record) describes, `stats`, `writable_layers`, `images`, `spec`, `not_covered` and `capture_drift` included.
+Returns the savepoint record — the shape [Output](output.md#the-savepoint-record) describes, `stats`, `writable_layers`, `images`, `spec` and `not_covered` included.
 
 ```json title="structured content"
 {
@@ -38,20 +38,11 @@ Returns the savepoint record — the shape [Output](output.md#the-savepoint-reco
   "writable_layers": [ … ],
   "images": [ … ],
   "spec": { "format": "compose-yaml" },
-  "not_covered": { "services_without_volumes": ["worker"] },
-  "capture_drift": {
-    "since": { "id": "019e83ff-30c0-7000-8000-000000000000", "name": "clean" },
-    "changes": [
-      { "service": "db", "stamp": "mount./var/lib/postgresql/data",
-        "was": { "capture": true, "backend": "fullcopy" }, "now": { "capture": true, "backend": "cdc" } }
-    ]
-  }
+  "not_covered": { "services_without_volumes": ["worker"] }
 }
 ```
 
 `not_covered` is what the savepoint does **not** hold — skipped mounts with a reason code, services without a captured volume, containers killed at the stop deadline, replica gaps, unresolvable images, and layers or images a [capture label](capture_labels.md) left out. The tool's description tells an agent to report it before relying on the savepoint.
-
-`capture_drift` is present when a unit was captured otherwise than in the savepoint before it — left out, taken again, or moved to another backend; see [Output](output.md#the-savepoint-record).
 
 A failure of the form `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start: …` means the savepoint **exists and is safe to roll back to**; only the restart failed. The tool's own description tells an agent this, so it reports the id rather than taking another savepoint.
 

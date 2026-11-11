@@ -38,7 +38,7 @@ func (s *Printer) formatSavepoint(savepoint model.Savepoint) string {
 	title := noun + s.formatSavepointTitle(savepoint, "15:04:05") + " · stored " + formatSize(newStoredBytes(savepoint))
 	b.WriteString(styleTitle.Render(title) + "\n")
 	b.WriteString(formatCaptureRows([]string{"count", "size", "stored"}, newCaptureRows(savepoint)))
-	b.WriteString(formatNotices(model.SortSevereFirst(append(savepoint.Notices(), savepoint.CaptureDrift.Notices()...))))
+	b.WriteString(formatNotices(savepoint.Notices()))
 	b.WriteString("\n  roll back:  " + s.newCommand(true, "rollback", newSavepointRef(savepoint)) + "\n")
 	return b.String()
 }

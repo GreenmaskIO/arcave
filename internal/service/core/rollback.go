@@ -331,10 +331,9 @@ func (s *Service) takeSafetySnapshot(
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
 	}
-	safetySnapshot, err := s.performSavepoint(ctx, grantedLock, working, killed, savepointMeta{
-		name:   safetySnapshotName(savepoint.ID),
-		labels: newSafetySnapshotLabels(),
-	})
+	safetySnapshot, err := s.performSavepoint(
+		ctx, grantedLock, working, killed, safetySnapshotName(savepoint.ID), "", newSafetySnapshotLabels(),
+	)
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
 	}

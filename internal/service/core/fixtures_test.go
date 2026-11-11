@@ -353,7 +353,7 @@ func expectSpecCommit(repo *mockSavepointRepo) *mock.Call {
 func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.SavepointID) *mock.Call {
 	return repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil && r.Name == "safety-snapshot-"+restoring.String() &&
-			r.IsSafetySnapshot() && r.Spec != nil && r.CaptureDrift == nil
+			r.IsSafetySnapshot() && r.Spec != nil
 	})).Return(nil).Once()
 }
 
@@ -435,4 +435,8 @@ func withoutDeploymentLabels(project *types.Project) *types.Project {
 		stripped.Services[name] = service
 	}
 	return &stripped
+}
+
+func fixedNow() time.Time {
+	return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 }

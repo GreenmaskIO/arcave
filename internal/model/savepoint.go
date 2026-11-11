@@ -55,24 +55,6 @@ type Savepoint struct {
 	Spec *SpecRef `json:"spec,omitempty"`
 	// NotCovered is what this savepoint does not hold; nil when it holds everything.
 	NotCovered *NotCovered `json:"not_covered,omitempty"`
-	// CaptureDrift is every unit this savepoint captured otherwise than the latest savepoint
-	// before it did; nil when none was, or when there was none to compare with.
-	CaptureDrift *CaptureDrift `json:"capture_drift,omitempty"`
-}
-
-// SavepointRef names a savepoint by id and by the name it carried then: the savepoint may since
-// have been removed.
-type SavepointRef struct {
-	ID   SavepointID `json:"id"`
-	Name string      `json:"name"`
-}
-
-// String names the savepoint by its name, by its id when it has none.
-func (m SavepointRef) String() string {
-	if m.Name != "" {
-		return m.Name
-	}
-	return m.ID.String()
 }
 
 // SpecRef is the reference to a savepoint's compose spec artifact.

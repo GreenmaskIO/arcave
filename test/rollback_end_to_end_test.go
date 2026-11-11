@@ -30,7 +30,6 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
-	"github.com/greenmaskio/arcave/internal/service/core"
 )
 
 // endToEndSpec is one compose project carrying everything a rollback has to rebuild: a named
@@ -193,55 +192,6 @@ func TestRollback_RebuildsAComposeProjectThatWasTakenDown(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, savepoint.ID, records[0].ID)
-}
-
-// driftSpec is one service with one named volume.
-const driftSpec = `
-name: %[1]s
-services:
-  db:
-    image: busybox
-    command: ["sleep", "3600"]
-    stop_signal: SIGKILL
-    volumes: [dbdata:/data]
-volumes:
-  dbdata: {}
-`
-
-// A savepoint taken under another capture policy than the one before it records what changed,
-// against the savepoint it compared with.
-func TestSavepoint_RecordsTheCaptureDrift(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	env := newImageRollbackEnv(t)
-	env.upDocument(t, fmt.Sprintf(driftSpec, env.project))
-	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "with-layers"})
-	require.NoError(t, err)
-	require.Nil(t, first.CaptureDrift, "nothing before it to compare with")
-	deps := env.deps
-	deps.CaptureDefaults.SavepointCapture.WritableLayers = false
-	withoutLayers := core.New(deps)
-
-	// Act
-	second, err := withoutLayers.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "without-layers"})
-
-	// Assert
-	require.NoError(t, err)
-	want := &model.CaptureDrift{
-		Since: model.SavepointRef{ID: first.ID, Name: "with-layers"},
-		Changes: []model.CaptureChange{{
-			Service: "db",
-			Stamp:   "writable-layer",
-			Was:     model.CaptureStampDecision{Capture: true, Backend: string(model.ImageBackendDedupCopy)},
-			Now:     model.CaptureStampDecision{},
-		}},
-	}
-	assert.Equal(t, want, second.CaptureDrift)
-	records, err := env.svc.ListSavepoints(env.ctx, model.ListRequest{})
-	require.NoError(t, err)
-	require.Len(t, records, 2)
-	assert.Equal(t, want, records[0].CaptureDrift, "the record carries it, as list reads it")
 }
 
 // down takes the compose project down as `docker compose down` does, keeping its named

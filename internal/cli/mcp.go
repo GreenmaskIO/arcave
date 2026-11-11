@@ -171,9 +171,7 @@ const (
 		"savepoint does NOT hold — skipped mounts with a reason code, services with no volume, " +
 		"containers killed at the stop deadline (their data may be crash-consistent only), replica " +
 		"gaps and containers whose image is unknown — so tell the user before relying on " +
-		"it. Its capture_drift, when present, lists the units captured otherwise than in the " +
-		"savepoint before it (since): a unit left out, taken again, or moved to another backend. " +
-		"If the call fails with a message of the " +
+		"it. If the call fails with a message of the " +
 		"form 'savepoint <id> committed; services failed to start', the savepoint EXISTS and is " +
 		"safe to roll back to — only the restart failed, so report that id to the user and " +
 		"investigate the compose project (the services are stopped or unhealthy), rather than taking " +

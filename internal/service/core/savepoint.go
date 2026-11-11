@@ -77,7 +77,6 @@ func (s *Service) createSavepoint(
 		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
-	drift := s.warnCapturePolicyDrift(ctx, visible, working.project)
 
 	killed, err := s.stopServices(ctx, working)
 	if err != nil {
@@ -91,12 +90,7 @@ func (s *Service) createSavepoint(
 
 	// Capture while the services are stopped. The capture error is what the caller
 	// gets; the restart on top of it is best-effort and only logged.
-	savepoint, err := s.performSavepoint(ctx, grantedLock, working, killed, savepointMeta{
-		name:         req.Name,
-		description:  req.Description,
-		labels:       req.Labels,
-		captureDrift: drift,
-	})
+	savepoint, err := s.performSavepoint(ctx, grantedLock, working, killed, req.Name, req.Description, req.Labels)
 	if err != nil {
 		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
 		err = preferInterrupt(ctx, err)
