@@ -32,7 +32,7 @@ if ! { ./run-migration.sh && ./run-tests.sh; }; then
 fi
 ```
 
-When stdout is a pipe, as it is here, every command prints its result as JSON and its logs on stderr, so `jq -r .id` is enough — there is no output to scrape. On a terminal, with the live tree drawn, the result is text; `--format json` asks for JSON there too.
+When stdout is a pipe, as it is here, every command prints its result as JSON and its logs on stderr, so `jq -r .id` is enough — there is no output to scrape. On a terminal, the result is text; `--format json` asks for JSON there too.
 
 ## Why this is a checkpoint, not a backup
 

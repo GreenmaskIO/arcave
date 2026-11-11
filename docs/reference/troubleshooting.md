@@ -433,7 +433,7 @@ ID=$(arcave savepoint create nightly | jq -r .id)
 
 ## The result is text, not JSON
 
-While the live tree is drawn — stderr a terminal, `log.format: text` — and stdout is a terminal, arcave prints the result as text for a person to read. Anything else gets JSON — a pipe, a redirect, `--log-format json` — and `--format json` (or `ARCAVE_FORMAT=json`) asks for it anywhere. Under `--progress json`, stdout carries a JSON line per step event before the result — the result is the last line, `{"type":"result",…}`; see [Output](output.md#result-format).
+When stdout is a terminal, arcave prints the result as text for a person to read. It prints JSON when stdout is a pipe or a file, and `--format json` (or `ARCAVE_FORMAT=json`) asks for it anywhere. Under `--progress json`, stdout carries a JSON line per step event before the result — the result is the last line, `{"type":"result",…}`; see [Output](output.md#result-format).
 
 Exceptions: `arcave --version` prints a plain version line, and `arcave mcp` writes nothing to stdout at all.
 

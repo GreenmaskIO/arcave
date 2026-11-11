@@ -428,6 +428,14 @@ func TestPrinter_Print(t *testing.T) {
 			},
 		},
 		{
+			name: "generate_compose",
+			result: model.GenerateComposeResponse{
+				ComposeProject: "shop",
+				Services:       []string{"app", "db", "minio", "nginx", "redis", "worker", "mailpit", "scheduler"},
+				Path:           "/srv/shop/recovered.yaml",
+			},
+		},
+		{
 			name:   "unknown_type_as_json",
 			result: map[string]string{"path": "compose.yaml"},
 		},

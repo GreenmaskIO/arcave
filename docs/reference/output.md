@@ -6,7 +6,7 @@ keywords: [arcave output, JSON, stdout, stderr, exit codes, jq, docker compose]
 
 # Output and exit codes
 
-**Results are JSON on stdout. All logs are on stderr.** That split is the contract: a script or an agent parses stdout and never has to pick data out of prose. `--progress json` is the one mode that puts more on stdout, and it says so line by line — see [Progress](#progress). A person at a terminal gets the result as text instead, in two cases only — see [Result format](#result-format).
+**Results are JSON on stdout. All logs are on stderr.** That split is the contract: a script or an agent parses stdout and never has to pick data out of prose. `--progress json` is the one mode that puts more on stdout, and it says so line by line — see [Progress](#progress). A person gets the result as text instead when stdout is a terminal — see [Result format](#result-format).
 
 ```shell title="stdout carries the result, and nothing else"
 ID=$(arcave savepoint create nightly | jq -r .id)
@@ -22,11 +22,11 @@ Three exceptions: `arcave --version` prints a plain version line, [`arcave mcp`]
 |---|---|
 | `--format text` | text |
 | `--format json` | JSON |
-| `--format auto`, the default, with the live tree drawn and stdout a terminal | text |
-| `--format auto`, anything else | JSON |
+| `--format auto`, the default, stdout a terminal | text |
+| `--format auto`, stdout a pipe or a file | JSON |
 | `--progress json` | the JSON stream; `--format text` beside it is refused |
 
-The tree is drawn on stderr and the result goes to stdout, so `ID=$(arcave savepoint create)` captures JSON even on a terminal: `auto` checks both. Text is for reading, not parsing — its shape may change; a type of result the text printer does not know is printed as JSON.
+`auto` asks only where stdout goes (the `--progress json` stream aside) — not `--progress log`, `--log-format` or where stderr goes — so `ID=$(arcave savepoint create)` captures JSON even on a terminal. Text is for reading, not parsing — its shape may change; a type of result the text printer does not know is printed as JSON.
 
 ```text title="savepoint create, as text"
 ✔ savepoint.create nightly         15.4s
@@ -71,6 +71,8 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
   ```text
   INF rollback[sp1]/rollback.apply/volume.restore/volume[volume-named-myapp_pgdata] bytes=1.2GB/1.2GB elapsed=8.1s status=succeeded
   ```
+
+  Warnings the result repeats are logged too: the log is the whole run, the result its summary.
 
 - **`json`** puts the whole run on stdout as JSON lines, one per event, and the result last:
 

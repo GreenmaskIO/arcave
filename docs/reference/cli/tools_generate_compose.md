@@ -40,7 +40,15 @@ The top-level `volumes:` and `networks:` keep the names the daemon holds (`demo_
 
 ## Output
 
-stdout carries a summary:
+On a terminal, stdout carries a summary:
+
+```text title="stdout, on a terminal"
+Wrote /srv/demo/docker-compose.yaml · compose project demo
+  services  db, web
+  It holds every environment value, secrets included.
+```
+
+In a pipe or a file, or with `--format json`, it is JSON:
 
 ```json title="stdout"
 {

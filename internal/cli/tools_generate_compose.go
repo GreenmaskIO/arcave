@@ -45,7 +45,7 @@ func NewToolsGenerateComposeHandler(svc toolsGenerateComposeService, printer pri
 	}
 }
 
-// GenerateCompose writes the compose file to output and prints its summary as JSON. An existing
+// GenerateCompose writes the compose file to output and prints its summary. An existing
 // output is refused unless force.
 func (h *ToolsGenerateComposeHandler) GenerateCompose(
 	ctx context.Context, req model.GenerateComposeRequest, output string, force bool,

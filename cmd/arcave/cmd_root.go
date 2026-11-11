@@ -273,8 +273,7 @@ func init() {
 			"%s (log records) or %s (JSON lines on stdout, the result last; env %s)",
 			progressModeAuto, progressModeTTY, progressModeLog, progressModeTTY, progressModeLog, progressModeJSON, progressEnv))
 	persistentFlags.StringVar(&resultFormat, "format", "",
-		fmt.Sprintf("How the result is printed on stdout: %s (%s while the tree is drawn on a terminal stdout, "+
-			"else %s), %s or %s (env %s)",
+		fmt.Sprintf("How the result is printed on stdout: %s (%s on a terminal stdout, else %s), %s or %s (env %s)",
 			formatAuto, formatText, formatJSON, formatJSON, formatText, formatEnv))
 	persistentFlags.String("compose-progress", config.ProgressLog,
 		fmt.Sprintf("Where docker compose's own progress goes: %s (arcave log records), %s (compose's own renderer) or %s",

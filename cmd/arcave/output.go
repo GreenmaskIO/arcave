@@ -126,8 +126,8 @@ func resolveProgressMode(mode string, stderrTerminal bool, logFormat string) (st
 	}
 }
 
-// resolveFormat turns --format into the format the result is printed in: auto is text only while
-// the tree is drawn and stdout is a terminal too, so a captured stdout still reads JSON.
+// resolveFormat turns --format into the format the result is printed in: auto is text whenever
+// stdout is a terminal, the json stream aside, so a captured stdout reads JSON.
 func resolveFormat(format, progressMode string, stdoutTerminal bool) (string, error) {
 	switch format {
 	case formatText:
@@ -139,7 +139,7 @@ func resolveFormat(format, progressMode string, stdoutTerminal bool) (string, er
 	case formatJSON:
 		return formatJSON, nil
 	case formatAuto, "":
-		if progressMode == progressModeTTY && stdoutTerminal {
+		if stdoutTerminal && progressMode != progressModeJSON {
 			return formatText, nil
 		}
 		return formatJSON, nil
