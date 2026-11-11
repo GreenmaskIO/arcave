@@ -7,6 +7,21 @@
 - **`arcave rollback --no-safety-snapshot` replaces `--safety-snapshot=false`.** Both flags are plain switches now and take no value: `--safety-snapshot` takes a safety snapshot even under `rollback.safety_snapshot: false`, `--no-safety-snapshot` takes none, and the two cannot be passed together. Without either, the config decides.
 - **`ARCAVE_COMPOSE_PROJECT_NAME` names the compose project.** `ARCAVE_PROJECT_NAME` no longer does: it is only the config key `project.name`, the storage tenant, as every `ARCAVE_<KEY>` is. A shell that exports it keeps its tenant and now has to name the compose project with `-p` or the new variable.
 - **The MCP tools' `project` argument is `compose_project`.**
+- **`status` says a stopped compose project once.** With every container stopped, a replica that exited 0 no longer adds a `replica-exited` notice beside `compose-project-stopped`; one that exited otherwise still does.
+
+### New
+
+- **A rollback names the leftover volumes it overwrote.** Rolling back a compose project taken down overwrites the named volumes `compose down` kept, and no safety snapshot holds what they held. The result now lists them in `leftover_volumes` and warns of each, first and severe, on the terminal, in JSON and in the MCP tool.
+
+### Changed
+
+- **`savepoint create` no longer compares its capture with the latest savepoint's.** It warned when a unit's capture changed since then; what a savepoint does not hold is in its `not_covered`, as before, and the capture no longer reads the previous savepoint's spec from the store.
+
+### Fixes
+
+- The savepoint create and rollback titles print the full savepoint id. The first eight characters were the same for savepoints taken within about a minute and no selector accepted them.
+- A failure to open a command's dependencies is no longer wrapped in `init dependencies:`; the failed step names itself.
+- gc's `FREED` total prints the known part with a `+` when some deletion freed an unknown amount, as `SIZE` does, instead of `?`.
 
 ## v0.1.0-alpha.4 — 2026-11-08
 

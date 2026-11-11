@@ -122,7 +122,7 @@ Returns what the CLI prints — see [Output](output.md#rollback):
 }
 ```
 
-`writable_layers` is omitted when the savepoint held no layer.
+`writable_layers` is omitted when the savepoint held no layer. `leftover_volumes` appears only when a project with no containers was rebuilt over named volumes that outlived its `down`: it lists their docker names, each overwritten with no safety snapshot holding what it held. The tool's description tells an agent to report it.
 
 ## `session_list`
 

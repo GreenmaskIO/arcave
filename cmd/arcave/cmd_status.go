@@ -15,8 +15,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
@@ -48,7 +46,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 
 	svc, err := openStatusService(projectRoot, projectCfg, composeProject, &opened)
 	if err != nil {
-		return fmt.Errorf("init status dependencies: %w", err)
+		return err
 	}
 	return cli.NewStatusHandler(svc, loadRunOutput()).Status(ctx, model.StatusRequest{Session: sessionRef})
 }

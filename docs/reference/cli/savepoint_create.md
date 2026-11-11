@@ -17,7 +17,7 @@ arcave savepoint create [name] [flags]
 
 The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. The sequence is [the savepoint flow](../../how_it_works.md#the-savepoint-flow); what ends up inside is [what a savepoint covers](../../how_it_works.md#what-a-savepoint-covers).
 
-Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `not_covered`. When a unit is captured differently than in the latest savepoint, `savepoint create` warns of it before it stops anything.
+Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `not_covered`.
 
 ## Flags
 
@@ -55,7 +55,7 @@ On a terminal, the final tree of the steps on stderr and a summary of what was c
 ├── ✔ savepoint.capture before-migration  3.6s
 └── ✔ compose.start                       2.2s
 
-Savepoint before-migration · 019e843e · 19:41:12 · stored 173 MB
+Savepoint before-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 · stored 173 MB
             count     size   stored
   volumes       1  40.9 MB   3.9 MB
   layers        2   163 MB  20.6 KB

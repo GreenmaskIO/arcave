@@ -37,7 +37,7 @@ One word sums the compose project up — the first that applies:
 | `starting` | Nothing is wrong, but a healthcheck is still starting. |
 | `running` | Every replica runs — healthy where it has a healthcheck —, completed its job, or exited `0`. |
 
-A replica is `completed` when it exited `0` and another service waits on it with `depends_on: {condition: service_completed_successfully}`: a migration, say. Any other container that exited `0` is `exited`: `status` cannot tell a job no service waits on from a database stopped by hand, which exits `0` too. Such a replica does not make the compose project `degraded`; a `replica-exited` warning names it, and the table shows `exited 0`. An exit code other than `0` is a failure, whatever the service.
+A replica is `completed` when it exited `0` and another service waits on it with `depends_on: {condition: service_completed_successfully}`: a migration, say. Any other container that exited `0` is `exited`: `status` cannot tell a job no service waits on from a database stopped by hand, which exits `0` too. Such a replica does not make the compose project `degraded`; the table shows `exited 0`, and a `replica-exited` warning names it while something else still runs. Once every container is stopped, `compose-project-stopped` says so once, and a replica that exited `0` adds no warning of its own. An exit code other than `0` is a failure, whatever the service.
 
 An unhealthy compose project is not an error: `status` exits `0` whatever the state, and `1` only when it could not read something.
 
@@ -110,7 +110,7 @@ A warning states what is so, and ends with its code in brackets; the JSON carrie
 | `safety-snapshot-deployed` | A rollback's undo runs: you rolled back to it, or a failed rollback put it back. | `arcave savepoint create` keeps what runs now. |
 | `volume-not-restored`, `layer-not-restored` | A label or the config left that out of the deployed savepoint, as its record says: a volume kept what it held, an anonymous volume came back empty, a writable layer started fresh. Not reported once the record is gone. | — |
 | `replica-missing` | A replica the deployed savepoint recorded is gone. | A rollback to the deployed savepoint rebuilds it, and puts the savepoint's volumes back: `savepoint create` first keeps today's data. |
-| `replica-exited` | The container exited. With a code other than `0` the warning is severe, and says out of memory, killed or terminated where the daemon tells. | `docker logs <container>`. A replica that exited `0` was stopped by hand or finished its job. |
+| `replica-exited` | The container exited. With a code other than `0` the warning is severe, and says out of memory, killed or terminated where the daemon tells. An exit `0` is named only while another container still runs: with every container stopped, `compose-project-stopped` covers it. A process with no SIGTERM handler exits `143` (terminated) or `137` (killed) at a `docker compose stop`, and is named even then. | `docker logs <container>`. A replica that exited `0` was stopped by hand or finished its job. |
 | `replica-dead`, `replica-removing`, `replica-restarting`, `replica-created` | The container is not doing its work. | `docker logs <container>`; `docker start <container>` for one never started. |
 | `replica-paused` | Paused, by hand most likely. | `docker unpause <container>`. |
 | `replica-restarted` | It runs, but restarted since it was created. | `docker logs <container>`. |

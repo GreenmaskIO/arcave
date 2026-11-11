@@ -184,6 +184,9 @@ func TestRollback_RebuildsAComposeProjectThatWasTakenDown(t *testing.T) {
 	assert.Equal(t, container.NetworkMode("container:"+containers["db-1"].ID),
 		containers["sidecar-1"].Inspect.HostConfig.NetworkMode, "sidecar joins the new db")
 
+	// The named volume `compose down` kept is overwritten with nothing to undo it, and named.
+	assert.Equal(t, []string{env.project + "_dbdata"}, res.LeftoverVolumes)
+
 	// No safety snapshot is taken: there was nothing running to save.
 	records, err := env.svc.ListSavepoints(env.ctx, model.ListRequest{IncludeSafetySnapshots: true})
 	require.NoError(t, err)

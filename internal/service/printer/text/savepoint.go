@@ -83,22 +83,16 @@ func (s *Printer) formatRollback(response model.RollbackResult) string {
 			cells: []string{strconv.Itoa(len(response.WritableLayers))},
 		})
 	}
+	// Whether one was taken, not which: its id is in the undo command below.
 	safety := "none"
 	if response.SafetySnapshot != "" {
-		safety = formatShortID(response.SafetySnapshot.String())
+		safety = "taken"
 	}
 	b.WriteString(formatCaptureRows(nil, rows))
-	// Below the counts, not aligned with them: an id is no number.
+	// Below the counts, not aligned with them: a word is no number.
 	b.WriteString(formatCaptureLine("safety", []string{safety}, []int{0}) + "\n")
 
-	var notices []model.Notice
-	if len(response.WritableLayers) > 0 {
-		notices = append(notices, model.Notice{
-			Message: "the containers run on the savepoint's writable layers",
-			Hint:    "`docker compose up` of your compose file recreates them on its images and drops those layers",
-		})
-	}
-	b.WriteString(formatNotices(notices))
+	b.WriteString(formatNotices(response.Notices()))
 	if response.SafetySnapshot != "" {
 		b.WriteString("\n  undo it:  " + s.newCommand(true, "rollback", response.SafetySnapshot.String()) + "\n")
 	}
@@ -123,14 +117,14 @@ func (s *Printer) formatRemove(response model.RemoveResult) string {
 	return b.String()
 }
 
-// formatSavepointTitle is "<name> · <short id> · <time>", the name left out when none.
+// formatSavepointTitle is "<name> · <id> · <time>", the name left out when none.
 func (s *Printer) formatSavepointTitle(savepoint model.Savepoint, layout string) string {
 	parts := make([]string, 0, 3)
 	if savepoint.Name != "" {
 		parts = append(parts, savepoint.Name)
 	}
 	parts = append(parts,
-		formatShortID(savepoint.ID.String()),
+		savepoint.ID.String(),
 		savepoint.CreatedAt.In(s.opts.Location).Format(layout))
 	return strings.Join(parts, " · ")
 }

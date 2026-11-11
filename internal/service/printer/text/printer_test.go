@@ -108,6 +108,16 @@ func TestPrinter_Print(t *testing.T) {
 			},
 		},
 		{
+			name: "rollback_leftover_volumes",
+			opts: Options{ComposeProject: "arcave-demo"},
+			result: model.RollbackResult{
+				RolledBackTo:    newSavepoint(),
+				Restored:        []model.Volume{namedVolume("demo_db"), namedVolume("demo_minio")},
+				WritableLayers:  []model.WritableLayerRestoreResult{{Service: "app", Replica: 1}},
+				LeftoverVolumes: []string{"demo_db", "demo_minio"},
+			},
+		},
+		{
 			name: "savepoint_remove_dry_run",
 			result: model.RemoveResult{
 				DryRun:  true,
@@ -180,6 +190,56 @@ func TestPrinter_Print(t *testing.T) {
 					DeleteFailed:  1,
 					FreedBytes:    utils.New[int64](14_400_000),
 				},
+			},
+		},
+		{
+			name: "gc_freed_partial",
+			result: model.GarbageCollectResult{
+				Session: sessionID,
+				Reports: []model.GarbageReport{
+					{
+						DataKind:       model.GarbageDataKindSavepointData,
+						ComposeProject: "demo",
+						Summary:        model.GarbageSummary{Found: 2, Bytes: utils.New[int64](12_400_000)},
+						Deletion: &model.GarbageDeletion{
+							Deleted: []model.GarbageDeleted{{Target: "a", Bytes: utils.New[int64](12_400_000)}, {Target: "b"}},
+						},
+					},
+				},
+				Total: model.GarbageTotal{Found: 2, Bytes: 12_400_000, BytesComplete: true, Deleted: 2},
+			},
+		},
+		{
+			name: "gc_freed_unknown",
+			result: model.GarbageCollectResult{
+				Session: sessionID,
+				Reports: []model.GarbageReport{
+					{
+						DataKind:       model.GarbageDataKindDeduplicatedVolumes,
+						ComposeProject: "demo",
+						Summary:        model.GarbageSummary{Found: 1},
+						Deletion: &model.GarbageDeletion{
+							Deleted:   []model.GarbageDeleted{{Target: "a"}},
+							Reclaimed: []model.GarbageReclaimed{{Target: "repo"}},
+						},
+					},
+				},
+				Total: model.GarbageTotal{Found: 1, Deleted: 1},
+			},
+		},
+		{
+			name: "gc_nothing_deleted",
+			result: model.GarbageCollectResult{
+				Session: sessionID,
+				Reports: []model.GarbageReport{
+					{
+						DataKind:       model.GarbageDataKindSavepointData,
+						ComposeProject: "demo",
+						Summary:        model.GarbageSummary{Bytes: utils.New[int64](0)},
+						Deletion:       &model.GarbageDeletion{},
+					},
+				},
+				Total: model.GarbageTotal{BytesComplete: true, FreedBytes: utils.New[int64](0)},
 			},
 		},
 		{

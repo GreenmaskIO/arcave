@@ -15,6 +15,7 @@
 package status
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -604,8 +605,8 @@ func TestService_Status(t *testing.T) {
 			stored: []model.Savepoint{statusDeployed},
 			verify: func(t *testing.T, status model.ComposeProjectStatus) {
 				assert.Equal(t, model.ComposeProjectStateStopped, status.State)
-				assertNotice(t, status.Notices, model.NoticeCodeComposeProjectStopped, "no container runs")
-				assertNotice(t, status.Notices, model.NoticeCodeReplicaExited, "db-1 exited with code 0 4m ago")
+				assert.Equal(t, []model.Notice{{Code: model.NoticeCodeComposeProjectStopped, Message: "no container runs"}},
+					status.Notices, "a clean exit adds nothing to a stopped project")
 			},
 		},
 		{
@@ -1123,7 +1124,9 @@ func TestNewReplicaNotices(t *testing.T) {
 		name    string
 		replica model.ReplicaStatus
 		record  *model.Savepoint
-		want    []model.Notice
+		// state is the compose project's; running when empty.
+		state model.ComposeProjectState
+		want  []model.Notice
 	}{
 		{
 			name:    "missing",
@@ -1135,6 +1138,26 @@ func TestNewReplicaNotices(t *testing.T) {
 			name:    "exited 0 is no failure",
 			replica: model.ReplicaStatus{Number: 1, State: model.ReplicaStateExited, FinishedAt: &finished, InDeployment: true, InSavepoint: true},
 			want:    []model.Notice{{Code: model.NoticeCodeReplicaExited, Message: "db-1 exited with code 0 4m ago"}},
+		},
+		{
+			name:    "exited 0 with every container stopped is the stopped project's to say",
+			replica: model.ReplicaStatus{Number: 1, State: model.ReplicaStateExited, FinishedAt: &finished, InDeployment: true, InSavepoint: true},
+			state:   model.ComposeProjectStateStopped,
+		},
+		{
+			name: "a failing exit with every container stopped is still a failure",
+			replica: model.ReplicaStatus{Number: 1, State: model.ReplicaStateExited, ExitCode: 1, FinishedAt: &finished,
+				InDeployment: true, InSavepoint: true},
+			state: model.ComposeProjectStateStopped,
+			want:  []model.Notice{{Code: model.NoticeCodeReplicaExited, Severe: true, Message: "db-1 exited with code 1 4m ago"}},
+		},
+		{
+			name: "terminated by a stop it did not handle, every container stopped",
+			replica: model.ReplicaStatus{Number: 1, State: model.ReplicaStateExited, ExitCode: 143, FinishedAt: &finished,
+				InDeployment: true, InSavepoint: true},
+			state: model.ComposeProjectStateStopped,
+			want: []model.Notice{{Code: model.NoticeCodeReplicaExited, Severe: true,
+				Message: "db-1 exited with code 143 (terminated) 4m ago"}},
 		},
 		{
 			name: "out of memory",
@@ -1222,6 +1245,7 @@ func TestNewReplicaNotices(t *testing.T) {
 			// Arrange
 			facts := statusFacts{
 				checkedAt:   statusCheckedAt,
+				state:       cmp.Or(tt.state, model.ComposeProjectStateRunning),
 				deployments: containerDeployments{latest: &deployment},
 				view:        storeView{savepoint: tt.record},
 			}

@@ -195,8 +195,10 @@ const (
 		"environment as it was. The result's safety_snapshot names it: rolling back to that id " +
 		"undoes the rollback, until the gc tool retires it. With safety_snapshot false, or a " +
 		"project configured so, none is taken: it is faster, but nothing can undo the rollback, and " +
-		"after a failure the same rollback must be run again. " +
-		"Services are stopped and started again."
+		"after a failure the same rollback must be run again. A compose project taken down " +
+		"(no containers) is rebuilt from the savepoint and takes no safety snapshot: the result's " +
+		"leftover_volumes names every volume that outlived the down and was overwritten with nothing " +
+		"to undo it — tell the user. Services are stopped and started again."
 	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — newest " +
 		"first unless sort is asc, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current_source " +
 		"marks the session the other tools work in when they are given no session — the one session_current " +

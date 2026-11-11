@@ -43,6 +43,11 @@ func TestResults_JSONKeys(t *testing.T) {
 			want: []string{"rolled_back_to", "restored", "writable_layers", "safety_snapshot"},
 		},
 		{
+			name:   "a cold rollback names the leftover volumes it overwrote",
+			result: RollbackResult{LeftoverVolumes: []string{"shop_pgdata"}},
+			want:   []string{"rolled_back_to", "restored", "leftover_volumes"},
+		},
+		{
 			name:   "a remove",
 			result: RemoveResult{},
 			want:   []string{"dry_run", "removed"},

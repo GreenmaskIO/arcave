@@ -29,7 +29,7 @@ Named volumes the project still owns — what `docker compose down` leaves behin
 
 | Value | What happens to a leftover volume the savepoint restores into |
 |---|---|
-| `overwrite` (default) | Overwritten, with a warning naming it. No safety snapshot is taken, so its old contents are gone. |
+| `overwrite` (default) | Overwritten, named in the result's warnings and `leftover_volumes`. No safety snapshot is taken, so its old contents are gone. |
 | `refuse` | The rollback is refused before anything is created: `compose project is not running but its volumes survive: myapp_pgdata`. |
 
 If such a rollback fails, arcave removes what it created. If it is interrupted, run the **same** rollback again: there is no safety snapshot to return to, and the interrupted-rollback marker lets that one through.
@@ -92,10 +92,10 @@ On a terminal, the final tree of the steps on stderr and a summary on stdout; in
 ├── ✔ rollback.apply                                                              3.5s
 └── ✔ rollback.cleanup                                                            0.0s
 
-Rolled back to before-migration · 019e843e · 2026-06-01 19:41:12
+Rolled back to before-migration · 019e843e-1650-7000-8000-000000000000 · 2026-06-01 19:41:12
   volumes   1
   layers    2
-  safety    019e8491
+  safety    taken
 
 Warnings (1)
   ! the containers run on the savepoint's writable layers

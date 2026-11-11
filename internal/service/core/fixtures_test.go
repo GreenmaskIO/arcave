@@ -436,3 +436,7 @@ func withoutDeploymentLabels(project *types.Project) *types.Project {
 	}
 	return &stripped
 }
+
+func fixedNow() time.Time {
+	return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+}

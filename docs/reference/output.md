@@ -35,7 +35,7 @@ The tree is drawn on stderr and the result goes to stdout, so `ID=$(arcave savep
 ├── ✔ savepoint.capture            12.1s
 └── ✔ compose.start                 2.7s
 
-Savepoint nightly · 01a188c4 · 19:45:35 · stored 4.7 MB
+Savepoint nightly · 01a188c4-1650-7000-8000-000000000001 · 19:45:35 · stored 4.7 MB
             count     size   stored
   volumes       3  48.8 MB   4.7 MB
   layers        4   275 MB  44.1 KB
@@ -128,7 +128,7 @@ The JSON each command prints; [as text](#result-format), each is a summary, a ta
 | [`savepoint create`](cli/savepoint_create.md) | one savepoint record |
 | [`savepoint list`](cli/savepoint_list.md) | an array of savepoint records, newest first unless `--sort asc`; `[]` when there are none |
 | [`savepoint remove`](cli/savepoint_remove.md) | `{"dry_run": …, "removed": [ … ]}` |
-| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "safety_snapshot": "<id>"}` |
+| [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "safety_snapshot": "<id>", "leftover_volumes": [ … ]}` |
 | [`session create`](cli/session.md#session-create), [`session set`](cli/session.md#session-set), [`session unset`](cli/session.md#session-unset) | one session record: `{"id": …, "name": …, "created_at": …, "from": {"session": …}}` |
 | [`session current`](cli/session.md#session-current) | the session record plus `current_source`: `{"source": "flag" \| "env" \| "pointer" \| "default", "overrides": {"id": …, "name": …}}` — `overrides`, the session the flag or the variable hides, only when it hides another |
 | [`session list`](cli/session.md#session-list) | an array of session entries — the record plus `status`, `current_source` on the current entry alone, `savepoint_count`, `safety_snapshot_count`, `compose_projects`, `size_bytes` — newest first unless `--sort asc` |
@@ -293,6 +293,8 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 `writable_layers` names each container layer put back, and is omitted when the savepoint held none. `tag` is the reference the restored layer answers to in your local Docker daemon: after a rollback the container runs on it, not on the image its compose file names.
 
 `safety_snapshot` is the id of the safety snapshot the rollback took: rolling back to it undoes the rollback. It is omitted when none was taken: the project had no containers, or `rollback.safety_snapshot` or `--safety-snapshot` turned it off. In that last case the stream has no `rollback.safety-snapshot` step, and a warning, marked `in_result`, says what running without one risks.
+
+`leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`rollback.leftover_volumes: overwrite`](configuration.md#rollback). No safety snapshot holds what they held. Each is also a severe warning in the result, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
 
 ## `status`
 

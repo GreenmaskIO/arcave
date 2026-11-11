@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -73,7 +72,7 @@ func mcpSavepointServiceFactory(
 	svc, err := openSavepointService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
-		return nil, nil, fmt.Errorf("init dependencies: %w", err)
+		return nil, nil, err
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }
@@ -87,7 +86,7 @@ func mcpSavepointStoreServiceFactory(
 	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
-		return nil, nil, fmt.Errorf("init dependencies: %w", err)
+		return nil, nil, err
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }
@@ -98,7 +97,7 @@ func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
 	if err != nil {
 		opened.release(ctx)
-		return nil, nil, fmt.Errorf("init session dependencies: %w", err)
+		return nil, nil, err
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }
@@ -109,7 +108,7 @@ func mcpToolsServiceFactory(ctx context.Context, composeProject string) (cli.MCP
 	svc, err := openComposeFileService(ctx, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
-		return nil, nil, fmt.Errorf("init tools dependencies: %w", err)
+		return nil, nil, err
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }
@@ -120,7 +119,7 @@ func mcpGCServiceFactory(ctx context.Context, sessionRef string) (cli.MCPGCServi
 	svc, err := openGCService(ctx, projectRoot, projectCfg, sessionRef, &opened)
 	if err != nil {
 		opened.release(ctx)
-		return nil, nil, fmt.Errorf("init gc dependencies: %w", err)
+		return nil, nil, err
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }
@@ -131,7 +130,7 @@ func mcpStatusServiceFactory(ctx context.Context, composeProject string) (cli.MC
 	svc, err := openStatusService(projectRoot, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
-		return nil, nil, fmt.Errorf("init status dependencies: %w", err)
+		return nil, nil, err
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }

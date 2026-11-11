@@ -15,8 +15,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
 	"github.com/greenmaskio/arcave/internal/cli"
@@ -54,7 +52,7 @@ func runSavepointList(cmd *cobra.Command, _ []string) error {
 
 	svc, err := openSavepointStoreService(ctx, projectRoot, projectCfg, sessionRef, composeProject, &opened)
 	if err != nil {
-		return fmt.Errorf("init dependencies: %w", err)
+		return err
 	}
 	h := cli.NewSavepointListHandler(svc, loadRunOutput())
 	return h.SavepointList(ctx, model.ListRequest{

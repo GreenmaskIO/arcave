@@ -16,7 +16,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/spf13/cobra"
 
@@ -67,7 +66,7 @@ func runGC(cmd *cobra.Command, _ []string) error {
 
 	svc, err := openGCService(ctx, projectRoot, projectCfg, sessionRef, &opened)
 	if err != nil {
-		return fmt.Errorf("init gc dependencies: %w", err)
+		return err
 	}
 	return cli.NewGCHandler(svc, loadRunOutput()).GarbageCollect(ctx, req)
 }

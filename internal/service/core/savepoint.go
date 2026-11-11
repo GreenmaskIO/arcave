@@ -77,7 +77,6 @@ func (s *Service) createSavepoint(
 		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
-	s.warnCapturePolicyDrift(ctx, visible, working.project)
 
 	killed, err := s.stopServices(ctx, working)
 	if err != nil {

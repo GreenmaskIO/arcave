@@ -44,7 +44,7 @@ arcave savepoint create pre-migration --description "orders table, 1000 rows"
 ├── ✔ savepoint.capture pre-migration  5.2s
 └── ✔ compose.start                    3.6s
 
-Savepoint pre-migration · 019e843e · 19:41:12 · stored 273 MB
+Savepoint pre-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 · stored 273 MB
             count     size   stored
   volumes       3  48.9 MB   4.7 MB
   layers        3   260 MB  40.6 KB
@@ -187,10 +187,10 @@ arcave rollback pre-migration
 ├── ✔ rollback.apply            5.3s
 └── ✔ rollback.cleanup          0.0s
 
-Rolled back to pre-migration · 019e843e · 2026-06-01 19:41:12
+Rolled back to pre-migration · 019e843e-1650-7000-8000-000000000000 · 2026-06-01 19:41:12
   volumes   3
   layers    3
-  safety    019e8491
+  safety    taken
 
 Warnings (1)
   ! the containers run on the savepoint's writable layers

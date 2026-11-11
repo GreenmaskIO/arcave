@@ -122,7 +122,7 @@ Garbage collected · session 00000000-0000-0000-0000-000000000001
   image-layers          5      52.5 MB   5        52.5 MB
   upstream-images       0      0 B       0        0 B
   restored-layers       2      ?         2        ?
-  total                 7      52.5 MB+  7        ?
+  total                 7      52.5 MB+  7        52.5 MB+
 ```
 
 </TabItem>
@@ -221,6 +221,8 @@ Garbage collected · session 00000000-0000-0000-0000-000000000001
 
 </TabItem>
 </Tabs>
+
+On the terminal, a size gc cannot tell is `?`. A total that adds up only some of its sizes is the known part with a `+`: `SIZE` when a report found sizes it cannot tell, `FREED` when some deletion freed an unknown amount — an untagged layer's always is. A `FREED` total with no known size at all is `?`. The JSON does not add up a partial total: `total.freed_bytes` is left out instead.
 
 | Field | Meaning |
 |---|---|

@@ -249,6 +249,46 @@ func TestGarbageDeletion_FreedBytes(t *testing.T) {
 	}
 }
 
+// The known sizes add up; each unknown one, an op's or a prune's, is counted instead.
+func TestGarbageDeletion_KnownFreedBytes(t *testing.T) {
+	size := func(n int64) *int64 { return &n }
+	tests := []struct {
+		name        string
+		deletion    GarbageDeletion
+		wantKnown   int64
+		wantUnknown int
+	}{
+		{name: "nothing deleted", deletion: GarbageDeletion{}},
+		{
+			name: "every size known",
+			deletion: GarbageDeletion{
+				Deleted:   []GarbageDeleted{{Target: "a", Bytes: size(1)}, {Target: "b", Bytes: size(2)}},
+				Reclaimed: []GarbageReclaimed{{Target: "r", Bytes: size(5)}},
+			},
+			wantKnown: 8,
+		},
+		{
+			name: "the known part, and what is not",
+			deletion: GarbageDeletion{
+				Deleted:   []GarbageDeleted{{Target: "a", Bytes: size(1)}, {Target: "b"}},
+				Reclaimed: []GarbageReclaimed{{Target: "r"}},
+			},
+			wantKnown:   1,
+			wantUnknown: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			known, unknown := tt.deletion.KnownFreedBytes()
+
+			// Assert
+			assert.Equal(t, tt.wantKnown, known)
+			assert.Equal(t, tt.wantUnknown, unknown)
+		})
+	}
+}
+
 func TestGarbageCollectResult_IsPartial(t *testing.T) {
 	tests := []struct {
 		name  string

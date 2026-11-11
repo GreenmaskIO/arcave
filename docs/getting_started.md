@@ -117,7 +117,7 @@ On a terminal you watch the steps as a live tree on stderr, and the result is pr
 ├── ✔ savepoint.capture before-migration  4.2s
 └── ✔ compose.start                       6.1s
 
-Savepoint before-migration · 019e843e · 19:41:12 · stored 169 MB
+Savepoint before-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 · stored 169 MB
             count     size   stored
   volumes       1  40.8 MB   3.9 MB
   layers        1   159 MB  16.7 KB
@@ -237,10 +237,10 @@ arcave rollback before-migration
 ├── ✔ rollback.apply            3.1s
 └── ✔ rollback.cleanup          0.0s
 
-Rolled back to before-migration · 019e843e · 2026-06-01 19:41:12
+Rolled back to before-migration · 019e843e-1650-7000-8000-000000000000 · 2026-06-01 19:41:12
   volumes   1
   layers    1
-  safety    019e8491
+  safety    taken
 
 Warnings (1)
   ! the containers run on the savepoint's writable layers

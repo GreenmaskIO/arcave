@@ -226,7 +226,7 @@ func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
 
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
 	if err != nil {
-		return model.SessionID{}, fmt.Errorf("init session dependencies: %w", err)
+		return model.SessionID{}, err
 	}
 	record, err := svc.ResolveSession(ctx, ref)
 	if err != nil {

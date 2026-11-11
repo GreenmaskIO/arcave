@@ -7,6 +7,5 @@ myapp · stopped · savepoint before-migration (01a188c4-1650-7000-8000-00000000
 SERVICE  REPLICAS  STATE     UP  PORTS
 db       0/1       exited 0  —   127.0.0.1:5432→5432/tcp
 
-Warnings (2)
-  ! db-1 exited with code 0 4m ago [replica-exited]
+Warnings (1)
   ! no container runs [compose-project-stopped]

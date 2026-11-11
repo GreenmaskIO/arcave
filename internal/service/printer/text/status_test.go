@@ -122,9 +122,6 @@ func TestPrinter_Print_Status(t *testing.T) {
 				status.Services[0].Replicas[0].State, status.Services[0].Replicas[0].Health =
 					model.ReplicaStateExited, ""
 				status.Notices = []model.Notice{{
-					Code:    model.NoticeCodeReplicaExited,
-					Message: "db-1 exited with code 0 4m ago",
-				}, {
 					Code:    model.NoticeCodeComposeProjectStopped,
 					Message: "no container runs",
 				}}

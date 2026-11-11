@@ -52,7 +52,7 @@ arcave savepoint create clean --description "seeded baseline — do not delete"
 ├── ✔ savepoint.capture clean  5.7s
 └── ✔ compose.start            3.6s
 
-Savepoint clean · 019e83ff · 18:36:40 · stored 273 MB
+Savepoint clean · 019e83ff-30c0-7000-8000-000000000000 · 18:36:40 · stored 273 MB
             count     size   stored
   volumes       3  49.2 MB   4.7 MB
   layers        3   260 MB  40.6 KB
