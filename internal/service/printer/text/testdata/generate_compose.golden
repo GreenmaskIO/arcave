@@ -1,0 +1,3 @@
+Wrote /srv/shop/recovered.yaml · compose project shop
+  services  app, db, minio, nginx, redis, worker +2
+  It holds every environment value, secrets included.

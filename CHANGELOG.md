@@ -9,6 +9,7 @@
 - **The MCP tools' `project` argument is `compose_project`.**
 - **`status` says a stopped compose project once.** With every container stopped, a replica that exited 0 no longer adds a `replica-exited` notice beside `compose-project-stopped`; one that exited otherwise still does.
 - **`savepoint remove` refuses `--retain-recent 0` beside an id or name, and a negative `--retain-for`.** `0` with ids was silently ignored and is now a selector conflict, as any other retention rule there is; the same holds for `retain_recent: 0` with `refs` in the MCP `savepoint_remove` tool. `--retain-for -1h` (and `retain_for: "-1h"`) used to delete everything and is now refused with `retain-for must be zero or positive`.
+- **`--format auto` prints text whenever stdout is a terminal.** Before, it printed text only while the live tree was drawn, so `--progress log`, `--log-format json` or a redirected stderr turned the result into JSON on a terminal. A pipe or a file still gets JSON; `--format json` or `ARCAVE_FORMAT=json` asks for it on a terminal. `arcave tools generate-compose` now has a text summary there too.
 
 ### New
 

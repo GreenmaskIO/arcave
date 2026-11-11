@@ -121,9 +121,22 @@ func TestResolveFormat(t *testing.T) {
 			want:         formatJSON,
 		},
 		{
-			name:           "auto under the log is json",
+			name:           "auto under the log on a terminal stdout is text",
 			format:         formatAuto,
 			progressMode:   progressModeLog,
+			stdoutTerminal: true,
+			want:           formatText,
+		},
+		{
+			name:         "auto under the log with stdout captured is json",
+			format:       formatAuto,
+			progressMode: progressModeLog,
+			want:         formatJSON,
+		},
+		{
+			name:           "auto under the json stream is json",
+			format:         formatAuto,
+			progressMode:   progressModeJSON,
 			stdoutTerminal: true,
 			want:           formatJSON,
 		},

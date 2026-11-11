@@ -97,6 +97,8 @@ func (s *Printer) Print(v any) error {
 		text = formatRemoveSession(v)
 	case model.ComposeProjectStatus:
 		text = s.formatStatus(v)
+	case model.GenerateComposeResponse:
+		text = formatGenerateCompose(v)
 	default:
 		return jsonprinter.New(s.w).Print(v)
 	}

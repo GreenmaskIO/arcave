@@ -55,7 +55,7 @@ How a run prints its result and shows its progress — the same things `--format
 
 | Variable | Values | Unset |
 |---|---|---|
-| `ARCAVE_FORMAT` | `auto`, `json`, `text` | `auto`: text while the live tree is drawn and stdout is a terminal, else JSON |
+| `ARCAVE_FORMAT` | `auto`, `json`, `text` | `auto`: text on a terminal stdout, else JSON |
 | `ARCAVE_PROGRESS` | `auto`, `tty`, `log`, `json` | `auto`: the live tree on a terminal stderr with `log.format: text`, else log records |
 
 ```shell title="JSON results on a terminal, for the rest of the shell"
