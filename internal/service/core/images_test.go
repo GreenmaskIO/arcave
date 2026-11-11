@@ -255,7 +255,7 @@ func TestService_Rollback_RevertRestoresTheSafetySnapshotLayers(t *testing.T) {
 	vol := demoVolume()
 	record := demoRecord()
 	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
 	locker := &mockLocker{}
 	expectLock(locker)
@@ -720,7 +720,7 @@ func TestService_Rollback_UnsupportedDaemonLoadsNothing(t *testing.T) {
 	// Arrange
 	record := demoRecordWithImages()
 	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	locker := &mockLocker{}
 	expectLock(locker)
 	introspection := demoIntrospectionWithContainers()

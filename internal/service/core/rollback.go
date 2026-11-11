@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -92,6 +93,13 @@ func (s *Service) Rollback(ctx context.Context, req model.RollbackRequest) (_ mo
 	// Every container it builds is labelled with the arcave project, which status reads back.
 	if err := s.arcaveProject.Validate(); err != nil {
 		return model.RollbackResult{}, fmt.Errorf("arcave project of the deployment labels: %w", err)
+	}
+	// A missing savepoint fails right away instead of waiting for the session lock.
+	// Any other outcome is resolved again under the lock.
+	if req.ID != nil || req.Name != nil {
+		if _, err := s.resolveSavepoint(ctx, req); errors.Is(err, errSavepointNotFound) {
+			return model.RollbackResult{}, err
+		}
 	}
 
 	return locked(ctx, s.SavepointStoreService, model.SessionLockOperationRollback,

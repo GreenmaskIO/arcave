@@ -115,6 +115,41 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 	safetySnapshotBackend.AssertExpectations(t)
 }
 
+// A savepoint that does not exist is refused before any lock is taken: the mocked lockers carry
+// no expectations, so a Lock or an Acquire would panic.
+func TestService_Rollback_RefusesAMissingSavepointBeforeTheLocks(t *testing.T) {
+	tests := []struct {
+		name string
+		req  model.RollbackRequest
+	}{
+		{name: "by id", req: model.RollbackRequest{ID: ptrID("019e843e-1650-7000-8000-00000000ffff")}},
+		{name: "by name", req: model.RollbackRequest{Name: ptrString("nope")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			repo := &mockSavepointRepo{}
+			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{demoRecord()}, nil).Once()
+			projectLocker, sessionLocker := &mockLocker{}, &mockSessionLocker{}
+			svc := New(Deps{
+				ArcaveProject: demoArcaveProject,
+				SavepointRepo: repo,
+				ProjectLocker: projectLocker,
+				SessionLocker: sessionLocker,
+			})
+
+			// Act
+			_, err := svc.Rollback(context.Background(), tt.req)
+
+			// Assert
+			require.ErrorIs(t, err, errSavepointNotFound)
+			repo.AssertExpectations(t)
+			projectLocker.AssertExpectations(t)
+			sessionLocker.AssertExpectations(t)
+		})
+	}
+}
+
 // A failed restore reverts through the very backend instances that took the
 // backup: the .Once builds above pin one safety instance, so the revert's
 // Restore can only land on the one whose Snapshot wrote the backup.
@@ -911,7 +946,7 @@ func TestService_Rollback_RefusesASavepointWithNoSpec(t *testing.T) {
 	record := demoRecord()
 	record.Spec = nil
 	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	locker := &mockLocker{}
 	expectLock(locker)
 	registry := &mockRegistry{}
@@ -1050,7 +1085,7 @@ func demoColdRecord() model.Savepoint {
 func coldStartDeps(t *testing.T, record model.Savepoint) (Deps, *mockSavepointRepo, *mockInspector) {
 	t.Helper()
 	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	introspection := demoAbsentIntrospection()
 	inspector := &mockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
@@ -1599,7 +1634,7 @@ func newNoSnapshotService(t *testing.T, record model.Savepoint, inflight infligh
 	t.Helper()
 	vol := record.Stats[0].Volume
 	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
 	locker := &mockLocker{}
 	expectLock(locker)
@@ -1850,7 +1885,7 @@ func TestService_Rollback_NoSafetySnapshotFailureRecoversAsAColdStart(t *testing
 	record := demoRecord()
 	inflight := &fakeInflight{}
 	svc, doubles := newNoSnapshotService(t, record, inflight)
-	doubles.repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	doubles.repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	doubles.repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
 	expectLock(doubles.locker)
 	doubles.registry.On("New", matchSpec(doubles.store, record.Stats[0].Volume.ObjectID)).Return(doubles.backend, nil).Once()

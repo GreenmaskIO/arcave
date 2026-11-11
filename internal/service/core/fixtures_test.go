@@ -363,6 +363,8 @@ func ptrID(id model.SavepointID) *model.SavepointID { return &id }
 
 func ptrBool(b bool) *bool { return &b }
 
+func ptrString(s string) *string { return &s }
+
 // deployed matches the project a rollback builds from spec: spec with every service carrying the
 // deployment labels.
 func deployed(spec *types.Project) any {
