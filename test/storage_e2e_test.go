@@ -197,8 +197,10 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 	assert.Equal(t, "v1", volumeAfter, "the volume is back at sp1")
 	assert.Equal(t, "v1", layerAfter, "the writable layer is back at sp1")
 	require.NotEmpty(t, rolledBack.SafetySnapshot, "the result names the safety snapshot")
-	assert.Equal(t, []string{"safety-snapshot-" + sp1.ID.String(), "sp2", "sp1"}, savepointNames(withSafety),
-		"the safety snapshot stays")
+	assert.Equal(t, []string{"", "sp2", "sp1"}, savepointNames(withSafety),
+		"the safety snapshot stays, with no name")
+	assert.Equal(t, &model.SavepointRef{ID: sp1.ID, Name: "sp1"}, withSafety[0].TakenBeforeRollbackTo,
+		"and names the rollback it was taken before")
 	assert.Equal(t, []string{"sp2", "sp1"}, savepointNames(inFork), "the fork holds the copied savepoints")
 	assert.Equal(t, "v2", volumeInFork, "the fork's copy of sp2 restores")
 	assert.Equal(t, []model.SavepointID{sp2.ID}, savepointIDs(removed.Removed))

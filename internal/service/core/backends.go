@@ -131,7 +131,8 @@ func volumeOpContext(
 
 // performSavepoint captures a fresh savepoint under a heartbeat and commits its record last,
 // once grantedLock still holds the lock; on failure it returns a zero savepoint. killed are the
-// containers the stop killed.
+// containers the stop killed. takenBefore is the savepoint the rollback a safety snapshot is taken
+// before goes to; nil for a savepoint create.
 func (s *Service) performSavepoint(
 	ctx context.Context,
 	grantedLock model.GrantedSessionLock,
@@ -140,6 +141,7 @@ func (s *Service) performSavepoint(
 	name string,
 	description string,
 	labels map[string]string,
+	takenBefore *model.SavepointRef,
 ) (_ model.Savepoint, err error) {
 	var (
 		id         = model.NewSavepointID()
@@ -197,16 +199,17 @@ func (s *Service) performSavepoint(
 		return model.Savepoint{}, err
 	}
 	savepoint := model.Savepoint{
-		ID:             id,
-		Name:           name,
-		Description:    description,
-		Labels:         labels,
-		CreatedAt:      createdAt,
-		Stats:          captured.stats,
-		Images:         captured.images,
-		WritableLayers: captured.writableLayers,
-		Spec:           &model.SpecRef{Format: model.SpecFormatComposeYAML},
-		NotCovered:     notCovered,
+		ID:                    id,
+		Name:                  name,
+		Description:           description,
+		Labels:                labels,
+		CreatedAt:             createdAt,
+		TakenBeforeRollbackTo: takenBefore,
+		Stats:                 captured.stats,
+		Images:                captured.images,
+		WritableLayers:        captured.writableLayers,
+		Spec:                  &model.SpecRef{Format: model.SpecFormatComposeYAML},
+		NotCovered:            notCovered,
 	}
 	if err = s.savepointRepo.SaveSavepoint(ctx, savepoint); err != nil {
 		err = fmt.Errorf("commit savepoint %s: %w", id, err)

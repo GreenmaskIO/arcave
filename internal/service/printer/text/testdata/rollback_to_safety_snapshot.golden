@@ -1,0 +1,5 @@
+Rolled back to the state before rollback to test3 · 01a188c9-0000-7000-8000-000000000002 · 2026-10-29 20:45:35
+  volumes   1
+  safety    taken
+
+  undo it:  arcave -p arcave-demo rollback 01a188ce-0000-7000-8000-000000000003

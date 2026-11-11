@@ -37,9 +37,9 @@ arcave savepoint list --include-safety-snapshots
 <TabItem value="terminal" label="Terminal" default>
 
 ```text title="stdout"
-NAME                                                           ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
-safety-snapshot-019e843e-1650-7000-8000-000000000000 (safety)  019e8491-04c8-7000-8000-000000000000  2026-06-01 21:22  1        2       3.9 MB   1
-before-migration                                               019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       173 MB   1
+NAME                                          ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+before rollback to before-migration (safety)  019e8491-04c8-7000-8000-000000000000  2026-06-01 21:22  1        2       3.9 MB   1
+before-migration                              019e843e-1650-7000-8000-000000000000  2026-06-01 19:41  1        2       173 MB   1
 ```
 
 </TabItem>
@@ -49,9 +49,10 @@ before-migration                                               019e843e-1650-700
 [
   {
     "id": "019e8491-04c8-7000-8000-000000000000",
-    "name": "safety-snapshot-019e843e-1650-7000-8000-000000000000",
+    "name": "",
     "description": "",
     "labels": { "arcave-safety-snapshot": "true" },
+    "taken_before_rollback_to": { "id": "019e843e-1650-7000-8000-000000000000", "name": "before-migration" },
     "created_at": "2026-06-01T21:22:37.009412Z",
     …
   },
@@ -68,7 +69,7 @@ before-migration                                               019e843e-1650-700
 </TabItem>
 </Tabs>
 
-The name carries the id of the savepoint that rollback was applying, so it always says which rollback it undoes.
+A safety snapshot has no name: its `taken_before_rollback_to` names the savepoint that rollback was applying, by id and by the name it had then, so it always says which rollback it was taken before.
 
 ```shell title="2. Apply it, by id"
 arcave rollback 019e8491-04c8-7000-8000-000000000000

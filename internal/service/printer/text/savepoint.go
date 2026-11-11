@@ -15,6 +15,7 @@
 package text
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
@@ -71,8 +72,7 @@ func (s *Printer) formatSavepointTable(savepoints []model.Savepoint) string {
 // formatRollback is what a rollback restored, and what is left to know about it.
 func (s *Printer) formatRollback(response model.RollbackResult) string {
 	var b strings.Builder
-	b.WriteString(styleTitle.Render("Rolled back to "+
-		s.formatSavepointTitle(response.RolledBackTo, "2006-01-02 15:04:05")) + "\n")
+	b.WriteString(styleTitle.Render(s.formatRolledBackTo(response.RolledBackTo)) + "\n")
 	rows := []captureRow{{
 		kind:  "volumes",
 		cells: []string{strconv.Itoa(len(response.Restored))},
@@ -115,6 +115,17 @@ func (s *Printer) formatRemove(response model.RemoveResult) string {
 			s.formatTime(savepoint.CreatedAt))
 	}
 	return b.String()
+}
+
+// formatRolledBackTo is the rollback's title: the savepoint it restored, or for a safety snapshot
+// the state it holds — the one before the rollback it was taken before, at that rollback's time.
+func (s *Printer) formatRolledBackTo(savepoint model.Savepoint) string {
+	const layout = "2006-01-02 15:04:05"
+	if takenBefore := savepoint.TakenBeforeRollbackTo; takenBefore != nil && savepoint.IsSafetySnapshot() {
+		return "Rolled back to the state " + formatTakenBefore(*takenBefore) + " · " +
+			s.formatSavepointTitle(model.Savepoint{ID: savepoint.ID, CreatedAt: savepoint.CreatedAt}, layout)
+	}
+	return "Rolled back to " + s.formatSavepointTitle(savepoint, layout)
 }
 
 // formatSavepointTitle is "<name> · <id> · <time>", the name left out when none.
@@ -210,16 +221,23 @@ func newSavepointRef(savepoint model.Savepoint) string {
 	return savepoint.ID.String()
 }
 
-// formatSavepointName is the name, a safety snapshot marked, "-" for none.
+// formatSavepointName is the name, "-" for none; a safety snapshot is named by the rollback it was
+// taken before, and marked.
 func formatSavepointName(savepoint model.Savepoint) string {
-	name := savepoint.Name
-	if name == "" {
-		name = "-"
+	if !savepoint.IsSafetySnapshot() {
+		return cmp.Or(savepoint.Name, "-")
 	}
-	if savepoint.IsSafetySnapshot() {
-		name += " (safety)"
+	name := cmp.Or(savepoint.Name, "-")
+	if takenBefore := savepoint.TakenBeforeRollbackTo; takenBefore != nil {
+		name = formatTakenBefore(*takenBefore)
 	}
-	return name
+	return name + " (safety)"
+}
+
+// formatTakenBefore is "before rollback to <savepoint>": the target as named when the safety
+// snapshot was taken, by its full id when it had no name.
+func formatTakenBefore(target model.SavepointRef) string {
+	return "before rollback to " + target.String()
 }
 
 // newStoredBytes is what the savepoint wrote to the store, every kind of unit together.

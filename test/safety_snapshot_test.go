@@ -16,6 +16,7 @@ package test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -125,6 +126,43 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	assert.NotEmpty(t, freeing.ops(model.GarbageDataKindImageLayers), "and frees the blobs only they listed")
 	assert.Equal(t, []model.SavepointID{undone.SafetySnapshot}, afterFreeing,
 		"the undo of the rollback to the kept one is the newest now")
+}
+
+// Two rollbacks to one savepoint leave two safety snapshots, told apart by id: neither has a name to
+// mistake for the target, both name it in taken_before_rollback_to, and rolling back to one says it
+// restored the state before that rollback.
+func TestRollback_SafetySnapshotNamesItsRollback(t *testing.T) {
+	t.Parallel()
+
+	// Arrange
+	env := newSessionEnv(t)
+	env.withComposeProject(t)
+	initArcave(t, env)
+	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	arcave := func(args ...string) []byte {
+		t.Helper()
+		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
+	}
+	sp1 := decode[model.Savepoint](t, arcave("savepoint", "create", "sp1"))
+
+	// Act
+	first := decode[model.RollbackResult](t, arcave("rollback", "sp1"))
+	second := decode[model.RollbackResult](t, arcave("rollback", "sp1"))
+	listed := decode[[]model.Savepoint](t, arcave("savepoint", "list", "--include-safety-snapshots"))
+	undone := string(arcave("--format", "text", "rollback", second.SafetySnapshot.String()))
+
+	// Assert
+	want := &model.SavepointRef{ID: sp1.ID, Name: "sp1"}
+	require.Equal(t, []model.SavepointID{second.SafetySnapshot, first.SafetySnapshot}, safetySnapshots(listed))
+	for _, savepoint := range listed {
+		if !savepoint.IsSafetySnapshot() {
+			continue
+		}
+		assert.Empty(t, savepoint.Name, "a safety snapshot has no name")
+		assert.Equal(t, want, savepoint.TakenBeforeRollbackTo, "it names the rollback it was taken before")
+	}
+	assert.True(t, strings.HasPrefix(undone, "Rolled back to the state before rollback to sp1 · "+
+		second.SafetySnapshot.String()), "the title names the state, not the target: %q", undone)
 }
 
 // --no-safety-snapshot and rollback.safety_snapshot: false both take none: no record stays, the

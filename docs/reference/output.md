@@ -165,9 +165,10 @@ The one shape four commands are built from: `savepoint create` prints it, `savep
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | string | A UUIDv7 in canonical form, assigned at capture. |
-| `name` | string | What you passed, or `""`. |
+| `name` | string | What you passed, or `""`. Always `""` for a safety snapshot. |
 | `description` | string | What you passed, or `""`. |
 | `labels` | object | Omitted unless the record carries marks. `arcave-safety-snapshot: "true"` is the one arcave sets. |
+| `taken_before_rollback_to` | object | A safety snapshot's alone: `{id, name}` — the savepoint the rollback it was taken before went to, as it was named then; `name` is `""` for an unnamed one. It may since have been removed. Omitted on any other savepoint. |
 | `created_at` | string | RFC3339Nano. |
 | `stats` | array | One entry per captured volume. Omitted when there are none. |
 | `writable_layers` | array | One entry per container whose writable layer was captured. Omitted when there are none. |
@@ -340,7 +341,7 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 }
 ```
 
-`state` is one of `rollback-pending`, `absent`, `stopped`, `degraded`, `starting`, `running` — see [the command](cli/status.md#the-state). `deployment` is `null` with no container, and `{"source": "compose"}` alone when no container carries a rollback's labels; `source` is `savepoint` when every container does, `mixed` otherwise. `deployed_at`, `arcave_project`, `session` and the savepoint's `id`, `name`, `created_at` and `safety_snapshot` are read off the labels, so they are there when the store is not. `record` says whether the deployed savepoint's session still holds it — `found`, `missing` (the savepoint or its session removed since), or `unreadable` — and is absent when `arcave_project` is not the one the config names, whose store is not read; the savepoint's `description` and `restored` come from that record, and are absent unless it is `found`. `replaced` counts the replicas the savepoint recorded that were recreated outside arcave since — those with `in_deployment` `false` and `in_savepoint` `true` — and is absent at `0`.
+`state` is one of `rollback-pending`, `absent`, `stopped`, `degraded`, `starting`, `running` — see [the command](cli/status.md#the-state). `deployment` is `null` with no container, and `{"source": "compose"}` alone when no container carries a rollback's labels; `source` is `savepoint` when every container does, `mixed` otherwise. `deployed_at`, `arcave_project`, `session` and the savepoint's `id`, `name`, `created_at` and `safety_snapshot` are read off the labels, so they are there when the store is not; `name` is absent for a savepoint without one, a safety snapshot always. `record` says whether the deployed savepoint's session still holds it — `found`, `missing` (the savepoint or its session removed since), or `unreadable` — and is absent when `arcave_project` is not the one the config names, whose store is not read; the savepoint's `description` and `restored` come from that record, and are absent unless it is `found`. `replaced` counts the replicas the savepoint recorded that were recreated outside arcave since — those with `in_deployment` `false` and `in_savepoint` `true` — and is absent at `0`.
 
 A replica's `state` is `running`, `completed`, `exited`, `restarting`, `created`, `paused`, `removing`, `dead`, or `missing` for one the deployed savepoint recorded and the daemon does not hold; `health` is `healthy`, `unhealthy` or `starting`, and absent with no healthcheck or once the container stopped. `in_deployment` marks a container the deployment built and `in_savepoint` a replica the savepoint recorded: `false`/`true` was recreated outside arcave, `false`/`false` was added since. `replaces` is the container compose recreated this one over. `replicas_expected` is absent with nothing deployed.
 

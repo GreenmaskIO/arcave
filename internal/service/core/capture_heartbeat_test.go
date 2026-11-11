@@ -57,7 +57,7 @@ func TestService_performSavepoint_HeartbeatFramesTheCapture(t *testing.T) {
 	working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
 
 	// Act
-	savepoint, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil)
+	savepoint, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestService_performSavepoint_HeartbeatLostCommitsNothing(t *testing.T) {
 	working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
 
 	// Act
-	savepoint, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil)
+	savepoint, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil, nil)
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrHeartbeatLost)
@@ -112,7 +112,7 @@ func TestService_performSavepoint_RefusesAnOccupiedTreeBeforeTheHeartbeat(t *tes
 	working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
 
 	// Act
-	_, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil)
+	_, err := svc.performSavepoint(ctx, fakeGrantedSessionLock{}, working, nil, "sp", "", nil, nil)
 
 	// Assert
 	require.ErrorIs(t, err, errCaptureDirectoryNotEmpty)

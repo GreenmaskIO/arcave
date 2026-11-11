@@ -46,7 +46,7 @@ func demoDeployment() SavepointDeployment {
 
 func TestSavepointDeployment_Labels(t *testing.T) {
 	safetySnapshot := demoDeployment()
-	safetySnapshot.Savepoint.Name = "safety-snapshot-019e843e-1650-7000-8000-000000000000"
+	safetySnapshot.Savepoint.Name = ""
 	safetySnapshot.Savepoint.IsSafetySnapshot = true
 	tests := []struct {
 		name       string
@@ -77,7 +77,7 @@ func TestSavepointDeployment_Labels(t *testing.T) {
 				"io.arcave.deployment.session-id":                   DefaultSession.String(),
 				"io.arcave.deployment.session-name":                 DefaultSessionName,
 				"io.arcave.deployment.savepoint-id":                 "019e843e-1650-7000-8000-000000000000",
-				"io.arcave.deployment.savepoint-name":               "safety-snapshot-019e843e-1650-7000-8000-000000000000",
+				"io.arcave.deployment.savepoint-name":               "",
 				"io.arcave.deployment.savepoint-created-at":         "2026-11-06T19:41:00Z",
 				"io.arcave.deployment.savepoint-is-safety-snapshot": "true",
 				"io.arcave.deployment.service-replicas":             "db=1,3;migrate=1",

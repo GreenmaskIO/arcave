@@ -72,12 +72,13 @@ func TestPrinter_Print(t *testing.T) {
 			name: "savepoint_list",
 			result: []model.Savepoint{
 				newSavepoint(),
-				{
-					ID:        safetyID,
-					Name:      "before-rollback",
-					Labels:    map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue},
-					CreatedAt: createdAt.Add(time.Hour),
-				},
+				newSafetySnapshot(model.SavepointRef{ID: savepointID, Name: "test3"}),
+			},
+		},
+		{
+			name: "savepoint_list_unnamed_target",
+			result: []model.Savepoint{
+				newSafetySnapshot(model.SavepointRef{ID: savepointID}),
 			},
 		},
 		{
@@ -97,6 +98,15 @@ func TestPrinter_Print(t *testing.T) {
 					{Service: "app", Replica: 2},
 				},
 				SafetySnapshot: safetyID,
+			},
+		},
+		{
+			name: "rollback_to_safety_snapshot",
+			opts: Options{ComposeProject: "arcave-demo"},
+			result: model.RollbackResult{
+				RolledBackTo:   newSafetySnapshot(model.SavepointRef{ID: savepointID, Name: "test3"}),
+				Restored:       []model.Volume{namedVolume("demo_db")},
+				SafetySnapshot: "01a188ce-0000-7000-8000-000000000003",
 			},
 		},
 		{
@@ -381,9 +391,10 @@ func TestPrinter_Print(t *testing.T) {
 						ComposeProject: "shop",
 						Savepoints: []model.Savepoint{
 							{
-								ID:        safetyID,
-								Labels:    map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue},
-								CreatedAt: createdAt.Add(2 * time.Hour),
+								ID:                    safetyID,
+								Labels:                map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue},
+								TakenBeforeRollbackTo: &model.SavepointRef{ID: savepointID, Name: "test3"},
+								CreatedAt:             createdAt.Add(2 * time.Hour),
 							},
 							newSavepoint(),
 						},
@@ -404,7 +415,7 @@ func TestPrinter_Print(t *testing.T) {
 		{
 			name: "session_show_unnamed",
 			result: model.SessionDetail{
-				Session:       model.Session{ID: sessionID, From: &model.SessionOrigin{Session: removedSessionID}},
+				Session: model.Session{ID: sessionID, From: &model.SessionOrigin{Session: removedSessionID}},
 				CurrentSource: &model.CurrentSessionSource{
 					Source:    model.SessionRefSourceEnv,
 					Overrides: &model.SessionRef{ID: model.DefaultSession, Name: model.DefaultSessionName},
@@ -506,6 +517,17 @@ func TestFormatSize(t *testing.T) {
 			// Assert
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+// newSafetySnapshot is a safety snapshot taken before a rollback to target, an hour after newSavepoint.
+func newSafetySnapshot(target model.SavepointRef) model.Savepoint {
+	return model.Savepoint{
+		ID:                    safetyID,
+		Labels:                map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue},
+		TakenBeforeRollbackTo: &target,
+		CreatedAt:             createdAt.Add(time.Hour),
+		Stats:                 []model.SnapshotStat{{Volume: namedVolume("demo_db"), SizeBytes: 1_000, StoredBytes: 1_000}},
 	}
 }
 

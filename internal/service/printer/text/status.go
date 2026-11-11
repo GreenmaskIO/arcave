@@ -75,7 +75,7 @@ func newShownDeployment(status model.ComposeProjectStatus) *model.DeploymentStat
 }
 
 // formatDeploymentSource names what the containers run: the savepoint as the notices name it, a
-// safety snapshot by its id alone, since its name is the id of the savepoint it was taken before.
+// safety snapshot by its id alone, since its name is no selector and is empty.
 func formatDeploymentSource(deployment model.DeploymentStatus) string {
 	switch savepoint := deployment.Savepoint; {
 	case savepoint == nil:

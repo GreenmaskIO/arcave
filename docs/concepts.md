@@ -47,7 +47,7 @@ A name matching several savepoints is an **error** that lists the candidate ids,
 
 ## Safety snapshot
 
-A **safety snapshot** is an ordinary savepoint that a rollback takes of the live state before overwriting it. Same store, same format, same record. It differs in exactly three ways: it is named `safety-snapshot-<target id>`, it carries the label `arcave-safety-snapshot`, and that label hides it from `arcave savepoint list` and from every scanning selector — `latest`, a name lookup, `--retain-recent`, `--retain-for`, `--before-date`.
+A **safety snapshot** is an ordinary savepoint that a rollback takes of the live state before overwriting it. Same store, same format, same record. It differs in exactly three ways: it has no name and carries `taken_before_rollback_to` — the savepoint the rollback went to, by id and by the name it had then —, it carries the label `arcave-safety-snapshot`, and that label hides it from `arcave savepoint list` and from every scanning selector — `latest`, a name lookup, `--retain-recent`, `--retain-for`, `--before-date`.
 
 An explicit id still reaches it. That asymmetry is the point: rolling back to a safety snapshot by id undoes the rollback that took it. It stays until [`arcave gc`](reference/cli/gc.md) retires it, past the newest few each compose project keeps, or you remove it by id. See [How arcave works](how_it_works.md#the-safety-snapshot).
 

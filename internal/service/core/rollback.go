@@ -28,12 +28,6 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// safetySnapshotPrefix opens the Name a rollback's undo carries; the id of the
-// savepoint being restored completes it, so each says which rollback it undoes.
-// The id and not the ref the user typed: once
-// resolved, "latest" names no savepoint and a name may be one of several.
-const safetySnapshotPrefix = "safety-snapshot"
-
 // revertBudget bounds a revert that runs past its command's own context: a torn
 // revert leaves the environment torn, so it gets a deadline instead of the caller's.
 const revertBudget = 10 * time.Minute
@@ -60,10 +54,6 @@ func (t rollbackTarget) newResult(savepoint model.Savepoint, safetySnapshot mode
 		WritableLayers: t.restored,
 		SafetySnapshot: safetySnapshot,
 	}
-}
-
-func safetySnapshotName(restoring model.SavepointID) string {
-	return safetySnapshotPrefix + "-" + restoring.String()
 }
 
 // newSafetySnapshotLabels is the mark that makes an ordinary savepoint an undo: it
@@ -339,8 +329,12 @@ func (s *Service) takeSafetySnapshot(
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
 	}
+	// No name: one would read as the savepoint restored, and select nothing. What it was taken
+	// before is a field, the target by id and by the name it carries now — the resolved savepoint,
+	// never the ref the user typed, since "latest" names none and a name may be removed.
 	safetySnapshot, err := s.performSavepoint(
-		ctx, grantedLock, working, killed, safetySnapshotName(savepoint.ID), "", newSafetySnapshotLabels(),
+		ctx, grantedLock, working, killed, "", "", newSafetySnapshotLabels(),
+		&model.SavepointRef{ID: savepoint.ID, Name: savepoint.Name},
 	)
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)

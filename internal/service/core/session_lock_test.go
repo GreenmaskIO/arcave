@@ -313,7 +313,7 @@ func TestService_performSavepoint_SessionLock(t *testing.T) {
 			working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
 
 			// Act
-			savepoint, err := svc.performSavepoint(newLockTestContext(), grantedLock, working, nil, "sp", "", nil)
+			savepoint, err := svc.performSavepoint(newLockTestContext(), grantedLock, working, nil, "sp", "", nil, nil)
 
 			// Assert
 			if tt.verifyErr != nil {

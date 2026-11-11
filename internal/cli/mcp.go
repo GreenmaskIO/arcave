@@ -181,7 +181,8 @@ const (
 		"rollback or savepoint_remove. Safety snapshots — the undo a rollback commits of the live " +
 		"state before it overwrites it — are hidden unless include_safety_snapshots is set. Each " +
 		"stays until a gc retires it, so list them with the flag and roll back to one by id to " +
-		"undo a rollback."
+		"undo a rollback. A safety snapshot has no name: its taken_before_rollback_to names the " +
+		"savepoint the rollback it was taken before went to."
 	descRemove = "Delete savepoints and the snapshot data they hold. Select them either by " +
 		"explicit ids, or by retention rules (retain_recent/retain_for/before_date) — the two " +
 		"modes cannot be combined, and at least one is required. Pass dry_run to see what would " +
