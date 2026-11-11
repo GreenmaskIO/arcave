@@ -29,7 +29,7 @@ Named volumes the project still owns — what `docker compose down` leaves behin
 
 | Value | What happens to a leftover volume the savepoint restores into |
 |---|---|
-| `overwrite` (default) | Overwritten, with a warning naming it. No safety snapshot is taken, so its old contents are gone. |
+| `overwrite` (default) | Overwritten, named in the result's warnings and `leftover_volumes`. No safety snapshot is taken, so its old contents are gone. |
 | `refuse` | The rollback is refused before anything is created: `compose project is not running but its volumes survive: myapp_pgdata`. |
 
 If such a rollback fails, arcave removes what it created. If it is interrupted, run the **same** rollback again: there is no safety snapshot to return to, and the interrupted-rollback marker lets that one through.

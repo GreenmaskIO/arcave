@@ -69,6 +69,11 @@ func TestPrinter_Print(t *testing.T) {
 			},
 		},
 		{
+			name:   "savepoint_create_capture_drift",
+			opts:   Options{ComposeProject: "arcave-demo"},
+			result: newDriftedSavepoint(),
+		},
+		{
 			name: "savepoint_list",
 			result: []model.Savepoint{
 				newSavepoint(),
@@ -105,6 +110,16 @@ func TestPrinter_Print(t *testing.T) {
 			result: model.RollbackResult{
 				RolledBackTo: newSavepoint(),
 				Restored:     []model.Volume{namedVolume("demo_db")},
+			},
+		},
+		{
+			name: "rollback_leftover_volumes",
+			opts: Options{ComposeProject: "arcave-demo"},
+			result: model.RollbackResult{
+				RolledBackTo:    newSavepoint(),
+				Restored:        []model.Volume{namedVolume("demo_db"), namedVolume("demo_minio")},
+				WritableLayers:  []model.WritableLayerRestoreResult{{Service: "app", Replica: 1}},
+				LeftoverVolumes: []string{"demo_db", "demo_minio"},
 			},
 		},
 		{
@@ -471,6 +486,29 @@ func newSavepoint() model.Savepoint {
 			KilledContainers:       []model.KilledContainer{{Service: "db", Replica: 1, Container: "0123456789abcdef"}},
 		},
 	}
+}
+
+// newDriftedSavepoint is newSavepoint taken with two units of app and one of db captured otherwise
+// than the savepoint before it.
+func newDriftedSavepoint() model.Savepoint {
+	savepoint := newSavepoint()
+	savepoint.CaptureDrift = &model.CaptureDrift{
+		Since: model.SavepointRef{ID: safetyID, Name: "test2"},
+		Changes: []model.CaptureChange{
+			{
+				Service: "app", Stamp: "mount./var/lib/data",
+				Was: model.CaptureStampDecision{Capture: true, Backend: "fullcopy"},
+				Now: model.CaptureStampDecision{Capture: true, Backend: "cdc"},
+			},
+			{Service: "app", Stamp: "image", Was: model.CaptureStampDecision{Capture: true}},
+			{
+				Service: "db", Stamp: "writable-layer",
+				Was: model.CaptureStampDecision{},
+				Now: model.CaptureStampDecision{Capture: true, Backend: "dedupcopy"},
+			},
+		},
+	}
+	return savepoint
 }
 
 func namedVolume(name string) model.Volume {

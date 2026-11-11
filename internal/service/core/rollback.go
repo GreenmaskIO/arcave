@@ -331,9 +331,10 @@ func (s *Service) takeSafetySnapshot(
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
 	}
-	safetySnapshot, err := s.performSavepoint(
-		ctx, grantedLock, working, killed, safetySnapshotName(savepoint.ID), "", newSafetySnapshotLabels(),
-	)
+	safetySnapshot, err := s.performSavepoint(ctx, grantedLock, working, killed, savepointMeta{
+		name:   safetySnapshotName(savepoint.ID),
+		labels: newSafetySnapshotLabels(),
+	})
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
 	}
@@ -583,10 +584,18 @@ func (s *Service) rollbackColdStart(
 		return model.RollbackResult{}, err
 	}
 
+	if recovery.recovering {
+		// What the project still owns is the interrupted rollback's partial writes, not volumes a
+		// `compose down` left: overwriting them is the recovery, and no leftover to name.
+		for _, name := range leftover {
+			log.Info().Str("volume", name).
+				Msg("the compose project is not running but this volume survives; the rollback overwrites it, " +
+					"and no safety snapshot is taken")
+		}
+		leftover = nil
+	}
 	for _, name := range leftover {
-		log.Warn().Str("volume", name).
-			Msg("the compose project is not running but this volume survives; the rollback overwrites it, " +
-				"and no safety snapshot is taken")
+		progress.Current(ctx).WarnInResult(model.NewLeftoverVolumeNotice(name).Message)
 	}
 
 	// No safety snapshot of its own: the marker tells the user how to recover.
@@ -607,7 +616,9 @@ func (s *Service) rollbackColdStart(
 	defer cancel()
 	s.cleanUpRollback(cleanupCtx, nil, nil)
 	logRestoredLayers(ctx, target.restored)
-	return target.newResult(savepoint, ""), nil
+	result := target.newResult(savepoint, "")
+	result.LeftoverVolumes = leftover
+	return result, nil
 }
 
 // ownedVolumes are the docker names of the volumes the compose project owns.

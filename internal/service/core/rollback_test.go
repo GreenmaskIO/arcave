@@ -1131,19 +1131,20 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 	sessions.On("LoadSession", mock.Anything, demoSession).Return(model.Session{ID: demoSession, Name: "exp"}, true, nil).Once()
 	deps.Session, deps.Sessions = demoSession, sessions
 	svc := New(deps)
-	logs := &syncBuffer{}
-	ctx := zerolog.New(logs).WithContext(context.Background())
+	warned := &warnedRecorder{}
+	ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(warned, fixedNow))
 
 	// Act
 	res, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
 
-	// Assert: the volume `compose down` kept is overwritten under a warning naming it.
+	// Assert: the volume `compose down` kept is overwritten, named in the result and warned of.
 	require.NoError(t, err)
 	assert.Equal(t, record, res.RolledBackTo)
 	assert.Equal(t, []model.Volume{vol}, res.Restored)
 	assert.Equal(t, []model.WritableLayerRestoreResult{demoWritableLayerRestoreResult()}, res.WritableLayers)
-	assert.Contains(t, logs.String(), `"volume":"`+demoVolumeName+`"`)
-	assert.Contains(t, logs.String(), "no safety snapshot is taken")
+	assert.Equal(t, []string{demoVolumeName}, res.LeftoverVolumes)
+	assert.Equal(t, []string{model.NewLeftoverVolumeNotice(demoVolumeName).Message}, warned.msgs)
+	assert.Equal(t, []bool{true}, warned.inResult, "the result names it too")
 	inflight.AssertExpectations(t)
 	repo.AssertExpectations(t)
 	inspector.AssertExpectations(t)
@@ -1325,16 +1326,18 @@ func TestService_Rollback_ColdStartRerun(t *testing.T) {
 			registry.On("New", matchSpec(deps.Store, vol.ObjectID)).Return(&mockBackend{volume: vol}, nil).Once()
 			deps.Inflight, deps.ImageBackend, deps.ComposeRunner, deps.BackendRegistry = inflight, images, runner, registry
 			svc := New(deps)
-			ctx := zerolog.Nop().WithContext(context.Background())
+			warned := &warnedRecorder{}
+			ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(warned, fixedNow))
 
 			// Act
 			_, err := svc.Rollback(ctx, model.RollbackRequest{
 				ID: ptrID(record.ID), WaitTimeout: 60 * time.Second, LeftoverVolumes: model.LeftoverVolumesRefuse,
 			})
 
-			// Assert
+			// Assert: the interrupted rollback's partial writes are neither refused nor warned of.
 			require.Error(t, err)
 			assert.NotErrorIs(t, err, model.ErrLeftoverVolumes)
+			assert.Empty(t, warned.msgs)
 			assert.Contains(t, err.Error(), "create boom")
 			marker, marked, getErr := inflight.Get(ctx)
 			require.NoError(t, getErr)
@@ -1865,16 +1868,21 @@ func TestService_Rollback_NoSafetySnapshotFailureRecoversAsAColdStart(t *testing
 		ID: ptrID(record.ID), WaitTimeout: 60 * time.Second, SkipSafetySnapshot: true, LeftoverVolumes: model.LeftoverVolumesRefuse,
 	}
 
+	warned := &warnedRecorder{}
+	recoveryCtx := progress.WithTracker(ctx, progress.New(warned, fixedNow))
+
 	// Act
 	_, failed := svc.Rollback(ctx, req)
 	interrupted, markedAfterFailure, _ := inflight.Get(ctx)
-	_, err := svc.Rollback(ctx, req)
+	res, err := svc.Rollback(recoveryCtx, req)
 
-	// Assert
+	// Assert: the recovery overwrites the first run's partial writes, and names none as a leftover.
 	require.ErrorContains(t, failed, "create boom")
 	require.True(t, markedAfterFailure)
 	assert.Equal(t, model.InflightRecreating, interrupted.Phase)
 	require.NoError(t, err)
+	assert.Nil(t, res.LeftoverVolumes)
+	assert.Empty(t, warned.msgs)
 	_, marked, getErr := inflight.Get(ctx)
 	require.NoError(t, getErr)
 	assert.False(t, marked)

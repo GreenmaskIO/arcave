@@ -171,7 +171,9 @@ const (
 		"savepoint does NOT hold — skipped mounts with a reason code, services with no volume, " +
 		"containers killed at the stop deadline (their data may be crash-consistent only), replica " +
 		"gaps and containers whose image is unknown — so tell the user before relying on " +
-		"it. If the call fails with a message of the " +
+		"it. Its capture_drift, when present, lists the units captured otherwise than in the " +
+		"savepoint before it (since): a unit left out, taken again, or moved to another backend. " +
+		"If the call fails with a message of the " +
 		"form 'savepoint <id> committed; services failed to start', the savepoint EXISTS and is " +
 		"safe to roll back to — only the restart failed, so report that id to the user and " +
 		"investigate the compose project (the services are stopped or unhealthy), rather than taking " +
@@ -195,8 +197,10 @@ const (
 		"environment as it was. The result's safety_snapshot names it: rolling back to that id " +
 		"undoes the rollback, until the gc tool retires it. With safety_snapshot false, or a " +
 		"project configured so, none is taken: it is faster, but nothing can undo the rollback, and " +
-		"after a failure the same rollback must be run again. " +
-		"Services are stopped and started again."
+		"after a failure the same rollback must be run again. A compose project taken down " +
+		"(no containers) is rebuilt from the savepoint and takes no safety snapshot: the result's " +
+		"leftover_volumes names every volume that outlived the down and was overwritten with nothing " +
+		"to undo it — tell the user. Services are stopped and started again."
 	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — newest " +
 		"first unless sort is asc, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current_source " +
 		"marks the session the other tools work in when they are given no session — the one session_current " +

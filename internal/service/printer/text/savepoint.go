@@ -38,7 +38,7 @@ func (s *Printer) formatSavepoint(savepoint model.Savepoint) string {
 	title := noun + s.formatSavepointTitle(savepoint, "15:04:05") + " · stored " + formatSize(newStoredBytes(savepoint))
 	b.WriteString(styleTitle.Render(title) + "\n")
 	b.WriteString(formatCaptureRows([]string{"count", "size", "stored"}, newCaptureRows(savepoint)))
-	b.WriteString(formatNotices(savepoint.Notices()))
+	b.WriteString(formatNotices(model.SortSevereFirst(append(savepoint.Notices(), savepoint.CaptureDrift.Notices()...))))
 	b.WriteString("\n  roll back:  " + s.newCommand(true, "rollback", newSavepointRef(savepoint)) + "\n")
 	return b.String()
 }
@@ -92,14 +92,7 @@ func (s *Printer) formatRollback(response model.RollbackResult) string {
 	// Below the counts, not aligned with them: a word is no number.
 	b.WriteString(formatCaptureLine("safety", []string{safety}, []int{0}) + "\n")
 
-	var notices []model.Notice
-	if len(response.WritableLayers) > 0 {
-		notices = append(notices, model.Notice{
-			Message: "the containers run on the savepoint's writable layers",
-			Hint:    "`docker compose up` of your compose file recreates them on its images and drops those layers",
-		})
-	}
-	b.WriteString(formatNotices(notices))
+	b.WriteString(formatNotices(response.Notices()))
 	if response.SafetySnapshot != "" {
 		b.WriteString("\n  undo it:  " + s.newCommand(true, "rollback", response.SafetySnapshot.String()) + "\n")
 	}

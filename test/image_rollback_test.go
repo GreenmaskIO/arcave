@@ -200,6 +200,8 @@ type imageRollbackEnv struct {
 	daemon    *client.Client
 	store     storages.Storager
 	project   string
+	// deps built svc: a test that needs another capture policy over the same store builds from them.
+	deps core.Deps
 }
 
 func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
@@ -234,7 +236,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
 	require.NoError(t, err)
 
-	svc := core.New(core.Deps{
+	deps := core.Deps{
 		ArcaveProject:      "arcave-image-rollback-tenant",
 		SessionLocker:      newStoreLocker(store, model.DefaultSession),
 		WriteAdmission:     newPlainAdmission(store),
@@ -252,7 +254,8 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		Inflight:           inflightrepo.New(projectRoot),
 		Store:              store,
 		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
-	})
+	}
+	svc := core.New(deps)
 
 	env := &imageRollbackEnv{
 		ctx:       zerolog.New(io.Discard).WithContext(context.Background()),
@@ -262,6 +265,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		daemon:    daemonAPI,
 		store:     store,
 		project:   project,
+		deps:      deps,
 	}
 	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env

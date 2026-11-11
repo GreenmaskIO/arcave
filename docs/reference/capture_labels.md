@@ -112,6 +112,6 @@ A rollback puts back what the savepoint holds, whatever the labels say now:
 - **A container whose layer was not captured** is rebuilt from its service's image, without the changes it made to its own filesystem.
 - **A service whose image was not captured** needs the image in the daemon or a registry that serves it. An image no registry holds — one built locally — and the daemon no longer has is refused before anything is stopped.
 
-`savepoint create` warns, per unit, when something is captured otherwise than in the latest savepoint — the sign that a label or the config changed in between.
+`savepoint create` warns, once per service, when something is captured otherwise than in the latest savepoint — the sign that a label or the config changed in between — and records each such unit, with the savepoint it compared with, in the record's [`capture_drift`](output.md#capture_drift).
 
 Each savepoint's recorded spec carries `io.arcave.capture.*` labels stating what arcave decided for every unit and why; they are arcave's own and are never read as policy.

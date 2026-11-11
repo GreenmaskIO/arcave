@@ -353,7 +353,7 @@ func expectSpecCommit(repo *mockSavepointRepo) *mock.Call {
 func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.SavepointID) *mock.Call {
 	return repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
 		return r.ID.Validate() == nil && r.Name == "safety-snapshot-"+restoring.String() &&
-			r.IsSafetySnapshot() && r.Spec != nil
+			r.IsSafetySnapshot() && r.Spec != nil && r.CaptureDrift == nil
 	})).Return(nil).Once()
 }
 

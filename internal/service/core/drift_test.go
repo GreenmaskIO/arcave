@@ -35,6 +35,11 @@ const (
 	excludedStamp = "false; origin=label; source=arcave.mounts.exclude=/cache on service app"
 )
 
+var (
+	fullcopyDecision = model.CaptureStampDecision{Capture: true, Backend: "fullcopy"}
+	leftOutDecision  = model.CaptureStampDecision{}
+)
+
 // stampedProject is one service, app, carrying the stamps given.
 func stampedProject(labels types.Labels) *types.Project {
 	return &types.Project{Services: types.Services{"app": {Name: "app", Labels: labels}}}
@@ -45,16 +50,17 @@ func TestFindCapturePolicyDrift(t *testing.T) {
 	tests := []struct {
 		name          string
 		previous, now types.Labels
-		want          []capturePolicyChange
+		want          []model.CaptureChange
 	}{
 		{name: "the same decision is no drift",
 			previous: types.Labels{string(cache): keptStamp}, now: types.Labels{string(cache): keptStamp}},
 		{name: "a unit left out since",
 			previous: types.Labels{string(cache): keptStamp}, now: types.Labels{string(cache): excludedStamp},
-			want: []capturePolicyChange{{service: "app", stampKey: string(cache), previous: keptStamp, current: excludedStamp}}},
+			want: []model.CaptureChange{{Service: "app", Stamp: "mount./cache", Was: fullcopyDecision, Now: leftOutDecision}}},
 		{name: "a backend changed since",
 			previous: types.Labels{string(cache): keptStamp}, now: types.Labels{string(cache): "true; backend=cdc; origin=label"},
-			want: []capturePolicyChange{{service: "app", stampKey: string(cache), previous: keptStamp, current: "true; backend=cdc; origin=label"}}},
+			want: []model.CaptureChange{{Service: "app", Stamp: "mount./cache", Was: fullcopyDecision,
+				Now: model.CaptureStampDecision{Capture: true, Backend: "cdc"}}}},
 		{name: "only the reason changed is no drift",
 			previous: types.Labels{string(cache): "false; origin=config; source=capture.volumes.anonymous=false in the config"},
 			now:      types.Labels{string(cache): excludedStamp}},
@@ -98,11 +104,18 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 		parseErr error
 		want     string
 		warnings []string
+		drift    *model.CaptureDrift
 	}{
-		{name: "a drift is warned of once per service, naming the savepoint",
+		{name: "a drift is warned of once per service, naming the savepoint, and returned",
 			previous: stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): keptStamp}),
 			want:     `"message":"captured otherwise than in the latest savepoint"`,
-			warnings: []string{"app captured otherwise than in savepoint sp: mount /cache fullcopy → left out"}},
+			warnings: []string{"app captured otherwise than in savepoint sp: mount /cache fullcopy → left out"},
+			drift: &model.CaptureDrift{
+				Since:   model.SavepointRef{ID: demoRecord().ID, Name: "sp"},
+				Changes: []model.CaptureChange{{Service: "app", Stamp: "mount./cache", Was: fullcopyDecision, Now: leftOutDecision}},
+			}},
+		{name: "no drift returns none",
+			previous: stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): excludedStamp})},
 		{name: "a spec that cannot be read is only logged",
 			parseErr: errors.New("broken"),
 			want:     `"message":"cannot compare the capture policy with the latest savepoint"`},
@@ -122,13 +135,20 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 			ctx, _ = progress.New(recorder, fixedNow).Begin(ctx, progress.Step{Kind: kindSavepointCreate})
 
 			// Act
-			svc.warnCapturePolicyDrift(ctx, []model.Savepoint{record},
+			drift := svc.warnCapturePolicyDrift(ctx, []model.Savepoint{record},
 				stampedProject(types.Labels{string(model.NewMountStampLabel("/cache")): excludedStamp}))
 
 			// Assert
-			assert.Contains(t, logs.String(), tt.want)
-			assert.Contains(t, logs.String(), `"savepoint":"sp"`)
+			assert.Equal(t, tt.drift, drift)
+			if tt.want != "" {
+				assert.Contains(t, logs.String(), tt.want)
+				assert.Contains(t, logs.String(), `"savepoint":"sp"`)
+			}
 			assert.Equal(t, tt.warnings, recorder.msgs)
+			require.Len(t, recorder.inResult, len(tt.warnings))
+			for _, inResult := range recorder.inResult {
+				assert.True(t, inResult, "the record carries it: the result repeats it")
+			}
 			repo.AssertExpectations(t)
 			codec.AssertExpectations(t)
 		})
@@ -137,23 +157,4 @@ func TestService_warnCapturePolicyDrift(t *testing.T) {
 
 func fixedNow() time.Time {
 	return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
-}
-
-// One line per service, each unit of it spelled was → now.
-func TestNewDriftWarning(t *testing.T) {
-	changes := []capturePolicyChange{
-		{service: "app", stampKey: string(model.NewMountStampLabel("/cache")), previous: keptStamp, current: excludedStamp},
-		{service: "app", stampKey: string(model.SystemLabelImageStamp), previous: excludedStamp, current: "true; origin=config"},
-		{service: "db", stampKey: string(model.SystemLabelWritableLayerStamp), previous: keptStamp, current: "unreadable"},
-	}
-
-	var got []string
-	for _, serviceChanges := range newServiceChanges(changes) {
-		got = append(got, newDriftWarning(serviceChanges, "sp"))
-	}
-
-	assert.Equal(t, []string{
-		"app captured otherwise than in savepoint sp: mount /cache fullcopy → left out, image left out → kept",
-		"db captured otherwise than in savepoint sp: writable-layer fullcopy → unreadable",
-	}, got)
 }

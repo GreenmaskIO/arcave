@@ -15,9 +15,7 @@
 package core
 
 import (
-	"cmp"
 	"context"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -29,78 +27,40 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// capturePolicyChange is one resource a capture takes otherwise than the latest savepoint
-// did, as the two specs' stamps say.
-type capturePolicyChange struct {
-	service  string
-	stampKey string
-	previous string
-	current  string
-}
-
 // warnCapturePolicyDrift warns, once per service, of every unit the latest savepoint captured
-// otherwise than this capture will; a spec it cannot read is only logged.
-func (s *Service) warnCapturePolicyDrift(ctx context.Context, savepoints []model.Savepoint, current *types.Project) {
+// otherwise than this capture will, and returns that drift for the record; nil when nothing changed
+// or the latest savepoint's spec cannot be read, which is only logged.
+func (s *Service) warnCapturePolicyDrift(
+	ctx context.Context, savepoints []model.Savepoint, current *types.Project,
+) *model.CaptureDrift {
 	latest, ok := findLatestSavepoint(savepoints)
 	if !ok {
-		return
+		return nil
 	}
 	log := zerolog.Ctx(ctx).With().Str("savepoint_id", latest.ID.String()).Str("savepoint", latest.Name).Logger()
 	previous, err := s.loadSavepointSpec(ctx, latest)
 	if err != nil {
 		log.Warn().Err(err).Msg("cannot compare the capture policy with the latest savepoint")
-		return
+		return nil
 	}
-	var (
-		changes = findCapturePolicyDrift(previous, current)
-		step    = progress.Current(ctx)
-		ref     = cmp.Or(latest.Name, latest.ID.String())
-	)
+	changes := findCapturePolicyDrift(previous, current)
+	if len(changes) == 0 {
+		return nil
+	}
 	for _, change := range changes {
-		log.Info().Str("service", change.service).Str("stamp", change.stampKey).
-			Str("was", change.previous).Str("now", change.current).
+		log.Info().Str("service", change.Service).Str("stamp", change.Stamp).
+			Str("was", change.Was.String()).Str("now", change.Now.String()).
 			Msg("captured otherwise than in the latest savepoint")
 	}
-	for _, serviceChanges := range newServiceChanges(changes) {
-		step.Warn(newDriftWarning(serviceChanges, ref))
+	drift := &model.CaptureDrift{
+		Since:   model.SavepointRef{ID: latest.ID, Name: latest.Name},
+		Changes: changes,
 	}
-}
-
-// newServiceChanges groups changes, sorted by service, one group per service.
-func newServiceChanges(changes []capturePolicyChange) [][]capturePolicyChange {
-	var groups [][]capturePolicyChange
-	for i, change := range changes {
-		if i == 0 || change.service != changes[i-1].service {
-			groups = append(groups, nil)
-		}
-		groups[len(groups)-1] = append(groups[len(groups)-1], change)
+	step := progress.Current(ctx)
+	for _, notice := range drift.Notices() {
+		step.WarnInResult(notice.Message)
 	}
-	return groups
-}
-
-// newDriftWarning renders one service's changes as one line, each unit's stamp before and now.
-func newDriftWarning(changes []capturePolicyChange, ref string) string {
-	units := make([]string, 0, len(changes))
-	for _, change := range changes {
-		unit := strings.Replace(strings.TrimPrefix(change.stampKey, model.CaptureStampLabelPrefix), ".", " ", 1)
-		units = append(units, fmt.Sprintf("%s %s → %s",
-			unit, formatCaptureStamp(change.previous), formatCaptureStamp(change.current)))
-	}
-	return fmt.Sprintf("%s captured otherwise than in savepoint %s: %s",
-		changes[0].service, ref, strings.Join(units, ", "))
-}
-
-// formatCaptureStamp renders a stamp as "left out", else its backend.
-func formatCaptureStamp(stamp string) string {
-	parsed, err := model.ParseCaptureStamp(stamp)
-	switch {
-	case err != nil:
-		return stamp
-	case !parsed.Capture:
-		return "left out"
-	default:
-		return cmp.Or(parsed.Backend, "kept")
-	}
+	return drift
 }
 
 // findLatestSavepoint is the newest of savepoints: a SavepointID is a UUIDv7, so the greatest.
@@ -114,10 +74,10 @@ func findLatestSavepoint(savepoints []model.Savepoint) (model.Savepoint, bool) {
 }
 
 // findCapturePolicyDrift lists the stamps both specs carry whose capture or backend
-// differ. A resource only one of them has is a change of topology, not of policy, and
-// is left out.
-func findCapturePolicyDrift(previousProject, currentProject *types.Project) []capturePolicyChange {
-	var changes []capturePolicyChange
+// differ, sorted by service and stamp. A resource only one of them has is a change of
+// topology, not of policy, and is left out; so is a stamp either spec cannot read.
+func findCapturePolicyDrift(previousProject, currentProject *types.Project) []model.CaptureChange {
+	var changes []model.CaptureChange
 	for _, serviceName := range slices.Sorted(maps.Keys(currentProject.Services)) {
 		previousService, ok := previousProject.Services[serviceName]
 		if !ok {
@@ -129,27 +89,35 @@ func findCapturePolicyDrift(previousProject, currentProject *types.Project) []ca
 				continue
 			}
 			previousStamp, ok := previousService.Labels[key]
-			if !ok || !isCaptureChanged(previousStamp, currentLabels[key]) {
+			if !ok {
 				continue
 			}
-			changes = append(changes, capturePolicyChange{
-				service: serviceName, stampKey: key, previous: previousStamp, current: currentLabels[key],
+			was, now, ok := parseCaptureChange(previousStamp, currentLabels[key])
+			if !ok {
+				continue
+			}
+			changes = append(changes, model.CaptureChange{
+				Service: serviceName,
+				Stamp:   strings.TrimPrefix(key, model.CaptureStampLabelPrefix),
+				Was:     was,
+				Now:     now,
 			})
 		}
 	}
 	return changes
 }
 
-// isCaptureChanged reports whether two stamps capture differently; a stamp it cannot read
-// claims nothing.
-func isCaptureChanged(previous, current string) bool {
+// parseCaptureChange reads two stamps' decisions, ok when they capture differently; a stamp
+// it cannot read claims nothing.
+func parseCaptureChange(previous, current string) (was, now model.CaptureStampDecision, ok bool) {
 	previousStamp, err := model.ParseCaptureStamp(previous)
 	if err != nil {
-		return false
+		return was, now, false
 	}
 	currentStamp, err := model.ParseCaptureStamp(current)
 	if err != nil {
-		return false
+		return was, now, false
 	}
-	return previousStamp.Capture != currentStamp.Capture || previousStamp.Backend != currentStamp.Backend
+	was, now = model.NewCaptureStampDecision(previousStamp), model.NewCaptureStampDecision(currentStamp)
+	return was, now, was != now
 }
