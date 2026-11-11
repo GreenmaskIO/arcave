@@ -31,7 +31,7 @@ projects/<project>/
   sessions/…                                   every object below is an age file
 ```
 
-The marker is what refuses a plain host over an encrypted arcave project, and a host with another key; no marker is no encryption, and the first encrypted command writes it. Object names, directories and sizes are the same as in an unencrypted store, give or take 200 bytes per object and 16 per 64 KiB.
+The marker is what refuses a plain host over an encrypted arcave project, and a host with another key; no marker is no encryption, and the first encrypted command that writes to the store writes it; a command that only reads never does. Object names, directories and sizes are the same as in an unencrypted store, give or take 200 bytes per object and 16 per 64 KiB.
 
 `compose/` has a reserved sibling for a second timeline that is not built yet, which is why the compose project sits one level down rather than at the root.
 
