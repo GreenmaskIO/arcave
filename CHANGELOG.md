@@ -19,7 +19,6 @@
 - The savepoint create and rollback titles print the full savepoint id. The first eight characters were the same for savepoints taken within about a minute and no selector accepted them.
 - A failure to open a command's dependencies is no longer wrapped in `init dependencies:`; the failed step names itself.
 - gc's `FREED` total prints the known part with a `+` when some deletion freed an unknown amount, as `SIZE` does, instead of `?`.
-- `--help` lists bool flags bare again, without `[=true|false]`.
 
 ## v0.1.0-alpha.4 — 2026-11-08
 

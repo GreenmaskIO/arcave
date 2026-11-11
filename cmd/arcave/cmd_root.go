@@ -24,7 +24,6 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
@@ -236,62 +235,7 @@ func resolveSession(ctx context.Context, ref string) (model.SessionID, error) {
 	return record.ID, nil
 }
 
-// usageTemplate is cobra's own usage template (v1.10.2, defaultUsageTemplate), the flag listings
-// rendered through flagUsages.
-const usageTemplate = `Usage:{{if .Runnable}}
-  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
-  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
-
-Aliases:
-  {{.NameAndAliases}}{{end}}{{if .HasExample}}
-
-Examples:
-{{.Example}}{{end}}{{if .HasAvailableSubCommands}}{{$cmds := .Commands}}{{if eq (len .Groups) 0}}
-
-Available Commands:{{range $cmds}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{else}}{{range $group := .Groups}}
-
-{{.Title}}{{range $cmds}}{{if (and (eq .GroupID $group.ID) (or .IsAvailableCommand (eq .Name "help")))}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if not .AllChildCommandsHaveGroup}}
-
-Additional Commands:{{range $cmds}}{{if (and (eq .GroupID "") (or .IsAvailableCommand (eq .Name "help")))}}
-  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
-
-Flags:
-{{flagUsages .LocalFlags | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
-
-Global Flags:
-{{flagUsages .InheritedFlags | trimTrailingWhitespaces}}{{end}}{{if .HasHelpSubCommands}}
-
-Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
-  {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
-
-Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
-`
-
-// usageValue is a flag's value with IsBoolFlag hidden: pflag 1.1.0 appends "[=true|false]" to
-// every bool flag that reports itself one, and a listing of usageValues names each flag alone.
-type usageValue struct{ pflag.Value }
-
-// flagUsages lists flags as pflag does, each bool flag by its name alone: one takes no value on the
-// command line as arcave documents it. pflag aligns the copy itself, defaults included.
-func flagUsages(flags *pflag.FlagSet) string {
-	listed := pflag.NewFlagSet("", pflag.ContinueOnError)
-	listed.SortFlags = flags.SortFlags
-	flags.VisitAll(func(flag *pflag.Flag) {
-		shown := *flag
-		if flag.Value.Type() == "bool" {
-			shown.Value = usageValue{flag.Value}
-		}
-		listed.AddFlag(&shown)
-	})
-	return listed.FlagUsages()
-}
-
 func init() {
-	cobra.AddTemplateFunc("flagUsages", flagUsages)
-	rootCmd.SetUsageTemplate(usageTemplate)
-
 	persistentFlags := rootCmd.PersistentFlags()
 	persistentFlags.StringVar(&rootConfigFile, "config", "", "config file path")
 	// Unbound, like --config: it steers one run rather than describing the project.
