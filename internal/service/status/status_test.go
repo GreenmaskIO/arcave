@@ -398,7 +398,7 @@ func TestService_Status(t *testing.T) {
 		WritableLayers: []model.SkippedWritableLayer{{Service: demoService, Replica: 1, Reason: model.SkipReasonExcluded}},
 	}
 	safety := model.Savepoint{
-		ID: "019e8500-0000-7000-8000-000000000000", Name: "safety-snapshot-x",
+		ID:     "019e8500-0000-7000-8000-000000000000",
 		Labels: map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}, CreatedAt: statusDeployed.CreatedAt.Add(time.Hour),
 	}
 	tests := []struct {
@@ -664,7 +664,7 @@ func TestService_Status(t *testing.T) {
 				assert.True(t, status.Deployment.Savepoint.IsSafetySnapshot)
 				assert.Equal(t, []model.Notice{{
 					Code:    model.NoticeCodeSafetySnapshotDeployed,
-					Message: "running safety-snapshot-x (019e8500-0000-7000-8000-000000000000), the safety snapshot of a rollback",
+					Message: "running 019e8500-0000-7000-8000-000000000000, the safety snapshot of a rollback",
 				}}, status.Notices)
 			},
 		},

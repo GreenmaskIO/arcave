@@ -93,7 +93,7 @@ func (s *Service) createSavepoint(
 
 	// Capture while the services are stopped. The capture error is what the caller
 	// gets; the restart on top of it is best-effort and only logged.
-	savepoint, err := s.performSavepoint(ctx, grantedLock, working, killed, req.Name, req.Description, req.Labels)
+	savepoint, err := s.performSavepoint(ctx, grantedLock, working, killed, req.Name, req.Description, req.Labels, nil)
 	if err != nil {
 		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
 		err = preferInterrupt(ctx, err)

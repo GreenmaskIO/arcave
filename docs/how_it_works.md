@@ -194,7 +194,7 @@ If this rollback fails, arcave removes what it created, including the volumes th
 
 ## The safety snapshot
 
-Before a rollback overwrites anything, it takes an ordinary savepoint of the live state. It is not a separate tier or a separate store — it is a normal savepoint carrying the label `arcave-safety-snapshot`, named `safety-snapshot-<id of the savepoint being restored>`, hidden from `arcave savepoint list` unless you pass [`--include-safety-snapshots`](reference/cli/savepoint_list.md), and rollback-able by id like any other.
+Before a rollback overwrites anything, it takes an ordinary savepoint of the live state. It is not a separate tier or a separate store — it is a normal savepoint carrying the label `arcave-safety-snapshot`, with no name and a `taken_before_rollback_to` naming the savepoint being restored, by id and by the name it had then, hidden from `arcave savepoint list` unless you pass [`--include-safety-snapshots`](reference/cli/savepoint_list.md), and rollback-able by id like any other.
 
 If any step past that point fails — a restore error, or services that never become healthy — arcave replays the safety snapshot through the very same backend instances that took it: it loads its layers back, creates the project again as it was, restores its volumes, starts the services, and reports the original error.
 

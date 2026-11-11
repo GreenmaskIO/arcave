@@ -126,7 +126,7 @@ Current session overridden by ARCAVE_SESSION; without it: feat/add-new-table.
 
 One session and its committed savepoints, grouped by compose project — every compose project of the session at once, so it takes no `-p`. The session is the one the argument names — by id or name, `latest` for the newest; without one, or with `current`, the session a command works in ([above](#naming-the-session-a-command-works-in)), its title naming the flag or the variable when one of them overrides the current session, and a line naming the session it hides. The argument outranks `--session`, which still marks the current session; one naming no session marks none, with a warning on stderr, as in `session list`.
 
-Compose projects come by name, and each one's savepoints newest first, in the columns of [`savepoint list`](savepoint_list.md), safety snapshots among them, marked `(safety)`. It reads the store alone — no daemon, no lock — and writes nothing.
+Compose projects come by name, and each one's savepoints newest first, in the columns of [`savepoint list`](savepoint_list.md), safety snapshots among them, each named by the rollback it was taken before and marked `(safety)`. It reads the store alone — no daemon, no lock — and writes nothing.
 
 <Tabs groupId="output">
 <TabItem value="terminal" label="Terminal" default>
@@ -143,10 +143,10 @@ blog
   init  019a0c30-1b2c-7d3e-8f40-5a6b7c8d9e01  2026-10-10 12:10  1        0       48.0 MB  -
 
 shop
-  NAME              ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
-  - (safety)        019a0c4b-4e5f-7061-b273-8d9e0f1a2b34  2026-10-10 13:20  2        1       1.25 GB  -
-  before-migration  019a0c3a-2c3d-7e4f-9051-6b7c8d9e0f12  2026-10-10 12:55  2        1       1.20 GB  -
-  seed              019a0c31-3d4e-7f50-a162-7c8d9e0f1a23  2026-10-10 12:15  2        1       1.10 GB  -
+  NAME                              ID                                    CREATED           VOLUMES  LAYERS  STORED   NOT COVERED
+  before rollback to seed (safety)  019a0c4b-4e5f-7061-b273-8d9e0f1a2b34  2026-10-10 13:20  2        1       1.25 GB  -
+  before-migration                  019a0c3a-2c3d-7e4f-9051-6b7c8d9e0f12  2026-10-10 12:55  2        1       1.20 GB  -
+  seed                              019a0c31-3d4e-7f50-a162-7c8d9e0f1a23  2026-10-10 12:15  2        1       1.10 GB  -
 ```
 
 `Savepoints` counts the session's savepoints, its safety snapshots apart. An empty session prints `No savepoints in this session yet.` below its header.

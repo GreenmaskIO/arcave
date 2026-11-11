@@ -67,7 +67,7 @@ Returns an object, because MCP structured output must be one — the array the C
 }
 ```
 
-An empty store answers `{"savepoints": []}`, never `null`.
+A safety snapshot has an empty `name`; its `taken_before_rollback_to` (`{id, name}`) names the savepoint the rollback it was taken before went to — roll back to the snapshot by its `id` to undo that rollback. An empty store answers `{"savepoints": []}`, never `null`.
 
 ## `savepoint_remove`
 

@@ -15,9 +15,11 @@
 package model
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // A safety snapshot is told from a savepoint by one label and nothing else, so the
@@ -48,6 +50,65 @@ func TestSavepoint_IsSafetySnapshot(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// A savepoint ref reads as its name, as its id when it had none.
+func TestSavepointRef_String(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  SavepointRef
+		want string
+	}{
+		{name: "a named savepoint", ref: SavepointRef{ID: "019e843e-1650-7000-8000-000000000000", Name: "seed"}, want: "seed"},
+		{name: "an unnamed one, by its full id", ref: SavepointRef{ID: "019e843e-1650-7000-8000-000000000000"}, want: "019e843e-1650-7000-8000-000000000000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			got := tt.ref.String()
+
+			// Assert
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// taken_before_rollback_to is a safety snapshot's alone: absent from any other record, and its name
+// key present even when the target had none.
+func TestSavepoint_JSON_TakenBeforeRollbackTo(t *testing.T) {
+	tests := []struct {
+		name      string
+		savepoint Savepoint
+		want      map[string]any
+	}{
+		{name: "an ordinary savepoint", savepoint: Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "seed"}},
+		{
+			name: "a safety snapshot of an unnamed target",
+			savepoint: Savepoint{
+				ID:                    "019e844b-7818-7000-8000-000000000000",
+				Labels:                map[string]string{SavepointLabelSafetySnapshot: SavepointLabelSafetySnapshotValue},
+				TakenBeforeRollbackTo: &SavepointRef{ID: "019e843e-1650-7000-8000-000000000000"},
+			},
+			want: map[string]any{"id": "019e843e-1650-7000-8000-000000000000", "name": ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			data, err := json.Marshal(tt.savepoint)
+
+			// Assert
+			require.NoError(t, err)
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(data, &got))
+			field, present := got["taken_before_rollback_to"]
+			if tt.want == nil {
+				assert.False(t, present)
+				return
+			}
+			assert.Equal(t, tt.want, field)
 		})
 	}
 }

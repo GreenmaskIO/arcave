@@ -219,11 +219,11 @@ With `fullcopy`, each safety snapshot is a full copy of the volumes until then. 
 
 ```shell
 arcave savepoint list --include-safety-snapshots \
-  | jq -r '.[] | select(.labels."arcave-safety-snapshot" == "true") | "\(.id)  \(.name)"'
+  | jq -r '.[] | select(.labels."arcave-safety-snapshot" == "true") | "\(.id)  before rollback to \(.taken_before_rollback_to | if .name != "" then .name else .id end)"'
 ```
 
 ```text
-019e8491-04c8-7000-8000-000000000000  safety-snapshot-019e843e-1650-7000-8000-000000000000
+019e8491-04c8-7000-8000-000000000000  before rollback to before-migration
 ```
 
 ```shell

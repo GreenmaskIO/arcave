@@ -83,14 +83,14 @@ On a terminal, the final tree of the steps on stderr and a summary on stdout; in
 <TabItem value="terminal" label="Terminal" default>
 
 ```text title="stderr + stdout"
-✔ rollback before-migration                                                       8.6s
-├── ✔ project.introspect                                                          0.0s
-├── ✔ rollback.prepare                                                            1.3s
-├── ✔ rollback.safety-snapshot                                                    2.7s
-│   └── ✔ savepoint.capture safety-snapshot-019e843e-1650-7000-8000-000000000000  2.4s
+✔ rollback before-migration                                       8.6s
+├── ✔ project.introspect                                          0.0s
+├── ✔ rollback.prepare                                            1.3s
+├── ✔ rollback.safety-snapshot                                    2.7s
+│   └── ✔ savepoint.capture 019e8491-04c8-7000-8000-000000000000  2.4s
 │         ! not covered: 1 service(s) without volumes
-├── ✔ rollback.apply                                                              3.5s
-└── ✔ rollback.cleanup                                                            0.0s
+├── ✔ rollback.apply                                              3.5s
+└── ✔ rollback.cleanup                                            0.0s
 
 Rolled back to before-migration · 019e843e-1650-7000-8000-000000000000 · 2026-06-01 19:41:12
   volumes   1
@@ -157,9 +157,15 @@ Warnings (1)
 </TabItem>
 </Tabs>
 
+Rolling back to a safety snapshot — undoing a rollback — titles the summary by the state it holds, the one before the rollback it was taken before, at that rollback's time; the savepoint named is that rollback's target, not what was restored:
+
+```text title="stdout"
+Rolled back to the state before rollback to before-migration · 019e8491-04c8-7000-8000-000000000000 · 2026-06-01 21:22:37
+```
+
 | Field | Meaning |
 |---|---|
-| `rolled_back_to` | The savepoint record that was applied, whole. |
+| `rolled_back_to` | The savepoint record that was applied, whole. A safety snapshot's has an empty `name` and carries `taken_before_rollback_to`. |
 | `restored` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
 | `writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
 | `safety_snapshot` | The id of the safety snapshot the rollback took: rolling back to it undoes the rollback. Omitted when none was taken. |

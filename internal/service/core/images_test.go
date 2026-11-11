@@ -419,7 +419,7 @@ func TestService_Rollback_RestoresTheWritableLayers(t *testing.T) {
 	snapshotSafety := safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	specSafety := expectSpecCommit(repo)
-	commitSafety := expectSafetySnapshotCommit(repo, record.ID)
+	commitSafety := expectSafetySnapshotCommit(repo, record)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	// The compose project is rebuilt on the restored layer, and never off a registry.
 	target := matchRetargetedImage(demoService, demoRestoredTag(1))
@@ -502,7 +502,7 @@ func TestService_Rollback_ScaledServiceRebuildsDivergentReplicas(t *testing.T) {
 	safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	expectSpecCommit(repo)
-	expectSafetySnapshotCommit(repo, record.ID)
+	expectSafetySnapshotCommit(repo, record)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	// The spec carries the first replica's image; only the second is rebuilt.
 	target := matchRetargetedImage(demoService, demoRestoredTag(1))
@@ -575,7 +575,7 @@ func TestService_Rollback_SavepointWithoutImagesRestoresNothing(t *testing.T) {
 	safetyBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
 		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
 	expectSpecCommit(repo)
-	expectSafetySnapshotCommit(repo, record.ID)
+	expectSafetySnapshotCommit(repo, record)
 	runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	// The spec goes to the rebuild untouched: nothing was retargeted.
 	runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()

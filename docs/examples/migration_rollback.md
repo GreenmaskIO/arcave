@@ -208,7 +208,7 @@ INF mount restored from the savepoint backend=fullcopy origin=config service=pos
 INF rollback[pre-migration]/rollback.prepare/layer.restore elapsed=1.754s items=3/3 status=succeeded
 INF rollback[pre-migration]/rollback.prepare elapsed=1.771s status=succeeded
 INF rollback[pre-migration]/rollback.safety-snapshot/compose.stop elapsed=177ms status=succeeded
-INF rollback[pre-migration]/rollback.safety-snapshot/savepoint.capture[safety-snapshot-019e843e-1650-7000-8000-000000000000] elapsed=3.769s status=succeeded
+INF rollback[pre-migration]/rollback.safety-snapshot/savepoint.capture[019e8491-04c8-7000-8000-000000000000] elapsed=3.769s status=succeeded
 INF rollback[pre-migration]/rollback.apply/compose.down elapsed=133ms status=succeeded
 INF rollback[pre-migration]/rollback.apply/compose.create elapsed=142ms status=succeeded
 INF rollback[pre-migration]/rollback.apply/volume.restore/volume[volume-named-arcave-demo_pgdata] bytes=49MB/49MB elapsed=1.396s status=succeeded

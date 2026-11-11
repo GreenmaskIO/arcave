@@ -98,16 +98,16 @@ func demoSpecRef() *model.SpecRef {
 }
 
 // demoSafetySnapshot is a committed safety snapshot of demoVolume: an ordinary
-// record, newer than demoRecord, told apart by its label alone. Its name carries
-// the ref the rollback that took it was aiming at.
+// record, newer than demoRecord, told apart by its label alone. It has no name: its field names
+// the savepoint the rollback that took it was aiming at.
 func demoSafetySnapshot() model.Savepoint {
 	return model.Savepoint{
-		ID:        "019e844b-7818-7000-8000-000000000000",
-		Name:      safetySnapshotName(demoRecord().ID),
-		Labels:    newSafetySnapshotLabels(),
-		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
-		Spec:      demoSpecRef(),
+		ID:                    "019e844b-7818-7000-8000-000000000000",
+		Labels:                newSafetySnapshotLabels(),
+		TakenBeforeRollbackTo: &model.SavepointRef{ID: demoRecord().ID, Name: demoRecord().Name},
+		CreatedAt:             time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
+		Stats:                 []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
+		Spec:                  demoSpecRef(),
 	}
 }
 
@@ -348,11 +348,13 @@ func expectSpecCommit(repo *mockSavepointRepo) *mock.Call {
 }
 
 // expectSafetySnapshotCommit declares the record a rollback commits for its undo:
-// an id off the clock, the name carrying the id of the savepoint being restored,
-// and the label that hides it from every scanning selector.
-func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.SavepointID) *mock.Call {
+// an id off the clock, no name, the savepoint being restored by id and name, and
+// the label that hides it from every scanning selector.
+func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.Savepoint) *mock.Call {
+	want := model.SavepointRef{ID: restoring.ID, Name: restoring.Name}
 	return repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.ID.Validate() == nil && r.Name == "safety-snapshot-"+restoring.String() &&
+		return r.ID.Validate() == nil && r.Name == "" &&
+			r.TakenBeforeRollbackTo != nil && *r.TakenBeforeRollbackTo == want &&
 			r.IsSafetySnapshot() && r.Spec != nil
 	})).Return(nil).Once()
 }

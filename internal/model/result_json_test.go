@@ -48,6 +48,11 @@ func TestResults_JSONKeys(t *testing.T) {
 			want:   []string{"rolled_back_to", "restored", "leftover_volumes"},
 		},
 		{
+			name:   "a savepoint ref names an unnamed savepoint all the same",
+			result: SavepointRef{ID: "019e843e-1650-7000-8000-000000000000"},
+			want:   []string{"id", "name"},
+		},
+		{
 			name:   "a remove",
 			result: RemoveResult{},
 			want:   []string{"dry_run", "removed"},
