@@ -169,10 +169,11 @@ Rolled back to the state before rollback to before-migration · 019e8491-04c8-70
 | `restored` | One entry per volume written back, as the savepoint recorded it. `type` is `named`, `bind` or `anon`, with the matching block. |
 | `writable_layers` | One entry per container layer put back: the container it was rebuilt as, the image id, and the `tag` it now answers to in your local daemon. Omitted when the savepoint held no layer. |
 | `safety_snapshot` | The id of the safety snapshot the rollback took: rolling back to it undoes the rollback. Omitted when none was taken. |
+| `leftover_volumes` | The Docker names of the named volumes a rollback of a compose project with no containers overwrote: `compose down` kept them, and no safety snapshot holds what they held. Omitted when there are none. |
 
 Each restored layer is tagged `arcave/<compose-project>-<service>-<replica>-<base image>:sp-<savepoint id>`, so `docker images` reads as one row per savepoint under a row per replica. A rollback to the same savepoint again puts the same tag back. The containers run on those tags: a `docker compose up` of your compose file recreates them on its own images and drops the restored layers — roll back again to get them back. [`arcave gc`](gc.md) removes a tag once no container uses it.
 
-Every container the rollback builds carries `io.arcave.deployment.*` labels: when it was built, the session and the savepoint by id and name, when the savepoint was taken and whether it is a safety snapshot, and the replicas it recorded. [`arcave status`](status.md) reads them to tell what is deployed and what was rebuilt outside arcave since; no network or volume gets them, since compose would take a label it did not write for a change and recreate them.
+Every container the rollback builds carries `io.arcave.deployment.*` labels: when it was built (`deployed-at`), the arcave project (`arcave-project`), the session by id and name (`session-id`, `session-name`), the savepoint by id and name (`savepoint-id`, `savepoint-name`), when the savepoint was taken (`savepoint-created-at`) and whether it is a safety snapshot (`savepoint-is-safety-snapshot`), and the replicas it recorded (`service-replicas`, such as `db=1;web=1,3`). [`arcave status`](status.md) reads them to tell what is deployed and what was rebuilt outside arcave since; no network or volume gets them, since compose would take a label it did not write for a change and recreate them.
 
 ## Errors
 

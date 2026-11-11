@@ -20,7 +20,7 @@ None of the `session` commands touches the Docker daemon, and none of them takes
 ```text title="Synopsis"
 arcave session create [--name <name>] [--from <session>]
 arcave session list [--all] [--sort desc|asc]
-arcave session show [<id|name>]
+arcave session show [<id|name>|current|latest]
 arcave session remove [--force] <id|name>
 arcave session set <id|name>
 arcave session unset
@@ -71,7 +71,7 @@ Four things to know before you run it.
 
 ## `session list`
 
-The project's sessions, newest first — `baseline`, created by no one, comes last — or oldest first with `--sort asc`: each one's id, name, `status`, `current_source` on the current one — the session a command naming none works in, or the one `--session` names —, when it was created, the session it was forked from, how many savepoints it holds (safety snapshots not counted), the compose projects they belong to, and `size_bytes` — what the session occupies in the store. On a terminal they are a table, the current session marked `*`; in a script, a JSON array.
+The project's sessions, newest first — `baseline`, created by no one, comes last — or oldest first with `--sort asc`: each one's id, name, `status`, `current_source` on the current one — the session a command naming none works in, or the one `--session` names —, when it was created, the session it was forked from, how many savepoints it holds — `savepoint_count`, safety snapshots counted apart in `safety_snapshot_count` and, on a terminal, as `(+1 safety)` —, the compose projects they belong to, and `size_bytes` — what the session occupies in the store. On a terminal they are a table, the current session marked `*`; in a script, a JSON array.
 
 Without `--all` every session listed is `ready`. `--all` adds the session directories that never got their record — what a fork leaves while it copies, or after it failed. They have no name; address them by id.
 

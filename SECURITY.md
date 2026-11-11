@@ -49,8 +49,10 @@ can read that path can read the project's data and any secrets it holds.
 With [`encryption`](https://www.greenmask.io/docs/arcave/reference/configuration/#encryption)
 switched on, arcave encrypts every object, apart from one marker holding the public key, to
 your [age](https://age-encryption.org) key before it leaves the host. That protects the contents from whoever reads the store. Names and sizes
-stay visible, and the data stays unencrypted in Docker on the host; see
-[Limitations](https://www.greenmask.io/docs/arcave/reference/limitations/#encryption-hides-contents-not-shape).
+stay visible, and the data stays unencrypted in Docker on the host, as do the labels a
+rollback puts on its containers, which carry the session's and the savepoint's names; see
+[Limitations](https://www.greenmask.io/docs/arcave/reference/limitations/#encryption-hides-contents-not-shape)
+and [A deployment lives in the daemon](https://www.greenmask.io/docs/arcave/reference/limitations/#a-deployment-lives-in-the-daemon).
 
 ## Security Considerations
 

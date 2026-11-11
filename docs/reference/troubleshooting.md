@@ -243,7 +243,7 @@ compose:
 arcave --log-level debug rollback latest
 ```
 
-In-flight steps — `Waiting`, `Starting`, `Creating`, image-pull progress — are logged at debug level. A service that declares no health check is considered up the moment its container starts, which is faster and worse.
+In-flight steps — `Waiting`, `Starting`, `Creating`, image-pull progress — are logged at debug level. A service that declares no health check is considered up the moment its container starts, which is faster and worse. A one-shot service — a migration, a seed — that exits `0` counts as started, whether or not another service waits on it; one that exits otherwise fails the start at once, without waiting for the bound.
 
 ## A database needs recovery after a rollback
 
