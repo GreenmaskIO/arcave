@@ -40,6 +40,7 @@ const (
 	SessionLockOperationSavepointCreate SessionLockOperation = "savepoint-create"
 	SessionLockOperationSavepointRemove SessionLockOperation = "savepoint-remove"
 	SessionLockOperationRollback        SessionLockOperation = "rollback"
+	SessionLockOperationUp              SessionLockOperation = "up"
 	SessionLockOperationSessionFork     SessionLockOperation = "session-fork"
 	SessionLockOperationSessionRemove   SessionLockOperation = "session-remove"
 	SessionLockOperationGarbageCollect  SessionLockOperation = "gc"

@@ -119,3 +119,21 @@ func TestNamedVolume_StorageID(t *testing.T) {
 	assert.Equal(t, "volume-named-demo_pgdata", got)
 	assert.Equal(t, got, reference.ObjectID("db"))
 }
+
+// The containers that are no replica are what a drop removes ahead of compose's down.
+func TestComposeProjectResources_NonReplicas(t *testing.T) {
+	// Arrange
+	resources := ComposeProjectResources{
+		Containers: []string{"demo-db-1", "demo-db-run-1", "demo-web-hook"},
+		Replicas: ComposeProjectContainers{Services: []ServiceContainers{{
+			Name: "db", Containers: []Container{{Name: "demo-db-1", Number: 1}},
+		}}},
+	}
+
+	// Act
+	got := resources.NonReplicas()
+
+	// Assert
+	assert.Equal(t, []string{"demo-db-run-1", "demo-web-hook"}, got)
+	assert.Nil(t, ComposeProjectResources{}.NonReplicas())
+}

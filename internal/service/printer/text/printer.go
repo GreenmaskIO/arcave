@@ -81,6 +81,10 @@ func (s *Printer) Print(v any) error {
 		text = s.formatSavepoints(v)
 	case model.RollbackResult:
 		text = s.formatRollback(v)
+	case model.UpResult:
+		text = s.formatUp(v)
+	case model.DownResult:
+		text = s.formatDown(v)
 	case model.RemoveResult:
 		text = s.formatRemove(v)
 	case model.GarbageCollectResult:

@@ -126,6 +126,26 @@ var (
 	// ErrComposeProjectAbsent reports a compose project the daemon holds no container of.
 	ErrComposeProjectAbsent = errors.New("no containers found")
 
+	// ErrComposeProjectPresent refuses to bring up a compose project the daemon still holds
+	// containers or volumes of; ComposeProjectPresentError names them.
+	ErrComposeProjectPresent = errors.New("the daemon holds the compose project already")
+
+	// ErrDeployedElsewhere refuses to take down an environment another session or arcave project
+	// deployed; DeployedElsewhereError names the deployment.
+	ErrDeployedElsewhere = errors.New("the environment was deployed from elsewhere")
+
+	// ErrNotDeployedByArcave refuses to take down what no rollback built, or what is left of it no
+	// replica names; NotDeployedByArcaveError names it.
+	ErrNotDeployedByArcave = errors.New("the environment was not deployed by arcave")
+
+	// ErrComposeProjectLeft reports a drop of a compose project that left containers or volumes of it
+	// on the daemon; ComposeProjectLeftError names them.
+	ErrComposeProjectLeft = errors.New("the daemon still holds the compose project after its drop")
+
+	// ErrNoSavepoints reports a selector by name or latest in a session and compose project with no
+	// savepoint to see.
+	ErrNoSavepoints = errors.New("no savepoints exist")
+
 	// ErrInvalidStoreKey reports an encryption.key that is not an age X25519 identity.
 	ErrInvalidStoreKey = errors.New("invalid store key")
 	// ErrWrongStoreKey reports an encryption.key other than the one the arcave project is encrypted to.
@@ -201,4 +221,93 @@ func (m *AmbiguousSessionNameError) Error() string {
 	}
 	return fmt.Sprintf("%d sessions are named %q; name the session by id instead: %s",
 		len(m.IDs), m.Name, strings.Join(ids, ", "))
+}
+
+// ComposeProjectPresentError is what the daemon still holds of a compose project an up would build
+// over: its containers and the volumes it owns. It is ErrComposeProjectPresent.
+type ComposeProjectPresentError struct {
+	Containers []string
+	Volumes    []string
+}
+
+func (m *ComposeProjectPresentError) Error() string {
+	return fmt.Sprintf("%v: %s", ErrComposeProjectPresent, formatResources(m.Containers, m.Volumes, nil))
+}
+
+func (m *ComposeProjectPresentError) Unwrap() error { return ErrComposeProjectPresent }
+
+// DeployedElsewhereError is the deployment of the first replica a down found built by another
+// session or arcave project. It is ErrDeployedElsewhere.
+type DeployedElsewhereError struct {
+	// ArcaveProject is the arcave project the down runs in, which a foreign one is told apart from.
+	ArcaveProject ArcaveProjectName
+	Deployment    SavepointDeployment
+}
+
+func (m *DeployedElsewhereError) Error() string {
+	session := fmt.Sprintf("session %s", m.Deployment.Session.ID)
+	if m.Deployment.Session.Name != "" {
+		session = fmt.Sprintf("session %q (%s)", m.Deployment.Session.Name, m.Deployment.Session.ID)
+	}
+	if m.Deployment.ArcaveProject != m.ArcaveProject {
+		return fmt.Sprintf("%v: %s of arcave project %q", ErrDeployedElsewhere, session, m.Deployment.ArcaveProject)
+	}
+	return fmt.Sprintf("%v: %s", ErrDeployedElsewhere, session)
+}
+
+func (m *DeployedElsewhereError) Unwrap() error { return ErrDeployedElsewhere }
+
+// NotDeployedByArcaveError is what a down cannot put down to a rollback: the replicas with no or
+// unreadable deployment labels, as <service>-<number>, or, with no replica left, the containers,
+// volumes and networks of the compose project. It is ErrNotDeployedByArcave.
+type NotDeployedByArcaveError struct {
+	Replicas   []string
+	Containers []string
+	Volumes    []string
+	Networks   []string
+}
+
+func (m *NotDeployedByArcaveError) Error() string {
+	if len(m.Replicas) > 0 {
+		return fmt.Sprintf("%v: no deployment labels on %s", ErrNotDeployedByArcave, strings.Join(m.Replicas, ", "))
+	}
+	return fmt.Sprintf("%v: no replica is left to name the owner of %s", ErrNotDeployedByArcave,
+		formatResources(m.Containers, m.Volumes, m.Networks))
+}
+
+// ComposeProjectLeftError is what a drop of a compose project could not remove: containers, and
+// volumes something outside the compose project still holds. Cause is the daemon's refusals of
+// those volumes, nil when nothing said why. It is ErrComposeProjectLeft.
+type ComposeProjectLeftError struct {
+	Containers []string
+	Volumes    []string
+	Cause      error
+}
+
+func (m *ComposeProjectLeftError) Error() string {
+	msg := fmt.Sprintf("%v: %s", ErrComposeProjectLeft, formatResources(m.Containers, m.Volumes, nil))
+	if m.Cause != nil {
+		msg += ": " + m.Cause.Error()
+	}
+	return msg
+}
+
+func (m *ComposeProjectLeftError) Unwrap() []error {
+	return []error{ErrComposeProjectLeft, m.Cause}
+}
+
+func (m *NotDeployedByArcaveError) Unwrap() error { return ErrNotDeployedByArcave }
+
+// formatResources lists the containers, volumes and networks of a compose project, each kind named.
+func formatResources(containers, volumes, networks []string) string {
+	var parts []string
+	for _, kind := range []struct {
+		noun  string
+		names []string
+	}{{"containers", containers}, {"volumes", volumes}, {"networks", networks}} {
+		if len(kind.names) > 0 {
+			parts = append(parts, kind.noun+" "+strings.Join(kind.names, ", "))
+		}
+	}
+	return strings.Join(parts, "; ")
 }

@@ -57,6 +57,13 @@ type writeAdmission interface {
 // composeIntrospector reports the live compose project it was bound to at construction.
 type composeIntrospector interface {
 	Introspect(ctx context.Context) (model.IntrospectionResult, error)
+	composeResourcesReader
+}
+
+// composeResourcesReader reports what the daemon holds of the compose project by its label, with
+// none of what a full introspection reads.
+type composeResourcesReader interface {
+	ReadResources(ctx context.Context) (model.ComposeProjectResources, error)
 }
 
 // projectAssembler builds the spec of a live compose project out of its introspection.
@@ -81,6 +88,13 @@ type composeRunner interface {
 	// docker names of the volumes the rollback restores, holds it.
 	Create(ctx context.Context, project *types.Project, restoredVolumes []string) error
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
+	composeVolumesDowner
+}
+
+// composeVolumesDowner removes everything the daemon holds of a compose project, its volumes too,
+// by the project's name alone.
+type composeVolumesDowner interface {
+	DownWithVolumes(ctx context.Context, composeProject string) error
 }
 
 // volumeRemover reaps the anonymous volumes a teardown orphans.
@@ -128,12 +142,14 @@ type Deps struct {
 	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
 	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
-	SessionLocker      model.SessionLocker
-	ComposeInspector   composeIntrospector
-	ProjectAssembler   projectAssembler
-	SpecCodec          specCodec
-	ComposeRunner      composeRunner
-	VolumeRemover      volumeRemover
+	SessionLocker    model.SessionLocker
+	ComposeInspector composeIntrospector
+	ProjectAssembler projectAssembler
+	SpecCodec        specCodec
+	ComposeRunner    composeRunner
+	VolumeRemover    volumeRemover
+	// ProjectRemover removes by docker name what compose's down leaves of the compose project.
+	ProjectRemover     projectRemover
 	ImageBackend       imageBackend
 	ContainerRebuilder containerRebuilder
 	ImageLookup        imageLookup
@@ -177,6 +193,7 @@ type Service struct {
 	specCodec               specCodec
 	composeRunner           composeRunner
 	volumeRemover           volumeRemover
+	projectRemover          projectRemover
 	imageBackend            imageBackend
 	containerRebuilder      containerRebuilder
 	imageLookup             imageLookup
@@ -209,6 +226,7 @@ func New(deps Deps) *Service {
 		specCodec:               deps.SpecCodec,
 		composeRunner:           deps.ComposeRunner,
 		volumeRemover:           deps.VolumeRemover,
+		projectRemover:          deps.ProjectRemover,
 		imageBackend:            deps.ImageBackend,
 		containerRebuilder:      deps.ContainerRebuilder,
 		imageLookup:             deps.ImageLookup,

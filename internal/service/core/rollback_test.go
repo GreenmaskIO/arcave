@@ -1235,8 +1235,10 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 			create := runner.On("Create", mock.Anything, target, demoRestoredVolumes).Return(tt.createErr).Once()
 			backend := &mockBackend{volume: vol}
 			down := runner.On("Down", mock.Anything, target).Return(nil).Once()
-			// demo_db outlived `compose down` and stays; demo_cache is the failed run's own.
-			inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospectionWith("demo_cache"), nil).Once()
+			// demo_db outlived `compose down` and stays; demo_cache is the failed run's own. The
+			// cleanup reads them narrowly: a half-built container must not hide them.
+			inspector.On("ReadResources", mock.Anything).
+				Return(model.ComposeProjectResources{Volumes: []string{"demo_cache", demoVolumeName}}, nil).Once()
 			volumeRemover := &mockVolumeRemover{}
 			removeCreated := volumeRemover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once()
 			if tt.createErr == nil {
@@ -1283,15 +1285,6 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 	}
 }
 
-// demoAbsentIntrospectionWith is demoAbsentIntrospection owning the extra volumes too.
-func demoAbsentIntrospectionWith(names ...string) model.IntrospectionResult {
-	introspection := demoAbsentIntrospection()
-	for _, name := range names {
-		introspection.Project.Volumes = append(introspection.Project.Volumes, model.NamedVolume{Key: name, Name: name})
-	}
-	return introspection
-}
-
 // Recovering from an interrupted rollback with no containers left is not refused over the volumes
 // it wrote, and its marker never goes back to "nothing written": a failure keeps it.
 func TestService_Rollback_ColdStartRerun(t *testing.T) {
@@ -1312,7 +1305,8 @@ func TestService_Rollback_ColdStartRerun(t *testing.T) {
 			vol := record.Stats[0].Volume
 			deps, repo, inspector := coldStartDeps(t, record)
 			repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
-			inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once()
+			inspector.On("ReadResources", mock.Anything).
+				Return(model.ComposeProjectResources{Volumes: []string{demoVolumeName}}, nil).Once()
 			inflight := &fakeInflight{}
 			require.NoError(t, inflight.Put(context.Background(), newRecoveredMarker(record.ID, tt.phase, tt.toSafety)))
 			images := &mockImageBackend{}
@@ -2090,7 +2084,8 @@ func TestInterruptedState_NoSafetySnapshot(t *testing.T) {
 		phase model.InflightPhase
 		want  string
 	}{
-		{phase: model.InflightRecreating, want: "before it wrote any volume"},
+		// Not that nothing changed: a forced up drops the compose project in this phase.
+		{phase: model.InflightRecreating, want: "before it restored any volume; the containers may be gone"},
 		{phase: model.InflightRestoring, want: "volumes may be half-restored"},
 		// A failed cold start stands here too, what it restored into removed.
 		{phase: model.InflightRestoreDone, want: "volumes may be half-restored"},

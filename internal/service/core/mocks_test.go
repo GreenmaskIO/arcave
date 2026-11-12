@@ -274,6 +274,11 @@ func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResu
 	return args.Get(0).(model.IntrospectionResult), args.Error(1)
 }
 
+func (m *mockInspector) ReadResources(ctx context.Context) (model.ComposeProjectResources, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(model.ComposeProjectResources), args.Error(1)
+}
+
 type mockAssembler struct{ mock.Mock }
 
 func (m *mockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
@@ -308,6 +313,10 @@ func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) er
 	return m.Called(ctx, project).Error(0)
 }
 
+func (m *mockComposeRunner) DownWithVolumes(ctx context.Context, composeProject string) error {
+	return m.Called(ctx, composeProject).Error(0)
+}
+
 func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project, restoredVolumes []string) error {
 	return m.Called(ctx, project, restoredVolumes).Error(0)
 }
@@ -319,6 +328,14 @@ func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, w
 type mockVolumeRemover struct{ mock.Mock }
 
 func (m *mockVolumeRemover) RemoveVolume(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
+}
+
+func (m *mockVolumeRemover) RemoveContainer(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
+}
+
+func (m *mockVolumeRemover) RemoveNetwork(ctx context.Context, name string) error {
 	return m.Called(ctx, name).Error(0)
 }
 
@@ -419,4 +436,16 @@ type mockSavepointReader struct{ mock.Mock }
 func (m *mockSavepointReader) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
 	args := m.Called(ctx)
 	return args.Get(0).([]model.Savepoint), args.Error(1)
+}
+
+type mockLayerTags struct{ mock.Mock }
+
+func (m *mockLayerTags) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
+	args := m.Called(ctx)
+	tagged, _ := args.Get(0).([]model.TaggedImage)
+	return tagged, args.Error(1)
+}
+
+func (m *mockLayerTags) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
+	return m.Called(ctx, ref).Error(0)
 }

@@ -1397,6 +1397,8 @@ func TestFindSavepoint(t *testing.T) {
 		req     model.RollbackRequest
 		wantID  model.SavepointID
 		wantErr bool
+		// wantErrIs, when set, is the sentinel the error must carry.
+		wantErrIs error
 	}{
 		{name: "latest picks newest by created_at", records: records, req: latest, wantID: "300"},
 		{name: "explicit id hit", records: records, req: model.RollbackRequest{ID: ptrID("200")}, wantID: "200"},
@@ -1429,12 +1431,13 @@ func TestFindSavepoint(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "a store holding only safety snapshots reads as empty",
-			records: []model.Savepoint{safetySnapshot},
-			req:     latest,
-			wantErr: true,
+			name:      "a store holding only safety snapshots reads as empty",
+			records:   []model.Savepoint{safetySnapshot},
+			req:       latest,
+			wantErr:   true,
+			wantErrIs: model.ErrNoSavepoints,
 		},
-		{name: "no savepoints at all errors", req: latest, wantErr: true},
+		{name: "no savepoints at all errors", req: latest, wantErr: true, wantErrIs: model.ErrNoSavepoints},
 		// The backstop for a request that skipped Validate: no selector resolves to
 		// no savepoint, not to an arbitrary one.
 		{name: "no selector errors", records: records, req: model.RollbackRequest{}, wantErr: true},
@@ -1448,6 +1451,9 @@ func TestFindSavepoint(t *testing.T) {
 			// Assert
 			if tt.wantErr {
 				require.Error(t, err)
+				if tt.wantErrIs != nil {
+					assert.ErrorIs(t, err, tt.wantErrIs)
+				}
 				return
 			}
 			require.NoError(t, err)

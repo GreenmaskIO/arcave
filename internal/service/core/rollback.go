@@ -133,7 +133,7 @@ func (s *Service) rollback(
 	}
 	switch {
 	case composeProjectAbsent(introspection):
-		return s.rollbackColdStart(ctx, req, session, savepoint, introspection, recovery)
+		return s.rollbackColdStart(ctx, req, session, savepoint, ownedVolumes(introspection), recovery, nil)
 	case recovery.recovering || req.SkipSafetySnapshot:
 		return s.rollbackWithoutSnapshot(ctx, req, session, savepoint, introspection, recovery)
 	default:
@@ -559,28 +559,46 @@ func newFirstMarkerPhase(recovering bool) model.InflightPhase {
 }
 
 // rollbackColdStart rolls back a compose project with no containers (never started, or taken
-// down): nothing is stopped or snapshotted, so a failure only removes what it created.
+// down): nothing is stopped or snapshotted, so a failure only removes what it created. owned are
+// the docker names of the volumes the compose project owns. With discard, what the daemon holds of
+// it — discard, as read before — goes first, volumes included and with no backup, and a failure
+// removes every volume left.
 func (s *Service) rollbackColdStart(
 	ctx context.Context,
 	req model.RollbackRequest,
 	session model.SessionRef,
 	savepoint model.Savepoint,
-	introspection model.IntrospectionResult,
+	owned map[string]bool,
 	recovery rollbackRecovery,
+	discard *model.ComposeProjectResources,
 ) (model.RollbackResult, error) {
 	log := zerolog.Ctx(ctx)
-	log.Info().Msg("the compose project is not running: building it from the savepoint")
-
-	// A recovery's volumes are the interrupted rollback's partial writes: they are not refused.
-	owned := ownedVolumes(introspection)
-	leftover := leftoverVolumes(owned, savepoint)
-	if len(leftover) > 0 && req.LeftoverVolumes == model.LeftoverVolumesRefuse && !recovery.recovering {
-		return model.RollbackResult{}, fmt.Errorf("%w: %s", model.ErrLeftoverVolumes, strings.Join(leftover, ", "))
+	var (
+		leftover    []string
+		ownedBefore = owned
+	)
+	if discard != nil {
+		log.Info().Msg("dropping what the daemon holds of the compose project: building it from the savepoint")
+		// Nothing of it survives the drop, so a failure owes it no volume.
+		ownedBefore = map[string]bool{}
+	} else {
+		log.Info().Msg("the compose project is not running: building it from the savepoint")
+		// A recovery's volumes are the interrupted rollback's partial writes: they are not refused.
+		leftover = leftoverVolumes(owned, savepoint)
+		if len(leftover) > 0 && req.LeftoverVolumes == model.LeftoverVolumesRefuse && !recovery.recovering {
+			return model.RollbackResult{}, fmt.Errorf("%w: %s", model.ErrLeftoverVolumes, strings.Join(leftover, ", "))
+		}
 	}
 
 	target, err := s.runPrepareTarget(ctx, session, savepoint, "rollback interrupted before anything was created: nothing changed")
 	if err != nil {
 		return model.RollbackResult{}, err
+	}
+	// An interrupt that landed during the prepare stops here: a marker would refuse the next
+	// workflow over a compose project nothing touched.
+	if err := context.Cause(ctx); err != nil {
+		logInterrupt(ctx, "rollback interrupted before anything was created: nothing changed")
+		return model.RollbackResult{}, fmt.Errorf("rollback interrupted, nothing changed: %w", err)
 	}
 
 	for _, name := range leftover {
@@ -595,10 +613,17 @@ func (s *Service) rollbackColdStart(
 	}
 
 	if err := runStep(ctx, kindRollbackApply, func(ctx context.Context) error {
+		// Proved gone before the build: compose's down alone leaves a busy volume, which the build
+		// would reuse with its old data. A network left holds none, and the build reuses it.
+		if discard != nil {
+			if _, err := dropComposeProject(ctx, s.composeRunner, s.composeInspector, s.projectRemover, s.composeProject, *discard); err != nil {
+				return err
+			}
+		}
 		return s.buildFromSavepoint(ctx, savepoint, target, savepoint.ID, recovery.safety, req.WaitTimeout)
 	}); err != nil {
 		logInterrupt(ctx, "rollback interrupted: removing what it created")
-		s.abortColdStart(ctx, target.project, owned)
+		s.abortColdStart(ctx, target.project, ownedBefore)
 		return model.RollbackResult{}, fmt.Errorf("rollback failed: %w", preferInterrupt(ctx, err))
 	}
 
@@ -674,15 +699,16 @@ func (s *Service) abortColdStart(ctx context.Context, project *types.Project, ow
 }
 
 // removeCreatedVolumes drops the volumes the compose project owns now and did not own
-// before: what the failed rollback created, holding nothing the savepoint does not.
+// before: what the failed rollback created, holding nothing the savepoint does not. The narrow
+// read: a container left half-built must not keep the volumes from being found.
 func (s *Service) removeCreatedVolumes(ctx context.Context, ownedBefore map[string]bool) {
 	log := zerolog.Ctx(ctx)
-	introspection, err := s.introspect(ctx)
+	resources, err := readResources(ctx, s.composeInspector)
 	if err != nil {
 		log.Warn().Err(err).Msg("cannot tell which volumes the failed rollback created; they are left behind")
 		return
 	}
-	for name := range ownedVolumes(introspection) {
+	for _, name := range resources.Volumes {
 		if ownedBefore[name] {
 			continue
 		}

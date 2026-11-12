@@ -256,6 +256,23 @@ func TestClient_Down(t *testing.T) {
 	}
 }
 
+// DownWithVolumes goes by name and drops the volumes: no spec, so compose reads the project off
+// the daemon, and no timeout, so each container keeps its own grace period.
+func TestClient_DownWithVolumes(t *testing.T) {
+	// Arrange
+	composeAPI := &mockComposeAPI{}
+	composeAPI.On("Down", mock.Anything, "demo", mock.Anything).Return(nil).Once()
+	c := NewClient(composeAPI, testOptions)
+
+	// Act
+	err := c.DownWithVolumes(context.Background(), "demo")
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, api.DownOptions{RemoveOrphans: true, Volumes: true}, composeAPI.downCall(t))
+	composeAPI.AssertExpectations(t)
+}
+
 // Create must not inherit and must not recreate: reusing the anonymous volume
 // Down orphaned would restore into the volume the rollback is discarding.
 func TestClient_Create(t *testing.T) {

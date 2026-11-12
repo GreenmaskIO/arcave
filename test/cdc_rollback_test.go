@@ -529,6 +529,8 @@ func (s *stubComposeRunner) Stop(context.Context, *types.Project) ([]string, err
 
 func (s *stubComposeRunner) Down(context.Context, *types.Project) error { return nil }
 
+func (s *stubComposeRunner) DownWithVolumes(context.Context, string) error { return nil }
+
 func (s *stubComposeRunner) Create(context.Context, *types.Project, []string) error { return nil }
 
 func (s *stubComposeRunner) Start(context.Context, *types.Project, time.Duration) error {
@@ -566,6 +568,10 @@ type stubInspector struct{ result model.IntrospectionResult }
 
 func (s stubInspector) Introspect(context.Context) (model.IntrospectionResult, error) {
 	return s.result, nil
+}
+
+func (s stubInspector) ReadResources(context.Context) (model.ComposeProjectResources, error) {
+	return model.ComposeProjectResources{}, nil
 }
 
 // newDaemonClient skips the test unless a docker daemon answers.

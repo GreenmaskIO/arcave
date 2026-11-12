@@ -15,6 +15,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -305,6 +306,116 @@ func (s *Service) composeDown(ctx context.Context, project *types.Project) error
 		return fmt.Errorf("removing the compose project: %w", err)
 	}
 	return nil
+}
+
+// composeDownWithVolumes removes everything the daemon holds of the compose project, volumes
+// included, going by its name: what an up over a present compose project drops.
+func composeDownWithVolumes(ctx context.Context, runner composeVolumesDowner, composeProject model.DockerComposeProjectName) error {
+	if err := runComposeActivity(ctx, kindComposeDown, func(ctx context.Context) error {
+		return runner.DownWithVolumes(ctx, composeProject.String())
+	}); err != nil {
+		return fmt.Errorf("removing the compose project with its volumes: %w", err)
+	}
+	return nil
+}
+
+// errNetworkStayed is why a network is left that the daemon removed without a word.
+var errNetworkStayed = errors.New("still there after its removal")
+
+// projectRemover removes, by docker name, a container, volume or network of a compose project:
+// what compose's own down leaves.
+type projectRemover interface {
+	RemoveContainer(ctx context.Context, name string) error
+	RemoveVolume(ctx context.Context, name string) error
+	RemoveNetwork(ctx context.Context, name string) error
+}
+
+// leftNetwork is a network of the compose project its drop left, and why.
+type leftNetwork struct {
+	name  string
+	cause error
+}
+
+// dropComposeProject removes everything the daemon holds of the compose project and proves it
+// gone. Three passes: the containers other than replicas in before go first, by name with their
+// anonymous volumes — compose's down keeps a running one-off of a service with no replica and
+// removes a finished one without its volumes; then compose's down by name; then, by docker name,
+// what it still left — a container, a volume it passed over (it keys volumes by logical name and
+// warns past a busy one), a network one of those held — and a read back. A container or volume
+// still there is a ComposeProjectLeftError, whatever outside the compose project holds it left
+// alone; a network left holds no data and is returned with the daemon's reason.
+func dropComposeProject(
+	ctx context.Context,
+	runner composeVolumesDowner,
+	reader composeResourcesReader,
+	remover projectRemover,
+	composeProject model.DockerComposeProjectName,
+	before model.ComposeProjectResources,
+) ([]leftNetwork, error) {
+	log := zerolog.Ctx(ctx)
+	var refusals []error
+	removeContainers := func(names []string) {
+		for _, name := range names {
+			if err := remover.RemoveContainer(ctx, name); err != nil {
+				log.Warn().Err(err).Str("container", name).Msg("container of the compose project left")
+				refusals = append(refusals, err)
+			}
+		}
+	}
+
+	removeContainers(before.NonReplicas())
+	if err := composeDownWithVolumes(ctx, runner, composeProject); err != nil {
+		return nil, err
+	}
+	left, err := readResources(ctx, reader)
+	if err != nil {
+		return nil, err
+	}
+	if left.IsEmpty() {
+		return nil, nil
+	}
+
+	// The containers first: they hold the volumes and the networks.
+	removeContainers(left.Containers)
+	for _, name := range left.Volumes {
+		if err := remover.RemoveVolume(ctx, name); err != nil {
+			log.Warn().Err(err).Str("volume", name).Msg("volume of the compose project left")
+			refusals = append(refusals, err)
+		}
+	}
+	networkRefusals := map[string]error{}
+	for _, name := range left.Networks {
+		if err := remover.RemoveNetwork(ctx, name); err != nil {
+			log.Warn().Err(err).Str("network", name).Msg("network of the compose project left")
+			networkRefusals[name] = err
+		}
+	}
+	if left, err = readResources(ctx, reader); err != nil {
+		return nil, err
+	}
+	if len(left.Containers) > 0 || len(left.Volumes) > 0 {
+		return nil, &model.ComposeProjectLeftError{
+			Containers: left.Containers,
+			Volumes:    left.Volumes,
+			Cause:      errors.Join(refusals...),
+		}
+	}
+	networks := make([]leftNetwork, 0, len(left.Networks))
+	for _, name := range left.Networks {
+		networks = append(networks, leftNetwork{name: name, cause: cmp.Or(networkRefusals[name], errNetworkStayed)})
+	}
+	return networks, nil
+}
+
+// readResources reads what the daemon holds of the compose project by its label.
+func readResources(ctx context.Context, reader composeResourcesReader) (model.ComposeProjectResources, error) {
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
+	resources, err := reader.ReadResources(ctx)
+	step.End(err)
+	if err != nil {
+		return model.ComposeProjectResources{}, fmt.Errorf("read the compose project's resources: %w", err)
+	}
+	return resources, nil
 }
 
 // composeCreate creates the containers of project without starting them: the data is

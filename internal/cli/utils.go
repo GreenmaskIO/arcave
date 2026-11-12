@@ -93,3 +93,56 @@ func sessionFixError(err error, hints sessionFixHints) error {
 		return err
 	}
 }
+
+// deploymentFixHints is what an adapter tells a caller to do about an up or a down refused, each
+// in the spelling of its own surface.
+type deploymentFixHints struct {
+	// present is the way past an up over what the daemon still holds of the compose project.
+	present string
+	// elsewhere is the way past a down of another deployment's environment; %s is its session.
+	elsewhere string
+	// notByArcave is the way past a down of what no rollback built.
+	notByArcave string
+	// noSavepoints is how to get a first savepoint.
+	noSavepoints string
+	// left is the way past a drop something outside the compose project held back.
+	left string
+}
+
+var (
+	cliDeploymentFixHints = deploymentFixHints{
+		present: "pass --force to drop all of it first, with no backup; " +
+			"'arcave rollback' replaces a running environment and keeps a safety snapshot",
+		elsewhere:    "run it in that session with --session %s, or pass --force to take it down anyway",
+		notByArcave:  "pass --force to take it down anyway",
+		noSavepoints: "start the compose project with 'docker compose up -d', then take one with 'arcave savepoint create'",
+		left:         "stop or remove what holds them, then run it again",
+	}
+	mcpDeploymentFixHints = deploymentFixHints{
+		present: "pass force to drop all of it first, with no backup; " +
+			"the rollback tool replaces a running environment and keeps a safety snapshot",
+		elsewhere:    "call it with session %s, or pass force to take it down anyway",
+		notByArcave:  "pass force to take it down anyway",
+		noSavepoints: "start the compose project with 'docker compose up -d', then call savepoint_create",
+		left:         "stop or remove what holds them, then call it again",
+	}
+)
+
+// deploymentError adds the fix to what refuses an up or a down, as hints spell it.
+func deploymentError(err error, hints deploymentFixHints) error {
+	var elsewhere *model.DeployedElsewhereError
+	switch {
+	case errors.Is(err, model.ErrComposeProjectPresent):
+		return fmt.Errorf("%w; %s", err, hints.present)
+	case errors.As(err, &elsewhere):
+		return fmt.Errorf("%w; %s", err, fmt.Sprintf(hints.elsewhere, elsewhere.Deployment.Session))
+	case errors.Is(err, model.ErrNotDeployedByArcave):
+		return fmt.Errorf("%w; %s", err, hints.notByArcave)
+	case errors.Is(err, model.ErrNoSavepoints):
+		return fmt.Errorf("%w; %s", err, hints.noSavepoints)
+	case errors.Is(err, model.ErrComposeProjectLeft):
+		return fmt.Errorf("%w; %s", err, hints.left)
+	default:
+		return err
+	}
+}

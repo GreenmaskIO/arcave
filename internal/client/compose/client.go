@@ -117,6 +117,26 @@ func (c *Client) Down(ctx context.Context, project *types.Project) error {
 	})
 }
 
+// DownWithVolumes removes everything the daemon holds of the compose project by its label:
+// containers, networks, the volumes it owns and its containers' anonymous ones. It goes by name,
+// so it needs no spec. An external volume carries no label of the project and stays, as does a
+// bind, the host's. Each container is stopped with its own stop_grace_period: Options.StopTimeout
+// does not apply, the data being thrown away.
+func (c *Client) DownWithVolumes(ctx context.Context, composeProject string) error {
+	defer c.routeEvents(ctx)()
+	zerolog.Ctx(ctx).Debug().Msg("removing compose containers, networks and volumes")
+
+	if err := c.api.Down(ctx, composeProject, api.DownOptions{
+		Project:       nil,
+		Timeout:       nil,
+		RemoveOrphans: true,
+		Volumes:       true,
+	}); err != nil {
+		return fmt.Errorf("remove the compose project: %w", err)
+	}
+	return nil
+}
+
 // Create builds the project's containers, networks and volumes without starting them, anonymous
 // volumes fresh; a drifted volume is recreated only when restoredVolumes holds its docker name.
 func (c *Client) Create(ctx context.Context, project *types.Project, restoredVolumes []string) error {

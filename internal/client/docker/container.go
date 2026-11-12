@@ -147,3 +147,27 @@ func renamedAliases(aliases []string, oldName, newName string) []string {
 	}
 	return renamed
 }
+
+// RemoveContainer removes one container, running or not, with its anonymous volumes: what a
+// compose project's drop takes of a container compose's own down left.
+func (e *Engine) RemoveContainer(ctx context.Context, name string) error {
+	if name == "" {
+		return fmt.Errorf("cannot remove a container with no name")
+	}
+	if _, err := e.api.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+		return fmt.Errorf("remove container %s: %w", name, err)
+	}
+	return nil
+}
+
+// RemoveNetwork removes one network, never forced: the daemon refuses one a container still uses,
+// and that refusal is what says so.
+func (e *Engine) RemoveNetwork(ctx context.Context, name string) error {
+	if name == "" {
+		return fmt.Errorf("cannot remove a network with no name")
+	}
+	if _, err := e.api.NetworkRemove(ctx, name, client.NetworkRemoveOptions{}); err != nil {
+		return fmt.Errorf("remove network %s: %w", name, err)
+	}
+	return nil
+}

@@ -131,6 +131,11 @@ func (s *Inspector) ReadContainers(ctx context.Context) (model.ComposeProjectCon
 	if err != nil {
 		return model.ComposeProjectContainers{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
 	}
+	return s.readReplicas(ctx, listed)
+}
+
+// readReplicas reads the replicas among the listed containers, as ReadContainers reports them.
+func (s *Inspector) readReplicas(ctx context.Context, listed []container.Summary) (model.ComposeProjectContainers, error) {
 	byService := groupByService(keepProjectContainers(listed))
 	services := make([]model.ServiceContainers, 0, len(byService))
 	for _, name := range slices.Sorted(maps.Keys(byService)) {
@@ -149,6 +154,46 @@ func (s *Inspector) ReadContainers(ctx context.Context) (model.ComposeProjectCon
 		})
 	}
 	return model.ComposeProjectContainers{Services: services}, nil
+}
+
+// ReadResources reports what the daemon holds of the compose project by its label: the names of
+// all its containers, the replicas among them as ReadContainers reads them, and the names of the
+// volumes and networks it owns, sorted. Nothing they mount or run on is read, so nothing a full
+// introspection trips on can fail it.
+func (s *Inspector) ReadResources(ctx context.Context) (model.ComposeProjectResources, error) {
+	var (
+		listed   []container.Summary
+		replicas model.ComposeProjectContainers
+		volumes  map[string]volume.Volume
+		networks []model.Network
+		err      error
+	)
+	if listed, err = s.listContainers(ctx); err != nil {
+		return model.ComposeProjectResources{}, fmt.Errorf("read containers of compose project %q: %w", s.composeProject, err)
+	}
+	if replicas, err = s.readReplicas(ctx, listed); err != nil {
+		return model.ComposeProjectResources{}, err
+	}
+	if volumes, err = s.readOwnedVolumes(ctx); err != nil {
+		return model.ComposeProjectResources{}, fmt.Errorf("read volumes of compose project %q: %w", s.composeProject, err)
+	}
+	if networks, err = s.readNetworks(ctx); err != nil {
+		return model.ComposeProjectResources{}, fmt.Errorf("read networks of compose project %q: %w", s.composeProject, err)
+	}
+	containerNames := make([]string, 0, len(listed))
+	for _, summary := range listed {
+		containerNames = append(containerNames, containerName(summary.Names))
+	}
+	networkNames := make([]string, 0, len(networks))
+	for _, projectNetwork := range networks {
+		networkNames = append(networkNames, projectNetwork.Name)
+	}
+	return model.ComposeProjectResources{
+		Containers: slices.Sorted(slices.Values(containerNames)),
+		Replicas:   replicas,
+		Volumes:    slices.Sorted(maps.Keys(volumes)),
+		Networks:   slices.Sorted(slices.Values(networkNames)),
+	}, nil
 }
 
 // listContainers lists every container compose stamped with the compose project's name, stopped

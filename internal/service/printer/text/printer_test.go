@@ -108,6 +108,48 @@ func TestPrinter_Print(t *testing.T) {
 			},
 		},
 		{
+			name: "up_forced",
+			opts: Options{ComposeProject: "arcave-demo"},
+			result: model.UpResult{
+				RolledBackTo:   newSavepoint(),
+				Restored:       []model.Volume{namedVolume("demo_db")},
+				WritableLayers: []model.WritableLayerRestoreResult{{Service: "app", Replica: 1}},
+				Discarded: &model.DiscardedResources{
+					Containers: []string{"arcave-demo-app-1"}, Volumes: []string{"demo_db", "demo_extra"},
+					Networks: []string{"arcave-demo_default"},
+				},
+			},
+		},
+		{
+			name: "down",
+			opts: Options{ComposeProject: "arcave-demo"},
+			result: model.DownResult{
+				ComposeProject: "arcave-demo",
+				Session:        model.SessionRef{ID: sessionID, Name: "feature"},
+				Deployment: &model.SavepointDeployment{
+					ArcaveProject: "shop",
+					Session:       model.SessionRef{ID: sessionID, Name: "feature"},
+					Savepoint:     model.DeployedSavepoint{ID: savepointID, Name: "test3"},
+				},
+				Discarded: model.DiscardedResources{
+					Containers: []string{"arcave-demo-app-1"}, Volumes: []string{"demo_db"}, Networks: []string{"arcave-demo_default"},
+				},
+				RemovedTags: []model.ImageRef{"arcave/arcave-demo-app-1-node:sp-01a188c4"},
+			},
+		},
+		{
+			name: "down_forced_nothing",
+			opts: Options{ComposeProject: "arcave-demo"},
+			result: model.DownResult{
+				ComposeProject: "arcave-demo",
+				Session:        model.SessionRef{ID: sessionID, Name: "feature"},
+				Forced:         true,
+				Discarded:      model.DiscardedResources{Containers: []string{}, Volumes: []string{}, Networks: []string{}},
+				RemovedTags:    []model.ImageRef{},
+				Notices:        []model.Notice{{Message: "restored layer tag x left behind: in use"}},
+			},
+		},
+		{
 			name: "savepoint_remove_dry_run",
 			result: model.RemoveResult{
 				DryRun:  true,

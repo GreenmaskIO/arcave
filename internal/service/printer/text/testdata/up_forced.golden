@@ -1,0 +1,8 @@
+Up from test3 · 01a188c4 · 2026-10-29 19:45:35
+  volumes   1
+  layers    1
+  dropped   1 container, 2 volumes, 1 network
+
+Warnings (1)
+  ! the containers run on the savepoint's writable layers
+    → `docker compose up` of your compose file recreates them on its images and drops those layers

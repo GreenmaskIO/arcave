@@ -172,3 +172,8 @@ func (m *mockAPI) VolumeInspect(ctx context.Context, volumeID string, options cl
 func (m *mockAPI) VolumeRemove(ctx context.Context, volumeID string, options client.VolumeRemoveOptions) (client.VolumeRemoveResult, error) {
 	return client.VolumeRemoveResult{}, m.Called(ctx, volumeID, options).Error(0)
 }
+
+func (m *mockAPI) NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error) {
+	args := m.Called(ctx, networkID, options)
+	return client.NetworkRemoveResult{}, args.Error(0)
+}

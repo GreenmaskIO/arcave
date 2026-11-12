@@ -470,6 +470,69 @@ func TestInspector_ReadContainers(t *testing.T) {
 	daemon.AssertExpectations(t)
 }
 
+// The resources are every container of the compose project, the replicas among them, and what its
+// label names, with no container too; the volumes and networks are listed by that label exactly, so
+// an external volume, which carries none, is never among them.
+func TestInspector_ReadResources(t *testing.T) {
+	oneoff := summary("c-web-run", "web", "nginx:1", 1)
+	oneoff.Labels[api.OneoffLabel] = "True"
+	hook := summary("c-web-hook", "web", "nginx:1", 0)
+	maps.Copy(hook.Labels, map[string]string{api.HookLabel: "pre_start", api.HookIndexLabel: "0"})
+	tests := []struct {
+		name           string
+		containers     []container.Summary
+		replicas       []string
+		wantContainers []string
+		wantReplicas   []string
+	}{
+		{
+			name:           "a running compose project, a one-off and a hook's runner beside it",
+			containers:     []container.Summary{summary("c-web-1", "web", "nginx:1", 1), oneoff, hook},
+			replicas:       []string{"c-web-1"},
+			wantContainers: []string{"c-web-1", "c-web-hook", "c-web-run"},
+			wantReplicas:   []string{"c-web-1"},
+		},
+		{
+			name:           "a lone one-off",
+			containers:     []container.Summary{oneoff},
+			wantContainers: []string{"c-web-run"},
+		},
+		{name: "a compose project taken down without its volumes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			daemon := &mockDockerAPI{}
+			daemon.expectContainers(tt.containers...)
+			daemon.expectInspect(tt.replicas...)
+			byLabel := map[string]bool{api.ProjectLabel + "=" + composeProject.String(): true}
+			daemon.On("VolumeList", mock.Anything, mock.MatchedBy(func(opts client.VolumeListOptions) bool {
+				return assert.ObjectsAreEqual(byLabel, opts.Filters["label"])
+			})).Return([]volume.Volume{{Name: "demo_db"}, {Name: "demo_cache"}}, nil).Once()
+			daemon.On("NetworkList", mock.Anything, mock.MatchedBy(func(opts client.NetworkListOptions) bool {
+				return assert.ObjectsAreEqual(byLabel, opts.Filters["label"])
+			})).Return([]network.Summary{{Network: network.Network{Name: "demo_default"}}}, nil).Once()
+
+			// Act
+			got, err := NewInspector(daemon, composeProject).ReadResources(context.Background())
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantContainers, got.Containers)
+			var replicas []string
+			for _, service := range got.Replicas.Services {
+				for _, replica := range service.Containers {
+					replicas = append(replicas, replica.ID)
+				}
+			}
+			assert.Equal(t, tt.wantReplicas, replicas, "one-offs and hooks' runners are no replicas")
+			assert.Equal(t, []string{"demo_cache", "demo_db"}, got.Volumes, "sorted")
+			assert.Equal(t, []string{"demo_default"}, got.Networks)
+			daemon.AssertExpectations(t)
+		})
+	}
+}
+
 func TestInspector_ReadContainers_GoneUnderTheRead(t *testing.T) {
 	// Arrange: web-2 and the only migrate replica go between the listing and their inspect, as a
 	// rollback rebuilding them removes them.
