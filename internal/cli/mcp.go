@@ -37,6 +37,7 @@ const serverVersion = "0.1.0"
 type MCPSavepointService interface {
 	CreateSavepoint(ctx context.Context, req model.CreateSavepointRequest) (model.Savepoint, error)
 	Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error)
+	Up(ctx context.Context, req model.UpRequest) (model.UpResult, error)
 }
 
 // MCPSavepointServiceFactory builds the workflows for one compose project in the named session
@@ -44,6 +45,17 @@ type MCPSavepointService interface {
 type MCPSavepointServiceFactory func(
 	ctx context.Context, composeProject, session string,
 ) (svc MCPSavepointService, release func(), err error)
+
+// MCPDownService is the MCP adapter's view of down.
+type MCPDownService interface {
+	Down(ctx context.Context, req model.DownRequest) (model.DownResult, error)
+}
+
+// MCPDownServiceFactory builds down for one compose project in the named session ("" is the
+// current one) plus its release: the daemon and the marker, nothing a capture or restore needs.
+type MCPDownServiceFactory func(
+	ctx context.Context, composeProject, session string,
+) (svc MCPDownService, release func(), err error)
 
 // MCPSavepointStoreService is the MCP adapter's view of the savepoint workflows over the store alone.
 type MCPSavepointStoreService interface {
@@ -100,6 +112,7 @@ type MCPStatusServiceFactory func(ctx context.Context, composeProject string) (s
 // MCPFactories builds what each family of tools runs on, once per tool call.
 type MCPFactories struct {
 	Savepoint      MCPSavepointServiceFactory
+	Down           MCPDownServiceFactory
 	SavepointStore MCPSavepointStoreServiceFactory
 	Session        MCPSessionServiceFactory
 	Tools          MCPToolsServiceFactory
@@ -142,6 +155,17 @@ func (h *MCPHandler) openSavepointService(
 	ctx context.Context, composeProject, session string,
 ) (MCPSavepointService, func(), error) {
 	svc, release, err := h.factories.Savepoint(ctx, composeProject, cmp.Or(session, h.pinRef()))
+	if err != nil {
+		return nil, nil, h.mcpError(err)
+	}
+	return svc, release, nil
+}
+
+// openDownService is openSavepointService for down, which reaches the daemon and writes no store.
+func (h *MCPHandler) openDownService(
+	ctx context.Context, composeProject, session string,
+) (MCPDownService, func(), error) {
+	svc, release, err := h.factories.Down(ctx, composeProject, cmp.Or(session, h.pinRef()))
 	if err != nil {
 		return nil, nil, h.mcpError(err)
 	}
@@ -197,6 +221,23 @@ const (
 		"project configured so, none is taken: it is faster, but nothing can undo the rollback, and " +
 		"after a failure the same rollback must be run again. " +
 		"Services are stopped and started again."
+	descUp = "Bring the environment up from a savepoint, selected by id, by name, or by the literal " +
+		"'latest'; omit ref for the newest. It builds over nothing: while the Docker daemon holds any " +
+		"container or volume of the compose project the call is refused before anything is written. " +
+		"force is DESTRUCTIVE: every container, volume and network of the compose project is dropped " +
+		"first, with no backup, volumes no savepoint holds included. To replace a running environment, " +
+		"prefer the rollback tool: it keeps a safety snapshot that undoes it. Refused, forced or not, " +
+		"while an interrupted rollback's marker stands: recovering is the rollback tool's."
+	descDown = "End the environment on the Docker daemon: remove the compose project's containers, " +
+		"networks, the volumes it owns, its containers' anonymous volumes and its restored layer tags. " +
+		"DESTRUCTIVE: whatever changed since the last savepoint, and every volume a savepoint leaves " +
+		"out, is lost — call savepoint_create first to keep it. External volumes and bind mounts stay. " +
+		"Refused when a replica was deployed by another session (call it with that session) or by no " +
+		"rollback at all, and while an interrupted rollback's marker stands. force takes it down all " +
+		"the same and clears this compose project's marker; the result's cleared_inflight then names " +
+		"that rollback's safety snapshot, the last copy of the state before it. A volume something " +
+		"outside the compose project still holds refuses the call, naming the holder; a network one " +
+		"uses stays, with a notice."
 	descSessionList = "List the arcave project's sessions — independent timelines of savepoints — newest " +
 		"first unless sort is asc, with their id, name, savepoint count, compose projects and size_bytes. Read-only. current_source " +
 		"marks the session the other tools work in when they are given no session — the one session_current " +
@@ -401,6 +442,56 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.rollbackConfig.LeftoverVolumes, skipSafetySnapshot))
 	if err != nil {
 		return nil, model.RollbackResult{}, h.mcpError(err)
+	}
+	return nil, res, nil
+}
+
+// upInput is up's input schema.
+type upInput struct {
+	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to bring up, as docker compose ls names it"`
+	Session        string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
+	Ref            string `json:"ref,omitempty" jsonschema:"the savepoint to bring up: its id, its name, or the literal 'latest'; omit for the newest"`
+	WaitTimeout    string `json:"wait_timeout,omitempty" jsonschema:"how long to wait for services to become healthy, e.g. 2m or 90s; omit for the project's default"`
+	Force          bool   `json:"force,omitempty" jsonschema:"drop every container, volume and network of the compose project first, with no backup"`
+}
+
+// upMCP brings the environment up from the referenced savepoint.
+func (h *MCPHandler) upMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in upInput) (*mcpsdk.CallToolResult, model.UpResult, error) {
+	waitTimeout, err := parseToolDuration("wait_timeout", in.WaitTimeout)
+	if err != nil {
+		return nil, model.UpResult{}, err
+	}
+	svc, release, err := h.openSavepointService(ctx, in.ComposeProject, in.Session)
+	if err != nil {
+		return nil, model.UpResult{}, err
+	}
+	defer release()
+
+	res, err := svc.Up(ctx, newUpRequest(in.Ref, waitTimeout, in.Force))
+	if err != nil {
+		return nil, model.UpResult{}, h.mcpError(deploymentError(err, mcpDeploymentFixHints))
+	}
+	return nil, res, nil
+}
+
+// downInput is down's input schema.
+type downInput struct {
+	ComposeProject string `json:"compose_project" jsonschema:"the docker compose project to take down, as docker compose ls names it"`
+	Session        string `json:"session,omitempty" jsonschema:"the session to work in for this call only, by name or id; omit for the current session"`
+	Force          bool   `json:"force,omitempty" jsonschema:"take the environment down whoever deployed it, and clear this compose project's interrupted-rollback marker"`
+}
+
+// downMCP takes the environment off the daemon.
+func (h *MCPHandler) downMCP(ctx context.Context, _ *mcpsdk.CallToolRequest, in downInput) (*mcpsdk.CallToolResult, model.DownResult, error) {
+	svc, release, err := h.openDownService(ctx, in.ComposeProject, in.Session)
+	if err != nil {
+		return nil, model.DownResult{}, err
+	}
+	defer release()
+
+	res, err := svc.Down(ctx, model.DownRequest{Force: in.Force})
+	if err != nil {
+		return nil, model.DownResult{}, h.mcpError(deploymentError(err, mcpDeploymentFixHints))
 	}
 	return nil, res, nil
 }
@@ -742,6 +833,18 @@ func (h *MCPHandler) Server() *mcpsdk.Server {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_list", Description: descList}, h.listSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "savepoint_remove", Description: descRemove}, h.removeSavepointsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "rollback", Description: descRollback}, h.rollbackMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:        "up",
+		Description: descUp,
+		// Forced, it drops the compose project.
+		Annotations: &mcpsdk.ToolAnnotations{DestructiveHint: utils.New(true)},
+	}, h.upMCP)
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name:         "down",
+		Description:  descDown,
+		Annotations:  &mcpsdk.ToolAnnotations{DestructiveHint: utils.New(true)},
+		OutputSchema: newOutputSchema[model.DownResult](),
+	}, h.downMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{Name: "session_list", Description: descSessionList,
 		OutputSchema: newOutputSchema[sessionListOutput]()}, h.listSessionsMCP)
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{

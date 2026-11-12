@@ -233,6 +233,134 @@ func TestMCPHandler_rollbackMCP_SafetySnapshot(t *testing.T) {
 	}
 }
 
+// up reads its ref as rollback does, none being the newest, and refuses a bad wait_timeout before
+// it opens anything.
+func TestMCPHandler_upMCP(t *testing.T) {
+	id := model.SavepointID("019e843e-1650-7000-8000-000000000000")
+	tests := []struct {
+		name    string
+		in      upInput
+		wantReq model.UpRequest
+	}{
+		{name: "no ref is the newest", in: upInput{ComposeProject: "demo"}, wantReq: model.UpRequest{Latest: ptr(true)}},
+		{name: "a name", in: upInput{ComposeProject: "demo", Ref: "base"}, wantReq: model.UpRequest{Name: ptr("base")}},
+		{
+			name:    "an id, forced, with a bound",
+			in:      upInput{ComposeProject: "demo", Ref: id.String(), Force: true, WaitTimeout: "90s"},
+			wantReq: model.UpRequest{ID: ptr(id), Force: true, WaitTimeout: 90 * time.Second},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("Up", mock.Anything, tt.wantReq).Return(model.UpResult{RolledBackTo: model.Savepoint{ID: id}}, nil).Once()
+			h := NewMCPHandler(MCPFactories{Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
+				return svc, func() {}, nil
+			}}, model.SessionID{}, "", RollbackConfig{})
+
+			// Act
+			_, out, err := h.upMCP(context.Background(), nil, tt.in)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, id, out.RolledBackTo.ID)
+			svc.AssertExpectations(t)
+		})
+	}
+
+	t.Run("a bad wait_timeout opens nothing", func(t *testing.T) {
+		// Arrange: no factory, so opening one would panic.
+		h := NewMCPHandler(MCPFactories{}, model.SessionID{}, "", RollbackConfig{})
+
+		// Act
+		_, _, err := h.upMCP(context.Background(), nil, upInput{ComposeProject: "demo", WaitTimeout: "soon"})
+
+		// Assert
+		require.ErrorContains(t, err, "wait_timeout")
+	})
+}
+
+// A refused up or down keeps its sentinel and gains the fix as a tool call spells it, never as
+// the CLI does.
+func TestMCPHandler_DeploymentErrorsInMCPSpelling(t *testing.T) {
+	elsewhere := &model.DeployedElsewhereError{
+		ArcaveProject: "shop", Deployment: model.SavepointDeployment{ArcaveProject: "shop", Session: model.SessionRef{Name: "feat"}},
+	}
+	tests := []struct {
+		name     string
+		up       bool
+		err      error
+		wantHint string
+	}{
+		{name: "up over a present compose project", up: true, err: &model.ComposeProjectPresentError{Volumes: []string{"demo_db"}},
+			wantHint: "the rollback tool replaces"},
+		{name: "down of another session's", err: elsewhere, wantHint: "call it with session feat"},
+		{name: "down of compose's own", err: &model.NotDeployedByArcaveError{Replicas: []string{"db-1"}}, wantHint: "pass force"},
+		{name: "a drop held back", err: &model.ComposeProjectLeftError{Volumes: []string{"demo_db"}}, wantHint: "then call it again"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			var err error
+			h := NewMCPHandler(MCPFactories{
+				Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) { return svc, func() {}, nil },
+				Down:      func(context.Context, string, string) (MCPDownService, func(), error) { return svc, func() {}, nil },
+			}, model.SessionID{}, "", RollbackConfig{})
+
+			// Act
+			if tt.up {
+				svc.On("Up", mock.Anything, mock.Anything).Return(model.UpResult{}, tt.err).Once()
+				_, _, err = h.upMCP(context.Background(), nil, upInput{ComposeProject: "demo"})
+			} else {
+				svc.On("Down", mock.Anything, model.DownRequest{}).Return(model.DownResult{}, tt.err).Once()
+				_, _, err = h.downMCP(context.Background(), nil, downInput{ComposeProject: "demo"})
+			}
+
+			// Assert
+			require.ErrorIs(t, err, tt.err)
+			assert.Contains(t, err.Error(), tt.wantHint)
+			assert.NotContains(t, err.Error(), "--force", "a flag the tool does not have")
+			svc.AssertExpectations(t)
+		})
+	}
+}
+
+// A server pinned to a session takes a down there unless the call names another.
+func TestMCPHandler_downMCP_FollowsThePin(t *testing.T) {
+	tests := []struct {
+		name        string
+		session     string
+		wantSession string
+	}{
+		{name: "the pin", wantSession: handlerSession.String()},
+		{name: "the call's own", session: "feat", wantSession: "feat"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			svc := &mockService{}
+			svc.On("Down", mock.Anything, model.DownRequest{}).Return(model.DownResult{ComposeProject: "demo"}, nil).Once()
+			var gotSession string
+			released := false
+			h := NewMCPHandler(MCPFactories{Down: func(_ context.Context, _, session string) (MCPDownService, func(), error) {
+				gotSession = session
+				return svc, func() { released = true }, nil
+			}}, handlerSession, model.SessionRefSourceFlag, RollbackConfig{})
+
+			// Act
+			_, _, err := h.downMCP(context.Background(), nil, downInput{ComposeProject: "demo", Session: tt.session})
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSession, gotSession)
+			assert.True(t, released)
+			svc.AssertExpectations(t)
+		})
+	}
+}
+
 func TestMCPHandler_ALockedProjectIsNamed(t *testing.T) {
 	// Arrange
 	svc := &mockService{}
@@ -556,6 +684,21 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		}},
 		CheckedAt: savepoint.CreatedAt,
 	}
+	// A down's result carries session ids in three places, which the output schema must take as strings.
+	downResult := model.DownResult{
+		ComposeProject: "demo",
+		Session:        model.SessionRef{ID: handlerSession, Name: "feat"},
+		Deployment: &model.SavepointDeployment{
+			DeployedAt: deployedAt, ArcaveProject: "shop", Session: model.SessionRef{ID: handlerSession, Name: "feat"},
+			Savepoint: model.DeployedSavepoint{ID: savepoint.ID, Name: savepoint.Name, CreatedAt: deployedAt},
+		},
+		Forced:          true,
+		ClearedInflight: &model.InflightMarker{Phase: model.InflightRestoring, Session: handlerSession, ComposeProject: "demo", Target: savepoint.ID, At: deployedAt},
+		Discarded:       model.DiscardedResources{Containers: []string{"demo-db-1"}, Volumes: []string{"demo_db"}, Networks: []string{"demo_default"}},
+		RemovedTags:     []model.ImageRef{"arcave/demo-db-1-postgres-16:sp-v1"},
+	}
+	upResult := model.UpResult{RolledBackTo: savepoint, Restored: []model.Volume{},
+		Discarded: &model.DiscardedResources{Containers: []string{"demo-db-1"}, Volumes: []string{}, Networks: []string{}}}
 	tests := []struct {
 		tool               string
 		args               map[string]any
@@ -581,6 +724,14 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 				svc.On("Rollback", mock.Anything, mock.Anything).
 					Return(model.RollbackResult{RolledBackTo: savepoint, WritableLayers: layers}, nil).Once()
 			}, want: model.RollbackResult{RolledBackTo: savepoint, WritableLayers: layers}, wantComposeProject: "demo"},
+		{tool: "up", args: map[string]any{"compose_project": "demo", "force": true},
+			setup: func(svc *mockService) {
+				svc.On("Up", mock.Anything, model.UpRequest{Latest: ptr(true), Force: true}).Return(upResult, nil).Once()
+			}, want: upResult, wantComposeProject: "demo"},
+		{tool: "down", args: map[string]any{"compose_project": "demo", "force": true},
+			setup: func(svc *mockService) {
+				svc.On("Down", mock.Anything, model.DownRequest{Force: true}).Return(downResult, nil).Once()
+			}, want: downResult, wantComposeProject: "demo"},
 		{tool: "session_list", args: map[string]any{"all": true},
 			setup: func(svc *mockService) {
 				svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true, Sort: model.SortDesc}).
@@ -638,6 +789,10 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 	var gotComposeProject string
 	h := NewMCPHandler(MCPFactories{
 		Savepoint: func(_ context.Context, composeProject, _ string) (MCPSavepointService, func(), error) {
+			gotComposeProject = composeProject
+			return svc, func() {}, nil
+		},
+		Down: func(_ context.Context, composeProject, _ string) (MCPDownService, func(), error) {
 			gotComposeProject = composeProject
 			return svc, func() {}, nil
 		},

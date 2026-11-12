@@ -56,6 +56,7 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 func newMCPFactories() cli.MCPFactories {
 	return cli.MCPFactories{
 		Savepoint:      mcpSavepointServiceFactory,
+		Down:           mcpDownServiceFactory,
 		SavepointStore: mcpSavepointStoreServiceFactory,
 		Session:        mcpSessionServiceFactory,
 		Tools:          mcpToolsServiceFactory,
@@ -74,6 +75,20 @@ func mcpSavepointServiceFactory(
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, fmt.Errorf("init dependencies: %w", err)
+	}
+	return svc, func() { opened.release(ctx) }, nil
+}
+
+// mcpDownServiceFactory wires down for a tool call's compose project and session ("" is the
+// current one): the daemon and the marker, none of what a capture or a restore needs.
+func mcpDownServiceFactory(
+	ctx context.Context, composeProject, sessionRef string,
+) (cli.MCPDownService, func(), error) {
+	var opened closers
+	svc, err := openDownService(ctx, projectRoot, projectCfg, sessionRef, model.DockerComposeProjectName(composeProject), &opened)
+	if err != nil {
+		opened.release(ctx)
+		return nil, nil, fmt.Errorf("init down dependencies: %w", err)
 	}
 	return svc, func() { opened.release(ctx) }, nil
 }
