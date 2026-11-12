@@ -759,45 +759,6 @@ func TestRequireUniqueName(t *testing.T) {
 	}
 }
 
-// An orphan tree a crashed run left under the id stops the capture: it is the
-// only copy of whatever that run captured, so it is reported, never deleted.
-func TestService_requireEmptyTree(t *testing.T) {
-	tests := []struct {
-		name    string
-		planted []string
-		wantErr error
-	}{
-		{name: "an empty directory passes"},
-		{name: "an orphan is refused", planted: []string{"volume-named-gone/data.tar"}, wantErr: errCaptureDirectoryNotEmpty},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			const id = model.SavepointID("019e843e-1650-7000-8000-000000000000")
-			store := newDirStore(t)
-			want := make([]string, 0, len(tt.planted))
-			for _, name := range tt.planted {
-				key := id.String() + "/" + name
-				require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader("stale")))
-				want = append(want, key)
-			}
-			svc := New(Deps{SessionLocker: fakeSessionLocker{}, Store: store})
-
-			// Act
-			err := svc.requireEmptyTree(zerolog.Nop().WithContext(context.Background()), id)
-
-			// Assert
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.ElementsMatch(t, want, objectNames(t, store), "nothing is deleted")
-		})
-	}
-}
-
 // A named volume no service mounts is covered like any other: a backend
 // addresses a volume by name, so having no container to read it through is no
 // longer a reason to leave it out of the savepoint.

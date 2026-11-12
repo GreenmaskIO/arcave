@@ -26,30 +26,18 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// workingSet is what a mutating workflow operates on: the introspection taken once
-// before the stop, its rendered spec and the project parsed from it, the request's
-// bound, and one backend per volume.
+// workingSet is what a mutating workflow operates on: the capture plan of the live compose
+// project, decided before the stop, and the anonymous volumes a rollback reaps.
 type workingSet struct {
-	project     *types.Project
-	spec        []byte
-	waitTimeout time.Duration
-	backends    []model.VolumeSnapshotBackend
-	// containers are every replica of the compose project.
-	containers []model.ContainerRef
-	// images are the layers and upstreams the capture takes.
-	images imageSet
+	plan capture.Plan
 	// anonymousVolumeNames maps a mount's ObjectID to the docker name behind it — the only
 	// record of what a teardown orphans.
 	anonymousVolumeNames map[string]string
-	// What a capture of this set leaves out, as known before the stop.
-	skippedMounts          []model.SkippedVolume
-	servicesWithoutVolumes []string
-	replicaGaps            []model.ReplicaGap
-	unresolvedImages       []model.UnresolvedImage
 }
 
 // imageSet is what a capture takes of the images, as the policy decides.
@@ -61,42 +49,6 @@ type imageSet struct {
 	upstreams             []model.ImageCaptureRequest
 	skippedWritableLayers []model.SkippedWritableLayer
 	skippedImages         []model.SkippedImage
-}
-
-// newNotCovered is what a capture of ws leaves out, killed being the containers the
-// stop killed; nil when it leaves out nothing.
-func (ws workingSet) newNotCovered(killed []string) *model.NotCovered {
-	notCovered := model.NotCovered{
-		Mounts:                 ws.skippedMounts,
-		ServicesWithoutVolumes: ws.servicesWithoutVolumes,
-		KilledContainers:       ws.newKilledContainers(killed),
-		ReplicaGaps:            ws.replicaGaps,
-		UnresolvedImages:       ws.unresolvedImages,
-		WritableLayers:         ws.images.skippedWritableLayers,
-		Images:                 ws.images.skippedImages,
-	}
-	if notCovered.IsEmpty() {
-		return nil
-	}
-	return &notCovered
-}
-
-// newKilledContainers names the replica behind each container id the stop killed.
-func (ws workingSet) newKilledContainers(ids []string) []model.KilledContainer {
-	var killedContainers []model.KilledContainer
-	for _, id := range ids {
-		killed := model.KilledContainer{Container: id}
-		if i := slices.IndexFunc(ws.containers, func(c model.ContainerRef) bool { return c.ID == id }); i >= 0 {
-			ref := ws.containers[i]
-			killed = model.KilledContainer{
-				Service:   ref.Service,
-				Replica:   ref.Replica,
-				Container: ref.Name,
-			}
-		}
-		killedContainers = append(killedContainers, killed)
-	}
-	return killedContainers
 }
 
 // prepare introspects the compose project and builds the working set of it.
@@ -172,18 +124,24 @@ func (s *Service) newWorkingSet(
 	}
 
 	return workingSet{
-		project:              project,
-		spec:                 spec,
-		waitTimeout:          waitTimeout,
-		backends:             backends,
-		containers:           containers,
-		images:               images,
+		plan: capture.Plan{
+			Project:        project,
+			Spec:           spec,
+			WaitTimeout:    waitTimeout,
+			Volumes:        backends,
+			Images:         images.upstreams,
+			WritableLayers: images.writableLayers,
+			Containers:     containers,
+			NotCovered: model.NotCovered{
+				Mounts:                 notCovered.Mounts,
+				ServicesWithoutVolumes: notCovered.ServicesWithoutVolumes,
+				ReplicaGaps:            newReplicaGaps(ctx, introspection),
+				UnresolvedImages:       newUnresolvedImages(introspection, containers),
+				WritableLayers:         images.skippedWritableLayers,
+				Images:                 images.skippedImages,
+			},
+		},
 		anonymousVolumeNames: newAnonymousVolumeNames(introspection),
-
-		skippedMounts:          notCovered.Mounts,
-		servicesWithoutVolumes: notCovered.ServicesWithoutVolumes,
-		replicaGaps:            newReplicaGaps(ctx, introspection),
-		unresolvedImages:       newUnresolvedImages(introspection, containers),
 	}, nil
 }
 
@@ -284,18 +242,6 @@ func composeProjectAbsent(introspection model.IntrospectionResult) bool {
 	return len(introspection.Project.Services) == 0
 }
 
-// stopServices puts the services down and returns the containers the stop deadline killed, which
-// the capture's not-covered warning reports.
-func (s *Service) stopServices(ctx context.Context, working workingSet) ([]string, error) {
-	ctx, step := progress.Run(ctx, progress.Step{Kind: kindComposeStop}, progress.MeasureResources)
-	killed, err := s.composeRunner.Stop(ctx, working.project)
-	step.End(err)
-	if err != nil {
-		return nil, fmt.Errorf("stopping services: %w", err)
-	}
-	return killed, nil
-}
-
 // composeDown removes the compose project's containers and networks. It goes by project
 // name, so it also takes down what a failed rebuild left standing.
 func (s *Service) composeDown(ctx context.Context, project *types.Project) error {
@@ -318,27 +264,11 @@ func (s *Service) composeCreate(ctx context.Context, project *types.Project, res
 	return nil
 }
 
-// startServices brings the services back and waits on their health checks.
-func (s *Service) startServices(ctx context.Context, working workingSet) error {
-	if err := s.composeStart(ctx, working.project, working.waitTimeout); err != nil {
-		return fmt.Errorf("starting services: %w", err)
-	}
-	return nil
-}
-
 // composeStart starts the containers of project and waits on their health checks.
 func (s *Service) composeStart(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	return runComposeActivity(ctx, kindComposeStart, func(ctx context.Context) error {
 		return s.composeRunner.Start(ctx, project, waitTimeout)
 	})
-}
-
-// restartServices brings back the services a workflow stopped, on a revertContext:
-// the interrupt that aborted the workflow must not leave the compose project stopped.
-func (s *Service) restartServices(ctx context.Context, working workingSet) error {
-	ctx, cancel := revertContext(ctx)
-	defer cancel()
-	return s.startServices(ctx, working)
 }
 
 // revertContext strips ctx of its cancellation and bounds it by revertBudget instead, for a

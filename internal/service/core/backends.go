@@ -15,9 +15,7 @@
 package core
 
 import (
-	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -25,62 +23,18 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// volumeOp is one operation forEachBackend runs: its name in logs and errors, and its batch's kind.
-type volumeOp struct {
-	name string
-	kind progress.Kind
-}
+// volumeRestoreOpName is what a volume's restore is called in its logs and errors.
+const volumeRestoreOpName = "restore"
 
-var (
-	volumeCapture = volumeOp{
-		name: "snapshot",
-		kind: kindVolumeCapture,
-	}
-	volumeRestore = volumeOp{
-		name: "restore",
-		kind: kindVolumeRestore,
-	}
-)
-
-// captureVolumes takes one capture per backend under id, its stats indexed alike with backends;
-// on error what the fan-out wrote is left for a later gc.
-func (s *Service) captureVolumes(
-	ctx context.Context, id model.SavepointID, labels map[string]string, backends []model.VolumeSnapshotBackend,
-) ([]model.SnapshotStat, error) {
-	stats := make([]model.SnapshotStat, len(backends))
-	err := s.forEachBackend(ctx, id, backends, volumeCapture,
-		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			stat, err := backend.Snapshot(ctx, model.BackendSnapshotRequest{
-				SnapshotID: id,
-				Labels:     labels,
-			})
-			if err != nil {
-				return fmt.Errorf("capture volume: %w", err)
-			}
-			stats[i] = stat
-			progress.Current(ctx).Done(newCaptureSample(stat.SizeBytes, stat.StoredBytes, stat.ReusedBytes))
-			return nil
-		})
-	if err != nil {
-		return nil, err
-	}
-	return stats, nil
-}
-
-// forEachBackend runs fn over every backend concurrently and waits for all of them.
-// fn gets its slice index and a context whose step counts the volume's bytes.
-func (s *Service) forEachBackend(
-	ctx context.Context,
-	snapshotID model.SavepointID,
-	backends []model.VolumeSnapshotBackend,
-	op volumeOp,
-	fn func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error,
+// restoreVolumes writes every volume back concurrently, each carrying the payload its own
+// capture reported; stats index alike with backends.
+func (s *Service) restoreVolumes(
+	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
 ) error {
-	if err := snapshotID.Validate(); err != nil {
+	if err := savepoint.ID.Validate(); err != nil {
 		return fmt.Errorf("validate savepoint id: %w", err)
 	}
 	if len(backends) == 0 {
@@ -88,23 +42,30 @@ func (s *Service) forEachBackend(
 	}
 
 	// Before the group: the batch reports the group's cancellation, so it opens outside it.
-	ctx, batch := progress.Batch(ctx, progress.Step{Kind: op.kind}, len(backends))
+	ctx, batch := progress.Batch(ctx, progress.Step{Kind: kindVolumeRestore}, len(backends))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(s.maxConcurrentOperations)
 	for i, backend := range backends {
 		eg.Go(func() error {
-			opCtx := volumeOpContext(egCtx, backend, snapshotID, op.name)
-			opCtx, step := progress.Run(opCtx, progress.Step{Kind: kindVolume, ID: backend.Volume().ObjectID},
-				progress.MeasureBytes)
+			opCtx := volumeOpContext(egCtx, backend, savepoint.ID)
+			opCtx, step := progress.Run(opCtx, progress.Step{
+				Kind: kindVolume,
+				ID:   backend.Volume().ObjectID,
+			}, progress.MeasureBytes)
 			log := zerolog.Ctx(opCtx)
 
 			started := time.Now()
 			log.Debug().Msg("volume operation started")
-			if err := fn(opCtx, i, backend); err != nil {
-				err = fmt.Errorf("%s %s: %w", op.name, backend.Volume().ObjectID, err)
+			if err := backend.Restore(opCtx, model.BackendRestoreRequest{
+				SnapshotID: savepoint.ID,
+				Payload:    savepoint.Stats[i].Payload,
+				SizeBytes:  savepoint.Stats[i].SizeBytes,
+			}); err != nil {
+				err = fmt.Errorf("%s %s: restore capture: %w", volumeRestoreOpName, backend.Volume().ObjectID, err)
 				step.End(err)
 				return err
 			}
+			step.Done(newRestoreSample(savepoint.Stats[i].SizeBytes))
 			step.End(nil)
 			log.Debug().Dur("duration", time.Since(started)).Msg("volume operation finished")
 			return nil
@@ -115,196 +76,16 @@ func (s *Service) forEachBackend(
 	return err
 }
 
-// volumeOpContext attributes every line the operation logs.
-func volumeOpContext(
-	ctx context.Context, backend model.VolumeSnapshotBackend, snapshotID model.SavepointID, opName string,
-) context.Context {
+// volumeOpContext attributes every line the restore logs.
+func volumeOpContext(ctx context.Context, backend model.VolumeSnapshotBackend, id model.SavepointID) context.Context {
 	volume := backend.Volume()
 	return zerolog.Ctx(ctx).With().
 		Str("volume", volume.ObjectID).
 		Str("backend", string(volume.Backend)).
-		Str("snapshot_id", snapshotID.String()).
-		Str("op", opName).
+		Str("snapshot_id", id.String()).
+		Str("op", volumeRestoreOpName).
 		Logger().
 		WithContext(ctx)
-}
-
-// performSavepoint captures a fresh savepoint under a heartbeat and commits its record last,
-// once grantedLock still holds the lock; on failure it returns a zero savepoint. killed are the
-// containers the stop killed. takenBefore is the savepoint the rollback a safety snapshot is taken
-// before goes to; nil for a savepoint create.
-func (s *Service) performSavepoint(
-	ctx context.Context,
-	grantedLock model.GrantedSessionLock,
-	working workingSet,
-	killed []string,
-	name string,
-	description string,
-	labels map[string]string,
-	takenBefore *model.SavepointRef,
-) (_ model.Savepoint, err error) {
-	var (
-		id         = model.NewSavepointID()
-		createdAt  = time.Now()
-		notCovered = working.newNotCovered(killed)
-		writer     heartbeatWriter
-		captured   capturedSavepoint
-	)
-	// Outside the heartbeat's cancellation, which the step reports with its cause.
-	ctx, step := progress.Begin(ctx, progress.Step{
-		Kind: kindSavepointCapture,
-		Name: cmp.Or(name, id.String()),
-	})
-	defer func() { step.End(err) }()
-	if warning := newNotCoveredWarning(notCovered); warning != "" {
-		warn(step, warning, isInResult(labels))
-	}
-	if err = s.requireEmptyTree(ctx, id); err != nil {
-		return model.Savepoint{}, err
-	}
-	if writer, err = s.openHeartbeat(id); err != nil {
-		return model.Savepoint{}, fmt.Errorf("savepoint %s: open the heartbeat: %w", id, err)
-	}
-	captureCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	worker := heartbeat.NewWorker(writer).SetInterval(s.heartbeatInterval).SetStaleAfter(s.heartbeatStaleAfter)
-	initialBeat := heartbeat.Heartbeat{
-		Operation:  model.HeartbeatOperationSavepoint,
-		RunnerInfo: s.runnerInfo,
-	}
-	if err = worker.Start(ctx, initialBeat, cancel); err != nil {
-		// A write that timed out may still have landed: mark it failed rather than leave it in progress.
-		err = fmt.Errorf("savepoint %s: %w", id, err)
-		abandonCapture(ctx, worker, id, err)
-		return model.Savepoint{}, err
-	}
-
-	captured, err = s.captureSavepoint(captureCtx, id, labels, working)
-	worker.Stop()
-	if err != nil {
-		if cause := context.Cause(captureCtx); errors.Is(cause, model.ErrHeartbeatLost) {
-			err = cause
-		}
-		abandonCapture(ctx, worker, id, err)
-		return model.Savepoint{}, err
-	}
-	if err = worker.Alive(); err != nil {
-		err = fmt.Errorf("commit savepoint %s: %w", id, err)
-		abandonCapture(ctx, worker, id, err)
-		return model.Savepoint{}, err
-	}
-	if err = grantedLock.Verify(ctx); err != nil {
-		err = fmt.Errorf("commit savepoint %s: %w", id, err)
-		abandonCapture(ctx, worker, id, err)
-		return model.Savepoint{}, err
-	}
-	savepoint := model.Savepoint{
-		ID:                    id,
-		Name:                  name,
-		Description:           description,
-		Labels:                labels,
-		CreatedAt:             createdAt,
-		TakenBeforeRollbackTo: takenBefore,
-		Stats:                 captured.stats,
-		Images:                captured.images,
-		WritableLayers:        captured.writableLayers,
-		Spec:                  &model.SpecRef{Format: model.SpecFormatComposeYAML},
-		NotCovered:            notCovered,
-	}
-	if err = s.savepointRepo.SaveSavepoint(ctx, savepoint); err != nil {
-		err = fmt.Errorf("commit savepoint %s: %w", id, err)
-		abandonCapture(ctx, worker, id, err)
-		return model.Savepoint{}, err
-	}
-	worker.Finish(ctx)
-	return savepoint, nil
-}
-
-// openHeartbeat opens the heartbeat at the root of id's tree.
-func (s *Service) openHeartbeat(id model.SavepointID) (heartbeatWriter, error) {
-	tree, err := s.store.SubStorage(id.String(), true)
-	if err != nil {
-		return nil, err
-	}
-	return heartbeat.NewWriter(tree), nil
-}
-
-// capturedSavepoint is what a capture stored under its id, short of the record.
-type capturedSavepoint struct {
-	stats          []model.SnapshotStat
-	images         []model.Image
-	writableLayers []model.WritableLayer
-}
-
-// captureSavepoint stores everything a savepoint holds but its record: volumes, images, layers,
-// and the spec written beside them.
-func (s *Service) captureSavepoint(
-	ctx context.Context, id model.SavepointID, labels map[string]string, working workingSet,
-) (capturedSavepoint, error) {
-	var (
-		stats          []model.SnapshotStat
-		images         []model.Image
-		writableLayers []model.WritableLayer
-		err            error
-	)
-	if stats, err = s.captureVolumes(ctx, id, labels, working.backends); err != nil {
-		return capturedSavepoint{}, err
-	}
-	// The images first: a writable layer's stored_bytes is then what it adds over its image.
-	if images, err = s.captureImages(ctx, id, working.images.upstreams, isInResult(labels)); err != nil {
-		return capturedSavepoint{}, err
-	}
-	if writableLayers, err = s.captureWritableLayers(ctx, id, working.images.writableLayers); err != nil {
-		return capturedSavepoint{}, err
-	}
-	if err = s.savepointRepo.SaveSpec(ctx, id, working.spec); err != nil {
-		return capturedSavepoint{}, fmt.Errorf("write compose spec of savepoint %s: %w", id, err)
-	}
-	return capturedSavepoint{
-		stats:          stats,
-		images:         images,
-		writableLayers: writableLayers,
-	}, nil
-}
-
-// abandonCapture marks an uncommitted capture's heartbeat failed and logs its tree for a gc.
-func abandonCapture(ctx context.Context, worker *heartbeat.Worker, id model.SavepointID, cause error) {
-	worker.Fail(ctx, cause)
-	zerolog.Ctx(ctx).Warn().Str("snapshot_id", id.String()).
-		Msg("the partial capture is retained for a later gc")
-}
-
-// restoreVolumes writes every volume back, each carrying the payload its own
-// capture reported; stats index alike with backends.
-func (s *Service) restoreVolumes(
-	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
-) error {
-	return s.forEachBackend(ctx, savepoint.ID, backends, volumeRestore,
-		func(ctx context.Context, i int, backend model.VolumeSnapshotBackend) error {
-			if err := backend.Restore(ctx, model.BackendRestoreRequest{
-				SnapshotID: savepoint.ID,
-				Payload:    savepoint.Stats[i].Payload,
-				SizeBytes:  savepoint.Stats[i].SizeBytes,
-			}); err != nil {
-				return fmt.Errorf("restore capture: %w", err)
-			}
-			progress.Current(ctx).Done(newRestoreSample(savepoint.Stats[i].SizeBytes))
-			return nil
-		})
-}
-
-// requireEmptyTree refuses an id whose capture directory already holds objects: an
-// interrupted run's remains, possibly the last copy of what it captured.
-func (s *Service) requireEmptyTree(ctx context.Context, id model.SavepointID) error {
-	objects, err := s.store.List(ctx, id.String())
-	if err != nil {
-		return fmt.Errorf("reading the capture directory %s: %w", id, err)
-	}
-	if len(objects) > 0 {
-		return fmt.Errorf("%w: %s holds %d object(s), an interrupted run's remains; check what is there before removing it",
-			errCaptureDirectoryNotEmpty, id, len(objects))
-	}
-	return nil
 }
 
 // newBackends builds one backend per volume, all rooted at the one store, in

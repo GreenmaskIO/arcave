@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -208,7 +209,7 @@ func (s *Service) rollbackLive(
 	}
 
 	if err := runStep(ctx, kindRollbackApply, func(ctx context.Context) error {
-		return s.applySavepoint(ctx, savepoint, target, safetySnapshot.ID, working.project, working.waitTimeout)
+		return s.applySavepoint(ctx, savepoint, target, safetySnapshot.ID, working.plan.Project, working.plan.WaitTimeout)
 	}); err != nil {
 		log.Warn().Err(err).Str("safety_snapshot_id", safetySnapshot.ID.String()).
 			Msg("rollback failed: reverting to the pre-rollback state")
@@ -325,17 +326,19 @@ func (s *Service) takeSafetySnapshot(
 ) (_ model.Savepoint, err error) {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackSafetySnapshot})
 	defer func() { step.End(err) }()
-	killed, err := s.stopServices(ctx, working)
+	killed, err := s.capture.Hold(ctx, working.plan)
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
 	}
-	// No name: one would read as the savepoint restored, and select nothing. What it was taken
-	// before is a field, the target by id and by the name it carries now — the resolved savepoint,
-	// never the ref the user typed, since "latest" names none and a name may be removed.
-	safetySnapshot, err := s.performSavepoint(
-		ctx, grantedLock, working, killed, "", "", newSafetySnapshotLabels(),
-		&model.SavepointRef{ID: savepoint.ID, Name: savepoint.Name},
-	)
+	// No name: one would read as the savepoint restored. TakenBefore is the resolved target,
+	// never the typed ref, since "latest" names none and a name may be removed.
+	safetySnapshot, err := s.capture.Capture(ctx, grantedLock, working.plan, killed, capture.Request{
+		Labels: newSafetySnapshotLabels(),
+		TakenBefore: &model.SavepointRef{
+			ID:   savepoint.ID,
+			Name: savepoint.Name,
+		},
+	})
 	if err != nil {
 		return model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
 	}
@@ -349,10 +352,10 @@ func logKeptSafetySnapshot(ctx context.Context, id model.SavepointID) {
 		Msg("the rollback changed nothing; its safety snapshot stays until a gc retires it")
 }
 
-// abortBeforeRestore restarts the services, best-effort and on a revertContext; nothing was
-// restored, so there is nothing to revert.
+// abortBeforeRestore brings the held services back, best-effort; nothing was restored, so
+// there is nothing to revert.
 func (s *Service) abortBeforeRestore(ctx context.Context, working workingSet) {
-	if err := s.restartServices(ctx, working); err != nil {
+	if err := s.capture.Release(ctx, working.plan); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Msg("services failed to restart after the aborted rollback")
 	}
 }
@@ -432,9 +435,8 @@ func (s *Service) revert(
 ) (err error) {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackRevert})
 	defer func() { step.End(err) }()
-	// The safety snapshot holds the layers the live compose project had, so the undo has to
-	// put them back — the same parity the capture side already has.
-	restored, err := s.restoreWritableLayers(ctx, safetySnapshot, working.project.Name)
+	// The safety snapshot holds the live compose project's layers, so the undo puts them back.
+	restored, err := s.restoreWritableLayers(ctx, safetySnapshot, working.plan.Project.Name)
 	if err != nil {
 		return fmt.Errorf("restore the safety snapshot's writable layers: %w", err)
 	}
@@ -444,21 +446,21 @@ func (s *Service) revert(
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to phase the inflight marker back before revert")
 	}
 
-	if err := s.composeDown(ctx, working.project); err != nil {
+	if err := s.composeDown(ctx, working.plan.Project); err != nil {
 		return err
 	}
 	return s.buildFromSavepoint(
 		ctx,
 		safetySnapshot,
 		rollbackTarget{
-			project:  retargetImages(working.project, restored),
+			project:  retargetImages(working.plan.Project, restored),
 			restored: restored,
-			backends: working.backends,
+			backends: working.plan.Volumes,
 			session:  session,
 		},
 		targetID,
 		safetySnapshot.ID,
-		working.waitTimeout,
+		working.plan.WaitTimeout,
 	)
 }
 

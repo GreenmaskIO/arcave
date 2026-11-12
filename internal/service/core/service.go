@@ -15,7 +15,6 @@
 package core
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -187,9 +187,7 @@ type Service struct {
 	daemonVersion           string
 	minDaemonMajor          int
 	maxConcurrentOperations int
-	runnerInfo              heartbeat.RunnerInfo
-	heartbeatInterval       time.Duration
-	heartbeatStaleAfter     time.Duration
+	capture                 *capture.Service
 }
 
 func New(deps Deps) *Service {
@@ -219,9 +217,16 @@ func New(deps Deps) *Service {
 		daemonVersion:           deps.DaemonVersion,
 		minDaemonMajor:          deps.MinDaemonMajor,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
-		runnerInfo:              deps.RunnerInfo,
-		heartbeatInterval:       cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
-		heartbeatStaleAfter:     cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
+		capture: capture.New(capture.Deps{
+			SavepointRepo:       deps.SavepointRepo,
+			ImageBackend:        deps.ImageBackend,
+			ComposeRunner:       deps.ComposeRunner,
+			Store:               deps.Store,
+			Concurrency:         deps.Concurrency,
+			RunnerInfo:          deps.RunnerInfo,
+			HeartbeatInterval:   deps.HeartbeatInterval,
+			HeartbeatStaleAfter: deps.HeartbeatStaleAfter,
+		}),
 	}
 }
 

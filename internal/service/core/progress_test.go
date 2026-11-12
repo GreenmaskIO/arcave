@@ -235,7 +235,7 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Act
 	_, err := withSessionLock(ctx, locker, model.SessionLockOperationSavepointCreate,
 		func(ctx context.Context, _ model.GrantedSessionLock) (string, error) {
-			_, step := progress.Run(ctx, progress.Step{Kind: kindComposeStop})
+			_, step := progress.Run(ctx, progress.Step{Kind: kindComposeDown})
 			err := preferInterrupt(ctx, errWorkflow)
 			step.End(err)
 			return "", err
@@ -245,7 +245,7 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Assert
 	require.ErrorIs(t, err, model.ErrSessionLockLost)
 	require.Len(t, recorder.ended, 2)
-	assert.Equal(t, "savepoint.create/compose.stop cancelled", recorder.ended[0])
+	assert.Equal(t, "savepoint.create/compose.down cancelled", recorder.ended[0])
 	assert.True(t, strings.HasPrefix(recorder.ended[1], "savepoint.create failed error=interrupted: "),
 		"the cause is on the root: %s", recorder.ended[1])
 	assert.Contains(t, recorder.ended[1], model.ErrSessionLockLost.Error())
@@ -299,37 +299,6 @@ func TestWithSessionLock_ShowsTheWaitOnlyWhenHeld(t *testing.T) {
 	}
 }
 
-func TestNewNotCoveredWarning(t *testing.T) {
-	tests := []struct {
-		name       string
-		notCovered *model.NotCovered
-		want       string
-	}{
-		{
-			name: "nothing left out",
-		},
-		{
-			name:       "an empty report",
-			notCovered: &model.NotCovered{},
-		},
-		{
-			name: "every kind left out is counted",
-			notCovered: &model.NotCovered{
-				Mounts:           []model.SkippedVolume{{}, {}},
-				KilledContainers: []model.KilledContainer{{}},
-			},
-			want: "not covered: 2 mount(s), 1 killed container(s)",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := newNotCoveredWarning(tt.notCovered)
-
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 // warnedRecorder keeps every warning, and whether it was marked as the result repeats it.
 type warnedRecorder struct {
 	msgs     []string
@@ -340,79 +309,5 @@ func (r *warnedRecorder) Render(evt progress.Event) {
 	if evt.Status == progress.StatusWarned {
 		r.msgs = append(r.msgs, evt.Msg)
 		r.inResult = append(r.inResult, evt.InResult)
-	}
-}
-
-// A capture's warnings are marked InResult, a safety snapshot's are not.
-func TestWarn(t *testing.T) {
-	tests := []struct {
-		name   string
-		labels map[string]string
-		want   []bool
-	}{
-		{
-			name: "an ordinary savepoint is the result",
-			want: []bool{true},
-		},
-		{
-			name:   "a safety snapshot is not",
-			labels: newSafetySnapshotLabels(),
-			want:   []bool{false},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var (
-				recorder = &warnedRecorder{}
-				now      = func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
-				ctx      = zerolog.Nop().WithContext(context.Background())
-			)
-			_, step := progress.New(recorder, now).Begin(ctx, progress.Step{Kind: kindSavepointCapture})
-
-			warn(step, "not covered: 1 mount(s)", isInResult(tt.labels))
-
-			assert.Equal(t, tt.want, recorder.inResult)
-		})
-	}
-}
-
-func TestNewImageSample(t *testing.T) {
-	tests := []struct {
-		name  string
-		image model.Image
-		want  progress.Sample
-	}{
-		{
-			name: "stored by this capture",
-			image: model.Image{
-				SizeBytes:   100,
-				StoredBytes: 40,
-				Stored:      true,
-			},
-			want: newCaptureSample(100, 40, 60),
-		},
-		{
-			name: "already stored",
-			image: model.Image{
-				SizeBytes: 100,
-				Stored:    true,
-			},
-			want: newCaptureSample(100, 0, 100),
-		},
-		{
-			name: "not stored moves nothing",
-			image: model.Image{
-				SizeBytes: 100,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := newImageSample(tt.image)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
 	}
 }

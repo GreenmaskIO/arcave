@@ -64,14 +64,14 @@ func TestService_prepare_LabelsDecideTheImages(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.Len(t, working.images.writableLayers, 1)
-	assert.Equal(t, model.ImageBackendFullCopy, working.images.writableLayers[0].Backend)
-	assert.Equal(t, demoContainerID, working.images.writableLayers[0].Container.ID)
-	assert.Empty(t, working.images.upstreams)
+	require.Len(t, working.plan.WritableLayers, 1)
+	assert.Equal(t, model.ImageBackendFullCopy, working.plan.WritableLayers[0].Backend)
+	assert.Equal(t, demoContainerID, working.plan.WritableLayers[0].Container.ID)
+	assert.Empty(t, working.plan.Images)
 	assert.Equal(t, []model.SkippedImage{{
 		Service: demoService, Image: demoBaseImage, Reason: model.SkipReasonExcluded,
 		Detail: "arcave.image.capture=false on service " + demoService,
-	}}, working.images.skippedImages)
+	}}, working.plan.NotCovered.Images)
 	inspector.AssertExpectations(t)
 	registry.AssertExpectations(t)
 }
