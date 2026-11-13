@@ -250,6 +250,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 	release := locker.On("Release").Return(nil).Once()
 	mock.InOrder(acquire, lock, release)
 	inspector := &mockInspector{}
+	captureService := &mockCapture{}
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		ProjectLocker:    locker,
@@ -257,6 +258,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 		WriteAdmission:   fakeWriteAdmission{},
 		ComposeInspector: inspector,
 		Inflight:         &fakeInflight{},
+		Capture:          captureService,
 	})
 
 	// Act
@@ -267,6 +269,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 	locker.AssertExpectations(t)
 	sessionLocker.AssertExpectations(t)
 	inspector.AssertExpectations(t)
+	captureService.AssertExpectations(t)
 }
 
 func TestSessionService_RemoveSession_SessionLock(t *testing.T) {
@@ -430,26 +433,27 @@ func TestPreferInterrupt(t *testing.T) {
 	}
 }
 
-// A rollback aborted before its restore only restarts the services, past the interrupt that
-// aborted it: the safety snapshot it took stays, and no session lock is asked.
+// A rollback aborted before its restore releases what its safety snapshot held, on the context it
+// was aborted on: the release is what outlives the interrupt. No session lock is asked.
 func TestService_abortBeforeRestore(t *testing.T) {
 	// Arrange
-	runner := &mockComposeRunner{}
-	runner.On("Start", mock.MatchedBy(func(ctx context.Context) bool { return ctx.Err() == nil }), demoSpec, time.Minute).
-		Return(nil).Once()
-	svc := New(Deps{ComposeRunner: runner})
+	ctx, cancel := context.WithCancel(newLockTestContext())
+	cancel()
 	working := workingSet{plan: capture.Plan{
 		Project:     demoSpec,
 		WaitTimeout: time.Minute,
 	}}
-	ctx, cancel := context.WithCancel(newLockTestContext())
-	cancel()
+	captureService := &mockCapture{}
+	captureService.On("Release", ctx, mock.MatchedBy(func(plan capture.Plan) bool {
+		return plan.Project == demoSpec && plan.WaitTimeout == time.Minute
+	})).Return(nil).Once()
+	svc := New(Deps{Capture: captureService})
 
 	// Act
 	svc.abortBeforeRestore(ctx, working)
 
 	// Assert
-	runner.AssertExpectations(t)
+	captureService.AssertExpectations(t)
 }
 
 // A removal checks the session's lock before it uncommits each savepoint: a lost lock removes

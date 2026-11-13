@@ -12,6 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package capture carries out a savepoint's capture as a Plan decides it: stops the compose
-// project, captures and commits the savepoint, and brings the project back.
+// Package capture carries out a savepoint's capture as a Plan decides it, in three steps the
+// caller composes: stop the compose project, capture and commit the savepoint, bring it back.
 package capture

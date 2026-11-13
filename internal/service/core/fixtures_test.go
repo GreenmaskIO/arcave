@@ -15,8 +15,10 @@
 package core
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -27,6 +29,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
@@ -103,7 +106,7 @@ func demoSpecRef() *model.SpecRef {
 func demoSafetySnapshot() model.Savepoint {
 	return model.Savepoint{
 		ID:                    "019e844b-7818-7000-8000-000000000000",
-		Labels:                newSafetySnapshotLabels(),
+		Labels:                safetySnapshotLabels(),
 		TakenBeforeRollbackTo: &model.SavepointRef{ID: demoRecord().ID, Name: demoRecord().Name},
 		CreatedAt:             time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
 		Stats:                 []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}},
@@ -359,6 +362,52 @@ func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.Savepoi
 	})).Return(nil).Once()
 }
 
+// matchLivePlan matches the plan of the live compose project demoCodec parses back.
+func matchLivePlan() any {
+	return mock.MatchedBy(func(plan capture.Plan) bool {
+		return plan.Project == demoSpec && bytes.Equal(plan.Spec, demoSpecBytes)
+	})
+}
+
+// expectCapture declares savepoint create's capture of plan: the hold, the capture of what it
+// holds under the session's lock, committing savepoint, and the release.
+func expectCapture(
+	c *mockCapture, plan any, req capture.Request, savepoint model.Savepoint,
+) (hold, captured, release *mock.Call) {
+	hold = c.On("Hold", mock.Anything, plan).Return([]string(nil), nil).Once()
+	captured = c.On("Capture", mock.Anything, fakeGrantedSessionLock{}, plan, []string(nil), req).
+		Return(savepoint, nil).Once().NotBefore(hold)
+	release = c.On("Release", mock.Anything, plan).Return(nil).Once().NotBefore(captured)
+	return hold, captured, release
+}
+
+// expectSafetySnapshot declares a rollback's safety snapshot of the live compose project: the hold,
+// then the capture of what it holds, taken before target and committing savepoint.
+func expectSafetySnapshot(c *mockCapture, target, savepoint model.Savepoint) (hold, captured *mock.Call) {
+	hold = c.On("Hold", mock.Anything, matchLivePlan()).Return([]string(nil), nil).Once()
+	captured = c.On("Capture", mock.Anything, fakeGrantedSessionLock{}, matchLivePlan(), []string(nil),
+		newSafetySnapshotRequest(target)).Return(savepoint, nil).Once().NotBefore(hold)
+	return hold, captured
+}
+
+// newSafetySnapshotRequest is the request a rollback to target captures its safety snapshot by:
+// no name, the label, and target by the id and name it resolved to.
+func newSafetySnapshotRequest(target model.Savepoint) capture.Request {
+	return capture.Request{
+		Labels: safetySnapshotLabels(),
+		TakenBefore: &model.SavepointRef{
+			ID:   target.ID,
+			Name: target.Name,
+		},
+	}
+}
+
+// safetySnapshotLabels are the labels that mark a safety snapshot, spelled out rather than built
+// by the code under test.
+func safetySnapshotLabels() map[string]string {
+	return map[string]string{model.SavepointLabelSafetySnapshot: model.SavepointLabelSafetySnapshotValue}
+}
+
 // ptrID and ptrBool render a literal as one of RollbackRequest's optional
 // selectors; a composite literal cannot take the address of a constant.
 func ptrID(id model.SavepointID) *model.SavepointID { return &id }
@@ -443,4 +492,17 @@ func withoutDeploymentLabels(project *types.Project) *types.Project {
 
 func fixedNow() time.Time {
 	return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+}
+
+// assertLogOrder asserts log holds each of lines, in their order.
+func assertLogOrder(t *testing.T, log string, lines []string) {
+	t.Helper()
+	at := -1
+	for _, line := range lines {
+		i := strings.Index(log, line)
+		if !assert.Greater(t, i, at, "%q out of order or missing", line) {
+			return
+		}
+		at = i
+	}
 }

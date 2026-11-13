@@ -42,6 +42,7 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -97,18 +98,26 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	blobStore, err := composeProjectStore.SubStorage(sharedBlobPrefix, true)
 	require.NoError(t, err)
 
+	repo := sprepo.New(composeProjectStore)
+	images := newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), profile.engine, blobStore)
 	svc := core.New(core.Deps{
-		ArcaveProject:      "arcave-oci-tenant",
-		SessionLocker:      newStoreLocker(composeProjectStore, model.DefaultSession),
-		WriteAdmission:     newPlainAdmission(composeProjectStore),
-		SavepointRepo:      sprepo.New(composeProjectStore),
-		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
-		ProjectAssembler:   profile.assembler,
-		SpecCodec:          composespec.NewCodec(),
-		ComposeRunner:      runner,
+		ArcaveProject:    "arcave-oci-tenant",
+		SessionLocker:    newStoreLocker(composeProjectStore, model.DefaultSession),
+		WriteAdmission:   newPlainAdmission(composeProjectStore),
+		SavepointRepo:    repo,
+		ProjectLocker:    lock.New(projectRoot),
+		ComposeInspector: introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
+		ProjectAssembler: profile.assembler,
+		SpecCodec:        composespec.NewCodec(),
+		ComposeRunner:    runner,
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ImageBackend:  images,
+			ComposeRunner: runner,
+			Store:         composeProjectStore,
+		}),
 		VolumeRemover:      profile.engine,
-		ImageBackend:       newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), profile.engine, blobStore),
+		ImageBackend:       images,
 		ContainerRebuilder: profile.engine,
 		ImageLookup:        profile.engine,
 		BackendRegistry:    mustRegistry(t, profile.volumes),

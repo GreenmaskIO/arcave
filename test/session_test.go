@@ -40,6 +40,7 @@ import (
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/gc"
@@ -404,18 +405,26 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
 	require.NoError(t, err)
 
+	repo := sprepo.New(store)
+	images := newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), profile.engine, blobStore)
 	svc := core.New(core.Deps{
-		ArcaveProject:      sessionArcaveProject,
-		SessionLocker:      newSessionLocker(t, arcaveProjectStore, session),
-		WriteAdmission:     newPlainAdmission(arcaveProjectStore),
-		SavepointRepo:      sprepo.New(store),
-		ProjectLocker:      lock.New(e.projectRoot),
-		ComposeInspector:   inspector,
-		ProjectAssembler:   profile.assembler,
-		SpecCodec:          composespec.NewCodec(),
-		ComposeRunner:      runner,
+		ArcaveProject:    sessionArcaveProject,
+		SessionLocker:    newSessionLocker(t, arcaveProjectStore, session),
+		WriteAdmission:   newPlainAdmission(arcaveProjectStore),
+		SavepointRepo:    repo,
+		ProjectLocker:    lock.New(e.projectRoot),
+		ComposeInspector: inspector,
+		ProjectAssembler: profile.assembler,
+		SpecCodec:        composespec.NewCodec(),
+		ComposeRunner:    runner,
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ImageBackend:  images,
+			ComposeRunner: runner,
+			Store:         store,
+		}),
 		VolumeRemover:      profile.engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), profile.engine, blobStore),
+		ImageBackend:       images,
 		ContainerRebuilder: profile.engine,
 		ImageLookup:        profile.engine,
 		BackendRegistry:    mustRegistry(t, profile.volumes),

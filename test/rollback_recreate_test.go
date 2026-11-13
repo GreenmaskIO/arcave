@@ -48,6 +48,7 @@ import (
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -314,18 +315,26 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
 	require.NoError(t, err)
 
+	repo := sprepo.New(store)
+	images := newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), profile.engine, blobStore)
 	svc := core.New(core.Deps{
-		ArcaveProject:      "arcave-recreate-tenant",
-		SessionLocker:      newStoreLocker(store, model.DefaultSession),
-		WriteAdmission:     newPlainAdmission(store),
-		SavepointRepo:      sprepo.New(store),
-		ProjectLocker:      lock.New(projectRoot),
-		ComposeInspector:   inspector,
-		ProjectAssembler:   profile.assembler,
-		SpecCodec:          codec,
-		ComposeRunner:      runner,
+		ArcaveProject:    "arcave-recreate-tenant",
+		SessionLocker:    newStoreLocker(store, model.DefaultSession),
+		WriteAdmission:   newPlainAdmission(store),
+		SavepointRepo:    repo,
+		ProjectLocker:    lock.New(projectRoot),
+		ComposeInspector: inspector,
+		ProjectAssembler: profile.assembler,
+		SpecCodec:        codec,
+		ComposeRunner:    runner,
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ImageBackend:  images,
+			ComposeRunner: runner,
+			Store:         store,
+		}),
 		VolumeRemover:      profile.engine,
-		ImageBackend:       newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), profile.engine, blobStore),
+		ImageBackend:       images,
 		ContainerRebuilder: profile.engine,
 		ImageLookup:        profile.engine,
 		BackendRegistry:    mustRegistry(t, profile.volumes),

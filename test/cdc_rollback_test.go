@@ -45,6 +45,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -396,24 +397,30 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	require.NoError(t, err)
 
 	spec := stubAssembler{project: &types.Project{Name: cdcProject}}
+	repo := sprepo.New(composeProjectStore)
 	svc := core.New(core.Deps{
 		ArcaveProject:    cdcArcaveProject,
 		SessionLocker:    newSessionLocker(t, e.arcaveProjectStore(t), session),
 		WriteAdmission:   newPlainAdmission(e.arcaveProjectStore(t)),
-		SavepointRepo:    sprepo.New(composeProjectStore),
+		SavepointRepo:    repo,
 		ProjectLocker:    lock.New(e.projectRoot),
 		ComposeInspector: stubInspector{result: introspectionOf(e.volumes)},
 		ProjectAssembler: spec,
 		SpecCodec:        spec,
 		ComposeRunner:    e.compose,
-		VolumeRemover:    stubVolumeRemover{},
-		BackendRegistry:  registry,
-		Inflight:         inflightrepo.New(e.projectRoot),
-		Store:            composeProjectStore,
-		CaptureDefaults:  newCaptureDefaults(model.SnapshotBackendCDC),
-		Session:          session,
-		ComposeProject:   cdcProject,
-		Sessions:         sessionrepo.New(e.arcaveProjectStore(t)),
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ComposeRunner: e.compose,
+			Store:         composeProjectStore,
+		}),
+		VolumeRemover:   stubVolumeRemover{},
+		BackendRegistry: registry,
+		Inflight:        inflightrepo.New(e.projectRoot),
+		Store:           composeProjectStore,
+		CaptureDefaults: newCaptureDefaults(model.SnapshotBackendCDC),
+		Session:         session,
+		ComposeProject:  cdcProject,
+		Sessions:        sessionrepo.New(e.arcaveProjectStore(t)),
 	})
 	return svc, composeProjectStore
 }

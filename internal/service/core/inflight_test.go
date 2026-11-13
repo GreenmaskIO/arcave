@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -60,6 +61,7 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	repo := &mockSavepointRepo{}
 	inspector := &mockInspector{}
 	runner := &mockComposeRunner{}
+	captured := &mockCapture{}
 	registry := &mockRegistry{}
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
@@ -72,6 +74,7 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 		ProjectAssembler: demoAssembler(),
 		SpecCodec:        demoCodec(),
 		ComposeRunner:    runner,
+		Capture:          captured,
 		BackendRegistry:  registry,
 		Inflight:         standingMarker(t, model.InflightRestoring),
 		Store:            nil,
@@ -90,6 +93,7 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	repo.AssertExpectations(t)
 	inspector.AssertExpectations(t)
 	runner.AssertExpectations(t)
+	captured.AssertExpectations(t)
 	registry.AssertExpectations(t)
 }
 
@@ -130,6 +134,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	expectLock(locker)
 	inspector := &mockInspector{}
 	runner := &mockComposeRunner{}
+	captured := &mockCapture{}
 	registry := &mockRegistry{}
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
@@ -142,6 +147,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 		ProjectAssembler: demoAssembler(),
 		SpecCodec:        demoCodec(),
 		ComposeRunner:    runner,
+		Capture:          captured,
 		BackendRegistry:  registry,
 		Inflight:         standingMarker(t, model.InflightRestoring),
 		Store:            nil,
@@ -160,6 +166,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	locker.AssertExpectations(t)
 	inspector.AssertExpectations(t)
 	runner.AssertExpectations(t)
+	captured.AssertExpectations(t)
 	registry.AssertExpectations(t)
 }
 
@@ -174,6 +181,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
+	captured := &mockCapture{}
 	runner := &mockComposeRunner{}
 	down := runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
@@ -196,6 +204,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 		ProjectAssembler: demoAssembler(),
 		SpecCodec:        demoCodec(),
 		ComposeRunner:    runner,
+		Capture:          captured,
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
@@ -219,6 +228,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	runner.AssertExpectations(t)
+	captured.AssertExpectations(t)
 	registry.AssertExpectations(t)
 	savepointBackend.AssertExpectations(t)
 }
@@ -232,7 +242,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	record := demoRecord()
 	repo, inspector, locker := demoResolution(record)
 
-	var safetySnapshotID model.SavepointID
+	safetySnapshotID := demoSafetySnapshot().ID
 	matchMarker := func(phase model.InflightPhase) any {
 		return mock.MatchedBy(func(m model.InflightMarker) bool {
 			return m.Phase == phase && m.Target == record.ID && m.Safety == safetySnapshotID &&
@@ -248,14 +258,10 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
+	captured := &mockCapture{}
+	hold, safety := expectSafetySnapshot(captured, record, demoSafetySnapshot())
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
-	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
-	specSafety := expectSpecCommit(repo)
-	commitSafety := expectSafetySnapshotCommit(repo, record)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
@@ -264,7 +270,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 
 	// The marker steps in workflow order: written before the teardown, phased to
 	// restoring before a byte moves and forward before the restart, then cleared.
-	mock.InOrder(gateGet, stop, snapshotSafety, specSafety, commitSafety,
+	mock.InOrder(gateGet, hold, safety,
 		putRecreating, down, create, putRestoring, restoreSp, putDone, up,
 		clear)
 
@@ -283,6 +289,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 		ProjectAssembler: demoAssembler(),
 		SpecCodec:        demoCodec(),
 		ComposeRunner:    runner,
+		Capture:          captured,
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
@@ -304,6 +311,7 @@ func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
 	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
 	runner.AssertExpectations(t)
+	captured.AssertExpectations(t)
 	registry.AssertExpectations(t)
 	savepointBackend.AssertExpectations(t)
 	safetySnapshotBackend.AssertExpectations(t)
@@ -325,16 +333,15 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
+	captured := &mockCapture{}
+	hold, safety := expectSafetySnapshot(captured, record, demoSafetySnapshot())
+	// The held live compose project is released; nothing is torn down.
+	release := captured.On("Release", mock.Anything, mock.MatchedBy(func(plan capture.Plan) bool {
+		return assert.ObjectsAreEqual(demoSpec, plan.Project)
+	})).Return(nil).Once()
 	runner := &mockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
-	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
-	specSafety := expectSpecCommit(repo)
-	commitSafety := expectSafetySnapshotCommit(repo, record)
-	up := runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once()
-	mock.InOrder(gateGet, stop, snapshotSafety, specSafety, commitSafety,
-		putRecreating, up)
+	mock.InOrder(gateGet, hold, safety, putRecreating, release)
 
 	store := newDirStore(t)
 	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
@@ -351,6 +358,7 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 		ProjectAssembler: demoAssembler(),
 		SpecCodec:        demoCodec(),
 		ComposeRunner:    runner,
+		Capture:          captured,
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
@@ -371,8 +379,10 @@ func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
 	inflight.AssertExpectations(t)
 	repo.AssertExpectations(t)
 	runner.AssertExpectations(t)
+	captured.AssertExpectations(t)
 	savepointBackend.AssertExpectations(t)
 	safetySnapshotBackend.AssertExpectations(t)
+	registry.AssertExpectations(t)
 }
 
 // A failed revert leaves the marker in place at inconsistent, naming the safety
@@ -384,17 +394,13 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	repo, inspector, locker := demoResolution(record)
 	inflight := &fakeInflight{}
 
-	var safetySnapshotID model.SavepointID
+	safetySnapshotID := demoSafetySnapshot().ID
 	registry := &mockRegistry{}
 	savepointBackend := &mockBackend{volume: vol}
+	captured := &mockCapture{}
+	hold, safety := expectSafetySnapshot(captured, record, demoSafetySnapshot())
 	runner := &mockComposeRunner{}
-	stopBeforeBackup := runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
 	safetySnapshotBackend := &mockBackend{volume: vol}
-	snapshotSafety := safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-		Run(func(args mock.Arguments) { safetySnapshotID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-		Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy, Payload: "safety-payload"}, nil).Once()
-	specSafety := expectSpecCommit(repo)
-	commitSafety := expectSafetySnapshotCommit(repo, record)
 	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
 	restoreSp := savepointBackend.On("Restore", mock.Anything,
@@ -404,10 +410,10 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	// start follows.
 	downForRevert := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
 	createForRevert := runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Return(nil).Once()
-	restoreSafety := safetySnapshotBackend.On("Restore", mock.Anything, mock.MatchedBy(func(req model.BackendRestoreRequest) bool {
-		return req.SnapshotID == safetySnapshotID && req.Payload == "safety-payload"
-	})).Return(errors.New("revert boom")).Once()
-	mock.InOrder(stopBeforeBackup, snapshotSafety, specSafety, commitSafety, down, create,
+	restoreSafety := safetySnapshotBackend.On("Restore", mock.Anything,
+		model.BackendRestoreRequest{SnapshotID: safetySnapshotID, Payload: "safety-payload"}).
+		Return(errors.New("revert boom")).Once()
+	mock.InOrder(hold, safety, down, create,
 		restoreSp, downForRevert, createForRevert, restoreSafety)
 
 	store := newDirStore(t)
@@ -425,6 +431,7 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 		ProjectAssembler: demoAssembler(),
 		SpecCodec:        demoCodec(),
 		ComposeRunner:    runner,
+		Capture:          captured,
 		BackendRegistry:  registry,
 		Inflight:         inflight,
 		Store:            store,
@@ -449,8 +456,10 @@ func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
 	assert.Equal(t, safetySnapshotID, marker.Safety)
 	repo.AssertExpectations(t)
 	runner.AssertExpectations(t)
+	captured.AssertExpectations(t)
 	savepointBackend.AssertExpectations(t)
 	safetySnapshotBackend.AssertExpectations(t)
+	registry.AssertExpectations(t)
 }
 
 // A marker naming no safety snapshot protects no earlier state: a rollback to its own target or to
@@ -469,7 +478,7 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 			// Arrange
 			record := demoColdRecord()
 			vol := record.Stats[0].Volume
-			deps, repo, inspector := coldStartDeps(t, record)
+			deps, repo, inspector, capturer := coldStartDeps(t, record)
 			inflight := &fakeInflight{}
 			require.NoError(t, inflight.Put(context.Background(), model.InflightMarker{
 				Phase: model.InflightRestoring, Session: model.DefaultSession, Target: tt.target,
@@ -486,6 +495,7 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 			backend.On("Restore", mock.Anything, mock.Anything).Return(nil).Once()
 			registry := &mockRegistry{}
 			registry.On("New", matchSpec(deps.Store, vol.ObjectID)).Return(backend, nil).Once()
+			// A recovery takes no safety snapshot: the capture carries no expectation.
 			deps.Inflight, deps.ComposeRunner, deps.ImageBackend, deps.BackendRegistry = inflight, runner, images, registry
 			svc := New(deps)
 			ctx := zerolog.Nop().WithContext(context.Background())
@@ -500,6 +510,7 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 			assert.False(t, marked)
 			repo.AssertExpectations(t)
 			inspector.AssertExpectations(t)
+			capturer.AssertExpectations(t)
 			runner.AssertExpectations(t)
 			images.AssertExpectations(t)
 			backend.AssertExpectations(t)

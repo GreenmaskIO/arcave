@@ -17,12 +17,10 @@ package capture
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
-	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -67,8 +65,8 @@ type Deps struct {
 	HeartbeatStaleAfter time.Duration
 }
 
-// Service captures a savepoint of a compose project: it holds the project still, captures and
-// commits, and brings the project back.
+// Service captures a savepoint of a compose project in three steps the caller composes: Hold
+// holds the project still, Capture captures and commits what is held, Release brings it back.
 type Service struct {
 	savepointRepo           savepointRepository
 	imageBackend            imageBackend
@@ -94,46 +92,6 @@ func New(deps Deps) *Service {
 	}
 }
 
-// Run stops the project as plan says, captures and commits the savepoint, and brings the
-// project back on every path. On error the record is zero.
-func (s *Service) Run(
-	ctx context.Context, grantedLock model.GrantedSessionLock, plan Plan, req Request,
-) (model.Savepoint, error) {
-	var (
-		log                             = zerolog.Ctx(ctx)
-		killed                          []string
-		savepoint                       model.Savepoint
-		beforeErr, captureErr, afterErr error
-	)
-	if killed, beforeErr = s.Hold(ctx, plan); beforeErr != nil {
-		// A stop that failed or was interrupted partway may have stopped some services.
-		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")
-	} else if savepoint, captureErr = s.Capture(ctx, grantedLock, plan, killed, req); captureErr != nil {
-		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
-		captureErr = preferInterrupt(ctx, captureErr)
-	} else {
-		logInterrupt(ctx, "savepoint committed before the interrupt: restarting services")
-	}
-	afterErr = s.Release(ctx, plan)
-
-	// The hold's or the capture's error wins; a release failing under it is only logged.
-	switch {
-	case beforeErr != nil:
-		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to restart after stop failure")
-		}
-		return model.Savepoint{}, preferInterrupt(ctx, beforeErr)
-	case captureErr != nil:
-		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to restart after capture failure")
-		}
-		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", captureErr)
-	case afterErr != nil:
-		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", savepoint.ID, afterErr)
-	}
-	return savepoint, nil
-}
-
 // Hold holds the project still as plan says and returns the containers the stop killed; the
 // caller captures with Capture and brings the project back with Release, or takes it down.
 func (s *Service) Hold(ctx context.Context, plan Plan) (killed []string, err error) {
@@ -146,25 +104,6 @@ func (s *Service) Release(ctx context.Context, plan Plan) error {
 	revertCtx, cancel := revertContext(ctx)
 	defer cancel()
 	return newCaptureTriggers(s.composeRunner, plan).afterCapture(revertCtx)
-}
-
-// logInterrupt tells the user what arcave does about an interrupt, when ctx was interrupted.
-func logInterrupt(ctx context.Context, action string) {
-	if ctx.Err() == nil {
-		return
-	}
-	zerolog.Ctx(ctx).Info().Msg(action)
-}
-
-// preferInterrupt returns the interrupt that cancelled ctx in place of err, the symptom
-// it caused somewhere downstream, and logs err.
-func preferInterrupt(ctx context.Context, err error) error {
-	if ctx.Err() == nil {
-		return err
-	}
-	zerolog.Ctx(ctx).Debug().Err(err).Msg("failure the interrupt caused")
-	// The cause, not ctx.Err: a lost session lock interrupts too, and says so.
-	return fmt.Errorf("interrupted: %w", context.Cause(ctx))
 }
 
 // revertContext strips ctx of its cancellation and bounds it by revertBudget instead, for a

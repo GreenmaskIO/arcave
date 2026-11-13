@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -71,11 +72,13 @@ type captureDoubles struct {
 	locker    *mockLocker
 	runner    *mockComposeRunner
 	repo      *mockSavepointRepo
+	images    *mockImageBackend
 	registry  *mockRegistry
 	backend   *mockBackend
 }
 
-// newCaptureService is a service whose one volume's snapshot returns snapshotErr.
+// newCaptureService is a service over the real capture whose one volume's snapshot returns
+// snapshotErr.
 func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDoubles) {
 	t.Helper()
 	inspector := &mockInspector{}
@@ -102,6 +105,7 @@ func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDouble
 	store := newDirStore(t)
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
+	images := &mockImageBackend{}
 
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
@@ -118,12 +122,19 @@ func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDouble
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ImageBackend:  images,
+			ComposeRunner: runner,
+			Store:         store,
+		}),
 	})
 	return svc, captureDoubles{
 		inspector: inspector,
 		locker:    locker,
 		runner:    runner,
 		repo:      repo,
+		images:    images,
 		registry:  registry,
 		backend:   backend,
 	}
@@ -183,10 +194,100 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 			doubles.locker.AssertExpectations(t)
 			doubles.runner.AssertExpectations(t)
 			doubles.repo.AssertExpectations(t)
+			doubles.images.AssertExpectations(t)
 			doubles.registry.AssertExpectations(t)
 			doubles.backend.AssertExpectations(t)
 		})
 	}
+}
+
+// A rollback's safety snapshot is captured under its own step: the capture's steps open under
+// rollback.safety-snapshot, by the same code savepoint create runs them with.
+func TestService_Rollback_Progress(t *testing.T) {
+	// Arrange
+	ctx, recorder := newProgressContext()
+	vol := demoVolume()
+	record := demoRecord()
+	repo, inspector, locker := demoResolution(record)
+	runner := &mockComposeRunner{}
+	safetySnapshotBackend := &mockBackend{volume: vol}
+	savepointBackend := &mockBackend{volume: vol}
+	mock.InOrder(
+		runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once(),
+		safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
+			Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy}, nil).Once(),
+		expectSpecCommit(repo),
+		expectSafetySnapshotCommit(repo, record),
+		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
+		runner.On("Create", mock.Anything, rolledBackTo(demoTargetSpec, record), demoRestoredVolumes).
+			Return(nil).Once(),
+		savepointBackend.On("Restore", mock.Anything, model.BackendRestoreRequest{
+			SnapshotID: record.ID,
+			Payload:    "sp-payload",
+			SizeBytes:  demoVolumeSize,
+		}).Return(nil).Once(),
+		runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once(),
+	)
+	store := newDirStore(t)
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
+	images := &mockImageBackend{}
+	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
+		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		CaptureDefaults:  demoCaptureDefaults,
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ImageBackend:  images,
+			ComposeRunner: runner,
+			Store:         store,
+		}),
+	})
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{
+		ID:          ptrID(record.ID),
+		WaitTimeout: 60 * time.Second,
+	})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"rollback/project.introspect succeeded",
+		"rollback/rollback.safety-snapshot/compose.stop succeeded",
+		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture/volume[volume-named-demo_db] succeeded",
+		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture succeeded",
+		"rollback/rollback.safety-snapshot/savepoint.capture succeeded",
+		"rollback/rollback.safety-snapshot succeeded",
+		"rollback/rollback.apply/compose.down succeeded",
+		"rollback/rollback.apply/compose.create succeeded",
+		"rollback/rollback.apply/volume.restore/volume[volume-named-demo_db] succeeded",
+		"rollback/rollback.apply/volume.restore succeeded",
+		"rollback/rollback.apply/compose.start succeeded",
+		"rollback/rollback.apply succeeded",
+		"rollback/rollback.cleanup succeeded",
+		"rollback succeeded",
+	}, recorder.ended)
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	images.AssertExpectations(t)
+	registry.AssertExpectations(t)
+	safetySnapshotBackend.AssertExpectations(t)
+	savepointBackend.AssertExpectations(t)
 }
 
 // A remove reports the savepoints it drops and no volume: it reaches no backend.

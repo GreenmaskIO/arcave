@@ -61,6 +61,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -240,10 +241,28 @@ func openSavepointService(
 		return nil, err
 	}
 
-	// One repository over the one store, so every record travels with its data. The
-	// locker is bound to the project root here, so the service never names a path.
+	// One repository over the one store, so every record travels with its data.
+	savepointRepo := sprepo.New(scope.store)
+	// One runner for the capture and the rollback: it routes compose's events to the call's step.
+	composeRunner := compose.NewClient(composeAPI, compose.Options{
+		WaitTimeout:     cfg.Compose.WaitTimeout,
+		StopTimeout:     cfg.Compose.StopTimeout,
+		Events:          composeOutput.events,
+		Prompter:        prompter,
+		SinkFromContext: newComposeEventSink,
+	})
+	savepointCapture := capture.New(capture.Deps{
+		SavepointRepo: savepointRepo,
+		ImageBackend:  imageBackend,
+		ComposeRunner: composeRunner,
+		Store:         scope.store,
+		Concurrency:   cfg.Common.Concurrency,
+		RunnerInfo:    newRunnerInfo(),
+	})
+
+	// The locker is bound to the project root here, so the service never names a path.
 	return core.New(core.Deps{
-		SavepointRepo:  sprepo.New(scope.store),
+		SavepointRepo:  savepointRepo,
 		ProjectLocker:  lock.New(projectPath),
 		WriteAdmission: scope.writeAdmission,
 		// The session's lock in the store, which the flock beside it cannot be across hosts.
@@ -251,18 +270,13 @@ func openSavepointService(
 		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
 		ProjectAssembler: profile.assembler,
 		SpecCodec:        composespec.NewCodec(),
-		ComposeRunner: compose.NewClient(composeAPI, compose.Options{
-			WaitTimeout:     cfg.Compose.WaitTimeout,
-			StopTimeout:     cfg.Compose.StopTimeout,
-			Events:          composeOutput.events,
-			Prompter:        prompter,
-			SinkFromContext: newComposeEventSink,
-		}),
-		VolumeRemover:  profile.engine,
-		ImageBackend:   imageBackend,
-		DaemonVersion:  profile.version,
-		MinDaemonMajor: profile.minDaemonMajor,
-		Concurrency:    cfg.Common.Concurrency,
+		ComposeRunner:    composeRunner,
+		Capture:          savepointCapture,
+		VolumeRemover:    profile.engine,
+		ImageBackend:     imageBackend,
+		DaemonVersion:    profile.version,
+		MinDaemonMajor:   profile.minDaemonMajor,
+		Concurrency:      cfg.Common.Concurrency,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: profile.engine,
@@ -276,8 +290,7 @@ func openSavepointService(
 		Session:         scope.sessionID,
 		ComposeProject:  composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
-		Sessions:   scope.sessions,
-		RunnerInfo: newRunnerInfo(),
+		Sessions: scope.sessions,
 	}), nil
 }
 

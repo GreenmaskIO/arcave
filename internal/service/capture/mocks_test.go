@@ -17,7 +17,6 @@ package capture
 import (
 	"bytes"
 	"context"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -106,6 +105,22 @@ func matchValidSnapshotID() any {
 	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
 		return req.SnapshotID.Validate() == nil
 	})
+}
+
+type mockImageBackend struct{ mock.Mock }
+
+func (m *mockImageBackend) CaptureImage(ctx context.Context, req model.ImageCaptureRequest) (model.Image, error) {
+	args := m.Called(ctx, req)
+	image, _ := args.Get(0).(model.Image)
+	return image, args.Error(1)
+}
+
+func (m *mockImageBackend) CaptureWritableLayer(
+	ctx context.Context, req model.WritableLayerCaptureRequest,
+) (model.WritableLayer, error) {
+	args := m.Called(ctx, req)
+	layer, _ := args.Get(0).(model.WritableLayer)
+	return layer, args.Error(1)
 }
 
 // fakeGrantedSessionLock is a session lock that always holds.
@@ -200,17 +215,4 @@ func readCaptureHeartbeat(t *testing.T, store storages.Storager, id model.Savepo
 	beat, err := heartbeat.NewReader(tree).Read(context.Background())
 	require.NoError(t, err)
 	return beat
-}
-
-// assertLogOrder asserts log holds each of lines, in their order.
-func assertLogOrder(t *testing.T, log string, lines []string) {
-	t.Helper()
-	at := -1
-	for _, line := range lines {
-		i := strings.Index(log, line)
-		if !assert.Greater(t, i, at, "%q out of order or missing", line) {
-			return
-		}
-		at = i
-	}
 }

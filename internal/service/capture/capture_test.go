@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -257,4 +258,149 @@ func TestService_requireEmptyTree(t *testing.T) {
 			assert.ElementsMatch(t, want, objectNames(t, store), "nothing is deleted")
 		})
 	}
+}
+
+// The record takes its name, description, labels and rollback target from the request, and
+// lands after the spec.
+func TestService_Capture_RecordsTheRequest(t *testing.T) {
+	// Arrange
+	req := Request{
+		Name:        "sp",
+		Description: "before the migration",
+		Labels:      map[string]string{"team": "core"},
+		TakenBefore: &model.SavepointRef{ID: "019e843e-1650-7000-8000-000000000000", Name: "v1"},
+	}
+	repo := &mockSavepointRepo{}
+	spec := expectSpecCommit(repo)
+	commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
+		return savepoint.ID.Validate() == nil
+	})).Return(nil).Once()
+	mock.InOrder(spec, commit)
+	svc := New(Deps{SavepointRepo: repo, Store: newDirStore(t)})
+
+	// Act
+	savepoint, err := svc.Capture(newTestContext(), fakeGrantedSessionLock{}, Plan{Spec: demoSpecBytes}, nil, req)
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, req.Name, savepoint.Name)
+	assert.Equal(t, req.Description, savepoint.Description)
+	assert.Equal(t, req.Labels, savepoint.Labels)
+	assert.Equal(t, req.TakenBefore, savepoint.TakenBeforeRollbackTo)
+	assert.Equal(t, &model.SpecRef{Format: model.SpecFormatComposeYAML}, savepoint.Spec)
+	repo.AssertExpectations(t)
+}
+
+// A volume that fails commits nothing: the savepoint stays invisible rather than list with
+// half its volumes.
+func TestService_Capture_UncommittedOnFailure(t *testing.T) {
+	// Arrange
+	backend := &mockBackend{volume: demoVolume()}
+	backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+		Return(model.SnapshotStat{}, errors.New("capture boom")).Once()
+	repo := &mockSavepointRepo{}
+	svc := New(Deps{SavepointRepo: repo, Store: newDirStore(t)})
+	plan := Plan{Volumes: []model.VolumeSnapshotBackend{backend}, Spec: demoSpecBytes}
+
+	// Act
+	savepoint, err := svc.Capture(newTestContext(), fakeGrantedSessionLock{}, plan, nil, Request{Name: "sp"})
+
+	// Assert
+	require.EqualError(t, err, "snapshot volume-named-pgdata: capture volume: capture boom")
+	assert.Zero(t, savepoint)
+	backend.AssertExpectations(t)
+	repo.AssertExpectations(t)
+}
+
+// What a half-finished fan-out wrote stays for a later gc, logged with its id: no record names
+// it, and a failure path never deletes data.
+func TestService_Capture_RetainsWhatAPartialCaptureWrote(t *testing.T) {
+	// Arrange
+	store := newDirStore(t)
+	var id model.SavepointID
+	written := &mockBackend{volume: demoVolume()}
+	written.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+		Run(func(args mock.Arguments) {
+			id = args.Get(1).(model.BackendSnapshotRequest).SnapshotID
+			key := id.String() + "/" + demoVolume().ObjectID + "/data.tar"
+			require.NoError(t, store.PutObject(context.Background(), key, strings.NewReader("pgdata bytes")))
+		}).
+		Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
+	failed := &mockBackend{volume: model.Volume{ObjectID: "volume-service-app-etc-cfg"}}
+	failed.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+		Return(model.SnapshotStat{}, errors.New("capture boom")).Once()
+	repo := &mockSavepointRepo{}
+	// One at a time, so the failure comes after the first volume is written.
+	svc := New(Deps{SavepointRepo: repo, Store: store, Concurrency: 1})
+	plan := Plan{Volumes: []model.VolumeSnapshotBackend{written, failed}, Spec: demoSpecBytes}
+	logs := &syncBuffer{}
+	ctx := zerolog.New(logs).WithContext(context.Background())
+
+	// Act
+	savepoint, err := svc.Capture(ctx, fakeGrantedSessionLock{}, plan, nil, Request{Name: "sp"})
+
+	// Assert
+	require.ErrorContains(t, err, "capture boom")
+	assert.Zero(t, savepoint)
+	assert.ElementsMatch(t,
+		[]string{
+			id.String() + "/" + heartbeat.FileName,
+			id.String() + "/" + demoVolume().ObjectID + "/data.tar",
+		},
+		objectNames(t, store),
+		"the archive the surviving volume wrote is kept beside its heartbeat")
+	assert.Equal(t, heartbeat.StatusFailed, readCaptureHeartbeat(t, store, id).Status)
+	assert.Contains(t, logs.String(), `"snapshot_id":"`+id.String()+`","message":"the partial capture is retained for a later gc"`)
+	written.AssertExpectations(t)
+	failed.AssertExpectations(t)
+	repo.AssertExpectations(t)
+}
+
+// The id comes off the clock, a UUIDv7, and is the one every backend writes under and the
+// record and its tree are committed under.
+func TestService_Capture_CreatesTheIDFromTheClock(t *testing.T) {
+	// Arrange
+	var volumeID, layerID, specID model.SavepointID
+	backend := &mockBackend{volume: demoVolume()}
+	backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
+		Run(func(args mock.Arguments) { volumeID = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
+		Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
+	images := &mockImageBackend{}
+	images.On("CaptureWritableLayer", mock.Anything, mock.MatchedBy(func(req model.WritableLayerCaptureRequest) bool {
+		return req.Container == demoContainerRef()
+	})).
+		Run(func(args mock.Arguments) { layerID = args.Get(1).(model.WritableLayerCaptureRequest).SnapshotID }).
+		Return(demoWritableLayer(), nil).Once()
+	repo := &mockSavepointRepo{}
+	repo.On("SaveSpec", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil }), demoSpecBytes).
+		Run(func(args mock.Arguments) { specID = args.Get(1).(model.SavepointID) }).
+		Return(nil).Once()
+	repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
+		return savepoint.ID.Validate() == nil
+	})).Return(nil).Once()
+	store := newDirStore(t)
+	svc := New(Deps{SavepointRepo: repo, ImageBackend: images, Store: store})
+	plan := Plan{
+		Spec:           demoSpecBytes,
+		Volumes:        []model.VolumeSnapshotBackend{backend},
+		WritableLayers: []model.WritableLayerCaptureRequest{{Container: demoContainerRef()}},
+	}
+
+	// Act
+	savepoint, err := svc.Capture(newTestContext(), fakeGrantedSessionLock{}, plan, nil, Request{Name: "sp"})
+
+	// Assert
+	require.NoError(t, err)
+	parsed, err := uuid.Parse(savepoint.ID.String())
+	require.NoError(t, err)
+	assert.Equal(t, uuid.Version(7), parsed.Version())
+	assert.WithinDuration(t, time.Now(), savepoint.CreatedAt, time.Minute)
+	assert.Equal(t, savepoint.ID, volumeID)
+	assert.Equal(t, savepoint.ID, layerID)
+	assert.Equal(t, savepoint.ID, specID)
+	assert.Equal(t, []string{savepoint.ID.String() + "/" + heartbeat.FileName}, objectNames(t, store),
+		"the heartbeat lands in the tree the id names")
+	backend.AssertExpectations(t)
+	images.AssertExpectations(t)
+	repo.AssertExpectations(t)
 }
