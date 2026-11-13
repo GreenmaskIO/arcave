@@ -15,6 +15,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -131,6 +132,7 @@ func (s *Service) newWorkingSet(
 			Volumes:        backends,
 			Images:         images.upstreams,
 			WritableLayers: images.writableLayers,
+			Services:       newServiceHolds(introspection, capturePolicy),
 			Containers:     containers,
 			NotCovered: model.NotCovered{
 				Mounts:                 notCovered.Mounts,
@@ -143,6 +145,43 @@ func (s *Service) newWorkingSet(
 		},
 		anonymousVolumeNames: newAnonymousVolumeNames(introspection),
 	}, nil
+}
+
+// newServiceHolds decides how each service is held still and sorts its replicas by what the daemon
+// reported of them: running, or already still.
+func newServiceHolds(introspection model.IntrospectionResult, capturePolicy model.CapturePolicy) []capture.ServiceHold {
+	holds := make([]capture.ServiceHold, 0, len(introspection.Project.Services))
+	for _, svc := range introspection.Project.Services {
+		var (
+			running []model.ContainerRef
+			idle    []capture.IdleReplica
+		)
+		for _, replica := range svc.Containers {
+			ref := model.ContainerRef{
+				Service: svc.Name,
+				Replica: replica.Number,
+				ID:      replica.ID,
+				Name:    replica.Name,
+			}
+			state := replica.Inspect.State
+			// No state is never the daemon's answer; it is read as running.
+			if state == nil || state.Running && !state.Paused && !state.Restarting {
+				running = append(running, ref)
+				continue
+			}
+			idle = append(idle, capture.IdleReplica{
+				Ref:   ref,
+				State: string(state.Status),
+			})
+		}
+		holds = append(holds, capture.ServiceHold{
+			Service: svc.Name,
+			Mode:    cmp.Or(capturePolicy.DecideService(svc.Name).Mode, model.CaptureModeStop),
+			Running: running,
+			Idle:    idle,
+		})
+	}
+	return holds
 }
 
 // newImageSet decides the writable layers and images a capture takes.
@@ -179,10 +218,10 @@ func stampServices(project *types.Project, labels map[string]map[string]string) 
 }
 
 // newSafetySnapshotPolicy is the capture policy of the safety snapshot taken before a
-// rollback to restoring: the live labels, as a savepoint reads them, with two exceptions.
+// rollback to restoring: the live labels, as a savepoint reads them, with three exceptions.
 // A label that cannot be parsed warns and falls back to the config instead of failing
 // the rollback, and every volume the rollback overwrites is captured whatever its label
-// says, since the safety snapshot is the only copy of it.
+// says, since the safety snapshot is the only copy of it; and every service is stopped.
 func (s *Service) newSafetySnapshotPolicy(
 	ctx context.Context, introspection model.IntrospectionResult, restoring model.Savepoint,
 ) (model.CapturePolicy, error) {
@@ -196,7 +235,19 @@ func (s *Service) newSafetySnapshotPolicy(
 			return model.CapturePolicy{}, err
 		}
 	}
-	return keepRestored(capturePolicy, introspection, restoring), nil
+	return withStopMode(keepRestored(capturePolicy, introspection, restoring)), nil
+}
+
+// withStopMode stops every service, whatever its label or the config say: a rollback overwrites
+// the project, so its safety snapshot is held by stop alone.
+func withStopMode(capturePolicy model.CapturePolicy) model.CapturePolicy {
+	services := make(map[string]model.ServiceDecision, len(capturePolicy.Services))
+	for name, decision := range capturePolicy.Services {
+		decision.Mode = model.CaptureModeStop
+		services[name] = decision
+	}
+	capturePolicy.Mode, capturePolicy.Services = model.CaptureModeStop, services
+	return capturePolicy
 }
 
 // keepRestored captures every live unit savepoint restores into, so the safety snapshot

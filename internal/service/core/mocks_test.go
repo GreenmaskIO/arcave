@@ -305,6 +305,27 @@ func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) ([
 	return killed, args.Error(1)
 }
 
+func (m *mockComposeRunner) StopServices(ctx context.Context, project *types.Project, services []string) ([]string, error) {
+	args := m.Called(ctx, project, services)
+	killed, _ := args.Get(0).([]string)
+	return killed, args.Error(1)
+}
+
+// mockContainerControl doubles containerControl, and capture's too.
+type mockContainerControl struct{ mock.Mock }
+
+func (m *mockContainerControl) PauseContainers(ctx context.Context, ids []string) error {
+	return m.Called(ctx, ids).Error(0)
+}
+
+func (m *mockContainerControl) UnpauseContainers(ctx context.Context, ids []string) error {
+	return m.Called(ctx, ids).Error(0)
+}
+
+func (m *mockContainerControl) AwaitHealthProbes(ctx context.Context, ids []string) error {
+	return m.Called(ctx, ids).Error(0)
+}
+
 func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) error {
 	return m.Called(ctx, project).Error(0)
 }

@@ -23,6 +23,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
+	"github.com/moby/moby/api/types/container"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1704,6 +1705,7 @@ type noSnapshotDoubles struct {
 	backend       *mockBackend
 	volumeRemover *mockVolumeRemover
 	capture       *mockCapture
+	control       *mockContainerControl
 }
 
 // assert closes every double.
@@ -1717,6 +1719,7 @@ func (d noSnapshotDoubles) assert(t *testing.T) {
 	d.backend.AssertExpectations(t)
 	d.volumeRemover.AssertExpectations(t)
 	d.capture.AssertExpectations(t)
+	d.control.AssertExpectations(t)
 }
 
 // newNoSnapshotService is a service over a running compose project and a record it may restore.
@@ -1744,6 +1747,7 @@ func newNoSnapshotService(t *testing.T, record model.Savepoint, inflight infligh
 		backend:       backend,
 		volumeRemover: &mockVolumeRemover{},
 		capture:       &mockCapture{},
+		control:       &mockContainerControl{},
 	}
 	return New(Deps{
 		SessionLocker:    fakeSessionLocker{},
@@ -1757,6 +1761,7 @@ func newNoSnapshotService(t *testing.T, record model.Savepoint, inflight infligh
 		ComposeRunner:    doubles.runner,
 		BackendRegistry:  registry,
 		Capture:          doubles.capture,
+		ContainerControl: doubles.control,
 		Inflight:         inflight,
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
@@ -2243,6 +2248,163 @@ func TestInterruptedState_NoSafetySnapshot(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.phase), func(t *testing.T) {
 			assert.Contains(t, interruptedState(model.InflightMarker{Phase: tt.phase}), tt.want)
+		})
+	}
+}
+
+// demoPausedIntrospection is demoIntrospection with its one service's replica frozen.
+func demoPausedIntrospection() model.IntrospectionResult {
+	introspection := demoIntrospection()
+	introspection.Project.Services[0].Containers = []model.Container{{
+		ID:     demoContainerID,
+		Name:   demoContainerName(1),
+		Number: 1,
+		Inspect: container.InspectResponse{
+			State: &container.State{Status: container.StatePaused, Running: true, Paused: true},
+		},
+	}}
+	return introspection
+}
+
+// A rollback taking no safety snapshot resumes a frozen replica before its marker, with a
+// warning; one it cannot resume is only logged, and the rollback goes on.
+func TestService_Rollback_NoSafetySnapshotResumesAPausedReplica(t *testing.T) {
+	tests := []struct {
+		name       string
+		unpauseErr error
+		wantLog    string
+	}{
+		{name: "the replica is resumed"},
+		{name: "a failed resume goes on", unpauseErr: errors.New("boom"), wantLog: "cannot resume the paused containers"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			record := demoRecord()
+			inflight := &mockInflight{}
+			svc, doubles := newNoSnapshotService(t, record, inflight)
+			doubles.inspector.On("Introspect", mock.Anything).Return(demoPausedIntrospection(), nil).Once()
+			warned := &warnedRecorder{}
+			logs := &strings.Builder{}
+			now := func() time.Time { return time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC) }
+			ctx := progress.WithTracker(zerolog.New(logs).WithContext(context.Background()), progress.New(warned, now))
+			mock.InOrder(
+				inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once(),
+				doubles.control.On("UnpauseContainers", mock.Anything, []string{demoContainerID}).
+					Return(tt.unpauseErr).Once(),
+				inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRecreating)).Return(nil).Once(),
+				doubles.runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once(),
+				doubles.runner.On("Create", mock.Anything, rolledBackTo(demoTargetSpec, record), demoRestoredVolumes).
+					Return(nil).Once(),
+				inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRestoring)).Return(nil).Once(),
+				doubles.backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once(),
+				inflight.On("Put", mock.Anything, isInflightMarker(record.ID, model.InflightRestoreDone)).Return(nil).Once(),
+				doubles.runner.On("Start", mock.Anything, rolledBackTo(demoTargetSpec, record), 60*time.Second).
+					Return(nil).Once(),
+				inflight.On("Clear", mock.Anything).Return(nil).Once(),
+			)
+
+			// Act
+			_, err := svc.Rollback(ctx, model.RollbackRequest{
+				ID: ptrID(record.ID), WaitTimeout: 60 * time.Second, SkipSafetySnapshot: true,
+			})
+
+			// Assert
+			assert.NoError(t, err)
+			assert.Contains(t, warned.msgs, "db-1 was paused: resuming it before the rollback")
+			if tt.wantLog != "" {
+				assert.Contains(t, logs.String(), tt.wantLog)
+			} else {
+				assert.NotContains(t, logs.String(), "cannot resume the paused containers")
+			}
+			inflight.AssertExpectations(t)
+			doubles.assert(t)
+		})
+	}
+}
+
+// A live rollback's safety snapshot is held by stop whatever the labels say: a frozen replica is
+// resumed before the stop, and one that cannot be resumed aborts the rollback, the project started
+// back and nothing marked.
+func TestService_Rollback_SafetySnapshotResumesAPausedReplica(t *testing.T) {
+	boom := errors.New("boom")
+	tests := []struct {
+		name       string
+		unpauseErr error
+		wantErr    string
+	}{
+		{name: "resumed, then stopped", wantErr: "stopping services: boom"},
+		{name: "a failed resume aborts", unpauseErr: boom, wantErr: "resuming containers: boom"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			record := demoRecord()
+			repo, _, locker := demoResolution(record)
+			introspection := demoPausedIntrospection()
+			introspection.Project.Services[0].Labels = map[string]string{string(model.CaptureLabelCaptureMode): "pause"}
+			inspector := &mockInspector{}
+			inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
+			inflight := &mockInflight{}
+			runner := &mockComposeRunner{}
+			control := &mockContainerControl{}
+			calls := []*mock.Call{
+				inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once(),
+				control.On("UnpauseContainers", mock.Anything, []string{demoContainerID}).Return(tt.unpauseErr).Once(),
+			}
+			if tt.unpauseErr == nil {
+				calls = append(calls, runner.On("Stop", mock.Anything, demoSpec).Return(nil, boom).Once())
+			}
+			calls = append(calls, runner.On("Start", mock.Anything, demoSpec, 60*time.Second).Return(nil).Once())
+			mock.InOrder(calls...)
+			store := newDirStore(t)
+			registry := &mockRegistry{}
+			registry.On("New", matchSpec(store, demoVolume().ObjectID)).Return(&mockBackend{volume: demoVolume()}, nil).Twice()
+			defaults := demoCaptureDefaults
+			defaults.Mode = model.CaptureModePause
+			defaults.SavepointCapture.WritableLayers = false
+			defaults.SavepointCapture.Images = false
+			svc := New(Deps{
+				SessionLocker:    fakeSessionLocker{},
+				WriteAdmission:   fakeWriteAdmission{},
+				VolumeRemover:    &mockVolumeRemover{},
+				SavepointRepo:    repo,
+				ProjectLocker:    locker,
+				ComposeInspector: inspector,
+				ProjectAssembler: assemblerFor(introspection),
+				SpecCodec:        demoCodec(),
+				ComposeRunner:    runner,
+				ContainerControl: control,
+				BackendRegistry:  registry,
+				Capture: capture.New(capture.Deps{
+					SavepointRepo:    repo,
+					ImageBackend:     &mockImageBackend{},
+					ComposeRunner:    runner,
+					ContainerControl: control,
+					Store:            store,
+				}),
+				Inflight:        inflight,
+				Store:           store,
+				CaptureDefaults: defaults,
+				ArcaveProject:   demoArcaveProject,
+			})
+			warned := &warnedRecorder{}
+			now := func() time.Time { return time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC) }
+			ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(warned, now))
+
+			// Act
+			_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
+
+			// Assert
+			assert.EqualError(t, err, "stop services: "+tt.wantErr)
+			assert.Contains(t, warned.msgs, "db-1 was paused: resuming it to stop it")
+			repo.AssertExpectations(t)
+			locker.AssertExpectations(t)
+			registry.AssertExpectations(t)
+			inspector.AssertExpectations(t)
+			inflight.AssertExpectations(t)
+			runner.AssertExpectations(t)
+			control.AssertExpectations(t)
 		})
 	}
 }

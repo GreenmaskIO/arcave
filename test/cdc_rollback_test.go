@@ -534,6 +534,10 @@ func (s *stubComposeRunner) Stop(context.Context, *types.Project) ([]string, err
 	return nil, nil
 }
 
+func (s *stubComposeRunner) StopServices(context.Context, *types.Project, []string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *stubComposeRunner) Down(context.Context, *types.Project) error { return nil }
 
 func (s *stubComposeRunner) Create(context.Context, *types.Project, []string) error { return nil }

@@ -32,6 +32,7 @@ snapshot:
 writable_layers:
     backend: dedupcopy
 capture:
+    mode: stop
     writable_layers: true
     images: true
     volumes:
@@ -372,15 +373,20 @@ unsupported writable_layers.backend "zstd" (supported: dedupcopy, fullcopy)
 
 ## `capture`
 
-Which kinds of unit a savepoint captures when no [capture label](capture_labels.md) says otherwise. Everything is on by default.
+How a savepoint holds the services still, and which kinds of unit it captures, when no [capture label](capture_labels.md) says otherwise. Everything is on by default.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `capture.mode` | string | `stop` | How a service is held still while a savepoint captures it: `stop`, `pause` or `live`. See [Capture modes](../capture_modes.md). A rollback's safety snapshot always stops. |
 | `capture.writable_layers` | bool | `true` | Every container's writable layer. |
 | `capture.images` | bool | `true` | The image each service's `image:` names. |
 | `capture.volumes.named` | bool | `true` | Named volumes. |
 | `capture.volumes.bind` | bool | `true` | Bind mounts. |
 | `capture.volumes.anonymous` | bool | `true` | Anonymous volumes. |
+
+```text
+unsupported capture.mode "freeze" (supported: stop, pause, live)
+```
 
 These are the defaults a label overrides: `capture.volumes.bind: false` with `arcave.mounts.include: /app/data` on one service captures that one bind and no other. They steer a running compose project without recreating it, which a label cannot. What a savepoint left out is listed in its `not_covered`.
 

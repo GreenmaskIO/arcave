@@ -367,9 +367,20 @@ func (w WritableLayers) BackendKind() model.ImageBackendKind {
 // Capture says, by kind of unit, what a savepoint takes when no arcave.* label says
 // otherwise. It names no service or volume: those are the compose file's, by label.
 type Capture struct {
+	// Mode holds a service no arcave.capture.mode label names: stop, pause or live.
+	Mode           string         `yaml:"mode" mapstructure:"mode"`
 	WritableLayers *bool          `yaml:"writable_layers" mapstructure:"writable_layers"`
 	Images         *bool          `yaml:"images" mapstructure:"images"`
 	Volumes        CaptureVolumes `yaml:"volumes" mapstructure:"volumes"`
+}
+
+// Validate rejects a capture mode arcave does not know.
+func (c Capture) Validate() error {
+	if _, ok := model.ParseCaptureMode(c.Mode); !ok {
+		return fmt.Errorf("%w: unsupported capture.mode %q (supported: %s, %s, %s)", ErrInvalid,
+			c.Mode, model.CaptureModeStop, model.CaptureModePause, model.CaptureModeLive)
+	}
+	return nil
 }
 
 // CaptureVolumes says which kinds of volume a savepoint takes.
@@ -638,6 +649,9 @@ func (c *Config) ApplyDefaults(projectRoot string) {
 	if c.WritableLayers.Backend == "" {
 		c.WritableLayers.Backend = string(model.ImageBackendDedupCopy)
 	}
+	if c.Capture.Mode == "" {
+		c.Capture.Mode = string(model.CaptureModeStop)
+	}
 	if c.Capture.WritableLayers == nil {
 		c.Capture.WritableLayers = utils.New(true)
 	}
@@ -742,6 +756,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.WritableLayers.Validate(); err != nil {
+		return err
+	}
+	if err := c.Capture.Validate(); err != nil {
 		return err
 	}
 	if err := c.Rollback.Validate(); err != nil {

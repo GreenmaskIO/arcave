@@ -78,19 +78,26 @@ type composeRunner interface {
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
 }
 
+// containerControl resumes frozen containers ahead of a rollback's teardown.
+type containerControl interface {
+	// UnpauseContainers resumes whichever of the containers is paused; one that is not, or is
+	// gone, is no error.
+	UnpauseContainers(ctx context.Context, ids []string) error
+}
+
 // savepointCapture is a savepoint's capture in three steps the workflow composes: hold the
 // compose project still, capture what is held, bring it back.
 type savepointCapture interface {
-	// Hold brings the compose project to a state a capture can be taken of: its services
-	// stopped. It returns the ids of the containers the stop's deadline killed.
+	// Hold brings the compose project to a state a capture can be taken of: each service held
+	// still as the plan says. It returns the ids of the containers a stop's deadline killed.
 	Hold(ctx context.Context, plan capture.Plan) (killed []string, err error)
 	// Capture commits a savepoint of the project Hold holds still, the record last; killed are
 	// the containers Hold returned. It starts and stops nothing.
 	Capture(
 		ctx context.Context, grantedLock model.GrantedSessionLock, plan capture.Plan, killed []string, req capture.Request,
 	) (model.Savepoint, error)
-	// Release starts the services back, on a context an interrupt does not cancel; it converges
-	// whether Hold ran or not.
+	// Release resumes every service and starts the project back, on a context an interrupt does
+	// not cancel; it converges whether Hold ran or not.
 	Release(ctx context.Context, plan capture.Plan) error
 }
 
@@ -141,6 +148,7 @@ type Deps struct {
 	ProjectAssembler   projectAssembler
 	SpecCodec          specCodec
 	ComposeRunner      composeRunner
+	ContainerControl   containerControl
 	Capture            savepointCapture
 	VolumeRemover      volumeRemover
 	ImageBackend       imageBackend
@@ -179,6 +187,7 @@ type Service struct {
 	projectAssembler        projectAssembler
 	specCodec               specCodec
 	composeRunner           composeRunner
+	containerControl        containerControl
 	volumeRemover           volumeRemover
 	imageBackend            imageBackend
 	containerRebuilder      containerRebuilder
@@ -209,6 +218,7 @@ func New(deps Deps) *Service {
 		projectAssembler:        deps.ProjectAssembler,
 		specCodec:               deps.SpecCodec,
 		composeRunner:           deps.ComposeRunner,
+		containerControl:        deps.ContainerControl,
 		volumeRemover:           deps.VolumeRemover,
 		imageBackend:            deps.ImageBackend,
 		containerRebuilder:      deps.ContainerRebuilder,

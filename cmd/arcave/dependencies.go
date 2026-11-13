@@ -252,12 +252,13 @@ func openSavepointService(
 		SinkFromContext: newComposeEventSink,
 	})
 	savepointCapture := capture.New(capture.Deps{
-		SavepointRepo: savepointRepo,
-		ImageBackend:  imageBackend,
-		ComposeRunner: composeRunner,
-		Store:         scope.store,
-		Concurrency:   cfg.Common.Concurrency,
-		RunnerInfo:    newRunnerInfo(),
+		SavepointRepo:    savepointRepo,
+		ImageBackend:     imageBackend,
+		ComposeRunner:    composeRunner,
+		ContainerControl: profile.engine,
+		Store:            scope.store,
+		Concurrency:      cfg.Common.Concurrency,
+		RunnerInfo:       newRunnerInfo(),
 	})
 
 	// The locker is bound to the project root here, so the service never names a path.
@@ -271,6 +272,7 @@ func openSavepointService(
 		ProjectAssembler: profile.assembler,
 		SpecCodec:        composespec.NewCodec(),
 		ComposeRunner:    composeRunner,
+		ContainerControl: profile.engine,
 		Capture:          savepointCapture,
 		VolumeRemover:    profile.engine,
 		ImageBackend:     imageBackend,
@@ -1021,6 +1023,7 @@ func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        cfg.Snapshot.BackendKind(),
 		WritableLayerBackend: cfg.WritableLayers.BackendKind(),
+		Mode:                 model.CaptureMode(cfg.Capture.Mode),
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   utils.Value(cfg.Capture.WritableLayers),
 			Images:           utils.Value(cfg.Capture.Images),

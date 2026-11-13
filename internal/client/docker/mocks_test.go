@@ -100,6 +100,14 @@ func (m *mockAPI) ContainerCommit(ctx context.Context, containerID string, optio
 	return args.Get(0).(client.ContainerCommitResult), args.Error(1)
 }
 
+func (m *mockAPI) ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error) {
+	return client.ContainerPauseResult{}, m.Called(ctx, containerID, options).Error(0)
+}
+
+func (m *mockAPI) ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error) {
+	return client.ContainerUnpauseResult{}, m.Called(ctx, containerID, options).Error(0)
+}
+
 func (m *mockAPI) ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error) {
 	args := m.Called(ctx, imageID)
 	return client.ImageInspectResult{InspectResponse: args.Get(0).(image.InspectResponse)}, args.Error(1)

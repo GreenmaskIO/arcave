@@ -24,6 +24,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // newMockCaptureTriggers returns n strict mock triggers, as mocks and as the triggers they form.
@@ -178,21 +181,82 @@ func TestCaptureTriggers_afterCapture_AfterAFailedBefore(t *testing.T) {
 	}
 }
 
+// Replicas of the demo services, as the trigger tests name them.
+var (
+	dbReplica1     = model.ContainerRef{Service: "db", Replica: 1, ID: "db1", Name: "demo-db-1"}
+	webReplica1    = model.ContainerRef{Service: "web", Replica: 1, ID: "web1", Name: "demo-web-1"}
+	webReplica2    = model.ContainerRef{Service: "web", Replica: 2, ID: "web2", Name: "demo-web-2"}
+	workerReplica1 = model.ContainerRef{Service: "worker", Replica: 1, ID: "worker1", Name: "demo-worker-1"}
+)
+
+// stopServices is a plan's services, every one held by stop and running.
+var stopServices = []ServiceHold{{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}}}
+
+// newProgressContext is a context under a root step reporting to recorder.
+func newProgressContext(recorder progress.Renderer) context.Context {
+	ctx := zerolog.Nop().WithContext(context.Background())
+	ctx, _ = progress.Begin(progress.WithTracker(ctx, progress.New(recorder, time.Now)), progress.Step{Kind: "test"})
+	return ctx
+}
+
 func TestStopTrigger_beforeCapture(t *testing.T) {
+	errBoom := errors.New("boom")
+
 	tests := []struct {
-		name       string
-		stopErr    error
-		wantKilled []string
-		wantErr    string
+		name          string
+		services      []string
+		allServices   bool
+		pausedOnEntry []model.ContainerRef
+		unpauseErr    error
+		stopErr       error
+		// wantStop and wantStopServices are the calls expected; neither is no stop at all.
+		wantStop         bool
+		wantStopServices bool
+		wantKilled       []string
+		wantWarnings     []string
+		wantErr          string
 	}{
 		{
-			name:       "stops the project",
-			wantKilled: []string{"c1"},
+			name:        "every service is stop: the project is stopped",
+			services:    []string{"db"},
+			allServices: true,
+			wantStop:    true,
+			wantKilled:  []string{"c1"},
 		},
 		{
-			name:    "a failed stop",
-			stopErr: errors.New("boom"),
-			wantErr: "stopping services: boom",
+			name:             "some services are stop: those are stopped",
+			services:         []string{"db", "web"},
+			wantStopServices: true,
+			wantKilled:       []string{"c1"},
+		},
+		{
+			name: "no service is stop: nothing is stopped",
+		},
+		{
+			name:          "a replica paused on entry is resumed before the stop",
+			services:      []string{"db"},
+			allServices:   true,
+			pausedOnEntry: []model.ContainerRef{dbReplica1},
+			wantStop:      true,
+			wantKilled:    []string{"c1"},
+			wantWarnings:  []string{"db-1 was paused: resuming it to stop it"},
+		},
+		{
+			name:          "a failed resume stops nothing",
+			services:      []string{"db"},
+			allServices:   true,
+			pausedOnEntry: []model.ContainerRef{dbReplica1},
+			unpauseErr:    errBoom,
+			wantWarnings:  []string{"db-1 was paused: resuming it to stop it"},
+			wantErr:       "resuming containers: boom",
+		},
+		{
+			name:        "a failed stop",
+			services:    []string{"db"},
+			allServices: true,
+			stopErr:     errBoom,
+			wantStop:    true,
+			wantErr:     "stopping services: boom",
 		},
 	}
 
@@ -200,8 +264,150 @@ func TestStopTrigger_beforeCapture(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			runner := &mockComposeRunner{}
-			runner.On("Stop", mock.Anything, demoSpec).Return([]string{"c1"}, tt.stopErr).Once()
-			trigger := stopTrigger{composeRunner: runner, project: demoSpec, waitTimeout: time.Minute}
+			control := &mockContainerControl{}
+			var calls []*mock.Call
+			if len(tt.pausedOnEntry) > 0 {
+				calls = append(calls, control.On("UnpauseContainers", mock.Anything, []string{"db1"}).
+					Return(tt.unpauseErr).Once())
+			}
+			if tt.wantStop {
+				calls = append(calls, runner.On("Stop", mock.Anything, demoSpec).
+					Return([]string{"c1"}, tt.stopErr).Once())
+			}
+			if tt.wantStopServices {
+				calls = append(calls, runner.On("StopServices", mock.Anything, demoSpec, tt.services).
+					Return([]string{"c1"}, tt.stopErr).Once())
+			}
+			mock.InOrder(calls...)
+			trigger := stopTrigger{
+				composeRunner: runner,
+				control:       control,
+				project:       demoSpec,
+				waitTimeout:   time.Minute,
+				services:      tt.services,
+				allServices:   tt.allServices,
+				pausedOnEntry: tt.pausedOnEntry,
+			}
+			recorder := &stepRecorder{}
+
+			// Act
+			killed, err := trigger.beforeCapture(newProgressContext(recorder))
+
+			// Assert
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, tt.wantErr)
+			}
+			assert.Equal(t, tt.wantKilled, killed)
+			assert.Equal(t, tt.wantWarnings, recorder.warnings)
+			runner.AssertExpectations(t)
+			control.AssertExpectations(t)
+		})
+	}
+}
+
+func TestStopTrigger_afterCapture(t *testing.T) {
+	errBoom := errors.New("boom")
+
+	tests := []struct {
+		name     string
+		resumed  []model.ContainerRef
+		awaitErr error
+		startErr error
+		// wantAwait are the containers whose health probes are waited on; nil is no wait.
+		wantAwait []string
+		wantErr   string
+	}{
+		{
+			name: "starts the project",
+		},
+		{
+			name:      "the resumed replicas' probes are waited on before the start",
+			resumed:   []model.ContainerRef{webReplica1, workerReplica1},
+			wantAwait: []string{"web1", "worker1"},
+		},
+		{
+			name:      "a failed wait still starts the project",
+			resumed:   []model.ContainerRef{webReplica1},
+			awaitErr:  errBoom,
+			wantAwait: []string{"web1"},
+		},
+		{
+			name:     "a failed start",
+			startErr: errBoom,
+			wantErr:  "starting services: boom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			runner := &mockComposeRunner{}
+			control := &mockContainerControl{}
+			var calls []*mock.Call
+			if tt.wantAwait != nil {
+				calls = append(calls, control.On("AwaitHealthProbes", mock.Anything, tt.wantAwait).
+					Return(tt.awaitErr).Once())
+			}
+			calls = append(calls, runner.On("Start", mock.Anything, demoSpec, time.Minute).Return(tt.startErr).Once())
+			mock.InOrder(calls...)
+			trigger := stopTrigger{
+				composeRunner: runner,
+				control:       control,
+				project:       demoSpec,
+				waitTimeout:   time.Minute,
+				resumed:       tt.resumed,
+			}
+
+			// Act
+			err := trigger.afterCapture(zerolog.Nop().WithContext(context.Background()))
+
+			// Assert
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, tt.wantErr)
+			}
+			runner.AssertExpectations(t)
+			control.AssertExpectations(t)
+		})
+	}
+}
+
+func TestPauseTrigger_beforeCapture(t *testing.T) {
+	tests := []struct {
+		name      string
+		running   []model.ContainerRef
+		pauseErr  error
+		wantPause []string
+		wantErr   string
+	}{
+		{
+			name:      "freezes the running replicas",
+			running:   []model.ContainerRef{webReplica1, webReplica2},
+			wantPause: []string{"web1", "web2"},
+		},
+		{
+			name: "no running replica: no call",
+		},
+		{
+			name:      "a failed pause",
+			running:   []model.ContainerRef{webReplica1},
+			pauseErr:  errors.New("boom"),
+			wantPause: []string{"web1"},
+			wantErr:   "pausing containers: boom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			control := &mockContainerControl{}
+			if tt.wantPause != nil {
+				control.On("PauseContainers", mock.Anything, tt.wantPause).Return(tt.pauseErr).Once()
+			}
+			trigger := pauseTrigger{control: control, running: tt.running}
 
 			// Act
 			killed, err := trigger.beforeCapture(context.Background())
@@ -212,37 +418,58 @@ func TestStopTrigger_beforeCapture(t *testing.T) {
 			} else {
 				assert.EqualError(t, err, tt.wantErr)
 			}
-			assert.Equal(t, tt.wantKilled, killed)
-			runner.AssertExpectations(t)
+			assert.Empty(t, killed)
+			control.AssertExpectations(t)
 		})
 	}
 }
 
-func TestStopTrigger_afterCapture(t *testing.T) {
+func TestPauseTrigger_afterCapture(t *testing.T) {
 	tests := []struct {
-		name     string
-		startErr error
-		wantErr  string
+		name          string
+		running       []model.ContainerRef
+		pausedOnEntry []model.ContainerRef
+		unpauseErr    error
+		wantUnpause   []string
+		wantWarnings  []string
+		wantErr       string
 	}{
 		{
-			name: "starts the project",
+			name:        "resumes its own",
+			running:     []model.ContainerRef{webReplica1},
+			wantUnpause: []string{"web1"},
 		},
 		{
-			name:     "a failed start",
-			startErr: errors.New("boom"),
-			wantErr:  "starting services: boom",
+			name:          "resumes the ones frozen before it too, with a warning",
+			running:       []model.ContainerRef{webReplica1},
+			pausedOnEntry: []model.ContainerRef{webReplica2},
+			wantUnpause:   []string{"web1", "web2"},
+			wantWarnings:  []string{"web-2 was paused before the capture: resuming it"},
+		},
+		{
+			name: "no replica: no call",
+		},
+		{
+			name:        "a failed resume",
+			running:     []model.ContainerRef{webReplica1},
+			unpauseErr:  errors.New("boom"),
+			wantUnpause: []string{"web1"},
+			wantErr:     "resuming containers: boom",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			runner := &mockComposeRunner{}
-			runner.On("Start", mock.Anything, demoSpec, time.Minute).Return(tt.startErr).Once()
-			trigger := stopTrigger{composeRunner: runner, project: demoSpec, waitTimeout: time.Minute}
+			control := &mockContainerControl{}
+			if tt.wantUnpause != nil {
+				control.On("UnpauseContainers", mock.Anything, tt.wantUnpause).Return(tt.unpauseErr).Once()
+			}
+			trigger := pauseTrigger{control: control, running: tt.running, pausedOnEntry: tt.pausedOnEntry}
+			recorder := &stepRecorder{}
 
 			// Act
-			err := trigger.afterCapture(context.Background())
+			err := trigger.afterCapture(newProgressContext(recorder))
 
 			// Assert
 			if tt.wantErr == "" {
@@ -250,21 +477,98 @@ func TestStopTrigger_afterCapture(t *testing.T) {
 			} else {
 				assert.EqualError(t, err, tt.wantErr)
 			}
-			runner.AssertExpectations(t)
+			assert.Equal(t, tt.wantWarnings, recorder.warnings)
+			control.AssertExpectations(t)
 		})
 	}
 }
 
-func TestNewCaptureTriggers(t *testing.T) {
+func TestLiveTrigger_afterCapture(t *testing.T) {
 	// Arrange
-	runner := &mockComposeRunner{}
-	plan := Plan{Project: demoSpec, WaitTimeout: time.Minute}
+	control := &mockContainerControl{}
+	control.On("UnpauseContainers", mock.Anything, []string{"worker1"}).Return(nil).Once()
+	trigger := liveTrigger{control: control, pausedOnEntry: []model.ContainerRef{workerReplica1}}
+	recorder := &warnedRecorder{}
 
 	// Act
-	triggers := newCaptureTriggers(runner, plan)
+	err := trigger.afterCapture(newProgressContext(recorder))
 
 	// Assert
-	assert.Equal(t, captureTriggers{
-		stopTrigger{composeRunner: runner, project: demoSpec, waitTimeout: time.Minute},
-	}, triggers)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"worker-1 was paused before the capture: resuming it"}, recorder.msgs)
+	control.AssertExpectations(t)
+}
+
+func TestNewCaptureTriggersByMode(t *testing.T) {
+	pausedWeb := IdleReplica{Ref: webReplica2, State: "paused"}
+	exitedWeb := IdleReplica{Ref: webReplica2, State: "exited"}
+	pausedWorker := IdleReplica{Ref: workerReplica1, State: "paused"}
+
+	tests := []struct {
+		name     string
+		services []ServiceHold
+		want     func(runner composeRunner, control containerControl) captureTriggers
+	}{
+		{
+			name: "each group its own trigger, stop then pause then live",
+			services: []ServiceHold{
+				{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
+				{Service: "web", Mode: model.CaptureModePause, Running: []model.ContainerRef{webReplica1}, Idle: []IdleReplica{pausedWeb}},
+				{Service: "worker", Mode: model.CaptureModeLive, Idle: []IdleReplica{pausedWorker}},
+			},
+			want: func(runner composeRunner, control containerControl) captureTriggers {
+				return captureTriggers{
+					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute,
+						services: []string{"db"},
+						resumed:  []model.ContainerRef{webReplica1, webReplica2, workerReplica1}},
+					pauseTrigger{control: control, running: []model.ContainerRef{webReplica1},
+						pausedOnEntry: []model.ContainerRef{webReplica2}},
+					liveTrigger{control: control, pausedOnEntry: []model.ContainerRef{workerReplica1}},
+				}
+			},
+		},
+		{
+			name: "every service stop, an unknown mode stopped too",
+			services: []ServiceHold{
+				{Service: "db", Mode: model.CaptureModeStop, Running: []model.ContainerRef{dbReplica1}},
+				{Service: "web", Idle: []IdleReplica{exitedWeb, pausedWeb}},
+			},
+			want: func(runner composeRunner, control containerControl) captureTriggers {
+				return captureTriggers{
+					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute,
+						services: []string{"db", "web"}, allServices: true, pausedOnEntry: []model.ContainerRef{webReplica2}},
+					pauseTrigger{control: control},
+					liveTrigger{control: control},
+				}
+			},
+		},
+		{
+			name: "every service live: a stop trigger with no service, to start the project after",
+			services: []ServiceHold{
+				{Service: "db", Mode: model.CaptureModeLive, Running: []model.ContainerRef{dbReplica1}},
+			},
+			want: func(runner composeRunner, control containerControl) captureTriggers {
+				return captureTriggers{
+					stopTrigger{composeRunner: runner, control: control, project: demoSpec, waitTimeout: time.Minute},
+					pauseTrigger{control: control},
+					liveTrigger{control: control},
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			runner := &mockComposeRunner{}
+			control := &mockContainerControl{}
+			plan := Plan{Project: demoSpec, WaitTimeout: time.Minute, Services: tt.services}
+
+			// Act
+			triggers := newCaptureTriggersByMode(runner, control, plan)
+
+			// Assert
+			assert.Equal(t, tt.want(runner, control), triggers)
+		})
+	}
 }

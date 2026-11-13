@@ -298,7 +298,7 @@ func TestService_captureHeld(t *testing.T) {
 			interruptOn: "Hold",
 			wantErr:     "interrupted: context canceled",
 			wantLogOrder: []string{
-				"savepoint interrupted while stopping services",
+				"savepoint interrupted while holding the services",
 				"release",
 				"failure the interrupt caused",
 			},
@@ -331,7 +331,7 @@ func TestService_captureHeld(t *testing.T) {
 		{
 			name:             "a failed release past the commit names the savepoint",
 			releaseErr:       errBoom,
-			wantErr:          "savepoint " + committed.ID.String() + " committed; services failed to start: boom",
+			wantErr:          "savepoint " + committed.ID.String() + " committed; services failed to resume: boom",
 			wantNoRestartLog: true,
 		},
 		{
@@ -339,14 +339,14 @@ func TestService_captureHeld(t *testing.T) {
 			captureErr:   errors.New("capture boom"),
 			releaseErr:   errBoom,
 			wantErr:      "capturing volumes: capture boom",
-			wantLogOrder: []string{"services failed to restart after capture failure"},
+			wantLogOrder: []string{"services failed to resume after capture failure"},
 		},
 		{
 			name:         "a failed release under a failed hold is logged",
 			holdErr:      errors.New("stop boom"),
 			releaseErr:   errBoom,
 			wantErr:      "stop boom",
-			wantLogOrder: []string{"services failed to restart after stop failure"},
+			wantLogOrder: []string{"services failed to resume after hold failure"},
 		},
 	}
 
@@ -410,7 +410,7 @@ func TestService_captureHeld(t *testing.T) {
 			}
 			assertLogOrder(t, logs.String(), tt.wantLogOrder)
 			if tt.wantNoRestartLog {
-				assert.NotContains(t, logs.String(), "services failed to restart")
+				assert.NotContains(t, logs.String(), "services failed to resume")
 			}
 			capturer.AssertExpectations(t)
 			grantedLock.AssertExpectations(t)

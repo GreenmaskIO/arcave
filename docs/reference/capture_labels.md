@@ -23,6 +23,7 @@ On a **service** (`services.<name>.labels`):
 | `arcave.writable-layer.capture` | `true` / `false` | The writable layers of the service's containers. |
 | `arcave.writable-layer.backend` | `dedupcopy` / `fullcopy` | How those layers are stored; see [`writable_layers`](configuration.md#writable_layers). |
 | `arcave.image.capture` | `true` / `false` | The bytes of the image the service's `image:` names. |
+| `arcave.capture.mode` | `stop` / `pause` / `live` | How the service is held still while a savepoint captures it; see [Capture modes](../capture_modes.md). |
 
 On a **named volume** (`volumes.<name>.labels`):
 
@@ -41,6 +42,8 @@ The most specific label wins:
 2. The service's target lists — `arcave.mounts.exclude`/`include` for whether, `arcave.mounts.fullcopy`/`cdc` for the backend.
 3. The service's defaults — `arcave.capture`, `arcave.volume.backend`.
 4. The config: [`capture.*`](configuration.md#capture), [`snapshot.backend`](configuration.md#snapshot) and [`writable_layers.backend`](configuration.md#writable_layers).
+
+`arcave.capture.mode` stands alone: the service's own label, else [`capture.mode`](configuration.md#capture). A rollback's safety snapshot ignores both and stops every service.
 
 `arcave.writable-layer.capture` and `arcave.image.capture` sit at step 2 for their own unit: they override the service's `arcave.capture`.
 
@@ -88,6 +91,16 @@ volumes:
   pgdata:
     labels:
       arcave.backend: cdc
+```
+
+Capture a database without restarting it: frozen for the capture, resumed after it, crash-consistent:
+
+```yaml
+services:
+  db:
+    image: postgres:16
+    labels:
+      arcave.capture.mode: pause
 ```
 
 Quote `"true"` and `"false"`: compose labels are strings.

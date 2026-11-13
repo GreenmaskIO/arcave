@@ -151,11 +151,11 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 			name: "every step ends where the workflow opened it",
 			want: []string{
 				"savepoint.create/project.introspect succeeded",
-				"savepoint.create/compose.stop succeeded",
+				"savepoint.create/savepoint.hold succeeded",
 				"savepoint.create/savepoint.capture/volume.capture/volume[volume-named-demo_db] succeeded",
 				"savepoint.create/savepoint.capture/volume.capture succeeded",
 				"savepoint.create/savepoint.capture succeeded",
-				"savepoint.create/compose.start succeeded",
+				"savepoint.create/savepoint.release succeeded",
 				"savepoint.create succeeded",
 			},
 		},
@@ -164,12 +164,12 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 			snapshotErr: errDisk,
 			want: []string{
 				"savepoint.create/project.introspect succeeded",
-				"savepoint.create/compose.stop succeeded",
+				"savepoint.create/savepoint.hold succeeded",
 				"savepoint.create/savepoint.capture/volume.capture/volume[volume-named-demo_db] failed " +
 					"error=snapshot volume-named-demo_db: capture volume: disk full",
 				"savepoint.create/savepoint.capture/volume.capture failed",
 				"savepoint.create/savepoint.capture failed",
-				"savepoint.create/compose.start succeeded",
+				"savepoint.create/savepoint.release succeeded",
 				"savepoint.create failed",
 			},
 		},
@@ -266,7 +266,7 @@ func TestService_Rollback_Progress(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		"rollback/project.introspect succeeded",
-		"rollback/rollback.safety-snapshot/compose.stop succeeded",
+		"rollback/rollback.safety-snapshot/savepoint.hold succeeded",
 		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture/volume[volume-named-demo_db] succeeded",
 		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture succeeded",
 		"rollback/rollback.safety-snapshot/savepoint.capture succeeded",

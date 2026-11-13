@@ -96,29 +96,29 @@ func (s *Service) captureHeld(
 		beforeErr, captureErr, afterErr error
 	)
 	if killed, beforeErr = s.capture.Hold(ctx, plan); beforeErr != nil {
-		// A stop that failed or was interrupted partway may have stopped some services.
-		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")
+		// A hold that failed or was interrupted partway may have held some services.
+		logInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
 	} else if savepoint, captureErr = s.capture.Capture(ctx, grantedLock, plan, killed, req); captureErr != nil {
-		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
+		logInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
 		captureErr = preferInterrupt(ctx, captureErr)
 	} else {
-		logInterrupt(ctx, "savepoint committed before the interrupt: restarting services")
+		logInterrupt(ctx, "savepoint committed before the interrupt: resuming the services")
 	}
 	afterErr = s.capture.Release(ctx, plan)
 
 	switch {
 	case beforeErr != nil:
 		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to restart after stop failure")
+			log.Error().Err(afterErr).Msg("services failed to resume after hold failure")
 		}
 		return model.Savepoint{}, preferInterrupt(ctx, beforeErr)
 	case captureErr != nil:
 		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to restart after capture failure")
+			log.Error().Err(afterErr).Msg("services failed to resume after capture failure")
 		}
 		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", captureErr)
 	case afterErr != nil:
-		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", savepoint.ID, afterErr)
+		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to resume: %w", savepoint.ID, afterErr)
 	}
 	return savepoint, nil
 }

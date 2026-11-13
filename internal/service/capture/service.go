@@ -24,6 +24,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // revertBudget bounds the step that brings the compose project back past an interrupt.
@@ -43,9 +44,25 @@ type imageBackend interface {
 
 // composeRunner stops the compose project for a capture and starts it after.
 type composeRunner interface {
-	// Stop returns the ids of the containers its deadline killed.
+	// Stop stops every service of project and returns the ids of the containers its deadline
+	// killed.
 	Stop(ctx context.Context, project *types.Project) ([]string, error)
+	// StopServices stops the named services alone, and returns the same.
+	StopServices(ctx context.Context, project *types.Project, services []string) ([]string, error)
+	// Start starts every service of project, whichever of them was stopped, and waits on their
+	// health checks; a running container is left as it is.
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
+}
+
+// containerControl freezes containers for a capture and resumes them after.
+type containerControl interface {
+	PauseContainers(ctx context.Context, ids []string) error
+	// UnpauseContainers resumes whichever of the containers is paused; one that is not, or is
+	// gone, is no error.
+	UnpauseContainers(ctx context.Context, ids []string) error
+	// AwaitHealthProbes waits out the unhealthy a pause leaves on the containers until their next
+	// probe, bounded by their healthchecks.
+	AwaitHealthProbes(ctx context.Context, ids []string) error
 }
 
 // Deps are Service's collaborators.
@@ -53,6 +70,8 @@ type Deps struct {
 	SavepointRepo savepointRepository
 	ImageBackend  imageBackend
 	ComposeRunner composeRunner
+	// ContainerControl pauses the services captured with model.CaptureModePause.
+	ContainerControl containerControl
 	// Store is the compose project's store: the capture's tree and its heartbeat.
 	Store storages.Storager
 	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
@@ -71,6 +90,7 @@ type Service struct {
 	savepointRepo           savepointRepository
 	imageBackend            imageBackend
 	composeRunner           composeRunner
+	containerControl        containerControl
 	store                   storages.Storager
 	maxConcurrentOperations int
 	runnerInfo              heartbeat.RunnerInfo
@@ -84,6 +104,7 @@ func New(deps Deps) *Service {
 		savepointRepo:           deps.SavepointRepo,
 		imageBackend:            deps.ImageBackend,
 		composeRunner:           deps.ComposeRunner,
+		containerControl:        deps.ContainerControl,
 		store:                   deps.Store,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		runnerInfo:              deps.RunnerInfo,
@@ -94,16 +115,22 @@ func New(deps Deps) *Service {
 
 // Hold holds the project still as plan says and returns the containers the stop killed; the
 // caller captures with Capture and brings the project back with Release, or takes it down.
-func (s *Service) Hold(ctx context.Context, plan Plan) (killed []string, err error) {
-	return newCaptureTriggers(s.composeRunner, plan).beforeCapture(ctx)
+func (s *Service) Hold(ctx context.Context, plan Plan) (_ []string, err error) {
+	ctx, step := progress.Run(ctx, progress.Step{Kind: kindSavepointHold}, progress.MeasureResources)
+	defer func() { step.End(err) }()
+
+	return newCaptureTriggersByMode(s.composeRunner, s.containerControl, plan).beforeCapture(ctx)
 }
 
 // Release brings back the project plan holds, on a revertContext; it converges whether Hold
 // ran, failed partway or never ran.
-func (s *Service) Release(ctx context.Context, plan Plan) error {
+func (s *Service) Release(ctx context.Context, plan Plan) (err error) {
 	revertCtx, cancel := revertContext(ctx)
 	defer cancel()
-	return newCaptureTriggers(s.composeRunner, plan).afterCapture(revertCtx)
+	revertCtx, step := progress.Run(revertCtx, progress.Step{Kind: kindSavepointRelease}, progress.MeasureResources)
+	defer func() { step.End(err) }()
+
+	return newCaptureTriggersByMode(s.composeRunner, s.containerControl, plan).afterCapture(revertCtx)
 }
 
 // revertContext strips ctx of its cancellation and bounds it by revertBudget instead, for a

@@ -26,6 +26,11 @@
         },
         {
           "type": "doc",
+          "id": "capture_modes",
+          "label": "Capture modes"
+        },
+        {
+          "type": "doc",
           "id": "installation",
           "label": "Installation"
         },

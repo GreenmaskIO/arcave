@@ -215,9 +215,9 @@ An earlier run was interrupted after it started writing and before it committed 
 
 If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back. Its `heartbeat.json` says whether the run that wrote it failed, and [`arcave gc`](cli/gc.md) deletes such a directory — `--dry-run` only names it.
 
-## `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start`
+## `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to resume`
 
-**The savepoint exists and is complete.** Only the restart failed, so note the id and look at the project: the services are stopped, or unhealthy, or slower than [`--wait-timeout`](configuration.md#compose). Do not take another savepoint to compensate.
+**The savepoint exists and is complete.** Only the restart failed, so note the id and look at the project: the services are stopped, paused, or unhealthy, or slower than [`--wait-timeout`](configuration.md#compose). Do not take another savepoint to compensate.
 
 ```shell
 docker compose ps

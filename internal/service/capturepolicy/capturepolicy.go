@@ -37,6 +37,7 @@ var (
 		model.CaptureLabelCapture, model.CaptureLabelVolumeBackend, model.CaptureLabelMountsExclude,
 		model.CaptureLabelMountsInclude, model.CaptureLabelMountsFullCopy, model.CaptureLabelMountsCDC,
 		model.CaptureLabelWritableLayerCapture, model.CaptureLabelWritableLayerBackend, model.CaptureLabelImageCapture,
+		model.CaptureLabelCaptureMode,
 	}
 	volumeLabelKeys = []model.CaptureLabel{model.CaptureLabelCapture, model.CaptureLabelBackend}
 )
@@ -46,7 +47,9 @@ var (
 type CaptureDefaults struct {
 	VolumeBackend        model.SnapshotBackendKind
 	WritableLayerBackend model.ImageBackendKind
-	SavepointCapture     SavepointCaptureSettings
+	// Mode holds a service no arcave.capture.mode label names.
+	Mode             model.CaptureMode
+	SavepointCapture SavepointCaptureSettings
 }
 
 // SavepointCaptureSettings says which kinds of resource a savepoint captures when no
@@ -72,6 +75,7 @@ type serviceLabels struct {
 	writableLayerCapture *model.CaptureDecision
 	writableLayerBackend *model.ImageBackendKind
 	imageCapture         *model.CaptureDecision
+	mode                 *model.CaptureMode
 }
 
 // volumeLabels is one named volume's arcave.* labels, parsed; a nil field is unset.
@@ -88,6 +92,7 @@ func Resolve(
 	capturePolicy := model.CapturePolicy{
 		VolumeBackend:        defaults.VolumeBackend,
 		WritableLayerBackend: defaults.WritableLayerBackend,
+		Mode:                 defaults.Mode,
 		Services:             map[string]model.ServiceDecision{},
 		NamedVolumes:         map[string]model.VolumeDecision{},
 		Mounts:               map[model.MountRef]model.VolumeDecision{},
@@ -100,7 +105,7 @@ func Resolve(
 			return model.CapturePolicy{}, err
 		}
 		services[service.Name] = labels
-		capturePolicy.Services[service.Name] = labels.decideWritableLayerAndImage(defaults)
+		capturePolicy.Services[service.Name] = labels.decideService(defaults)
 		for _, mount := range service.Volumes {
 			if !isMountOwnedByService(mount) {
 				continue
@@ -224,6 +229,14 @@ func parseServiceLabels(
 		}
 		labels.writableLayerBackend = &backend
 	}
+	if value, ok := raw[string(model.CaptureLabelCaptureMode)]; ok {
+		mode, ok := model.ParseCaptureMode(value)
+		if !ok {
+			return serviceLabels{}, newInvalidLabelError(
+				where, model.CaptureLabelCaptureMode, value, "want stop, pause or live")
+		}
+		labels.mode = &mode
+	}
 
 	if labels.excludedTargets, err = parseTargets(service, raw, model.CaptureLabelMountsExclude); err != nil {
 		return serviceLabels{}, err
@@ -260,9 +273,9 @@ func parseServiceLabels(
 	return labels, nil
 }
 
-// decideWritableLayerAndImage decides a service's writable layer and image: its own
-// label, else the service's arcave.capture, else the config.
-func (sl serviceLabels) decideWritableLayerAndImage(defaults CaptureDefaults) model.ServiceDecision {
+// decideService decides a service's writable layer and image — its own label, else the
+// service's arcave.capture, else the config — and its capture mode, its label else the config.
+func (sl serviceLabels) decideService(defaults CaptureDefaults) model.ServiceDecision {
 	writableLayerConfig := newConfigDecision(defaults.SavepointCapture.WritableLayers, "writable_layers")
 	writableLayer := model.WritableLayerDecision{
 		CaptureDecision: sl.decideWithFallback(sl.writableLayerCapture, writableLayerConfig),
@@ -272,7 +285,15 @@ func (sl serviceLabels) decideWritableLayerAndImage(defaults CaptureDefaults) mo
 		writableLayer.Backend = *sl.writableLayerBackend
 	}
 	image := sl.decideWithFallback(sl.imageCapture, newConfigDecision(defaults.SavepointCapture.Images, "images"))
-	return model.ServiceDecision{WritableLayer: writableLayer, Image: image}
+	mode := defaults.Mode
+	if sl.mode != nil {
+		mode = *sl.mode
+	}
+	return model.ServiceDecision{
+		WritableLayer: writableLayer,
+		Image:         image,
+		Mode:          mode,
+	}
 }
 
 // decideMount decides one bind or anonymous mount of the service, most specific first:

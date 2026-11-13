@@ -127,9 +127,9 @@ arcave --log-format json mcp 2> arcave-mcp.log
 
 ```json title="arcave-mcp.log (trimmed)"
 {"level":"info","status":"started","message":"savepoint.create[attempt-3]"}
-{"level":"info","status":"succeeded","elapsed":"412ms","message":"savepoint.create[attempt-3]/compose.stop"}
+{"level":"info","status":"succeeded","elapsed":"412ms","message":"savepoint.create[attempt-3]/savepoint.hold"}
 {"level":"info","status":"succeeded","bytes":"41MB/41MB","stored":"41MB","elapsed":"3.1s","message":"savepoint.create[attempt-3]/savepoint.capture[attempt-3]/volume.capture/volume[volume-named-arcave-demo_pgdata]"}
-{"level":"info","status":"in_progress","msg":"Healthy","resource":"container:arcave-demo-postgres-1","message":"savepoint.create[attempt-3]/compose.start"}
+{"level":"info","status":"in_progress","msg":"Healthy","resource":"container:arcave-demo-postgres-1","message":"savepoint.create[attempt-3]/savepoint.release"}
 {"level":"info","status":"succeeded","elapsed":"15.4s","message":"savepoint.create[attempt-3]"}
 ```
 

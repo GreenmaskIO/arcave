@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,58 @@ func TestClient_Stop(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
+			composeAPI.AssertExpectations(t)
+		})
+	}
+}
+
+// StopServices stops, lists and bounds the named services alone: a grace period of a service it
+// does not stop raises nothing.
+func TestClient_StopServices(t *testing.T) {
+	tests := []struct {
+		name        string
+		services    []string
+		grace       map[string]time.Duration
+		wantTimeout time.Duration
+	}{
+		{
+			name:        "the named service's grace raises the bound",
+			services:    []string{"db"},
+			grace:       map[string]time.Duration{"db": 40 * time.Second},
+			wantTimeout: 40 * time.Second,
+		},
+		{
+			name:        "another service's grace raises nothing",
+			services:    []string{"app"},
+			grace:       map[string]time.Duration{"db": 40 * time.Second},
+			wantTimeout: testOptions.StopTimeout,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			project := graceProject(tt.grace)
+			composeAPI := &mockComposeAPI{}
+			running := []api.ContainerSummary{{ID: "c1", Name: "demo-x-1", Service: tt.services[0], State: "running"}}
+			mock.InOrder(
+				composeAPI.On("Ps", mock.Anything, "demo", mock.MatchedBy(func(opts api.PsOptions) bool {
+					return !opts.All && opts.Project == project && slices.Equal(opts.Services, tt.services)
+				})).Return(running, nil).Once(),
+				composeAPI.On("Stop", mock.Anything, "demo", mock.MatchedBy(func(opts api.StopOptions) bool {
+					return opts.Project == project && slices.Equal(opts.Services, tt.services) &&
+						opts.Timeout != nil && *opts.Timeout == tt.wantTimeout
+				})).Return(nil).Once(),
+				composeAPI.On("Ps", mock.Anything, "demo", mock.MatchedBy(func(opts api.PsOptions) bool {
+					return opts.All && opts.Project == project && slices.Equal(opts.Services, tt.services)
+				})).Return(nil, nil).Once(),
+			)
+			c := NewClient(composeAPI, testOptions)
+
+			// Act
+			_, err := c.StopServices(context.Background(), project, tt.services)
+
+			// Assert
+			assert.NoError(t, err)
 			composeAPI.AssertExpectations(t)
 		})
 	}

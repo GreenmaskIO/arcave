@@ -532,6 +532,7 @@ func (s *Service) rollbackWithoutSnapshot(
 		return model.RollbackResult{}, fmt.Errorf("rollback interrupted, nothing changed: %w", err)
 	}
 	progress.Current(ctx).WarnInResult(noSafetySnapshotWarning)
+	s.unpauseOnEntry(ctx, introspection)
 
 	if err := s.putInflightMarker(ctx, newFirstMarkerPhase(recovery.recovering), savepoint.ID, recovery.safety); err != nil {
 		return model.RollbackResult{}, fmt.Errorf("recording the inflight marker, nothing changed: %w", err)
@@ -551,6 +552,34 @@ func (s *Service) rollbackWithoutSnapshot(
 	s.cleanUpRollback(cleanupCtx, newAnonymousVolumeNames(introspection), volumesOf(savepoint))
 	logRestoredLayers(ctx, target.restored)
 	return target.newResult(savepoint, ""), nil
+}
+
+// unpauseOnEntry resumes the replicas introspection found frozen, ahead of a teardown that does
+// not; a failure is only logged, the teardown going on regardless.
+func (s *Service) unpauseOnEntry(ctx context.Context, introspection model.IntrospectionResult) {
+	var (
+		ids   []string
+		names []string
+	)
+	for _, svc := range introspection.Project.Services {
+		for _, replica := range svc.Containers {
+			if state := replica.Inspect.State; state != nil && state.Paused {
+				ids = append(ids, replica.ID)
+				names = append(names, fmt.Sprintf("%s-%d", svc.Name, replica.Number))
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	step := progress.Current(ctx)
+	for _, name := range names {
+		step.Warn(name + " was paused: resuming it before the rollback")
+	}
+	if err := s.containerControl.UnpauseContainers(ctx, ids); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("cannot resume the paused containers; the rollback goes on")
+	}
 }
 
 // newFirstMarkerPhase is the phase the first marker of a rollback taking no snapshot is written

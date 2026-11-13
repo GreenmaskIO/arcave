@@ -23,6 +23,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// statePaused is the state of a container frozen, as the daemon reports it.
+const statePaused = "paused"
+
 // Plan is one capture, decided before anything is touched: the compose project held still,
 // what is captured, and what is left out.
 type Plan struct {
@@ -37,10 +40,27 @@ type Plan struct {
 	Images         []model.ImageCaptureRequest
 	WritableLayers []model.WritableLayerCaptureRequest
 
+	// Services are how each service is held still, its replicas as they were found.
+	Services []ServiceHold
 	// Containers are every replica, to name the ones a stop killed.
 	Containers []model.ContainerRef
 	// NotCovered is what the capture leaves out, as known before the stop.
 	NotCovered model.NotCovered
+}
+
+// ServiceHold is how one service is held still and the replicas it was found with.
+type ServiceHold struct {
+	Service string
+	Mode    model.CaptureMode
+	// Running replicas are the ones a hold acts on; Idle ones are already still.
+	Running []model.ContainerRef
+	Idle    []IdleReplica
+}
+
+// IdleReplica is a replica found not running, or frozen; State is the daemon's word for it.
+type IdleReplica struct {
+	Ref   model.ContainerRef
+	State string
 }
 
 // Request is what one capture is recorded as.
@@ -50,6 +70,38 @@ type Request struct {
 	Labels      map[string]string
 	// TakenBefore is the rollback target of a safety snapshot; nil for any other savepoint.
 	TakenBefore *model.SavepointRef
+}
+
+// pausedOnEntry are the replicas found frozen.
+func (h ServiceHold) pausedOnEntry() []model.ContainerRef {
+	var paused []model.ContainerRef
+	for _, idle := range h.Idle {
+		if idle.State == statePaused {
+			paused = append(paused, idle.Ref)
+		}
+	}
+	return paused
+}
+
+// heldMode is the mode the service is held by; an unknown one stops it.
+func (h ServiceHold) heldMode() model.CaptureMode {
+	switch h.Mode {
+	case model.CaptureModePause, model.CaptureModeLive:
+		return h.Mode
+	default:
+		return model.CaptureModeStop
+	}
+}
+
+// servicesHeldBy are the services of the plan held by mode.
+func (p Plan) servicesHeldBy(mode model.CaptureMode) []ServiceHold {
+	var held []ServiceHold
+	for _, service := range p.Services {
+		if service.heldMode() == mode {
+			held = append(held, service)
+		}
+	}
+	return held
 }
 
 // newNotCovered is what a capture of plan leaves out, killed being the containers the stop

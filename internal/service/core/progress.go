@@ -21,7 +21,7 @@ import (
 )
 
 // The kinds of the steps core opens: <namespace>.<action> for an action, a bare noun for an object.
-// compose.start, volume and layer are duplicated in capture; keep both in step.
+// volume and layer are duplicated in capture; keep both in step.
 const (
 	kindSavepointCreate progress.Kind = "savepoint.create"
 	kindSavepointRemove progress.Kind = "savepoint.remove"

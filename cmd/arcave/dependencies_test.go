@@ -635,6 +635,7 @@ func TestNewCaptureDefaults(t *testing.T) {
 		Snapshot:       config.Snapshot{Backend: config.SnapshotBackendCDC},
 		WritableLayers: config.WritableLayers{Backend: "fullcopy"},
 		Capture: config.Capture{
+			Mode:           "pause",
 			WritableLayers: utils.New(false),
 			Volumes:        config.CaptureVolumes{Bind: utils.New(false), Named: utils.New(true)},
 		},
@@ -648,6 +649,7 @@ func TestNewCaptureDefaults(t *testing.T) {
 	assert.Equal(t, capturepolicy.CaptureDefaults{
 		VolumeBackend:        model.SnapshotBackendCDC,
 		WritableLayerBackend: model.ImageBackendFullCopy,
+		Mode:                 model.CaptureModePause,
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   false,
 			Images:           true,
@@ -1044,7 +1046,7 @@ func TestComposeEventSink_Event(t *testing.T) {
 	recorder := &eventRecorder{}
 	ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(recorder, time.Now))
 	ctx, _ = progress.Begin(ctx, progress.Step{Kind: "savepoint.create"})
-	ctx, step := progress.Run(ctx, progress.Step{Kind: "compose.stop"}, progress.MeasureResources)
+	ctx, step := progress.Run(ctx, progress.Step{Kind: "savepoint.hold"}, progress.MeasureResources)
 	sink := newComposeEventSink(ctx)
 	require.NotNil(t, sink)
 

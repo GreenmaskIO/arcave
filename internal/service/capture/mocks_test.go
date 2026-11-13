@@ -77,6 +77,27 @@ func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) ([
 	return killed, args.Error(1)
 }
 
+func (m *mockComposeRunner) StopServices(ctx context.Context, project *types.Project, services []string) ([]string, error) {
+	args := m.Called(ctx, project, services)
+	killed, _ := args.Get(0).([]string)
+	return killed, args.Error(1)
+}
+
+// mockContainerControl doubles containerControl.
+type mockContainerControl struct{ mock.Mock }
+
+func (m *mockContainerControl) PauseContainers(ctx context.Context, ids []string) error {
+	return m.Called(ctx, ids).Error(0)
+}
+
+func (m *mockContainerControl) UnpauseContainers(ctx context.Context, ids []string) error {
+	return m.Called(ctx, ids).Error(0)
+}
+
+func (m *mockContainerControl) AwaitHealthProbes(ctx context.Context, ids []string) error {
+	return m.Called(ctx, ids).Error(0)
+}
+
 func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	return m.Called(ctx, project, waitTimeout).Error(0)
 }
@@ -182,6 +203,21 @@ func (r *warnedRecorder) Render(evt progress.Event) {
 	if evt.Status == progress.StatusWarned {
 		r.msgs = append(r.msgs, evt.Msg)
 		r.inResult = append(r.inResult, evt.InResult)
+	}
+}
+
+// stepRecorder keeps the kind of every step opened and every warning.
+type stepRecorder struct {
+	kinds    []progress.Kind
+	warnings []string
+}
+
+func (r *stepRecorder) Render(evt progress.Event) {
+	if evt.Open != nil {
+		r.kinds = append(r.kinds, evt.Open.Step.Kind)
+	}
+	if evt.Status == progress.StatusWarned {
+		r.warnings = append(r.warnings, evt.Msg)
 	}
 }
 

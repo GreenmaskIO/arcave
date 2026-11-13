@@ -15,7 +15,7 @@ Captures a savepoint: every stateful volume, every container's writable layer, t
 arcave savepoint create [name] [flags]
 ```
 
-The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. The sequence is [the savepoint flow](../../how_it_works.md#the-savepoint-flow); what ends up inside is [what a savepoint covers](../../how_it_works.md#what-a-savepoint-covers).
+The services are stopped for the capture and started again when it completes — that is what makes the result application-consistent. A service with [`arcave.capture.mode: pause`](../../capture_modes.md) is frozen instead, and one with `live` is left running. The sequence is [the savepoint flow](../../how_it_works.md#the-savepoint-flow); what ends up inside is [what a savepoint covers](../../how_it_works.md#what-a-savepoint-covers).
 
 Everything is captured by default. The `capture` section of the [config](../configuration.md) turns a kind off for the whole project, and `arcave.*` labels in the compose file leave out or include a service, a volume, a mount, a layer or an image — see [Capture labels](../capture_labels.md). What a savepoint does not hold is listed in its `not_covered`.
 
@@ -51,9 +51,9 @@ On a terminal, the final tree of the steps on stderr and a summary of what was c
 ```text title="stderr + stdout"
 ✔ savepoint.create before-migration       7.1s
 ├── ✔ project.introspect                  0.1s
-├── ✔ compose.stop                        0.2s
+├── ✔ savepoint.hold                      0.2s
 ├── ✔ savepoint.capture before-migration  3.6s
-└── ✔ compose.start                       2.2s
+└── ✔ savepoint.release                   2.2s
 
 Savepoint before-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 · stored 173 MB
             count     size   stored
@@ -188,7 +188,7 @@ Full shapes for every command are in [Output](../output.md).
 | An interrupted rollback is marked | `rollback to savepoint 019e843e-1650-7000-8000-000000000000 was interrupted (restoring); recover by rolling back to 019e8491-04c8-7000-8000-000000000000` — see [Troubleshooting](../troubleshooting.md#an-interrupted-rollback). |
 | Another arcave run holds the lock | `another arcave command is already running in this project` |
 | The capture can't write its `heartbeat.json` for 25 minutes | `heartbeat lost` — the capture cancels itself and commits nothing; its directory is left for [`arcave gc`](gc.md). Check that the store is reachable and writable. |
-| The services do not become healthy in `--wait-timeout` | `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to start: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the project. |
+| The services do not become healthy in `--wait-timeout` | `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to resume: …` — **the savepoint exists and is complete.** Only the restart failed: note the id, and look at the project. |
 
 An error raised during the capture itself — after the services are stopped — is prefixed `capturing volumes: `, and the services are started again.
 

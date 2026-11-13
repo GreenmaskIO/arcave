@@ -22,13 +22,12 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The kinds of the steps a capture opens. compose.start, volume and layer are duplicated in core;
-// keep both in step. compose.stop is capture's alone.
+// The kinds of the steps a capture opens. volume and layer are duplicated in core; keep both in
+// step.
 const (
+	kindSavepointHold    progress.Kind = "savepoint.hold"
 	kindSavepointCapture progress.Kind = "savepoint.capture"
-
-	kindComposeStop  progress.Kind = "compose.stop"
-	kindComposeStart progress.Kind = "compose.start"
+	kindSavepointRelease progress.Kind = "savepoint.release"
 
 	kindVolumeCapture progress.Kind = "volume.capture"
 	kindVolume        progress.Kind = "volume"

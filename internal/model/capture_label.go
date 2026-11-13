@@ -48,6 +48,9 @@ const (
 	// CaptureLabelImageCapture is "true" or "false": the bytes of the image a service's image:
 	// names.
 	CaptureLabelImageCapture CaptureLabel = "arcave.image.capture"
+	// CaptureLabelCaptureMode is how a service is held still while a savepoint captures it:
+	// stop, pause or live.
+	CaptureLabelCaptureMode CaptureLabel = "arcave.capture.mode"
 )
 
 func (m CaptureLabel) String() string { return string(m) }

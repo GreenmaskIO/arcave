@@ -48,9 +48,9 @@ arcave savepoint create clean --description "seeded baseline — do not delete"
 ```text title="stderr + stdout"
 ✔ savepoint.create clean      10.6s
 ├── ✔ project.introspect       0.1s
-├── ✔ compose.stop             0.2s
+├── ✔ savepoint.hold           0.2s
 ├── ✔ savepoint.capture clean  5.7s
-└── ✔ compose.start            3.6s
+└── ✔ savepoint.release        3.6s
 
 Savepoint clean · 019e83ff-30c0-7000-8000-000000000000 · 18:36:40 · stored 273 MB
             count     size   stored

@@ -53,7 +53,7 @@ The fork on that diagram is a **session** — an independent line of savepoints.
 
 This is the design's central trade. A running database holds state in memory and in files it is midway through writing; copying those files produces a snapshot that may not restore. Stopping the containers first is what makes "consistent" a claim arcave can actually make for every service a compose file might hold — Postgres, MySQL, Redis, Mongo and whatever else — rather than one engine at a time.
 
-The cost is downtime, proportional to the data being moved plus the time your services take to become healthy again.
+The cost is downtime, proportional to the data being moved plus the time your services take to become healthy again. A service that recovers from a crash on its own — a database replaying its journal — can be frozen with `docker pause` instead, by [`arcave.capture.mode: pause`](capture_modes.md): no restart, and a crash-consistent copy.
 
 :::note
 `savepoint create` stops the containers, it never removes them: the same containers start again, nothing is recreated, and nothing on the host is touched beyond the data being captured. A rollback is different — it removes the containers and creates them again from the savepoint's spec, see [What a rollback restores](#what-a-rollback-restores).

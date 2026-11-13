@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -85,6 +86,8 @@ type dockerAPI interface {
 	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 	CopyToContainer(ctx context.Context, containerID string, options client.CopyToContainerOptions) (client.CopyToContainerResult, error)
 	ContainerCommit(ctx context.Context, containerID string, options client.ContainerCommitOptions) (client.ContainerCommitResult, error)
+	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
+	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImageList(ctx context.Context, options client.ImageListOptions) (client.ImageListResult, error)
 	ImagePull(ctx context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error)
@@ -109,6 +112,8 @@ type Engine struct {
 	// api is the resolved daemon connection. A test sets it directly, standing in
 	// for the client the composition root would have built.
 	api dockerAPI
+	// healthPoll is how often a resumed container's health is read; zero is staleHealthPoll.
+	healthPoll time.Duration
 }
 
 // NewEngine wraps an already-resolved daemon connection.
