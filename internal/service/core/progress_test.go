@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -71,11 +72,13 @@ type captureDoubles struct {
 	locker    *mockLocker
 	runner    *mockComposeRunner
 	repo      *mockSavepointRepo
+	images    *mockImageBackend
 	registry  *mockRegistry
 	backend   *mockBackend
 }
 
-// newCaptureService is a service whose one volume's snapshot returns snapshotErr.
+// newCaptureService is a service over the real capture whose one volume's snapshot returns
+// snapshotErr.
 func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDoubles) {
 	t.Helper()
 	inspector := &mockInspector{}
@@ -102,6 +105,7 @@ func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDouble
 	store := newDirStore(t)
 	registry := &mockRegistry{}
 	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
+	images := &mockImageBackend{}
 
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
@@ -118,12 +122,19 @@ func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDouble
 		Inflight:         &fakeInflight{},
 		Store:            store,
 		CaptureDefaults:  demoCaptureDefaults,
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ImageBackend:  images,
+			ComposeRunner: runner,
+			Store:         store,
+		}),
 	})
 	return svc, captureDoubles{
 		inspector: inspector,
 		locker:    locker,
 		runner:    runner,
 		repo:      repo,
+		images:    images,
 		registry:  registry,
 		backend:   backend,
 	}
@@ -183,10 +194,100 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 			doubles.locker.AssertExpectations(t)
 			doubles.runner.AssertExpectations(t)
 			doubles.repo.AssertExpectations(t)
+			doubles.images.AssertExpectations(t)
 			doubles.registry.AssertExpectations(t)
 			doubles.backend.AssertExpectations(t)
 		})
 	}
+}
+
+// A rollback's safety snapshot is captured under its own step: the capture's steps open under
+// rollback.safety-snapshot, by the same code savepoint create runs them with.
+func TestService_Rollback_Progress(t *testing.T) {
+	// Arrange
+	ctx, recorder := newProgressContext()
+	vol := demoVolume()
+	record := demoRecord()
+	repo, inspector, locker := demoResolution(record)
+	runner := &mockComposeRunner{}
+	safetySnapshotBackend := &mockBackend{volume: vol}
+	savepointBackend := &mockBackend{volume: vol}
+	mock.InOrder(
+		runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once(),
+		safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
+			Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy}, nil).Once(),
+		expectSpecCommit(repo),
+		expectSafetySnapshotCommit(repo, record),
+		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
+		runner.On("Create", mock.Anything, rolledBackTo(demoTargetSpec, record), demoRestoredVolumes).
+			Return(nil).Once(),
+		savepointBackend.On("Restore", mock.Anything, model.BackendRestoreRequest{
+			SnapshotID: record.ID,
+			Payload:    "sp-payload",
+			SizeBytes:  demoVolumeSize,
+		}).Return(nil).Once(),
+		runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once(),
+	)
+	store := newDirStore(t)
+	registry := &mockRegistry{}
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
+	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
+	images := &mockImageBackend{}
+	svc := New(Deps{
+		ArcaveProject:    demoArcaveProject,
+		SessionLocker:    fakeSessionLocker{},
+		WriteAdmission:   fakeWriteAdmission{},
+		VolumeRemover:    &mockVolumeRemover{},
+		SavepointRepo:    repo,
+		ProjectLocker:    locker,
+		ComposeInspector: inspector,
+		ProjectAssembler: demoAssembler(),
+		SpecCodec:        demoCodec(),
+		ComposeRunner:    runner,
+		BackendRegistry:  registry,
+		Inflight:         &fakeInflight{},
+		Store:            store,
+		CaptureDefaults:  demoCaptureDefaults,
+		Capture: capture.New(capture.Deps{
+			SavepointRepo: repo,
+			ImageBackend:  images,
+			ComposeRunner: runner,
+			Store:         store,
+		}),
+	})
+
+	// Act
+	_, err := svc.Rollback(ctx, model.RollbackRequest{
+		ID:          ptrID(record.ID),
+		WaitTimeout: 60 * time.Second,
+	})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"rollback/project.introspect succeeded",
+		"rollback/rollback.safety-snapshot/compose.stop succeeded",
+		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture/volume[volume-named-demo_db] succeeded",
+		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture succeeded",
+		"rollback/rollback.safety-snapshot/savepoint.capture succeeded",
+		"rollback/rollback.safety-snapshot succeeded",
+		"rollback/rollback.apply/compose.down succeeded",
+		"rollback/rollback.apply/compose.create succeeded",
+		"rollback/rollback.apply/volume.restore/volume[volume-named-demo_db] succeeded",
+		"rollback/rollback.apply/volume.restore succeeded",
+		"rollback/rollback.apply/compose.start succeeded",
+		"rollback/rollback.apply succeeded",
+		"rollback/rollback.cleanup succeeded",
+		"rollback succeeded",
+	}, recorder.ended)
+	repo.AssertExpectations(t)
+	inspector.AssertExpectations(t)
+	locker.AssertExpectations(t)
+	runner.AssertExpectations(t)
+	images.AssertExpectations(t)
+	registry.AssertExpectations(t)
+	safetySnapshotBackend.AssertExpectations(t)
+	savepointBackend.AssertExpectations(t)
 }
 
 // A remove reports the savepoints it drops and no volume: it reaches no backend.
@@ -235,7 +336,7 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Act
 	_, err := withSessionLock(ctx, locker, model.SessionLockOperationSavepointCreate,
 		func(ctx context.Context, _ model.GrantedSessionLock) (string, error) {
-			_, step := progress.Run(ctx, progress.Step{Kind: kindComposeStop})
+			_, step := progress.Run(ctx, progress.Step{Kind: kindComposeDown})
 			err := preferInterrupt(ctx, errWorkflow)
 			step.End(err)
 			return "", err
@@ -245,7 +346,7 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Assert
 	require.ErrorIs(t, err, model.ErrSessionLockLost)
 	require.Len(t, recorder.ended, 2)
-	assert.Equal(t, "savepoint.create/compose.stop cancelled", recorder.ended[0])
+	assert.Equal(t, "savepoint.create/compose.down cancelled", recorder.ended[0])
 	assert.True(t, strings.HasPrefix(recorder.ended[1], "savepoint.create failed error=interrupted: "),
 		"the cause is on the root: %s", recorder.ended[1])
 	assert.Contains(t, recorder.ended[1], model.ErrSessionLockLost.Error())
@@ -299,37 +400,6 @@ func TestWithSessionLock_ShowsTheWaitOnlyWhenHeld(t *testing.T) {
 	}
 }
 
-func TestNewNotCoveredWarning(t *testing.T) {
-	tests := []struct {
-		name       string
-		notCovered *model.NotCovered
-		want       string
-	}{
-		{
-			name: "nothing left out",
-		},
-		{
-			name:       "an empty report",
-			notCovered: &model.NotCovered{},
-		},
-		{
-			name: "every kind left out is counted",
-			notCovered: &model.NotCovered{
-				Mounts:           []model.SkippedVolume{{}, {}},
-				KilledContainers: []model.KilledContainer{{}},
-			},
-			want: "not covered: 2 mount(s), 1 killed container(s)",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := newNotCoveredWarning(tt.notCovered)
-
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 // warnedRecorder keeps every warning, and whether it was marked as the result repeats it.
 type warnedRecorder struct {
 	msgs     []string
@@ -340,79 +410,5 @@ func (r *warnedRecorder) Render(evt progress.Event) {
 	if evt.Status == progress.StatusWarned {
 		r.msgs = append(r.msgs, evt.Msg)
 		r.inResult = append(r.inResult, evt.InResult)
-	}
-}
-
-// A capture's warnings are marked InResult, a safety snapshot's are not.
-func TestWarn(t *testing.T) {
-	tests := []struct {
-		name   string
-		labels map[string]string
-		want   []bool
-	}{
-		{
-			name: "an ordinary savepoint is the result",
-			want: []bool{true},
-		},
-		{
-			name:   "a safety snapshot is not",
-			labels: newSafetySnapshotLabels(),
-			want:   []bool{false},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var (
-				recorder = &warnedRecorder{}
-				now      = func() time.Time { return time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC) }
-				ctx      = zerolog.Nop().WithContext(context.Background())
-			)
-			_, step := progress.New(recorder, now).Begin(ctx, progress.Step{Kind: kindSavepointCapture})
-
-			warn(step, "not covered: 1 mount(s)", isInResult(tt.labels))
-
-			assert.Equal(t, tt.want, recorder.inResult)
-		})
-	}
-}
-
-func TestNewImageSample(t *testing.T) {
-	tests := []struct {
-		name  string
-		image model.Image
-		want  progress.Sample
-	}{
-		{
-			name: "stored by this capture",
-			image: model.Image{
-				SizeBytes:   100,
-				StoredBytes: 40,
-				Stored:      true,
-			},
-			want: newCaptureSample(100, 40, 60),
-		},
-		{
-			name: "already stored",
-			image: model.Image{
-				SizeBytes: 100,
-				Stored:    true,
-			},
-			want: newCaptureSample(100, 0, 100),
-		},
-		{
-			name: "not stored moves nothing",
-			image: model.Image{
-				SizeBytes: 100,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := newImageSample(tt.image)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
 	}
 }

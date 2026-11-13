@@ -15,7 +15,6 @@
 package core
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -23,8 +22,8 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
@@ -32,8 +31,6 @@ import (
 
 type savepointRepository interface {
 	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
-	SaveSavepoint(ctx context.Context, savepoint model.Savepoint) error
-	SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error
 	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
 	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
 }
@@ -71,11 +68,9 @@ type specCodec interface {
 	Parse(ctx context.Context, spec []byte) (*types.Project, error)
 }
 
-// composeRunner is the compose project's lifecycle: stop it, tear it down, build it back
-// from a spec without starting it, start it.
+// composeRunner is the compose project's lifecycle: tear it down, build it back from a spec
+// without starting it, start it.
 type composeRunner interface {
-	// Stop returns the ids of the containers its deadline killed.
-	Stop(ctx context.Context, project *types.Project) ([]string, error)
 	Down(ctx context.Context, project *types.Project) error
 	// Create lets compose recreate a volume whose config drifted only when restoredVolumes, the
 	// docker names of the volumes the rollback restores, holds it.
@@ -83,16 +78,29 @@ type composeRunner interface {
 	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
 }
 
+// savepointCapture is a savepoint's capture in three steps the workflow composes: hold the
+// compose project still, capture what is held, bring it back.
+type savepointCapture interface {
+	// Hold brings the compose project to a state a capture can be taken of: its services
+	// stopped. It returns the ids of the containers the stop's deadline killed.
+	Hold(ctx context.Context, plan capture.Plan) (killed []string, err error)
+	// Capture commits a savepoint of the project Hold holds still, the record last; killed are
+	// the containers Hold returned. It starts and stops nothing.
+	Capture(
+		ctx context.Context, grantedLock model.GrantedSessionLock, plan capture.Plan, killed []string, req capture.Request,
+	) (model.Savepoint, error)
+	// Release starts the services back, on a context an interrupt does not cancel; it converges
+	// whether Hold ran or not.
+	Release(ctx context.Context, plan capture.Plan) error
+}
+
 // volumeRemover reaps the anonymous volumes a teardown orphans.
 type volumeRemover interface {
 	RemoveVolume(ctx context.Context, name string) error
 }
 
-// imageBackend carries writable layers both ways — committed into the store, and loaded
-// back out of it under a tag of its own — and keeps the images they were taken over.
+// imageBackend loads writable layers back out of the store, each under a tag of its own.
 type imageBackend interface {
-	CaptureWritableLayer(ctx context.Context, req model.WritableLayerCaptureRequest) (model.WritableLayer, error)
-	CaptureImage(ctx context.Context, req model.ImageCaptureRequest) (model.Image, error)
 	RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
 }
 
@@ -133,6 +141,7 @@ type Deps struct {
 	ProjectAssembler   projectAssembler
 	SpecCodec          specCodec
 	ComposeRunner      composeRunner
+	Capture            savepointCapture
 	VolumeRemover      volumeRemover
 	ImageBackend       imageBackend
 	ContainerRebuilder containerRebuilder
@@ -156,12 +165,6 @@ type Deps struct {
 	MinDaemonMajor int
 	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
 	Concurrency int
-	// RunnerInfo identifies this process in a capture's heartbeat.
-	RunnerInfo heartbeat.RunnerInfo
-	// HeartbeatInterval and HeartbeatStaleAfter time a capture's heartbeat; zero keeps
-	// heartbeat.DefaultInterval and heartbeat.DefaultStaleAfter.
-	HeartbeatInterval   time.Duration
-	HeartbeatStaleAfter time.Duration
 }
 
 // Service orchestrates arcave's savepoint workflows over one store root, the daemon's included:
@@ -187,9 +190,7 @@ type Service struct {
 	daemonVersion           string
 	minDaemonMajor          int
 	maxConcurrentOperations int
-	runnerInfo              heartbeat.RunnerInfo
-	heartbeatInterval       time.Duration
-	heartbeatStaleAfter     time.Duration
+	capture                 savepointCapture
 }
 
 func New(deps Deps) *Service {
@@ -219,9 +220,7 @@ func New(deps Deps) *Service {
 		daemonVersion:           deps.DaemonVersion,
 		minDaemonMajor:          deps.MinDaemonMajor,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
-		runnerInfo:              deps.RunnerInfo,
-		heartbeatInterval:       cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
-		heartbeatStaleAfter:     cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
+		capture:                 deps.Capture,
 	}
 }
 

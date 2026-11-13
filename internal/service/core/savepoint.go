@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/pkg/progress"
 	"github.com/rs/zerolog"
+
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
+	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // errNoVolumesToBackUp refuses a savepoint that would cover nothing. It stays
@@ -32,10 +34,6 @@ var errNoVolumesToBackUp = errors.New("no stateful volumes found; nothing to cap
 
 // errSavepointNotFound is returned when no savepoint matches the requested id or name.
 var errSavepointNotFound = errors.New("savepoint not found")
-
-// errCaptureDirectoryNotEmpty refuses to capture into a directory that already
-// holds data. Unexported for the same reason: nothing matches on it.
-var errCaptureDirectoryNotEmpty = errors.New("capture directory is not empty")
 
 // CreateSavepoint stops the services, captures every volume under one id, commits
 // the record, and starts the services again. The project lock is held throughout.
@@ -59,8 +57,6 @@ func (s *Service) CreateSavepoint(ctx context.Context, req model.CreateSavepoint
 func (s *Service) createSavepoint(
 	ctx context.Context, grantedLock model.GrantedSessionLock, req model.CreateSavepointRequest,
 ) (model.Savepoint, error) {
-	log := zerolog.Ctx(ctx)
-
 	if err := req.Validate(); err != nil {
 		return model.Savepoint{}, err
 	}
@@ -81,31 +77,48 @@ func (s *Service) createSavepoint(
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
 
-	killed, err := s.stopServices(ctx, working)
-	if err != nil {
+	return s.captureHeld(ctx, grantedLock, working.plan, capture.Request{
+		Name:        req.Name,
+		Description: req.Description,
+		Labels:      req.Labels,
+	})
+}
+
+// captureHeld holds the project, captures it and releases it on every path; the hold's or the
+// capture's error wins, a release failing under it is only logged. On error the record is zero.
+func (s *Service) captureHeld(
+	ctx context.Context, grantedLock model.GrantedSessionLock, plan capture.Plan, req capture.Request,
+) (model.Savepoint, error) {
+	var (
+		log                             = zerolog.Ctx(ctx)
+		killed                          []string
+		savepoint                       model.Savepoint
+		beforeErr, captureErr, afterErr error
+	)
+	if killed, beforeErr = s.capture.Hold(ctx, plan); beforeErr != nil {
 		// A stop that failed or was interrupted partway may have stopped some services.
 		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")
-		if err := s.restartServices(ctx, working); err != nil {
-			log.Error().Err(err).Msg("services failed to restart after stop failure")
-		}
-		return model.Savepoint{}, preferInterrupt(ctx, err)
-	}
-
-	// Capture while the services are stopped. The capture error is what the caller
-	// gets; the restart on top of it is best-effort and only logged.
-	savepoint, err := s.performSavepoint(ctx, grantedLock, working, killed, req.Name, req.Description, req.Labels, nil)
-	if err != nil {
+	} else if savepoint, captureErr = s.capture.Capture(ctx, grantedLock, plan, killed, req); captureErr != nil {
 		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
-		err = preferInterrupt(ctx, err)
-		if err := s.restartServices(ctx, working); err != nil {
-			log.Error().Err(err).Msg("services failed to restart after capture failure")
-		}
-		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", err)
+		captureErr = preferInterrupt(ctx, captureErr)
+	} else {
+		logInterrupt(ctx, "savepoint committed before the interrupt: restarting services")
 	}
+	afterErr = s.capture.Release(ctx, plan)
 
-	logInterrupt(ctx, "savepoint committed before the interrupt: restarting services")
-	if err := s.restartServices(ctx, working); err != nil {
-		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", savepoint.ID, err)
+	switch {
+	case beforeErr != nil:
+		if afterErr != nil {
+			log.Error().Err(afterErr).Msg("services failed to restart after stop failure")
+		}
+		return model.Savepoint{}, preferInterrupt(ctx, beforeErr)
+	case captureErr != nil:
+		if afterErr != nil {
+			log.Error().Err(afterErr).Msg("services failed to restart after capture failure")
+		}
+		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", captureErr)
+	case afterErr != nil:
+		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", savepoint.ID, afterErr)
 	}
 	return savepoint, nil
 }

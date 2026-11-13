@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -249,6 +250,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 	release := locker.On("Release").Return(nil).Once()
 	mock.InOrder(acquire, lock, release)
 	inspector := &mockInspector{}
+	captureService := &mockCapture{}
 	svc := New(Deps{
 		ArcaveProject:    demoArcaveProject,
 		ProjectLocker:    locker,
@@ -256,6 +258,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 		WriteAdmission:   fakeWriteAdmission{},
 		ComposeInspector: inspector,
 		Inflight:         &fakeInflight{},
+		Capture:          captureService,
 	})
 
 	// Act
@@ -266,69 +269,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 	locker.AssertExpectations(t)
 	sessionLocker.AssertExpectations(t)
 	inspector.AssertExpectations(t)
-}
-
-// A capture commits its record only while the session's lock is still its own.
-func TestService_performSavepoint_SessionLock(t *testing.T) {
-	tests := []struct {
-		name      string
-		verifyErr error
-		wantBeat  heartbeat.Status
-	}{
-		{
-			name:     "a held lock lets the record land",
-			wantBeat: heartbeat.StatusDone,
-		},
-		{
-			name:      "a lost lock commits nothing",
-			verifyErr: model.ErrSessionLockLost,
-			wantBeat:  heartbeat.StatusFailed,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			store := newDirStore(t)
-			backend := &mockBackend{volume: demoVolume()}
-			var id model.SavepointID
-			snapshot := backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
-				Run(func(args mock.Arguments) { id = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
-				Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once()
-			repo := &mockSavepointRepo{}
-			spec := expectSpecCommit(repo)
-			grantedLock := &mockGrantedSessionLock{}
-			verify := grantedLock.On("Verify", mock.Anything).Return(tt.verifyErr).Once()
-			calls := []*mock.Call{snapshot, spec, verify}
-			if tt.verifyErr == nil {
-				calls = append(calls, repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
-					return savepoint.ID == id && savepoint.Name == "sp"
-				})).Return(nil).Once())
-			}
-			mock.InOrder(calls...)
-			svc := New(Deps{
-				ArcaveProject: demoArcaveProject,
-				SavepointRepo: repo,
-				Store:         store,
-			})
-			working := workingSet{backends: []model.VolumeSnapshotBackend{backend}, spec: demoSpecBytes}
-
-			// Act
-			savepoint, err := svc.performSavepoint(newLockTestContext(), grantedLock, working, nil, "sp", "", nil, nil)
-
-			// Assert
-			if tt.verifyErr != nil {
-				require.ErrorIs(t, err, tt.verifyErr)
-				assert.Zero(t, savepoint)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, id, savepoint.ID)
-			}
-			assert.Equal(t, tt.wantBeat, readCaptureHeartbeat(t, store, id).Status)
-			backend.AssertExpectations(t)
-			repo.AssertExpectations(t)
-			grantedLock.AssertExpectations(t)
-		})
-	}
+	captureService.AssertExpectations(t)
 }
 
 func TestSessionService_RemoveSession_SessionLock(t *testing.T) {
@@ -492,26 +433,27 @@ func TestPreferInterrupt(t *testing.T) {
 	}
 }
 
-// A rollback aborted before its restore only restarts the services, past the interrupt that
-// aborted it: the safety snapshot it took stays, and no session lock is asked.
+// A rollback aborted before its restore releases what its safety snapshot held, on the context it
+// was aborted on: the release is what outlives the interrupt. No session lock is asked.
 func TestService_abortBeforeRestore(t *testing.T) {
 	// Arrange
-	runner := &mockComposeRunner{}
-	runner.On("Start", mock.MatchedBy(func(ctx context.Context) bool { return ctx.Err() == nil }), demoSpec, time.Minute).
-		Return(nil).Once()
-	svc := New(Deps{ComposeRunner: runner})
-	working := workingSet{
-		project:     demoSpec,
-		waitTimeout: time.Minute,
-	}
 	ctx, cancel := context.WithCancel(newLockTestContext())
 	cancel()
+	working := workingSet{plan: capture.Plan{
+		Project:     demoSpec,
+		WaitTimeout: time.Minute,
+	}}
+	captureService := &mockCapture{}
+	captureService.On("Release", ctx, mock.MatchedBy(func(plan capture.Plan) bool {
+		return plan.Project == demoSpec && plan.WaitTimeout == time.Minute
+	})).Return(nil).Once()
+	svc := New(Deps{Capture: captureService})
 
 	// Act
 	svc.abortBeforeRestore(ctx, working)
 
 	// Assert
-	runner.AssertExpectations(t)
+	captureService.AssertExpectations(t)
 }
 
 // A removal checks the session's lock before it uncommits each savepoint: a lost lock removes

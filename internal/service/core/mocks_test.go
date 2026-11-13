@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/service/capture"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
@@ -314,6 +315,27 @@ func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project, 
 
 func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	return m.Called(ctx, project, waitTimeout).Error(0)
+}
+
+// mockCapture doubles savepointCapture.
+type mockCapture struct{ mock.Mock }
+
+func (m *mockCapture) Hold(ctx context.Context, plan capture.Plan) ([]string, error) {
+	args := m.Called(ctx, plan)
+	killed, _ := args.Get(0).([]string)
+	return killed, args.Error(1)
+}
+
+func (m *mockCapture) Capture(
+	ctx context.Context, grantedLock model.GrantedSessionLock, plan capture.Plan, killed []string, req capture.Request,
+) (model.Savepoint, error) {
+	args := m.Called(ctx, grantedLock, plan, killed, req)
+	savepoint, _ := args.Get(0).(model.Savepoint)
+	return savepoint, args.Error(1)
+}
+
+func (m *mockCapture) Release(ctx context.Context, plan capture.Plan) error {
+	return m.Called(ctx, plan).Error(0)
 }
 
 type mockVolumeRemover struct{ mock.Mock }

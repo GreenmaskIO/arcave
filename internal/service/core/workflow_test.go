@@ -42,7 +42,6 @@ func TestService_prepare(t *testing.T) {
 		codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil).Once(),
 	)
 	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return([]string{demoContainerID}, nil).Once()
 
 	store := newDirStore(t)
 	registry := &mockRegistry{}
@@ -64,14 +63,11 @@ func TestService_prepare(t *testing.T) {
 
 	// Act
 	working, err := svc.prepare(ctx, 0)
-	require.NoError(t, err)
-	killed, err := svc.stopServices(ctx, working)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Same(t, demoSpec, working.project)
-	assert.Equal(t, demoSpecBytes, working.spec)
-	assert.Equal(t, []string{demoContainerID}, killed)
+	assert.Same(t, demoSpec, working.plan.Project)
+	assert.Equal(t, demoSpecBytes, working.plan.Spec)
 	inspector.AssertExpectations(t)
 	assembler.AssertExpectations(t)
 	codec.AssertExpectations(t)
