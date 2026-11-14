@@ -243,6 +243,28 @@ func TestEngine_AwaitHealthProbes(t *testing.T) {
 	}
 }
 
+// A container that fails leaves the others their attempt: each runs on the caller's context,
+// which another's failure does not cancel.
+func TestEngine_UnpauseContainers_OneFailure(t *testing.T) {
+	// Arrange
+	type callerKey struct{}
+	ctx := context.WithValue(context.Background(), callerKey{}, "caller")
+	paused := inspectState(container.State{Status: container.StatePaused, Running: true, Paused: true})
+	api := &mockAPI{}
+	api.On("ContainerInspect", ctx, "a", client.ContainerInspectOptions{}).
+		Return(container.InspectResponse{}, errDaemon).Once()
+	inspect := api.On("ContainerInspect", ctx, "b", client.ContainerInspectOptions{}).Return(paused, nil).Once()
+	api.On("ContainerUnpause", ctx, "b", client.ContainerUnpauseOptions{}).Return(nil).Once().NotBefore(inspect)
+	e := &Engine{api: api}
+
+	// Act
+	err := e.UnpauseContainers(ctx, []string{"a", "b"})
+
+	// Assert
+	assert.EqualError(t, err, "inspect container a: daemon refused")
+	api.AssertExpectations(t)
+}
+
 // A cancelled wait returns the cancellation's cause.
 func TestEngine_AwaitHealthProbes_Cancelled(t *testing.T) {
 	// Arrange

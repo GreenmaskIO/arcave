@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -175,7 +174,7 @@ func TestService_locked(t *testing.T) {
 			locker := &mockLocker{}
 			admission := &mockWriteAdmission{}
 			sessionLocker := &mockSessionLocker{}
-			repo := &mockSavepointRepo{}
+			repo := &mockSavepoints{}
 			grantedLock := &mockGrantedSessionLock{}
 			calls := []*mock.Call{
 				locker.On("Acquire", mock.Anything).Return(nil).Once(),
@@ -183,7 +182,7 @@ func TestService_locked(t *testing.T) {
 				sessionLocker.On("Lock", mock.Anything, tt.operation).Return(grantedLock, nil).Once(),
 			}
 			calls = append(calls,
-				repo.On("ListSavepoints", mock.Anything).Return(nil, errListStore).Once(),
+				repo.On("List", mock.Anything).Return(nil, errListStore).Once(),
 				grantedLock.On("Unlock", mock.Anything).Return(nil).Once(),
 				locker.On("Release").Return(nil).Once(),
 			)
@@ -193,7 +192,7 @@ func TestService_locked(t *testing.T) {
 				ProjectLocker:  locker,
 				WriteAdmission: admission,
 				SessionLocker:  sessionLocker,
-				SavepointRepo:  repo,
+				Savepoints:     repo,
 				Inflight:       &fakeInflight{},
 			})
 
@@ -226,7 +225,7 @@ func TestService_locked_AWriteRefused(t *testing.T) {
 		ProjectLocker:  locker,
 		WriteAdmission: admission,
 		SessionLocker:  sessionLocker,
-		SavepointRepo:  &mockSavepointRepo{},
+		Savepoints:     &mockSavepoints{},
 		Inflight:       &fakeInflight{},
 	})
 
@@ -249,16 +248,14 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 		Return(nil, model.ErrSessionLocked).Once()
 	release := locker.On("Release").Return(nil).Once()
 	mock.InOrder(acquire, lock, release)
-	inspector := &mockInspector{}
-	captureService := &mockCapture{}
+	stages := newMockStages(false)
 	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		ProjectLocker:    locker,
-		SessionLocker:    sessionLocker,
-		WriteAdmission:   fakeWriteAdmission{},
-		ComposeInspector: inspector,
-		Inflight:         &fakeInflight{},
-		Capture:          captureService,
+		ArcaveProject:  demoArcaveProject,
+		ProjectLocker:  locker,
+		SessionLocker:  sessionLocker,
+		WriteAdmission: fakeWriteAdmission{},
+		Workload:       &stages.workload,
+		Inflight:       &fakeInflight{},
 	})
 
 	// Act
@@ -268,8 +265,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrSessionLocked)
 	locker.AssertExpectations(t)
 	sessionLocker.AssertExpectations(t)
-	inspector.AssertExpectations(t)
-	captureService.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 func TestSessionService_RemoveSession_SessionLock(t *testing.T) {
@@ -433,27 +429,24 @@ func TestPreferInterrupt(t *testing.T) {
 	}
 }
 
-// A rollback aborted before its restore releases what its safety snapshot held, on the context it
-// was aborted on: the release is what outlives the interrupt. No session lock is asked.
-func TestService_abortBeforeRestore(t *testing.T) {
+// A rollback aborted before its restore releases what its safety snapshot held on a revertContext:
+// the release outlives the interrupt. No session lock is asked.
+func TestAbortBeforeRestore(t *testing.T) {
 	// Arrange
 	ctx, cancel := context.WithCancel(newLockTestContext())
 	cancel()
-	working := workingSet{plan: capture.Plan{
-		Project:     demoSpec,
-		WaitTimeout: time.Minute,
-	}}
-	captureService := &mockCapture{}
-	captureService.On("Release", ctx, mock.MatchedBy(func(plan capture.Plan) bool {
-		return plan.Project == demoSpec && plan.WaitTimeout == time.Minute
-	})).Return(nil).Once()
-	svc := New(Deps{Capture: captureService})
+	capturePlan := &mockCapturePlan{}
+	revertCtx := mock.MatchedBy(func(ctx context.Context) bool {
+		_, bounded := ctx.Deadline()
+		return ctx.Err() == nil && bounded
+	})
+	capturePlan.On("Release", revertCtx, time.Minute).Return(nil).Once()
 
 	// Act
-	svc.abortBeforeRestore(ctx, working)
+	abortBeforeRestore(ctx, capturePlan, time.Minute)
 
 	// Assert
-	captureService.AssertExpectations(t)
+	capturePlan.AssertExpectations(t)
 }
 
 // A removal checks the session's lock before it uncommits each savepoint: a lost lock removes
@@ -463,8 +456,8 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 	record := demoRecord()
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := &mockSavepointRepo{}
-	list := repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	repo := &mockSavepoints{}
+	list := repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
 	sessionLocker := &mockSessionLocker{}
 	grantedLock := &mockGrantedSessionLock{}
 	lock := sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationSavepointRemove).Return(grantedLock, nil).Once()
@@ -476,7 +469,7 @@ func TestService_RemoveSavepoints_LostLockRemovesNothing(t *testing.T) {
 		ArcaveProject:  demoArcaveProject,
 		ProjectLocker:  locker,
 		SessionLocker:  sessionLocker,
-		SavepointRepo:  repo,
+		Savepoints:     repo,
 		Inflight:       &fakeInflight{},
 	})
 
@@ -568,9 +561,9 @@ func TestSessionService_withWriteUnlock(t *testing.T) {
 func TestSavepointStoreService_ListSavepoints_AdmitsNoWrite(t *testing.T) {
 	// Arrange: an admission with no expectation fails on any call.
 	admission := &mockWriteAdmission{}
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{}, nil).Once()
-	svc := NewSavepointStoreService(SavepointStoreDeps{SavepointRepo: repo, WriteAdmission: admission})
+	repo := &mockSavepoints{}
+	repo.On("List", mock.Anything).Return([]model.Savepoint{}, nil).Once()
+	svc := NewSavepointStoreService(SavepointStoreDeps{Savepoints: repo, WriteAdmission: admission})
 
 	// Act
 	_, err := svc.ListSavepoints(newLockTestContext(), model.ListRequest{Sort: model.SortDesc})

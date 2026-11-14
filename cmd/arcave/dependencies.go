@@ -35,7 +35,7 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	dockercompose "github.com/docker/compose/v5/pkg/compose"
 	"github.com/docker/go-connections/tlsconfig"
-	"github.com/greenmaskio/arcave/internal/client/compose"
+	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/storages"
 	"github.com/labstack/echo/v4"
 	"github.com/moby/moby/api/types/system"
@@ -49,6 +49,17 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/layertag"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociblob"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociimage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/savepointdir"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/eraser"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
@@ -61,18 +72,11 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/service/composetools"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/gc"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/layertag"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociblob"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/safetysnapshot"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
-	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
@@ -200,7 +204,7 @@ func openSavepointService(
 		return nil, err
 	}
 	// compose asks before recreating a volume; unanswered, it would ask on stdout.
-	prompter := compose.NewPrompter(*log.Ctx(ctx))
+	prompter := composeclient.NewPrompter(*log.Ctx(ctx))
 	composeAPI, err := dockercompose.NewComposeService(daemon.cli,
 		dockercompose.WithEventProcessor(composeOutput.processor),
 		dockercompose.WithPrompt(prompter.Prompt),
@@ -244,53 +248,51 @@ func openSavepointService(
 	// One repository over the one store, so every record travels with its data.
 	savepointRepo := sprepo.New(scope.store)
 	// One runner for the capture and the rollback: it routes compose's events to the call's step.
-	composeRunner := compose.NewClient(composeAPI, compose.Options{
+	composeRunner := composeclient.NewClient(composeAPI, composeclient.Options{
 		WaitTimeout:     cfg.Compose.WaitTimeout,
 		StopTimeout:     cfg.Compose.StopTimeout,
 		Events:          composeOutput.events,
 		Prompter:        prompter,
 		SinkFromContext: newComposeEventSink,
 	})
-	savepointCapture := capture.New(capture.Deps{
+	// The compose provider: the workload core runs its stages through, over the same repository and
+	// runner the capture and the rollback share.
+	workload := compose.New(compose.Deps{
 		SavepointRepo:    savepointRepo,
-		ImageBackend:     imageBackend,
-		ComposeRunner:    composeRunner,
-		ContainerControl: profile.engine,
-		Store:            scope.store,
-		Concurrency:      cfg.Common.Concurrency,
-		RunnerInfo:       newRunnerInfo(),
-	})
-
-	// The locker is bound to the project root here, so the service never names a path.
-	return core.New(core.Deps{
-		SavepointRepo:  savepointRepo,
-		ProjectLocker:  lock.New(projectPath),
-		WriteAdmission: scope.writeAdmission,
-		// The session's lock in the store, which the flock beside it cannot be across hosts.
-		SessionLocker:    scope.sessionLocker,
 		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
-		ProjectAssembler: profile.assembler,
-		SpecCodec:        composespec.NewCodec(),
+		ImageBackend:     imageBackend,
 		ComposeRunner:    composeRunner,
 		ContainerControl: profile.engine,
-		Capture:          savepointCapture,
 		VolumeRemover:    profile.engine,
-		ImageBackend:     imageBackend,
-		DaemonVersion:    profile.version,
-		MinDaemonMajor:   profile.minDaemonMajor,
-		Concurrency:      cfg.Common.Concurrency,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
 		ContainerRebuilder: profile.engine,
 		ImageLookup:        profile.engine,
+		ProjectAssembler:   profile.assembler,
+		SpecCodec:          composespec.NewCodec(),
 		BackendRegistry:    backendRegistry,
+		CaptureDefaults:    newCaptureDefaults(cfg),
+		LeftoverVolumes:    cfg.Rollback.Policy(),
+		DaemonVersion:      profile.version,
+		MinDaemonMajor:     profile.minDaemonMajor,
+		Store:              scope.store,
+		Concurrency:        cfg.Common.Concurrency,
+		RunnerInfo:         newRunnerInfo(),
+	})
+
+	// The locker is bound to the project root here, so the service never names a path.
+	return core.New(core.Deps{
+		Savepoints:     sessionstore.NewSavepoints(savepointRepo),
+		ProjectLocker:  lock.New(projectPath),
+		WriteAdmission: scope.writeAdmission,
+		// The session's lock in the store, which the flock beside it cannot be across hosts.
+		SessionLocker: scope.sessionLocker,
+		Workload:      workload,
 		// The marker an interrupted rollback leaves behind, host-local beside the lock.
-		Inflight:        inflightrepo.New(projectPath),
-		Store:           scope.store,
-		CaptureDefaults: newCaptureDefaults(cfg),
-		ArcaveProject:   model.ArcaveProjectName(cfg.Project.Name),
-		Session:         scope.sessionID,
-		ComposeProject:  composeProject,
+		Inflight:       inflightrepo.New(projectPath),
+		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
+		Session:        scope.sessionID,
+		ComposeProject: composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
 		Sessions: scope.sessions,
 	}), nil
@@ -307,7 +309,7 @@ func openSavepointStoreService(
 		return nil, err
 	}
 	return core.NewSavepointStoreService(core.SavepointStoreDeps{
-		SavepointRepo:  sprepo.New(scope.store),
+		Savepoints:     sessionstore.NewSavepoints(sprepo.New(scope.store)),
 		ProjectLocker:  lock.New(projectPath),
 		WriteAdmission: scope.writeAdmission,
 		SessionLocker:  scope.sessionLocker,
@@ -323,8 +325,8 @@ func openSavepointStoreService(
 func newBackendRegistry(
 	cfg config.Config, resticRoot storages.Storager,
 	streamer fullcopy.VolumeStreamer, runner cdc.VolumeRunner, transport cdc.Transport,
-) (*core.SnapshotBackendRegistry, error) {
-	backendRegistry, err := core.NewSnapshotBackendRegistry(
+) (*backendregistry.Registry, error) {
+	backendRegistry, err := backendregistry.New(
 		fullcopy.NewFactory(streamer, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:         runner,
@@ -544,11 +546,11 @@ func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 	}
 }
 
-// openComposeFileService wires the tools commands for composeProject over the daemon docker.*
+// openComposeToolsService wires the tools commands for composeProject over the daemon docker.*
 // names: one connection, no store.
-func openComposeFileService(
+func openComposeToolsService(
 	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
-) (*core.ComposeFileService, error) {
+) (*composetools.Service, error) {
 	// The gate the savepoint services apply through storefactory, though no store is opened here.
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
@@ -562,7 +564,7 @@ func openComposeFileService(
 	if err != nil {
 		return nil, err
 	}
-	return core.NewComposeFileService(core.ComposeFileDeps{
+	return composetools.New(composetools.Deps{
 		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
 		ProjectAssembler: profile.assembler,
 		SpecCodec:        composespec.NewComposeFileCodec(),
@@ -618,13 +620,19 @@ func newSessionService(
 	projectPath string, arcaveProject openedArcaveProject, sessions *sessionrepo.Repository,
 ) *core.SessionService {
 	return core.NewSessionService(core.SessionDeps{
-		Sessions:           sessions,
-		Locker:             lock.New(projectPath),
-		WriteAdmission:     arcaveProject.writeAdmission,
-		Inflight:           inflightrepo.New(projectPath),
-		Current:            currentsession.New(projectPath),
-		Store:              arcaveProject.store,
-		NewSavepointReader: newSavepointReader,
+		Sessions:       sessions,
+		Locker:         lock.New(projectPath),
+		WriteAdmission: arcaveProject.writeAdmission,
+		Inflight:       inflightrepo.New(projectPath),
+		Current:        currentsession.New(projectPath),
+		Store:          arcaveProject.store,
+		NewSession: func(id model.SessionID) provider.Session {
+			return sessionstore.New(sessionstore.Deps{
+				Store:               arcaveProject.store,
+				Session:             id,
+				NewSavepointRecords: newSavepointRecords,
+			})
+		},
 		NewSessionLocker: func(id model.SessionID) (model.SessionLocker, error) {
 			return newSessionLocker(arcaveProject.store, id)
 		},
@@ -863,7 +871,7 @@ type composeProgress struct {
 	// stream is the CLI's error stream, which compose writes beside its events.
 	stream io.Writer
 	// events re-emits the events as log records, or on a step; nil when compose renders them itself.
-	events *compose.EventLogger
+	events *composeclient.EventLogger
 }
 
 // newComposeProgress chooses compose's renderer: its own on stderr, nothing, or by default the
@@ -886,7 +894,7 @@ func newComposeProgress(mode string, logger zerolog.Logger) composeProgress {
 			stream:    os.Stderr,
 		}
 	default:
-		events := compose.NewEventLogger(logger)
+		events := composeclient.NewEventLogger(logger)
 		return composeProgress{
 			processor: events,
 			stream:    io.Discard,
@@ -902,7 +910,7 @@ type composeEventSink struct {
 
 // newComposeEventSink is the sink of the step ctx carries; nil under a mute one, so the events
 // stay in the log.
-func newComposeEventSink(ctx context.Context) compose.EventSink {
+func newComposeEventSink(ctx context.Context) composeclient.EventSink {
 	step := progress.Current(ctx)
 	if step.IsMute() {
 		return nil
@@ -911,7 +919,7 @@ func newComposeEventSink(ctx context.Context) compose.EventSink {
 }
 
 // Event reports one event as its object's line: in flight, settled, or a warning.
-func (s composeEventSink) Event(evt compose.Event) {
+func (s composeEventSink) Event(evt composeclient.Event) {
 	kind := strings.ToLower(evt.Kind)
 	if kind == "" {
 		kind = composeResourceObject
@@ -924,9 +932,9 @@ func (s composeEventSink) Event(evt compose.Event) {
 		msg = strings.TrimSpace(evt.Status + " " + evt.Text)
 	)
 	switch evt.State {
-	case compose.EventWorking:
+	case composeclient.EventWorking:
 		s.step.UpdateResource(resource, msg)
-	case compose.EventDone:
+	case composeclient.EventDone:
 		s.step.SettleResource(resource, msg)
 	default:
 		s.step.WarnResource(resource, msg)
@@ -1061,20 +1069,26 @@ func openGCService(
 	}
 	engine := docker.NewEngine(daemon.api)
 	return gc.New(gc.Deps{
-		Store:                    scope.arcaveProjectStore,
-		Session:                  scope.sessionID,
-		Sessions:                 scope.sessions,
-		NewSavepointReader:       newGCSavepointReader,
-		Locker:                   lock.New(projectPath),
-		WriteAdmission:           scope.writeAdmission,
-		SessionLocker:            scope.sessionLocker,
-		Inflight:                 inflightrepo.New(projectPath),
-		DaemonCollectors:         newDaemonCollectors(cfg, engine),
-		ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
-		DaemonErasers:            newDaemonErasers(engine),
-		ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
-		// resticrepo reads the repositories through restic, not the listing.
-		UnlistedNamespaces: []string{cdc.NamespaceRepos},
+		Sessions: scope.sessions,
+		ProviderSession: sessionstore.New(sessionstore.Deps{
+			Store:               scope.arcaveProjectStore,
+			Session:             scope.sessionID,
+			NewSavepointRecords: newSavepointRecords,
+			Garbage: garbage.New(garbage.Deps{
+				NewSavepointReader:       newGCSavepointReader,
+				DaemonCollectors:         newDaemonCollectors(cfg, engine),
+				ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
+				DaemonErasers:            newDaemonErasers(engine),
+				ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
+				// resticrepo reads the repositories through restic, not the listing.
+				UnlistedNamespaces: []string{cdc.NamespaceRepos},
+			}),
+		}),
+		Locker:         lock.New(projectPath),
+		WriteAdmission: scope.writeAdmission,
+		SessionLocker:  scope.sessionLocker,
+		Inflight:       inflightrepo.New(projectPath),
+		RetainRecent:   utils.Value(cfg.GC.SafetySnapshots.RetainRecent),
 	}), nil
 }
 
@@ -1088,34 +1102,27 @@ func newSavepointLoader(store storages.Storager) status.SavepointLoader {
 	return sprepo.New(store)
 }
 
-// newSavepointReader is the savepoint repository of a compose project's store, as a service
-// reading across compose projects sees it.
-func newSavepointReader(store storages.Storager) core.SavepointReader {
+// newSavepointRecords is the savepoint repository of a compose project's store, as a session reads it.
+func newSavepointRecords(store storages.Storager) sessionstore.SavepointRecords {
 	return sprepo.New(store)
 }
 
 // newGCSavepointReader is the savepoint repository of a compose project's store, as gc reads it.
-func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
-	return sprepo.New(store)
-}
-
-// newGCSavepointDeleter is the savepoint repository gc's eraser deletes a savepoint through.
-func newGCSavepointDeleter(store storages.Storager) eraser.SavepointDeleter {
+func newGCSavepointReader(store storages.Storager) garbage.SavepointReader {
 	return sprepo.New(store)
 }
 
 // newDaemonCollectors builds the collectors judging the daemon.
-func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []gc.DaemonCollector {
-	return []gc.DaemonCollector{
+func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []garbage.DaemonCollector {
+	return []garbage.DaemonCollector{
 		layertag.New(daemon, model.ArcaveProjectName(cfg.Project.Name)),
 	}
 }
 
 // newComposeProjectCollectors builds the collectors judging a compose project's store.
-func newComposeProjectCollectors(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectCollector {
-	return []gc.ComposeProjectCollector{
+func newComposeProjectCollectors(cfg config.Config, daemon gcDaemon) []garbage.ComposeProjectCollector {
+	return []garbage.ComposeProjectCollector{
 		savepointdir.New(),
-		safetysnapshot.New(utils.Value(cfg.GC.SafetySnapshots.RetainRecent)),
 		ociimage.New(),
 		ociblob.New(cfg.Common.Concurrency),
 		resticrepo.New(daemon, resticInspectorOpener{
@@ -1126,17 +1133,16 @@ func newComposeProjectCollectors(cfg config.Config, daemon gcDaemon) []gc.Compos
 }
 
 // newDaemonErasers builds the erasers carrying out the gc's actions on the daemon.
-func newDaemonErasers(daemon gcDaemon) []gc.DaemonEraser {
-	return []gc.DaemonEraser{
+func newDaemonErasers(daemon gcDaemon) []garbage.DaemonEraser {
+	return []garbage.DaemonEraser{
 		eraser.NewTagEraser(daemon),
 	}
 }
 
 // newComposeProjectErasers builds the erasers carrying out the gc's actions in a compose project's store.
-func newComposeProjectErasers(cfg config.Config, daemon gcDaemon) []gc.ComposeProjectEraser {
-	return []gc.ComposeProjectEraser{
+func newComposeProjectErasers(cfg config.Config, daemon gcDaemon) []garbage.ComposeProjectEraser {
+	return []garbage.ComposeProjectEraser{
 		eraser.NewTreeEraser(),
-		eraser.NewSavepointEraser(newGCSavepointDeleter),
 		eraser.NewImageEraser(),
 		eraser.NewObjectEraser(),
 		eraser.NewForgetEraser(resticPrunerOpener{

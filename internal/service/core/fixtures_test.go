@@ -15,22 +15,15 @@
 package core
 
 import (
-	"bytes"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/image"
-
-	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
-	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 // The project every workflow test runs against: one service mounting one named
@@ -46,29 +39,6 @@ const (
 	// demoVolumeSize is the size demoRecord's capture reported.
 	demoVolumeSize = 4096
 )
-
-// demoCaptureDefaults are the backends every test Service captures by, every kind captured.
-var demoCaptureDefaults = capturepolicy.CaptureDefaults{
-	VolumeBackend:        model.SnapshotBackendFullCopy,
-	WritableLayerBackend: model.ImageBackendDedupCopy,
-	SavepointCapture: capturepolicy.SavepointCaptureSettings{
-		WritableLayers:   true,
-		Images:           true,
-		NamedVolumes:     true,
-		BindVolumes:      true,
-		AnonymousVolumes: true,
-	},
-}
-
-// cdcCaptureDefaults are demoCaptureDefaults with volumes captured by cdc.
-func cdcCaptureDefaults() capturepolicy.CaptureDefaults {
-	defaults := demoCaptureDefaults
-	defaults.VolumeBackend = model.SnapshotBackendCDC
-	return defaults
-}
-
-// demoRestoredVolumes are the docker names of the volumes a rollback to demoRecord restores.
-var demoRestoredVolumes = []string{demoVolumeName}
 
 // demoVolume is the unit, in the form the mock tests address it by.
 func demoVolume() model.Volume {
@@ -114,221 +84,6 @@ func demoSafetySnapshot() model.Savepoint {
 	}
 }
 
-// demoIntrospection is what the inspector reports for the live compose project: one
-// service mounting the named volume. It holds no container, so no layer is captured.
-func demoIntrospection() model.IntrospectionResult {
-	return model.IntrospectionResult{Project: model.Project{
-		Name: demoProject,
-		Services: []model.Service{{
-			Name: demoService,
-			Volumes: []model.ServiceVolume{{
-				Type: model.VolumeTypeNamed, Source: "db", Target: demoTarget, VolumeName: demoVolumeName,
-			}},
-		}},
-		Volumes: []model.NamedVolume{{Key: "db", Name: demoVolumeName,
-			UsedBy: []model.ServiceReference{{Service: demoService, Target: demoTarget}}}},
-	}}
-}
-
-// demoAbsentIntrospection is what the inspector reports once the compose project was
-// taken down: no service, its named volume left behind.
-func demoAbsentIntrospection() model.IntrospectionResult {
-	introspection := demoIntrospection()
-	introspection.Project.Services = nil
-	introspection.Project.Volumes[0].UsedBy = nil
-	return introspection
-}
-
-// The one replica demoIntrospectionWithContainers reports for demoService — the
-// unit an image capture commits.
-const (
-	demoContainerID = "c0ffee"
-	demoBaseImage   = "postgres:16"
-	demoUpstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-)
-
-// demoContainerRef is that replica in the form a capture request addresses it by.
-func demoContainerRef() model.ContainerRef {
-	return model.ContainerRef{
-		Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1),
-		UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage,
-	}
-}
-
-// demoContainerName is the name compose gives replica n of demoService.
-func demoContainerName(n int) string {
-	return fmt.Sprintf("%s-%s-%d", demoProject, demoService, n)
-}
-
-// demoContainerInspect is a replica running on demoBaseImage.
-func demoContainerInspect() container.InspectResponse {
-	return container.InspectResponse{
-		Image:  demoUpstreamID.String(),
-		Config: &container.Config{Image: demoBaseImage},
-	}
-}
-
-// demoImageCaptureRequest is the one upstream demoIntrospectionWithContainers names.
-func demoImageCaptureRequest() model.ImageCaptureRequest {
-	return model.ImageCaptureRequest{
-		Image: model.Image{
-			ID: demoUpstreamID, Refs: []string{demoBaseImage}, RepoDigests: []string{"postgres@sha256:dd"}, SizeBytes: 1 << 20,
-		},
-		ExistsInDaemon: true,
-	}
-}
-
-// demoImage is what the copier reports for demoImageCaptureRequest.
-func demoImage() model.Image {
-	image := demoImageCaptureRequest().Image
-	image.Stored = true
-	image.StoredBytes = 512
-	return image
-}
-
-// demoIntrospectionWithContainers is demoIntrospection with the daemon holding
-// one container for demoService: what a workflow that captures layers sees.
-func demoIntrospectionWithContainers() model.IntrospectionResult {
-	introspection := demoIntrospection()
-	introspection.Project.Services = []model.Service{{
-		Name: demoService,
-		Containers: []model.Container{{
-			ID:      demoContainerID,
-			Name:    demoContainerName(1),
-			Number:  1,
-			Inspect: demoContainerInspect(),
-		}},
-	}}
-	introspection.Images = map[model.ImageDigestID]image.InspectResponse{
-		demoUpstreamID: {
-			ID: demoUpstreamID.String(), RepoTags: []string{demoBaseImage},
-			RepoDigests: []string{"postgres@sha256:dd"}, Size: 1 << 20,
-		},
-	}
-	return introspection
-}
-
-// demoWritableLayer is what the copier reports for demoContainerRef.
-func demoWritableLayer() model.WritableLayer {
-	return model.WritableLayer{
-		Service:          demoService,
-		Replica:          1,
-		ContainerID:      demoContainerID,
-		ContainerName:    demoContainerName(1),
-		CommittedImageID: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ImageBackend:     model.ImageBackendDedupCopy,
-		UpstreamImageID:  demoUpstreamID,
-		UpstreamImageRef: demoBaseImage,
-		SizeBytes:        4096,
-	}
-}
-
-// demoRecordWithImages is demoRecord carrying the writable layer of its one replica.
-func demoRecordWithImages() model.Savepoint {
-	record := demoRecord()
-	record.WritableLayers = []model.WritableLayer{demoWritableLayer()}
-	return record
-}
-
-// demoRestoredTag is the tag a rollback of demoRecord puts on one replica's layer;
-// demoBaseImage's colon is what a docker repository path cannot carry.
-func demoRestoredTag(replica int) string {
-	return fmt.Sprintf("arcave/%s-%s-%d-postgres-16:sp-%s", demoProject, demoService, replica, demoRecord().ID)
-}
-
-// demoWritableLayerRestoreResult is what the copier reports for demoWritableLayer.
-func demoWritableLayerRestoreResult() model.WritableLayerRestoreResult {
-	return model.WritableLayerRestoreResult{
-		Service: demoService, Replica: 1, ContainerName: demoContainerName(1),
-		ImageID: demoWritableLayer().CommittedImageID, Tag: demoRestoredTag(1),
-	}
-}
-
-// The second replica of demoService, and the layer it carries of its own — what a
-// compose service's one image cannot stand for.
-const (
-	demoSecondContainerID = "cafe"
-	demoSecondImageID     = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-)
-
-// demoScaledIntrospection is demoIntrospectionWithContainers with demoService
-// scaled to two replicas.
-func demoScaledIntrospection() model.IntrospectionResult {
-	introspection := demoIntrospectionWithContainers()
-	introspection.Project.Services[0].Containers = append(introspection.Project.Services[0].Containers, model.Container{
-		ID:      demoSecondContainerID,
-		Name:    demoContainerName(2),
-		Number:  2,
-		Inspect: demoContainerInspect(),
-	})
-	return introspection
-}
-
-// demoSecondWritableLayer is the second replica's own layer.
-func demoSecondWritableLayer() model.WritableLayer {
-	capture := demoWritableLayer()
-	capture.Replica = 2
-	capture.ContainerID = demoSecondContainerID
-	capture.ContainerName = demoContainerName(2)
-	capture.CommittedImageID = demoSecondImageID
-	return capture
-}
-
-// demoScaledRecord is a savepoint of the scaled compose project: one capture per replica.
-func demoScaledRecord() model.Savepoint {
-	record := demoRecord()
-	record.WritableLayers = []model.WritableLayer{demoWritableLayer(), demoSecondWritableLayer()}
-	return record
-}
-
-// demoAssembled is what the assembler materialises demoIntrospection into, demoSpecBytes
-// its artifact and demoSpec what that artifact parses back to — the live compose project
-// a workflow acts on. demoTargetSpecBytes is a savepoint's artifact and demoTargetSpec
-// what it parses back to. The projects are distinct values: expectations match them by
-// identity, so a call handed the assembled project, or the live one instead of the
-// savepoint's, fails.
-var (
-	demoAssembled  = &types.Project{Name: demoProject}
-	demoSpec       = &types.Project{Name: demoProject}
-	demoTargetSpec = &types.Project{Name: demoProject, Services: types.Services{
-		demoService: {Name: demoService, Image: demoBaseImage},
-	}}
-	demoSpecBytes       = []byte("name: demo\n")
-	demoTargetSpecBytes = []byte("name: demo\nservices: {db: {image: postgres:16}}\n")
-)
-
-// demoAssembler materialises demoIntrospection into demoAssembled.
-func demoAssembler() *mockAssembler { return assemblerFor(demoIntrospection()) }
-
-// assemblerFor is demoAssembler for a test that reports its own introspection.
-func assemblerFor(introspection model.IntrospectionResult) *mockAssembler {
-	assembler := &mockAssembler{}
-	assembler.On("Assemble", mock.Anything, introspection).Return(demoAssembled, nil)
-	return assembler
-}
-
-// demoCodec renders demoAssembled and parses both artifacts back.
-func demoCodec() *mockCodec {
-	codec := &mockCodec{}
-	codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil)
-	codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil)
-	codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil)
-	return codec
-}
-
-// demoResolution is the three reads every rollback opens with: the records, the
-// introspection, and a free lock.
-func demoResolution(record model.Savepoint) (*mockSavepointRepo, *mockInspector, *mockLocker) {
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil)
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	return repo, inspector, locker
-}
-
 // expectLock declares a free lock and the release that always follows it —
 // withUnlock defers the release, so a taken lock is a released one.
 func expectLock(locker *mockLocker) *mock.Call {
@@ -336,64 +91,10 @@ func expectLock(locker *mockLocker) *mock.Call {
 	return locker.On("Acquire", mock.Anything).Return(nil).Once()
 }
 
-// emptySavepointRepo is a compose project with no savepoint yet, as the listing a create
-// opens with finds it.
-func emptySavepointRepo() *mockSavepointRepo {
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint(nil), nil).Once()
-	return repo
-}
-
-// expectSpecCommit declares the artifact a capture writes before its record. The
-// id comes off the clock, so only the payload can be named.
-func expectSpecCommit(repo *mockSavepointRepo) *mock.Call {
-	return repo.On("SaveSpec", mock.Anything, mock.Anything, demoSpecBytes).Return(nil).Once()
-}
-
-// expectSafetySnapshotCommit declares the record a rollback commits for its undo:
-// an id off the clock, no name, the savepoint being restored by id and name, and
-// the label that hides it from every scanning selector.
-func expectSafetySnapshotCommit(repo *mockSavepointRepo, restoring model.Savepoint) *mock.Call {
-	want := model.SavepointRef{ID: restoring.ID, Name: restoring.Name}
-	return repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-		return r.ID.Validate() == nil && r.Name == "" &&
-			r.TakenBeforeRollbackTo != nil && *r.TakenBeforeRollbackTo == want &&
-			r.IsSafetySnapshot() && r.Spec != nil
-	})).Return(nil).Once()
-}
-
-// matchLivePlan matches the plan of the live compose project demoCodec parses back.
-func matchLivePlan() any {
-	return mock.MatchedBy(func(plan capture.Plan) bool {
-		return plan.Project == demoSpec && bytes.Equal(plan.Spec, demoSpecBytes)
-	})
-}
-
-// expectCapture declares savepoint create's capture of plan: the hold, the capture of what it
-// holds under the session's lock, committing savepoint, and the release.
-func expectCapture(
-	c *mockCapture, plan any, req capture.Request, savepoint model.Savepoint,
-) (hold, captured, release *mock.Call) {
-	hold = c.On("Hold", mock.Anything, plan).Return([]string(nil), nil).Once()
-	captured = c.On("Capture", mock.Anything, fakeGrantedSessionLock{}, plan, []string(nil), req).
-		Return(savepoint, nil).Once().NotBefore(hold)
-	release = c.On("Release", mock.Anything, plan).Return(nil).Once().NotBefore(captured)
-	return hold, captured, release
-}
-
-// expectSafetySnapshot declares a rollback's safety snapshot of the live compose project: the hold,
-// then the capture of what it holds, taken before target and committing savepoint.
-func expectSafetySnapshot(c *mockCapture, target, savepoint model.Savepoint) (hold, captured *mock.Call) {
-	hold = c.On("Hold", mock.Anything, matchLivePlan()).Return([]string(nil), nil).Once()
-	captured = c.On("Capture", mock.Anything, fakeGrantedSessionLock{}, matchLivePlan(), []string(nil),
-		newSafetySnapshotRequest(target)).Return(savepoint, nil).Once().NotBefore(hold)
-	return hold, captured
-}
-
 // newSafetySnapshotRequest is the request a rollback to target captures its safety snapshot by:
 // no name, the label, and target by the id and name it resolved to.
-func newSafetySnapshotRequest(target model.Savepoint) capture.Request {
-	return capture.Request{
+func newSafetySnapshotRequest(target model.Savepoint) provider.CaptureRequest {
+	return provider.CaptureRequest{
 		Labels: safetySnapshotLabels(),
 		TakenBefore: &model.SavepointRef{
 			ID:   target.ID,
@@ -416,78 +117,10 @@ func ptrBool(b bool) *bool { return &b }
 
 func ptrString(s string) *string { return &s }
 
-// deployed matches the project a rollback builds from spec: spec with every service carrying the
-// deployment labels.
-func deployed(spec *types.Project) any {
-	return mock.MatchedBy(func(project *types.Project) bool {
-		for _, service := range project.Services {
-			if service.Labels[string(model.SystemLabelDeploymentSavepointID)] == "" {
-				return false
-			}
-		}
-		return assert.ObjectsAreEqual(spec, withoutDeploymentLabels(project))
-	})
-}
-
-// rolledBackTo matches what deployed does, labelled as savepoint of the default session deployed.
-func rolledBackTo(spec *types.Project, savepoint model.Savepoint) any {
-	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
-		return deployment.Savepoint.ID == savepoint.ID && deployment.Savepoint.Name == savepoint.Name &&
-			!deployment.Savepoint.IsSafetySnapshot && deployment.Session == defaultSessionRef &&
-			deployment.ArcaveProject == demoArcaveProject
-	})
-}
-
-// deployedSafetySnapshot matches what deployed does, labelled as the safety snapshot *id of the
-// default session deployed: a revert. id is read at the match, once the capture has set it.
-func deployedSafetySnapshot(spec *types.Project, id *model.SavepointID) any {
-	return deployedAs(spec, func(deployment model.SavepointDeployment) bool {
-		return deployment.Savepoint.ID == *id && deployment.Savepoint.IsSafetySnapshot &&
-			deployment.Session == defaultSessionRef && deployment.ArcaveProject == demoArcaveProject
-	})
-}
-
 // defaultSessionRef is the default session as the deployment labels name it.
 var defaultSessionRef = model.SessionRef{
 	ID:   model.DefaultSession,
 	Name: model.DefaultSessionName,
-}
-
-// deployedAs matches what deployed does, every service's labels read back into a deployment want
-// accepts.
-func deployedAs(spec *types.Project, want func(model.SavepointDeployment) bool) any {
-	return mock.MatchedBy(func(project *types.Project) bool {
-		for _, service := range project.Services {
-			deployment, ok, err := model.ParseSavepointDeployment(service.Labels)
-			if err != nil || !ok || !want(deployment) {
-				return false
-			}
-		}
-		return assert.ObjectsAreEqual(spec, withoutDeploymentLabels(project))
-	})
-}
-
-// withoutDeploymentLabels is project with the deployment labels a rollback adds taken off again.
-func withoutDeploymentLabels(project *types.Project) *types.Project {
-	stripped := *project
-	stripped.Services = nil
-	if len(project.Services) > 0 {
-		stripped.Services = make(types.Services, len(project.Services))
-	}
-	for name, service := range project.Services {
-		labels := types.Labels{}
-		for key, value := range service.Labels {
-			if !strings.HasPrefix(key, model.DeploymentLabelPrefix) {
-				labels[key] = value
-			}
-		}
-		if len(labels) == 0 {
-			labels = nil
-		}
-		service.Labels = labels
-		stripped.Services[name] = service
-	}
-	return &stripped
 }
 
 func fixedNow() time.Time {
@@ -504,5 +137,51 @@ func assertLogOrder(t *testing.T, log string, lines []string) {
 			return
 		}
 		at = i
+	}
+}
+
+// demoResolution is what every rollback by id opens with: the savepoints, listed twice, and a free
+// lock.
+func demoResolution(record model.Savepoint) (*mockSavepoints, *mockLocker) {
+	savepoints := &mockSavepoints{}
+	// Twice: once ahead of the locks, so a missing savepoint fails at once, and again under them.
+	savepoints.On("List", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
+	locker := &mockLocker{}
+	expectLock(locker)
+	return savepoints, locker
+}
+
+// emptySavepoints lists no savepoint, once.
+func emptySavepoints() *mockSavepoints {
+	savepoints := &mockSavepoints{}
+	savepoints.On("List", mock.Anything).Return([]model.Savepoint(nil), nil).Once()
+	return savepoints
+}
+
+// demoSummary is what building demoRecord restores.
+func demoSummary() provider.PreparedSummary {
+	return provider.PreparedSummary{Volumes: []model.Volume{demoVolume()}}
+}
+
+// newDeploymentOf is the deployment core hands the provider for a build of savepoint in the
+// default session.
+func newDeploymentOf(savepoint model.Savepoint) model.SavepointDeployment {
+	return model.SavepointDeployment{
+		ArcaveProject: demoArcaveProject,
+		Session:       defaultSessionRef,
+		Savepoint: model.DeployedSavepoint{
+			ID:               savepoint.ID,
+			Name:             savepoint.Name,
+			CreatedAt:        savepoint.CreatedAt,
+			IsSafetySnapshot: savepoint.IsSafetySnapshot(),
+		},
+	}
+}
+
+// demoPrepareOptions are the options a rollback to savepoint prepares it by, recovering or not.
+func demoPrepareOptions(savepoint model.Savepoint, recovering bool) provider.PrepareOptions {
+	return provider.PrepareOptions{
+		Deployment: newDeploymentOf(savepoint),
+		Recovering: recovering,
 	}
 }

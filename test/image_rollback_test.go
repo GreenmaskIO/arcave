@@ -36,10 +36,11 @@ import (
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -239,32 +240,29 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 
 	repo := sprepo.New(store)
 	images := newImageCopier(store, newLayerOwner("arcave-image-rollback-tenant", project), profile.engine, blobStore)
+	registry := mustRegistry(t, profile.volumes)
 	deps := core.Deps{
-		ArcaveProject:    "arcave-image-rollback-tenant",
-		SessionLocker:    newStoreLocker(store, model.DefaultSession),
-		WriteAdmission:   newPlainAdmission(store),
-		SavepointRepo:    repo,
-		ProjectLocker:    lock.New(projectRoot),
-		ComposeInspector: inspector,
-		ProjectAssembler: profile.assembler,
-		SpecCodec:        composespec.NewCodec(),
-		ComposeRunner:    runner,
-		ContainerControl: profile.engine,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo:    repo,
-			ImageBackend:     images,
-			ComposeRunner:    runner,
-			ContainerControl: profile.engine,
-			Store:            store,
+		Savepoints:     sessionstore.NewSavepoints(repo),
+		ArcaveProject:  "arcave-image-rollback-tenant",
+		SessionLocker:  newStoreLocker(store, model.DefaultSession),
+		WriteAdmission: newPlainAdmission(store),
+		ProjectLocker:  lock.New(projectRoot),
+		Inflight:       inflightrepo.New(projectRoot),
+		Workload: compose.New(compose.Deps{
+			SavepointRepo:      repo,
+			ImageBackend:       images,
+			ComposeRunner:      runner,
+			ContainerControl:   profile.engine,
+			Store:              store,
+			ProjectAssembler:   profile.assembler,
+			SpecCodec:          composespec.NewCodec(),
+			BackendRegistry:    registry,
+			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
+			ComposeInspector:   inspector,
+			VolumeRemover:      profile.engine,
+			ContainerRebuilder: profile.engine,
+			ImageLookup:        profile.engine,
 		}),
-		VolumeRemover:      profile.engine,
-		ImageBackend:       images,
-		ContainerRebuilder: profile.engine,
-		ImageLookup:        profile.engine,
-		BackendRegistry:    mustRegistry(t, profile.volumes),
-		Inflight:           inflightrepo.New(projectRoot),
-		Store:              store,
-		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	}
 	svc := core.New(deps)
 

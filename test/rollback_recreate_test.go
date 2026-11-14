@@ -44,11 +44,13 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -317,30 +319,28 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 
 	repo := sprepo.New(store)
 	images := newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), profile.engine, blobStore)
+	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		ArcaveProject:    "arcave-recreate-tenant",
-		SessionLocker:    newStoreLocker(store, model.DefaultSession),
-		WriteAdmission:   newPlainAdmission(store),
-		SavepointRepo:    repo,
-		ProjectLocker:    lock.New(projectRoot),
-		ComposeInspector: inspector,
-		ProjectAssembler: profile.assembler,
-		SpecCodec:        codec,
-		ComposeRunner:    runner,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo: repo,
-			ImageBackend:  images,
-			ComposeRunner: runner,
-			Store:         store,
+		Savepoints:     sessionstore.NewSavepoints(repo),
+		ArcaveProject:  "arcave-recreate-tenant",
+		SessionLocker:  newStoreLocker(store, model.DefaultSession),
+		WriteAdmission: newPlainAdmission(store),
+		ProjectLocker:  lock.New(projectRoot),
+		Inflight:       inflightrepo.New(projectRoot),
+		Workload: compose.New(compose.Deps{
+			SavepointRepo:      repo,
+			ImageBackend:       images,
+			ComposeRunner:      runner,
+			Store:              store,
+			ProjectAssembler:   profile.assembler,
+			SpecCodec:          codec,
+			BackendRegistry:    registry,
+			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
+			ComposeInspector:   inspector,
+			VolumeRemover:      profile.engine,
+			ContainerRebuilder: profile.engine,
+			ImageLookup:        profile.engine,
 		}),
-		VolumeRemover:      profile.engine,
-		ImageBackend:       images,
-		ContainerRebuilder: profile.engine,
-		ImageLookup:        profile.engine,
-		BackendRegistry:    mustRegistry(t, profile.volumes),
-		Inflight:           inflightrepo.New(projectRoot),
-		Store:              store,
-		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &recreateEnv{
@@ -362,7 +362,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 func mustRegistry(t *testing.T, volumes fullcopy.VolumeStreamer) model.SnapshotBackendRegistry {
 	t.Helper()
 
-	registry, err := core.NewSnapshotBackendRegistry(fullcopy.NewFactory(volumes, fullcopy.CompressionZstd))
+	registry, err := backendregistry.New(fullcopy.NewFactory(volumes, fullcopy.CompressionZstd))
 	require.NoError(t, err)
 	return registry
 }

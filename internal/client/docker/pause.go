@@ -51,11 +51,13 @@ func (e *Engine) PauseContainers(ctx context.Context, ids []string) error {
 
 // UnpauseContainers thaws whichever of the containers is paused, all at once; one that is not
 // paused, or is gone, is left alone. The state is read first: the daemon refuses an unpause of a
-// container not paused with no code to tell it by.
+// container not paused with no code to tell it by. One that fails leaves the others their
+// attempt; the first failure is returned.
 func (e *Engine) UnpauseContainers(ctx context.Context, ids []string) error {
-	eg, egCtx := errgroup.WithContext(ctx)
+	// No context of the group's own: a failure must not cancel the thaw of the rest.
+	var eg errgroup.Group
 	for _, id := range ids {
-		eg.Go(func() error { return e.unpauseContainer(egCtx, id) })
+		eg.Go(func() error { return e.unpauseContainer(ctx, id) })
 	}
 	return eg.Wait()
 }

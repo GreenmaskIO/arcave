@@ -18,111 +18,45 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"slices"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/greenmaskio/storages"
-	"github.com/greenmaskio/storages/directory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
+// savepoint create checks the name, inspects the workload and plans the capture before anything is
+// held: a plan that cannot be built must leave the project running. Reversed, it compiles.
 func TestService_CreateSavepoint(t *testing.T) {
 	// Arrange
-	// One named volume and one bind mount are units; the tmpfs mount is a skip and
-	// web, mounting nothing, is not covered.
-	introspection := model.IntrospectionResult{Project: model.Project{
-		Name: "demo",
-		Services: []model.Service{
-			{
-				Name: "app",
-				Volumes: []model.ServiceVolume{
-					{Type: model.VolumeTypeBind, RawType: "bind", Source: "/host/cfg", Target: "/etc/cfg"},
-					{Type: model.VolumeTypeTmpfs, RawType: "tmpfs", Target: "/scratch"},
-				},
-			},
-			{
-				Name: "db",
-				Volumes: []model.ServiceVolume{{
-					Type: model.VolumeTypeNamed, RawType: "volume", Source: "pgdata",
-					Target: "/var/lib/postgresql/data", VolumeName: "demo_pgdata",
-				}},
-			},
-			{Name: "web"},
-		},
-		Volumes: []model.NamedVolume{{
-			Key: "pgdata", Name: "demo_pgdata",
-			UsedBy: []model.ServiceReference{{Service: "db", Target: "/var/lib/postgresql/data"}},
-		}},
-	}}
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
 	locker := &mockLocker{}
 	expectLock(locker)
-	wantNotCovered := model.NotCovered{
-		Mounts: []model.SkippedVolume{{Service: "app", Target: "/scratch", RawType: "tmpfs",
-			Reason: model.SkipReasonTmpfs, Detail: "non-persistent (tmpfs lives in RAM)"}},
-		ServicesWithoutVolumes: []string{"web"},
-	}
-
-	store := newDirStore(t)
-	pgBackend := &mockBackend{volume: model.Volume{ObjectID: "volume-named-demo_pgdata"}}
-	cfgBackend := &mockBackend{volume: model.Volume{ObjectID: "volume-service-app-etc-cfg"}}
-	var specs []model.BackendSpec
-	captureSpec := func(args mock.Arguments) { specs = append(specs, args.Get(0).(model.BackendSpec)) }
-	registry := &mockRegistry{}
-	newPg := registry.On("New", matchSpec(store, "volume-named-demo_pgdata")).
-		Run(captureSpec).Return(pgBackend, nil).Once()
-	newCfg := registry.On("New", matchSpec(store, "volume-service-app-etc-cfg")).
-		Run(captureSpec).Return(cfgBackend, nil).Once()
-	repo := &mockSavepointRepo{}
-	nameCheck := repo.On("ListSavepoints", mock.Anything).
+	savepoints := &mockSavepoints{}
+	nameCheck := savepoints.On("List", mock.Anything).
 		Return([]model.Savepoint{{ID: "019e843e-1650-7000-8000-000000000000", Name: "other"}}, nil).Once()
-
 	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000", Name: "before-migration"}
-	capturer := &mockCapture{}
-	plan := mock.MatchedBy(func(p capture.Plan) bool {
-		return p.Project == demoSpec && string(p.Spec) == string(demoSpecBytes) &&
-			p.WaitTimeout == 90*time.Second &&
-			sameBackends(p.Volumes, pgBackend, cfgBackend) &&
-			assert.ObjectsAreEqual(wantNotCovered, p.NotCovered)
-	})
-	// Every backend is built, and the name checked, before the capture: one that cannot be
-	// built must leave the project running. Reversed, it compiles.
-	hold, _, _ := expectCapture(capturer, plan, capture.Request{
-		Name:        "before-migration",
-		Description: "trying a schema change",
-	}, committed)
-	hold.NotBefore(newPg, newCfg, nameCheck)
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(introspection),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	logs := &syncBuffer{}
-	ctx := zerolog.New(logs).WithContext(context.Background())
+	stages := newMockStages(false)
+	mock.InOrder(
+		nameCheck,
+		stages.expectInspect(nil),
+		stages.expectPlanCapture(provider.CaptureOptions{}, nil),
+		stages.expectHold(nil),
+		stages.expectCaptureOf(provider.CaptureRequest{
+			Name:        "before-migration",
+			Description: "trying a schema change",
+			InResult:    true,
+		}, nil),
+		stages.expectCommit(committed, nil),
+		stages.expectRelease(90*time.Second, nil),
+	)
+	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
@@ -134,61 +68,27 @@ func TestService_CreateSavepoint(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, committed, savepoint)
-
-	// The store reaches every backend as the DI root left it — there is one, and a
-	// backend bound to anything else would be writing outside the project's tree.
-	require.Len(t, specs, 2)
-	for _, spec := range specs {
-		assert.Same(t, store, spec.Store)
-	}
-
-	assert.Contains(t, logs.String(), "volume will not be backed up")
-	assert.Contains(t, logs.String(), "/scratch")
-	assert.Contains(t, logs.String(), "tmpfs")
-	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-	pgBackend.AssertExpectations(t)
-	cfgBackend.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 // Labels reach the capture's request as they were asked for.
 func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	// Arrange
 	labels := map[string]string{"team": "payments"}
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := emptySavepointRepo()
-	store := newDirStore(t)
-	backend := &mockBackend{volume: demoVolume()}
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
+	savepoints := emptySavepoints()
 	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000", Labels: labels}
-	capturer := &mockCapture{}
-	expectCapture(capturer, mock.MatchedBy(func(p capture.Plan) bool {
-		return sameBackends(p.Volumes, backend)
-	}), capture.Request{Labels: labels}, committed)
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
+	stages := newMockStages(false)
+	stages.expectInspect(nil)
+	stages.expectPlanCapture(provider.CaptureOptions{}, nil)
+	stages.expectHold(nil)
+	stages.expectCaptureOf(provider.CaptureRequest{Labels: labels, InResult: true}, nil)
+	stages.expectCommit(committed, nil)
+	stages.expectRelease(0, nil)
+	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -199,52 +99,41 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, committed, savepoint)
-	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-	backend.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 // The capture runs under the session lock the workflow was granted: the one its commit is verified
 // against.
 func TestService_CreateSavepoint_CapturesUnderTheSessionLock(t *testing.T) {
 	// Arrange
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := emptySavepointRepo()
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(&mockBackend{volume: demoVolume()}, nil).Once()
+	savepoints := emptySavepoints()
 	grantedLock := &mockGrantedSessionLock{}
 	grantedLock.On("Unlock", mock.Anything).Return(nil).Once()
 	sessionLocker := &mockSessionLocker{}
 	sessionLocker.On("Lock", mock.Anything, model.SessionLockOperationSavepointCreate).Return(grantedLock, nil).Once()
 	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000"}
-	capturer := &mockCapture{}
-	hold := capturer.On("Hold", mock.Anything, matchLivePlan()).Return([]string(nil), nil).Once()
-	captured := capturer.On("Capture", mock.Anything, grantedLock, matchLivePlan(), []string(nil), capture.Request{}).
-		Return(committed, nil).Once()
-	release := capturer.On("Release", mock.Anything, matchLivePlan()).Return(nil).Once()
-	mock.InOrder(hold, captured, release)
-
+	stages := newMockStages(false)
+	mock.InOrder(
+		stages.expectInspect(nil),
+		stages.expectPlanCapture(provider.CaptureOptions{}, nil),
+		stages.expectHold(nil),
+		stages.expectCaptureOf(provider.CaptureRequest{InResult: true}, nil),
+		grantedLock.On("Verify", mock.Anything).Return(nil).Once(),
+		stages.expectCommit(committed, nil),
+		stages.expectRelease(0, nil),
+	)
 	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    sessionLocker,
-		WriteAdmission:   fakeWriteAdmission{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:  demoArcaveProject,
+		SessionLocker:  sessionLocker,
+		WriteAdmission: fakeWriteAdmission{},
+		Savepoints:     savepoints,
+		ProjectLocker:  locker,
+		Workload:       &stages.workload,
+		Inflight:       &fakeInflight{},
 	})
 
 	// Act
@@ -253,28 +142,27 @@ func TestService_CreateSavepoint_CapturesUnderTheSessionLock(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, committed, savepoint)
-	inspector.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
 	grantedLock.AssertExpectations(t)
 	sessionLocker.AssertExpectations(t)
-	capturer.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
-// savepoint create holds, captures and releases on every path; the hold's or the capture's error
-// wins over the release's, and an interrupt wins over the failure it caused.
-func TestService_captureHeld(t *testing.T) {
+// savepoint create releases on every path; the hold's or capture's error outranks the release's,
+// an interrupt outranks the failure it caused, and a lock lost before the commit abandons.
+func TestCaptureHeld(t *testing.T) {
 	errBoom := errors.New("boom")
-	killed := []string{"c1"}
 	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000", Name: "sp"}
 
 	tests := []struct {
 		name       string
 		holdErr    error
 		captureErr error
+		verifyErr  error
+		commitErr  error
 		releaseErr error
-		// interruptOn cancels the command's context inside that call: Hold or Capture.
+		// interruptOn cancels the command's context inside that call: Hold, Capture or Commit.
 		interruptOn string
 		wantErr     string
 		// wantLogOrder are lines the log must hold in this order; "release" is the release's.
@@ -307,19 +195,31 @@ func TestService_captureHeld(t *testing.T) {
 		{
 			name:             "a failed capture releases",
 			captureErr:       errBoom,
-			wantErr:          "capturing volumes: boom",
+			wantErr:          "capturing the savepoint: boom",
 			wantNoRestartLog: true,
 		},
 		{
 			name:        "an interrupted capture releases",
 			captureErr:  errBoom,
 			interruptOn: "Capture",
-			wantErr:     "capturing volumes: interrupted: context canceled",
+			wantErr:     "capturing the savepoint: interrupted: context canceled",
 			wantLogOrder: []string{
 				"savepoint interrupted during capture",
 				"failure the interrupt caused",
 				"release",
 			},
+			wantNoRestartLog: true,
+		},
+		{
+			name:             "a lost lock abandons the capture and releases",
+			verifyErr:        model.ErrSessionLockLost,
+			wantErr:          "capturing the savepoint: commit savepoint " + committed.ID.String() + ": " + model.ErrSessionLockLost.Error(),
+			wantNoRestartLog: true,
+		},
+		{
+			name:             "a failed commit releases",
+			commitErr:        errBoom,
+			wantErr:          "capturing the savepoint: boom",
 			wantNoRestartLog: true,
 		},
 		{
@@ -338,7 +238,7 @@ func TestService_captureHeld(t *testing.T) {
 			name:         "a failed release under a failed capture is logged",
 			captureErr:   errors.New("capture boom"),
 			releaseErr:   errBoom,
-			wantErr:      "capturing volumes: capture boom",
+			wantErr:      "capturing the savepoint: capture boom",
 			wantLogOrder: []string{"services failed to resume after capture failure"},
 		},
 		{
@@ -363,36 +263,35 @@ func TestService_captureHeld(t *testing.T) {
 					}
 				}
 			}
-			plan := capture.Plan{Project: demoSpec, Spec: demoSpecBytes, WaitTimeout: time.Minute}
-			req := capture.Request{Name: "sp"}
+			req := provider.CaptureRequest{Name: "sp", InResult: true}
 			grantedLock := &mockGrantedSessionLock{}
-
-			capturer := &mockCapture{}
-			calls := []*mock.Call{
-				capturer.On("Hold", mock.Anything, plan).Run(interruptIf("Hold")).Return(killed, tt.holdErr).Once(),
-			}
+			capturer := newMockStages(false)
+			calls := []*mock.Call{capturer.expectHold(tt.holdErr).Run(interruptIf("Hold"))}
 			if tt.holdErr == nil {
+				calls = append(calls, capturer.expectCaptureOf(req, tt.captureErr).Run(interruptIf("Capture")))
+			}
+			if tt.holdErr == nil && tt.captureErr == nil {
+				calls = append(calls, grantedLock.On("Verify", mock.Anything).Return(tt.verifyErr).Once())
+			}
+			if tt.verifyErr != nil {
+				named, abandon := capturer.expectAbandon(committed.ID, tt.verifyErr)
+				calls = append(calls, named, abandon)
+			}
+			if tt.holdErr == nil && tt.captureErr == nil && tt.verifyErr == nil {
 				var savepoint model.Savepoint
-				if tt.captureErr == nil {
+				if tt.commitErr == nil {
 					savepoint = committed
 				}
-				calls = append(calls, capturer.On("Capture", mock.Anything, grantedLock, plan, killed, req).
-					Run(func(args mock.Arguments) {
-						interruptIf("Capture")(args)
-						interruptIf("Commit")(args)
-					}).
-					Return(savepoint, tt.captureErr).Once())
+				calls = append(calls, capturer.expectCommit(savepoint, tt.commitErr).Run(interruptIf("Commit")))
 			}
-			calls = append(calls, capturer.On("Release", mock.Anything, plan).
+			calls = append(calls, capturer.expectRelease(time.Minute, tt.releaseErr).
 				Run(func(args mock.Arguments) {
 					zerolog.Ctx(args.Get(0).(context.Context)).Info().Msg("release")
-				}).
-				Return(tt.releaseErr).Once())
+				}))
 			mock.InOrder(calls...)
-			svc := New(Deps{Capture: capturer})
 
 			// Act
-			savepoint, err := svc.captureHeld(ctx, grantedLock, plan, req)
+			savepoint, err := captureHeld(ctx, grantedLock, &capturer.plan, req, time.Minute)
 
 			// Assert
 			if tt.wantErr == "" {
@@ -402,11 +301,10 @@ func TestService_captureHeld(t *testing.T) {
 				require.EqualError(t, err, tt.wantErr)
 				assert.Zero(t, savepoint)
 			}
-			if tt.holdErr != nil && tt.interruptOn == "" {
-				assert.ErrorIs(t, err, tt.holdErr)
-			}
-			if tt.captureErr != nil && tt.interruptOn == "" {
-				assert.ErrorIs(t, err, tt.captureErr)
+			for _, cause := range []error{tt.holdErr, tt.captureErr, tt.verifyErr, tt.commitErr} {
+				if cause != nil && tt.interruptOn == "" {
+					assert.ErrorIs(t, err, cause)
+				}
 			}
 			assertLogOrder(t, logs.String(), tt.wantLogOrder)
 			if tt.wantNoRestartLog {
@@ -418,296 +316,29 @@ func TestService_captureHeld(t *testing.T) {
 	}
 }
 
-// Every replica's anonymous volume is a unit of its own, captured by its own backend.
-func TestService_CreateSavepoint_AnonymousVolumePerReplica(t *testing.T) {
+// A plan that cannot be built leaves the compose project running: nothing is held or captured.
+func TestService_CreateSavepoint_APlanNotBuiltHoldsNothing(t *testing.T) {
 	// Arrange
-	anon := func(replica int) model.ServiceVolume {
-		return model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
-	}
-	introspection := model.IntrospectionResult{Project: model.Project{
-		Name: "demo",
-		Services: []model.Service{{
-			Name:    "worker",
-			Volumes: []model.ServiceVolume{anon(1), anon(2), anon(3)},
-		}},
-	}}
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
+	errPlan := errors.New("compose files are gone")
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := emptySavepointRepo()
-
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	var backends []model.VolumeSnapshotBackend
-	for replica := 1; replica <= 3; replica++ {
-		objectID := fmt.Sprintf("volume-anon-worker-%d-cache", replica)
-		backend := &mockBackend{volume: model.Volume{ObjectID: objectID}}
-		registry.On("New", mock.MatchedBy(func(spec model.BackendSpec) bool {
-			return spec.Store == store && spec.Volume.ObjectID == objectID &&
-				spec.Volume.Anon != nil && spec.Volume.Anon.Replica == replica
-		})).Return(backend, nil).Once()
-		backends = append(backends, backend)
-	}
-	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000"}
-	capturer := &mockCapture{}
-	expectCapture(capturer, mock.MatchedBy(func(p capture.Plan) bool {
-		return sameBackends(p.Volumes, backends...)
-	}), capture.Request{}, committed)
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(introspection),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
+	// Only the plan is expected: a hold would fail the test where it happened.
+	savepoints := emptySavepoints()
+	stages := newMockStages(false)
+	stages.expectInspect(nil)
+	stages.expectPlanCapture(provider.CaptureOptions{}, errPlan)
+	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
 	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
 
 	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, committed, savepoint)
-	inspector.AssertExpectations(t)
+	require.ErrorIs(t, err, errPlan)
+	assert.Zero(t, savepoint)
 	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-}
-
-// The backend a new savepoint captures with is the configured one, not a
-// constant: it is stamped on every volume the create resolves.
-func TestService_CreateSavepoint_StampsTheConfiguredBackend(t *testing.T) {
-	// Arrange
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	repo := emptySavepointRepo()
-
-	cdcVolume := model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendCDC}
-	backend := &mockBackend{volume: cdcVolume}
-	registry := &mockRegistry{}
-	registry.On("New", mock.MatchedBy(func(spec model.BackendSpec) bool {
-		return spec.Volume.Backend == model.SnapshotBackendCDC
-	})).Return(backend, nil).Once()
-	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000"}
-	capturer := &mockCapture{}
-	expectCapture(capturer, mock.MatchedBy(func(p capture.Plan) bool {
-		return sameBackends(p.Volumes, backend)
-	}), capture.Request{}, committed)
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            newDirStore(t),
-		CaptureDefaults:  cdcCaptureDefaults(),
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, committed, savepoint)
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-	backend.AssertExpectations(t)
-}
-
-func TestService_CreateSavepoint_AnAssemblerFailureLeavesTheComposeProjectRunning(t *testing.T) {
-	// Arrange
-	assembleErr := errors.New("compose files are gone")
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	assembler := &mockAssembler{}
-	assembler.On("Assemble", mock.Anything, demoIntrospection()).Return(nil, assembleErr).Once()
-	capturer := &mockCapture{}
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    emptySavepointRepo(),
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: assembler,
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  &mockRegistry{},
-		Inflight:         &fakeInflight{},
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-	// Assert
-	// The capture carries no expectations: a run would fail the test where it happened.
-	require.ErrorIs(t, err, assembleErr)
-	inspector.AssertExpectations(t)
-	assembler.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-}
-
-// A backend without a factory fails before the services are stopped.
-func TestService_CreateSavepoint_UnknownBackend(t *testing.T) {
-	// Arrange
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	repo := emptySavepointRepo()
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(nil, "volume-named-demo_db")).Return(nil, ErrUnknownBackend)
-	capturer := &mockCapture{}
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            nil,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-	// Assert
-	// The capture carries no expectations: a run would fail the test where it happened.
-	require.ErrorIs(t, err, ErrUnknownBackend)
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-}
-
-// A create that would cover nothing is refused before the services are touched:
-// stopping a project to capture zero volumes is pure downtime.
-func TestService_CreateSavepoint_NoVolumes(t *testing.T) {
-	// Arrange
-	empty := model.IntrospectionResult{Project: model.Project{
-		Name:     demoProject,
-		Services: []model.Service{{Name: demoService}},
-	}}
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(empty, nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	registry := &mockRegistry{}
-	capturer := &mockCapture{}
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    emptySavepointRepo(),
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(empty),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            nil,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-	// Assert
-	// Neither the capture nor the registry carries an expectation: a create that
-	// covers nothing must not stop the project or build a backend.
-	require.ErrorIs(t, err, errNoVolumesToBackUp)
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-}
-
-// A compose project taken down has nothing to capture a spec of: the create is refused
-// before anything is assembled, even though its volumes still exist.
-func TestService_CreateSavepoint_ComposeProjectAbsent(t *testing.T) {
-	// Arrange
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once()
-	locker := &mockLocker{}
-	expectLock(locker)
-	assembler := &mockAssembler{}
-	registry := &mockRegistry{}
-	capturer := &mockCapture{}
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    emptySavepointRepo(),
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: assembler,
-		SpecCodec:        &mockCodec{},
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-	// Assert
-	require.ErrorIs(t, err, model.ErrComposeProjectAbsent)
-	assert.Contains(t, err.Error(), `compose project "demo"`)
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	assembler.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 // A name the savepoint could not carry is refused while the project still runs:
@@ -734,23 +365,12 @@ func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
 			// Arrange
 			locker := &mockLocker{}
 			expectLock(locker)
-			repo := &mockSavepointRepo{}
+			repo := &mockSavepoints{}
 			if tt.existing != nil {
-				repo.On("ListSavepoints", mock.Anything).Return(tt.existing, nil).Once()
+				repo.On("List", mock.Anything).Return(tt.existing, nil).Once()
 			}
-			inspector := &mockInspector{}
-			capturer := &mockCapture{}
-			svc := New(Deps{
-				ArcaveProject:    demoArcaveProject,
-				SessionLocker:    fakeSessionLocker{},
-				WriteAdmission:   fakeWriteAdmission{},
-				SavepointRepo:    repo,
-				ProjectLocker:    locker,
-				ComposeInspector: inspector,
-				Capture:          capturer,
-				Inflight:         &fakeInflight{},
-				Store:            newDirStore(t),
-			})
+			stages := newMockStages(false)
+			svc := newStagedService(stages, repo, locker, &fakeInflight{})
 
 			// Act
 			_, err := svc.CreateSavepoint(zerolog.Nop().WithContext(context.Background()),
@@ -760,8 +380,7 @@ func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
 			require.ErrorIs(t, err, tt.wantErr)
 			locker.AssertExpectations(t)
 			repo.AssertExpectations(t)
-			inspector.AssertExpectations(t)
-			capturer.AssertExpectations(t)
+			stages.AssertExpectations(t)
 		})
 	}
 }
@@ -797,74 +416,6 @@ func TestRequireUniqueName(t *testing.T) {
 	}
 }
 
-// A named volume no service mounts is covered like any other: a backend
-// addresses a volume by name, so having no container to read it through is no
-// longer a reason to leave it out of the savepoint.
-func TestService_CreateSavepoint_CoversAnUnmountedVolume(t *testing.T) {
-	// Arrange
-	introspection := model.IntrospectionResult{Project: model.Project{
-		Name:     "demo",
-		Services: demoIntrospection().Project.Services,
-		Volumes: []model.NamedVolume{
-			{Key: "db", Name: "demo_db", UsedBy: []model.ServiceReference{{Service: "db", Target: "/data"}}},
-			// Mounted by no service — docker created it, so it can hold data.
-			{Key: "orphan", Name: "demo_orphan"},
-		},
-	}}
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(introspection, nil)
-	locker := &mockLocker{}
-	expectLock(locker)
-	repo := emptySavepointRepo()
-
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	backends := make([]model.VolumeSnapshotBackend, 0, 2)
-	for _, objectID := range []string{"volume-named-demo_db", "volume-named-demo_orphan"} {
-		backend := &mockBackend{volume: model.Volume{ObjectID: objectID}}
-		registry.On("New", matchSpec(store, objectID)).Return(backend, nil).Once()
-		backends = append(backends, backend)
-	}
-	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000"}
-	capturer := &mockCapture{}
-	expectCapture(capturer, mock.MatchedBy(func(p capture.Plan) bool {
-		return sameBackends(p.Volumes, backends...) && p.NotCovered.Mounts == nil
-	}), capture.Request{}, committed)
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: assemblerFor(introspection),
-		SpecCodec:        demoCodec(),
-		Capture:          capturer,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	logs := &syncBuffer{}
-	ctx := zerolog.New(logs).WithContext(context.Background())
-
-	// Act
-	savepoint, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-	// Assert
-	require.NoError(t, err)
-	assert.Equal(t, committed, savepoint)
-	assert.NotContains(t, logs.String(), "volume will not be backed up",
-		"nothing is left out for being unreachable any more")
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	capturer.AssertExpectations(t)
-}
-
 // A safety snapshot is an ordinary record in the one store, so what keeps it out
 // of a listing is the flag and nothing structural.
 func TestService_ListSavepoints(t *testing.T) {
@@ -894,14 +445,13 @@ func TestService_ListSavepoints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			repo := &mockSavepointRepo{}
-			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{demoRecord(), demoSafetySnapshot()}, nil).Once()
+			repo := &mockSavepoints{}
+			repo.On("List", mock.Anything).Return([]model.Savepoint{demoRecord(), demoSafetySnapshot()}, nil).Once()
 			// No daemon collaborator at all: savepoint list runs where no daemon does.
 			svc := New(Deps{
 				ArcaveProject: demoArcaveProject,
 				SessionLocker: fakeSessionLocker{},
-				SavepointRepo: repo, Inflight: &fakeInflight{},
-				CaptureDefaults: demoCaptureDefaults,
+				Savepoints:    repo, Inflight: &fakeInflight{},
 			})
 
 			// Act
@@ -956,15 +506,13 @@ func TestService_RemoveSavepoints_SafetySnapshotVisibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			repo := &mockSavepointRepo{}
-			repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record, backup}, nil).Once()
+			repo := &mockSavepoints{}
+			repo.On("List", mock.Anything).Return([]model.Savepoint{record, backup}, nil).Once()
 			svc := New(Deps{
 				ArcaveProject: demoArcaveProject,
 				SessionLocker: fakeSessionLocker{},
-				VolumeRemover: &mockVolumeRemover{},
-				SavepointRepo: repo, ProjectLocker: nil, ComposeInspector: nil,
-				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
-				Store: nil, CaptureDefaults: demoCaptureDefaults,
+				Savepoints:    repo, ProjectLocker: nil,
+				Inflight: &fakeInflight{},
 			})
 
 			// Act
@@ -984,17 +532,17 @@ func TestService_RemoveSavepoints(t *testing.T) {
 	record := demoRecord()
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
+	repo := &mockSavepoints{}
+	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo.On("Remove", mock.Anything, record.ID).Return(nil).Once()
 
 	// No daemon collaborator at all: savepoint remove runs where no daemon does.
 	svc := New(Deps{
 		ArcaveProject:  demoArcaveProject,
 		SessionLocker:  fakeSessionLocker{},
 		WriteAdmission: fakeWriteAdmission{},
-		SavepointRepo:  repo, ProjectLocker: locker,
-		Inflight: &fakeInflight{}, CaptureDefaults: demoCaptureDefaults,
+		Savepoints:     repo, ProjectLocker: locker,
+		Inflight: &fakeInflight{},
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -1015,18 +563,16 @@ func TestService_RemoveSavepoints_DeleteFailureNamesTheOrphan(t *testing.T) {
 	record := demoRecord()
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
-	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(errors.New("remove boom")).Once()
+	repo := &mockSavepoints{}
+	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo.On("Remove", mock.Anything, record.ID).Return(errors.New("remove boom")).Once()
 
 	svc := New(Deps{
 		ArcaveProject:  demoArcaveProject,
 		SessionLocker:  fakeSessionLocker{},
 		WriteAdmission: fakeWriteAdmission{},
-		VolumeRemover:  &mockVolumeRemover{},
-		SavepointRepo:  repo, ProjectLocker: locker, ComposeInspector: nil,
-		ComposeRunner: nil, Inflight: &fakeInflight{},
-		CaptureDefaults: demoCaptureDefaults,
+		Savepoints:     repo, ProjectLocker: locker,
+		Inflight: &fakeInflight{},
 	})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
@@ -1047,17 +593,15 @@ func TestService_RemoveSavepoints_DeleteFailureNamesTheOrphan(t *testing.T) {
 func TestService_RemoveSavepoints_DryRun(t *testing.T) {
 	// Arrange
 	record := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000000", Name: "sp", CreatedAt: time.Date(2026, 6, 12, 11, 0, 0, 0, time.UTC)}
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil)
+	repo := &mockSavepoints{}
+	repo.On("List", mock.Anything).Return([]model.Savepoint{record}, nil)
 	locker := &mockLocker{}
 
 	svc := New(Deps{
 		ArcaveProject: demoArcaveProject,
 		SessionLocker: fakeSessionLocker{},
-		VolumeRemover: &mockVolumeRemover{},
-		SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: nil,
-		ComposeRunner: nil, Inflight: &fakeInflight{},
-		Store: nil, CaptureDefaults: demoCaptureDefaults,
+		Savepoints:    repo, ProjectLocker: locker,
+		Inflight: &fakeInflight{},
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -1177,10 +721,8 @@ func TestService_parseRetentionCutoffs(t *testing.T) {
 			svc := New(Deps{
 				ArcaveProject: demoArcaveProject,
 				SessionLocker: fakeSessionLocker{},
-				VolumeRemover: &mockVolumeRemover{},
-				SavepointRepo: nil, ProjectLocker: nil, ComposeInspector: nil,
-				ComposeRunner: nil, BackendRegistry: nil, Inflight: &fakeInflight{},
-				Store: nil, CaptureDefaults: demoCaptureDefaults,
+				Savepoints:    nil, ProjectLocker: nil,
+				Inflight: &fakeInflight{},
 			})
 			now := time.Now()
 
@@ -1487,74 +1029,4 @@ func ids(records []model.Savepoint) []string {
 		out[i] = r.ID.String()
 	}
 	return out
-}
-
-// newDirStore is a real directory Storager on a tempdir: the service addresses
-// its stores directly, so a nil one would panic.
-func newDirStore(t *testing.T) storages.Storager {
-	t.Helper()
-	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, store.Close()) })
-	return store
-}
-
-// objectNames lists a store's whole tree.
-func objectNames(t *testing.T, store storages.Storager) []string {
-	t.Helper()
-
-	written, err := store.List(context.Background(), "")
-	require.NoError(t, err)
-	names := make([]string, 0, len(written))
-	for _, obj := range written {
-		names = append(names, obj.Name)
-	}
-	return names
-}
-
-// fakeVolumeStreamer serves a fixed payload from OpenVolume and collects
-// WriteVolume's stream; hand-rolled because a mock cannot stream. Guarded, since
-// the fan-out is concurrent.
-//
-// It addresses every volume by its own ObjectID, which no real engine does — it
-// only has to be unique per volume.
-type fakeVolumeStreamer struct {
-	mu      sync.Mutex
-	payload string
-	written strings.Builder
-}
-
-func (f *fakeVolumeStreamer) ResolveMountSource(
-	_ context.Context, v model.Volume,
-) (model.MountSource, error) {
-	return model.MountSource{Type: model.MountSourceVolume, Source: v.ObjectID}, nil
-}
-
-func (f *fakeVolumeStreamer) OpenVolume(
-	_ context.Context, _ model.MountSource,
-) (io.ReadCloser, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return io.NopCloser(strings.NewReader(f.payload)), nil
-}
-
-func (f *fakeVolumeStreamer) WriteVolume(_ context.Context, _ model.MountSource, r io.Reader) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	_, err := io.Copy(&f.written, r)
-	return err
-}
-
-// sameBackends reports whether got holds exactly want, by identity and in any order: the
-// plan carries the very backends the registry built.
-func sameBackends(got []model.VolumeSnapshotBackend, want ...model.VolumeSnapshotBackend) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for _, backend := range want {
-		if !slices.Contains(got, backend) {
-			return false
-		}
-	}
-	return true
 }

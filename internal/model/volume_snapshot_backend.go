@@ -38,7 +38,7 @@ type SnapshotBackendFactory interface {
 }
 
 // SnapshotBackendRegistry resolves a volume's Backend to its factory and builds
-// the instance. Services hold this seam; core ships the implementation.
+// the instance. The compose provider holds this seam and ships the implementation.
 type SnapshotBackendRegistry interface {
 	New(spec BackendSpec) (VolumeSnapshotBackend, error)
 }

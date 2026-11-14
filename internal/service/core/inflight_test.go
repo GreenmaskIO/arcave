@@ -16,13 +16,11 @@ package core
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -33,11 +31,12 @@ import (
 // is demoSafetySnapshot.
 func demoMarker(phase model.InflightPhase) model.InflightMarker {
 	return model.InflightMarker{
-		Phase:   phase,
-		Session: model.DefaultSession,
-		Target:  demoRecord().ID,
-		Safety:  demoSafetySnapshot().ID,
-		At:      time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
+		Phase:          phase,
+		Session:        model.DefaultSession,
+		ComposeProject: demoProject,
+		Target:         demoRecord().ID,
+		Safety:         demoSafetySnapshot().ID,
+		At:             time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -58,27 +57,16 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := &mockSavepointRepo{}
-	inspector := &mockInspector{}
-	runner := &mockComposeRunner{}
-	captured := &mockCapture{}
-	registry := &mockRegistry{}
+	savepoints := &mockSavepoints{}
+	stages := newMockStages(false)
 	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		Capture:          captured,
-		BackendRegistry:  registry,
-		Inflight:         standingMarker(t, model.InflightRestoring),
-		Store:            nil,
-		CaptureDefaults:  demoCaptureDefaults,
+		ArcaveProject:  demoArcaveProject,
+		SessionLocker:  fakeSessionLocker{},
+		WriteAdmission: fakeWriteAdmission{},
+		Savepoints:     savepoints,
+		ProjectLocker:  locker,
+		Workload:       &stages.workload,
+		Inflight:       standingMarker(t, model.InflightRestoring),
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -90,26 +78,22 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	require.ErrorAs(t, err, &interrupted)
 	assert.Equal(t, demoMarker(model.InflightRestoring), interrupted.Marker)
 	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	inspector.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	captured.AssertExpectations(t)
-	registry.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
 	// Arrange
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := &mockSavepointRepo{}
+	savepoints := &mockSavepoints{}
 	svc := New(Deps{
 		ArcaveProject:  demoArcaveProject,
 		SessionLocker:  fakeSessionLocker{},
 		WriteAdmission: fakeWriteAdmission{},
-		VolumeRemover:  &mockVolumeRemover{},
-		SavepointRepo:  repo, ProjectLocker: locker, ComposeInspector: nil,
-		ComposeRunner: nil, BackendRegistry: nil, Inflight: standingMarker(t, model.InflightInconsistent),
-		Store: nil, CaptureDefaults: demoCaptureDefaults,
+		Savepoints:     savepoints,
+		ProjectLocker:  locker,
+		Inflight:       standingMarker(t, model.InflightInconsistent),
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -120,7 +104,7 @@ func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
 	var interrupted *model.InterruptedRollbackError
 	require.ErrorAs(t, err, &interrupted)
 	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
 }
 
 // A rollback to anything but the marker's own safety snapshot is refused, and the
@@ -128,31 +112,12 @@ func TestService_RemoveSavepoints_RefusedWhileInflight(t *testing.T) {
 func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	// Arrange
 	record := demoRecord()
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
+	savepoints := &mockSavepoints{}
+	savepoints.On("List", mock.Anything).Return([]model.Savepoint{record}, nil).Twice()
 	locker := &mockLocker{}
 	expectLock(locker)
-	inspector := &mockInspector{}
-	runner := &mockComposeRunner{}
-	captured := &mockCapture{}
-	registry := &mockRegistry{}
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		Capture:          captured,
-		BackendRegistry:  registry,
-		Inflight:         standingMarker(t, model.InflightRestoring),
-		Store:            nil,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
+	stages := newMockStages(false)
+	svc := newStagedService(stages, savepoints, locker, standingMarker(t, model.InflightRestoring))
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act: a blind retry of the interrupted rollback, still refused — its undo would
@@ -162,54 +127,29 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	// Assert
 	var interrupted *model.InterruptedRollbackError
 	require.ErrorAs(t, err, &interrupted)
-	repo.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	inspector.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	captured.AssertExpectations(t)
-	registry.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 // A rollback to the marker's safety snapshot passes the gate and clears the marker on success. It
 // takes no safety snapshot of its own: that would capture the half-restored volumes as an undo.
 func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testing.T) {
 	// Arrange: the record being restored IS the safety snapshot the marker names.
-	vol := demoVolume()
 	record := demoSafetySnapshot()
-	repo, inspector, locker := demoResolution(record)
+	savepoints, locker := demoResolution(record)
 	inflight := standingMarker(t, model.InflightRestoring)
-
-	registry := &mockRegistry{}
-	savepointBackend := &mockBackend{volume: vol}
-	captured := &mockCapture{}
-	runner := &mockComposeRunner{}
-	down := runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
-	restoreSp := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "safety-payload"}).Return(nil).Once()
-	up := runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
-	mock.InOrder(down, create, restoreSp, up)
-
-	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		Capture:          captured,
-		BackendRegistry:  registry,
-		Inflight:         inflight,
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
+	stages := newMockStages(false)
+	mock.InOrder(
+		stages.expectInspect(nil),
+		stages.expectPrepare(record.ID, demoPrepareOptions(record, true), nil),
+		stages.expectLiveTeardown(nil),
+		stages.target.expectBuild(nil),
+		stages.target.expectRestoreData(nil),
+		stages.target.expectStart(60*time.Second, nil),
+		stages.target.expectReap(),
+	)
+	svc := newStagedService(stages, savepoints, locker, inflight)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -224,280 +164,48 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 	_, found, getErr := inflight.Get(ctx)
 	require.NoError(t, getErr)
 	assert.False(t, found, "a successful recovery clears the marker")
-	repo.AssertExpectations(t)
-	inspector.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	captured.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
-}
-
-// The marker's lifecycle across a clean rollback: restoring before the first
-// destructive write, restore-done before the restart, then cleared.
-// Every neighbouring pair compiles when swapped, so the chain is the pin.
-func TestService_Rollback_WritesAndClearsTheMarker(t *testing.T) {
-	// Arrange
-	vol := demoVolume()
-	record := demoRecord()
-	repo, inspector, locker := demoResolution(record)
-
-	safetySnapshotID := demoSafetySnapshot().ID
-	matchMarker := func(phase model.InflightPhase) any {
-		return mock.MatchedBy(func(m model.InflightMarker) bool {
-			return m.Phase == phase && m.Target == record.ID && m.Safety == safetySnapshotID &&
-				m.Session == model.DefaultSession && m.ComposeProject == "demo"
-		})
-	}
-	inflight := &mockInflight{}
-	gateGet := inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once()
-	putRecreating := inflight.On("Put", mock.Anything, matchMarker(model.InflightRecreating)).Return(nil).Once()
-	putRestoring := inflight.On("Put", mock.Anything, matchMarker(model.InflightRestoring)).Return(nil).Once()
-	putDone := inflight.On("Put", mock.Anything, matchMarker(model.InflightRestoreDone)).Return(nil).Once()
-	clear := inflight.On("Clear", mock.Anything).Return(nil).Once()
-
-	registry := &mockRegistry{}
-	savepointBackend := &mockBackend{volume: vol}
-	captured := &mockCapture{}
-	hold, safety := expectSafetySnapshot(captured, record, demoSafetySnapshot())
-	runner := &mockComposeRunner{}
-	safetySnapshotBackend := &mockBackend{volume: vol}
-	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
-	restoreSp := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).Return(nil).Once()
-	up := runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once()
-
-	// The marker steps in workflow order: written before the teardown, phased to
-	// restoring before a byte moves and forward before the restart, then cleared.
-	mock.InOrder(gateGet, hold, safety,
-		putRecreating, down, create, putRestoring, restoreSp, putDone, up,
-		clear)
-
-	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		Capture:          captured,
-		BackendRegistry:  registry,
-		Inflight:         inflight,
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-		ComposeProject:   "demo",
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID(record.ID),
-		WaitTimeout: 60 * time.Second,
-	})
-
-	// Assert
-	require.NoError(t, err)
-	inflight.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	inspector.AssertExpectations(t)
-	locker.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	captured.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
-	safetySnapshotBackend.AssertExpectations(t)
-}
-
-// The write-ahead bit is strict: a marker that cannot be written aborts before the
-// first destructive write — the snapshot stays and the services come back.
-func TestService_Rollback_MarkerWriteFailureAbortsBeforeRestore(t *testing.T) {
-	// Arrange
-	vol := demoVolume()
-	record := demoRecord()
-	repo, inspector, locker := demoResolution(record)
-
-	inflight := &mockInflight{}
-	gateGet := inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once()
-	putRecreating := inflight.On("Put", mock.Anything, mock.MatchedBy(func(m model.InflightMarker) bool {
-		return m.Phase == model.InflightRecreating && m.Target == record.ID
-	})).Return(errors.New("disk full")).Once()
-
-	registry := &mockRegistry{}
-	savepointBackend := &mockBackend{volume: vol}
-	captured := &mockCapture{}
-	hold, safety := expectSafetySnapshot(captured, record, demoSafetySnapshot())
-	// The held live compose project is released; nothing is torn down.
-	release := captured.On("Release", mock.Anything, mock.MatchedBy(func(plan capture.Plan) bool {
-		return assert.ObjectsAreEqual(demoSpec, plan.Project)
-	})).Return(nil).Once()
-	runner := &mockComposeRunner{}
-	safetySnapshotBackend := &mockBackend{volume: vol}
-	mock.InOrder(gateGet, hold, safety, putRecreating, release)
-
-	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		Capture:          captured,
-		BackendRegistry:  registry,
-		Inflight:         inflight,
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID(record.ID),
-		WaitTimeout: 60 * time.Second,
-	})
-
-	// Assert: nothing changed, and the caller is told why.
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "recording the inflight marker")
-	assert.Contains(t, err.Error(), "nothing changed")
-	inflight.AssertExpectations(t)
-	repo.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	captured.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
-	safetySnapshotBackend.AssertExpectations(t)
-	registry.AssertExpectations(t)
-}
-
-// A failed revert leaves the marker in place at inconsistent, naming the safety
-// snapshot that is now the last copy of the pre-rollback state.
-func TestService_Rollback_RevertFailureMarksInconsistent(t *testing.T) {
-	// Arrange
-	vol := demoVolume()
-	record := demoRecord()
-	repo, inspector, locker := demoResolution(record)
-	inflight := &fakeInflight{}
-
-	safetySnapshotID := demoSafetySnapshot().ID
-	registry := &mockRegistry{}
-	savepointBackend := &mockBackend{volume: vol}
-	captured := &mockCapture{}
-	hold, safety := expectSafetySnapshot(captured, record, demoSafetySnapshot())
-	runner := &mockComposeRunner{}
-	safetySnapshotBackend := &mockBackend{volume: vol}
-	down := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	create := runner.On("Create", mock.Anything, deployed(demoTargetSpec), demoRestoredVolumes).Return(nil).Once()
-	restoreSp := savepointBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: record.ID, Payload: "sp-payload", SizeBytes: demoVolumeSize}).
-		Return(errors.New("restore boom")).Once()
-	// The revert rebuilds the live compose project and fails replaying its own capture: no
-	// start follows.
-	downForRevert := runner.On("Down", mock.Anything, demoSpec).Return(nil).Once()
-	createForRevert := runner.On("Create", mock.Anything, deployed(demoSpec), demoRestoredVolumes).Return(nil).Once()
-	restoreSafety := safetySnapshotBackend.On("Restore", mock.Anything,
-		model.BackendRestoreRequest{SnapshotID: safetySnapshotID, Payload: "safety-payload"}).
-		Return(errors.New("revert boom")).Once()
-	mock.InOrder(hold, safety, down, create,
-		restoreSp, downForRevert, createForRevert, restoreSafety)
-
-	store := newDirStore(t)
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		Capture:          captured,
-		BackendRegistry:  registry,
-		Inflight:         inflight,
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	_, err := svc.Rollback(ctx, model.RollbackRequest{
-		ID:          ptrID(record.ID),
-		WaitTimeout: 60 * time.Second,
-	})
-
-	// Assert
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rollback failed")
-	marker, found, getErr := inflight.Get(ctx)
-	require.NoError(t, getErr)
-	require.True(t, found, "the marker stays with the retained safety snapshot")
-	assert.Equal(t, model.InflightInconsistent, marker.Phase)
-	assert.Equal(t, record.ID, marker.Target)
-	assert.Equal(t, safetySnapshotID, marker.Safety)
-	repo.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	captured.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
-	safetySnapshotBackend.AssertExpectations(t)
-	registry.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 // A marker naming no safety snapshot protects no earlier state: a rollback to its own target or to
-// another savepoint passes the gate and clears it.
+// another savepoint passes the gate as a recovery and clears it.
 func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 	tests := []struct {
 		name   string
 		target model.SavepointID
+		absent bool
 	}{
-		{name: "its own target", target: demoColdRecord().ID},
-		{name: "another target", target: "019e83ef-ee80-7000-8000-000000000000"},
+		{name: "its own target", target: demoRecord().ID, absent: true},
+		{name: "another target", target: "019e83ef-ee80-7000-8000-000000000000", absent: true},
+		// A savepoint that will not come up holds nothing hostage: another one recovers over a
+		// running project too, taking no snapshot of its half-restored state.
+		{name: "another target over a running project", target: "019e83ef-ee80-7000-8000-000000000000"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			record := demoColdRecord()
-			vol := record.Stats[0].Volume
-			deps, repo, inspector, capturer := coldStartDeps(t, record)
+			record := demoRecord()
+			savepoints, locker := demoResolution(record)
 			inflight := &fakeInflight{}
 			require.NoError(t, inflight.Put(context.Background(), model.InflightMarker{
-				Phase: model.InflightRestoring, Session: model.DefaultSession, Target: tt.target,
+				Phase: model.InflightRestoring, Session: model.DefaultSession, ComposeProject: demoProject, Target: tt.target,
 				At: time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC),
 			}))
-			repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once()
-			images := &mockImageBackend{}
-			images.On("RestoreWritableLayer", mock.Anything, mock.Anything).Return(demoWritableLayerRestoreResult(), nil).Once()
-			target := matchRetargetedImage(demoService, demoRestoredTag(1))
-			runner := &mockComposeRunner{}
-			runner.On("Create", mock.Anything, target, demoRestoredVolumes).Return(nil).Once()
-			runner.On("Start", mock.Anything, target, 60*time.Second).Return(nil).Once()
-			backend := &mockBackend{volume: vol}
-			backend.On("Restore", mock.Anything, mock.Anything).Return(nil).Once()
-			registry := &mockRegistry{}
-			registry.On("New", matchSpec(deps.Store, vol.ObjectID)).Return(backend, nil).Once()
-			// A recovery takes no safety snapshot: the capture carries no expectation.
-			deps.Inflight, deps.ComposeRunner, deps.ImageBackend, deps.BackendRegistry = inflight, runner, images, registry
-			svc := New(deps)
+			// A recovery takes no safety snapshot: nothing is planned or held.
+			stages := newMockStages(tt.absent)
+			mock.InOrder(
+				stages.expectInspect(nil),
+				stages.expectPrepare(record.ID, demoPrepareOptions(record, true), nil),
+				stages.expectLiveTeardown(nil),
+				stages.target.expectBuild(nil),
+				stages.target.expectRestoreData(nil),
+				stages.target.expectStart(60*time.Second, nil),
+				stages.target.expectReap(),
+			)
+			svc := newStagedService(stages, savepoints, locker, inflight)
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -508,13 +216,9 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 			_, marked, getErr := inflight.Get(ctx)
 			require.NoError(t, getErr)
 			assert.False(t, marked)
-			repo.AssertExpectations(t)
-			inspector.AssertExpectations(t)
-			capturer.AssertExpectations(t)
-			runner.AssertExpectations(t)
-			images.AssertExpectations(t)
-			backend.AssertExpectations(t)
-			registry.AssertExpectations(t)
+			savepoints.AssertExpectations(t)
+			locker.AssertExpectations(t)
+			stages.AssertExpectations(t)
 		})
 	}
 }
@@ -559,7 +263,7 @@ func TestService_requireNoInflight(t *testing.T) {
 			// Arrange
 			inflight := &fakeInflight{}
 			require.NoError(t, inflight.Put(context.Background(), tt.marker))
-			svc := New(Deps{SessionLocker: fakeSessionLocker{}, Inflight: inflight, Session: tt.session})
+			svc := New(Deps{SessionLocker: fakeSessionLocker{}, Inflight: inflight, Session: tt.session, ComposeProject: demoProject})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -616,28 +320,6 @@ func TestNew_ZeroSessionIsTheDefault(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, model.DefaultSession, svc.session)
-}
-
-// A zero concurrency is no limit: an errgroup limit of 0 would admit no goroutine, and a capture
-// would hang on its first backend.
-func TestNew(t *testing.T) {
-	tests := []struct {
-		name        string
-		concurrency int
-		want        int
-	}{
-		{name: "no limit", concurrency: 0, want: -1},
-		{name: "a limit", concurrency: 3, want: 3},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			svc := New(Deps{Concurrency: tt.concurrency})
-
-			// Assert
-			assert.Equal(t, tt.want, svc.maxConcurrentOperations)
-		})
-	}
 }
 
 // A zero session is the default one.

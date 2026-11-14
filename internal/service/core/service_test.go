@@ -26,28 +26,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-func TestFanOutLimit(t *testing.T) {
-	tests := []struct {
-		name        string
-		concurrency int
-		want        int
-	}{
-		{name: "a configured concurrency is the limit", concurrency: 5, want: 5},
-		{name: "one runs the fan-out serially", concurrency: 1, want: 1},
-		{name: "zero leaves the fan-out unbounded", concurrency: 0, want: -1},
-		{name: "a negative concurrency leaves it unbounded", concurrency: -3, want: -1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := fanOutLimit(tt.concurrency)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestReadSessionRef(t *testing.T) {
 	loadErr := errors.New("store unreachable")
 	tests := []struct {

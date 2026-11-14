@@ -28,10 +28,9 @@ import (
 // so this is the gate that makes those branches sound.
 func TestRollbackRequest_Validate(t *testing.T) {
 	tests := []struct {
-		name       string
-		req        RollbackRequest
-		wantErr    bool
-		wantErrMsg string // set for an error other than ErrRollbackNoSelector
+		name    string
+		req     RollbackRequest
+		wantErr bool // set for an error other than ErrRollbackNoSelector
 	}{
 		{name: "an id", req: RollbackRequest{ID: ptr(SavepointID("019e843e-1650-7000-8000-000000000000"))}},
 		{name: "a name", req: RollbackRequest{Name: ptr("before-migration")}},
@@ -45,12 +44,6 @@ func TestRollbackRequest_Validate(t *testing.T) {
 		// An empty id beside a real name still validates — the empty one is simply
 		// not a selector, and the name is.
 		{name: "an empty id beside a name", req: RollbackRequest{ID: ptr(SavepointID("")), Name: ptr("sp")}},
-		{name: "a refusing policy", req: RollbackRequest{Latest: ptr(true), LeftoverVolumes: LeftoverVolumesRefuse}},
-		{
-			name:       "an unknown policy",
-			req:        RollbackRequest{Latest: ptr(true), LeftoverVolumes: "keep"},
-			wantErrMsg: `unsupported leftover volumes policy "keep"`,
-		},
 	}
 
 	for _, tt := range tests {
@@ -59,10 +52,6 @@ func TestRollbackRequest_Validate(t *testing.T) {
 			err := tt.req.Validate()
 
 			// Assert
-			if tt.wantErrMsg != "" {
-				assert.EqualError(t, err, tt.wantErrMsg)
-				return
-			}
 			if tt.wantErr {
 				assert.ErrorIs(t, err, ErrRollbackNoSelector)
 				return

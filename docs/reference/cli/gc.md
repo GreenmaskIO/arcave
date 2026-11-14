@@ -82,16 +82,17 @@ A session directory without `session.json`, which a failed fork leaves, belongs 
 
 ## How gc deletes
 
-gc first looks with every collector, at the daemon and at every compose project, then deletes what they found: the daemon's layer tags first, then one compose project after the other. Every finding is made before anything is deleted: the `image-layers` finding is read off the very manifests deleting a tree or an image removes. Deletion runs in a fixed order:
+gc first looks with every collector, at the daemon and at every compose project, then picks the safety snapshots past the retention, and only then deletes what they found: the daemon's layer tags first, then one compose project after the other, then the retired safety snapshots. Every finding is made before anything is deleted: the `image-layers` finding is read off the very manifests deleting a tree or an image removes. Deletion runs in a fixed order:
 
 1. `restored-layers`: each unused tag, taken off the daemon one at a time, never forced. The image goes with its last tag. A tag whose image a container was created from since gc found it is refused, even when another tag names the same image, and listed under `deletion.failed`.
-2. `savepoint-data`: each dead savepoint's directory, whole.
-3. `safety-snapshots`: each retired one, record first, then its directory. One whose directory fails to go is dead, and goes with `savepoint-data` on the next run.
-4. `upstream-images`: each unused image's directory, its manifest first. A deletion cut short then leaves no manifest that a capture would take for the image stored; the next gc deletes what is left of the directory.
-5. `image-layers`: each blob, one at a time.
-6. `deduplicated-volumes`: one restic run per repository, up to `common.concurrency` repositories at once. gc clears the repository's stale locks, then runs `restic forget <snapshots> --prune`, or `restic prune` for a repository with nothing to forget. Either takes restic's own lock. A repository whose run fails fails each of its ops.
+2. In each compose project:
+   1. `savepoint-data`: each dead savepoint's directory, whole.
+   2. `upstream-images`: each unused image's directory, its manifest first. A deletion cut short then leaves no manifest that a capture would take for the image stored; the next gc deletes what is left of the directory.
+   3. `image-layers`: each blob, one at a time.
+   4. `deduplicated-volumes`: one restic run per repository, up to `common.concurrency` repositories at once. gc clears the repository's stale locks, then runs `restic forget <snapshots> --prune`, or `restic prune` for a repository with nothing to forget. Either takes restic's own lock. A repository whose run fails fails each of its ops.
+3. `safety-snapshots`, compose project by compose project: each retired one, record first, then its directory. One whose directory fails to go is dead, and goes with `savepoint-data` on the next run.
 
-gc deletes exactly the ops the report lists, by their `target`. A target already gone counts as deleted. A target it fails to delete is listed under the report's `deletion.failed`, and gc goes on with the next one. Before each kind, in each compose project, it checks that it still holds the session's lock. A check that fails stops every deletion after it, which is counted under `not_run`. A report whose kind was aborted or failed deletes nothing. An object left unjudged doesn't keep the kind's ops from being deleted.
+gc deletes exactly the ops the report lists, by their `target`. A target already gone counts as deleted. A target it fails to delete is listed under the report's `deletion.failed`, and gc goes on with the next one. Before each report it deletes, it checks that it still holds the session's lock. A check that fails stops every deletion after it, which is counted under `not_run`. A report whose kind was aborted or failed deletes nothing. An object left unjudged doesn't keep the kind's ops from being deleted.
 
 Because a layer an image lists is held back as `listed-by-unreferenced` until the image is gone, the layers of an image gc deletes go on the next run. Run `arcave gc` twice to free an unused image whole.
 
@@ -240,7 +241,8 @@ A `deduplicated-volumes` op is a `forget` of one snapshot, and its `bytes` is `n
 `bytes` is `null` when gc can't say how much would be freed:
 
 * an estimate restic didn't give: `freed_bytes` is `null`, and so is the report's `summary.bytes`;
-* a `restored-layers` tag: the image may share layers with other images.
+* a `restored-layers` tag: the image may share layers with other images;
+* a retired `safety-snapshots` savepoint: what it holds is shared with other savepoints, and what only it held goes on the next run.
 
 `total.bytes_complete` is then `false`.
 

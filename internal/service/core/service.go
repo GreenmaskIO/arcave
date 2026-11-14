@@ -17,29 +17,12 @@ package core
 import (
 	"context"
 	"fmt"
-	"time"
-
-	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
-	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 )
-
-type savepointRepository interface {
-	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
-	LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error)
-	DeleteSavepoint(ctx context.Context, id model.SavepointID) error
-}
-
-// SavepointReader reads the savepoints of one compose project's store, for a service that
-// reads across compose projects; the DI root opens one per store.
-type SavepointReader interface {
-	ListSavepoints(ctx context.Context) ([]model.Savepoint, error)
-}
 
 type projectLocker interface {
 	Acquire(ctx context.Context) (release func() error, err error)
@@ -49,77 +32,6 @@ type projectLocker interface {
 // and before the first: an encrypted one is marked for its key then.
 type writeAdmission interface {
 	AdmitWrite(ctx context.Context) error
-}
-
-// composeIntrospector reports the live compose project it was bound to at construction.
-type composeIntrospector interface {
-	Introspect(ctx context.Context) (model.IntrospectionResult, error)
-}
-
-// projectAssembler builds the spec of a live compose project out of its introspection.
-type projectAssembler interface {
-	Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error)
-}
-
-// specCodec moves a spec through the artifact a savepoint commits; Parse is compose's
-// loader, so every project the runner acts on has been through it.
-type specCodec interface {
-	Marshal(project *types.Project) ([]byte, error)
-	Parse(ctx context.Context, spec []byte) (*types.Project, error)
-}
-
-// composeRunner is the compose project's lifecycle: tear it down, build it back from a spec
-// without starting it, start it.
-type composeRunner interface {
-	Down(ctx context.Context, project *types.Project) error
-	// Create lets compose recreate a volume whose config drifted only when restoredVolumes, the
-	// docker names of the volumes the rollback restores, holds it.
-	Create(ctx context.Context, project *types.Project, restoredVolumes []string) error
-	Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error
-}
-
-// containerControl resumes frozen containers ahead of a rollback's teardown.
-type containerControl interface {
-	// UnpauseContainers resumes whichever of the containers is paused; one that is not, or is
-	// gone, is no error.
-	UnpauseContainers(ctx context.Context, ids []string) error
-}
-
-// savepointCapture is a savepoint's capture in three steps the workflow composes: hold the
-// compose project still, capture what is held, bring it back.
-type savepointCapture interface {
-	// Hold brings the compose project to a state a capture can be taken of: each service held
-	// still as the plan says. It returns the ids of the containers a stop's deadline killed.
-	Hold(ctx context.Context, plan capture.Plan) (killed []string, err error)
-	// Capture commits a savepoint of the project Hold holds still, the record last; killed are
-	// the containers Hold returned. It starts and stops nothing.
-	Capture(
-		ctx context.Context, grantedLock model.GrantedSessionLock, plan capture.Plan, killed []string, req capture.Request,
-	) (model.Savepoint, error)
-	// Release resumes every service and starts the project back, on a context an interrupt does
-	// not cancel; it converges whether Hold ran or not.
-	Release(ctx context.Context, plan capture.Plan) error
-}
-
-// volumeRemover reaps the anonymous volumes a teardown orphans.
-type volumeRemover interface {
-	RemoveVolume(ctx context.Context, name string) error
-}
-
-// imageBackend loads writable layers back out of the store, each under a tag of its own.
-type imageBackend interface {
-	RestoreWritableLayer(ctx context.Context, req model.WritableLayerRestoreRequest) (model.WritableLayerRestoreResult, error)
-}
-
-// containerRebuilder recreates one built container from another image as the replica a
-// savepoint recorded, which compose's one image per service cannot express.
-type containerRebuilder interface {
-	RecreateWithImage(ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string) (string, error)
-}
-
-// imageLookup tells whether the daemon holds an image under a reference.
-type imageLookup interface {
-	ImageRefExists(ctx context.Context, ref string) (bool, error)
 }
 
 // sessionLookup finds a session's record; core re-checks it under the lock.
@@ -138,74 +50,39 @@ type inflightMarkers interface {
 // Deps are Service's collaborators. A struct rather than a parameter list: the
 // seams have no natural order, so a new one could silently swap with an existing one.
 type Deps struct {
-	SavepointRepo savepointRepository
+	// Savepoints are the compose project's savepoints, as the provider keeps them.
+	Savepoints    provider.Savepoints
 	ProjectLocker projectLocker
 	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
 	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
-	SessionLocker      model.SessionLocker
-	ComposeInspector   composeIntrospector
-	ProjectAssembler   projectAssembler
-	SpecCodec          specCodec
-	ComposeRunner      composeRunner
-	ContainerControl   containerControl
-	Capture            savepointCapture
-	VolumeRemover      volumeRemover
-	ImageBackend       imageBackend
-	ContainerRebuilder containerRebuilder
-	ImageLookup        imageLookup
-	BackendRegistry    model.SnapshotBackendRegistry
-	Inflight           inflightMarkers
-	Store              storages.Storager
-	// CaptureDefaults are the backends a unit no arcave.* label names is captured by.
-	CaptureDefaults capturepolicy.CaptureDefaults
-	// ArcaveProject is the arcave project Store belongs to, which a rollback's deployment labels name.
+	SessionLocker model.SessionLocker
+	// Workload is the compose project the workflows act on, through the provider's stages.
+	Workload provider.Workload
+	Inflight inflightMarkers
+	// ArcaveProject is the arcave project the workload belongs to, which a rollback's deployment
+	// labels name.
 	ArcaveProject model.ArcaveProjectName
-	// Session is the session Store belongs to; zero means model.DefaultSession.
+	// Session is the session the workload belongs to; zero means model.DefaultSession.
 	Session model.SessionID
-	// ComposeProject is the compose project Store belongs to.
+	// ComposeProject is the compose project the workload is.
 	ComposeProject model.DockerComposeProjectName
 	// Sessions checks, under the lock, that Session still exists.
 	Sessions sessionLookup
-	// DaemonVersion is the version the engine reports; requireDaemon judges it.
-	DaemonVersion string
-	// MinDaemonMajor is the oldest major of that engine a workflow runs on; 0 requires none.
-	MinDaemonMajor int
-	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
-	Concurrency int
 }
 
-// Service orchestrates arcave's savepoint workflows over one store root, the daemon's included:
-// the store's half is embedded, so a capture and a rollback read savepoints through it.
-//
-// Every record travels with its data, in a repository over that one store. A
-// rollback's safety snapshot is an ordinary savepoint there, marked
-// model.SavepointLabelSafetySnapshot: hidden from a scanning selector, findable by id.
+// Service orchestrates arcave's savepoint workflows over one workload; a capture and a rollback
+// read savepoints through the embedded SavepointStoreService.
 type Service struct {
 	*SavepointStoreService
-	composeInspector        composeIntrospector
-	projectAssembler        projectAssembler
-	specCodec               specCodec
-	composeRunner           composeRunner
-	containerControl        containerControl
-	volumeRemover           volumeRemover
-	imageBackend            imageBackend
-	containerRebuilder      containerRebuilder
-	imageLookup             imageLookup
-	snapshotBackendRegistry model.SnapshotBackendRegistry
-	store                   storages.Storager
-	captureDefaults         capturepolicy.CaptureDefaults
-	arcaveProject           model.ArcaveProjectName
-	daemonVersion           string
-	minDaemonMajor          int
-	maxConcurrentOperations int
-	capture                 savepointCapture
+	workload      provider.Workload
+	arcaveProject model.ArcaveProjectName
 }
 
 func New(deps Deps) *Service {
 	return &Service{
 		SavepointStoreService: NewSavepointStoreService(SavepointStoreDeps{
-			SavepointRepo:  deps.SavepointRepo,
+			Savepoints:     deps.Savepoints,
 			ProjectLocker:  deps.ProjectLocker,
 			WriteAdmission: deps.WriteAdmission,
 			SessionLocker:  deps.SessionLocker,
@@ -214,23 +91,8 @@ func New(deps Deps) *Service {
 			ComposeProject: deps.ComposeProject,
 			Sessions:       deps.Sessions,
 		}),
-		composeInspector:        deps.ComposeInspector,
-		projectAssembler:        deps.ProjectAssembler,
-		specCodec:               deps.SpecCodec,
-		composeRunner:           deps.ComposeRunner,
-		containerControl:        deps.ContainerControl,
-		volumeRemover:           deps.VolumeRemover,
-		imageBackend:            deps.ImageBackend,
-		containerRebuilder:      deps.ContainerRebuilder,
-		imageLookup:             deps.ImageLookup,
-		snapshotBackendRegistry: deps.BackendRegistry,
-		store:                   deps.Store,
-		captureDefaults:         deps.CaptureDefaults,
-		arcaveProject:           deps.ArcaveProject,
-		daemonVersion:           deps.DaemonVersion,
-		minDaemonMajor:          deps.MinDaemonMajor,
-		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
-		capture:                 deps.Capture,
+		workload:      deps.Workload,
+		arcaveProject: deps.ArcaveProject,
 	}
 }
 
@@ -313,13 +175,4 @@ func readSessionRef(ctx context.Context, sessions sessionLookup, id model.Sessio
 		ID:   session.ID,
 		Name: session.Name,
 	}, nil
-}
-
-// fanOutLimit turns a configured concurrency into an errgroup limit, where a
-// negative one is unbounded and zero would admit no goroutine at all.
-func fanOutLimit(concurrency int) int {
-	if concurrency < 1 {
-		return -1
-	}
-	return concurrency
 }

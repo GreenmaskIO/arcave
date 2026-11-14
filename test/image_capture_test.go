@@ -36,12 +36,13 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	imagefullcopy "github.com/greenmaskio/arcave/internal/service/backend/imagecopy/fullcopy"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -170,30 +171,28 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 
 	repo := sprepo.New(store)
 	images := newImageCopier(store, newLayerOwner("arcave-image-tenant", project), profile.engine, blobStore)
+	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		ArcaveProject:    "arcave-image-tenant",
-		SessionLocker:    newStoreLocker(store, model.DefaultSession),
-		WriteAdmission:   newPlainAdmission(store),
-		SavepointRepo:    repo,
-		ProjectLocker:    lock.New(projectRoot),
-		ComposeInspector: introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
-		ProjectAssembler: profile.assembler,
-		SpecCodec:        composespec.NewCodec(),
-		ComposeRunner:    runner,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo: repo,
-			ImageBackend:  images,
-			ComposeRunner: runner,
-			Store:         store,
+		Savepoints:     sessionstore.NewSavepoints(repo),
+		ArcaveProject:  "arcave-image-tenant",
+		SessionLocker:  newStoreLocker(store, model.DefaultSession),
+		WriteAdmission: newPlainAdmission(store),
+		ProjectLocker:  lock.New(projectRoot),
+		Inflight:       inflightrepo.New(projectRoot),
+		Workload: compose.New(compose.Deps{
+			SavepointRepo:      repo,
+			ImageBackend:       images,
+			ComposeRunner:      runner,
+			Store:              store,
+			ProjectAssembler:   profile.assembler,
+			SpecCodec:          composespec.NewCodec(),
+			BackendRegistry:    registry,
+			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
+			ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
+			VolumeRemover:      profile.engine,
+			ContainerRebuilder: profile.engine,
+			ImageLookup:        profile.engine,
 		}),
-		VolumeRemover:      profile.engine,
-		ImageBackend:       images,
-		ContainerRebuilder: profile.engine,
-		ImageLookup:        profile.engine,
-		BackendRegistry:    mustRegistry(t, profile.volumes),
-		Inflight:           inflightrepo.New(projectRoot),
-		Store:              store,
-		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &imageCaptureEnv{

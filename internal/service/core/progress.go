@@ -21,7 +21,6 @@ import (
 )
 
 // The kinds of the steps core opens: <namespace>.<action> for an action, a bare noun for an object.
-// volume and layer are duplicated in capture; keep both in step.
 const (
 	kindSavepointCreate progress.Kind = "savepoint.create"
 	kindSavepointRemove progress.Kind = "savepoint.remove"
@@ -38,40 +37,11 @@ const (
 	kindSessionRemove progress.Kind = "session.remove"
 	kindSessionLock   progress.Kind = "session.lock"
 	kindSessionFork   progress.Kind = "session.fork"
-
-	kindProjectIntrospect progress.Kind = "project.introspect"
-	kindComposeDown       progress.Kind = "compose.down"
-	kindComposeCreate     progress.Kind = "compose.create"
-	kindComposeStart      progress.Kind = "compose.start"
-
-	kindVolumeRestore  progress.Kind = "volume.restore"
-	kindVolume         progress.Kind = "volume"
-	kindLayerRestore   progress.Kind = "layer.restore"
-	kindLayer          progress.Kind = "layer"
-	kindReplicaRebuild progress.Kind = "replica.rebuild"
-	kindReplica        progress.Kind = "replica"
 )
 
 // runStep runs fn under a workflow step of kind, ended with fn's error.
-func runStep(ctx context.Context, kind progress.Kind, fn func(ctx context.Context) error) error {
+func runStep[T any](ctx context.Context, kind progress.Kind, fn func(ctx context.Context) (T, error)) (_ T, err error) {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kind})
-	err := fn(ctx)
-	step.End(err)
-	return err
-}
-
-// runComposeActivity runs fn as one compose activity of kind, a line per object compose reports.
-func runComposeActivity(ctx context.Context, kind progress.Kind, fn func(ctx context.Context) error) error {
-	ctx, step := progress.Run(ctx, progress.Step{Kind: kind}, progress.MeasureResources)
-	err := fn(ctx)
-	step.End(err)
-	return err
-}
-
-// newRestoreSample is the sample a restored unit ends with: its size.
-func newRestoreSample(size int64) progress.Sample {
-	return progress.Sample{Bytes: &progress.Bytes{
-		Done:  size,
-		Total: size,
-	}}
+	defer func() { step.End(err) }()
+	return fn(ctx)
 }

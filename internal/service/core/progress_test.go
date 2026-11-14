@@ -16,7 +16,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -66,195 +65,76 @@ func newProgressContext() (context.Context, *progressRecorder) {
 	return progress.WithTracker(ctx, progress.New(recorder, now)), recorder
 }
 
-// captureDoubles are the doubles a newCaptureService runs on.
-type captureDoubles struct {
-	inspector *mockInspector
-	locker    *mockLocker
-	runner    *mockComposeRunner
-	repo      *mockSavepointRepo
-	images    *mockImageBackend
-	registry  *mockRegistry
-	backend   *mockBackend
+// openStep is a mock's Run opening and ending a step of kind under the step its context carries:
+// where a provider's own steps land.
+func openStep(kind progress.Kind) func(mock.Arguments) {
+	return func(args mock.Arguments) {
+		_, step := progress.Run(args.Get(0).(context.Context), progress.Step{Kind: kind})
+		step.End(nil)
+	}
 }
 
-// newCaptureService is a service over the real capture whose one volume's snapshot returns
-// snapshotErr.
-func newCaptureService(t *testing.T, snapshotErr error) (*Service, captureDoubles) {
-	t.Helper()
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(demoIntrospection(), nil)
+// Every stage of savepoint create runs under the create's own step.
+func TestService_CreateSavepointProgress(t *testing.T) {
+	// Arrange
+	ctx, recorder := newProgressContext()
 	locker := &mockLocker{}
 	expectLock(locker)
-	runner := &mockComposeRunner{}
-	runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once()
-	runner.On("Start", mock.Anything, demoSpec, time.Duration(0)).Return(nil).Once()
-	repo := emptySavepointRepo()
-	backend := &mockBackend{volume: demoVolume()}
-	if snapshotErr == nil {
-		expectSpecCommit(repo)
-		repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(r model.Savepoint) bool {
-			return r.ID.Validate() == nil && len(r.Stats) == 1 &&
-				r.Stats[0].Volume.ObjectID == "volume-named-demo_db" && r.Stats[0].SizeBytes == 42
-		})).Return(nil).Once()
-		backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
-			Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, SizeBytes: 42}, nil).Once()
-	} else {
-		backend.On("Snapshot", mock.Anything, matchValidSnapshotID()).
-			Return(model.SnapshotStat{}, snapshotErr).Once()
-	}
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(backend, nil).Once()
-	images := &mockImageBackend{}
+	savepoints := emptySavepoints()
+	stages := newMockStages(false)
+	mock.InOrder(
+		stages.expectInspect(nil).Run(openStep("stage.inspect")),
+		stages.expectPlanCapture(provider.CaptureOptions{}, nil).Run(openStep("stage.plan")),
+		stages.expectHold(nil).Run(openStep("stage.hold")),
+		stages.expectCaptureOf(provider.CaptureRequest{InResult: true}, nil).Run(openStep("stage.capture")),
+		stages.expectCommit(demoRecord(), nil).Run(openStep("stage.commit")),
+		stages.expectRelease(0, nil).Run(openStep("stage.release")),
+	)
+	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
 
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo: repo,
-			ImageBackend:  images,
-			ComposeRunner: runner,
-			Store:         store,
-		}),
-	})
-	return svc, captureDoubles{
-		inspector: inspector,
-		locker:    locker,
-		runner:    runner,
-		repo:      repo,
-		images:    images,
-		registry:  registry,
-		backend:   backend,
-	}
+	// Act
+	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
+
+	// Assert
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"savepoint.create/stage.inspect succeeded",
+		"savepoint.create/stage.plan succeeded",
+		"savepoint.create/stage.hold succeeded",
+		"savepoint.create/stage.capture succeeded",
+		"savepoint.create/stage.commit succeeded",
+		"savepoint.create/stage.release succeeded",
+		"savepoint.create succeeded",
+	}, recorder.ended)
+	locker.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
-func TestService_CreateSavepointProgress(t *testing.T) {
-	errDisk := errors.New("disk full")
-	tests := []struct {
-		name        string
-		snapshotErr error
-		want        []string
-	}{
-		{
-			name: "every step ends where the workflow opened it",
-			want: []string{
-				"savepoint.create/project.introspect succeeded",
-				"savepoint.create/savepoint.hold succeeded",
-				"savepoint.create/savepoint.capture/volume.capture/volume[volume-named-demo_db] succeeded",
-				"savepoint.create/savepoint.capture/volume.capture succeeded",
-				"savepoint.create/savepoint.capture succeeded",
-				"savepoint.create/savepoint.release succeeded",
-				"savepoint.create succeeded",
-			},
-		},
-		{
-			name:        "a failed capture carries its error on the volume alone",
-			snapshotErr: errDisk,
-			want: []string{
-				"savepoint.create/project.introspect succeeded",
-				"savepoint.create/savepoint.hold succeeded",
-				"savepoint.create/savepoint.capture/volume.capture/volume[volume-named-demo_db] failed " +
-					"error=snapshot volume-named-demo_db: capture volume: disk full",
-				"savepoint.create/savepoint.capture/volume.capture failed",
-				"savepoint.create/savepoint.capture failed",
-				"savepoint.create/savepoint.release succeeded",
-				"savepoint.create failed",
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			ctx, recorder := newProgressContext()
-			svc, doubles := newCaptureService(t, tt.snapshotErr)
-
-			// Act
-			_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
-
-			// Assert
-			if tt.snapshotErr != nil {
-				require.ErrorIs(t, err, tt.snapshotErr)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.Equal(t, tt.want, recorder.ended)
-			doubles.inspector.AssertExpectations(t)
-			doubles.locker.AssertExpectations(t)
-			doubles.runner.AssertExpectations(t)
-			doubles.repo.AssertExpectations(t)
-			doubles.images.AssertExpectations(t)
-			doubles.registry.AssertExpectations(t)
-			doubles.backend.AssertExpectations(t)
-		})
-	}
-}
-
-// A rollback's safety snapshot is captured under its own step: the capture's steps open under
-// rollback.safety-snapshot, by the same code savepoint create runs them with.
+// Every stage of a live rollback runs under the rollback's step that frames it: the plan and the
+// prepare under rollback.prepare, the safety snapshot's under rollback.safety-snapshot, the
+// teardown and the build under rollback.apply.
 func TestService_Rollback_Progress(t *testing.T) {
 	// Arrange
 	ctx, recorder := newProgressContext()
-	vol := demoVolume()
 	record := demoRecord()
-	repo, inspector, locker := demoResolution(record)
-	runner := &mockComposeRunner{}
-	safetySnapshotBackend := &mockBackend{volume: vol}
-	savepointBackend := &mockBackend{volume: vol}
+	savepoints, locker := demoResolution(record)
+	stages := newMockStages(false)
 	mock.InOrder(
-		runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once(),
-		safetySnapshotBackend.On("Snapshot", mock.Anything, matchSafetySnapshot()).
-			Return(model.SnapshotStat{Volume: vol, Type: model.SnapshotBackendFullCopy}, nil).Once(),
-		expectSpecCommit(repo),
-		expectSafetySnapshotCommit(repo, record),
-		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
-		runner.On("Create", mock.Anything, rolledBackTo(demoTargetSpec, record), demoRestoredVolumes).
-			Return(nil).Once(),
-		savepointBackend.On("Restore", mock.Anything, model.BackendRestoreRequest{
-			SnapshotID: record.ID,
-			Payload:    "sp-payload",
-			SizeBytes:  demoVolumeSize,
-		}).Return(nil).Once(),
-		runner.On("Start", mock.Anything, deployed(demoTargetSpec), 60*time.Second).Return(nil).Once(),
+		stages.expectInspect(nil).Run(openStep("stage.inspect")),
+		stages.expectPlanCapture(provider.CaptureOptions{Restoring: record.ID}, nil).Run(openStep("stage.plan")),
+		stages.expectPrepare(record.ID, demoPrepareOptions(record, false), nil).Run(openStep("stage.prepare")),
+		stages.expectHold(nil).Run(openStep("stage.hold")),
+		stages.expectCaptureOf(newSafetySnapshotRequest(record), nil).Run(openStep("stage.capture")),
+		stages.expectCommit(demoSafetySnapshot(), nil).Run(openStep("stage.commit")),
+		stages.expectHeldTeardown(&stages.target, nil).Run(openStep("stage.teardown")),
+		stages.target.expectBuild(nil).Run(openStep("stage.build")),
+		stages.target.expectRestoreData(nil).Run(openStep("stage.restore")),
+		stages.target.expectStart(60*time.Second, nil).Run(openStep("stage.start")),
+		// rollback.cleanup is an activity: a provider warns on it and opens no step under it.
+		stages.target.expectReap(),
 	)
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(safetySnapshotBackend, nil).Once()
-	registry.On("New", matchSpec(store, vol.ObjectID)).Return(savepointBackend, nil).Once()
-	images := &mockImageBackend{}
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		WriteAdmission:   fakeWriteAdmission{},
-		VolumeRemover:    &mockVolumeRemover{},
-		SavepointRepo:    repo,
-		ProjectLocker:    locker,
-		ComposeInspector: inspector,
-		ProjectAssembler: demoAssembler(),
-		SpecCodec:        demoCodec(),
-		ComposeRunner:    runner,
-		BackendRegistry:  registry,
-		Inflight:         &fakeInflight{},
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo: repo,
-			ImageBackend:  images,
-			ComposeRunner: runner,
-			Store:         store,
-		}),
-	})
+	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{
@@ -265,29 +145,25 @@ func TestService_Rollback_Progress(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"rollback/project.introspect succeeded",
-		"rollback/rollback.safety-snapshot/savepoint.hold succeeded",
-		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture/volume[volume-named-demo_db] succeeded",
-		"rollback/rollback.safety-snapshot/savepoint.capture/volume.capture succeeded",
-		"rollback/rollback.safety-snapshot/savepoint.capture succeeded",
+		"rollback/stage.inspect succeeded",
+		"rollback/rollback.prepare/stage.plan succeeded",
+		"rollback/rollback.prepare/stage.prepare succeeded",
+		"rollback/rollback.prepare succeeded",
+		"rollback/rollback.safety-snapshot/stage.hold succeeded",
+		"rollback/rollback.safety-snapshot/stage.capture succeeded",
+		"rollback/rollback.safety-snapshot/stage.commit succeeded",
 		"rollback/rollback.safety-snapshot succeeded",
-		"rollback/rollback.apply/compose.down succeeded",
-		"rollback/rollback.apply/compose.create succeeded",
-		"rollback/rollback.apply/volume.restore/volume[volume-named-demo_db] succeeded",
-		"rollback/rollback.apply/volume.restore succeeded",
-		"rollback/rollback.apply/compose.start succeeded",
+		"rollback/rollback.apply/stage.teardown succeeded",
+		"rollback/rollback.apply/stage.build succeeded",
+		"rollback/rollback.apply/stage.restore succeeded",
+		"rollback/rollback.apply/stage.start succeeded",
 		"rollback/rollback.apply succeeded",
 		"rollback/rollback.cleanup succeeded",
 		"rollback succeeded",
 	}, recorder.ended)
-	repo.AssertExpectations(t)
-	inspector.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
 	locker.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	images.AssertExpectations(t)
-	registry.AssertExpectations(t)
-	safetySnapshotBackend.AssertExpectations(t)
-	savepointBackend.AssertExpectations(t)
+	stages.AssertExpectations(t)
 }
 
 // A remove reports the savepoints it drops and no volume: it reaches no backend.
@@ -297,15 +173,15 @@ func TestService_RemoveSavepoints_Progress(t *testing.T) {
 	record := demoRecord()
 	locker := &mockLocker{}
 	expectLock(locker)
-	repo := &mockSavepointRepo{}
-	repo.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
-	repo.On("DeleteSavepoint", mock.Anything, record.ID).Return(nil).Once()
+	savepoints := &mockSavepoints{}
+	savepoints.On("List", mock.Anything).Return([]model.Savepoint{record}, nil).Once()
+	savepoints.On("Remove", mock.Anything, record.ID).Return(nil).Once()
 	svc := New(Deps{
 		ArcaveProject:  demoArcaveProject,
 		ProjectLocker:  locker,
 		SessionLocker:  fakeSessionLocker{},
 		WriteAdmission: fakeWriteAdmission{},
-		SavepointRepo:  repo,
+		Savepoints:     savepoints,
 		Inflight:       &fakeInflight{},
 	})
 
@@ -320,7 +196,7 @@ func TestService_RemoveSavepoints_Progress(t *testing.T) {
 		"savepoint.remove succeeded",
 	}, recorder.ended)
 	locker.AssertExpectations(t)
-	repo.AssertExpectations(t)
+	savepoints.AssertExpectations(t)
 }
 
 // A lost lock cancels the work under it, and the root, opened outside the lock, carries why.
@@ -336,7 +212,7 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Act
 	_, err := withSessionLock(ctx, locker, model.SessionLockOperationSavepointCreate,
 		func(ctx context.Context, _ model.GrantedSessionLock) (string, error) {
-			_, step := progress.Run(ctx, progress.Step{Kind: kindComposeDown})
+			_, step := progress.Run(ctx, progress.Step{Kind: "stage.teardown"})
 			err := preferInterrupt(ctx, errWorkflow)
 			step.End(err)
 			return "", err
@@ -346,7 +222,7 @@ func TestWithSessionLock_LostLockCancelsTheWork(t *testing.T) {
 	// Assert
 	require.ErrorIs(t, err, model.ErrSessionLockLost)
 	require.Len(t, recorder.ended, 2)
-	assert.Equal(t, "savepoint.create/compose.down cancelled", recorder.ended[0])
+	assert.Equal(t, "savepoint.create/stage.teardown cancelled", recorder.ended[0])
 	assert.True(t, strings.HasPrefix(recorder.ended[1], "savepoint.create failed error=interrupted: "),
 		"the cause is on the root: %s", recorder.ended[1])
 	assert.Contains(t, recorder.ended[1], model.ErrSessionLockLost.Error())
@@ -397,18 +273,5 @@ func TestWithSessionLock_ShowsTheWaitOnlyWhenHeld(t *testing.T) {
 			locker.AssertExpectations(t)
 			grantedLock.AssertExpectations(t)
 		})
-	}
-}
-
-// warnedRecorder keeps every warning, and whether it was marked as the result repeats it.
-type warnedRecorder struct {
-	msgs     []string
-	inResult []bool
-}
-
-func (r *warnedRecorder) Render(evt progress.Event) {
-	if evt.Status == progress.StatusWarned {
-		r.msgs = append(r.msgs, evt.Msg)
-		r.inResult = append(r.inResult, evt.InResult)
 	}
 }

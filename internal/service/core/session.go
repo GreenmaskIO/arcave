@@ -26,6 +26,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/sessionref"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -68,11 +69,10 @@ type SessionDeps struct {
 	Inflight       inflightMarkers
 	// Current is the current-session pointer.
 	Current currentSessionPointer
-	// Store is the arcave project store a fork's heartbeat is written into and read from, and a
-	// session's savepoints are listed off.
+	// Store is the arcave project store a fork's heartbeat is written into and read from.
 	Store storages.Navigator
-	// NewSavepointReader opens the savepoints of a compose project's store.
-	NewSavepointReader func(store storages.Storager) SavepointReader
+	// NewSession is one session as the provider holds it, its savepoints listed through it.
+	NewSession func(id model.SessionID) provider.Session
 	// NewSessionLocker opens the lock of one session.
 	NewSessionLocker func(id model.SessionID) (model.SessionLocker, error)
 	// RunnerInfo identifies this process in a fork's heartbeat.
@@ -131,7 +131,7 @@ func NewSessionService(deps SessionDeps) *SessionService {
 			return heartbeat.NewReader(sessionStore).SetStaleAfter(staleAfter), nil
 		},
 		sessionSavepoints: func(ctx context.Context, id model.SessionID) ([]model.ComposeProjectSavepoints, error) {
-			return readSessionSavepoints(ctx, deps.Store, deps.NewSavepointReader, id)
+			return readSessionSavepoints(ctx, deps.NewSession(id), id)
 		},
 	}
 }
@@ -519,33 +519,29 @@ func countSavepoints(groups []model.ComposeProjectSavepoints) (savepoints, safet
 // readSessionSavepoints lists every committed savepoint of session id, grouped by compose
 // project and ordered by its name; a compose project holding none is left out.
 func readSessionSavepoints(
-	ctx context.Context, store storages.Navigator, newSavepointReader func(storages.Storager) SavepointReader,
-	id model.SessionID,
+	ctx context.Context, session provider.Session, id model.SessionID,
 ) ([]model.ComposeProjectSavepoints, error) {
-	sessionStore, err := storefactory.Session(store, id)
-	if err != nil {
-		return nil, fmt.Errorf("open session %s: %w", id, err)
-	}
-	names, err := storefactory.ComposeProjects(ctx, sessionStore)
+	workloads, err := session.Workloads(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list compose projects of session %s: %w", id, err)
 	}
-	groups := make([]model.ComposeProjectSavepoints, 0, len(names))
-	for _, name := range names {
-		composeProjectStore, err := storefactory.ComposeProject(sessionStore, name)
+	groups := make([]model.ComposeProjectSavepoints, 0, len(workloads))
+	for _, workload := range workloads {
+		name := model.DockerComposeProjectName(workload)
+		savepoints, err := session.Savepoints(workload)
 		if err != nil {
 			return nil, fmt.Errorf("open compose project %s: %w", name, err)
 		}
-		savepoints, err := newSavepointReader(composeProjectStore).ListSavepoints(ctx)
+		listed, err := savepoints.List(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list savepoints of compose project %s: %w", name, err)
 		}
-		if len(savepoints) == 0 {
+		if len(listed) == 0 {
 			continue
 		}
 		groups = append(groups, model.ComposeProjectSavepoints{
 			ComposeProject: name,
-			Savepoints:     savepoints,
+			Savepoints:     listed,
 		})
 	}
 	return groups, nil

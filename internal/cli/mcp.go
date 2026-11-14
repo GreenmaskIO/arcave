@@ -110,7 +110,6 @@ type MCPFactories struct {
 // RollbackConfig is the project's config as the rollback tool reads it; a call may override
 // SkipSafetySnapshot alone.
 type RollbackConfig struct {
-	LeftoverVolumes    model.LeftoverVolumesPolicy
 	SkipSafetySnapshot bool
 }
 
@@ -404,7 +403,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	defer release()
 
 	skipSafetySnapshot := in.skipSafetySnapshot(h.rollbackConfig.SkipSafetySnapshot)
-	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.rollbackConfig.LeftoverVolumes, skipSafetySnapshot))
+	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, skipSafetySnapshot))
 	if err != nil {
 		return nil, model.RollbackResult{}, h.mcpError(err)
 	}

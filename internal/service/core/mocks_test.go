@@ -17,82 +17,19 @@ package core
 import (
 	"bytes"
 	"context"
+	"errors"
+	"slices"
 	"sync"
 	"time"
 
-	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
+	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
 // tests match ctx with mock.Anything unless they assert on it.
-
-type mockSavepointRepo struct{ mock.Mock }
-
-func (m *mockSavepointRepo) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
-	args := m.Called(ctx)
-	records, _ := args.Get(0).([]model.Savepoint)
-	return records, args.Error(1)
-}
-
-func (m *mockSavepointRepo) SaveSavepoint(ctx context.Context, record model.Savepoint) error {
-	return m.Called(ctx, record).Error(0)
-}
-
-func (m *mockSavepointRepo) SaveSpec(ctx context.Context, id model.SavepointID, spec []byte) error {
-	return m.Called(ctx, id, spec).Error(0)
-}
-
-func (m *mockSavepointRepo) LoadSpec(ctx context.Context, id model.SavepointID) ([]byte, error) {
-	args := m.Called(ctx, id)
-	spec, _ := args.Get(0).([]byte)
-	return spec, args.Error(1)
-}
-
-func (m *mockSavepointRepo) DeleteSavepoint(ctx context.Context, id model.SavepointID) error {
-	return m.Called(ctx, id).Error(0)
-}
-
-// mockImageBackend doubles imageBackend.
-type mockImageBackend struct{ mock.Mock }
-
-func (m *mockImageBackend) CaptureWritableLayer(
-	ctx context.Context, req model.WritableLayerCaptureRequest,
-) (model.WritableLayer, error) {
-	args := m.Called(ctx, req)
-	capture, _ := args.Get(0).(model.WritableLayer)
-	return capture, args.Error(1)
-}
-
-func (m *mockImageBackend) CaptureImage(
-	ctx context.Context, req model.ImageCaptureRequest,
-) (model.Image, error) {
-	args := m.Called(ctx, req)
-	image, _ := args.Get(0).(model.Image)
-	return image, args.Error(1)
-}
-
-func (m *mockImageBackend) RestoreWritableLayer(
-	ctx context.Context, req model.WritableLayerRestoreRequest,
-) (model.WritableLayerRestoreResult, error) {
-	args := m.Called(ctx, req)
-	restored, _ := args.Get(0).(model.WritableLayerRestoreResult)
-	return restored, args.Error(1)
-}
-
-// mockContainerRebuilder doubles containerRebuilder.
-type mockContainerRebuilder struct{ mock.Mock }
-
-func (m *mockContainerRebuilder) RecreateWithImage(
-	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
-) (string, error) {
-	args := m.Called(ctx, containerID, as, imageRef)
-	return args.String(0), args.Error(1)
-}
 
 // mockLocker doubles projectLocker. Release is a closure Acquire returns rather
 // than a method of the seam, so it reports itself as one — MethodCalled puts it
@@ -268,169 +205,6 @@ func (m *mockInflight) Clear(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
 
-type mockInspector struct{ mock.Mock }
-
-func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(model.IntrospectionResult), args.Error(1)
-}
-
-type mockAssembler struct{ mock.Mock }
-
-func (m *mockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
-	args := m.Called(ctx, introspection)
-	project, _ := args.Get(0).(*types.Project)
-	return project, args.Error(1)
-}
-
-type mockCodec struct{ mock.Mock }
-
-func (m *mockCodec) Marshal(project *types.Project) ([]byte, error) {
-	args := m.Called(project)
-	spec, _ := args.Get(0).([]byte)
-	return spec, args.Error(1)
-}
-
-func (m *mockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
-	args := m.Called(ctx, spec)
-	project, _ := args.Get(0).(*types.Project)
-	return project, args.Error(1)
-}
-
-type mockComposeRunner struct{ mock.Mock }
-
-func (m *mockComposeRunner) Stop(ctx context.Context, project *types.Project) ([]string, error) {
-	args := m.Called(ctx, project)
-	killed, _ := args.Get(0).([]string)
-	return killed, args.Error(1)
-}
-
-func (m *mockComposeRunner) StopServices(ctx context.Context, project *types.Project, services []string) ([]string, error) {
-	args := m.Called(ctx, project, services)
-	killed, _ := args.Get(0).([]string)
-	return killed, args.Error(1)
-}
-
-// mockContainerControl doubles containerControl, and capture's too.
-type mockContainerControl struct{ mock.Mock }
-
-func (m *mockContainerControl) PauseContainers(ctx context.Context, ids []string) error {
-	return m.Called(ctx, ids).Error(0)
-}
-
-func (m *mockContainerControl) UnpauseContainers(ctx context.Context, ids []string) error {
-	return m.Called(ctx, ids).Error(0)
-}
-
-func (m *mockContainerControl) AwaitHealthProbes(ctx context.Context, ids []string) error {
-	return m.Called(ctx, ids).Error(0)
-}
-
-func (m *mockComposeRunner) Down(ctx context.Context, project *types.Project) error {
-	return m.Called(ctx, project).Error(0)
-}
-
-func (m *mockComposeRunner) Create(ctx context.Context, project *types.Project, restoredVolumes []string) error {
-	return m.Called(ctx, project, restoredVolumes).Error(0)
-}
-
-func (m *mockComposeRunner) Start(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
-	return m.Called(ctx, project, waitTimeout).Error(0)
-}
-
-// mockCapture doubles savepointCapture.
-type mockCapture struct{ mock.Mock }
-
-func (m *mockCapture) Hold(ctx context.Context, plan capture.Plan) ([]string, error) {
-	args := m.Called(ctx, plan)
-	killed, _ := args.Get(0).([]string)
-	return killed, args.Error(1)
-}
-
-func (m *mockCapture) Capture(
-	ctx context.Context, grantedLock model.GrantedSessionLock, plan capture.Plan, killed []string, req capture.Request,
-) (model.Savepoint, error) {
-	args := m.Called(ctx, grantedLock, plan, killed, req)
-	savepoint, _ := args.Get(0).(model.Savepoint)
-	return savepoint, args.Error(1)
-}
-
-func (m *mockCapture) Release(ctx context.Context, plan capture.Plan) error {
-	return m.Called(ctx, plan).Error(0)
-}
-
-type mockVolumeRemover struct{ mock.Mock }
-
-func (m *mockVolumeRemover) RemoveVolume(ctx context.Context, name string) error {
-	return m.Called(ctx, name).Error(0)
-}
-
-type mockRegistry struct{ mock.Mock }
-
-func (m *mockRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
-	args := m.Called(spec)
-	backend, _ := args.Get(0).(model.VolumeSnapshotBackend)
-	return backend, args.Error(1)
-}
-
-// mockBackend doubles model.VolumeSnapshotBackend; volume answers the Volume()
-// accessor directly — it is identity, not behavior a test expects on.
-type mockBackend struct {
-	mock.Mock
-	volume model.Volume
-}
-
-func (m *mockBackend) Volume() model.Volume { return m.volume }
-
-func (m *mockBackend) Snapshot(ctx context.Context, req model.BackendSnapshotRequest) (model.SnapshotStat, error) {
-	args := m.Called(ctx, req)
-	stat, _ := args.Get(0).(model.SnapshotStat)
-	return stat, args.Error(1)
-}
-
-func (m *mockBackend) Restore(ctx context.Context, req model.BackendRestoreRequest) error {
-	return m.Called(ctx, req).Error(0)
-}
-
-// matchSpec matches a registry New's BackendSpec argument by the root it names
-// and the volume it is for. There is one root now, so the store no longer tells
-// a savepoint's instances from a rollback's undo — it is asserted because every
-// backend must be bound to the store the DI root handed down, and to no other.
-func matchSpec(store storages.Storager, objectID string) any {
-	return mock.MatchedBy(func(spec model.BackendSpec) bool {
-		return spec.Store == store && spec.Volume.ObjectID == objectID
-	})
-}
-
-// matchValidSnapshotID matches a Snapshot request whose id passes the gate; the
-// id comes off the clock, so no literal can name it.
-func matchValidSnapshotID() any {
-	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
-		return req.SnapshotID.Validate() == nil
-	})
-}
-
-// matchRetargetedImage matches the project a rebuild is handed by the image one of
-// its services is pointed at; the pull policy rides along, since a tag that lives
-// only in the local daemon must never be resolved remotely.
-func matchRetargetedImage(service, ref string) any {
-	return mock.MatchedBy(func(project *types.Project) bool {
-		svc, ok := project.Services[service]
-		return ok && svc.Image == ref && svc.PullPolicy == types.PullPolicyNever
-	})
-}
-
-// matchSafetySnapshot matches a safety snapshot's capture request: an id off the
-// clock that passes the gate, carrying the label a rollback stamps. That label
-// is the only thing marking the capture as an undo — the record it commits is an
-// ordinary savepoint's — so it is matched rather than widened away.
-func matchSafetySnapshot() any {
-	return mock.MatchedBy(func(req model.BackendSnapshotRequest) bool {
-		return req.SnapshotID.Validate() == nil &&
-			req.Labels[model.SavepointLabelSafetySnapshot] == model.SavepointLabelSafetySnapshotValue
-	})
-}
-
 // syncBuffer is the log sink workflow tests read back; guarded, because the
 // fan-out logs from one goroutine per volume.
 type syncBuffer struct {
@@ -450,16 +224,344 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-type mockImageLookup struct{ mock.Mock }
-
-func (m *mockImageLookup) ImageRefExists(ctx context.Context, ref string) (bool, error) {
-	args := m.Called(ctx, ref)
-	return args.Bool(0), args.Error(1)
+// mockSession doubles provider.Session.
+type mockSession struct {
+	mock.Mock
+	// id answers ID unmocked.
+	id model.SessionID
 }
 
-type mockSavepointReader struct{ mock.Mock }
+func (m *mockSession) ID() model.SessionID { return m.id }
 
-func (m *mockSavepointReader) ListSavepoints(ctx context.Context) ([]model.Savepoint, error) {
+func (m *mockSession) Workloads(ctx context.Context) ([]provider.WorkloadName, error) {
 	args := m.Called(ctx)
-	return args.Get(0).([]model.Savepoint), args.Error(1)
+	workloads, _ := args.Get(0).([]provider.WorkloadName)
+	return workloads, args.Error(1)
+}
+
+func (m *mockSession) Savepoints(workload provider.WorkloadName) (provider.Savepoints, error) {
+	args := m.Called(workload)
+	savepoints, _ := args.Get(0).(provider.Savepoints)
+	return savepoints, args.Error(1)
+}
+
+func (m *mockSession) FindGarbage(ctx context.Context, dataKinds []model.GarbageDataKind) []provider.Garbage {
+	found, _ := m.Called(ctx, dataKinds).Get(0).([]provider.Garbage)
+	return found
+}
+
+// mockSavepoints doubles provider.Savepoints.
+type mockSavepoints struct{ mock.Mock }
+
+func (m *mockSavepoints) List(ctx context.Context) ([]model.Savepoint, error) {
+	args := m.Called(ctx)
+	savepoints, _ := args.Get(0).([]model.Savepoint)
+	return savepoints, args.Error(1)
+}
+
+func (m *mockSavepoints) Remove(ctx context.Context, id model.SavepointID) error {
+	return m.Called(ctx, id).Error(0)
+}
+
+// mockStages doubles the provider's stages one workflow walks, with two builds: the target's and a
+// revert's. Each handle answers the next; AssertExpectations asserts every handle.
+type mockStages struct {
+	workload mockWorkload
+	live     mockLiveWorkload
+	plan     mockCapturePlan
+	held     mockHeldWorkload
+	captured mockCapturedSavepoint
+	target   mockBuild
+	revert   mockBuild
+}
+
+// newMockStages wires the handles to answer one another; absent is what the live workload reports.
+func newMockStages(absent bool) *mockStages {
+	stages := &mockStages{}
+	stages.live.absent = absent
+	return stages
+}
+
+func (m *mockStages) AssertExpectations(t mock.TestingT) bool {
+	results := []bool{
+		m.workload.AssertExpectations(t),
+		m.live.AssertExpectations(t),
+		m.plan.AssertExpectations(t),
+		m.held.AssertExpectations(t),
+		m.captured.AssertExpectations(t),
+		m.target.assertExpectations(t),
+		m.revert.assertExpectations(t),
+	}
+	return !slices.Contains(results, false)
+}
+
+// expectInspect declares the workload's inspection, failing with err, else answering the live one.
+func (m *mockStages) expectInspect(err error) *mock.Call {
+	if err != nil {
+		return m.workload.On("Inspect", mock.Anything).Return(nil, err).Once()
+	}
+	return m.workload.On("Inspect", mock.Anything).Return(&m.live, nil).Once()
+}
+
+// expectPlanCapture declares the capture's plan as opts says, failing with err, else answering the
+// plan.
+func (m *mockStages) expectPlanCapture(opts provider.CaptureOptions, err error) *mock.Call {
+	if err != nil {
+		return m.live.On("PlanCapture", mock.Anything, opts).Return(nil, err).Once()
+	}
+	return m.live.On("PlanCapture", mock.Anything, opts).Return(&m.plan, nil).Once()
+}
+
+// expectPrepare declares the live workload's preparing of id, failing with err, else answering the
+// target's prepared savepoint.
+func (m *mockStages) expectPrepare(id model.SavepointID, opts provider.PrepareOptions, err error) *mock.Call {
+	if err != nil {
+		return m.live.On("PrepareSavepoint", mock.Anything, id, opts).Return(nil, err).Once()
+	}
+	return m.live.On("PrepareSavepoint", mock.Anything, id, opts).Return(&m.target.prepared, nil).Once()
+}
+
+// expectLiveTeardown declares the live workload's teardown of the target, failing with err, else
+// answering the target's vacant workload.
+func (m *mockStages) expectLiveTeardown(err error) *mock.Call {
+	if err != nil {
+		return m.live.On("Teardown", mock.Anything, &m.target.prepared).Return(nil, err).Once()
+	}
+	return m.live.On("Teardown", mock.Anything, &m.target.prepared).Return(&m.target.vacant, nil).Once()
+}
+
+// expectHold declares the plan's hold, failing with err, else answering the held workload.
+func (m *mockStages) expectHold(err error) *mock.Call {
+	if err != nil {
+		return m.plan.On("Hold", mock.Anything).Return(nil, err).Once()
+	}
+	return m.plan.On("Hold", mock.Anything).Return(&m.held, nil).Once()
+}
+
+// expectCaptureOf declares the capture of what is held by req, failing with err, else answering
+// the captured savepoint.
+func (m *mockStages) expectCaptureOf(req provider.CaptureRequest, err error) *mock.Call {
+	if err != nil {
+		return m.held.On("Capture", mock.Anything, req).Return(nil, err).Once()
+	}
+	return m.held.On("Capture", mock.Anything, req).Return(&m.captured, nil).Once()
+}
+
+// expectCommit declares the commit of what was captured, committing savepoint or failing with err.
+func (m *mockStages) expectCommit(savepoint model.Savepoint, err error) *mock.Call {
+	return m.captured.On("Commit", mock.Anything).Return(savepoint, err).Once()
+}
+
+// expectAbandon declares the abandon of what was captured under id, for a cause wrapping err.
+func (m *mockStages) expectAbandon(id model.SavepointID, err error) (named, abandon *mock.Call) {
+	named = m.captured.On("ID").Return(id).Once()
+	wantCause := mock.MatchedBy(func(cause error) bool { return errors.Is(cause, err) })
+	abandon = m.captured.On("Abandon", mock.Anything, wantCause).Once()
+	return named, abandon
+}
+
+// expectRelease declares the plan's release, waiting waitTimeout, failing with err.
+func (m *mockStages) expectRelease(waitTimeout time.Duration, err error) *mock.Call {
+	return m.plan.On("Release", mock.Anything, waitTimeout).Return(err).Once()
+}
+
+// expectHeldPrepare declares the held workload's preparing of id, failing with err, else
+// answering the revert's prepared savepoint.
+func (m *mockStages) expectHeldPrepare(id model.SavepointID, opts provider.PrepareOptions, err error) *mock.Call {
+	if err != nil {
+		return m.held.On("PrepareSavepoint", mock.Anything, id, opts).Return(nil, err).Once()
+	}
+	return m.held.On("PrepareSavepoint", mock.Anything, id, opts).Return(&m.revert.prepared, nil).Once()
+}
+
+// expectHeldTeardown declares the held workload's teardown into build's vacant workload, failing
+// with err.
+func (m *mockStages) expectHeldTeardown(build *mockBuild, err error) *mock.Call {
+	if err != nil {
+		return m.held.On("Teardown", mock.Anything).Return(nil, err).Once()
+	}
+	return m.held.On("Teardown", mock.Anything).Return(&build.vacant, nil).Once()
+}
+
+// mockBuild doubles one build's handles: the prepared savepoint, the vacant workload it is built
+// on, what Build creates and what RestoreData fills.
+type mockBuild struct {
+	prepared stubPrepared
+	vacant   mockVacantWorkload
+	built    mockBuiltWorkload
+	restored mockRestoredWorkload
+}
+
+func (b *mockBuild) assertExpectations(t mock.TestingT) bool {
+	vacant := b.vacant.AssertExpectations(t)
+	built := b.built.AssertExpectations(t)
+	restored := b.restored.AssertExpectations(t)
+	return vacant && built && restored
+}
+
+// expectBuild declares the build of the prepared savepoint on the vacant workload, failing with err.
+func (b *mockBuild) expectBuild(err error) *mock.Call {
+	if err != nil {
+		return b.vacant.On("Build", mock.Anything, &b.prepared).Return(nil, err).Once()
+	}
+	return b.vacant.On("Build", mock.Anything, &b.prepared).Return(&b.built, nil).Once()
+}
+
+// expectRestoreData declares the restore of the data, failing with err.
+func (b *mockBuild) expectRestoreData(err error) *mock.Call {
+	if err != nil {
+		return b.built.On("RestoreData", mock.Anything).Return(nil, err).Once()
+	}
+	return b.built.On("RestoreData", mock.Anything).Return(&b.restored, nil).Once()
+}
+
+// expectStart declares the start, waiting waitTimeout, failing with err.
+func (b *mockBuild) expectStart(waitTimeout time.Duration, err error) *mock.Call {
+	return b.restored.On("Start", mock.Anything, waitTimeout).Return(err).Once()
+}
+
+// expectReap declares the reap of what the teardown orphaned.
+func (b *mockBuild) expectReap() *mock.Call {
+	return b.restored.On("Reap", mock.Anything).Once()
+}
+
+// expectDiscard declares the discard of what the build created, failing with err.
+func (b *mockBuild) expectDiscard(err error) *mock.Call {
+	return b.vacant.On("Discard", mock.Anything).Return(err).Once()
+}
+
+// mockWorkload doubles provider.Workload.
+type mockWorkload struct{ mock.Mock }
+
+func (m *mockWorkload) Inspect(ctx context.Context) (provider.LiveWorkload, error) {
+	args := m.Called(ctx)
+	live, _ := args.Get(0).(provider.LiveWorkload)
+	return live, args.Error(1)
+}
+
+// mockLiveWorkload doubles provider.LiveWorkload; Absent answers absent unmocked.
+type mockLiveWorkload struct {
+	mock.Mock
+	absent bool
+}
+
+func (m *mockLiveWorkload) Absent() bool { return m.absent }
+
+func (m *mockLiveWorkload) PlanCapture(ctx context.Context, opts provider.CaptureOptions) (provider.CapturePlan, error) {
+	args := m.Called(ctx, opts)
+	plan, _ := args.Get(0).(provider.CapturePlan)
+	return plan, args.Error(1)
+}
+
+func (m *mockLiveWorkload) PrepareSavepoint(
+	ctx context.Context, id model.SavepointID, opts provider.PrepareOptions,
+) (provider.PreparedSavepoint, error) {
+	args := m.Called(ctx, id, opts)
+	prepared, _ := args.Get(0).(provider.PreparedSavepoint)
+	return prepared, args.Error(1)
+}
+
+func (m *mockLiveWorkload) Teardown(ctx context.Context, prepared provider.PreparedSavepoint) (provider.VacantWorkload, error) {
+	args := m.Called(ctx, prepared)
+	vacant, _ := args.Get(0).(provider.VacantWorkload)
+	return vacant, args.Error(1)
+}
+
+// mockCapturePlan doubles provider.CapturePlan; LabelsIgnored answers labelsIgnored unmocked.
+type mockCapturePlan struct {
+	mock.Mock
+	labelsIgnored error
+}
+
+func (m *mockCapturePlan) LabelsIgnored() error { return m.labelsIgnored }
+
+func (m *mockCapturePlan) Hold(ctx context.Context) (provider.HeldWorkload, error) {
+	args := m.Called(ctx)
+	held, _ := args.Get(0).(provider.HeldWorkload)
+	return held, args.Error(1)
+}
+
+func (m *mockCapturePlan) Release(ctx context.Context, waitTimeout time.Duration) error {
+	return m.Called(ctx, waitTimeout).Error(0)
+}
+
+// mockHeldWorkload doubles provider.HeldWorkload.
+type mockHeldWorkload struct{ mock.Mock }
+
+func (m *mockHeldWorkload) Capture(ctx context.Context, req provider.CaptureRequest) (provider.CapturedSavepoint, error) {
+	args := m.Called(ctx, req)
+	captured, _ := args.Get(0).(provider.CapturedSavepoint)
+	return captured, args.Error(1)
+}
+
+func (m *mockHeldWorkload) PrepareSavepoint(
+	ctx context.Context, id model.SavepointID, opts provider.PrepareOptions,
+) (provider.PreparedSavepoint, error) {
+	args := m.Called(ctx, id, opts)
+	prepared, _ := args.Get(0).(provider.PreparedSavepoint)
+	return prepared, args.Error(1)
+}
+
+func (m *mockHeldWorkload) Teardown(ctx context.Context) (provider.VacantWorkload, error) {
+	args := m.Called(ctx)
+	vacant, _ := args.Get(0).(provider.VacantWorkload)
+	return vacant, args.Error(1)
+}
+
+// mockCapturedSavepoint doubles provider.CapturedSavepoint.
+type mockCapturedSavepoint struct{ mock.Mock }
+
+func (m *mockCapturedSavepoint) ID() model.SavepointID {
+	id, _ := m.Called().Get(0).(model.SavepointID)
+	return id
+}
+
+func (m *mockCapturedSavepoint) Commit(ctx context.Context) (model.Savepoint, error) {
+	args := m.Called(ctx)
+	savepoint, _ := args.Get(0).(model.Savepoint)
+	return savepoint, args.Error(1)
+}
+
+func (m *mockCapturedSavepoint) Abandon(ctx context.Context, cause error) {
+	m.Called(ctx, cause)
+}
+
+// stubPrepared is a provider.PreparedSavepoint answering summary.
+type stubPrepared struct {
+	summary provider.PreparedSummary
+}
+
+func (s *stubPrepared) Summary() provider.PreparedSummary { return s.summary }
+
+// mockVacantWorkload doubles provider.VacantWorkload.
+type mockVacantWorkload struct{ mock.Mock }
+
+func (m *mockVacantWorkload) Build(ctx context.Context, prepared provider.PreparedSavepoint) (provider.BuiltWorkload, error) {
+	args := m.Called(ctx, prepared)
+	built, _ := args.Get(0).(provider.BuiltWorkload)
+	return built, args.Error(1)
+}
+
+func (m *mockVacantWorkload) Discard(ctx context.Context) error {
+	return m.Called(ctx).Error(0)
+}
+
+// mockBuiltWorkload doubles provider.BuiltWorkload.
+type mockBuiltWorkload struct{ mock.Mock }
+
+func (m *mockBuiltWorkload) RestoreData(ctx context.Context) (provider.RestoredWorkload, error) {
+	args := m.Called(ctx)
+	restored, _ := args.Get(0).(provider.RestoredWorkload)
+	return restored, args.Error(1)
+}
+
+// mockRestoredWorkload doubles provider.RestoredWorkload.
+type mockRestoredWorkload struct{ mock.Mock }
+
+func (m *mockRestoredWorkload) Start(ctx context.Context, waitTimeout time.Duration) error {
+	return m.Called(ctx, waitTimeout).Error(0)
+}
+
+func (m *mockRestoredWorkload) Reap(ctx context.Context) {
+	m.Called(ctx)
 }

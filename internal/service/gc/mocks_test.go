@@ -17,10 +17,10 @@ package gc
 import (
 	"context"
 
-	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
@@ -45,8 +45,6 @@ func (m *mockLocker) Acquire(ctx context.Context) (func() error, error) {
 	return func() error { return m.MethodCalled("Release").Error(0) }, nil
 }
 
-// mockSessionLocker doubles model.SessionLocker; Lock hands out the *mockGrantedSessionLock it
-// returns, with the caller's context.
 // fakeWriteAdmission admits every write, for tests that are not about the admission.
 type fakeWriteAdmission struct{}
 
@@ -59,6 +57,8 @@ func (m *mockWriteAdmission) AdmitWrite(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
 
+// mockSessionLocker doubles model.SessionLocker; Lock hands out the *mockGrantedSessionLock it
+// returns, with the caller's context.
 type mockSessionLocker struct{ mock.Mock }
 
 func (m *mockSessionLocker) Lock(
@@ -106,69 +106,49 @@ func (m *mockInflight) Get(ctx context.Context) (model.InflightMarker, bool, err
 	return marker, args.Bool(1), args.Error(2)
 }
 
-type mockSavepointReader struct{ mock.Mock }
-
-func (m *mockSavepointReader) LoadSavepoints(ctx context.Context, ids []model.SavepointID) ([]model.Savepoint, error) {
-	args := m.Called(ctx, ids)
-	return args.Get(0).([]model.Savepoint), args.Error(1)
+type mockSession struct {
+	mock.Mock
+	// id answers ID unmocked.
+	id model.SessionID
 }
 
-type mockCollector struct{ mock.Mock }
+func (m *mockSession) ID() model.SessionID { return m.id }
 
-func (m *mockCollector) Kind() model.GarbageCollectorKind {
-	return m.Called().Get(0).(model.GarbageCollectorKind)
+func (m *mockSession) Workloads(ctx context.Context) ([]provider.WorkloadName, error) {
+	args := m.Called(ctx)
+	workloads, _ := args.Get(0).([]provider.WorkloadName)
+	return workloads, args.Error(1)
 }
 
-func (m *mockCollector) DataKind() model.GarbageDataKind {
-	return m.Called().Get(0).(model.GarbageDataKind)
+func (m *mockSession) Savepoints(workload provider.WorkloadName) (provider.Savepoints, error) {
+	args := m.Called(workload)
+	savepoints, _ := args.Get(0).(provider.Savepoints)
+	return savepoints, args.Error(1)
 }
 
-type mockDaemonCollector struct{ mockCollector }
-
-func (m *mockDaemonCollector) Find(ctx context.Context, scope DaemonScope) (model.GarbageStat, error) {
-	args := m.Called(ctx, scope)
-	stat, _ := args.Get(0).(model.GarbageStat)
-	return stat, args.Error(1)
+func (m *mockSession) FindGarbage(ctx context.Context, dataKinds []model.GarbageDataKind) []provider.Garbage {
+	found, _ := m.Called(ctx, dataKinds).Get(0).([]provider.Garbage)
+	return found
 }
 
-type mockComposeProjectCollector struct{ mockCollector }
+type mockGarbage struct{ mock.Mock }
 
-func (m *mockComposeProjectCollector) Find(ctx context.Context, scope ComposeProjectScope) (model.GarbageStat, error) {
-	args := m.Called(ctx, scope)
-	stat, _ := args.Get(0).(model.GarbageStat)
-	return stat, args.Error(1)
+func (m *mockGarbage) Report() model.GarbageReport {
+	return m.Called().Get(0).(model.GarbageReport)
 }
 
-// mockProbeCollector is a daemon collector reading something besides the store.
-type mockProbeCollector struct{ mockDaemonCollector }
-
-func (m *mockProbeCollector) Probe(ctx context.Context) error { return m.Called(ctx).Error(0) }
-
-// mockComposeProjectProbeCollector is a compose-project collector reading something besides the store.
-type mockComposeProjectProbeCollector struct{ mockComposeProjectCollector }
-
-func (m *mockComposeProjectProbeCollector) Probe(ctx context.Context) error {
-	return m.Called(ctx).Error(0)
+func (m *mockGarbage) Delete(ctx context.Context) model.GarbageDeletion {
+	return m.Called(ctx).Get(0).(model.GarbageDeletion)
 }
 
-// mockEraser doubles ComposeProjectEraser.
-type mockEraser struct{ mock.Mock }
+type mockSavepoints struct{ mock.Mock }
 
-func (m *mockEraser) Action() model.GarbageAction {
-	return m.Called().Get(0).(model.GarbageAction)
+func (m *mockSavepoints) List(ctx context.Context) ([]model.Savepoint, error) {
+	args := m.Called(ctx)
+	savepoints, _ := args.Get(0).([]model.Savepoint)
+	return savepoints, args.Error(1)
 }
 
-func (m *mockEraser) Erase(ctx context.Context, store storages.Storager, ops []model.GarbageOp) model.GarbageDeletion {
-	return m.Called(ctx, store, ops).Get(0).(model.GarbageDeletion)
-}
-
-// mockDaemonEraser doubles DaemonEraser.
-type mockDaemonEraser struct{ mock.Mock }
-
-func (m *mockDaemonEraser) Action() model.GarbageAction {
-	return m.Called().Get(0).(model.GarbageAction)
-}
-
-func (m *mockDaemonEraser) Erase(ctx context.Context, ops []model.GarbageOp) model.GarbageDeletion {
-	return m.Called(ctx, ops).Get(0).(model.GarbageDeletion)
+func (m *mockSavepoints) Remove(ctx context.Context, id model.SavepointID) error {
+	return m.Called(ctx, id).Error(0)
 }

@@ -38,12 +38,10 @@ func NewRollbackHandler(svc rollbackService, printer printer) *RollbackHandler {
 	}
 }
 
-// Rollback restores a savepoint and prints what was restored; the wait bound, the leftover-volumes
-// policy and whether a safety snapshot is taken come from cfg.
+// Rollback restores a savepoint and prints what was restored; the wait bound and whether a safety
+// snapshot is taken come from cfg.
 func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref string) error {
-	res, err := h.svc.Rollback(ctx, newRollbackRequest(
-		ref, cfg.Compose.WaitTimeout, cfg.Rollback.Policy(), cfg.Rollback.SkipSafetySnapshot(),
-	))
+	res, err := h.svc.Rollback(ctx, newRollbackRequest(ref, cfg.Compose.WaitTimeout, cfg.Rollback.SkipSafetySnapshot()))
 	if err != nil {
 		return err
 	}
@@ -52,12 +50,9 @@ func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref s
 
 // newRollbackRequest builds the request both adapters send, so neither drifts on
 // what a ref means: "latest" is reserved, a canonical UUID is an id, the rest is a name.
-func newRollbackRequest(
-	ref string, waitTimeout time.Duration, leftoverVolumesPolicy model.LeftoverVolumesPolicy, skipSafetySnapshot bool,
-) model.RollbackRequest {
+func newRollbackRequest(ref string, waitTimeout time.Duration, skipSafetySnapshot bool) model.RollbackRequest {
 	req := model.RollbackRequest{
 		WaitTimeout:        waitTimeout,
-		LeftoverVolumes:    leftoverVolumesPolicy,
 		SkipSafetySnapshot: skipSafetySnapshot,
 	}
 	switch {

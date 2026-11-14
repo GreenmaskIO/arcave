@@ -46,7 +46,7 @@ func runToolsGenerateCompose(cmd *cobra.Command, _ []string) error {
 	var opened closers
 	defer opened.release(ctx)
 
-	svc, err := openComposeFileService(ctx, projectCfg, composeProject, &opened)
+	svc, err := openComposeToolsService(ctx, projectCfg, composeProject, &opened)
 	if err != nil {
 		return err
 	}

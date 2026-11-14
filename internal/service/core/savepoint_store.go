@@ -28,6 +28,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -36,16 +37,17 @@ const maxParallelRemovals = 5
 
 // SavepointStoreDeps is what the workflows that read and delete in the store alone run on.
 type SavepointStoreDeps struct {
-	SavepointRepo savepointRepository
+	// Savepoints are the compose project's savepoints, as the provider keeps them.
+	Savepoints    provider.Savepoints
 	ProjectLocker projectLocker
 	// WriteAdmission admits a workflow's writes to the arcave project's store, before the first.
 	WriteAdmission writeAdmission
 	// SessionLocker holds Session's lock in the store for the whole of a workflow.
 	SessionLocker model.SessionLocker
 	Inflight      inflightMarkers
-	// Session is the session SavepointRepo belongs to; zero means model.DefaultSession.
+	// Session is the session Savepoints belong to; zero means model.DefaultSession.
 	Session model.SessionID
-	// ComposeProject is the compose project SavepointRepo belongs to.
+	// ComposeProject is the compose project Savepoints belong to.
 	ComposeProject model.DockerComposeProjectName
 	// Sessions checks, under the lock, that Session still exists.
 	Sessions sessionLookup
@@ -54,7 +56,7 @@ type SavepointStoreDeps struct {
 // SavepointStoreService lists and removes savepoints over one compose project's store. It reaches
 // no daemon, so it runs where none answers.
 type SavepointStoreService struct {
-	savepointRepo  savepointRepository
+	savepoints     provider.Savepoints
 	projectLocker  projectLocker
 	writeAdmission writeAdmission
 	sessionLocker  model.SessionLocker
@@ -69,7 +71,7 @@ func NewSavepointStoreService(deps SavepointStoreDeps) *SavepointStoreService {
 		deps.Session = model.DefaultSession
 	}
 	return &SavepointStoreService{
-		savepointRepo:  deps.SavepointRepo,
+		savepoints:     deps.Savepoints,
 		projectLocker:  deps.ProjectLocker,
 		writeAdmission: deps.WriteAdmission,
 		sessionLocker:  deps.SessionLocker,
@@ -145,11 +147,11 @@ func locked[T any](
 	})
 }
 
-// listSavepoints, oldest first, is core's only read of the repository, so the rule that hides a
+// listSavepoints, oldest first, is core's only read of the savepoints, so the rule that hides a
 // safety snapshot has one place to be forgotten. Which selector may see one is
 // findSavepoint's and selectSavepointsToRemove's call.
 func (s *SavepointStoreService) listSavepoints(ctx context.Context, includeSafetySnapshots bool) ([]model.Savepoint, error) {
-	savepoints, err := s.savepointRepo.ListSavepoints(ctx)
+	savepoints, err := s.savepoints.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing savepoints: %w", err)
 	}
@@ -396,7 +398,7 @@ func (s *SavepointStoreService) removeSavepoint(
 	if err := grantedLock.Verify(ctx); err != nil {
 		return fmt.Errorf("remove savepoint %s: %w", savepoint.ID, err)
 	}
-	if err := s.savepointRepo.DeleteSavepoint(ctx, savepoint.ID); err != nil {
+	if err := s.savepoints.Remove(ctx, savepoint.ID); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("savepoint", savepoint.ID.String()).
 			Msg("failed to remove the savepoint; if its record went, the directory is orphaned for a gc")
 		return err

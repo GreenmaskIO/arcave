@@ -86,7 +86,7 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
 
 ### Step kinds
 
-Every node's `open.step.kind` is one of these, and they are part of the stream's contract: an action is `<namespace>.<action>`, an object a bare noun, its key in `step.id` or its name in `step.name`.
+Every node's `open.step.kind` is one of these: an action is `<namespace>.<action>`, an object a bare noun, its key in `step.id` or its name in `step.name`. The kinds a workflow opens itself — the roots, `session.lock`, `rollback.prepare` and its siblings, `savepoint.drop`, `session.copy`, `gc.find`, `gc.retain` and `gc.erase` — are the stream's contract. The kinds that read and change the compose project under them — `project.introspect`, `savepoint.hold`, `savepoint.capture`, `savepoint.release`, `compose.*`, `volume.*`, `layer.*`, `image.*`, `replica.*`, and under gc `compose-project`, `collector`, `eraser`, `gc.delete`, `garbage` — and their objects are the compose provider's details: shown as they are, not promised.
 
 | Kind | What it is |
 |---|---|
@@ -100,11 +100,12 @@ Every node's `open.step.kind` is one of these, and they are part of the stream's
 | `layer.capture`, `layer.restore` → `layer` | a batch over the writable layers, one `layer` per container |
 | `image.capture` → `image` | a batch over the images, one `image` per image |
 | `replica.rebuild` → `replica` | the replicas a rollback recreates under their recorded number |
-| `savepoint.drop` → `savepoint` | the savepoints a remove takes |
+| `savepoint.drop` → `savepoint` | the savepoints a remove takes; under `gc.erase`, each retired safety snapshot |
 | `rollback.prepare`, `rollback.safety-snapshot`, `rollback.apply`, `rollback.revert`, `rollback.cleanup` | a rollback's phases |
 | `session.copy` → `key` | a fork's copy, one `key` per top-level directory or object |
 | `gc.find` → `collector`, `gc.find` → `compose-project` → `collector` | what each collector found: the daemon's, then each compose project's |
-| `gc.erase` → `eraser`, `gc.erase` → `compose-project` → `eraser`, then → `gc.delete` → `garbage` | the deletions, one `garbage` per target — per repository for a restic `forget` |
+| `gc.retain` | picking the safety snapshots past the retention, in every compose project |
+| `gc.erase` → `eraser`, `gc.erase` → `compose-project` → `eraser`, then → `gc.delete` → `garbage` | the deletions, one `compose-project` per report, one `garbage` per target — per repository for a restic `forget` |
 
 [`arcave mcp`](cli/mcp.md) always logs its progress: a tool's answer is its result alone.
 

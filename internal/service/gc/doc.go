@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package gc finds a session's garbage and deletes it: GarbageCollector reads every compose
-// project's scope once and runs the collectors over it. The collectors, one per kind of garbage,
-// live under collector/ and are handed in by the composition root; each judges liveness by
-// savepoint status, never by an object's age, and only finds: the GarbageEraser of each op's
-// action deletes it.
+// Package gc runs arcave gc over one session under its locks: the provider finds and deletes the
+// garbage, gc retires the safety snapshots beyond the retention.
 package gc

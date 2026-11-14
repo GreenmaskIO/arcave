@@ -23,14 +23,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/greenmaskio/storages"
-	"github.com/greenmaskio/storages/inmemory"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
@@ -1380,26 +1379,24 @@ func TestSessionService_RemoveSession_PointerClearFailureKeepsTheResult(t *testi
 	locker.AssertExpectations(t)
 }
 
-// A session's savepoints are read compose project by compose project, in name order: one name in
-// two compose projects is two savepoints, and one holding none is left out.
+// A session's savepoints are read compose project by compose project, in the order the provider
+// names them: one name in two compose projects is two savepoints, and one holding none is left out.
 func TestReadSessionSavepoints(t *testing.T) {
 	// Arrange
-	ctx := context.Background()
-	store := inmemory.New("")
-	for _, composeProject := range []string{"shop", "blog", "cache"} {
-		key := "sessions/" + demoSession.String() + "/compose/" + composeProject + "/019e843e-1650-7000-8000-000000000300/project.yaml"
-		require.NoError(t, store.PutObject(ctx, key, strings.NewReader("services: {}")))
-	}
 	shop := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000100", Name: "v1"}
 	blog := model.Savepoint{ID: "019e843e-1650-7000-8000-000000000200", Name: "v1"}
-	blogSavepoints, cacheSavepoints, shopSavepoints := &mockSavepointReader{}, &mockSavepointReader{}, &mockSavepointReader{}
-	blogSavepoints.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{blog}, nil).Once()
-	cacheSavepoints.On("ListSavepoints", mock.Anything).Return([]model.Savepoint(nil), nil).Once()
-	shopSavepoints.On("ListSavepoints", mock.Anything).Return([]model.Savepoint{shop}, nil).Once()
+	blogSavepoints, cacheSavepoints, shopSavepoints := &mockSavepoints{}, &mockSavepoints{}, &mockSavepoints{}
+	blogSavepoints.On("List", mock.Anything).Return([]model.Savepoint{blog}, nil).Once()
+	cacheSavepoints.On("List", mock.Anything).Return([]model.Savepoint(nil), nil).Once()
+	shopSavepoints.On("List", mock.Anything).Return([]model.Savepoint{shop}, nil).Once()
+	session := &mockSession{}
+	session.On("Workloads", mock.Anything).Return([]provider.WorkloadName{"blog", "cache", "shop"}, nil).Once()
+	session.On("Savepoints", provider.WorkloadName("blog")).Return(blogSavepoints, nil).Once()
+	session.On("Savepoints", provider.WorkloadName("cache")).Return(cacheSavepoints, nil).Once()
+	session.On("Savepoints", provider.WorkloadName("shop")).Return(shopSavepoints, nil).Once()
 
 	// Act
-	got, err := readSessionSavepoints(ctx, store, newSavepointsInOrder(t, blogSavepoints, cacheSavepoints, shopSavepoints), demoSession)
-	empty, emptyErr := readSessionSavepoints(ctx, store, newSavepointsInOrder(t), model.DefaultSession)
+	got, err := readSessionSavepoints(context.Background(), session, demoSession)
 
 	// Assert
 	require.NoError(t, err)
@@ -1407,21 +1404,62 @@ func TestReadSessionSavepoints(t *testing.T) {
 		{ComposeProject: "blog", Savepoints: []model.Savepoint{blog}},
 		{ComposeProject: "shop", Savepoints: []model.Savepoint{shop}},
 	}, got)
-	require.NoError(t, emptyErr)
-	assert.Empty(t, empty)
+	session.AssertExpectations(t)
 	blogSavepoints.AssertExpectations(t)
 	cacheSavepoints.AssertExpectations(t)
 	shopSavepoints.AssertExpectations(t)
 }
 
-// newSavepointsInOrder opens repos in turn, one per compose project read.
-func newSavepointsInOrder(t *testing.T, repos ...*mockSavepointReader) func(storages.Storager) SavepointReader {
-	next := 0
-	return func(storages.Storager) SavepointReader {
-		require.Less(t, next, len(repos), "a compose project read past the repositories given")
-		repo := repos[next]
-		next++
-		return repo
+// A read that fails fails the listing, saying what it was reading.
+func TestReadSessionSavepoints_Fails(t *testing.T) {
+	readErr := errors.New("access denied")
+
+	tests := []struct {
+		name          string
+		workloadsErr  error
+		savepointsErr error
+		listErr       error
+		wantErr       string
+	}{
+		{
+			name:         "the compose projects",
+			workloadsErr: readErr,
+			wantErr:      "list compose projects of session " + demoSession.String() + ": access denied",
+		},
+		{
+			name:          "a compose project",
+			savepointsErr: readErr,
+			wantErr:       "open compose project shop: access denied",
+		},
+		{
+			name:    "its savepoints",
+			listErr: readErr,
+			wantErr: "list savepoints of compose project shop: access denied",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			shopSavepoints := &mockSavepoints{}
+			session := &mockSession{}
+			session.On("Workloads", mock.Anything).Return([]provider.WorkloadName{"shop"}, tt.workloadsErr).Once()
+			if tt.workloadsErr == nil {
+				session.On("Savepoints", provider.WorkloadName("shop")).Return(shopSavepoints, tt.savepointsErr).Once()
+			}
+			if tt.listErr != nil {
+				shopSavepoints.On("List", mock.Anything).Return([]model.Savepoint(nil), tt.listErr).Once()
+			}
+
+			// Act
+			got, err := readSessionSavepoints(context.Background(), session, demoSession)
+
+			// Assert
+			require.ErrorIs(t, err, readErr)
+			assert.EqualError(t, err, tt.wantErr)
+			assert.Nil(t, got)
+			session.AssertExpectations(t)
+			shopSavepoints.AssertExpectations(t)
+		})
 	}
 }
 

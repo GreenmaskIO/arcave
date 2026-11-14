@@ -63,17 +63,9 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 			// Arrange
 			locker := &mockLocker{}
 			locker.On("Acquire", mock.Anything).Return(model.ErrProjectLocked)
-			repo, inspector, runner := &mockSavepointRepo{}, &mockInspector{}, &mockComposeRunner{}
-			registry := &mockRegistry{}
-			// Nil stores: a workflow that got as far as a backend would deref one.
-			svc := New(Deps{
-				ArcaveProject: demoArcaveProject,
-				SessionLocker: fakeSessionLocker{},
-				VolumeRemover: &mockVolumeRemover{},
-				SavepointRepo: repo, ProjectLocker: locker, ComposeInspector: inspector,
-				ComposeRunner: runner, BackendRegistry: registry, Inflight: &fakeInflight{},
-				Store: nil, CaptureDefaults: demoCaptureDefaults,
-			})
+			savepoints := &mockSavepoints{}
+			stages := newMockStages(false)
+			svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -84,10 +76,8 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 			// A lock that was never taken must not be released, and the locker carries
 			// no Release expectation — a release would fail the run as an unexpected call.
 			locker.AssertExpectations(t)
-			repo.AssertExpectations(t)
-			inspector.AssertExpectations(t)
-			runner.AssertExpectations(t)
-			registry.AssertExpectations(t)
+			savepoints.AssertExpectations(t)
+			stages.AssertExpectations(t)
 		})
 	}
 }
