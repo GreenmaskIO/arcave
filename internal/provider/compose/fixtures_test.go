@@ -43,7 +43,7 @@ const (
 	demoUpstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 )
 
-// demoCaptureDefaults are the backends every test Service captures by, every kind captured.
+// demoCaptureDefaults are the backends every test Provider captures by, every kind captured.
 var demoCaptureDefaults = capturepolicy.CaptureDefaults{
 	VolumeBackend:        model.SnapshotBackendFullCopy,
 	WritableLayerBackend: model.ImageBackendDedupCopy,

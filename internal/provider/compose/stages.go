@@ -97,7 +97,7 @@ func (l liveWorkload) Teardown(ctx context.Context, prepared provider.PreparedSa
 
 // newOverwritten names the leftover volumes savepoint overwrites; under
 // model.LeftoverVolumesRefuse any is model.ErrLeftoverVolumes, unless recovering.
-func (s *Service) newOverwritten(
+func (s *Provider) newOverwritten(
 	introspection model.IntrospectionResult, savepoint model.Savepoint, recovering bool,
 ) ([]string, error) {
 	leftover := leftoverVolumes(ownedVolumes(introspection), savepoint)
@@ -109,7 +109,7 @@ func (s *Service) newOverwritten(
 
 // prepareTarget builds the savepoint's backends, loads its spec and layers into the daemon and
 // points the spec at them. It writes nothing a rollback restores into.
-func (s *Service) prepareTarget(
+func (s *Provider) prepareTarget(
 	ctx context.Context, savepoint model.Savepoint, deployment model.SavepointDeployment, overwritten []string,
 ) (preparedSavepoint, error) {
 	// Their own set, not the live one's: a volume may have been added or dropped since.
@@ -155,7 +155,7 @@ func leftoverVolumes(owned map[string]bool, savepoint model.Savepoint) []string 
 
 // unpauseOnEntry resumes the replicas introspection found frozen, ahead of a teardown that does
 // not; a failure is only logged, the teardown going on regardless.
-func (s *Service) unpauseOnEntry(ctx context.Context, introspection model.IntrospectionResult) {
+func (s *Provider) unpauseOnEntry(ctx context.Context, introspection model.IntrospectionResult) {
 	var (
 		ids   []string
 		names []string
@@ -184,7 +184,7 @@ func (s *Service) unpauseOnEntry(ctx context.Context, introspection model.Intros
 // vacantWorkload is the compose project with nothing of it running: the anonymous volumes its teardown
 // orphaned, the volumes it owned before the build, and the project a discard takes down.
 type vacantWorkload struct {
-	service              *Service
+	service              *Provider
 	anonymousVolumeNames map[string]string
 	ownedBefore          map[string]bool
 	downProject          *types.Project
@@ -280,7 +280,7 @@ func newRestoredVolumeNames(savepoint model.Savepoint) []string {
 
 // composeCreate creates the containers of project without starting them: the data is
 // restored into them first. Only a volume of restoredVolumes may be recreated.
-func (s *Service) composeCreate(ctx context.Context, project *types.Project, restoredVolumes []string) error {
+func (s *Provider) composeCreate(ctx context.Context, project *types.Project, restoredVolumes []string) error {
 	if err := runComposeActivity(ctx, kindComposeCreate, func(ctx context.Context) error {
 		return s.composeRunner.Create(ctx, project, restoredVolumes)
 	}); err != nil {
@@ -290,7 +290,7 @@ func (s *Service) composeCreate(ctx context.Context, project *types.Project, res
 }
 
 // composeStart starts the containers of project and waits on their health checks.
-func (s *Service) composeStart(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
+func (s *Provider) composeStart(ctx context.Context, project *types.Project, waitTimeout time.Duration) error {
 	return runComposeActivity(ctx, kindComposeStart, func(ctx context.Context) error {
 		return s.composeRunner.Start(ctx, project, waitTimeout)
 	})
@@ -298,7 +298,7 @@ func (s *Service) composeStart(ctx context.Context, project *types.Project, wait
 
 // removeOrphanedVolumes removes the anonymous volumes `compose down` left behind whose data restored
 // holds; any other is its own last copy.
-func (s *Service) removeOrphanedVolumes(ctx context.Context, anonymousVolumeNames map[string]string, restored []model.Volume) {
+func (s *Provider) removeOrphanedVolumes(ctx context.Context, anonymousVolumeNames map[string]string, restored []model.Volume) {
 	log := zerolog.Ctx(ctx)
 	for _, volume := range restored {
 		name, ok := anonymousVolumeNames[volume.ObjectID]
@@ -316,7 +316,7 @@ func (s *Service) removeOrphanedVolumes(ctx context.Context, anonymousVolumeName
 
 // composeDown removes the compose project's containers and networks. It goes by project
 // name, so it also takes down what a failed rebuild left standing.
-func (s *Service) composeDown(ctx context.Context, project *types.Project) error {
+func (s *Provider) composeDown(ctx context.Context, project *types.Project) error {
 	if err := runComposeActivity(ctx, kindComposeDown, func(ctx context.Context) error {
 		return s.composeRunner.Down(ctx, project)
 	}); err != nil {
@@ -327,7 +327,7 @@ func (s *Service) composeDown(ctx context.Context, project *types.Project) error
 
 // removeCreatedVolumes drops the volumes the compose project owns now and did not own
 // before: what the failed rollback created, holding nothing the savepoint does not.
-func (s *Service) removeCreatedVolumes(ctx context.Context, ownedBefore map[string]bool) {
+func (s *Provider) removeCreatedVolumes(ctx context.Context, ownedBefore map[string]bool) {
 	log := zerolog.Ctx(ctx)
 	introspection, err := s.introspect(ctx)
 	if err != nil {

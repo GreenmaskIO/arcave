@@ -52,7 +52,7 @@ var inheritedSkipReason = skipReason{model.SkipReasonInheritedFromOutside, "inhe
 // resolveBackupVolumes returns the units a savepoint of the introspected compose project
 // covers, and the mounts and services it leaves out. Every workflow comes through
 // here, so create and rollback cannot differ.
-func (s *Service) resolveBackupVolumes(
+func (s *Provider) resolveBackupVolumes(
 	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
 ) ([]model.Volume, model.NotCovered, error) {
 	volumes, notCovered, err := FindBackupVolumes(introspection, capturePolicy)

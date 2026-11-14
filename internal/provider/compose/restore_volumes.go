@@ -31,7 +31,7 @@ const volumeRestoreOpName = "restore"
 
 // restoreVolumes writes every volume back concurrently, each carrying the payload its own
 // capture reported; stats index alike with backends.
-func (s *Service) restoreVolumes(
+func (s *Provider) restoreVolumes(
 	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
 ) error {
 	if err := savepoint.ID.Validate(); err != nil {
@@ -90,7 +90,7 @@ func volumeRestoreContext(ctx context.Context, backend model.VolumeSnapshotBacke
 
 // newBackends builds one backend per volume, all rooted at the one store, in
 // input order. All up front: an unregistered backend fails before any byte moves.
-func (s *Service) newBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
+func (s *Provider) newBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
 	backends := make([]model.VolumeSnapshotBackend, len(volumes))
 	for i, volume := range volumes {
 		backend, err := s.snapshotBackendRegistry.New(model.BackendSpec{

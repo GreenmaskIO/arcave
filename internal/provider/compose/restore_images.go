@@ -66,7 +66,7 @@ type replicaRebuild struct {
 
 // restoreWritableLayers loads every writable layer the savepoint holds back into the daemon,
 // concurrently, each under its own tag.
-func (s *Service) restoreWritableLayers(
+func (s *Provider) restoreWritableLayers(
 	ctx context.Context, savepoint model.Savepoint, composeProject string,
 ) ([]model.WritableLayerRestoreResult, error) {
 	if len(savepoint.WritableLayers) == 0 {
@@ -115,7 +115,7 @@ func (s *Service) restoreWritableLayers(
 
 // requireImages refuses, before anything is stopped, a service the rollback would build
 // on an image compose may not pull and the daemon does not hold.
-func (s *Service) requireImages(ctx context.Context, project *types.Project, restored []model.WritableLayerRestoreResult) error {
+func (s *Provider) requireImages(ctx context.Context, project *types.Project, restored []model.WritableLayerRestoreResult) error {
 	for _, name := range slices.Sorted(maps.Keys(project.Services)) {
 		svc := project.Services[name]
 		if svc.PullPolicy != types.PullPolicyNever ||
@@ -160,7 +160,7 @@ func retargetImages(project *types.Project, restored []model.WritableLayerRestor
 
 // rebuildDivergentReplicas rebuilds each replica the compose spec cannot name on its own layer
 // and recorded number. It must run before the volume restore, which resolves through containers.
-func (s *Service) rebuildDivergentReplicas(ctx context.Context, replicas []recordedReplica) error {
+func (s *Provider) rebuildDivergentReplicas(ctx context.Context, replicas []recordedReplica) error {
 	if createdAsRecorded(replicas) {
 		return nil
 	}
@@ -186,7 +186,7 @@ func (s *Service) rebuildDivergentReplicas(ctx context.Context, replicas []recor
 }
 
 // rebuildReplica recreates one created container as the replica the savepoint recorded.
-func (s *Service) rebuildReplica(ctx context.Context, rebuild replicaRebuild) error {
+func (s *Provider) rebuildReplica(ctx context.Context, rebuild replicaRebuild) error {
 	log := zerolog.Ctx(ctx)
 	replica := rebuild.recorded
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindReplica, ID: replica.containerName})

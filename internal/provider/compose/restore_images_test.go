@@ -184,7 +184,7 @@ func TestRetargetImages_LowestRecordedReplica(t *testing.T) {
 	assert.Equal(t, demoBaseImage, project.Services[demoService].Image, "the input project is left alone")
 }
 
-func TestService_rebuildDivergentReplicas(t *testing.T) {
+func TestProvider_rebuildDivergentReplicas(t *testing.T) {
 	type rebuild struct {
 		created  int
 		recorded int
@@ -276,7 +276,7 @@ func TestService_rebuildDivergentReplicas(t *testing.T) {
 
 // A compose project compose numbers as recorded, on one image, needs no rebuild and
 // not even a look at what was created.
-func TestService_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
+func TestProvider_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 	// Arrange
 	inspector := &mockInspector{}
 	rebuilder := &mockContainerRebuilder{}
@@ -295,7 +295,7 @@ func TestService_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 	rebuilder.AssertExpectations(t)
 }
 
-func TestService_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T) {
+func TestProvider_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T) {
 	// Arrange
 	built := demoIntrospection()
 	built.Project.Services = []model.Service{{Name: demoService, Containers: []model.Container{
@@ -337,7 +337,7 @@ func imageOf(replicas []recordedReplica, n int) string {
 	return ""
 }
 
-func TestService_requireImages(t *testing.T) {
+func TestProvider_requireImages(t *testing.T) {
 	tests := []struct {
 		name     string
 		policy   string

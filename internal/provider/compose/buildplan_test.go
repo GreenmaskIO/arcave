@@ -33,7 +33,7 @@ import (
 )
 
 // A service's labels choose its layer's backend and leave its upstream out.
-func TestService_BuildPlan_LabelsDecideTheImages(t *testing.T) {
+func TestProvider_BuildPlan_LabelsDecideTheImages(t *testing.T) {
 	// Arrange
 	introspection := labelledIntrospection(map[string]string{
 		string(model.CaptureLabelWritableLayerBackend): "fullcopy",
@@ -70,7 +70,7 @@ func TestService_BuildPlan_LabelsDecideTheImages(t *testing.T) {
 
 // A capture before a restore holds what the restore overwrites, whatever the labels say now;
 // a label it cannot read is returned as ignored, never refused.
-func TestService_newReplacementPolicy(t *testing.T) {
+func TestProvider_newReplacementPolicy(t *testing.T) {
 	tests := []struct {
 		name        string
 		labels      map[string]string
@@ -138,7 +138,7 @@ func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 
 // A label arcave cannot act on refuses the plan, as a capture policy error, before the spec is
 // assembled.
-func TestService_BuildPlan_InvalidLabelBuildsNothing(t *testing.T) {
+func TestProvider_BuildPlan_InvalidLabelBuildsNothing(t *testing.T) {
 	// Arrange
 	introspection := labelledIntrospection(map[string]string{"arcave.captur": "false"})
 	// No expectation on the assembler: the refusal comes first.
@@ -191,7 +191,7 @@ func TestNewLayerCaptures(t *testing.T) {
 }
 
 // Past a bad label a capture before a restore drops the labels, not the config.
-func TestService_newReplacementPolicy_FallbackKeepsTheConfig(t *testing.T) {
+func TestProvider_newReplacementPolicy_FallbackKeepsTheConfig(t *testing.T) {
 	// Arrange
 	defaults := demoCaptureDefaults
 	defaults.SavepointCapture.WritableLayers = false
@@ -209,7 +209,7 @@ func TestService_newReplacementPolicy_FallbackKeepsTheConfig(t *testing.T) {
 
 // A plan that fails past a bad label still says the labels were ignored: no plan is left to
 // carry that back to the caller.
-func TestService_BuildPlan_FailedPlanWarnsOfIgnoredLabels(t *testing.T) {
+func TestProvider_BuildPlan_FailedPlanWarnsOfIgnoredLabels(t *testing.T) {
 	// Arrange
 	record := demoRecord()
 	introspection := labelledIntrospection(map[string]string{"arcave.captur": "false"})
@@ -239,7 +239,7 @@ func TestService_BuildPlan_FailedPlanWarnsOfIgnoredLabels(t *testing.T) {
 
 // The live compose project is planned as its artifact parses back, not as the assembler built
 // it: a rollback acts on what the same loader reads.
-func TestService_BuildPlan(t *testing.T) {
+func TestProvider_BuildPlan(t *testing.T) {
 	// Arrange
 	introspection := demoIntrospection()
 	assembler := &mockAssembler{}
@@ -276,7 +276,7 @@ func TestService_BuildPlan(t *testing.T) {
 // A plan before a restore reads the restoring record by id and keeps what it overwrites; a record
 // missing or unreadable refuses the plan before anything is assembled, and is no capture policy error:
 // the policy was never resolved.
-func TestService_BuildPlan_Restoring(t *testing.T) {
+func TestProvider_BuildPlan_Restoring(t *testing.T) {
 	record := demoRecord()
 	errRead := errors.New("store unreachable")
 	tests := []struct {
@@ -379,7 +379,7 @@ func TestNewReplicaGaps(t *testing.T) {
 
 // One named volume and one bind mount are units; the tmpfs mount is a skip and web, mounting
 // nothing, is not covered. Every backend is rooted at the one store the DI root left.
-func TestService_BuildPlan_CoversEveryUnit(t *testing.T) {
+func TestProvider_BuildPlan_CoversEveryUnit(t *testing.T) {
 	// Arrange
 	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
@@ -439,7 +439,7 @@ func TestService_BuildPlan_CoversEveryUnit(t *testing.T) {
 }
 
 // Every replica's anonymous volume is a unit of its own, captured by its own backend.
-func TestService_BuildPlan_AnonymousVolumePerReplica(t *testing.T) {
+func TestProvider_BuildPlan_AnonymousVolumePerReplica(t *testing.T) {
 	// Arrange
 	anon := func(replica int) model.ServiceVolume {
 		return model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
@@ -483,7 +483,7 @@ func TestService_BuildPlan_AnonymousVolumePerReplica(t *testing.T) {
 
 // The backend a new savepoint captures with is the configured one, not a constant: it is stamped
 // on every volume the plan resolves.
-func TestService_BuildPlan_StampsTheConfiguredBackend(t *testing.T) {
+func TestProvider_BuildPlan_StampsTheConfiguredBackend(t *testing.T) {
 	// Arrange
 	backend := composetest.NewMockBackend(model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendCDC})
 	registry := &mockRegistry{}
@@ -512,7 +512,7 @@ func TestService_BuildPlan_StampsTheConfiguredBackend(t *testing.T) {
 
 // A named volume no service mounts is covered like any other: a backend addresses a volume by
 // name, so having no container to read it through is no reason to leave it out.
-func TestService_BuildPlan_CoversAnUnmountedVolume(t *testing.T) {
+func TestProvider_BuildPlan_CoversAnUnmountedVolume(t *testing.T) {
 	// Arrange
 	introspection := model.IntrospectionResult{Project: model.Project{
 		Name:     "demo",
@@ -555,7 +555,7 @@ func TestService_BuildPlan_CoversAnUnmountedVolume(t *testing.T) {
 
 // A plan that cannot be built is refused before anything is touched: an assembler that fails,
 // a backend without a factory, a capture of nothing, a compose project taken down.
-func TestService_BuildPlan_Refusals(t *testing.T) {
+func TestProvider_BuildPlan_Refusals(t *testing.T) {
 	errAssemble := errors.New("compose files are gone")
 	errNoFactory := errors.New("no factory")
 	nothing := model.IntrospectionResult{Project: model.Project{
@@ -636,7 +636,7 @@ func TestService_BuildPlan_Refusals(t *testing.T) {
 
 // A plan takes the live compose project's upstream and its writable layer, whether for a savepoint
 // or before a restore.
-func TestService_BuildPlan_PlansTheImagesAndWritableLayers(t *testing.T) {
+func TestProvider_BuildPlan_PlansTheImagesAndWritableLayers(t *testing.T) {
 	record := demoRecord()
 	tests := []struct {
 		name string

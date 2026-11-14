@@ -106,7 +106,7 @@ type containerControl interface {
 	AwaitHealthProbes(ctx context.Context, ids []string) error
 }
 
-// Deps are Service's collaborators.
+// Deps are Provider's collaborators.
 type Deps struct {
 	SavepointRepo    savepointRepository
 	ComposeInspector composeIntrospector
@@ -142,8 +142,8 @@ type Deps struct {
 	HeartbeatStaleAfter time.Duration
 }
 
-// Service is the compose provider of one compose project in one session: the workload core inspects.
-type Service struct {
+// Provider is the compose provider of one compose project in one session: the workload core inspects.
+type Provider struct {
 	savepointRepo           savepointRepository
 	composeInspector        composeIntrospector
 	imageBackend            imageBackend
@@ -164,9 +164,9 @@ type Service struct {
 	capturer                *capture.Capturer
 }
 
-// New builds a Service from deps.
-func New(deps Deps) *Service {
-	return &Service{
+// New builds a Provider from deps.
+func New(deps Deps) *Provider {
+	return &Provider{
 		savepointRepo:           deps.SavepointRepo,
 		composeInspector:        deps.ComposeInspector,
 		imageBackend:            deps.ImageBackend,

@@ -122,7 +122,7 @@ func TestNewServiceHolds(t *testing.T) {
 }
 
 // A capture before a restore stops every service, whatever a label or the config say.
-func TestService_newReplacementPolicy_StopsEveryService(t *testing.T) {
+func TestProvider_newReplacementPolicy_StopsEveryService(t *testing.T) {
 	tests := []struct {
 		name   string
 		labels map[string]string
@@ -154,7 +154,7 @@ func TestService_newReplacementPolicy_StopsEveryService(t *testing.T) {
 }
 
 // A savepoint's plan holds each service by its label, or by the config's mode.
-func TestService_BuildPlan_HoldsEachServiceByItsMode(t *testing.T) {
+func TestProvider_BuildPlan_HoldsEachServiceByItsMode(t *testing.T) {
 	tests := []struct {
 		name       string
 		labels     map[string]string

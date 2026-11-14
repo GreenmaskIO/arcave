@@ -25,13 +25,13 @@ import (
 
 // liveWorkload is the compose project as one introspection found it.
 type liveWorkload struct {
-	service       *Service
+	service       *Provider
 	introspection model.IntrospectionResult
 }
 
 // Inspect reads the compose project as the daemon holds it now, and refuses a daemon the image
 // backend cannot serve.
-func (s *Service) Inspect(ctx context.Context) (provider.LiveWorkload, error) {
+func (s *Provider) Inspect(ctx context.Context) (provider.LiveWorkload, error) {
 	introspection, err := s.introspect(ctx)
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func (l liveWorkload) PlanCapture(ctx context.Context, opts provider.CaptureOpti
 }
 
 // introspect reads the compose project as the daemon holds it now.
-func (s *Service) introspect(ctx context.Context) (model.IntrospectionResult, error) {
+func (s *Provider) introspect(ctx context.Context) (model.IntrospectionResult, error) {
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindProjectIntrospect})
 	introspection, err := s.composeInspector.Introspect(ctx)
 	step.End(err)

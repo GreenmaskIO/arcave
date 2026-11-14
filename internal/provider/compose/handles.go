@@ -28,14 +28,14 @@ import (
 // capturePlan is one capture decided, nothing touched yet: the anonymous volumes a teardown of the
 // project it holds orphans, and the volumes the project owned when it was inspected.
 type capturePlan struct {
-	service              *Service
+	service              *Provider
 	plan                 captureplan.Plan
 	anonymousVolumeNames map[string]string
 	ownedBefore          map[string]bool
 }
 
 // newCapturePlan wraps plan of the introspected project in the handle core holds a capture by.
-func (s *Service) newCapturePlan(plan captureplan.Plan, introspection model.IntrospectionResult) capturePlan {
+func (s *Provider) newCapturePlan(plan captureplan.Plan, introspection model.IntrospectionResult) capturePlan {
 	return capturePlan{
 		service:              s,
 		plan:                 plan,
@@ -73,7 +73,7 @@ func (p capturePlan) Release(ctx context.Context, waitTimeout time.Duration) err
 // heldWorkload is the project heldWorkload still, the containers its stop killed, the anonymous volumes its
 // teardown orphans and the volumes it owned when it was inspected.
 type heldWorkload struct {
-	service              *Service
+	service              *Provider
 	plan                 captureplan.Plan
 	killed               []string
 	anonymousVolumeNames map[string]string
@@ -121,7 +121,7 @@ func (h heldWorkload) Teardown(ctx context.Context) (provider.VacantWorkload, er
 }
 
 // hold holds the project still as plan says and returns the containers the stop killed.
-func (s *Service) hold(ctx context.Context, plan captureplan.Plan) (_ []string, err error) {
+func (s *Provider) hold(ctx context.Context, plan captureplan.Plan) (_ []string, err error) {
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindSavepointHold}, progress.MeasureResources)
 	defer func() { step.End(err) }()
 
@@ -129,7 +129,7 @@ func (s *Service) hold(ctx context.Context, plan captureplan.Plan) (_ []string, 
 }
 
 // release brings back the project plan holds, waiting waitTimeout on its health checks.
-func (s *Service) release(revertCtx context.Context, plan captureplan.Plan, waitTimeout time.Duration) (err error) {
+func (s *Provider) release(revertCtx context.Context, plan captureplan.Plan, waitTimeout time.Duration) (err error) {
 	revertCtx, step := progress.Run(revertCtx, progress.Step{Kind: kindSavepointRelease}, progress.MeasureResources)
 	defer func() { step.End(err) }()
 

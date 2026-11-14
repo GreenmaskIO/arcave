@@ -51,7 +51,7 @@ type imageSet struct {
 // buildPlan decides, off introspection, what a capture of the live compose project takes and leaves
 // out; it changes nothing. A capture policy that cannot be resolved is a provider.CapturePolicyError;
 // a record of opts.Restoring that cannot be read is not.
-func (s *Service) buildPlan(
+func (s *Provider) buildPlan(
 	ctx context.Context, introspection model.IntrospectionResult, opts provider.CaptureOptions,
 ) (captureplan.Plan, error) {
 	var (
@@ -84,7 +84,7 @@ func (s *Service) buildPlan(
 // replaced with restoring gets that replacement's policy, nil being none. The first error is why
 // the policy follows the config and not the labels, nil when it reads them; the second is the
 // failure.
-func (s *Service) resolveCapturePolicy(
+func (s *Provider) resolveCapturePolicy(
 	ctx context.Context, introspection model.IntrospectionResult, restoring *model.Savepoint,
 ) (model.CapturePolicy, error, error) {
 	if restoring == nil {
@@ -99,7 +99,7 @@ func (s *Service) resolveCapturePolicy(
 }
 
 // loadSavepoint reads the record of the savepoint id names.
-func (s *Service) loadSavepoint(ctx context.Context, id model.SavepointID) (model.Savepoint, error) {
+func (s *Provider) loadSavepoint(ctx context.Context, id model.SavepointID) (model.Savepoint, error) {
 	savepoints, err := s.savepointRepo.LoadSavepoints(ctx, []model.SavepointID{id})
 	if err != nil {
 		return model.Savepoint{}, err
@@ -113,7 +113,7 @@ func (s *Service) loadSavepoint(ctx context.Context, id model.SavepointID) (mode
 // newReplacementPolicy is the live policy of a project about to be replaced with restoring, every
 // unit it overwrites kept and every service stopped; a bad label falls back to the config and is
 // returned as the first error, labelsIgnored, the failure being the second.
-func (s *Service) newReplacementPolicy(
+func (s *Provider) newReplacementPolicy(
 	ctx context.Context, introspection model.IntrospectionResult, restoring model.Savepoint,
 ) (model.CapturePolicy, error, error) {
 	var (
@@ -203,7 +203,7 @@ func volumesOf(savepoint model.Savepoint) []model.Volume {
 
 // newPlan renders and parses back the compose project's spec and builds one backend per volume
 // capturePolicy takes; an absent compose project or an empty capture is refused.
-func (s *Service) newPlan(
+func (s *Provider) newPlan(
 	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy, labelsIgnored error,
 ) (captureplan.Plan, error) {
 	if err := requireComposeProject(introspection); err != nil {

@@ -74,7 +74,7 @@ func demoUndo() model.Savepoint {
 
 // A live rollback, walked through the stages in core's order: the capture commits before the
 // teardown, and the target's backend, not the live one's, restores.
-func TestService_Inspect_WalksALiveRollback(t *testing.T) {
+func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 	// Arrange
 	record := demoRecord()
 	deployment := demoDeployment(record)
@@ -778,7 +778,7 @@ func TestVacant_Discard(t *testing.T) {
 
 // Inspect reads the live compose project under its own step and refuses a daemon older than the
 // floor; a version it cannot read passes.
-func TestService_Inspect(t *testing.T) {
+func TestProvider_Inspect(t *testing.T) {
 	tests := []struct {
 		name    string
 		version string
@@ -909,7 +909,7 @@ func TestVolumesOf(t *testing.T) {
 
 // A failed cold-start build is discarded, dropping only the volumes created since inspection,
 // never a leftover the savepoint has no copy of.
-func TestService_Inspect_DiscardsAFailedColdStart(t *testing.T) {
+func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 	// Arrange: demo_db outlived the project; demo_cache is the failed build's own.
 	record := demoRecord()
 	now := demoAbsentIntrospection()
@@ -968,7 +968,7 @@ func TestService_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 
 // A rollback without a capture, walked through the stages: the anonymous volume the live project
 // mounted is reaped by the docker name it had before the teardown, once the restore replaced it.
-func TestService_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
+func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 	// Arrange
 	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
 	introspection := model.IntrospectionResult{Project: model.Project{

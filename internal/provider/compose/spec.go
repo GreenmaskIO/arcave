@@ -25,7 +25,7 @@ import (
 
 // loadSavepointSpec reads the compose project a savepoint was taken of. Every failure here
 // happens before anything is stopped.
-func (s *Service) loadSavepointSpec(ctx context.Context, savepoint model.Savepoint) (*types.Project, error) {
+func (s *Provider) loadSavepointSpec(ctx context.Context, savepoint model.Savepoint) (*types.Project, error) {
 	if savepoint.Spec == nil {
 		return nil, fmt.Errorf("%w: %s", model.ErrSavepointNoSpec, savepoint.ID)
 	}
