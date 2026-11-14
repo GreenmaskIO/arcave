@@ -76,6 +76,9 @@ linters:
       - path: ^internal/service/backend/restic/rest/modeltest/
         linters:
           - errcheck
+      - path: ^internal/provider/compose/utils/composetest/
+        linters:
+          - errcheck
       - path: ^pkg/common/mocks/
         linters:
           - errcheck

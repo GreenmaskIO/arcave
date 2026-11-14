@@ -31,18 +31,19 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/layertag"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociblob"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociimage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/savepointdir"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/eraser"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/gc"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/layertag"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociblob"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/ociimage"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/resticrepo"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/safetysnapshot"
-	"github.com/greenmaskio/arcave/internal/service/gc/collector/savepointdir"
-	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -115,6 +116,7 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 
 	var (
 		deleted []string
+		retired []string
 		freed   int64
 	)
 	for _, report := range result.Reports {
@@ -127,6 +129,14 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 				exists, err := baseline.engine().ImageRefExists(env.ctx, tag)
 				require.NoError(t, err)
 				assert.False(t, exists, "%s is untagged", tag)
+			}
+		case model.GarbageDataKindSafetySnapshots:
+			require.NotNil(t, report.Deletion)
+			assert.Empty(t, report.Deletion.Failed)
+			assert.Len(t, report.Deletion.Deleted, report.Summary.Found)
+			assert.Nil(t, report.Deletion.FreedBytes(), "a retired safety snapshot's size is not known")
+			for _, op := range report.Detail.Findings().Ops {
+				retired = append(retired, op.Target)
 			}
 		case model.GarbageDataKindDeduplicatedVolumes:
 			require.Empty(t, report.Detail.Findings().Ops, "no savepoint here is cdc's")
@@ -145,10 +155,12 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	}
 	assert.Empty(t, result.Warnings)
 	after := fileSizes(t, env.storeDir())
-	assert.Equal(t, newWithoutTargets(before, composeDir, deleted), after, "exactly what was named is gone")
-	assert.Equal(t, sumSizes(before)-sumSizes(after), freed)
+	assert.Equal(t, newWithoutTargets(before, composeDir, append(slices.Clone(deleted), retired...)), after,
+		"exactly what was named is gone")
+	retiredBytes := sumSizes(before) - sumSizes(newWithoutTargets(before, composeDir, retired))
+	assert.Equal(t, sumSizes(before)-sumSizes(after), freed+retiredBytes)
 	assert.Nil(t, result.Total.FreedBytes, "what an untag frees in the daemon is not known")
-	assert.Equal(t, len(deleted)+len(tags), result.Total.Deleted)
+	assert.Equal(t, len(deleted)+len(retired)+len(tags), result.Total.Deleted)
 
 	// The run after frees what only the removed image and the retired safety snapshot listed.
 	secondRun, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
@@ -242,8 +254,12 @@ func TestGC_DryRun_StaysInItsSession(t *testing.T) {
 	featSvc := env.newGarbageCollector(t, feat.ID, nil, model.GarbageDataKindSavepointData)
 
 	// Act
-	baseline, baselineErr := baselineSvc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
-	inFeat, featErr := featSvc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
+	request := model.GarbageCollectRequest{
+		DryRun:    true,
+		DataKinds: []model.GarbageDataKind{model.GarbageDataKindSavepointData},
+	}
+	baseline, baselineErr := baselineSvc.GarbageCollect(env.ctx, request)
+	inFeat, featErr := featSvc.GarbageCollect(env.ctx, request)
 
 	// Assert
 	require.NoError(t, baselineErr)
@@ -266,12 +282,11 @@ func (e *sessionEnv) newGarbageCollector(
 	require.NoError(t, err)
 
 	var (
-		daemonCollectors         []gc.DaemonCollector
-		composeProjectCollectors []gc.ComposeProjectCollector
-		daemonErasers            []gc.DaemonEraser
-		composeProjectErasers    = []gc.ComposeProjectEraser{
-			eraser.NewTreeEraser(), eraser.NewSavepointEraser(newGCSavepointDeleter), eraser.NewImageEraser(),
-			eraser.NewObjectEraser(),
+		daemonCollectors         []garbage.DaemonCollector
+		composeProjectCollectors []garbage.ComposeProjectCollector
+		daemonErasers            []garbage.DaemonEraser
+		composeProjectErasers    = []garbage.ComposeProjectEraser{
+			eraser.NewTreeEraser(), eraser.NewImageEraser(), eraser.NewObjectEraser(),
 		}
 	)
 	if engine != nil {
@@ -282,8 +297,6 @@ func (e *sessionEnv) newGarbageCollector(
 		switch kind {
 		case model.GarbageDataKindSavepointData:
 			composeProjectCollectors = append(composeProjectCollectors, savepointdir.New())
-		case model.GarbageDataKindSafetySnapshots:
-			composeProjectCollectors = append(composeProjectCollectors, safetysnapshot.New(config.DefaultSafetySnapshotRetainRecent))
 		case model.GarbageDataKindUpstreamImages:
 			composeProjectCollectors = append(composeProjectCollectors, ociimage.New())
 		case model.GarbageDataKindImageLayers:
@@ -296,20 +309,11 @@ func (e *sessionEnv) newGarbageCollector(
 			daemonCollectors = append(daemonCollectors, layertag.New(engine, sessionArcaveProject))
 		}
 	}
-	return gc.New(gc.Deps{
-		Store:                    arcaveProjectStore,
-		Session:                  session,
-		Sessions:                 sessionrepo.New(arcaveProjectStore),
-		NewSavepointReader:       newGCSavepointReader,
-		Locker:                   lock.New(e.projectRoot),
-		SessionLocker:            newSessionLocker(t, arcaveProjectStore, session),
-		WriteAdmission:           newPlainAdmission(arcaveProjectStore),
-		Inflight:                 inflightrepo.New(e.projectRoot),
+	return newGC(t, arcaveProjectStore, e.projectRoot, session, garbage.Deps{
 		DaemonCollectors:         daemonCollectors,
 		ComposeProjectCollectors: composeProjectCollectors,
 		DaemonErasers:            daemonErasers,
 		ComposeProjectErasers:    composeProjectErasers,
-		UnlistedNamespaces:       []string{cdc.NamespaceRepos},
 	})
 }
 
@@ -338,20 +342,15 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, cdcArcaveProject)
 	require.NoError(t, err)
-	svc := gc.New(gc.Deps{
-		Store:                    arcaveProjectStore,
-		Sessions:                 sessionrepo.New(arcaveProjectStore),
-		NewSavepointReader:       newGCSavepointReader,
-		Locker:                   lock.New(env.projectRoot),
-		SessionLocker:            newSessionLocker(t, arcaveProjectStore, model.DefaultSession),
-		WriteAdmission:           newPlainAdmission(arcaveProjectStore),
-		Inflight:                 inflightrepo.New(env.projectRoot),
-		ComposeProjectCollectors: []gc.ComposeProjectCollector{newResticCollector(t, env.engine, env.cdcCfg.Transport)},
-		UnlistedNamespaces:       []string{cdc.NamespaceRepos},
+	svc := newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, garbage.Deps{
+		ComposeProjectCollectors: []garbage.ComposeProjectCollector{newResticCollector(t, env.engine, env.cdcCfg.Transport)},
 	})
 
 	// Act
-	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
+	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{
+		DryRun:    true,
+		DataKinds: resticKinds,
+	})
 
 	// Assert
 	require.NoError(t, err)
@@ -418,7 +417,7 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 			svc := newCDCGarbageCollector(t, env)
 
 			// Act
-			result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{})
+			result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DataKinds: resticKinds})
 
 			// Assert
 			require.NoError(t, err)
@@ -440,7 +439,10 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 			}
 
 			// The run after finds nothing left to forget.
-			again, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
+			again, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{
+				DryRun:    true,
+				DataKinds: resticKinds,
+			})
 			require.NoError(t, err)
 			stat, ok := again.Reports[0].Detail.(model.ResticRepositoryStat)
 			require.True(t, ok)
@@ -456,22 +458,42 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 	}
 }
 
+// resticKinds asks a gc for the restic snapshots alone.
+var resticKinds = []model.GarbageDataKind{model.GarbageDataKindDeduplicatedVolumes}
+
 // newCDCGarbageCollector is a gc over env's default session, judging and deleting its restic
 // snapshots only.
 func newCDCGarbageCollector(t *testing.T, env *cdcEnv) *gc.GarbageCollector {
 	t.Helper()
 	arcaveProjectStore := env.arcaveProjectStore(t)
+	return newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, garbage.Deps{
+		ComposeProjectCollectors: []garbage.ComposeProjectCollector{newResticCollector(t, env.engine, env.cdcCfg.Transport)},
+		ComposeProjectErasers:    []garbage.ComposeProjectEraser{newForgetEraser(t, env.engine, env.cdcCfg.Transport)},
+	})
+}
+
+// newGC wires a gc of session over arcaveProjectStore the way openGCService does, its provider
+// finding garbage with finder's collectors and erasers.
+func newGC(
+	t *testing.T, arcaveProjectStore storages.Storager, projectRoot string, session model.SessionID,
+	finder garbage.Deps,
+) *gc.GarbageCollector {
+	t.Helper()
+	finder.NewSavepointReader = newGCSavepointReader
+	finder.UnlistedNamespaces = []string{cdc.NamespaceRepos}
 	return gc.New(gc.Deps{
-		Store:                    arcaveProjectStore,
-		Sessions:                 sessionrepo.New(arcaveProjectStore),
-		NewSavepointReader:       newGCSavepointReader,
-		Locker:                   lock.New(env.projectRoot),
-		SessionLocker:            newSessionLocker(t, arcaveProjectStore, model.DefaultSession),
-		WriteAdmission:           newPlainAdmission(arcaveProjectStore),
-		Inflight:                 inflightrepo.New(env.projectRoot),
-		ComposeProjectCollectors: []gc.ComposeProjectCollector{newResticCollector(t, env.engine, env.cdcCfg.Transport)},
-		ComposeProjectErasers:    []gc.ComposeProjectEraser{newForgetEraser(t, env.engine, env.cdcCfg.Transport)},
-		UnlistedNamespaces:       []string{cdc.NamespaceRepos},
+		Sessions: sessionrepo.New(arcaveProjectStore),
+		ProviderSession: sessionstore.New(sessionstore.Deps{
+			Store:               arcaveProjectStore,
+			Session:             session,
+			NewSavepointRecords: newSavepointRecords,
+			Garbage:             garbage.New(finder),
+		}),
+		Locker:         lock.New(projectRoot),
+		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
+		WriteAdmission: newPlainAdmission(arcaveProjectStore),
+		Inflight:       inflightrepo.New(projectRoot),
+		RetainRecent:   config.DefaultSafetySnapshotRetainRecent,
 	})
 }
 

@@ -40,9 +40,9 @@ arcave savepoint create pre-migration --description "orders table, 1000 rows"
 ```text title="stderr + stdout"
 ✔ savepoint.create pre-migration      10.2s
 ├── ✔ project.introspect               0.1s
-├── ✔ compose.stop                     0.2s
+├── ✔ savepoint.hold                   0.2s
 ├── ✔ savepoint.capture pre-migration  5.2s
-└── ✔ compose.start                    3.6s
+└── ✔ savepoint.release                3.6s
 
 Savepoint pre-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 · stored 273 MB
             count     size   stored
@@ -58,14 +58,14 @@ Savepoint pre-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 · s
 
 ```text title="stderr (trimmed)"
 INF savepoint.create[pre-migration] status=started
-INF savepoint.create[pre-migration]/compose.stop elapsed=205ms status=succeeded
+INF savepoint.create[pre-migration]/savepoint.hold elapsed=205ms status=succeeded
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture items=0/3 status=started
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-named-arcave-demo_miniodata] bytes=24KB/24KB elapsed=369ms status=succeeded stored=2.1KB
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-anon-redis-1-data] bytes=6.1KB/6.1KB elapsed=402ms status=succeeded stored=251B
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/volume.capture/volume[volume-named-arcave-demo_pgdata] bytes=49MB/49MB elapsed=909ms status=succeeded stored=4.7MB
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.883s reused=493MB status=succeeded stored=165MB
 INF savepoint.create[pre-migration]/savepoint.capture[pre-migration]/layer.capture/layer[arcave-demo-postgres-1] bytes=159MB/159MB elapsed=2.446s reused=159MB status=succeeded stored=17KB
-INF savepoint.create[pre-migration]/compose.start msg=Healthy resource=container:arcave-demo-postgres-1 status=in_progress
+INF savepoint.create[pre-migration]/savepoint.release msg=Healthy resource=container:arcave-demo-postgres-1 status=in_progress
 INF savepoint.create[pre-migration] elapsed=10.194s status=succeeded
 ```
 
@@ -207,7 +207,7 @@ INF writable layer restored from the savepoint backend=dedupcopy origin=config s
 INF mount restored from the savepoint backend=fullcopy origin=config service=postgres target=/var/lib/postgresql/data
 INF rollback[pre-migration]/rollback.prepare/layer.restore elapsed=1.754s items=3/3 status=succeeded
 INF rollback[pre-migration]/rollback.prepare elapsed=1.771s status=succeeded
-INF rollback[pre-migration]/rollback.safety-snapshot/compose.stop elapsed=177ms status=succeeded
+INF rollback[pre-migration]/rollback.safety-snapshot/savepoint.hold elapsed=177ms status=succeeded
 INF rollback[pre-migration]/rollback.safety-snapshot/savepoint.capture[019e8491-04c8-7000-8000-000000000000] elapsed=3.769s status=succeeded
 INF rollback[pre-migration]/rollback.apply/compose.down elapsed=133ms status=succeeded
 INF rollback[pre-migration]/rollback.apply/compose.create elapsed=142ms status=succeeded

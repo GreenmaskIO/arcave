@@ -180,14 +180,13 @@ func TestNewRollbackRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got := newRollbackRequest(tt.ref, 90*time.Second, model.LeftoverVolumesRefuse, true)
+			got := newRollbackRequest(tt.ref, 90*time.Second, true)
 
 			// Assert
 			assert.Equal(t, tt.wantID, got.ID)
 			assert.Equal(t, tt.wantName, got.Name)
 			assert.Equal(t, tt.wantLatest, got.Latest)
 			assert.Equal(t, 90*time.Second, got.WaitTimeout)
-			assert.Equal(t, model.LeftoverVolumesRefuse, got.LeftoverVolumes)
 			assert.True(t, got.SkipSafetySnapshot)
 			assert.ErrorIs(t, got.Validate(), tt.wantErr)
 			// Whatever it chose renders back as the word that was typed, which is what

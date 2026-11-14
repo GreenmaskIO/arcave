@@ -48,7 +48,7 @@ func TestMCPHandler_createSavepointMCP(t *testing.T) {
 	released := false
 	h := NewMCPHandler(MCPFactories{Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
 		return svc, func() { released = true }, nil
-	}}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	}}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	res, out, err := h.createSavepointMCP(context.Background(), nil, createInput{ComposeProject: "demo", Name: "before-migration"})
@@ -108,7 +108,7 @@ func TestMCPHandler_listSavepointsMCP(t *testing.T) {
 				gotProject = project
 				return svc, func() { released = true }, nil
 			}
-			h := NewMCPHandler(MCPFactories{SavepointStore: factory}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+			h := NewMCPHandler(MCPFactories{SavepointStore: factory}, model.SessionID{}, "", RollbackConfig{})
 
 			// Act
 			res, out, err := h.listSavepointsMCP(context.Background(), nil, tt.in)
@@ -129,7 +129,7 @@ func TestMCPHandler_listSavepointsMCP_ABadSortIsRefused(t *testing.T) {
 	h := NewMCPHandler(MCPFactories{SavepointStore: func(context.Context, string, string) (MCPSavepointStoreService, func(), error) {
 		t.Fatal("a bad sort must not open the store")
 		return nil, nil, nil
-	}}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	}}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, _, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{ComposeProject: "demo", Sort: "newest"})
@@ -144,7 +144,7 @@ func TestMCPHandler_listSavepointsMCP_AFactoryFailureSurfaces(t *testing.T) {
 	svc := &mockService{}
 	h := NewMCPHandler(MCPFactories{SavepointStore: func(context.Context, string, string) (MCPSavepointStoreService, func(), error) {
 		return nil, nil, wireErr
-	}}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	}}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, out, err := h.listSavepointsMCP(context.Background(), nil, listSavepointInput{ComposeProject: "nope"})
@@ -180,7 +180,7 @@ func TestMCPHandler_openService(t *testing.T) {
 					gotSavepointStore = session
 					return &mockService{}, func() {}, nil
 				},
-			}, tt.pin, model.SessionRefSourceFlag, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+			}, tt.pin, model.SessionRefSourceFlag, RollbackConfig{})
 
 			// Act
 			_, _, savepointErr := h.openSavepointService(context.Background(), "demo", tt.session)
@@ -239,7 +239,7 @@ func TestMCPHandler_ALockedProjectIsNamed(t *testing.T) {
 	svc.On("Rollback", mock.Anything, mock.Anything).Return(model.RollbackResult{}, model.ErrProjectLocked).Once()
 	h := NewMCPHandler(MCPFactories{Savepoint: func(context.Context, string, string) (MCPSavepointService, func(), error) {
 		return svc, func() {}, nil
-	}}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	}}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, _, err := h.rollbackMCP(context.Background(), nil, rollbackInput{ComposeProject: "demo", Ref: "latest"})
@@ -273,7 +273,7 @@ func TestMCPHandler_listSessionsMCP(t *testing.T) {
 			svc := &mockService{}
 			svc.On("ListSessions", mock.Anything, model.ListSessionsRequest{All: true, Sort: model.SortDesc}).Return(tt.svc, nil).Once()
 			released := false
-			h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+			h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{})
 
 			// Act
 			_, out, err := h.listSessionsMCP(context.Background(), nil, sessionListInput{All: true})
@@ -293,7 +293,7 @@ func TestMCPHandler_createSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("CreateSession", mock.Anything, model.CreateSessionRequest{Name: "exp", From: "baseline"}).Return(record, nil).Once()
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, out, err := h.createSessionMCP(context.Background(), nil, sessionCreateInput{Name: "exp", From: "baseline"})
@@ -311,7 +311,7 @@ func TestMCPHandler_removeSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("RemoveSession", mock.Anything, model.RemoveSessionRequest{Session: "exp", Force: true}).Return(res, nil).Once()
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, out, err := h.removeSessionMCP(context.Background(), nil, sessionRemoveInput{Session: "exp", Force: true})
@@ -329,7 +329,7 @@ func TestMCPHandler_setSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("SetSession", mock.Anything, "exp").Return(record, nil).Once()
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, out, err := h.setSessionMCP(context.Background(), nil, sessionSetInput{Session: "exp"})
@@ -345,7 +345,7 @@ func TestMCPHandler_setSessionMCP_RefusedWhenPinned(t *testing.T) {
 	// Arrange: strict mock, so a pinned server that writes the pointer fails the test.
 	svc := &mockService{}
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, handlerSession, model.SessionRefSourceFlag, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, handlerSession, model.SessionRefSourceFlag, RollbackConfig{})
 
 	// Act
 	_, _, err := h.setSessionMCP(context.Background(), nil, sessionSetInput{Session: "exp"})
@@ -394,7 +394,7 @@ func TestMCPHandler_unsetSessionMCP(t *testing.T) {
 	svc := &mockService{}
 	svc.On("UnsetSession", mock.Anything).Return(model.DefaultSessionRecord, nil).Once()
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, out, err := h.unsetSessionMCP(context.Background(), nil, struct{}{})
@@ -410,7 +410,7 @@ func TestMCPHandler_unsetSessionMCP_RefusedWhenPinned(t *testing.T) {
 	// Arrange: strict mock, so a pinned server that clears the pointer fails the test.
 	svc := &mockService{}
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, handlerSession, model.SessionRefSourceFlag, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, handlerSession, model.SessionRefSourceFlag, RollbackConfig{})
 
 	// Act
 	_, _, err := h.unsetSessionMCP(context.Background(), nil, struct{}{})
@@ -450,7 +450,7 @@ func TestMCPHandler_currentSessionMCP(t *testing.T) {
 			svc := &mockService{}
 			svc.On("CurrentSession", mock.Anything, tt.ref).Return(current, nil).Once()
 			released := false
-			h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, tt.pin, tt.source, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+			h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, tt.pin, tt.source, RollbackConfig{})
 
 			// Act
 			_, out, err := h.currentSessionMCP(context.Background(), nil, struct{}{})
@@ -480,7 +480,7 @@ func TestMCPHandler_PinnedSessionTools(t *testing.T) {
 	svc.On("ShowSession", mock.Anything, model.ShowSessionRequest{Session: "feat", Current: pin}).
 		Return(model.SessionDetail{}, nil).Once()
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, handlerSession, model.SessionRefSourceFlag, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, handlerSession, model.SessionRefSourceFlag, RollbackConfig{})
 
 	// Act
 	_, _, listErr := h.listSessionsMCP(context.Background(), nil, sessionListInput{})
@@ -503,7 +503,7 @@ func TestMCPHandler_ShowSessionMCP_ServiceError(t *testing.T) {
 	svc.On("ShowSession", mock.Anything, model.ShowSessionRequest{Session: "nowhere"}).
 		Return(model.SessionDetail{}, model.ErrSessionNotFound).Once()
 	released := false
-	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	h := NewMCPHandler(MCPFactories{Session: sessionFactoryOf(svc, &released)}, model.SessionID{}, "", RollbackConfig{})
 
 	// Act
 	_, out, err := h.showSessionMCP(context.Background(), nil, sessionShowInput{Session: "nowhere"})
@@ -672,7 +672,7 @@ func TestMCPHandler_Server_EveryTool(t *testing.T) {
 		Status: func(context.Context, string) (MCPStatusService, func(), error) {
 			return svc, func() {}, nil
 		},
-	}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+	}, model.SessionID{}, "", RollbackConfig{})
 	ctx := context.Background()
 	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
 	serverSession, err := h.Server().Connect(ctx, serverTransport, nil)
@@ -762,7 +762,7 @@ func TestMCPHandler_garbageCollectMCP(t *testing.T) {
 				Return(tt.res, tt.svcErr).Once()
 			h := NewMCPHandler(MCPFactories{GC: func(context.Context, string) (MCPGCService, func(), error) {
 				return svc, func() {}, nil
-			}}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+			}}, model.SessionID{}, "", RollbackConfig{})
 
 			// Act
 			res, got, err := h.garbageCollectMCP(context.Background(), nil, tt.in)
@@ -810,7 +810,7 @@ func TestMCPHandler_statusMCP(t *testing.T) {
 			h := NewMCPHandler(MCPFactories{Status: func(_ context.Context, composeProject string) (MCPStatusService, func(), error) {
 				require.Equal(t, "demo", composeProject)
 				return svc, func() {}, nil
-			}}, tt.pinned, model.SessionRefSourceFlag, RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+			}}, tt.pinned, model.SessionRefSourceFlag, RollbackConfig{})
 
 			// Act
 			res, got, err := h.statusMCP(context.Background(), nil, tt.in)
@@ -881,7 +881,7 @@ func TestMCPHandler_Server_RollbackInterrupted(t *testing.T) {
 				SavepointStore: func(context.Context, string, string) (MCPSavepointStoreService, func(), error) {
 					return svc, func() {}, nil
 				},
-			}, model.SessionID{}, "", RollbackConfig{LeftoverVolumes: model.LeftoverVolumesOverwrite})
+			}, model.SessionID{}, "", RollbackConfig{})
 
 			// Pipes rather than the in-memory pair: an agent host that dies closes the server's
 			// stdin under a call in flight, which the SDK client's own Close never does.

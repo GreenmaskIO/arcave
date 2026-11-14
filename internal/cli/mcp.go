@@ -110,7 +110,6 @@ type MCPFactories struct {
 // RollbackConfig is the project's config as the rollback tool reads it; a call may override
 // SkipSafetySnapshot alone.
 type RollbackConfig struct {
-	LeftoverVolumes    model.LeftoverVolumesPolicy
 	SkipSafetySnapshot bool
 }
 
@@ -172,9 +171,9 @@ const (
 		"containers killed at the stop deadline (their data may be crash-consistent only), replica " +
 		"gaps and containers whose image is unknown — so tell the user before relying on " +
 		"it. If the call fails with a message of the " +
-		"form 'savepoint <id> committed; services failed to start', the savepoint EXISTS and is " +
+		"form 'savepoint <id> committed; services failed to resume', the savepoint EXISTS and is " +
 		"safe to roll back to — only the restart failed, so report that id to the user and " +
-		"investigate the compose project (the services are stopped or unhealthy), rather than taking " +
+		"investigate the compose project (the services are stopped, paused or unhealthy), rather than taking " +
 		"another savepoint."
 	descList = "List the project's savepoints, newest first unless sort is asc, with their id, name, " +
 		"description and creation time. Read-only. Call it to find the savepoint id or name to pass to " +
@@ -404,7 +403,7 @@ func (h *MCPHandler) rollbackMCP(ctx context.Context, _ *mcpsdk.CallToolRequest,
 	defer release()
 
 	skipSafetySnapshot := in.skipSafetySnapshot(h.rollbackConfig.SkipSafetySnapshot)
-	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, h.rollbackConfig.LeftoverVolumes, skipSafetySnapshot))
+	res, err := svc.Rollback(ctx, newRollbackRequest(in.Ref, waitTimeout, skipSafetySnapshot))
 	if err != nil {
 		return nil, model.RollbackResult{}, h.mcpError(err)
 	}

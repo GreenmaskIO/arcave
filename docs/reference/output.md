@@ -31,9 +31,9 @@ Three exceptions: `arcave --version` prints a plain version line, [`arcave mcp`]
 ```text title="savepoint create, as text"
 ✔ savepoint.create nightly         15.4s
 ├── ✔ project.introspect            0.2s
-├── ✔ compose.stop                  0.4s
+├── ✔ savepoint.hold                0.4s
 ├── ✔ savepoint.capture            12.1s
-└── ✔ compose.start                 2.7s
+└── ✔ savepoint.release             2.7s
 
 Savepoint nightly · 01a188c4-1650-7000-8000-000000000001 · 19:45:35 · stored 4.7 MB
             count     size   stored
@@ -77,7 +77,7 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
 - **`json`** puts the whole run on stdout as JSON lines, one per event, and the result last:
 
   ```json
-  {"type":"progress","event":{"node":3,"status":"started","open":{"parent":1,"step":{"kind":"compose.stop","type":"activity"}},"sample":{"elapsed_ns":0},"at":"…"}}
+  {"type":"progress","event":{"node":3,"status":"started","open":{"parent":1,"step":{"kind":"savepoint.hold","type":"activity"}},"sample":{"elapsed_ns":0},"at":"…"}}
   {"type":"progress","event":{"node":3,"status":"succeeded","sample":{"elapsed_ns":2100000000},"at":"…"}}
   {"type":"result","result":{ … }}
   ```
@@ -86,30 +86,32 @@ The first Ctrl-C lets the command unwind through its own cleanup and then exits 
 
 ### Step kinds
 
-Every node's `open.step.kind` is one of these, and they are part of the stream's contract: an action is `<namespace>.<action>`, an object a bare noun, its key in `step.id` or its name in `step.name`.
+Every node's `open.step.kind` is one of these: an action is `<namespace>.<action>`, an object a bare noun, its key in `step.id` or its name in `step.name`. The kinds a workflow opens itself — the roots, `session.lock`, `rollback.prepare` and its siblings, `savepoint.drop`, `session.copy`, `gc.find`, `gc.retain` and `gc.erase` — are the stream's contract. The kinds that read and change the compose project under them — `project.introspect`, `savepoint.hold`, `savepoint.capture`, `savepoint.release`, `compose.*`, `volume.*`, `layer.*`, `image.*`, `replica.*`, and under gc `compose-project`, `collector`, `eraser`, `gc.delete`, `garbage` — and their objects are the compose provider's details: shown as they are, not promised.
 
 | Kind | What it is |
 |---|---|
 | `savepoint.create`, `savepoint.remove`, `rollback`, `gc`, `session.fork`, `session.remove` | the root of the command that ran |
 | `session.lock` | the wait for another holder of the session's lock; reported only when there is one |
 | `project.introspect` | reading the live compose project |
-| `compose.stop`, `compose.down`, `compose.create`, `compose.start` | a compose operation, one `resource` per container |
+| `savepoint.hold`, `savepoint.release` | holding the compose project still for a capture and bringing it back after, whatever each service's [capture mode](../capture_modes.md); one `resource` per container compose stops or starts, and a warning per replica found paused |
+| `compose.down`, `compose.create`, `compose.start` | a rollback's compose operation, one `resource` per container |
 | `savepoint.capture` | one savepoint's capture, a safety snapshot's included |
 | `volume.capture`, `volume.restore` → `volume` | a batch over the volumes, one `volume` per volume |
 | `layer.capture`, `layer.restore` → `layer` | a batch over the writable layers, one `layer` per container |
 | `image.capture` → `image` | a batch over the images, one `image` per image |
 | `replica.rebuild` → `replica` | the replicas a rollback recreates under their recorded number |
-| `savepoint.drop` → `savepoint` | the savepoints a remove takes |
+| `savepoint.drop` → `savepoint` | the savepoints a remove takes; under `gc.erase`, each retired safety snapshot |
 | `rollback.prepare`, `rollback.safety-snapshot`, `rollback.apply`, `rollback.revert`, `rollback.cleanup` | a rollback's phases |
 | `session.copy` → `key` | a fork's copy, one `key` per top-level directory or object |
 | `gc.find` → `collector`, `gc.find` → `compose-project` → `collector` | what each collector found: the daemon's, then each compose project's |
-| `gc.erase` → `eraser`, `gc.erase` → `compose-project` → `eraser`, then → `gc.delete` → `garbage` | the deletions, one `garbage` per target — per repository for a restic `forget` |
+| `gc.retain` | picking the safety snapshots past the retention, in every compose project |
+| `gc.erase` → `eraser`, `gc.erase` → `compose-project` → `eraser`, then → `gc.delete` → `garbage` | the deletions, one `compose-project` per report, one `garbage` per target — per repository for a restic `forget` |
 
 [`arcave mcp`](cli/mcp.md) always logs its progress: a tool's answer is its result alone.
 
 ## Compose's events
 
-Compose's own per-object events — a container `Stopping`, `Stopped`, `Healthy` — land on the step that caused them: `compose.stop`, `compose.down`, `compose.create`, `compose.start`. The tree shows one line per container under that step. Under `--progress log` each is a record of the step, at debug level while the object is under way and at info once it has settled:
+Compose's own per-object events — a container `Stopping`, `Stopped`, `Healthy` — land on the step that caused them: `savepoint.hold`, `savepoint.release`, `compose.down`, `compose.create`, `compose.start`. The tree shows one line per container under that step. Under `--progress log` each is a record of the step, at debug level while the object is under way and at info once it has settled:
 
 ```text
 DBG rollback[sp1]/rollback.apply/compose.start msg=Starting resource=container:myapp-db-1 status=in_progress

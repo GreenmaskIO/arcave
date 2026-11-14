@@ -19,18 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capture"
+	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
-
-// errNoVolumesToBackUp refuses a savepoint that would cover nothing. It stays
-// unexported: no adapter matches on it, so it is not a seam contract and does
-// not belong in model.
-var errNoVolumesToBackUp = errors.New("no stateful volumes found; nothing to capture")
 
 // errSavepointNotFound is returned when no savepoint matches the requested id or name.
 var errSavepointNotFound = errors.New("savepoint not found")
@@ -71,56 +67,78 @@ func (s *Service) createSavepoint(
 		return model.Savepoint{}, err
 	}
 
-	working, err := s.prepare(ctx, req.WaitTimeout)
+	plan, err := s.prepare(ctx)
 	if err != nil {
 		logInterrupt(ctx, "savepoint interrupted before anything was stopped: nothing changed")
 		return model.Savepoint{}, preferInterrupt(ctx, err)
 	}
 
-	return s.captureHeld(ctx, grantedLock, working.plan, capture.Request{
+	return captureHeld(ctx, grantedLock, plan, provider.CaptureRequest{
 		Name:        req.Name,
 		Description: req.Description,
 		Labels:      req.Labels,
-	})
+		InResult:    true,
+	}, req.WaitTimeout)
 }
 
 // captureHeld holds the project, captures it and releases it on every path; the hold's or the
 // capture's error wins, a release failing under it is only logged. On error the record is zero.
-func (s *Service) captureHeld(
-	ctx context.Context, grantedLock model.GrantedSessionLock, plan capture.Plan, req capture.Request,
+func captureHeld(
+	ctx context.Context,
+	grantedLock model.GrantedSessionLock,
+	plan provider.CapturePlan,
+	req provider.CaptureRequest,
+	waitTimeout time.Duration,
 ) (model.Savepoint, error) {
 	var (
 		log                             = zerolog.Ctx(ctx)
-		killed                          []string
+		held                            provider.HeldWorkload
 		savepoint                       model.Savepoint
 		beforeErr, captureErr, afterErr error
 	)
-	if killed, beforeErr = s.capture.Hold(ctx, plan); beforeErr != nil {
-		// A stop that failed or was interrupted partway may have stopped some services.
-		logInterrupt(ctx, "savepoint interrupted while stopping services: restarting them, nothing captured")
-	} else if savepoint, captureErr = s.capture.Capture(ctx, grantedLock, plan, killed, req); captureErr != nil {
-		logInterrupt(ctx, "savepoint interrupted during capture: restarting services, nothing committed")
+	if held, beforeErr = plan.Hold(ctx); beforeErr != nil {
+		// A hold that failed or was interrupted partway may have held some services.
+		logInterrupt(ctx, "savepoint interrupted while holding the services: resuming them, nothing captured")
+	} else if savepoint, captureErr = commitCaptured(ctx, grantedLock, held, req); captureErr != nil {
+		logInterrupt(ctx, "savepoint interrupted during capture: resuming the services, nothing committed")
 		captureErr = preferInterrupt(ctx, captureErr)
 	} else {
-		logInterrupt(ctx, "savepoint committed before the interrupt: restarting services")
+		logInterrupt(ctx, "savepoint committed before the interrupt: resuming the services")
 	}
-	afterErr = s.capture.Release(ctx, plan)
+	afterErr = releaseHeld(ctx, plan, waitTimeout)
 
 	switch {
 	case beforeErr != nil:
 		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to restart after stop failure")
+			log.Error().Err(afterErr).Msg("services failed to resume after hold failure")
 		}
 		return model.Savepoint{}, preferInterrupt(ctx, beforeErr)
 	case captureErr != nil:
 		if afterErr != nil {
-			log.Error().Err(afterErr).Msg("services failed to restart after capture failure")
+			log.Error().Err(afterErr).Msg("services failed to resume after capture failure")
 		}
-		return model.Savepoint{}, fmt.Errorf("capturing volumes: %w", captureErr)
+		return model.Savepoint{}, fmt.Errorf("capturing the savepoint: %w", captureErr)
 	case afterErr != nil:
-		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to start: %w", savepoint.ID, afterErr)
+		return model.Savepoint{}, fmt.Errorf("savepoint %s committed; services failed to resume: %w", savepoint.ID, afterErr)
 	}
 	return savepoint, nil
+}
+
+// commitCaptured captures what held holds and commits it while the session's lock is still this
+// workflow's; a lost lock abandons the capture. On error the record is zero.
+func commitCaptured(
+	ctx context.Context, grantedLock model.GrantedSessionLock, held provider.HeldWorkload, req provider.CaptureRequest,
+) (model.Savepoint, error) {
+	captured, err := held.Capture(ctx, req)
+	if err != nil {
+		return model.Savepoint{}, err
+	}
+	if err := grantedLock.Verify(ctx); err != nil {
+		err = fmt.Errorf("commit savepoint %s: %w", captured.ID(), err)
+		captured.Abandon(ctx, err)
+		return model.Savepoint{}, err
+	}
+	return captured.Commit(ctx)
 }
 
 // requireUniqueName refuses a name another of the visible savepoints carries. Safety

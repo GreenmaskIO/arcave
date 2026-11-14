@@ -16,56 +16,28 @@ package gc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// The kinds of the steps a gc opens: <namespace>.<action> for an action, a bare noun for an object.
+// The kinds of the steps a gc opens.
 const (
-	kindGC             progress.Kind = "gc"
-	kindSessionLock    progress.Kind = "session.lock"
-	kindGCFind         progress.Kind = "gc.find"
-	kindGCErase        progress.Kind = "gc.erase"
-	kindGCDelete       progress.Kind = "gc.delete"
-	kindComposeProject progress.Kind = "compose-project"
-	kindCollector      progress.Kind = "collector"
-	kindEraser         progress.Kind = "eraser"
-	kindGarbage        progress.Kind = "garbage"
+	kindGC            progress.Kind = "gc"
+	kindSessionLock   progress.Kind = "session.lock"
+	kindGCFind        progress.Kind = "gc.find"
+	kindGCRetain      progress.Kind = "gc.retain"
+	kindGCErase       progress.Kind = "gc.erase"
+	kindSavepointDrop progress.Kind = "savepoint.drop"
+	kindSavepoint     progress.Kind = "savepoint"
 )
-
-// endCollectorStep ends a collector's step with what its report says: a failure on its error,
-// what it held back or was refused as warnings the result repeats; one ctx's end cut short is cancelled.
-func endCollectorStep(ctx context.Context, step *progress.StepReporter, report model.GarbageReport) {
-	summary := report.Summary
-	if summary.Aborted != "" {
-		step.WarnInResult("aborted: " + summary.Aborted)
-	}
-	if summary.Unjudged > 0 {
-		step.WarnInResult(fmt.Sprintf("%d object(s) not judged", summary.Unjudged))
-	}
-	if summary.Skipped > 0 {
-		step.WarnInResult(fmt.Sprintf("%d object(s) held back", summary.Skipped))
-	}
-	switch {
-	case report.Error != "" && ctx.Err() != nil:
-		step.Fail("", context.Cause(ctx))
-		return
-	case report.Error != "":
-		step.Fail("", errors.New(report.Error))
-		return
-	}
-	step.Update(fmt.Sprintf("%d found", summary.Found))
-	step.Done(progress.Sample{})
-}
 
 // newDeletionError is what a deletion's step, opened on ctx, ends with: nil when every op ran and
 // none failed, ctx's cause when its end cut the deletion short.
 func newDeletionError(ctx context.Context, deletion *model.GarbageDeletion) error {
 	switch {
-	case deletion == nil || (len(deletion.Failed) == 0 && deletion.NotRun == 0):
+	case len(deletion.Failed) == 0 && deletion.NotRun == 0:
 		return nil
 	case deletion.IsInterrupted() && ctx.Err() != nil:
 		return context.Cause(ctx)

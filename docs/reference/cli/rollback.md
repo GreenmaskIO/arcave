@@ -186,7 +186,7 @@ Every container the rollback builds carries `io.arcave.deployment.*` labels: whe
 | `latest` or a name, with an empty store | `finding savepoint "latest": no savepoints exist` |
 | The savepoint carries no compose spec | `load the savepoint's compose spec: savepoint carries no compose spec: 019e843e-1650-7000-8000-000000000000`. The project is rebuilt from that spec, and savepoints taken before arcave recorded one carry none. |
 | The Docker daemon is older than 25 | `prepare: unsupported docker daemon: the daemon reports version 24.0.7; arcave needs Docker 25 or newer` — before anything is stopped. |
-| A Docker daemon older than 25 whose version arcave could not read, on a running project | `pre-rollback safety snapshot failed, nothing changed: capturing volumes: … unsupported image archive format: …`. The services are started again. |
+| A Docker daemon older than 25 whose version arcave could not read, on a running project | `pre-rollback safety snapshot failed, nothing changed: capturing the savepoint: … unsupported image archive format: …`. The services are started again. |
 | A stored layer the Docker daemon will not take | `restore the savepoint's writable layers: …` — raised **before** anything is stopped. |
 | A service would be rebuilt on an image the savepoint does not hold and the daemon lacks | `image is neither in the savepoint nor in the daemon: service app runs on myapp:latest` — before anything is stopped. Pull or build the image, then roll back again. |
 | The project is not running, its named volumes survive, and `rollback.leftover_volumes` is `refuse` | `compose project is not running but its volumes survive: myapp_pgdata`. Nothing is created. |

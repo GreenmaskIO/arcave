@@ -12,6 +12,12 @@ Read this before you build a workflow on arcave. For what arcave needs to run, s
 
 `savepoint create` and `rollback` stop the services, move the data, and start them again. Expect seconds on a small project, and minutes when the volumes are large or the services are slow to start. Stopping is what keeps the data consistent. It is also why arcave suits environments that are allowed to go down, and not production.
 
+A service with [`arcave.capture.mode: pause`](../capture_modes.md) is frozen instead of stopped for a savepoint, and its copy is crash-consistent; a rollback still stops everything.
+
+## A paused project does not stay paused
+
+`savepoint create` and `rollback` resume every replica they find frozen, yours included, with a warning: a savepoint leaves the compose project running, and a rollback replaces it. A pause that the engine cannot do — Podman rootless on cgroup v1 — fails the savepoint before anything is captured, and the project is started back.
+
 ## A slow shutdown can be captured mid-crash
 
 A container that doesn't shut down within [`compose.stop_timeout`](configuration.md#compose), or within its own `stop_grace_period` if that is longer, is killed. Its volume is then captured as it was at the moment it was killed, and a database will have to recover from that state on its next start. The savepoint still reports success. The killed container is named in a warning and in the savepoint's `not_covered.killed_containers`. Give slow services a long enough `stop_grace_period`.

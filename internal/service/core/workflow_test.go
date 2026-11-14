@@ -25,97 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
 )
-
-// The live compose project is acted on as its artifact parses back, not as the
-// assembler built it: a revert rebuilds from the same loader a rollback does.
-func TestService_prepare(t *testing.T) {
-	// Arrange
-	introspection := demoIntrospection()
-	inspector := &mockInspector{}
-	inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once()
-	assembler := &mockAssembler{}
-	codec := &mockCodec{}
-	mock.InOrder(
-		assembler.On("Assemble", mock.Anything, introspection).Return(demoAssembled, nil).Once(),
-		codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil).Once(),
-		codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil).Once(),
-	)
-	runner := &mockComposeRunner{}
-
-	store := newDirStore(t)
-	registry := &mockRegistry{}
-	registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(&mockBackend{volume: demoVolume()}, nil).Once()
-
-	svc := New(Deps{
-		ArcaveProject:    demoArcaveProject,
-		SessionLocker:    fakeSessionLocker{},
-		ComposeInspector: inspector,
-		ProjectAssembler: assembler,
-		SpecCodec:        codec,
-		ComposeRunner:    runner,
-		BackendRegistry:  registry,
-		Store:            store,
-		CaptureDefaults:  demoCaptureDefaults,
-		MinDaemonMajor:   25,
-	})
-	ctx := zerolog.Nop().WithContext(context.Background())
-
-	// Act
-	working, err := svc.prepare(ctx, 0)
-
-	// Assert
-	require.NoError(t, err)
-	assert.Same(t, demoSpec, working.plan.Project)
-	assert.Equal(t, demoSpecBytes, working.plan.Spec)
-	inspector.AssertExpectations(t)
-	assembler.AssertExpectations(t)
-	codec.AssertExpectations(t)
-	runner.AssertExpectations(t)
-	registry.AssertExpectations(t)
-}
-
-func TestNewReplicaGaps(t *testing.T) {
-	tests := []struct {
-		name    string
-		numbers []int
-		want    string
-		wantGap []model.ReplicaGap
-	}{
-		{name: "no gap", numbers: []int{2, 1, 3}},
-		{name: "a gap in the middle", numbers: []int{3, 1},
-			want:    `"service":"db","replicas":[1,3],"missing":[2],"message":"some replicas of this service are gone`,
-			wantGap: []model.ReplicaGap{{Service: demoService, Replicas: []int{1, 3}, Missing: []int{2}}}},
-		{name: "the first replica gone", numbers: []int{2, 3},
-			want:    `"service":"db","replicas":[2,3],"missing":[1],"message":"some replicas of this service are gone`,
-			wantGap: []model.ReplicaGap{{Service: demoService, Replicas: []int{2, 3}, Missing: []int{1}}}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			introspection := demoIntrospection()
-			svc := model.Service{Name: demoService}
-			for _, n := range tt.numbers {
-				svc.Containers = append(svc.Containers, model.Container{Number: n})
-			}
-			introspection.Project.Services = []model.Service{svc}
-			logs := &syncBuffer{}
-			ctx := zerolog.New(logs).WithContext(context.Background())
-
-			// Act
-			gaps := newReplicaGaps(ctx, introspection)
-
-			// Assert
-			assert.Equal(t, tt.wantGap, gaps)
-			if tt.want == "" {
-				assert.Empty(t, logs.String())
-				return
-			}
-			assert.Contains(t, logs.String(), tt.want)
-		})
-	}
-}
 
 func TestLogInterrupt(t *testing.T) {
 	tests := []struct {
@@ -145,4 +56,39 @@ func TestLogInterrupt(t *testing.T) {
 			assert.Equal(t, tt.want, buf.String())
 		})
 	}
+}
+
+// A savepoint's capture is planned off the inspected workload with no fact of a restore.
+func TestService_prepare(t *testing.T) {
+	// Arrange
+	stages := newMockStages(false)
+	mock.InOrder(
+		stages.expectInspect(nil),
+		stages.expectPlanCapture(provider.CaptureOptions{}, nil),
+	)
+	svc := newStagedService(stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
+
+	// Act
+	plan, err := svc.prepare(zerolog.Nop().WithContext(context.Background()))
+
+	// Assert
+	require.NoError(t, err)
+	assert.Same(t, &stages.plan, plan)
+	stages.AssertExpectations(t)
+}
+
+// A workload that cannot be inspected — a daemon refused among the reasons — plans nothing.
+func TestService_prepare_AnInspectionFailurePlansNothing(t *testing.T) {
+	// Arrange
+	stages := newMockStages(false)
+	stages.expectInspect(model.ErrUnsupportedDaemon)
+	svc := newStagedService(stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
+
+	// Act
+	plan, err := svc.prepare(zerolog.Nop().WithContext(context.Background()))
+
+	// Assert
+	require.ErrorIs(t, err, model.ErrUnsupportedDaemon)
+	assert.Nil(t, plan)
+	stages.AssertExpectations(t)
 }

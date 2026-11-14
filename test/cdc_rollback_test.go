@@ -39,13 +39,15 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -228,13 +230,13 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	sourceRepo := objectNames(t, env.composeProjectStore, cdc.NamespaceRepos)
 	arcaveProjectStore := env.arcaveProjectStore(t)
 	sessions := core.NewSessionService(core.SessionDeps{
-		Sessions:           sessionrepo.New(arcaveProjectStore),
-		Locker:             lock.New(env.projectRoot),
-		Inflight:           inflightrepo.New(env.projectRoot),
-		Store:              arcaveProjectStore,
-		NewSavepointReader: newSavepointReader,
-		NewSessionLocker:   newSessionLockerFactory(arcaveProjectStore),
-		WriteAdmission:     newPlainAdmission(arcaveProjectStore),
+		Sessions:         sessionrepo.New(arcaveProjectStore),
+		Locker:           lock.New(env.projectRoot),
+		Inflight:         inflightrepo.New(env.projectRoot),
+		Store:            arcaveProjectStore,
+		NewSession:       newProviderSession(arcaveProjectStore),
+		NewSessionLocker: newSessionLockerFactory(arcaveProjectStore),
+		WriteAdmission:   newPlainAdmission(arcaveProjectStore),
 	})
 	clone, err := sessions.CreateSession(env.ctx, model.CreateSessionRequest{Name: "feat", From: "baseline"})
 	require.NoError(t, err)
@@ -384,7 +386,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	require.NoError(t, err)
 	transport := e.openTransport(t, resticRoot)
 
-	registry, err := core.NewSnapshotBackendRegistry(cdc.NewFactory(cdc.Dependencies{
+	registry, err := backendregistry.New(cdc.NewFactory(cdc.Dependencies{
 		Runner:         e.engine,
 		Transport:      transport,
 		RepositoryRoot: resticRoot,
@@ -399,28 +401,26 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	spec := stubAssembler{project: &types.Project{Name: cdcProject}}
 	repo := sprepo.New(composeProjectStore)
 	svc := core.New(core.Deps{
-		ArcaveProject:    cdcArcaveProject,
-		SessionLocker:    newSessionLocker(t, e.arcaveProjectStore(t), session),
-		WriteAdmission:   newPlainAdmission(e.arcaveProjectStore(t)),
-		SavepointRepo:    repo,
-		ProjectLocker:    lock.New(e.projectRoot),
-		ComposeInspector: stubInspector{result: introspectionOf(e.volumes)},
-		ProjectAssembler: spec,
-		SpecCodec:        spec,
-		ComposeRunner:    e.compose,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo: repo,
-			ComposeRunner: e.compose,
-			Store:         composeProjectStore,
+		Savepoints:     sessionstore.NewSavepoints(repo),
+		ArcaveProject:  cdcArcaveProject,
+		SessionLocker:  newSessionLocker(t, e.arcaveProjectStore(t), session),
+		WriteAdmission: newPlainAdmission(e.arcaveProjectStore(t)),
+		ProjectLocker:  lock.New(e.projectRoot),
+		Inflight:       inflightrepo.New(e.projectRoot),
+		Session:        session,
+		ComposeProject: cdcProject,
+		Sessions:       sessionrepo.New(e.arcaveProjectStore(t)),
+		Workload: compose.New(compose.Deps{
+			SavepointRepo:    repo,
+			ComposeRunner:    e.compose,
+			Store:            composeProjectStore,
+			ProjectAssembler: spec,
+			SpecCodec:        spec,
+			BackendRegistry:  registry,
+			CaptureDefaults:  newCaptureDefaults(model.SnapshotBackendCDC),
+			ComposeInspector: stubInspector{result: introspectionOf(e.volumes)},
+			VolumeRemover:    stubVolumeRemover{},
 		}),
-		VolumeRemover:   stubVolumeRemover{},
-		BackendRegistry: registry,
-		Inflight:        inflightrepo.New(e.projectRoot),
-		Store:           composeProjectStore,
-		CaptureDefaults: newCaptureDefaults(model.SnapshotBackendCDC),
-		Session:         session,
-		ComposeProject:  cdcProject,
-		Sessions:        sessionrepo.New(e.arcaveProjectStore(t)),
 	})
 	return svc, composeProjectStore
 }
@@ -531,6 +531,10 @@ type stubComposeRunner struct {
 }
 
 func (s *stubComposeRunner) Stop(context.Context, *types.Project) ([]string, error) {
+	return nil, nil
+}
+
+func (s *stubComposeRunner) StopServices(context.Context, *types.Project, []string) ([]string, error) {
 	return nil, nil
 }
 

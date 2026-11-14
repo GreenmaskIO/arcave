@@ -113,9 +113,9 @@ On a terminal you watch the steps as a live tree on stderr, and the result is pr
 ```text title="stderr + stdout"
 ✔ savepoint.create before-migration      10.9s
 ├── ✔ project.introspect                  0.1s
-├── ✔ compose.stop                        0.3s
+├── ✔ savepoint.hold                      0.3s
 ├── ✔ savepoint.capture before-migration  4.2s
-└── ✔ compose.start                       6.1s
+└── ✔ savepoint.release                   6.1s
 
 Savepoint before-migration · 019e843e-1650-7000-8000-000000000000 · 19:41:12 · stored 169 MB
             count     size   stored
@@ -196,14 +196,14 @@ Progress goes to **stderr**, so it never contaminates the JSON. Off a terminal i
 
 ```text title="stderr"
 INF savepoint.create[before-migration]/project.introspect elapsed=96ms status=succeeded
-INF savepoint.create[before-migration]/compose.stop msg=Stopped resource=container:myapp-db-1 status=in_progress
-INF savepoint.create[before-migration]/compose.stop elapsed=312ms status=succeeded
+INF savepoint.create[before-migration]/savepoint.hold msg=Stopped resource=container:myapp-db-1 status=in_progress
+INF savepoint.create[before-migration]/savepoint.hold elapsed=312ms status=succeeded
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/volume.capture/volume[volume-named-myapp_pgdata] bytes=41MB/41MB elapsed=672ms status=succeeded stored=3.9MB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/image.capture/image[postgres:16] bytes=658MB/658MB elapsed=1.341s status=succeeded stored=165MB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration]/layer.capture/layer[myapp-db-1] bytes=159MB/159MB elapsed=2.224s reused=159MB status=succeeded stored=17KB
 INF savepoint.create[before-migration]/savepoint.capture[before-migration] elapsed=4.237s status=succeeded
-INF savepoint.create[before-migration]/compose.start msg=Healthy resource=container:myapp-db-1 status=in_progress
-INF savepoint.create[before-migration]/compose.start elapsed=6.104s status=succeeded
+INF savepoint.create[before-migration]/savepoint.release msg=Healthy resource=container:myapp-db-1 status=in_progress
+INF savepoint.create[before-migration]/savepoint.release elapsed=6.104s status=succeeded
 INF savepoint.create[before-migration] elapsed=10.873s status=succeeded
 ```
 

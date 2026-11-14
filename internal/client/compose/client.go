@@ -93,21 +93,31 @@ func NewClient(composeAPI dockerComposeAPI, opts Options) *Client {
 // Stop stops all project services, waits for the containers to exit, and returns
 // the ids of those the stop timeout SIGKILLed.
 func (c *Client) Stop(ctx context.Context, project *types.Project) ([]string, error) {
-	defer c.routeEvents(ctx)()
-	timeout := c.logStopTimeout(ctx, project, "stopping compose services")
-	running := c.runningContainers(ctx, project)
+	return c.StopServices(ctx, project, nil)
+}
 
-	if err := c.api.Stop(ctx, project.Name, api.StopOptions{Project: project, Timeout: &timeout}); err != nil {
+// StopServices is Stop of the named services alone; none names every service.
+func (c *Client) StopServices(ctx context.Context, project *types.Project, services []string) ([]string, error) {
+	defer c.routeEvents(ctx)()
+	timeout := c.logStopTimeout(ctx, project, services, "stopping compose services")
+	running := c.runningContainers(ctx, project, services)
+
+	stopOptions := api.StopOptions{
+		Project:  project,
+		Services: services,
+		Timeout:  &timeout,
+	}
+	if err := c.api.Stop(ctx, project.Name, stopOptions); err != nil {
 		return nil, fmt.Errorf("stop compose services: %w", err)
 	}
-	return c.killedContainers(ctx, project, running, timeout), nil
+	return c.killedContainers(ctx, project, services, running, timeout), nil
 }
 
 // Down removes the project's containers and networks. Volumes are kept: a volume
 // arcave does not capture has no copy anywhere else.
 func (c *Client) Down(ctx context.Context, project *types.Project) error {
 	defer c.routeEvents(ctx)()
-	timeout := c.logStopTimeout(ctx, project, "removing compose containers and networks")
+	timeout := c.logStopTimeout(ctx, project, nil, "removing compose containers and networks")
 
 	return c.api.Down(ctx, project.Name, api.DownOptions{
 		Project:       project,
@@ -182,10 +192,10 @@ func (c *Client) routePrompts(ctx context.Context, restoredVolumes []string) fun
 	})
 }
 
-// logStopTimeout resolves the stop bound for project and logs it with msg, at info only when a
-// service's stop_grace_period raised it.
-func (c *Client) logStopTimeout(ctx context.Context, project *types.Project, msg string) time.Duration {
-	timeout, raisedBy := c.stopTimeoutFor(project)
+// logStopTimeout resolves the stop bound for the services of project — none naming every one —
+// and logs it with msg, at info only when a service's stop_grace_period raised it.
+func (c *Client) logStopTimeout(ctx context.Context, project *types.Project, services []string, msg string) time.Duration {
+	timeout, raisedBy := c.stopTimeoutFor(project, services)
 	// Str, not Dur: zerolog renders a Dur in milliseconds, and "10000" is not what
 	// a user reading a grace period wants to see.
 	event := zerolog.Ctx(ctx).Debug().Str("stop_timeout", timeout.String())
@@ -197,11 +207,15 @@ func (c *Client) logStopTimeout(ctx context.Context, project *types.Project, msg
 }
 
 // stopTimeoutFor is the configured grace period raised to the longest stop_grace_period
-// the project declares, and the service that raised it, if one did. It is rounded up to
-// whole seconds: compose truncates it to them, and 500ms would be no grace at all.
-func (c *Client) stopTimeoutFor(project *types.Project) (time.Duration, string) {
+// the services declare — none naming every one of the project —, and the service that raised
+// it, if one did. It is rounded up to whole seconds: compose truncates it to them, and 500ms
+// would be no grace at all.
+func (c *Client) stopTimeoutFor(project *types.Project, services []string) (time.Duration, string) {
 	timeout, raisedBy := c.stopTimeout(), ""
 	for _, name := range slices.Sorted(maps.Keys(project.Services)) {
+		if len(services) > 0 && !slices.Contains(services, name) {
+			continue
+		}
 		grace := project.Services[name].StopGracePeriod
 		if grace != nil && time.Duration(*grace) > timeout {
 			timeout, raisedBy = time.Duration(*grace), name
@@ -219,10 +233,10 @@ func (c *Client) stopTimeout() time.Duration {
 	return c.opts.StopTimeout
 }
 
-// runningContainers are the ids of the project's running containers; a failed read
-// is logged and yields none, so nothing is warned of.
-func (c *Client) runningContainers(ctx context.Context, project *types.Project) map[string]bool {
-	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project})
+// runningContainers are the ids of the services' running containers, none naming every one; a
+// failed read is logged and yields none, so nothing is warned of.
+func (c *Client) runningContainers(ctx context.Context, project *types.Project, services []string) map[string]bool {
+	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project, Services: services})
 	if err != nil {
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("cannot list running containers; a killed one will not be reported")
 		return nil
@@ -237,13 +251,17 @@ func (c *Client) runningContainers(ctx context.Context, project *types.Project) 
 // killedContainers warns of and returns every container that was running and exited
 // 137: SIGKILLed at the stop deadline, its volumes may hold a crash state.
 func (c *Client) killedContainers(
-	ctx context.Context, project *types.Project, running map[string]bool, timeout time.Duration,
+	ctx context.Context, project *types.Project, services []string, running map[string]bool, timeout time.Duration,
 ) []string {
 	if len(running) == 0 {
 		return nil
 	}
 	logger := zerolog.Ctx(ctx)
-	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{Project: project, All: true})
+	containers, err := c.api.Ps(ctx, project.Name, api.PsOptions{
+		Project:  project,
+		Services: services,
+		All:      true,
+	})
 	if err != nil {
 		logger.Warn().Err(err).Msg("cannot list stopped containers; a killed one will not be reported")
 		return nil

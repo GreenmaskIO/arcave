@@ -35,16 +35,17 @@ import (
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
-	"github.com/greenmaskio/arcave/internal/service/gc"
-	"github.com/greenmaskio/arcave/internal/service/gc/eraser"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -85,14 +86,14 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 		projectRoot: projectRoot,
 		storage:     storage,
 		sessions: core.NewSessionService(core.SessionDeps{
-			Sessions:           sessionrepo.New(arcaveProjectStore),
-			Locker:             lock.New(projectRoot),
-			Inflight:           inflight,
-			Current:            currentsession.New(projectRoot),
-			Store:              arcaveProjectStore,
-			NewSavepointReader: newSavepointReader,
-			NewSessionLocker:   newSessionLockerFactory(arcaveProjectStore),
-			WriteAdmission:     newPlainAdmission(arcaveProjectStore),
+			Sessions:         sessionrepo.New(arcaveProjectStore),
+			Locker:           lock.New(projectRoot),
+			Inflight:         inflight,
+			Current:          currentsession.New(projectRoot),
+			Store:            arcaveProjectStore,
+			NewSession:       newProviderSession(arcaveProjectStore),
+			NewSessionLocker: newSessionLockerFactory(arcaveProjectStore),
+			WriteAdmission:   newPlainAdmission(arcaveProjectStore),
 		}),
 		inflight: inflight,
 	}
@@ -407,33 +408,31 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 
 	repo := sprepo.New(store)
 	images := newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), profile.engine, blobStore)
+	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		ArcaveProject:    sessionArcaveProject,
-		SessionLocker:    newSessionLocker(t, arcaveProjectStore, session),
-		WriteAdmission:   newPlainAdmission(arcaveProjectStore),
-		SavepointRepo:    repo,
-		ProjectLocker:    lock.New(e.projectRoot),
-		ComposeInspector: inspector,
-		ProjectAssembler: profile.assembler,
-		SpecCodec:        composespec.NewCodec(),
-		ComposeRunner:    runner,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo: repo,
-			ImageBackend:  images,
-			ComposeRunner: runner,
-			Store:         store,
+		Savepoints:     sessionstore.NewSavepoints(repo),
+		ArcaveProject:  sessionArcaveProject,
+		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
+		WriteAdmission: newPlainAdmission(arcaveProjectStore),
+		ProjectLocker:  lock.New(e.projectRoot),
+		Inflight:       e.inflight,
+		Session:        session,
+		ComposeProject: model.DockerComposeProjectName(e.project),
+		Sessions:       sessionrepo.New(arcaveProjectStore),
+		Workload: compose.New(compose.Deps{
+			SavepointRepo:      repo,
+			ImageBackend:       images,
+			ComposeRunner:      runner,
+			Store:              store,
+			ProjectAssembler:   profile.assembler,
+			SpecCodec:          composespec.NewCodec(),
+			BackendRegistry:    registry,
+			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
+			ComposeInspector:   inspector,
+			VolumeRemover:      profile.engine,
+			ContainerRebuilder: profile.engine,
+			ImageLookup:        profile.engine,
 		}),
-		VolumeRemover:      profile.engine,
-		ImageBackend:       images,
-		ContainerRebuilder: profile.engine,
-		ImageLookup:        profile.engine,
-		BackendRegistry:    mustRegistry(t, profile.volumes),
-		Inflight:           e.inflight,
-		Store:              store,
-		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
-		Session:            session,
-		ComposeProject:     model.DockerComposeProjectName(e.project),
-		Sessions:           sessionrepo.New(arcaveProjectStore),
 	})
 	return &imageRollbackEnv{
 		ctx:       e.ctx,
@@ -659,17 +658,24 @@ func fileSizes(t *testing.T, dir string) map[string]int64 {
 	return sizes
 }
 
-// newSavepointReader opens a compose project's savepoints the way the DI root does.
-func newSavepointReader(store storages.Storager) core.SavepointReader {
+// newSavepointRecords opens a compose project's savepoints the way the DI root does for a session.
+func newSavepointRecords(store storages.Storager) sessionstore.SavepointRecords {
 	return sprepo.New(store)
+}
+
+// newProviderSession opens a session of arcaveProjectStore the way the DI root does for the
+// session commands.
+func newProviderSession(arcaveProjectStore storages.Navigator) func(id model.SessionID) provider.Session {
+	return func(id model.SessionID) provider.Session {
+		return sessionstore.New(sessionstore.Deps{
+			Store:               arcaveProjectStore,
+			Session:             id,
+			NewSavepointRecords: newSavepointRecords,
+		})
+	}
 }
 
 // newGCSavepointReader opens a compose project's savepoints the way the DI root does for gc.
-func newGCSavepointReader(store storages.Storager) gc.SavepointReader {
-	return sprepo.New(store)
-}
-
-// newGCSavepointDeleter is the savepoint repository gc's eraser deletes a savepoint through.
-func newGCSavepointDeleter(store storages.Storager) eraser.SavepointDeleter {
+func newGCSavepointReader(store storages.Storager) garbage.SavepointReader {
 	return sprepo.New(store)
 }

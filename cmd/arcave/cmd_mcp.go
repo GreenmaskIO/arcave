@@ -46,7 +46,6 @@ func runMCP(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	return cli.NewMCPHandler(newMCPFactories(), pinnedSession, sessionRefSource, cli.RollbackConfig{
-		LeftoverVolumes:    projectCfg.Rollback.Policy(),
 		SkipSafetySnapshot: projectCfg.Rollback.SkipSafetySnapshot(),
 	}).MCPRun(cmd.Context())
 }
@@ -105,7 +104,7 @@ func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(
 // mcpToolsServiceFactory wires the tools commands for the compose project a tool call named.
 func mcpToolsServiceFactory(ctx context.Context, composeProject string) (cli.MCPToolsService, func(), error) {
 	var opened closers
-	svc, err := openComposeFileService(ctx, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
+	svc, err := openComposeToolsService(ctx, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, err

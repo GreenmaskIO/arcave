@@ -119,6 +119,28 @@ func ParseImageBackend(token string) (ImageBackendKind, bool) {
 	}
 }
 
+// CaptureMode is how a service is held still while a savepoint captures it.
+type CaptureMode string
+
+const (
+	// CaptureModeStop stops the service's containers.
+	CaptureModeStop CaptureMode = "stop"
+	// CaptureModePause freezes them: the capture is crash-consistent and no connection drops.
+	CaptureModePause CaptureMode = "pause"
+	// CaptureModeLive holds nothing: the service is captured as it runs.
+	CaptureModeLive CaptureMode = "live"
+)
+
+// ParseCaptureMode validates a capture mode, as config and labels spell it.
+func ParseCaptureMode(token string) (CaptureMode, bool) {
+	switch mode := CaptureMode(token); mode {
+	case CaptureModeStop, CaptureModePause, CaptureModeLive:
+		return mode, true
+	default:
+		return "", false
+	}
+}
+
 // CaptureDecision is whether one unit is captured, where that came from, and what
 // said so — "<key>=<value> on <where>" for a label; Source is empty for the default.
 type CaptureDecision struct {
@@ -140,10 +162,13 @@ type WritableLayerDecision struct {
 	Backend ImageBackendKind
 }
 
-// ServiceDecision is what a savepoint takes of one service's writable layers and image.
+// ServiceDecision is what a savepoint takes of one service's writable layers and image, and
+// how it holds the service still.
 type ServiceDecision struct {
 	WritableLayer WritableLayerDecision
 	Image         CaptureDecision
+	// Mode is empty for CaptureModeStop.
+	Mode CaptureMode
 }
 
 // MountRef addresses one bind or anonymous mount: a bind by service and target,
@@ -160,7 +185,9 @@ type MountRef struct {
 type CapturePolicy struct {
 	VolumeBackend        SnapshotBackendKind
 	WritableLayerBackend ImageBackendKind
-	Services             map[string]ServiceDecision
+	// Mode holds a service no label names; empty for CaptureModeStop.
+	Mode     CaptureMode
+	Services map[string]ServiceDecision
 	// NamedVolumes are keyed by docker name.
 	NamedVolumes map[string]VolumeDecision
 	Mounts       map[MountRef]VolumeDecision
@@ -175,6 +202,7 @@ func (m CapturePolicy) DecideService(name string) ServiceDecision {
 	return ServiceDecision{
 		WritableLayer: WritableLayerDecision{CaptureDecision: NewConfigDecision(true, ""), Backend: m.WritableLayerBackend},
 		Image:         NewConfigDecision(true, ""),
+		Mode:          m.Mode,
 	}
 }
 

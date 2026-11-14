@@ -16,7 +16,6 @@ package model
 
 import (
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -33,10 +32,6 @@ type RollbackRequest struct {
 	Latest *bool        // when true, the newest savepoint by CreatedAt
 
 	WaitTimeout time.Duration // bounds the health check on restart; <= 0 lets the compose runner apply its default
-
-	// LeftoverVolumes is what a rollback into a compose project with no containers does with
-	// the volumes that still exist; empty means LeftoverVolumesOverwrite.
-	LeftoverVolumes LeftoverVolumesPolicy
 
 	// SkipSafetySnapshot rolls a running compose project back capturing nothing of it, neither
 	// volumes nor writable layers: nothing undoes it, and after a failure the way back is the same
@@ -55,8 +50,7 @@ const (
 	LeftoverVolumesRefuse LeftoverVolumesPolicy = "refuse"
 )
 
-// Validate refuses a request whose selector is nil or zero-valued, or whose
-// leftover-volumes policy is unknown.
+// Validate refuses a request whose selector is nil or zero-valued.
 func (m RollbackRequest) Validate() error {
 	switch {
 	case m.ID != nil && *m.ID != "":
@@ -65,12 +59,7 @@ func (m RollbackRequest) Validate() error {
 	default:
 		return ErrRollbackNoSelector
 	}
-	switch m.LeftoverVolumes {
-	case "", LeftoverVolumesOverwrite, LeftoverVolumesRefuse:
-		return nil
-	default:
-		return fmt.Errorf("unsupported leftover volumes policy %q", m.LeftoverVolumes)
-	}
+	return nil
 }
 
 // Ref renders the selector back as the word the user typed, for error messages

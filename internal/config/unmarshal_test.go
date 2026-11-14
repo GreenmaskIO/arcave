@@ -466,6 +466,25 @@ func TestUnmarshal(t *testing.T) {
 			},
 		},
 		{
+			name: "the capture mode defaults to stop",
+			yaml: "",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, string(model.CaptureModeStop), cfg.Capture.Mode)
+			},
+		},
+		{
+			name: "a capture mode is taken",
+			yaml: "capture:\n  mode: pause\n",
+			verify: func(t *testing.T, cfg Config) {
+				assert.Equal(t, string(model.CaptureModePause), cfg.Capture.Mode)
+			},
+		},
+		{
+			name:       "a capture mode arcave does not know is rejected",
+			yaml:       "capture:\n  mode: freeze\n",
+			wantErrMsg: `unsupported capture.mode "freeze" (supported: stop, pause, live)`,
+		},
+		{
 			name:       "an unknown kind is rejected",
 			yaml:       "capture:\n  volumes:\n    tmpfs: true\n",
 			wantErrMsg: "tmpfs",

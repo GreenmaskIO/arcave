@@ -263,6 +263,8 @@ func TestResolve_Refuses(t *testing.T) {
 		{name: "a target of a tmpfs", app: map[string]string{string(model.CaptureLabelMountsExclude): "/tmp"}, wantMsg: "not a volume or bind of the service's own"},
 		{name: "a target in both backend lists", app: map[string]string{
 			string(model.CaptureLabelMountsCDC): "/app", string(model.CaptureLabelMountsFullCopy): "/app"}, wantMsg: "listed for both"},
+		{name: "an unknown capture mode", app: map[string]string{string(model.CaptureLabelCaptureMode): "freeze"},
+			wantMsg: `arcave.capture.mode="freeze" on service app: want stop, pause or live`},
 		{name: "a target both included and excluded", app: map[string]string{
 			string(model.CaptureLabelMountsInclude): "/app", string(model.CaptureLabelMountsExclude): "/app"}, wantMsg: "also in arcave.mounts.exclude"},
 	}
@@ -401,6 +403,43 @@ func TestResolve_IgnoresOtherLabels(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, byConfig(model.SnapshotBackendFullCopy), policy.DecideMount(appAnon))
+}
+
+// A service's capture mode is its label, else the config's, else none: stop.
+func TestResolve_CaptureMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		label      string
+		configMode model.CaptureMode
+		wantApp    model.CaptureMode
+		wantDB     model.CaptureMode
+	}{
+		{name: "the label", label: "pause", configMode: model.CaptureModeLive, wantApp: model.CaptureModePause, wantDB: model.CaptureModeLive},
+		{name: "the config", configMode: model.CaptureModePause, wantApp: model.CaptureModePause, wantDB: model.CaptureModePause},
+		{name: "a label, no config", label: "live", wantApp: model.CaptureModeLive},
+		{name: "neither: no mode, which holds by stop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			var appLabels map[string]string
+			if tt.label != "" {
+				appLabels = map[string]string{string(model.CaptureLabelCaptureMode): tt.label}
+			}
+			withMode := defaults
+			withMode.Mode = tt.configMode
+
+			// Act
+			policy, err := Resolve(nopCtx(), demoProject(appLabels, nil, nil, nil), withMode)
+
+			// Assert
+			require.NoError(t, err)
+			assert.Equal(t, tt.configMode, policy.Mode)
+			assert.Equal(t, tt.wantApp, policy.DecideService("app").Mode)
+			assert.Equal(t, tt.wantDB, policy.DecideService("db").Mode)
+			assert.Equal(t, tt.configMode, policy.DecideService("unknown").Mode)
+		})
+	}
 }
 
 // With every label ignored, the config still decides.

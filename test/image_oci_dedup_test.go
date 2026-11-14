@@ -39,10 +39,11 @@ import (
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
-	"github.com/greenmaskio/arcave/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -100,30 +101,28 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 
 	repo := sprepo.New(composeProjectStore)
 	images := newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), profile.engine, blobStore)
+	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		ArcaveProject:    "arcave-oci-tenant",
-		SessionLocker:    newStoreLocker(composeProjectStore, model.DefaultSession),
-		WriteAdmission:   newPlainAdmission(composeProjectStore),
-		SavepointRepo:    repo,
-		ProjectLocker:    lock.New(projectRoot),
-		ComposeInspector: introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
-		ProjectAssembler: profile.assembler,
-		SpecCodec:        composespec.NewCodec(),
-		ComposeRunner:    runner,
-		Capture: capture.New(capture.Deps{
-			SavepointRepo: repo,
-			ImageBackend:  images,
-			ComposeRunner: runner,
-			Store:         composeProjectStore,
+		Savepoints:     sessionstore.NewSavepoints(repo),
+		ArcaveProject:  "arcave-oci-tenant",
+		SessionLocker:  newStoreLocker(composeProjectStore, model.DefaultSession),
+		WriteAdmission: newPlainAdmission(composeProjectStore),
+		ProjectLocker:  lock.New(projectRoot),
+		Inflight:       inflightrepo.New(projectRoot),
+		Workload: compose.New(compose.Deps{
+			SavepointRepo:      repo,
+			ImageBackend:       images,
+			ComposeRunner:      runner,
+			Store:              composeProjectStore,
+			ProjectAssembler:   profile.assembler,
+			SpecCodec:          composespec.NewCodec(),
+			BackendRegistry:    registry,
+			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
+			ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
+			VolumeRemover:      profile.engine,
+			ContainerRebuilder: profile.engine,
+			ImageLookup:        profile.engine,
 		}),
-		VolumeRemover:      profile.engine,
-		ImageBackend:       images,
-		ContainerRebuilder: profile.engine,
-		ImageLookup:        profile.engine,
-		BackendRegistry:    mustRegistry(t, profile.volumes),
-		Inflight:           inflightrepo.New(projectRoot),
-		Store:              composeProjectStore,
-		CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
 	})
 
 	env := &ociDedupEnv{

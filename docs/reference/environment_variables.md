@@ -14,6 +14,7 @@ Every key of the config, whether or not the file carries it: arcave binds each o
 
 ```shell
 ARCAVE_SNAPSHOT_BACKEND=cdc arcave -p myapp savepoint create nightly
+ARCAVE_CAPTURE_MODE=pause arcave -p myapp savepoint create no-restart
 ```
 
 No variable reaches the file `arcave init` writes — it is a template of the defaults and `--name`; `ARCAVE_LOG_LEVEL` and `ARCAVE_LOG_FORMAT` steer only its own log.
