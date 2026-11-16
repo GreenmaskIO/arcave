@@ -34,6 +34,10 @@ const (
 	kindRollbackRevert         progress.Kind = "rollback.revert"
 	kindRollbackCleanup        progress.Kind = "rollback.cleanup"
 
+	kindUp progress.Kind = "up"
+
+	kindDown progress.Kind = "down"
+
 	kindSessionRemove progress.Kind = "session.remove"
 	kindSessionLock   progress.Kind = "session.lock"
 	kindSessionFork   progress.Kind = "session.fork"

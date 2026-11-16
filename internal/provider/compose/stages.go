@@ -326,15 +326,16 @@ func (s *Provider) composeDown(ctx context.Context, project *types.Project) erro
 }
 
 // removeCreatedVolumes drops the volumes the compose project owns now and did not own
-// before: what the failed rollback created, holding nothing the savepoint does not.
+// before: what the failed rollback created, holding nothing the savepoint does not. The narrow
+// read: a container left half-built must not keep the volumes from being found.
 func (s *Provider) removeCreatedVolumes(ctx context.Context, ownedBefore map[string]bool) {
 	log := zerolog.Ctx(ctx)
-	introspection, err := s.introspect(ctx)
+	resources, err := s.readResources(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("cannot tell which volumes the failed rollback created; they are left behind")
 		return
 	}
-	for name := range ownedVolumes(introspection) {
+	for _, name := range resources.Volumes {
 		if ownedBefore[name] {
 			continue
 		}

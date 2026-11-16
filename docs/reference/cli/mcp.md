@@ -12,13 +12,13 @@ Serves arcave's workflows as MCP tools.
 arcave mcp [--session <id|name>]
 ```
 
-No arguments and no flags of its own; `--session` is the [global flag](index.md#global-flags), and here it pins the server — see [Sessions](#sessions). The fourteen tools — four for savepoints, seven for sessions, `gc`, `status` and `compose_generate` — their arguments and their output shapes are in [MCP tools](../mcp_tools.md).
+No arguments and no flags of its own; `--session` is the [global flag](index.md#global-flags), and here it pins the server — see [Sessions](#sessions). The sixteen tools — four for savepoints, `up` and `down` for the environment, seven for sessions, `gc`, `status` and `compose_generate` — their arguments and their output shapes are in [MCP tools](../mcp_tools.md).
 
 `arcave mcp` takes no `-p/--project-name`: one server addresses many compose projects, and each tool call names the one it means. Every call wires the store and the daemon clients for the project it names and releases them when the call returns.
 
 ## Sessions
 
-A savepoint tool works in the session its `session` argument names. Without one, it works in:
+A savepoint or environment tool works in the session its `session` argument names. Without one, it works in:
 
 * **the pinned session**, when the server was started with `--session` or `ARCAVE_SESSION`. The pin is resolved once at startup, to an id — a session created later under the same name is not the pinned one — and a server whose `--session` names no session refuses to start. A pinned server refuses `session_set` and `session_unset`, and `session_remove` refuses the pinned session unless `force` is set.
 * otherwise **the current session**, `.arcave/current_session`, read on every call — the same pointer `arcave session set` writes, so `session_set` from an agent moves your own shell too.
@@ -84,4 +84,4 @@ arcave --log-format json mcp 2> arcave-mcp.log
 
 ## Next step
 
-[MCP tools](../mcp_tools.md) — the fourteen tools, their arguments and what they return.
+[MCP tools](../mcp_tools.md) — the sixteen tools, their arguments and what they return.

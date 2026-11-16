@@ -320,6 +320,42 @@ type ComposeProjectContainers struct {
 	Services []ServiceContainers
 }
 
+// ComposeProjectResources is everything the daemon holds of a compose project by its label: its
+// containers, its replicas among them, and the names of the volumes and networks it owns. An
+// external volume carries no such label, nor an anonymous one, which goes with its container.
+type ComposeProjectResources struct {
+	// Containers are the docker names of every container labelled with the compose project:
+	// replicas, one-offs, a lifecycle hook's and a provider's relay, sorted.
+	Containers []string
+	// Replicas are the service replicas among them, what deployment labels are read off.
+	Replicas ComposeProjectContainers
+	Volumes  []string
+	Networks []string
+}
+
+// NonReplicas are the docker names of the containers that are no replica: one-offs, a lifecycle
+// hook's runner, a provider's relay.
+func (m ComposeProjectResources) NonReplicas() []string {
+	replicas := map[string]bool{}
+	for _, service := range m.Replicas.Services {
+		for _, replica := range service.Containers {
+			replicas[replica.Name] = true
+		}
+	}
+	var names []string
+	for _, name := range m.Containers {
+		if !replicas[name] {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// IsEmpty reports whether the daemon holds no container, volume or network of the compose project.
+func (m ComposeProjectResources) IsEmpty() bool {
+	return len(m.Containers) == 0 && len(m.Volumes) == 0 && len(m.Networks) == 0
+}
+
 // ServiceContainers is one service's replicas.
 type ServiceContainers struct {
 	Name string

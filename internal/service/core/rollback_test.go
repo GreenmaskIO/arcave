@@ -1118,7 +1118,7 @@ func TestInterruptedState_NoSafetySnapshot(t *testing.T) {
 		phase model.InflightPhase
 		want  string
 	}{
-		{phase: model.InflightRecreating, want: "before it wrote any volume"},
+		{phase: model.InflightRecreating, want: "before it restored any volume; the containers may be gone"},
 		{phase: model.InflightRestoring, want: "volumes may be half-restored"},
 		// A failed cold start stands here too, what it restored into removed.
 		{phase: model.InflightRestoreDone, want: "volumes may be half-restored"},

@@ -182,7 +182,7 @@ After a rollback, a container whose layer was restored runs on an `arcave/…:sp
 
 ### A project with no containers
 
-A rollback also works on a compose project that has no containers — one never started here, or taken down with `docker compose down`. There is nothing to stop and nothing live to keep, so it takes a short path: no stop, no safety snapshot, no teardown. It loads the layers, creates the project from the spec, restores the volumes and starts the services.
+A rollback also works on a compose project that has no containers — one never started here, or taken down with `docker compose down`. There is nothing to stop and nothing live to keep, so it takes a short path: no stop, no safety snapshot, no teardown. It loads the layers, creates the project from the spec, restores the volumes and starts the services. [`arcave up`](reference/cli/up.md) takes the same path on purpose, and refuses when anything of the compose project is left; [`arcave down`](reference/cli/down.md) ends an environment so that nothing is.
 
 A named volume the project still owns — one `docker compose down` left behind — is overwritten with a warning. Set [`rollback.leftover_volumes`](reference/configuration.md#rollback) to `refuse` to fail instead, before anything is loaded:
 

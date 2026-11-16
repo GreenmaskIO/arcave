@@ -76,6 +76,16 @@ func (m *mockService) RemoveSavepoints(ctx context.Context, req model.RemoveRequ
 	return args.Get(0).(model.RemoveResult), args.Error(1)
 }
 
+func (m *mockService) Up(ctx context.Context, req model.UpRequest) (model.UpResult, error) {
+	args := m.Called(ctx, req)
+	return args.Get(0).(model.UpResult), args.Error(1)
+}
+
+func (m *mockService) Down(ctx context.Context, req model.DownRequest) (model.DownResult, error) {
+	args := m.Called(ctx, req)
+	return args.Get(0).(model.DownResult), args.Error(1)
+}
+
 func (m *mockService) Rollback(ctx context.Context, req model.RollbackRequest) (model.RollbackResult, error) {
 	args := m.Called(ctx, req)
 	return args.Get(0).(model.RollbackResult), args.Error(1)

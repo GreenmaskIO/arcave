@@ -367,6 +367,14 @@ arcave gc                                     # free what they shared, retire ol
 
 `savepoint remove` deletes each savepoint's record and its own directory; what it shared with other savepoints — stored images and layers — and its `cdc` snapshots are freed by [`arcave gc`](reference/cli/gc.md). `sp`, `ls` and `rm` are shorter spellings: `arcave sp ls`, `arcave sp rm before-migration` — see [Commands](reference/cli/index.md).
 
+To end the environment itself, take a savepoint and run [`arcave down`](reference/cli/down.md): it removes the containers, networks and volumes, which `docker compose down` leaves. [`arcave up`](reference/cli/up.md) brings it back from the newest savepoint, or from the one you name:
+
+```shell
+arcave savepoint create end-of-day
+arcave down
+arcave up                                     # later: latest, or a savepoint's name or id
+```
+
 ## 9. Branch off, if you need to
 
 Savepoints live in a session, `baseline` until you choose another. `arcave session create --from baseline --name experiment` copies the whole session into a new one, and `arcave session set experiment` makes the commands that follow work there. See [Sessions and branching](sessions.md).

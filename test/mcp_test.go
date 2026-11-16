@@ -390,6 +390,49 @@ func TestMCP_SavepointsFollowTheCurrentSession(t *testing.T) {
 	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(baselineStore))
 }
 
+// The environment's cycle through `arcave mcp`: up refuses a running compose project and down one
+// compose built, each saying what the call can pass; force takes it down, up brings the newest
+// savepoint back, and the session's own down needs no force.
+func TestMCP_UpAndDown(t *testing.T) {
+	t.Parallel()
+
+	// Arrange: the compose project runs as compose built it, no deployment labels on it.
+	env := newSessionEnv(t)
+	env.withComposeProject(t)
+	initArcave(t, env)
+	cs := newMCPClient(t, env)
+	project := map[string]any{"compose_project": env.project}
+	forced := map[string]any{"compose_project": env.project, "force": true}
+	v1 := callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "v1"})
+
+	// Act, Assert: neither builds over nor takes down what no rollback built.
+	assert.Contains(t, callToolErr(t, cs, "up", project), "pass force")
+	assert.Contains(t, callToolErr(t, cs, "down", project), "pass force")
+
+	// Act, Assert: force takes it down.
+	taken := callTool[model.DownResult](t, cs, "down", forced)
+	assert.True(t, taken.Forced)
+	assert.Nil(t, taken.Deployment, "compose's own replicas name no deployment")
+	assert.NotEmpty(t, taken.Discarded.Containers)
+	env.in(t, model.DefaultSession).requireGone(t)
+
+	// Act, Assert: up brings the newest savepoint back, and the session's own down needs no force.
+	up := callTool[model.UpResult](t, cs, "up", project)
+	assert.Equal(t, v1.ID, up.RolledBackTo.ID)
+	assert.Nil(t, up.Discarded, "nothing was there to drop")
+	down := callTool[model.DownResult](t, cs, "down", project)
+	require.NotNil(t, down.Deployment)
+	assert.Equal(t, model.DefaultSession, down.Deployment.Session.ID)
+	assert.Equal(t, v1.ID, down.Deployment.Savepoint.ID)
+	assert.False(t, down.Forced)
+	env.in(t, model.DefaultSession).requireGone(t)
+
+	// Act, Assert: nothing is left to take down.
+	again := callTool[model.DownResult](t, cs, "down", project)
+	assert.Empty(t, again.Discarded.Containers)
+	assert.Empty(t, again.Discarded.Volumes)
+}
+
 // The cdc backend runs under `arcave mcp` as under the CLI: each tool call serves its
 // restic runs over their exec streams, and a gc forgets through them too. Any byte
 // off the JSON-RPC channel on stdout would fail the client.
