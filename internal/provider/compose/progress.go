@@ -30,16 +30,6 @@ const (
 
 	kindVolumeRestore  progress.Kind = "volume.restore"
 	kindVolume         progress.Kind = "volume"
-	kindLayerRestore   progress.Kind = "layer.restore"
-	kindLayer          progress.Kind = "layer"
 	kindReplicaRebuild progress.Kind = "replica.rebuild"
 	kindReplica        progress.Kind = "replica"
 )
-
-// newRestoreSample is the sample a restored unit ends with: its size.
-func newRestoreSample(size int64) progress.Sample {
-	return progress.Sample{Bytes: &progress.Bytes{
-		Done:  size,
-		Total: size,
-	}}
-}

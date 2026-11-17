@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -26,7 +25,6 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/pkg/progress"
@@ -35,23 +33,17 @@ import (
 // errForeignPrepared refuses a prepared savepoint another provider handed out.
 var errForeignPrepared = errors.New("the savepoint was prepared by another provider")
 
-// preparedSavepoint is the savepoint's spec pointed at its loaded layers, one backend per volume,
-// the deployment its containers are labelled with, and what the build overwrites.
+// preparedSavepoint is a savepoint ready to build, as this provider hands it to core.
 type preparedSavepoint struct {
-	savepoint   model.Savepoint
-	project     *types.Project
-	restored    []model.WritableLayerRestoreResult
-	backends    []model.VolumeSnapshotBackend
-	deployment  model.SavepointDeployment
-	overwritten []string
+	composemodel.Target
 }
 
 // Summary is what building the prepared savepoint restores, and the volumes it overwrites.
 func (p preparedSavepoint) Summary() provider.PreparedSummary {
 	return provider.PreparedSummary{
-		Volumes:        composemodel.VolumesOf(p.savepoint),
-		WritableLayers: p.restored,
-		Overwritten:    p.overwritten,
+		Volumes:        composemodel.VolumesOf(p.Savepoint),
+		WritableLayers: p.Restored,
+		Overwritten:    p.Overwritten,
 	}
 }
 
@@ -66,15 +58,15 @@ func (l liveWorkload) PrepareSavepoint(
 	}
 	var overwritten []string
 	if l.Absent() {
-		if overwritten, err = l.service.newOverwritten(l.introspection, savepoint, opts.Recovering); err != nil {
+		if overwritten, err = l.service.preparer.NewOverwritten(l.introspection, savepoint, opts.Recovering); err != nil {
 			return nil, err
 		}
 	}
-	prepared, err := l.service.prepareTarget(ctx, savepoint, opts.Deployment, overwritten)
+	target, err := l.service.preparer.Prepare(ctx, savepoint, opts.Deployment, overwritten)
 	if err != nil {
 		return nil, err
 	}
-	return prepared, nil
+	return preparedSavepoint{Target: target}, nil
 }
 
 // Teardown resumes the replicas found frozen and runs `compose down` of prepared's project; over
@@ -86,7 +78,7 @@ func (l liveWorkload) Teardown(ctx context.Context, prepared provider.PreparedSa
 	}
 	if !l.Absent() {
 		l.service.unpauseOnEntry(ctx, l.introspection)
-		if err := l.service.composeDown(ctx, target.project); err != nil {
+		if err := l.service.composeDown(ctx, target.Project); err != nil {
 			return nil, err
 		}
 	}
@@ -94,66 +86,8 @@ func (l liveWorkload) Teardown(ctx context.Context, prepared provider.PreparedSa
 		service:              l.service,
 		anonymousVolumeNames: composemodel.NewAnonymousVolumeNames(l.introspection),
 		ownedBefore:          composemodel.OwnedVolumes(l.introspection),
-		downProject:          target.project,
+		downProject:          target.Project,
 	}, nil
-}
-
-// newOverwritten names the leftover volumes savepoint overwrites; under
-// model.LeftoverVolumesRefuse any is model.ErrLeftoverVolumes, unless recovering.
-func (s *Provider) newOverwritten(
-	introspection model.IntrospectionResult, savepoint model.Savepoint, recovering bool,
-) ([]string, error) {
-	leftover := leftoverVolumes(composemodel.OwnedVolumes(introspection), savepoint)
-	if len(leftover) > 0 && s.leftoverVolumes == model.LeftoverVolumesRefuse && !recovering {
-		return nil, fmt.Errorf("%w: %s", model.ErrLeftoverVolumes, strings.Join(leftover, ", "))
-	}
-	return leftover, nil
-}
-
-// prepareTarget builds the savepoint's backends, loads its spec and layers into the daemon and
-// points the spec at them. It writes nothing a rollback restores into.
-func (s *Provider) prepareTarget(
-	ctx context.Context, savepoint model.Savepoint, deployment model.SavepointDeployment, overwritten []string,
-) (preparedSavepoint, error) {
-	// Their own set, not the live one's: a volume may have been added or dropped since.
-	backends, err := backendregistry.NewBackends(s.snapshotBackendRegistry, s.store, composemodel.VolumesOf(savepoint))
-	if err != nil {
-		return preparedSavepoint{}, fmt.Errorf("build backends: %w", err)
-	}
-	project, err := s.loadSavepointSpec(ctx, savepoint)
-	if err != nil {
-		return preparedSavepoint{}, fmt.Errorf("load the savepoint's compose spec: %w", err)
-	}
-	if err := checkCaptureStamps(ctx, savepoint, project); err != nil {
-		return preparedSavepoint{}, err
-	}
-	// Also the check of the archives themselves: one the daemon will not take fails here.
-	restored, err := s.restoreWritableLayers(ctx, savepoint, project.Name)
-	if err != nil {
-		return preparedSavepoint{}, fmt.Errorf("restore the savepoint's writable layers: %w", err)
-	}
-	if err := s.requireImages(ctx, project, restored); err != nil {
-		return preparedSavepoint{}, err
-	}
-	return preparedSavepoint{
-		savepoint:   savepoint,
-		project:     retargetImages(project, restored),
-		restored:    restored,
-		backends:    backends,
-		deployment:  deployment,
-		overwritten: overwritten,
-	}, nil
-}
-
-// leftoverVolumes names the volumes that outlived the project's containers and savepoint overwrites.
-func leftoverVolumes(owned map[string]bool, savepoint model.Savepoint) []string {
-	var names []string
-	for _, v := range composemodel.VolumesOf(savepoint) {
-		if v.Named != nil && owned[v.Named.VolumeName] {
-			names = append(names, v.Named.VolumeName)
-		}
-	}
-	return names
 }
 
 // unpauseOnEntry resumes the replicas introspection found frozen, ahead of a teardown that does
@@ -201,12 +135,12 @@ func (v vacantWorkload) Build(ctx context.Context, prepared provider.PreparedSav
 		return nil, err
 	}
 	var (
-		recorded   = newRecordedReplicas(target.savepoint, target.project, target.restored)
-		deployment = newSavepointDeployment(target.deployment, target.project, recorded)
+		recorded   = newRecordedReplicas(target.Savepoint, target.Project, target.Restored)
+		deployment = newSavepointDeployment(target.Deployment, target.Project, recorded)
 		// A copy: the project the caller holds is the one a revert or a discard acts on later.
-		project = withDeploymentLabels(target.project, deployment.Labels())
+		project = withDeploymentLabels(target.Project, deployment.Labels())
 	)
-	if err := v.service.composeCreate(ctx, project, newRestoredVolumeNames(target.savepoint)); err != nil {
+	if err := v.service.composeCreate(ctx, project, newRestoredVolumeNames(target.Savepoint)); err != nil {
 		return nil, err
 	}
 	if err := v.service.rebuildDivergentReplicas(ctx, recorded); err != nil {
@@ -236,7 +170,7 @@ type builtWorkload struct {
 
 // RestoreData writes every volume of the savepoint back.
 func (b builtWorkload) RestoreData(ctx context.Context) (provider.RestoredWorkload, error) {
-	if err := b.vacant.service.restoreVolumes(ctx, b.target.savepoint, b.target.backends); err != nil {
+	if err := b.vacant.service.restoreVolumes(ctx, b.target.Savepoint, b.target.Backends); err != nil {
 		return nil, err
 	}
 	return restoredWorkload(b), nil
@@ -257,8 +191,8 @@ func (r restoredWorkload) Start(ctx context.Context, waitTimeout time.Duration) 
 // Reap drops the anonymous volumes the teardown orphaned and the restore replaced, and says where
 // the restored writable layers live.
 func (r restoredWorkload) Reap(ctx context.Context) {
-	r.vacant.service.removeOrphanedVolumes(ctx, r.vacant.anonymousVolumeNames, composemodel.VolumesOf(r.target.savepoint))
-	logRestoredLayers(ctx, r.target.restored)
+	r.vacant.service.removeOrphanedVolumes(ctx, r.vacant.anonymousVolumeNames, composemodel.VolumesOf(r.target.Savepoint))
+	logRestoredLayers(ctx, r.target.Restored)
 }
 
 // toPreparedSavepoint is prepared as this provider prepared it.

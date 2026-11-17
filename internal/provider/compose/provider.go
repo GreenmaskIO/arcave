@@ -25,6 +25,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/capture"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/captureplan"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/inspection"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/prepare"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
@@ -150,16 +151,11 @@ type Provider struct {
 	composeInspector        composeIntrospector
 	inspector               *inspection.Inspector
 	planner                 *captureplan.Planner
-	imageBackend            imageBackend
+	preparer                *prepare.Preparer
 	composeRunner           composeRunner
 	containerControl        containerControl
 	volumeRemover           volumeRemover
 	containerRebuilder      containerRebuilder
-	imageLookup             imageLookup
-	leftoverVolumes         model.LeftoverVolumesPolicy
-	specCodec               specCodec
-	snapshotBackendRegistry model.SnapshotBackendRegistry
-	store                   storages.Storager
 	maxConcurrentOperations int
 	capturer                *capture.Capturer
 }
@@ -176,21 +172,25 @@ func New(deps Deps) *Provider {
 			CaptureDefaults:  deps.CaptureDefaults,
 			Store:            deps.Store,
 		}),
+		preparer: prepare.New(prepare.Deps{
+			SpecReader:              deps.SavepointRepo,
+			SpecParser:              deps.SpecCodec,
+			LayerRestorer:           deps.ImageBackend,
+			ImageLookup:             deps.ImageLookup,
+			BackendRegistry:         deps.BackendRegistry,
+			Store:                   deps.Store,
+			LeftoverVolumes:         deps.LeftoverVolumes,
+			MaxConcurrentOperations: fanOutLimit(deps.Concurrency),
+		}),
 		inspector: inspection.New(inspection.Deps{
 			ComposeInspector: deps.ComposeInspector,
 			DaemonVersion:    deps.DaemonVersion,
 			MinDaemonMajor:   deps.MinDaemonMajor,
 		}),
-		imageBackend:            deps.ImageBackend,
 		composeRunner:           deps.ComposeRunner,
 		containerControl:        deps.ContainerControl,
 		volumeRemover:           deps.VolumeRemover,
 		containerRebuilder:      deps.ContainerRebuilder,
-		imageLookup:             deps.ImageLookup,
-		leftoverVolumes:         deps.LeftoverVolumes,
-		specCodec:               deps.SpecCodec,
-		snapshotBackendRegistry: deps.BackendRegistry,
-		store:                   deps.Store,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		capturer: capture.New(capture.Deps{
 			SavepointRepo:       deps.SavepointRepo,

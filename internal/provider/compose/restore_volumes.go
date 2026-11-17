@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -65,7 +66,7 @@ func (s *Provider) restoreVolumes(
 				step.End(err)
 				return err
 			}
-			step.Done(newRestoreSample(savepoint.Stats[i].SizeBytes))
+			step.Done(composemodel.NewRestoreSample(savepoint.Stats[i].SizeBytes))
 			step.End(nil)
 			log.Debug().Dur("duration", time.Since(started)).Msg("volume operation finished")
 			return nil

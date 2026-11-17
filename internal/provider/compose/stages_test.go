@@ -266,8 +266,8 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				target := prepared.(preparedSavepoint)
-				assert.Equal(t, composetest.DemoRestoredTag(1), target.project.Services[composetest.DemoService].Image)
-				assert.Equal(t, types.PullPolicyNever, target.project.Services[composetest.DemoService].PullPolicy)
+				assert.Equal(t, composetest.DemoRestoredTag(1), target.Project.Services[composetest.DemoService].Image)
+				assert.Equal(t, types.PullPolicyNever, target.Project.Services[composetest.DemoService].PullPolicy)
 				assert.Equal(t, []model.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()}, prepared.Summary().WritableLayers)
 				assert.Equal(t, []model.Volume{composetest.DemoVolume()}, prepared.Summary().Volumes)
 			}
@@ -401,7 +401,7 @@ func TestLive_Teardown(t *testing.T) {
 			recorder := &composetest.StepRecorder{}
 
 			// Act
-			vacant, err := live.Teardown(composetest.NewProgressContext(recorder), preparedSavepoint{project: composetest.DemoTargetSpec})
+			vacant, err := live.Teardown(composetest.NewProgressContext(recorder), preparedSavepoint{Target: composemodel.Target{Project: composetest.DemoTargetSpec}})
 
 			// Assert
 			if tt.wantErr != "" {
@@ -444,9 +444,9 @@ func TestHeld_PrepareSavepoint(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	target := prepared.(preparedSavepoint)
-	assert.Equal(t, tag, target.project.Services[composetest.DemoService].Image)
-	assert.Equal(t, []model.VolumeSnapshotBackend{backend}, target.backends)
-	assert.Equal(t, composetest.DemoDeployment(undo), target.deployment)
+	assert.Equal(t, tag, target.Project.Services[composetest.DemoService].Image)
+	assert.Equal(t, []model.VolumeSnapshotBackend{backend}, target.Backends)
+	assert.Equal(t, composetest.DemoDeployment(undo), target.Deployment)
 	repo.AssertExpectations(t)
 	images.AssertExpectations(t)
 }
@@ -506,7 +506,7 @@ func TestHeld_Teardown_CarriesTheAnonymousVolumes(t *testing.T) {
 	require.True(t, ok)
 
 	// Act
-	restoredWorkload{vacant: tornDown, target: preparedSavepoint{savepoint: record}}.Reap(ctx)
+	restoredWorkload{vacant: tornDown, target: preparedSavepoint{Target: composemodel.Target{Savepoint: record}}}.Reap(ctx)
 
 	// Assert
 	runner.AssertExpectations(t)
@@ -574,7 +574,7 @@ func TestVacant_Build_LabelsTheDeployment(t *testing.T) {
 	)
 	svc := New(Deps{ComposeRunner: runner})
 	vacant := vacantWorkload{service: svc}
-	prepared := preparedSavepoint{savepoint: savepoint, project: target, deployment: deployment}
+	prepared := preparedSavepoint{Target: composemodel.Target{Savepoint: savepoint, Project: target, Deployment: deployment}}
 	ctx := zerolog.Nop().WithContext(context.Background())
 	before := time.Now().UTC().Truncate(time.Second)
 
@@ -615,7 +615,10 @@ func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 		composetest.DemoWritableLayerRestoreResult(),
 		{Service: composetest.DemoService, Replica: 2, ContainerName: composetest.DemoContainerName(2), ImageID: composetest.DemoSecondImageID, Tag: composetest.DemoRestoredTag(2)},
 	}
-	project := retargetImages(composetest.DemoTargetSpec, restoredLayers)
+	// The target spec as a prepare retargets it: the service on its lowest replica's layer.
+	project := &types.Project{Name: composetest.DemoProject, Services: types.Services{
+		composetest.DemoService: {Name: composetest.DemoService, Image: composetest.DemoRestoredTag(1), PullPolicy: types.PullPolicyNever},
+	}}
 	backend := composetest.NewMockBackend(composetest.DemoVolume())
 	runner := &composetest.MockComposeRunner{}
 	inspector := &composetest.MockInspector{}
@@ -630,13 +633,13 @@ func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 	)
 	svc := New(Deps{ComposeRunner: runner, ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	vacant := vacantWorkload{service: svc}
-	prepared := preparedSavepoint{
-		savepoint:  record,
-		project:    project,
-		restored:   restoredLayers,
-		backends:   []model.VolumeSnapshotBackend{backend},
-		deployment: composetest.DemoDeployment(record),
-	}
+	prepared := preparedSavepoint{Target: composemodel.Target{
+		Savepoint:  record,
+		Project:    project,
+		Restored:   restoredLayers,
+		Backends:   []model.VolumeSnapshotBackend{backend},
+		Deployment: composetest.DemoDeployment(record),
+	}}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -660,7 +663,7 @@ func TestBuilt_RestoreData_LogsAreAttributedPerVolume(t *testing.T) {
 	backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
 	built := builtWorkload{
 		vacant: vacantWorkload{service: New(Deps{})},
-		target: preparedSavepoint{savepoint: record, backends: []model.VolumeSnapshotBackend{backend}},
+		target: preparedSavepoint{Target: composemodel.Target{Savepoint: record, Backends: []model.VolumeSnapshotBackend{backend}}},
 	}
 	logs := &composetest.SyncBuffer{}
 	ctx := zerolog.New(logs).Level(zerolog.DebugLevel).WithContext(context.Background())
@@ -685,7 +688,7 @@ func TestBuilt_RestoreData_FailedRestore(t *testing.T) {
 	backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(errors.New("boom")).Once()
 	building := builtWorkload{
 		vacant: vacantWorkload{service: New(Deps{})},
-		target: preparedSavepoint{savepoint: record, backends: []model.VolumeSnapshotBackend{backend}},
+		target: preparedSavepoint{Target: composemodel.Target{Savepoint: record, Backends: []model.VolumeSnapshotBackend{backend}}},
 	}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -726,7 +729,7 @@ func TestRestored_Reap(t *testing.T) {
 					service:              New(Deps{VolumeRemover: remover}),
 					anonymousVolumeNames: map[string]string{anonVol.ObjectID: "9f8e7d", "volume-anon-app-1-kept": "kept"},
 				},
-				target: preparedSavepoint{savepoint: record},
+				target: preparedSavepoint{Target: composemodel.Target{Savepoint: record}},
 			}
 			recorder := &composetest.StepRecorder{}
 
@@ -762,7 +765,7 @@ func TestRestored_Reap_LogsTheRestoredLayers(t *testing.T) {
 			ctx := zerolog.New(logs).WithContext(context.Background())
 			restored := restoredWorkload{
 				vacant: vacantWorkload{service: New(Deps{})},
-				target: preparedSavepoint{savepoint: composetest.DemoRecord(), restored: tt.restored},
+				target: preparedSavepoint{Target: composemodel.Target{Savepoint: composetest.DemoRecord(), Restored: tt.restored}},
 			}
 
 			// Act
@@ -1060,12 +1063,12 @@ func TestVacant_Build_Progress(t *testing.T) {
 	runner.On("Start", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), time.Minute).Return(nil).Once()
 	svc := New(Deps{ComposeRunner: runner})
 	held := heldWorkload{service: svc, plan: composemodel.Plan{Project: composetest.DemoTargetSpec}}
-	prepared := preparedSavepoint{
-		savepoint:  record,
-		project:    composetest.DemoTargetSpec,
-		backends:   []model.VolumeSnapshotBackend{backend},
-		deployment: composetest.DemoDeployment(record),
-	}
+	prepared := preparedSavepoint{Target: composemodel.Target{
+		Savepoint:  record,
+		Project:    composetest.DemoTargetSpec,
+		Backends:   []model.VolumeSnapshotBackend{backend},
+		Deployment: composetest.DemoDeployment(record),
+	}}
 	recorder := &composetest.StepRecorder{}
 	ctx := composetest.NewProgressContext(recorder)
 	torn, err := held.Teardown(ctx)

@@ -95,17 +95,11 @@ func (h heldWorkload) PrepareSavepoint(
 	if err != nil {
 		return nil, err
 	}
-	restored, err := h.service.restoreWritableLayers(ctx, savepoint, h.plan.Project.Name)
+	target, err := h.service.preparer.PrepareHeld(ctx, savepoint, h.plan, opts.Deployment)
 	if err != nil {
 		return nil, err
 	}
-	return preparedSavepoint{
-		savepoint:  savepoint,
-		project:    retargetImages(h.plan.Project, restored),
-		restored:   restored,
-		backends:   h.plan.Volumes,
-		deployment: opts.Deployment,
-	}, nil
+	return preparedSavepoint{Target: target}, nil
 }
 
 // Teardown runs `compose down` of the held project.
