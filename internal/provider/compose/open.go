@@ -135,13 +135,13 @@ func openWorkload(
 	}
 
 	// Under tcp the server listens for the whole process, so a bad address fails up front.
-	cdcTransport, err := openCDCTransport(ctx, composeconfig.CDCWithDefaults(settings.Backends.CDC), profile.engine, resticRoot)
+	cdcTransport, err := openCDCTransport(ctx, composeconfig.CDCWithDefaults(settings.Backends.CDC), profile.Engine, resticRoot)
 	if err != nil {
 		return nil, err
 	}
 	opened.addFunc(cdcTransport.Close)
 
-	backendRegistry, err := newBackendRegistry(settings, resticRoot, profile.volumes, profile.engine, cdcTransport.transport)
+	backendRegistry, err := newBackendRegistry(settings, resticRoot, profile.Volumes, profile.Engine, cdcTransport.transport)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func openWorkload(
 		ArcaveProject:  cfg.ArcaveProject,
 		ComposeProject: composeProject,
 	}
-	imageBackend, err := newImageBackend(store, origin, profile.engine)
+	imageBackend, err := newImageBackend(store, origin, profile.Engine)
 	if err != nil {
 		return nil, err
 	}
@@ -165,22 +165,22 @@ func openWorkload(
 	return workload.New(workload.Deps{
 		// One store for the records and the data, so every record travels with its data.
 		SavepointRepo:    sprepo.New(store),
-		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
+		ComposeInspector: introspect.NewInspector(profile.API, composeProject),
 		ImageBackend:     imageBackend,
 		ComposeRunner:    composeRunner,
-		ContainerControl: profile.engine,
-		VolumeRemover:    profile.engine,
+		ContainerControl: profile.Engine,
+		VolumeRemover:    profile.Engine,
 		// The per-replica half of a layer restore: what compose's one image per
 		// service cannot express, the engine rebuilds container by container.
-		ContainerRebuilder: profile.engine,
-		ImageLookup:        profile.engine,
-		ProjectAssembler:   profile.assembler,
+		ContainerRebuilder: profile.Engine,
+		ImageLookup:        profile.Engine,
+		ProjectAssembler:   profile.Assembler,
 		SpecCodec:          composespec.NewCodec(),
 		BackendRegistry:    backendRegistry,
 		CaptureDefaults:    newCaptureDefaults(settings),
 		LeftoverVolumes:    settings.Compose.LeftoverVolumesPolicy(),
-		DaemonVersion:      profile.version,
-		MinDaemonMajor:     profile.minDaemonMajor,
+		DaemonVersion:      profile.Version,
+		MinDaemonMajor:     profile.MinDaemonMajor,
 		Store:              store,
 		Concurrency:        cfg.Concurrency,
 	}), nil

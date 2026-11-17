@@ -20,59 +20,24 @@ import (
 	"testing"
 
 	"github.com/distribution/reference"
+	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/client/dockerdesktop"
-	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/runtimeprofile"
 )
 
-// runtimeProfile is what arcave's DI root chooses by the engine behind the daemon.
-type runtimeProfile struct {
-	runtime model.ContainerRuntimeKind
-	// api is the daemon's Docker API, answering as Docker would.
-	api client.APIClient
-	// engine is what a workflow reaches the daemon through, over api.
-	engine    *dockerclient.Engine
-	assembler *composespec.Assembler
-}
-
-// newRuntimeProfile is the profile arcave's DI root builds for the daemon api answers as. It
-// mirrors the compose provider's newRuntimeProfile, private to its root.
-func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
+// newRuntimeProfile is the profile the compose provider chooses for the daemon api answers as.
+func newRuntimeProfile(t *testing.T, api *client.Client) runtimeprofile.Profile {
 	t.Helper()
-	runtime, err := dockerclient.ReadRuntime(context.Background(), api)
+	profile, err := runtimeprofile.Read(context.Background(), api,
+		dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: api.DaemonHost()}})
 	require.NoError(t, err)
-	answer, err := api.Info(context.Background(), client.InfoOptions{})
-	require.NoError(t, err)
-	info := answer.Info
-	if runtime.Kind == model.ContainerRuntimePodman {
-		libpodClient := newLibpodClient(t, api, runtime.Version)
-		podmanAPI := podmanclient.NewAPI(api, libpodClient)
-		engine := dockerclient.NewEngine(podmanAPI)
-		return runtimeProfile{
-			runtime:   runtime.Kind,
-			api:       podmanAPI,
-			engine:    engine,
-			assembler: composespec.NewAssembler(composespec.NewPodmanStamps(info)),
-		}
-	}
-	var dockerAPI client.APIClient = api
-	if model.IsDockerDesktop(info) {
-		dockerAPI = dockerdesktop.NewAPI(api)
-	}
-	engine := dockerclient.NewEngine(dockerAPI)
-	return runtimeProfile{
-		runtime:   runtime.Kind,
-		api:       dockerAPI,
-		engine:    engine,
-		assembler: composespec.NewAssembler(composespec.NewDockerStamps(info)),
-	}
+	return profile
 }
 
 // newLibpodClient reaches libpod at api's daemon, Podman of version, through api's own dialer.

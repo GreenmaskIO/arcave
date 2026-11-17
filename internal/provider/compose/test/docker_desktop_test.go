@@ -110,7 +110,7 @@ func TestDockerDesktop_ContainerInspect_BindOnTheHost(t *testing.T) {
 			id := createDesktopContainer(t, daemon, tt.hostConfig)
 
 			// Act
-			got, err := profile.api.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+			got, err := profile.API.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
 
 			// Assert
 			require.NoError(t, err)
@@ -137,7 +137,7 @@ func TestDockerDesktop_RecreateWithImage_KeepsTheHostPath(t *testing.T) {
 	name := "arcave-desktop-it-rebuilt-" + suffix
 
 	// Act
-	rebuilt, err := profile.engine.RecreateWithImage(context.Background(), id,
+	rebuilt, err := profile.Engine.RecreateWithImage(context.Background(), id,
 		model.ReplicaIdentity{Name: name, Number: 1}, busyboxImage)
 
 	// Assert
@@ -179,9 +179,9 @@ func TestDockerDesktop_ContainerInspect_InheritedBindMountedAsItsSource(t *testi
 			heir := createDesktopContainer(t, daemon, container.HostConfig{VolumesFrom: []string{source}})
 
 			// Act
-			gotSource, err := profile.api.ContainerInspect(context.Background(), source, client.ContainerInspectOptions{})
+			gotSource, err := profile.API.ContainerInspect(context.Background(), source, client.ContainerInspectOptions{})
 			require.NoError(t, err)
-			gotHeir, err := profile.api.ContainerInspect(context.Background(), heir, client.ContainerInspectOptions{})
+			gotHeir, err := profile.API.ContainerInspect(context.Background(), heir, client.ContainerInspectOptions{})
 			require.NoError(t, err)
 
 			// Assert

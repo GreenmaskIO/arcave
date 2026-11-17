@@ -245,7 +245,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService, prompter := newComposeService(t, cli)
 	profile := newRuntimeProfile(t, daemonAPI)
-	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(project))
+	inspector := introspect.NewInspector(profile.API, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
@@ -273,7 +273,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		ctx:       zerolog.New(io.Discard).WithContext(context.Background()),
 		svc:       svc,
 		compose:   runner,
-		engine:    profile.engine,
+		engine:    profile.Engine,
 		daemon:    daemonAPI,
 		inspector: inspector,
 		codec:     codec,

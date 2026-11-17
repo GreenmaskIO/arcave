@@ -220,7 +220,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService, prompter := newComposeService(t, cli)
 	profile := newRuntimeProfile(t, daemonAPI)
-	inspector := introspect.NewInspector(profile.api, model.DockerComposeProjectName(project))
+	inspector := introspect.NewInspector(profile.API, model.DockerComposeProjectName(project))
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})

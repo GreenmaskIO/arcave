@@ -175,10 +175,10 @@ func newFidelityEnv(t *testing.T) *fidelityEnv {
 		runner: composeclient.NewClient(composeService, composeclient.Options{
 			WaitTimeout: 90 * time.Second, StopTimeout: 2 * time.Second, Prompter: prompter,
 		}),
-		inspector: introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
-		assembler: profile.assembler,
+		inspector: introspect.NewInspector(profile.API, model.DockerComposeProjectName(project)),
+		assembler: profile.Assembler,
 		codec:     composespec.NewCodec(),
-		runtime:   profile.runtime,
+		runtime:   profile.Kind,
 		project:   project,
 		dir:       t.TempDir(),
 		volumes:   map[string]bool{},

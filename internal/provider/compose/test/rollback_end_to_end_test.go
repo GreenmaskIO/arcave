@@ -204,7 +204,7 @@ func (e *imageRollbackEnv) down(t *testing.T) {
 	require.NoError(t, err)
 	// The project as compose would load it, so Down removes a container before the one
 	// whose namespace it joins: Podman refuses the other order.
-	assembled, err := newRuntimeProfile(t, e.daemon).assembler.Assemble(e.ctx, res)
+	assembled, err := newRuntimeProfile(t, e.daemon).Assembler.Assemble(e.ctx, res)
 	require.NoError(t, err)
 	spec, err := composespec.NewCodec().Marshal(assembled)
 	require.NoError(t, err)

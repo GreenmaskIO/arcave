@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"testing"
 
+	dockercontext "github.com/docker/cli/cli/context/docker"
 	"github.com/greenmaskio/storages"
 	"github.com/greenmaskio/storages/inmemory"
 	"github.com/moby/moby/api/types/container"
@@ -34,9 +35,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
-	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
-	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/runtimeprofile"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 )
 
@@ -167,17 +167,13 @@ func newEnv(t *testing.T, compression fullcopy.Compression) *env {
 	}
 }
 
-// newVolumeStreamer is the streamer arcave's DI root builds for the daemon cli answers as.
+// newVolumeStreamer is the streamer the compose provider chooses for the daemon cli answers as.
 func newVolumeStreamer(t *testing.T, cli *client.Client) fullcopy.VolumeStreamer {
 	t.Helper()
-	runtime, err := dockerclient.ReadRuntime(context.Background(), cli)
+	profile, err := runtimeprofile.Read(context.Background(), cli,
+		dockercontext.Endpoint{EndpointMeta: dockercontext.EndpointMeta{Host: cli.DaemonHost()}})
 	require.NoError(t, err)
-	if runtime.Kind == model.ContainerRuntimePodman {
-		libpodClient, err := libpod.NewClient(cli, libpod.Options{Version: runtime.Version})
-		require.NoError(t, err)
-		return podmanclient.NewEngine(dockerclient.NewEngine(podmanclient.NewAPI(cli, libpodClient)))
-	}
-	return dockerclient.NewEngine(cli)
+	return profile.Volumes
 }
 
 // backend builds the instance under test, as the registry does.
