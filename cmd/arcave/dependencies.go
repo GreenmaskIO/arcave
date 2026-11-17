@@ -257,9 +257,10 @@ func openSavepointService(
 	})
 	// The compose provider: the workload core runs its stages through, over the same repository and
 	// runner the capture and the rollback share.
+	inspector := introspect.NewInspector(profile.api, composeProject)
 	workload := compose.New(compose.Deps{
 		SavepointRepo:    savepointRepo,
-		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
+		ComposeInspector: inspector,
 		ImageBackend:     imageBackend,
 		ComposeRunner:    composeRunner,
 		ContainerControl: profile.engine,
@@ -278,6 +279,13 @@ func openSavepointService(
 		Store:              scope.store,
 		Concurrency:        cfg.Common.Concurrency,
 		RunnerInfo:         newRunnerInfo(),
+		// What a forced up drops the compose project with, by its label and its name.
+		ArcaveProject:  model.ArcaveProjectName(cfg.Project.Name),
+		ComposeProject: composeProject,
+		ResourceReader: inspector,
+		VolumesDowner:  composeRunner,
+		ProjectRemover: profile.engine,
+		LayerTags:      profile.engine,
 	})
 
 	// The locker is bound to the project root here, so the service never names a path.
@@ -295,6 +303,63 @@ func openSavepointService(
 		ComposeProject: composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
 		Sessions: scope.sessions,
+	}), nil
+}
+
+// openDownService wires down for composeProject in the session sessionRef resolves to: the daemon,
+// the marker and the flock, and of the store the session's record alone. Nothing a capture or a
+// restore needs is built — no backend, no image backend, no cdc transport and its listener — and
+// no session lock or write admission: a down writes nothing to the store.
+func openDownService(
+	ctx context.Context, projectPath string, cfg config.Config, sessionRef string,
+	composeProject model.DockerComposeProjectName, opened *closers,
+) (*core.DownService, error) {
+	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
+		return nil, err
+	}
+	scope, err := openSessionScope(ctx, cfg, projectPath, sessionRef, opened)
+	if err != nil {
+		return nil, err
+	}
+	composeOutput := newComposeProgress(
+		composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY), *log.Ctx(ctx),
+	)
+	daemon, err := connectDaemon(cfg.Docker, composeOutput.stream, opened)
+	if err != nil {
+		return nil, err
+	}
+	composeAPI, err := dockercompose.NewComposeService(daemon.cli,
+		dockercompose.WithEventProcessor(composeOutput.processor),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialise compose: %w", err)
+	}
+	// No runtime profile: the listings, compose's down, a volume's removal and an untag read alike
+	// on every engine.
+	engine := docker.NewEngine(daemon.api)
+	arcaveProject := model.ArcaveProjectName(cfg.Project.Name)
+	// The compose provider with only what a drop needs: no store, no backends, no capture.
+	workload := compose.New(compose.Deps{
+		ArcaveProject:  arcaveProject,
+		ComposeProject: composeProject,
+		ResourceReader: introspect.NewInspector(daemon.api, composeProject),
+		VolumesDowner: composeclient.NewClient(composeAPI, composeclient.Options{
+			WaitTimeout:     cfg.Compose.WaitTimeout,
+			StopTimeout:     cfg.Compose.StopTimeout,
+			Events:          composeOutput.events,
+			SinkFromContext: newComposeEventSink,
+		}),
+		ProjectRemover: engine,
+		LayerTags:      engine,
+	})
+	return core.NewDownService(core.DownDeps{
+		ProjectLocker:  lock.New(projectPath),
+		Inflight:       inflightrepo.New(projectPath),
+		Sessions:       scope.sessions,
+		Session:        scope.sessionID,
+		ArcaveProject:  arcaveProject,
+		ComposeProject: composeProject,
+		Workload:       workload,
 	}), nil
 }
 

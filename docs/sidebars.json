@@ -143,6 +143,16 @@
                 },
                 {
                   "type": "doc",
+                  "id": "reference/cli/up",
+                  "label": "up"
+                },
+                {
+                  "type": "doc",
+                  "id": "reference/cli/down",
+                  "label": "down"
+                },
+                {
+                  "type": "doc",
                   "id": "reference/cli/session",
                   "label": "session"
                 },

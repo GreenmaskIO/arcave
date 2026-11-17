@@ -16,7 +16,7 @@ arcave status -p <compose-project> [--session <session>] [flags]
 
 ## Where the answer comes from
 
-A rollback marks every container it builds, so `status` reads what is deployed — which savepoint, from which session, when — off the Docker daemon alone: it answers even after the savepoint or its session is removed. A container recreated outside arcave — `docker compose up` of your own file, say — is no longer part of the rollback, and `status` warns of it; once every container was recreated, the title says `not deployed by arcave`.
+A rollback — or an [`up`](up.md) — marks every container it builds, so `status` reads what is deployed — which savepoint, from which session, when — off the Docker daemon alone: it answers even after the savepoint or its session is removed. A container recreated outside arcave — `docker compose up` of your own file, say — is no longer part of the rollback, and `status` warns of it; once every container was recreated, the title says `not deployed by arcave`.
 
 The store only adds to that: whether the deployed savepoint still exists, and, while it does, its description, what it restored and what it left out. A store that cannot be read — unreachable, or opened with the wrong `encryption.key` — leaves the daemon's part whole: the result is printed and the command exits `1`.
 

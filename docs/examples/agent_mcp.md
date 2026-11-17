@@ -38,7 +38,7 @@ Start the host **in the project directory**, so `.arcave/config.yaml` resolves t
 
 ## 3. What the agent sees
 
-Twelve tools:
+Sixteen tools:
 
 | Tool | Purpose |
 |---|---|
@@ -46,16 +46,20 @@ Twelve tools:
 | `savepoint_list` | Find previous captures, newest first; `sort: "asc"` turns it around |
 | `savepoint_remove` | Prune |
 | `rollback` | Restore |
+| `up` | Bring the environment up from a savepoint where nothing of it runs; `force` drops what is there first, with no backup |
+| `down` | End the environment on the daemon; take a savepoint first to keep it |
 | `session_list` | List the [sessions](../sessions.md) |
+| `session_show` | One session's savepoints, by compose project |
 | `session_create` | Create a session, empty or a copy of another (`from`) |
 | `session_remove` | Remove a session and its savepoints |
 | `session_current` | Show the session calls work in |
 | `session_set` | Make a session the current one |
 | `session_unset` | Go back to `baseline` |
 | `gc` | Reclaim the space removed savepoints held; reports only unless `dry_run` is `false` |
+| `status` | What the daemon runs for a compose project, and a rollback in progress or interrupted |
 | `compose_generate` | A compose file rebuilt from the running project |
 
-The four savepoint tools and `compose_generate` take `compose_project` explicitly — one server serves many compose projects, and the agent names the one it means per call. The four savepoint tools also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `compose_project`: a session holds every compose project of the directory.
+The four savepoint tools, `up`, `down`, `status` and `compose_generate` take `compose_project` explicitly — one server serves many compose projects, and the agent names the one it means per call. The savepoint tools, `up` and `down` also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `compose_project`: a session holds every compose project of the directory.
 
 ```json title="A savepoint_create call"
 {
@@ -115,7 +119,7 @@ Because the environment resets between attempts, attempt 4 is genuinely attempt 
 }
 ```
 
-Both tools that restart the project accept `wait_timeout`. Without it they use the project's `compose.wait_timeout`, two minutes by default — and an agent that keeps hitting that on a slow-starting project will read the timeout as a failure and roll back for the wrong reason.
+The tools that start the project — `savepoint_create`, `rollback` and `up` — accept `wait_timeout`. Without it they use the project's `compose.wait_timeout`, two minutes by default — and an agent that keeps hitting that on a slow-starting project will read the timeout as a failure and roll back for the wrong reason.
 
 ## 6. Watch what it is doing
 

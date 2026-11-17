@@ -29,6 +29,42 @@ type Workload interface {
 	// Inspect reads the workload as it runs and refuses a daemon it cannot work on. It changes
 	// nothing.
 	Inspect(ctx context.Context) (LiveWorkload, error)
+	// Survey reads what the daemon holds of the workload by its labels alone, and refuses no
+	// daemon: a workload too broken to inspect is what a drop is for. It changes nothing.
+	Survey(ctx context.Context) (SurveyedWorkload, error)
+}
+
+// SurveyedWorkload is what Survey found of the workload on the daemon; nothing is touched.
+type SurveyedWorkload interface {
+	// Resources names what is there by the daemon's names, every list non-nil.
+	Resources() model.DiscardedResources
+	// Present tells whether a build would reuse something of what is there: a container, or a
+	// volume the workload owns. A network holds no data and does not count.
+	Present() bool
+	// Owner judges whose build the workload is by what its replicas name, and returns the
+	// deployment it read: no error when every replica names session of arcaveProject, or nothing
+	// is there; model.ErrNotDeployedByArcave or model.ErrDeployedElsewhere otherwise.
+	Owner(arcaveProject model.ArcaveProjectName, session model.SessionID) (*model.SavepointDeployment, error)
+	// PrepareSavepoint makes the savepoint id names ready to build once Drop removed what is
+	// there: nothing of it refuses the savepoint, but a daemon Inspect would refuse does.
+	PrepareSavepoint(ctx context.Context, id model.SavepointID, opts PrepareOptions) (PreparedSavepoint, error)
+	// Drop removes everything of the workload, its data included and with no backup, and proves
+	// it gone; on an empty one it removes nothing. A container or a volume something outside the
+	// workload still holds outlives it, and is model.ErrComposeProjectLeft.
+	Drop(ctx context.Context) (DroppedWorkload, error)
+}
+
+// DroppedWorkload is the workload dropped: nothing of it is left on the daemon that holds data.
+type DroppedWorkload interface {
+	// Notices names what the drop left that holds no data, and why.
+	Notices() []model.Notice
+	// Vacant is the dropped workload ready to build prepared, a savepoint the surveyed workload
+	// prepared.
+	Vacant(prepared PreparedSavepoint) (VacantWorkload, error)
+	// RemoveRestoredLayers removes the image tags the workload's builds restored writable layers
+	// under, whichever session built them: once it is dropped no container runs on one. A tag
+	// that will not come off is a notice, never an error.
+	RemoveRestoredLayers(ctx context.Context) ([]model.ImageRef, []model.Notice)
 }
 
 // LiveWorkload is the workload as Inspect found it; nothing is touched.

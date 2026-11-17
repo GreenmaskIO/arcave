@@ -16,6 +16,7 @@ package compose
 
 import (
 	"context"
+	"slices"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/greenmaskio/storages"
@@ -51,6 +52,59 @@ func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResu
 	args := m.Called(ctx)
 	introspection, _ := args.Get(0).(model.IntrospectionResult)
 	return introspection, args.Error(1)
+}
+
+func (m *mockInspector) ReadResources(ctx context.Context) (model.ComposeProjectResources, error) {
+	args := m.Called(ctx)
+	resources, _ := args.Get(0).(model.ComposeProjectResources)
+	return resources, args.Error(1)
+}
+
+// resourcesOfVolumes is what the narrow read reports of introspection's owned volumes, sorted.
+func resourcesOfVolumes(introspection model.IntrospectionResult) model.ComposeProjectResources {
+	var names []string
+	for _, v := range introspection.Project.Volumes {
+		if !v.External {
+			names = append(names, v.Name)
+		}
+	}
+	slices.Sort(names)
+	return model.ComposeProjectResources{Volumes: names}
+}
+
+// mockVolumesDowner doubles volumesDowner.
+type mockVolumesDowner struct{ mock.Mock }
+
+func (m *mockVolumesDowner) DownWithVolumes(ctx context.Context, composeProject string) error {
+	return m.Called(ctx, composeProject).Error(0)
+}
+
+// mockProjectRemover doubles projectRemover.
+type mockProjectRemover struct{ mock.Mock }
+
+func (m *mockProjectRemover) RemoveContainer(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
+}
+
+func (m *mockProjectRemover) RemoveVolume(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
+}
+
+func (m *mockProjectRemover) RemoveNetwork(ctx context.Context, name string) error {
+	return m.Called(ctx, name).Error(0)
+}
+
+// mockLayerTags doubles layerTags.
+type mockLayerTags struct{ mock.Mock }
+
+func (m *mockLayerTags) ListLayerImages(ctx context.Context) ([]model.TaggedImage, error) {
+	args := m.Called(ctx)
+	images, _ := args.Get(0).([]model.TaggedImage)
+	return images, args.Error(1)
+}
+
+func (m *mockLayerTags) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
+	return m.Called(ctx, ref).Error(0)
 }
 
 // mockVolumeRemover doubles volumeRemover.

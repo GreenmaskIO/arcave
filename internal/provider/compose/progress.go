@@ -35,6 +35,9 @@ const (
 	kindLayer          progress.Kind = "layer"
 	kindReplicaRebuild progress.Kind = "replica.rebuild"
 	kindReplica        progress.Kind = "replica"
+
+	kindDownUntag progress.Kind = "down.untag"
+	kindTag       progress.Kind = "tag"
 )
 
 // newRestoreSample is the sample a restored unit ends with: its size.

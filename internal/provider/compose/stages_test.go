@@ -485,10 +485,10 @@ func TestHeld_Teardown(t *testing.T) {
 		runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once(),
 		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
 		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
-		inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
+		inspector.On("ReadResources", mock.Anything).Return(resourcesOfVolumes(now), nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
-	svc := New(Deps{ComposeRunner: runner, ComposeInspector: inspector, VolumeRemover: remover})
+	svc := New(Deps{ComposeRunner: runner, ResourceReader: inspector, VolumeRemover: remover})
 	plan := svc.newCapturePlan(captureplan.Plan{Project: demoSpec, Services: []captureplan.ServiceHold{{Service: demoService}}}, introspection)
 	ctx := zerolog.Nop().WithContext(context.Background())
 	holding, err := plan.Hold(ctx)
@@ -753,10 +753,10 @@ func TestVacant_Discard(t *testing.T) {
 			remover := &mockVolumeRemover{}
 			mock.InOrder(
 				runner.On("Down", mock.Anything, demoTargetSpec).Return(tt.downErr).Once(),
-				inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
+				inspector.On("ReadResources", mock.Anything).Return(resourcesOfVolumes(now), nil).Once(),
 				remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 			)
-			svc := New(Deps{ComposeRunner: runner, ComposeInspector: inspector, VolumeRemover: remover})
+			svc := New(Deps{ComposeRunner: runner, ResourceReader: inspector, VolumeRemover: remover})
 			vacant := vacantWorkload{service: svc, ownedBefore: map[string]bool{"demo_db": true}, downProject: demoTargetSpec}
 
 			// Act
@@ -930,12 +930,14 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 		runner.On("Create", mock.Anything, deployedFrom(demoTargetSpec, demoDeployment(record)), demoRestoredVolumes).
 			Return(errors.New("create boom")).Once(),
 		runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once(),
-		inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
+		// The narrow read: a container left half-built must not hide the volumes.
+		inspector.On("ReadResources", mock.Anything).Return(resourcesOfVolumes(now), nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
 	svc := New(Deps{
 		SavepointRepo:    repo,
 		ComposeInspector: inspector,
+		ResourceReader:   inspector,
 		ComposeRunner:    runner,
 		SpecCodec:        codec,
 		BackendRegistry:  registry,

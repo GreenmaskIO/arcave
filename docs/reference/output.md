@@ -90,7 +90,7 @@ Every node's `open.step.kind` is one of these: an action is `<namespace>.<action
 
 | Kind | What it is |
 |---|---|
-| `savepoint.create`, `savepoint.remove`, `rollback`, `gc`, `session.fork`, `session.remove` | the root of the command that ran |
+| `savepoint.create`, `savepoint.remove`, `rollback`, `up`, `down`, `gc`, `session.fork`, `session.remove` | the root of the command that ran |
 | `session.lock` | the wait for another holder of the session's lock; reported only when there is one |
 | `project.introspect` | reading the live compose project |
 | `savepoint.hold`, `savepoint.release` | holding the compose project still for a capture and bringing it back after, whatever each service's [capture mode](../capture_modes.md); one `resource` per container compose stops or starts, and a warning per replica found paused |
@@ -101,6 +101,7 @@ Every node's `open.step.kind` is one of these: an action is `<namespace>.<action
 | `image.capture` → `image` | a batch over the images, one `image` per image |
 | `replica.rebuild` → `replica` | the replicas a rollback recreates under their recorded number |
 | `savepoint.drop` → `savepoint` | the savepoints a remove takes; under `gc.erase`, each retired safety snapshot |
+| `down.untag` → `tag` | the restored layer tags a down removes, one `tag` per tag |
 | `rollback.prepare`, `rollback.safety-snapshot`, `rollback.apply`, `rollback.revert`, `rollback.cleanup` | a rollback's phases |
 | `session.copy` → `key` | a fork's copy, one `key` per top-level directory or object |
 | `gc.find` → `collector`, `gc.find` → `compose-project` → `collector` | what each collector found: the daemon's, then each compose project's |
@@ -133,6 +134,8 @@ The JSON each command prints; [as text](#result-format), each is a summary, a ta
 | [`savepoint list`](cli/savepoint_list.md) | an array of savepoint records, newest first unless `--sort asc`; `[]` when there are none |
 | [`savepoint remove`](cli/savepoint_remove.md) | `{"dry_run": …, "removed": [ … ]}` |
 | [`rollback`](cli/rollback.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "safety_snapshot": "<id>", "leftover_volumes": [ … ]}` |
+| [`up`](cli/up.md) | `{"rolled_back_to": …, "restored": [ … ], "writable_layers": [ … ], "discarded": { … }}` — `discarded` only when `--force` dropped something |
+| [`down`](cli/down.md) | `{"compose_project": …, "session": …, "deployment": …, "forced": …, "cleared_inflight": …, "discarded": { … }, "removed_tags": [ … ], "notices": [ … ]}` |
 | [`session create`](cli/session.md#session-create), [`session set`](cli/session.md#session-set), [`session unset`](cli/session.md#session-unset) | one session record: `{"id": …, "name": …, "created_at": …, "from": {"session": …}}` |
 | [`session current`](cli/session.md#session-current) | the session record plus `current_source`: `{"source": "flag" \| "env" \| "pointer" \| "default", "overrides": {"id": …, "name": …}}` — `overrides`, the session the flag or the variable hides, only when it hides another |
 | [`session list`](cli/session.md#session-list) | an array of session entries — the record plus `status`, `current_source` on the current entry alone, `savepoint_count`, `safety_snapshot_count`, `compose_projects`, `size_bytes` — newest first unless `--sort asc` |
@@ -300,6 +303,45 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 `safety_snapshot` is the id of the safety snapshot the rollback took: rolling back to it undoes the rollback. It is omitted when none was taken: the project had no containers, or `rollback.safety_snapshot` or `--safety-snapshot` turned it off. In that last case the stream has no `rollback.safety-snapshot` step, and a warning, marked `in_result`, says what running without one risks.
 
 `leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`rollback.leftover_volumes: overwrite`](configuration.md#rollback). No safety snapshot holds what they held. Each is also a severe warning in the result, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
+
+## `up`
+
+```json
+{
+  "rolled_back_to": { … the savepoint record … },
+  "restored": [ … as in rollback … ],
+  "writable_layers": [ … as in rollback … ],
+  "discarded": {
+    "containers": ["myapp-app-1", "myapp-db-1"],
+    "volumes": ["myapp_pgdata"],
+    "networks": ["myapp_default"]
+  }
+}
+```
+
+The fields `rollback` prints, without `safety_snapshot`: an `up` takes none. `discarded` is what `--force` dropped before the build, by docker name, as read before the drop; it is omitted when the daemon held nothing of the compose project. An anonymous volume goes with its container and is not listed.
+
+## `down`
+
+```json
+{
+  "compose_project": "myapp",
+  "session": { "id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table" },
+  "deployment": {
+    "deployed_at": "2026-06-02T09:12:40Z",
+    "arcave_project": "myapp",
+    "session": { "id": "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31", "name": "feat/add-new-table" },
+    "savepoint": { "id": "019e843e-1650-7000-8000-000000000000", "name": "before-migration",
+                   "created_at": "2026-06-01T19:41:12.123456789Z", "safety_snapshot": false },
+    "service_replicas": { "app": [1], "db": [1] }
+  },
+  "forced": false,
+  "discarded": { "containers": [ … ], "volumes": [ … ], "networks": [ … ] },
+  "removed_tags": ["arcave/myapp-app-1-myapp-latest:sp-019e843e-1650-7000-8000-000000000000"]
+}
+```
+
+`deployment` is what the replicas' `io.arcave.deployment.*` labels named, omitted when none did. `cleared_inflight`, the interrupted-rollback marker a forced down cleared, and `notices`, what it left behind, are omitted when there is none. `discarded` and `removed_tags` are `[]`, never `null`, when there was nothing. See [`arcave down`](cli/down.md#output).
 
 ## `status`
 

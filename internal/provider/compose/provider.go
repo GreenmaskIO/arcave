@@ -140,6 +140,20 @@ type Deps struct {
 	// heartbeat.DefaultInterval and heartbeat.DefaultStaleAfter.
 	HeartbeatInterval   time.Duration
 	HeartbeatStaleAfter time.Duration
+
+	// ArcaveProject and ComposeProject name the compose project a drop takes down by its name and
+	// whose restored layer tags it removes.
+	ArcaveProject  model.ArcaveProjectName
+	ComposeProject model.DockerComposeProjectName
+	// ResourceReader reads what the daemon holds of the compose project by its label alone: a
+	// survey, a drop proving itself, a failed build's cleanup.
+	ResourceReader resourceReader
+	// VolumesDowner is compose's down by the project's name, its volumes too.
+	VolumesDowner volumesDowner
+	// ProjectRemover removes by docker name what compose's down leaves.
+	ProjectRemover projectRemover
+	// LayerTags are the restored layer tags a drop of the compose project removes.
+	LayerTags layerTags
 }
 
 // Provider is the compose provider of one compose project in one session: the workload core inspects.
@@ -162,6 +176,12 @@ type Provider struct {
 	store                   storages.Storager
 	maxConcurrentOperations int
 	capturer                *capture.Capturer
+	arcaveProject           model.ArcaveProjectName
+	composeProject          model.DockerComposeProjectName
+	resourceReader          resourceReader
+	volumesDowner           volumesDowner
+	projectRemover          projectRemover
+	layerTags               layerTags
 }
 
 // New builds a Provider from deps.
@@ -193,6 +213,12 @@ func New(deps Deps) *Provider {
 			HeartbeatInterval:   deps.HeartbeatInterval,
 			HeartbeatStaleAfter: deps.HeartbeatStaleAfter,
 		}),
+		arcaveProject:  deps.ArcaveProject,
+		composeProject: deps.ComposeProject,
+		resourceReader: deps.ResourceReader,
+		volumesDowner:  deps.VolumesDowner,
+		projectRemover: deps.ProjectRemover,
+		layerTags:      deps.LayerTags,
 	}
 }
 
