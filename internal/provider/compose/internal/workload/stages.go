@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package workload
 
 import (
 	"context"
@@ -90,7 +90,7 @@ func (l liveWorkload) Teardown(ctx context.Context, prepared provider.PreparedSa
 // vacantWorkload is the compose project with nothing of it running: the anonymous volumes its teardown
 // orphaned, the volumes it owned before the build, and the project a discard takes down.
 type vacantWorkload struct {
-	service              *Provider
+	service              *composeWorkload
 	anonymousVolumeNames map[string]string
 	ownedBefore          map[string]bool
 	downProject          *types.Project

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package workload
 
 import (
 	"context"
@@ -22,7 +22,8 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/capture"
+	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/captureplan"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/deploy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/inspection"
@@ -110,7 +111,7 @@ type containerControl interface {
 	AwaitHealthProbes(ctx context.Context, ids []string) error
 }
 
-// Deps are Provider's collaborators.
+// Deps are the collaborators of a compose project's workload.
 type Deps struct {
 	SavepointRepo    savepointRepository
 	ComposeInspector composeIntrospector
@@ -146,8 +147,9 @@ type Deps struct {
 	HeartbeatStaleAfter time.Duration
 }
 
-// Provider is the compose provider of one compose project in one session: the workload core inspects.
-type Provider struct {
+// composeWorkload is one compose project in one session, as the compose provider runs it: the
+// workload core inspects, over the components each stage delegates to.
+type composeWorkload struct {
 	savepointRepo savepointRepository
 	inspector     *inspection.Inspector
 	planner       *captureplan.Planner
@@ -159,14 +161,19 @@ type Provider struct {
 	containerControl containerControl
 }
 
-// New builds a Provider from deps.
-func New(deps Deps) *Provider {
+// New builds the workload of one compose project from deps.
+func New(deps Deps) provider.Workload {
+	return newComposeWorkload(deps)
+}
+
+// newComposeWorkload builds the workload and the components it delegates to.
+func newComposeWorkload(deps Deps) *composeWorkload {
 	inspector := inspection.New(inspection.Deps{
 		ComposeInspector: deps.ComposeInspector,
 		DaemonVersion:    deps.DaemonVersion,
 		MinDaemonMajor:   deps.MinDaemonMajor,
 	})
-	return &Provider{
+	return &composeWorkload{
 		savepointRepo: deps.SavepointRepo,
 		inspector:     inspector,
 		planner: captureplan.New(captureplan.Deps{

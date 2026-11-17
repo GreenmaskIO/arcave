@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package workload
 
 import (
 	"errors"
@@ -53,7 +53,7 @@ func TestCapturePlan_Hold(t *testing.T) {
 			// Arrange
 			runner := &composetest.MockComposeRunner{}
 			runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string{"c1"}, tt.stopErr).Once()
-			svc := New(Deps{ComposeRunner: runner})
+			svc := newComposeWorkload(Deps{ComposeRunner: runner})
 			recorder := &composetest.StepRecorder{}
 
 			// Act
@@ -86,7 +86,7 @@ func TestHeld_Capture(t *testing.T) {
 		return savepoint.ID.Validate() == nil
 	})).Run(func(args mock.Arguments) { committed = args.Get(1).(model.Savepoint) }).Return(nil).Once()
 	mock.InOrder(stop, spec, commit)
-	svc := New(Deps{
+	svc := newComposeWorkload(Deps{
 		SavepointRepo: repo,
 		ComposeRunner: runner,
 		Store:         composetest.NewDirStore(t),
@@ -137,7 +137,7 @@ func TestCapturePlan_Release(t *testing.T) {
 			// Arrange
 			runner := &composetest.MockComposeRunner{}
 			runner.On("Start", mock.Anything, composetest.DemoSpec, time.Minute).Return(tt.startErr).Once()
-			svc := New(Deps{ComposeRunner: runner})
+			svc := newComposeWorkload(Deps{ComposeRunner: runner})
 			recorder := &composetest.StepRecorder{}
 			ctx := composetest.NewProgressContext(recorder)
 
@@ -207,7 +207,7 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 				runner.On("Start", mock.Anything, composetest.DemoSpec, time.Minute).Return(nil).Once(),
 			)
 			mock.InOrder(calls...)
-			svc := New(Deps{
+			svc := newComposeWorkload(Deps{
 				SavepointRepo:    repo,
 				ComposeRunner:    runner,
 				ContainerControl: control,

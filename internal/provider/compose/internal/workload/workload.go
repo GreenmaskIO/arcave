@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package workload
 
 import (
 	"context"
@@ -25,13 +25,13 @@ import (
 
 // liveWorkload is the compose project as one introspection found it.
 type liveWorkload struct {
-	service       *Provider
+	service       *composeWorkload
 	introspection model.IntrospectionResult
 }
 
 // Inspect reads the compose project as the daemon holds it now, and refuses a daemon the image
 // backend cannot serve.
-func (s *Provider) Inspect(ctx context.Context) (provider.LiveWorkload, error) {
+func (s *composeWorkload) Inspect(ctx context.Context) (provider.LiveWorkload, error) {
 	introspection, err := s.inspector.Inspect(ctx)
 	if err != nil {
 		return nil, err

@@ -15,12 +15,14 @@
 package compose
 
 import (
-	"github.com/greenmaskio/arcave/pkg/progress"
+	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
 )
 
-// The kinds of the steps the provider opens beside a capture's own: <namespace>.<action> for an
-// action, a bare noun for an object.
-const (
-	kindSavepointHold    progress.Kind = "savepoint.hold"
-	kindSavepointRelease progress.Kind = "savepoint.release"
-)
+// Deps are the collaborators of one compose project's workload.
+type Deps = workload.Deps
+
+// New builds the workload of one compose project in one session: the stages core runs it through.
+func New(deps Deps) provider.Workload {
+	return workload.New(deps)
+}
