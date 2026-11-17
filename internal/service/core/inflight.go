@@ -37,8 +37,10 @@ func interruptedState(marker model.InflightMarker) string {
 	case marker.Safety != "" && marker.Target == marker.Safety:
 		return "the recovery to the safety snapshot failed; volumes may be half-restored"
 	// Ahead of restore-done: a failed cold start has removed what the restore wrote into.
+	// Not "nothing changed": a forced up drops the compose project in this phase.
 	case marker.Safety == "" && marker.Phase == model.InflightRecreating:
-		return "a rollback that took no safety snapshot was interrupted before it wrote any volume"
+		return "a rollback that took no safety snapshot was interrupted before it restored any volume; " +
+			"the containers may be gone"
 	case marker.Safety == "":
 		return "a rollback that took no safety snapshot was interrupted; volumes may be half-restored"
 	case marker.Phase == model.InflightRestoreDone:

@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Recovering from an interrupted rollback, finding what is deployed, a held project or session lock, a torn-down project, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
+description: Recovering from an interrupted rollback, finding what is deployed, a held project or session lock, a torn-down project, an up or a down refused, a missing volume, a refused label or config, a stale current session, a health-check timeout and cdc container networking.
 keywords: [arcave troubleshooting, interrupted rollback, safety snapshot, project lock, health check, cdc, restic]
 ---
 
@@ -181,7 +181,45 @@ arcave reads the running project from the daemon, not from your compose files. `
 compose project is not running but its volumes survive: myapp_pgdata
 ```
 
-A rollback into a project with no containers found named volumes the savepoint would restore into — usually left behind by `docker compose down` — and [`rollback.leftover_volumes`](configuration.md#rollback) is `refuse`. Nothing was created. Remove the volumes if you do not need them (`docker volume rm myapp_pgdata`), or set `leftover_volumes: overwrite` to have the rollback write over them.
+A rollback into a project with no containers found named volumes the savepoint would restore into — usually left behind by `docker compose down` — and [`rollback.leftover_volumes`](configuration.md#rollback) is `refuse`. Nothing was created. Remove the volumes if you do not need them (`docker volume rm myapp_pgdata`), or set `leftover_volumes: overwrite` to have the rollback write over them. [`arcave down`](cli/down.md) removes them with the rest of an environment arcave deployed.
+
+## `the daemon holds the compose project already`
+
+```text
+the daemon holds the compose project already: volumes myapp_pgdata; pass --force to drop all of it first, with no backup; 'arcave rollback' replaces a running environment and keeps a safety snapshot
+```
+
+[`arcave up`](cli/up.md) builds over nothing, and the daemon still holds containers or volumes of the compose project — a running environment, or the named volumes a `docker compose down` without `-v` left. Nothing was written. Pick by what you want of it:
+
+* **Keep a way back:** `arcave rollback <savepoint>` replaces it behind a safety snapshot.
+* **End it first, as arcave does:** `arcave down`, then `arcave up`.
+* **Throw it away:** `arcave up --force` drops all of it, with no backup.
+
+## `the environment was deployed from elsewhere`
+
+```text
+the environment was deployed from elsewhere: session "feat/add-new-table" (019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31); run it in that session with --session feat/add-new-table, or pass --force to take it down anyway
+```
+
+[`arcave down`](cli/down.md) found a replica a rollback or an `up` of another session built — or of another arcave project, which the message names. Nothing was removed. Run the down in that session, as the message says, or pass `--force` if the environment is yours to end whoever built it. [`arcave status`](cli/status.md) shows the deployment first.
+
+## `the environment was not deployed by arcave`
+
+```text
+the environment was not deployed by arcave: no deployment labels on app-1; pass --force to take it down anyway
+```
+
+A replica of the compose project carries no `io.arcave.deployment.*` labels: `docker compose up` of your own compose file built or recreated it. Or no replica is left, and containers, volumes or networks of the compose project are — the message lists them. Nothing was removed. `arcave down --force` takes it down; `docker compose down` does too, leaving the named volumes.
+
+## `the daemon still holds the compose project after its drop`
+
+```text
+the daemon still holds the compose project after its drop: volumes myapp_pgdata: …
+```
+
+A `down`, or a forced `up`, removed what it could, and a container or a volume of the compose project survived: something outside the compose project still holds it — a container of another project mounting the volume, say. The cause names the holder. A down keeps the interrupted-rollback marker and the restored layer tags; a forced up builds nothing. Stop or remove what holds it, then run the command again.
+
+A network another container still uses never fails the command: it stays, and a notice names it.
 
 ## `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`
 

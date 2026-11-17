@@ -47,13 +47,13 @@ func (m DeployedSavepoint) String() string {
 // SavepointDeployment is one build of a compose project from a savepoint, as the labels of every
 // container it built spell it: what a status reads with no store.
 type SavepointDeployment struct {
-	DeployedAt time.Time
+	DeployedAt time.Time `json:"deployed_at"`
 	// ArcaveProject is the arcave project whose store holds Session.
-	ArcaveProject ArcaveProjectName
-	Session       SessionRef
-	Savepoint     DeployedSavepoint
+	ArcaveProject ArcaveProjectName `json:"arcave_project"`
+	Session       SessionRef        `json:"session"`
+	Savepoint     DeployedSavepoint `json:"savepoint"`
 	// ServiceReplicas are the replica numbers each service was built with, a gap included.
-	ServiceReplicas map[string][]int
+	ServiceReplicas map[string][]int `json:"service_replicas,omitempty"`
 }
 
 // Labels spells the deployment out as labels, every key present.
