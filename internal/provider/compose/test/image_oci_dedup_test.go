@@ -41,7 +41,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
@@ -83,7 +82,6 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService, prompter := newComposeService(t, cli)
-	profile := newRuntimeProfile(t, daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
@@ -98,31 +96,15 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	blobStore, err := composeProjectStore.SubStorage(sharedBlobPrefix, true)
 	require.NoError(t, err)
 
-	repo := sprepo.New(composeProjectStore)
-	images := newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), profile.engine, blobStore)
-	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		Savepoints:     compose.NewSavepoints(repo),
+		Savepoints:     compose.NewStoreSavepoints(composeProjectStore),
 		Store:          composeProjectStore,
 		ArcaveProject:  "arcave-oci-tenant",
 		SessionLocker:  newStoreLocker(composeProjectStore, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(composeProjectStore),
 		ProjectLocker:  lock.New(projectRoot),
 		Inflight:       inflightrepo.New(projectRoot),
-		Workload: compose.New(compose.Deps{
-			SavepointRepo:      repo,
-			ImageBackend:       images,
-			ComposeRunner:      runner,
-			Store:              composeProjectStore,
-			ProjectAssembler:   profile.assembler,
-			SpecCodec:          composespec.NewCodec(),
-			BackendRegistry:    registry,
-			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
-			ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
-			VolumeRemover:      profile.engine,
-			ContainerRebuilder: profile.engine,
-			ImageLookup:        profile.engine,
-		}),
+		Workload:       openComposeWorkload(t, composeProjectStore, "arcave-oci-tenant", project),
 	})
 
 	env := &ociDedupEnv{

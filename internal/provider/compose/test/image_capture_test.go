@@ -33,19 +33,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
-	imagefullcopy "github.com/greenmaskio/arcave/internal/service/imagebackend/fullcopy"
-	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
@@ -153,7 +147,6 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	require.NoError(t, err)
 	require.NoError(t, cli.Initialize(flags.NewClientOptions()))
 	composeService, prompter := newComposeService(t, cli)
-	profile := newRuntimeProfile(t, daemonAPI)
 	runner := composeclient.NewClient(composeService, composeclient.Options{
 		WaitTimeout: 90 * time.Second, StopTimeout: 5 * time.Second, Prompter: prompter,
 	})
@@ -165,34 +158,15 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	}, projectRoot, "arcave-image-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
-	require.NoError(t, err)
-
-	repo := sprepo.New(store)
-	images := newImageCopier(store, newLayerOwner("arcave-image-tenant", project), profile.engine, blobStore)
-	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		Savepoints:     compose.NewSavepoints(repo),
+		Savepoints:     compose.NewStoreSavepoints(store),
 		Store:          store,
 		ArcaveProject:  "arcave-image-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),
 		ProjectLocker:  lock.New(projectRoot),
 		Inflight:       inflightrepo.New(projectRoot),
-		Workload: compose.New(compose.Deps{
-			SavepointRepo:      repo,
-			ImageBackend:       images,
-			ComposeRunner:      runner,
-			Store:              store,
-			ProjectAssembler:   profile.assembler,
-			SpecCodec:          composespec.NewCodec(),
-			BackendRegistry:    registry,
-			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
-			ComposeInspector:   introspect.NewInspector(profile.api, model.DockerComposeProjectName(project)),
-			VolumeRemover:      profile.engine,
-			ContainerRebuilder: profile.engine,
-			ImageLookup:        profile.engine,
-		}),
+		Workload:       openComposeWorkload(t, store, "arcave-image-tenant", project),
 	})
 
 	env := &imageCaptureEnv{
@@ -230,38 +204,24 @@ func storeKeys(t *testing.T, store storages.Storager) []string {
 	return keys
 }
 
-// newLayerOwner is the origin the DI root stamps layers with.
-func newLayerOwner(arcaveProject, composeProject string) model.LayerOrigin {
-	return model.LayerOrigin{
-		ArcaveProject:  model.ArcaveProjectName(arcaveProject),
-		ComposeProject: model.DockerComposeProjectName(composeProject),
-	}
-}
+// openComposeWorkload opens composeProject's workload over store the way the DI root does: the
+// config's defaults, with the timeouts this suite waits on and compose's own progress muted.
+func openComposeWorkload(t *testing.T, store storages.Storager, arcaveProject, composeProject string) compose.Workload {
+	t.Helper()
 
-// newImageCopier is the image backend the DI root builds: both writable layer archivers, and
-// images deduplicated.
-func newImageCopier(
-	store storages.Navigator, origin model.LayerOrigin, engine *dockerclient.Engine, blobStore storages.Storager,
-) *imagebackend.Copier {
-	dedup := dedupcopy.New(blobStore)
-	return imagebackend.NewCopier(store, origin, engine, map[model.ImageBackendKind]imagebackend.ImageArchiver{
-		model.ImageBackendDedupCopy: dedup,
-		model.ImageBackendFullCopy:  imagefullcopy.New(),
-	}, dedup)
-}
-
-// newCaptureDefaults are the capture defaults the DI root builds from a config that names
-// only the volume backend: every kind captured, layers deduplicated.
-func newCaptureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.CaptureDefaults {
-	return capturepolicy.CaptureDefaults{
-		VolumeBackend:        volumeBackend,
-		WritableLayerBackend: model.ImageBackendDedupCopy,
-		SavepointCapture: capturepolicy.SavepointCaptureSettings{
-			WritableLayers:   true,
-			Images:           true,
-			NamedVolumes:     true,
-			BindVolumes:      true,
-			AnonymousVolumes: true,
+	settings := composeconfig.Config{
+		Compose: composeconfig.Compose{
+			WaitTimeout: 90 * time.Second,
+			StopTimeout: 5 * time.Second,
 		},
 	}
+	settings.ApplyDefaults()
+	workload, err := compose.Open(t.Context(), compose.Config{
+		Settings:        settings,
+		ArcaveProject:   model.ArcaveProjectName(arcaveProject),
+		ComposeProgress: composeconfig.ProgressQuiet,
+	}, store, model.DockerComposeProjectName(composeProject))
+	require.NoError(t, err)
+	t.Cleanup(func() { workload.Close(context.Background()) })
+	return workload
 }

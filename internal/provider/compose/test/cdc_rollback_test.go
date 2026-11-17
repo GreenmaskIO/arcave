@@ -41,9 +41,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
+	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
@@ -344,8 +347,8 @@ type testTransport struct {
 	stop func() error
 }
 
-// openTestTransport serves resticRoot over transport: a copy of cmd/arcave's
-// openCDCTransport, which a test outside package main cannot import.
+// openTestTransport serves resticRoot over transport: a copy of the compose provider's
+// openCDCTransport, private to its root.
 func openTestTransport(
 	ctx context.Context, transport string, resticRoot storages.Storager, hostNetwork bool, containerHost string,
 ) (testTransport, error) {
@@ -385,7 +388,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	require.NoError(t, err)
 	transport := e.openTransport(t, resticRoot)
 
-	registry, err := compose.NewBackendRegistry(cdc.NewFactory(cdc.Dependencies{
+	registry, err := backendregistry.New(cdc.NewFactory(cdc.Dependencies{
 		Runner:         e.engine,
 		Transport:      transport,
 		RepositoryRoot: resticRoot,
@@ -400,7 +403,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	spec := stubAssembler{project: &types.Project{Name: cdcProject}}
 	repo := sprepo.New(composeProjectStore)
 	svc := core.New(core.Deps{
-		Savepoints:     compose.NewSavepoints(repo),
+		Savepoints:     compose.NewStoreSavepoints(composeProjectStore),
 		Store:          composeProjectStore,
 		ArcaveProject:  cdcArcaveProject,
 		SessionLocker:  newSessionLocker(t, e.arcaveProjectStore(t), session),
@@ -410,7 +413,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 		Session:        session,
 		ComposeProject: cdcProject,
 		Sessions:       sessionrepo.New(e.arcaveProjectStore(t)),
-		Workload: compose.New(compose.Deps{
+		Workload: workload.New(workload.Deps{
 			SavepointRepo:    repo,
 			ComposeRunner:    e.compose,
 			Store:            composeProjectStore,
@@ -423,6 +426,22 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 		}),
 	})
 	return svc, composeProjectStore
+}
+
+// newCaptureDefaults are the capture defaults the DI root builds from a config that names
+// only the volume backend: every kind captured, layers deduplicated.
+func newCaptureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.CaptureDefaults {
+	return capturepolicy.CaptureDefaults{
+		VolumeBackend:        volumeBackend,
+		WritableLayerBackend: model.ImageBackendDedupCopy,
+		SavepointCapture: capturepolicy.SavepointCaptureSettings{
+			WritableLayers:   true,
+			Images:           true,
+			NamedVolumes:     true,
+			BindVolumes:      true,
+			AnonymousVolumes: true,
+		},
+	}
 }
 
 // arcaveProjectStore is the store the session records live in.

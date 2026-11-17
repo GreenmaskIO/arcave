@@ -22,7 +22,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
@@ -38,7 +38,7 @@ func newBackendRegistry(
 	cfg composeconfig.Config, resticRoot storages.Storager,
 	streamer fullcopy.VolumeStreamer, runner cdc.VolumeRunner, transport cdc.Transport,
 ) (model.SnapshotBackendRegistry, error) {
-	backendRegistry, err := NewBackendRegistry(
+	backendRegistry, err := backendregistry.New(
 		fullcopy.NewFactory(streamer, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:         runner,
@@ -84,10 +84,4 @@ func newCaptureDefaults(cfg composeconfig.Config) capturepolicy.CaptureDefaults 
 			AnonymousVolumes: utils.Value(cfg.Capture.Volumes.Anonymous),
 		},
 	}
-}
-
-// newSavepointRepository is the savepoint repository of a compose project's store, as the provider
-// reads it with no daemon.
-func newSavepointRepository(store storages.Storager) SavepointRepository {
-	return sprepo.New(store)
 }

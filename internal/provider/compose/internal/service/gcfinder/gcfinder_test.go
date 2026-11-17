@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package gcfinder
 
 import (
 	"context"
@@ -30,7 +30,7 @@ import (
 func TestNewDaemonErasers(t *testing.T) {
 	// Act
 	var got []model.GarbageAction
-	for _, eraser := range newDaemonErasers(GarbageDeps{}) {
+	for _, eraser := range newDaemonErasers(Deps{}) {
 		got = append(got, eraser.Action())
 	}
 
@@ -48,7 +48,7 @@ func TestNewComposeProjectErasers(t *testing.T) {
 
 	// Act
 	var got []model.GarbageAction
-	for _, eraser := range newComposeProjectErasers(GarbageDeps{}) {
+	for _, eraser := range newComposeProjectErasers(Deps{}) {
 		got = append(got, eraser.Action())
 	}
 
@@ -61,7 +61,7 @@ func TestNewComposeProjectErasers(t *testing.T) {
 func TestNewDaemonCollectors_DaemonDoesNotAnswer(t *testing.T) {
 	// Arrange
 	errUnreachable := errors.New("daemon unreachable")
-	collectors := newDaemonCollectors(GarbageDeps{Daemon: unreachableDaemon{err: errUnreachable}})
+	collectors := newDaemonCollectors(Deps{Daemon: unreachableDaemon{err: errUnreachable}})
 
 	// Act
 	var probeErr error
@@ -107,10 +107,10 @@ func TestNewObjectCollectors(t *testing.T) {
 
 	// Act
 	got := map[model.GarbageDataKind][]resolution{}
-	for _, collector := range newDaemonCollectors(GarbageDeps{}) {
+	for _, collector := range newDaemonCollectors(Deps{}) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind(), daemon: true})
 	}
-	for _, collector := range newComposeProjectCollectors(GarbageDeps{}) {
+	for _, collector := range newComposeProjectCollectors(Deps{}) {
 		got[collector.DataKind()] = append(got[collector.DataKind()], resolution{collector: collector.Kind()})
 	}
 

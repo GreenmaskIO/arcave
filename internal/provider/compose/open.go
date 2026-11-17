@@ -25,10 +25,10 @@ import (
 	"github.com/rs/zerolog/log"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
@@ -58,15 +58,6 @@ type Workload struct {
 // Close releases what Open opened, newest first.
 func (w Workload) Close(ctx context.Context) { w.opened.release(ctx) }
 
-// Session is an opened session of the compose provider, with what it holds open.
-type Session struct {
-	provider.Session
-	opened closers
-}
-
-// Close releases what OpenSession opened.
-func (s Session) Close(ctx context.Context) { s.opened.release(ctx) }
-
 // ComposeContainers reads one compose project's containers off the daemon, with what it holds open.
 type ComposeContainers struct {
 	*introspect.Inspector
@@ -90,55 +81,6 @@ func Open(
 	return Workload{
 		Workload: workload,
 		opened:   opened,
-	}, nil
-}
-
-// NewStoreSavepoints is the savepoints in a compose project's store, reached with no daemon.
-func NewStoreSavepoints(store storages.Storager) provider.Savepoints {
-	return NewSavepoints(sprepo.New(store))
-}
-
-// NewStoreSession is session id in the arcave project's store, reached with no daemon.
-func NewStoreSession(arcaveProjectStore storages.Navigator, id model.SessionID) provider.Session {
-	return NewSession(SessionDeps{
-		Store:                  arcaveProjectStore,
-		Session:                id,
-		NewSavepointRepository: newSavepointRepository,
-	})
-}
-
-// OpenSession connects the daemon and opens session id with what a gc finds in it. Nothing a gc
-// reads differs by engine, so it runs over the client itself, with no runtime profile; whether the
-// daemon answers is the restored-layer collector's probe.
-func OpenSession(cfg Config, arcaveProjectStore storages.Navigator, id model.SessionID) (Session, error) {
-	var opened closers
-	// A docker.* the config gets wrong fails every command alike.
-	daemon, err := connectDaemon(cfg.Settings.Docker, io.Discard, &opened)
-	if err != nil {
-		return Session{}, err
-	}
-	engine := docker.NewEngine(daemon.api)
-	cdcConfig := composeconfig.CDCWithDefaults(cfg.Settings.Backends.CDC)
-	return Session{
-		Session: NewSession(SessionDeps{
-			Store:                  arcaveProjectStore,
-			Session:                id,
-			NewSavepointRepository: newSavepointRepository,
-			Garbage: &GarbageDeps{
-				Daemon:        engine,
-				ArcaveProject: cfg.ArcaveProject,
-				Concurrency:   cfg.Concurrency,
-				ResticInspectors: resticInspectorOpener{
-					cfg:    cdcConfig,
-					daemon: engine,
-				},
-				ResticPruners: resticPrunerOpener{
-					cfg:    cdcConfig,
-					daemon: engine,
-				},
-			},
-		}),
-		opened: opened,
 	}, nil
 }
 
@@ -220,7 +162,7 @@ func openWorkload(
 		Prompter:        prompter,
 		SinkFromContext: newComposeEventSink,
 	})
-	return New(Deps{
+	return workload.New(workload.Deps{
 		// One store for the records and the data, so every record travels with its data.
 		SavepointRepo:    sprepo.New(store),
 		ComposeInspector: introspect.NewInspector(profile.api, composeProject),

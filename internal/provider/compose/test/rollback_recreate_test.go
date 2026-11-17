@@ -47,13 +47,10 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -311,36 +308,15 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	}, projectRoot, "arcave-recreate-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	// The blob store is a sibling of the savepoints inside the compose project root, so it
-	// dies with the session the way everything else there does.
-	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
-	require.NoError(t, err)
-
-	repo := sprepo.New(store)
-	images := newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), profile.engine, blobStore)
-	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		Savepoints:     compose.NewSavepoints(repo),
+		Savepoints:     compose.NewStoreSavepoints(store),
 		Store:          store,
 		ArcaveProject:  "arcave-recreate-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),
 		ProjectLocker:  lock.New(projectRoot),
 		Inflight:       inflightrepo.New(projectRoot),
-		Workload: compose.New(compose.Deps{
-			SavepointRepo:      repo,
-			ImageBackend:       images,
-			ComposeRunner:      runner,
-			Store:              store,
-			ProjectAssembler:   profile.assembler,
-			SpecCodec:          codec,
-			BackendRegistry:    registry,
-			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
-			ComposeInspector:   inspector,
-			VolumeRemover:      profile.engine,
-			ContainerRebuilder: profile.engine,
-			ImageLookup:        profile.engine,
-		}),
+		Workload:       openComposeWorkload(t, store, "arcave-recreate-tenant", project),
 	})
 
 	env := &recreateEnv{
@@ -357,14 +333,6 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	}
 	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
 	return env
-}
-
-func mustRegistry(t *testing.T, volumes fullcopy.VolumeStreamer) model.SnapshotBackendRegistry {
-	t.Helper()
-
-	registry, err := compose.NewBackendRegistry(fullcopy.NewFactory(volumes, fullcopy.CompressionZstd))
-	require.NoError(t, err)
-	return registry
 }
 
 // spec renders the compose project's document through the savepoint artifact's codec.

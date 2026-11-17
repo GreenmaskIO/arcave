@@ -25,6 +25,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
@@ -181,7 +183,7 @@ type resticInspectorOpener struct {
 }
 
 // Open opens the transport over store's repositories; the inspector's Close releases it.
-func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (ResticInspector, error) {
+func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
 	served, err := openResticRepositories(ctx, o.cfg, o.daemon, store)
 	if err != nil {
 		return nil, err
@@ -205,7 +207,7 @@ type resticPrunerOpener struct {
 }
 
 // Open opens the transport over store's repositories; the pruner's Close releases it.
-func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (ResticPruner, error) {
+func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
 	served, err := openResticRepositories(ctx, o.cfg, o.daemon, store)
 	if err != nil {
 		return nil, err

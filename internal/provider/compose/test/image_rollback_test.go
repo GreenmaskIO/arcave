@@ -38,10 +38,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -232,37 +230,15 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	}, projectRoot, "arcave-image-rollback-tenant", model.DefaultSession, model.DockerComposeProjectName(project))
 	require.NoError(t, err)
 
-	// The blob store is a sibling of the savepoints inside the compose project root, so it
-	// dies with the session the way everything else there does.
-	blobStore, err := store.SubStorage(dedupcopy.NamespaceBlobs, true)
-	require.NoError(t, err)
-
-	repo := sprepo.New(store)
-	images := newImageCopier(store, newLayerOwner("arcave-image-rollback-tenant", project), profile.engine, blobStore)
-	registry := mustRegistry(t, profile.volumes)
 	deps := core.Deps{
-		Savepoints:     compose.NewSavepoints(repo),
+		Savepoints:     compose.NewStoreSavepoints(store),
 		Store:          store,
 		ArcaveProject:  "arcave-image-rollback-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),
 		ProjectLocker:  lock.New(projectRoot),
 		Inflight:       inflightrepo.New(projectRoot),
-		Workload: compose.New(compose.Deps{
-			SavepointRepo:      repo,
-			ImageBackend:       images,
-			ComposeRunner:      runner,
-			ContainerControl:   profile.engine,
-			Store:              store,
-			ProjectAssembler:   profile.assembler,
-			SpecCodec:          composespec.NewCodec(),
-			BackendRegistry:    registry,
-			CaptureDefaults:    newCaptureDefaults(model.SnapshotBackendFullCopy),
-			ComposeInspector:   inspector,
-			VolumeRemover:      profile.engine,
-			ContainerRebuilder: profile.engine,
-			ImageLookup:        profile.engine,
-		}),
+		Workload:       openComposeWorkload(t, store, "arcave-image-rollback-tenant", project),
 	}
 	svc := core.New(deps)
 

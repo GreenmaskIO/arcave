@@ -31,9 +31,14 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/gcfinder"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
+	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -276,21 +281,23 @@ func (e *sessionEnv) newGarbageCollector(
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
 	require.NoError(t, err)
 
-	garbage := compose.GarbageDeps{
-		ArcaveProject: sessionArcaveProject,
-		Concurrency:   2,
+	gcDeps := gcfinder.Deps{
+		NewSavepointReader: newSavepointReader,
+		ArcaveProject:      sessionArcaveProject,
+		Concurrency:        2,
 	}
 	if engine != nil {
 		opener := newResticOpener(t, engine, composeconfig.CDCTransportStdio)
-		garbage = compose.GarbageDeps{
-			Daemon:           engine,
-			ArcaveProject:    sessionArcaveProject,
-			Concurrency:      2,
-			ResticInspectors: opener,
-			ResticPruners:    resticPrunerOpener{opener},
+		gcDeps = gcfinder.Deps{
+			NewSavepointReader: newSavepointReader,
+			Daemon:             engine,
+			ArcaveProject:      sessionArcaveProject,
+			Concurrency:        2,
+			ResticInspectors:   opener,
+			ResticPruners:      resticPrunerOpener{opener},
 		}
 	}
-	return newGC(t, arcaveProjectStore, e.projectRoot, session, garbage)
+	return newGC(t, arcaveProjectStore, e.projectRoot, session, gcDeps)
 }
 
 // A cdc savepoint whose record is gone — a remove interrupted past its record — leaves its
@@ -445,32 +452,35 @@ func newCDCGarbageCollector(t *testing.T, env *cdcEnv) *gc.GarbageCollector {
 
 // newCDCGarbage is what a gc of env finds its garbage with, its restic repositories served over
 // env's transport.
-func newCDCGarbage(t *testing.T, env *cdcEnv) compose.GarbageDeps {
+func newCDCGarbage(t *testing.T, env *cdcEnv) gcfinder.Deps {
 	t.Helper()
 	opener := newResticOpener(t, env.engine, env.cdcCfg.Transport)
-	return compose.GarbageDeps{
-		Daemon:           env.engine,
-		ArcaveProject:    cdcArcaveProject,
-		Concurrency:      1,
-		ResticInspectors: opener,
-		ResticPruners:    resticPrunerOpener{opener},
+	return gcfinder.Deps{
+		NewSavepointReader: newSavepointReader,
+		Daemon:             env.engine,
+		ArcaveProject:      cdcArcaveProject,
+		Concurrency:        1,
+		ResticInspectors:   opener,
+		ResticPruners:      resticPrunerOpener{opener},
 	}
 }
 
 // newGC wires a gc of session over arcaveProjectStore the way openGCService does, its provider
-// finding garbage as garbage says.
+// finding garbage as gcDeps says.
 func newGC(
 	t *testing.T, arcaveProjectStore storages.Storager, projectRoot string, session model.SessionID,
-	garbage compose.GarbageDeps,
+	gcDeps gcfinder.Deps,
 ) *gc.GarbageCollector {
 	t.Helper()
 	return gc.New(gc.Deps{
 		Sessions: sessionrepo.New(arcaveProjectStore),
-		ProviderSession: compose.NewSession(compose.SessionDeps{
-			Store:                  arcaveProjectStore,
-			Session:                session,
-			NewSavepointRepository: newSavepointRepository,
-			Garbage:                &garbage,
+		ProviderSession: sessionstore.New(sessionstore.Deps{
+			Store:   arcaveProjectStore,
+			Session: session,
+			NewSavepointRecords: func(store storages.Storager) sessionstore.SavepointRecords {
+				return sprepo.New(store)
+			},
+			Garbage: gcfinder.New(gcDeps),
 		}),
 		Locker:         lock.New(projectRoot),
 		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
@@ -478,6 +488,11 @@ func newGC(
 		Inflight:       inflightrepo.New(projectRoot),
 		RetainRecent:   config.DefaultSafetySnapshotRetainRecent,
 	})
+}
+
+// newSavepointReader opens a compose project's savepoints the way the provider does.
+func newSavepointReader(store storages.Storager) garbage.SavepointReader {
+	return sprepo.New(store)
 }
 
 // repoBytes sums the sizes of every object of env's restic repositories.
@@ -511,7 +526,7 @@ func newResticOpener(t *testing.T, engine *dockerclient.Engine, transport string
 	}
 }
 
-func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (compose.ResticInspector, error) {
+func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
 	_, opened, err := o.serve(ctx, store)
 	if err != nil {
 		return nil, err
@@ -550,7 +565,7 @@ func (i resticInspector) Close(context.Context) { _ = i.stop() }
 // resticPrunerOpener serves a compose project's repositories over its transport, per erase.
 type resticPrunerOpener struct{ resticOpener }
 
-func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (compose.ResticPruner, error) {
+func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
 	root, opened, err := o.serve(ctx, store)
 	if err != nil {
 		return nil, err
