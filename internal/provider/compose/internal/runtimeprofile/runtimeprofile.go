@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package runtimeprofile chooses everything that differs by the engine behind the daemon: the one
-// switch on model.ContainerRuntimeKind below model. It is the provider root's, the clients it builds
+// switch on composemodel.ContainerRuntimeKind below model. It is the provider root's, the clients it builds
 // with; no service imports it.
 package runtimeprofile
 

@@ -81,6 +81,15 @@ const (
 	GarbageCollectorKindDockerLayerTags GarbageCollectorKind = "docker-layer-tags"
 )
 
+// GarbageCollectorKinds lists every collector kind.
+func GarbageCollectorKinds() []GarbageCollectorKind {
+	return []GarbageCollectorKind{
+		GarbageCollectorKindSavepointDirectory, GarbageCollectorKindSafetySnapshotRetention,
+		GarbageCollectorKindResticRepositories, GarbageCollectorKindOCIBlobs, GarbageCollectorKindOCIImages,
+		GarbageCollectorKindDockerLayerTags,
+	}
+}
+
 // GarbageAction is what a gc that deletes does to one object.
 type GarbageAction string
 
@@ -427,13 +436,4 @@ type GarbageCollectResult struct {
 func (m GarbageCollectResult) IsPartial() bool {
 	total := m.Total
 	return total.Failed > 0 || total.Aborted > 0 || total.Unjudged > 0 || total.DeleteFailed > 0 || total.NotRun > 0
-}
-
-// GarbageCollectorKinds lists every collector kind.
-func GarbageCollectorKinds() []GarbageCollectorKind {
-	return []GarbageCollectorKind{
-		GarbageCollectorKindSavepointDirectory, GarbageCollectorKindSafetySnapshotRetention,
-		GarbageCollectorKindResticRepositories, GarbageCollectorKindOCIBlobs, GarbageCollectorKindOCIImages,
-		GarbageCollectorKindDockerLayerTags,
-	}
 }

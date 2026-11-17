@@ -59,8 +59,6 @@ const (
 	SystemLabelDeploymentServiceReplicas           SystemLabel = DeploymentLabelPrefix + "service-replicas"
 )
 
-func (m SystemLabel) String() string { return string(m) }
-
 // deploymentLabels are every label SavepointDeployment.Labels writes.
 var deploymentLabels = []SystemLabel{
 	SystemLabelDeploymentDeployedAt,
@@ -73,3 +71,5 @@ var deploymentLabels = []SystemLabel{
 	SystemLabelDeploymentSavepointIsSafetySnapshot,
 	SystemLabelDeploymentServiceReplicas,
 }
+
+func (m SystemLabel) String() string { return string(m) }

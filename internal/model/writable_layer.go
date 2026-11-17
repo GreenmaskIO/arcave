@@ -39,7 +39,7 @@ type WritableLayer struct {
 	StoredBytes int64 `json:"stored_bytes,omitempty"`
 }
 
-// WritableLayerRestoreResult is what a WritableLayerRestoreRequest put back into the daemon:
+// WritableLayerRestoreResult is what a writable-layer restore put back into the daemon:
 // ImageID is the committed image, Tag the docker reference the rebuilt compose project names
 // it by. It travels in the rollback response, so its json tags are the wire contract.
 type WritableLayerRestoreResult struct {

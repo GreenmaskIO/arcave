@@ -28,7 +28,7 @@ type versionReader interface {
 	ServerVersion(ctx context.Context, options client.ServerVersionOptions) (client.ServerVersionResult, error)
 }
 
-// ReadRuntime asks the daemon which engine it is (model.NewContainerRuntime).
+// ReadRuntime asks the daemon which engine it is (composemodel.NewContainerRuntime).
 func ReadRuntime(ctx context.Context, api versionReader) (composemodel.ContainerRuntime, error) {
 	version, err := api.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {

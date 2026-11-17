@@ -51,7 +51,8 @@ var issuedSuffixes sync.Map
 // anonymousVolumeLabel is what the daemon stamps on a volume it created for a container.
 const anonymousVolumeLabel = "com.docker.volume.anonymous"
 
-// podmanEngine is the component Podman's `docker version` names itself by.
+// podmanEngine is the component Podman's `docker version` names itself by; it repeats the
+// compose provider's own, which a package outside the provider cannot import.
 const podmanEngine = "Podman Engine"
 
 // ryukDisabled is the variable testcontainers reads before it starts its reaper.

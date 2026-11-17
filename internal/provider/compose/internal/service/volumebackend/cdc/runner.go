@@ -131,7 +131,7 @@ type runner struct {
 
 // run executes one command and returns its summary line, zero-valued when the
 // command printed none. A non-zero exit comes back as the one-shot mechanism's
-// *model.ContainerExitError, carrying the container's own output — fronted by
+// *composemodel.ContainerExitError, carrying the container's own output — fronted by
 // restic's own diagnosis when it printed one, since "exited with status 1" says
 // nothing a user can act on.
 func (r runner) run(ctx context.Context, cmd resticCmd) (resticSummary, error) {

@@ -21,9 +21,9 @@ import (
 )
 
 // OneShotSpec describes a throwaway container run to completion, optionally
-// exchanging stdio with the caller. It lives in model because it crosses a seam:
-// a backend declares the runner interface, docker.Engine implements it, and
-// neither imports the other.
+// exchanging stdio with the caller. It lives in the provider's model because it crosses a seam:
+// a backend declares the runner interface, docker.Engine implements it, and neither imports the
+// other.
 type OneShotSpec struct {
 	Image string
 	// Entrypoint, when set, replaces the image's entrypoint; Cmd becomes its arguments.

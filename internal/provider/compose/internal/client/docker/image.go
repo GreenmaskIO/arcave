@@ -98,7 +98,7 @@ func (e *Engine) RemoveImage(ctx context.Context, imageID model.ImageDigestID) e
 // RemoveImageRef takes one reference off the daemon, the image with it once no other names it, as
 // docker rmi does, refusing it while any container, running or not, was created from the image or
 // one built on it: the daemon refuses that only for an image's last reference. One already gone is
-// model.ErrImageRefNotFound.
+// composemodel.ErrImageRefNotFound.
 func (e *Engine) RemoveImageRef(ctx context.Context, ref model.ImageRef) error {
 	inspect, err := e.api.ImageInspect(ctx, string(ref))
 	if cerrdefs.IsNotFound(err) {

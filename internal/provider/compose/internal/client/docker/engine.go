@@ -131,7 +131,7 @@ func (e *Engine) Ping(ctx context.Context) error {
 }
 
 // RunOneShot drives one throwaway container to completion; a non-zero exit is a
-// model.ContainerExitError carrying the container's own output. It is the
+// composemodel.ContainerExitError carrying the container's own output. It is the
 // exported face of the mechanism in oneshot.go, for the backends that run their
 // own containers.
 func (e *Engine) RunOneShot(ctx context.Context, spec composemodel.OneShotSpec) error {

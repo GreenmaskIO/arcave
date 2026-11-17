@@ -86,7 +86,7 @@ type volumeLabels struct {
 }
 
 // Resolve decides every resource of the compose project from its labels and defaults, a bind or
-// anonymous volume by its service's; a label it cannot act on is model.ErrInvalidCapturePolicy.
+// anonymous volume by its service's; a label it cannot act on is composemodel.ErrInvalidCapturePolicy.
 func Resolve(
 	ctx context.Context, introspection composemodel.IntrospectionResult, defaults CaptureDefaults,
 ) (composemodel.CapturePolicy, error) {
@@ -581,7 +581,7 @@ func requireMountedTarget(service composemodel.Service, key model.CaptureLabel, 
 	return nil
 }
 
-// newInvalidLabelError is model.ErrInvalidCapturePolicy naming the label and why.
+// newInvalidLabelError is composemodel.ErrInvalidCapturePolicy naming the label and why.
 func newInvalidLabelError(where string, key model.CaptureLabel, value, why string) error {
 	return fmt.Errorf("%w: %s=%q on %s: %s", composemodel.ErrInvalidCapturePolicy, key, value, where, why)
 }

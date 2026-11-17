@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package composespec builds the compose spec of a live compose project from
-// model.IntrospectionResult, complete enough to create it anew. It reads no file.
+// composemodel.IntrospectionResult, complete enough to create it anew. It reads no file.
 package composespec
 
 import (

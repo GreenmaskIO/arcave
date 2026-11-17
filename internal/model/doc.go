@@ -16,7 +16,7 @@
 // client, service, and adapter layers. It is the base of the dependency graph
 // and imports no other internal package. Each type lives in its own file.
 //
-// Besides the core domain types (Mount, SkippedMount, Savepoint), the package
+// Besides the core domain types (Savepoint, Volume, SnapshotStat, Session), the package
 // also owns the JSON response shapes arcave commands print to stdout: single-
 // savepoint payloads marshal Savepoint directly (its json tags are the wire
 // contract), while the multi-part envelopes — RollbackResult, RemoveResult —
@@ -27,8 +27,9 @@
 // one and an adapter matches it with errors.Is, so the error is a contract
 // between them and belongs with the other types they share.
 //
-// The package declares no interfaces: every seam in arcave is declared by its
-// consumer, per dependency inversion. The storage contract is the exception that
-// proves it — it is greenmaskio/storages' own Storager, consumed directly, so
-// there is nothing here to re-declare.
+// Every seam in arcave is declared by its consumer, per dependency inversion; the package declares
+// only the factory-named seams the doctrine keeps here (VolumeSnapshotBackend and its factory and
+// registry, SessionLocker, GrantedSessionLock) and GarbageStat, a wire value's method set. The
+// storage contract is greenmaskio/storages' own Storager, consumed directly. A provider's own
+// vocabulary lives in the provider: the compose provider's in its internal/model.
 package model

@@ -71,6 +71,16 @@ func (m SavepointDeployment) Labels() map[string]string {
 	}
 }
 
+// NewBlankDeploymentLabels is every deployment key blank: what a committed layer carries, so a
+// container created from it outside arcave names no deployment.
+func NewBlankDeploymentLabels() map[string]string {
+	labels := make(map[string]string, len(deploymentLabels))
+	for _, key := range deploymentLabels {
+		labels[string(key)] = ""
+	}
+	return labels
+}
+
 // ParseSavepointDeployment reads the deployment the labels name; ok is false when they name no
 // savepoint. Blank names and replicas are allowed, any other blank label is an error.
 func ParseSavepointDeployment(labels map[string]string) (SavepointDeployment, bool, error) {
@@ -187,14 +197,4 @@ func parseServiceReplicas(value string) (map[string][]int, error) {
 		replicas[service] = numbers
 	}
 	return replicas, nil
-}
-
-// NewBlankDeploymentLabels is every deployment key blank: what a committed layer carries, so a
-// container created from it outside arcave names no deployment.
-func NewBlankDeploymentLabels() map[string]string {
-	labels := make(map[string]string, len(deploymentLabels))
-	for _, key := range deploymentLabels {
-		labels[string(key)] = ""
-	}
-	return labels
 }

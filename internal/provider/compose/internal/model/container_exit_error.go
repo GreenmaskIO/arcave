@@ -19,10 +19,9 @@ import (
 )
 
 // ContainerExitError reports a one-shot Docker container that exited non-zero.
-// Like the sentinels in errors.go it crosses the client → service → cli/mcp
-// seam, so it lives in model: a consumer that wants the container's full output
-// recovers it with errors.As, while Error() — the text that reaches stdout via
-// the JSON printer and, later, an MCP tool result an agent holds in context —
+// It crosses the provider's client → backend seam, so it lives in the provider's model: a consumer
+// that wants the container's full output recovers it with errors.As, while Error() — the text
+// that reaches stdout via the JSON printer and an MCP tool result an agent holds in context —
 // stays compact.
 //
 // Output is already bounded and demultiplexed by whoever builds the error; the

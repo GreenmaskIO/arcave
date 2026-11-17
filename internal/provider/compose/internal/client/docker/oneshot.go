@@ -323,7 +323,7 @@ func (rr *recordingReader) Read(p []byte) (int, error) {
 }
 
 // waitOneShotContainer waits for containerID to exit; a non-zero exit is a
-// model.ContainerExitError carrying the container's output.
+// composemodel.ContainerExitError carrying the container's output.
 func waitOneShotContainer(ctx context.Context, api dockerAPI, containerID, image string) error {
 	wait := api.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {

@@ -114,7 +114,7 @@ func imageCaptureContainers(
 	return taken, skipped
 }
 
-// resolveUpstream is model.ResolveUpstream, with what it cannot say logged:
+// resolveUpstream is composemodel.ResolveUpstream, with what it cannot say logged:
 // a container off the image compose created it on, and a layer naming no upstream.
 func resolveUpstream(ctx context.Context, introspection composemodel.IntrospectionResult, container composemodel.Container) (model.ImageDigestID, string) {
 	if container.Inspect.Config == nil {

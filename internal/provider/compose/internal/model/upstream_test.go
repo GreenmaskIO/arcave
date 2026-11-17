@@ -26,8 +26,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// layerRef is a restored layer tag.
-const layerRef = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
+const (
+	upstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	upstreamRef = "postgres:16"
+	layerID     = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+	layerRef    = "arcave/demo-db-1-postgres-16:sp-019e7044-8fd0-7000-8000-000000000000"
+)
 
 func TestResolveUpstream(t *testing.T) {
 	tests := []struct {
@@ -104,9 +108,3 @@ func TestResolveUpstream(t *testing.T) {
 		})
 	}
 }
-
-const (
-	upstreamID  = model.ImageDigestID("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-	upstreamRef = "postgres:16"
-	layerID     = model.ImageDigestID("sha256:2222222222222222222222222222222222222222222222222222222222222222")
-)

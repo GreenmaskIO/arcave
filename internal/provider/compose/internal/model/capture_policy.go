@@ -22,6 +22,15 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// The parts of a stamp label's value: fields after its leading true or false, each
+// "<key>=<value>", joined by stampLabelSeparator.
+const (
+	stampLabelSeparator = "; "
+	stampLabelBackend   = "backend"
+	stampLabelOrigin    = "origin"
+	stampLabelSource    = "source"
+)
+
 // CaptureStamp is one stamp's value: "<true|false>[; backend=…]; origin=…[; source=…]".
 type CaptureStamp struct {
 	Capture bool
@@ -172,12 +181,3 @@ func (m CapturePolicy) defaultVolume() VolumeDecision {
 func NewConfigDecision(capture bool, source string) CaptureDecision {
 	return CaptureDecision{Capture: capture, Origin: OriginConfig, Source: source}
 }
-
-// The parts of a stamp label's value: fields after its leading true or false, each
-// "<key>=<value>", joined by stampLabelSeparator.
-const (
-	stampLabelSeparator = "; "
-	stampLabelBackend   = "backend"
-	stampLabelOrigin    = "origin"
-	stampLabelSource    = "source"
-)

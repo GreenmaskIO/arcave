@@ -26,6 +26,18 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
+// An ObjectID is one path segment: it is the name of a directory in a store and
+// the name of a repository on the restic wire, and both want a segment rather
+// than a tree. Every prefix opens with "volume-" — everything addressed here is
+// a volume — and the second word says how it is addressed, which keeps the
+// identity spaces apart: a volume named "db" and a service named "db" must not
+// produce the same id.
+const (
+	storageIDNamedPrefix   = "volume-named-"
+	storageIDServicePrefix = "volume-service-"
+	storageIDAnonPrefix    = "volume-anon-"
+)
+
 // IsAbsent reports whether the daemon holds no container of the compose project:
 // it was never started, or was taken down.
 func IsAbsent(introspection IntrospectionResult) bool {
@@ -296,15 +308,3 @@ func anonStorageID(service string, replica int, target string) string {
 func flattenTarget(target string) string {
 	return strings.ReplaceAll(strings.TrimPrefix(target, "/"), "/", "-")
 }
-
-// An ObjectID is one path segment: it is the name of a directory in a store and
-// the name of a repository on the restic wire, and both want a segment rather
-// than a tree. Every prefix opens with "volume-" — everything addressed here is
-// a volume — and the second word says how it is addressed, which keeps the
-// identity spaces apart: a volume named "db" and a service named "db" must not
-// produce the same id.
-const (
-	storageIDNamedPrefix   = "volume-named-"
-	storageIDServicePrefix = "volume-service-"
-	storageIDAnonPrefix    = "volume-anon-"
-)
