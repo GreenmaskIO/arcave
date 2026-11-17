@@ -197,7 +197,7 @@ func openStatusService(
 	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
 		return nil, err
 	}
-	composeContainers, err := openComposeContainers(cfg.Docker, composeProject, opened)
+	composeContainers, err := openComposeContainers(cfg, composeProject, opened)
 	if err != nil {
 		return nil, err
 	}
