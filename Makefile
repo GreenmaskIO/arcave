@@ -50,8 +50,9 @@ test-unit:
 	@test -n "$(UNIT_PKGS)" || { echo 'no unit packages: go list failed' >&2; exit 1; }
 	go test $(UNIT_PKGS)
 
+# -count=1: the e2e suite drives the built binary, which no test cache entry depends on.
 test-integration:
-	go test -timeout 30m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_FLAGS) $(INTEGRATION_PKGS)
+	go test -count=1 -timeout 30m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_FLAGS) $(INTEGRATION_PKGS)
 
 test-verbose:
 	go test -v -timeout 30m ./...

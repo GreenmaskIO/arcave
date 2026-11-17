@@ -61,7 +61,8 @@ type VolumeRunner interface {
 	WipeVolume(ctx context.Context, src model.MountSource) error
 }
 
-// Options is the backends.cdc config section, translated at the DI root.
+// Options is the backends.cdc config section, translated by the compose provider's root
+// (newCDCOptions).
 type Options struct {
 	// Image is the restic image every command runs in.
 	Image string

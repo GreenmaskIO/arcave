@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package docker acts on the *running* compose project, in contrast to internal/client/
-// compose, which only reads what the compose files declare. It holds the two
-// types arcave needs to reach the daemon, split by what they act on:
+// Package docker acts on the compose project's containers through the Docker API, in contrast to
+// the compose client beside it (client/compose), which runs the compose project's lifecycle. It
+// holds the two types arcave needs to reach the daemon, split by what they act on:
 //
 //   - Engine (engine.go) moves a volume's bytes in and out of the volume
 //     itself, through a throwaway container of its own.
