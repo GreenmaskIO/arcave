@@ -190,7 +190,8 @@ func TestRollback_RestoresEachReplicasOwnWritableLayer(t *testing.T) {
 	assert.Equal(t, "replica-2", env.read(t, rebuilt[1], layerMarker))
 }
 
-// imageRollbackEnv is the compose project these tests drive, wired the way cmd/arcave wires it.
+// imageRollbackEnv is the compose project these tests drive, its workload opened
+// through compose.Open, as the CLI opens it.
 type imageRollbackEnv struct {
 	ctx       context.Context
 	svc       *core.Service

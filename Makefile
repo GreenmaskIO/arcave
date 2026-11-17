@@ -35,7 +35,7 @@ docs-build: docs-install
 
 # Unit tests need no daemon; the integration suites under a provider's test/ need a reachable one.
 INTEGRATION_DIR := ./internal/provider/compose/test
-UNIT_PKGS = $(shell go list ./cmd/... ./internal/... ./pkg/... | grep -v '/internal/provider/[^/]*/test')
+UNIT_PKGS = $(shell go list ./cmd/... ./internal/... ./pkg/... | grep -Ev '/internal/provider/[^/]+/test(/|$$)')
 INTEGRATION_PKGS := $(INTEGRATION_DIR)/...
 # Concurrent tests per integration package: the daemon's disk, not the CPU, is the bound.
 INTEGRATION_PARALLEL := 4
@@ -45,6 +45,7 @@ INTEGRATION_FLAGS ?=
 test: test-unit test-integration
 
 test-unit:
+	@test -n "$(UNIT_PKGS)" || { echo 'no unit packages: go list failed' >&2; exit 1; }
 	go test $(UNIT_PKGS)
 
 test-integration:

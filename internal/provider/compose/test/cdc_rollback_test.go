@@ -55,9 +55,9 @@ import (
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
-// This is the cdc backend's proof, wired the way cmd/arcave wires it: real
-// stores, the real repository registry behind the real loopback endpoint, the real docker
-// engine, and stock restic containers on the far side. Only the two compose
+// This is the cdc backend's proof, its workload assembled through workload.New as compose.Open
+// assembles it: real stores, the real repository registry behind the real loopback endpoint, the
+// real docker engine, and stock restic containers on the far side. Only the two compose
 // halves are doubled — starting and stopping a compose project proves nothing this test is
 // about, and its containers stay created either way, which is the state arcave
 // captures in.
@@ -434,6 +434,7 @@ func newCaptureDefaults(volumeBackend model.SnapshotBackendKind) capturepolicy.C
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        volumeBackend,
 		WritableLayerBackend: model.ImageBackendDedupCopy,
+		Mode:                 model.CaptureModeStop,
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   true,
 			Images:           true,

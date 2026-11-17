@@ -124,7 +124,7 @@ type fidelityCase struct {
 	knownDefect map[string]string
 }
 
-// fidelityEnv is one compose project, driven the way cmd/arcave drives it.
+// fidelityEnv is one compose project, read and assembled the way the compose provider does.
 type fidelityEnv struct {
 	ctx       context.Context
 	logs      *syncBuffer

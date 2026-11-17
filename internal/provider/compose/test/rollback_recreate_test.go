@@ -266,7 +266,8 @@ func TestRollback_RebuildsTheComposeProjectFromTheSavepointSpec(t *testing.T) {
 	assert.Equal(t, networkAliases(before), networkAliases(after), "network aliases")
 }
 
-// recreateEnv is the one compose project this test drives, wired the way cmd/arcave wires it.
+// recreateEnv is the one compose project this test drives, its workload opened
+// through compose.Open, as the CLI opens it.
 type recreateEnv struct {
 	ctx       context.Context
 	svc       *core.Service

@@ -24,12 +24,16 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
+	"github.com/greenmaskio/storages"
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 )
 
@@ -84,4 +88,26 @@ func (e *composeEnv) up(t *testing.T, document string, args ...any) *types.Proje
 	require.NoError(t, e.compose.Create(e.ctx, project, nil))
 	require.NoError(t, e.compose.Start(e.ctx, project, 90*time.Second))
 	return project
+}
+
+// openComposeWorkload opens composeProject's workload over store the way the DI root does: the
+// config's defaults, with the timeouts this suite waits on and compose's own progress muted.
+func openComposeWorkload(t *testing.T, store storages.Storager, arcaveProject, composeProject string) compose.Workload {
+	t.Helper()
+
+	settings := composeconfig.Config{
+		Compose: composeconfig.Compose{
+			WaitTimeout: 90 * time.Second,
+			StopTimeout: 5 * time.Second,
+		},
+	}
+	settings.ApplyDefaults()
+	workload, err := compose.Open(t.Context(), compose.Config{
+		Settings:        settings,
+		ArcaveProject:   model.ArcaveProjectName(arcaveProject),
+		ComposeProgress: composeconfig.ProgressQuiet,
+	}, store, model.DockerComposeProjectName(composeProject))
+	require.NoError(t, err)
+	t.Cleanup(func() { workload.Close(context.Background()) })
+	return workload
 }

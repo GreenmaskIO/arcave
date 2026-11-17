@@ -36,7 +36,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -123,7 +122,8 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	assert.True(t, cerrdefs.IsNotFound(err), "the committed image outlived the capture: %v", err)
 }
 
-// imageCaptureEnv is the compose project this test drives, wired the way cmd/arcave wires it.
+// imageCaptureEnv is the compose project this test drives, its workload opened through
+// compose.Open, as the CLI opens it.
 type imageCaptureEnv struct {
 	ctx     context.Context
 	svc     *core.Service
@@ -202,26 +202,4 @@ func storeKeys(t *testing.T, store storages.Storager) []string {
 		keys = append(keys, object.Name)
 	}
 	return keys
-}
-
-// openComposeWorkload opens composeProject's workload over store the way the DI root does: the
-// config's defaults, with the timeouts this suite waits on and compose's own progress muted.
-func openComposeWorkload(t *testing.T, store storages.Storager, arcaveProject, composeProject string) compose.Workload {
-	t.Helper()
-
-	settings := composeconfig.Config{
-		Compose: composeconfig.Compose{
-			WaitTimeout: 90 * time.Second,
-			StopTimeout: 5 * time.Second,
-		},
-	}
-	settings.ApplyDefaults()
-	workload, err := compose.Open(t.Context(), compose.Config{
-		Settings:        settings,
-		ArcaveProject:   model.ArcaveProjectName(arcaveProject),
-		ComposeProgress: composeconfig.ProgressQuiet,
-	}, store, model.DockerComposeProjectName(composeProject))
-	require.NoError(t, err)
-	t.Cleanup(func() { workload.Close(context.Background()) })
-	return workload
 }

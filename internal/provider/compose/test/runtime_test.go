@@ -30,7 +30,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 )
 
 // runtimeProfile is what arcave's DI root chooses by the engine behind the daemon.
@@ -39,14 +38,12 @@ type runtimeProfile struct {
 	// api is the daemon's Docker API, answering as Docker would.
 	api client.APIClient
 	// engine is what a workflow reaches the daemon through, over api.
-	engine *dockerclient.Engine
-	// volumes is how a volume leaves the daemon.
-	volumes   fullcopy.VolumeStreamer
+	engine    *dockerclient.Engine
 	assembler *composespec.Assembler
 }
 
 // newRuntimeProfile is the profile arcave's DI root builds for the daemon api answers as. It
-// mirrors cmd/arcave's newRuntimeProfile, which package main cannot export.
+// mirrors the compose provider's newRuntimeProfile, private to its root.
 func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 	t.Helper()
 	runtime, err := dockerclient.ReadRuntime(context.Background(), api)
@@ -62,7 +59,6 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 			runtime:   runtime.Kind,
 			api:       podmanAPI,
 			engine:    engine,
-			volumes:   podmanclient.NewEngine(engine),
 			assembler: composespec.NewAssembler(composespec.NewPodmanStamps(info)),
 		}
 	}
@@ -75,7 +71,6 @@ func newRuntimeProfile(t *testing.T, api *client.Client) runtimeProfile {
 		runtime:   runtime.Kind,
 		api:       dockerAPI,
 		engine:    engine,
-		volumes:   engine,
 		assembler: composespec.NewAssembler(composespec.NewDockerStamps(info)),
 	}
 }
