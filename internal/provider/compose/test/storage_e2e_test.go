@@ -46,6 +46,7 @@ import (
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // The storage servers the e2e runs against, pinned by digest: the images the
@@ -244,7 +245,7 @@ func startS3Storage(t *testing.T) storageTarget {
 	bucket := config.S3Storage{
 		Endpoint:    "http://" + endpoint,
 		Bucket:      storageE2EBucket,
-		Prefix:      "it-" + randomSuffix(t),
+		Prefix:      "it-" + daemontest.RandomSuffix(t),
 		Region:      "us-east-1",
 		AccessKeyID: server.Username,
 	}
@@ -286,7 +287,7 @@ func startAzureStorage(t *testing.T) storageTarget {
 	blobs := config.AzureStorage{
 		Container:      "arcave-e2e",
 		StorageAccount: azurite.AccountName,
-		Prefix:         "it-" + randomSuffix(t),
+		Prefix:         "it-" + daemontest.RandomSuffix(t),
 		AccessKey:      azurite.AccountKey,
 		Endpoint:       serviceURL + "/" + azurite.AccountName,
 	}
@@ -337,7 +338,7 @@ func startSSHStorage(t *testing.T) storageTarget {
 		Port:     port,
 		User:     sftpUser,
 		Password: sftpPassword,
-		Prefix:   path.Join("/upload", "it-"+randomSuffix(t)),
+		Prefix:   path.Join("/upload", "it-"+daemontest.RandomSuffix(t)),
 	}}
 	// The port accepts connections before sshd serves on it; a real ping is the signal.
 	require.Eventually(t, func() bool {

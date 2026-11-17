@@ -44,6 +44,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // sessionArcaveProject is the arcave project every session test stores under.
@@ -366,9 +367,9 @@ func TestSession_IncompleteSessionIsInvisible(t *testing.T) {
 func (e *sessionEnv) withComposeProject(t *testing.T) {
 	t.Helper()
 
-	e.daemon = newDaemonClient(t)
-	e.project = "arcave-session-it-" + randomSuffix(t)
-	t.Cleanup(func() { removeComposeProject(t, e.daemon, e.project) })
+	e.daemon = daemontest.NewClient(t)
+	e.project = "arcave-session-it-" + daemontest.RandomSuffix(t)
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, e.daemon, e.project) })
 	e.in(t, model.DefaultSession).up(t, 1)
 }
 

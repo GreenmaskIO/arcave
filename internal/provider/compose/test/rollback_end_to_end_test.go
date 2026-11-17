@@ -30,6 +30,7 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // endToEndSpec is one compose project carrying everything a rollback has to rebuild: a named
@@ -272,7 +273,7 @@ func (e *imageRollbackEnv) externalVolume(t *testing.T, name, script string) {
 	require.NoError(t, err)
 	busybox(t, dockerclient.NewEngine(e.daemon), name, script)
 	t.Cleanup(func() {
-		removeComposeProject(t, e.daemon, e.project)
+		daemontest.RemoveComposeProject(t, e.daemon, e.project)
 		_, err := e.daemon.VolumeRemove(context.Background(), name, client.VolumeRemoveOptions{Force: true})
 		assert.NoError(t, err, "remove volume %s", name)
 	})

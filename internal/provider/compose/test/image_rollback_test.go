@@ -43,6 +43,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // volumeMarker sits in the named volume, layerMarker past every mount: a rollback
@@ -207,8 +208,8 @@ type imageRollbackEnv struct {
 func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	t.Helper()
 
-	daemonAPI := newDaemonClient(t)
-	project := "arcave-image-rollback-it-" + randomSuffix(t)
+	daemonAPI := daemontest.NewClient(t)
+	project := "arcave-image-rollback-it-" + daemontest.RandomSuffix(t)
 
 	cli, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -253,7 +254,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 		project:   project,
 		deps:      deps,
 	}
-	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, env.daemon, env.project) })
 	return env
 }
 

@@ -41,6 +41,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // layerMarker is written into the container's own filesystem, past every mount:
@@ -136,8 +137,8 @@ type imageCaptureEnv struct {
 func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	t.Helper()
 
-	daemonAPI := newDaemonClient(t)
-	project := "arcave-image-it-" + randomSuffix(t)
+	daemonAPI := daemontest.NewClient(t)
+	project := "arcave-image-it-" + daemontest.RandomSuffix(t)
 
 	cli, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -177,7 +178,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 		store:   store,
 		project: project,
 	}
-	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, env.daemon, env.project) })
 	return env
 }
 

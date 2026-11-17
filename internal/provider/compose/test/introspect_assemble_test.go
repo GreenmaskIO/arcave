@@ -47,6 +47,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // The images every case runs on, pinned so their environment and command hold still under the test.
@@ -153,8 +154,8 @@ const originExtension = "x-arcave-origin"
 func newFidelityEnv(t *testing.T) *fidelityEnv {
 	t.Helper()
 
-	daemon := newDaemonClient(t)
-	project := "arcave-fidelity-" + randomSuffix(t)
+	daemon := daemontest.NewClient(t)
+	project := "arcave-fidelity-" + daemontest.RandomSuffix(t)
 
 	dockerCLI, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -203,7 +204,7 @@ func (e *fidelityEnv) cleanup(t *testing.T) {
 			joined = append(joined, id)
 		}
 	}
-	removeComposeProject(t, e.daemon, e.project)
+	daemontest.RemoveComposeProject(t, e.daemon, e.project)
 	for _, id := range joined {
 		_, err := e.daemon.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
 		assert.NoError(t, err, "remove container %s", id)
@@ -312,7 +313,7 @@ func (e *fidelityEnv) down(t *testing.T, project *types.Project) {
 	t.Helper()
 
 	require.NoError(t, e.runner.Down(e.ctx, project), "down")
-	removeProjectNetworks(t, e.daemon, e.project)
+	daemontest.RemoveProjectNetworks(t, e.daemon, e.project)
 }
 
 func (e *fidelityEnv) introspect(t *testing.T) model.IntrospectionResult {

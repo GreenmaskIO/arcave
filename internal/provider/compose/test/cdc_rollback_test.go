@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -53,6 +51,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // This is the cdc backend's proof, its workload assembled through workload.New as compose.Open
@@ -291,8 +290,8 @@ type cdcVolume struct {
 func newCDCEnv(t *testing.T, cdcCfg composeconfig.CDCBackend) *cdcEnv {
 	t.Helper()
 
-	cli := newDaemonClient(t)
-	suffix := randomSuffix(t)
+	cli := daemontest.NewClient(t)
+	suffix := daemontest.RandomSuffix(t)
 	volumes := []cdcVolume{
 		{name: cdcProject + "-pgdata-" + suffix, service: "db", target: "/var/lib/postgresql/data"},
 		{name: cdcProject + "-assets-" + suffix, service: "app", target: "/srv/assets"},
@@ -599,23 +598,6 @@ func (s stubInspector) Introspect(context.Context) (model.IntrospectionResult, e
 	return s.result, nil
 }
 
-// newDaemonClient skips the test unless a docker daemon answers.
-func newDaemonClient(t *testing.T) *client.Client {
-	t.Helper()
-
-	if testing.Short() {
-		t.Skip("skipping the cdc backend integration test in short mode")
-	}
-	cli, err := client.New(client.FromEnv)
-	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
-		_ = cli.Close()
-		t.Skip("skipping the cdc backend integration test: no reachable docker daemon: " + err.Error())
-	}
-	t.Cleanup(func() { _ = cli.Close() })
-	return cli
-}
-
 // cdcTransport resolves how this daemon's containers reach the test's restic
 // server, exactly as the DI root's auto mode does.
 // ARCAVE_TEST_NETWORK_MODE (host, bridge) and ARCAVE_TEST_CONTAINER_HOST override
@@ -636,18 +618,6 @@ func cdcTransport(t *testing.T, engine *dockerclient.Engine) (hostNetwork bool, 
 		return true, "127.0.0.1"
 	}
 	return false, containerHost
-}
-
-// randomSuffix keeps concurrent copies of this test apart on one daemon.
-func randomSuffix(t *testing.T) string {
-	t.Helper()
-
-	b := make([]byte, 5)
-	_, err := rand.Read(b)
-	require.NoError(t, err)
-	suffix := hex.EncodeToString(b)
-	issuedSuffixes.Store(suffix, true)
-	return suffix
 }
 
 // createVolume makes an empty named volume, removed with the test.

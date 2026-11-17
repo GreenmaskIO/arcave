@@ -52,6 +52,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // recreateSpec is the compose project under test; mode and the published port are the drift.
@@ -281,11 +282,14 @@ type recreateEnv struct {
 	port      int
 }
 
+// anonymousVolumeLabel is what the daemon stamps on a volume it created for a container.
+const anonymousVolumeLabel = "com.docker.volume.anonymous"
+
 func newRecreateEnv(t *testing.T) *recreateEnv {
 	t.Helper()
 
-	daemonAPI := newDaemonClient(t)
-	project := "arcave-recreate-it-" + randomSuffix(t)
+	daemonAPI := daemontest.NewClient(t)
+	project := "arcave-recreate-it-" + daemontest.RandomSuffix(t)
 
 	cli, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -332,7 +336,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 		hostDir:   t.TempDir(),
 		port:      freePort(t),
 	}
-	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, env.daemon, env.project) })
 	return env
 }
 

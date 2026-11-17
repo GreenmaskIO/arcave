@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // desktopBindTarget is where every container of these tests mounts the bind under test.
@@ -43,7 +44,7 @@ func TestDockerDesktop_ContainerInspect_BindOnTheHost(t *testing.T) {
 
 	daemon := newDesktopDaemon(t)
 	profile := newRuntimeProfile(t, daemon)
-	suffix := randomSuffix(t)
+	suffix := daemontest.RandomSuffix(t)
 	volume := "arcave-desktop-it-" + suffix
 	createVolume(t, daemon, volume)
 	dir := t.TempDir()
@@ -125,7 +126,7 @@ func TestDockerDesktop_RecreateWithImage_KeepsTheHostPath(t *testing.T) {
 	// Arrange
 	daemon := newDesktopDaemon(t)
 	profile := newRuntimeProfile(t, daemon)
-	suffix := randomSuffix(t)
+	suffix := daemontest.RandomSuffix(t)
 	volume := "arcave-desktop-it-" + suffix
 	createVolume(t, daemon, volume)
 	dir := t.TempDir()
@@ -158,7 +159,7 @@ func TestDockerDesktop_ContainerInspect_InheritedBindMountedAsItsSource(t *testi
 
 	daemon := newDesktopDaemon(t)
 	profile := newRuntimeProfile(t, daemon)
-	volume := "arcave-desktop-it-" + randomSuffix(t)
+	volume := "arcave-desktop-it-" + daemontest.RandomSuffix(t)
 	createVolume(t, daemon, volume)
 	dir := t.TempDir()
 	bind := mount.Mount{Type: mount.TypeBind, Source: dir, Target: desktopBindTarget}
@@ -195,7 +196,7 @@ func TestDockerDesktop_ContainerInspect_InheritedBindMountedAsItsSource(t *testi
 func newDesktopDaemon(t *testing.T) *client.Client {
 	t.Helper()
 
-	daemon := newDaemonClient(t)
+	daemon := daemontest.NewClient(t)
 	answer, err := daemon.Info(context.Background(), client.InfoOptions{})
 	require.NoError(t, err)
 	if !model.IsDockerDesktop(answer.Info) {

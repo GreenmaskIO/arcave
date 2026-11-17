@@ -35,6 +35,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // composeEnv is one compose project named after the test, with a compose client and an engine
@@ -53,8 +54,8 @@ type composeEnv struct {
 func newComposeEnv(t *testing.T, kind string, stopTimeout time.Duration) *composeEnv {
 	t.Helper()
 
-	daemonAPI := newDaemonClient(t)
-	project := "arcave-" + kind + "-it-" + randomSuffix(t)
+	daemonAPI := daemontest.NewClient(t)
+	project := "arcave-" + kind + "-it-" + daemontest.RandomSuffix(t)
 
 	cli, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -75,7 +76,7 @@ func newComposeEnv(t *testing.T, kind string, stopTimeout time.Duration) *compos
 		logs:    logs,
 		project: project,
 	}
-	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, env.daemon, env.project) })
 	return env
 }
 

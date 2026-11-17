@@ -47,6 +47,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // epochMarker is what these tests drift and read back. Not layerMarker: the
@@ -71,8 +72,8 @@ type ociDedupEnv struct {
 func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	t.Helper()
 
-	daemonAPI := newDaemonClient(t)
-	project := "arcave-oci-dedup-" + randomSuffix(t)
+	daemonAPI := daemontest.NewClient(t)
+	project := "arcave-oci-dedup-" + daemontest.RandomSuffix(t)
 
 	cli, err := command.NewDockerCli(
 		command.WithInputStream(nil),
@@ -117,7 +118,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 		projectRoot:         projectRoot,
 		project:             project,
 	}
-	t.Cleanup(func() { removeComposeProject(t, env.daemon, env.project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, env.daemon, env.project) })
 	return env
 }
 

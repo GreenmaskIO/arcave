@@ -28,6 +28,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
 // capturePolicySpec labels out a bind, an anonymous volume and a whole service, and
@@ -244,7 +245,7 @@ func TestRollback_SafetySnapshotKeepsWhatTheRollbackOverwrites(t *testing.T) {
 	labelled := strings.Replace(fmt.Sprintf(imageRollbackSpec, env.project, 1),
 		"volumes:\n  data: {}", "volumes:\n  data:\n    labels:\n      arcave.capture: \"false\"", 1)
 	// A volume's labels are set at its creation, so the project is made again.
-	removeComposeProject(t, env.daemon, env.project)
+	daemontest.RemoveComposeProject(t, env.daemon, env.project)
 	env.upDocument(t, labelled)
 	env.write(t, env.replicas(t)[0], "live")
 

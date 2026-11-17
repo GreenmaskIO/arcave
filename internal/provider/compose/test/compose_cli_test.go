@@ -33,6 +33,7 @@ import (
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -75,12 +76,12 @@ func TestRollback_KeepsComposeImageLabel(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	daemon := newDaemonClient(t)
+	daemon := daemontest.NewClient(t)
 	requireComposeCLI(t, minComposeCLIVersion)
 	requireContainerdStore(t, daemon)
-	project := "arcave-compose-cli-it-" + randomSuffix(t)
+	project := "arcave-compose-cli-it-" + daemontest.RandomSuffix(t)
 	dir := t.TempDir()
-	t.Cleanup(func() { removeComposeProject(t, daemon, project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, daemon, project) })
 	writeComposeFile(t, dir, fmt.Sprintf(imageLabelSpec, project))
 	runComposeCLI(t, dir, project, "up", "-d", "--wait")
 	container := project + "-app-1"
@@ -105,13 +106,13 @@ func TestRollback_RecreatesOnlyARestoredVolume(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	daemon := newDaemonClient(t)
+	daemon := daemontest.NewClient(t)
 	requireComposeCLI(t, minComposeCLIVersion)
 	engine := dockerclient.NewEngine(daemon)
-	project := "arcave-volume-drift-it-" + randomSuffix(t)
+	project := "arcave-volume-drift-it-" + daemontest.RandomSuffix(t)
 	data, kept := project+"_data", project+"_kept"
 	dir := t.TempDir()
-	t.Cleanup(func() { removeComposeProject(t, daemon, project) })
+	t.Cleanup(func() { daemontest.RemoveComposeProject(t, daemon, project) })
 	writeComposeFile(t, dir, fmt.Sprintf(volumeDriftSpec, project, "a"))
 	runComposeCLI(t, dir, project, "up", "-d", "--wait")
 	busybox(t, engine, data, "printf a > /data/marker")
