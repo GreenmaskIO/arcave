@@ -34,7 +34,7 @@ volumes:
 
 For the copy to be recoverable, everything the database needs to recover must be in volumes the savepoint captures: for Postgres both `PGDATA` and `pg_wal`, if you moved the WAL to a volume of its own.
 
-A service with a health check reads `unhealthy` while it is frozen, and Docker keeps saying so after the resume until its next probe. arcave waits for that probe before it goes on — at most one health check interval — so a service that waits on it with `condition: service_healthy` is not refused.
+A service with a health check reads `unhealthy` while it is frozen, and Docker keeps saying so after the resume until its next probe; Podman reads `reset` until then. arcave waits for that probe before it goes on — at most one health check interval — so a service that waits on it with `condition: service_healthy` is not refused.
 
 ## `live`: consistency is yours
 

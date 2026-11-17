@@ -32,6 +32,10 @@ const (
 	defaultHealthTimeout  = 30 * time.Second
 )
 
+// healthReset is the health Podman reads from an unpause until the next probe; compose refuses it
+// on a dependency.
+const healthReset container.HealthStatus = "reset"
+
 // staleHealthPoll is how often a resumed container's health is read until its next probe.
 const staleHealthPoll = 200 * time.Millisecond
 
@@ -62,8 +66,8 @@ func (e *Engine) UnpauseContainers(ctx context.Context, ids []string) error {
 	return eg.Wait()
 }
 
-// AwaitHealthProbes waits, all at once, until none of the containers reads the unhealthy a pause
-// leaves with no failed probe, each at most one probe's interval and timeout; past that the
+// AwaitHealthProbes waits, all at once, until none of the containers reads the health a pause
+// leaves before the next probe, each at most one probe's interval and timeout; past that the
 // health is the caller's to judge. One reading no such health, or gone, is not waited on.
 func (e *Engine) AwaitHealthProbes(ctx context.Context, ids []string) error {
 	eg, egCtx := errgroup.WithContext(ctx)
@@ -138,10 +142,18 @@ func newProbeBound(config *container.Config) time.Duration {
 	return cmp.Or(healthcheck.Interval, defaultHealthInterval) + cmp.Or(healthcheck.Timeout, defaultHealthTimeout)
 }
 
-// isStaleHealth reports the unhealthy a pause leaves behind: no probe has failed since.
+// isStaleHealth reports the health a pause leaves behind until the next probe: Docker's unhealthy
+// no probe has failed since, Podman's reset.
 func isStaleHealth(state *container.State) bool {
 	if state == nil || state.Health == nil {
 		return false
 	}
-	return state.Health.Status == container.Unhealthy && state.Health.FailingStreak == 0
+	switch state.Health.Status {
+	case container.Unhealthy:
+		return state.Health.FailingStreak == 0
+	case healthReset:
+		return true
+	default:
+		return false
+	}
 }
