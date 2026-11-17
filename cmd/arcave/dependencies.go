@@ -51,15 +51,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/layertag"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociblob"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociimage"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/resticrepo"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/savepointdir"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/eraser"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
@@ -281,7 +272,7 @@ func openSavepointService(
 
 	// The locker is bound to the project root here, so the service never names a path.
 	return core.New(core.Deps{
-		Savepoints:     sessionstore.NewSavepoints(savepointRepo),
+		Savepoints:     compose.NewSavepoints(savepointRepo),
 		ProjectLocker:  lock.New(projectPath),
 		WriteAdmission: scope.writeAdmission,
 		// The session's lock in the store, which the flock beside it cannot be across hosts.
@@ -308,7 +299,7 @@ func openSavepointStoreService(
 		return nil, err
 	}
 	return core.NewSavepointStoreService(core.SavepointStoreDeps{
-		Savepoints:     sessionstore.NewSavepoints(sprepo.New(scope.store)),
+		Savepoints:     compose.NewSavepoints(sprepo.New(scope.store)),
 		ProjectLocker:  lock.New(projectPath),
 		WriteAdmission: scope.writeAdmission,
 		SessionLocker:  scope.sessionLocker,
@@ -324,8 +315,8 @@ func openSavepointStoreService(
 func newBackendRegistry(
 	cfg config.Config, resticRoot storages.Storager,
 	streamer fullcopy.VolumeStreamer, runner cdc.VolumeRunner, transport cdc.Transport,
-) (*backendregistry.Registry, error) {
-	backendRegistry, err := backendregistry.New(
+) (model.SnapshotBackendRegistry, error) {
+	backendRegistry, err := compose.NewBackendRegistry(
 		fullcopy.NewFactory(streamer, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:         runner,
@@ -601,10 +592,10 @@ func newSessionService(
 		Current:        currentsession.New(projectPath),
 		Store:          arcaveProject.store,
 		NewSession: func(id model.SessionID) provider.Session {
-			return sessionstore.New(sessionstore.Deps{
-				Store:               arcaveProject.store,
-				Session:             id,
-				NewSavepointRecords: newSavepointRecords,
+			return compose.NewSession(compose.SessionDeps{
+				Store:                  arcaveProject.store,
+				Session:                id,
+				NewSavepointRepository: newSavepointRepository,
 			})
 		},
 		NewSessionLocker: func(id model.SessionID) (model.SessionLocker, error) {
@@ -1044,19 +1035,23 @@ func openGCService(
 	engine := docker.NewEngine(daemon.api)
 	return gc.New(gc.Deps{
 		Sessions: scope.sessions,
-		ProviderSession: sessionstore.New(sessionstore.Deps{
-			Store:               scope.arcaveProjectStore,
-			Session:             scope.sessionID,
-			NewSavepointRecords: newSavepointRecords,
-			Garbage: garbage.New(garbage.Deps{
-				NewSavepointReader:       newGCSavepointReader,
-				DaemonCollectors:         newDaemonCollectors(cfg, engine),
-				ComposeProjectCollectors: newComposeProjectCollectors(cfg, engine),
-				DaemonErasers:            newDaemonErasers(engine),
-				ComposeProjectErasers:    newComposeProjectErasers(cfg, engine),
-				// resticrepo reads the repositories through restic, not the listing.
-				UnlistedNamespaces: []string{cdc.NamespaceRepos},
-			}),
+		ProviderSession: compose.NewSession(compose.SessionDeps{
+			Store:                  scope.arcaveProjectStore,
+			Session:                scope.sessionID,
+			NewSavepointRepository: newSavepointRepository,
+			Garbage: &compose.GarbageDeps{
+				Daemon:        engine,
+				ArcaveProject: model.ArcaveProjectName(cfg.Project.Name),
+				Concurrency:   cfg.Common.Concurrency,
+				ResticInspectors: resticInspectorOpener{
+					cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
+					daemon: engine,
+				},
+				ResticPruners: resticPrunerOpener{
+					cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
+					daemon: engine,
+				},
+			},
 		}),
 		Locker:         lock.New(projectPath),
 		WriteAdmission: scope.writeAdmission,
@@ -1076,54 +1071,10 @@ func newSavepointLoader(store storages.Storager) status.SavepointLoader {
 	return sprepo.New(store)
 }
 
-// newSavepointRecords is the savepoint repository of a compose project's store, as a session reads it.
-func newSavepointRecords(store storages.Storager) sessionstore.SavepointRecords {
+// newSavepointRepository is the savepoint repository of a compose project's store, as the provider
+// reads it with no daemon.
+func newSavepointRepository(store storages.Storager) compose.SavepointRepository {
 	return sprepo.New(store)
-}
-
-// newGCSavepointReader is the savepoint repository of a compose project's store, as gc reads it.
-func newGCSavepointReader(store storages.Storager) garbage.SavepointReader {
-	return sprepo.New(store)
-}
-
-// newDaemonCollectors builds the collectors judging the daemon.
-func newDaemonCollectors(cfg config.Config, daemon gcDaemon) []garbage.DaemonCollector {
-	return []garbage.DaemonCollector{
-		layertag.New(daemon, model.ArcaveProjectName(cfg.Project.Name)),
-	}
-}
-
-// newComposeProjectCollectors builds the collectors judging a compose project's store.
-func newComposeProjectCollectors(cfg config.Config, daemon gcDaemon) []garbage.ComposeProjectCollector {
-	return []garbage.ComposeProjectCollector{
-		savepointdir.New(),
-		ociimage.New(),
-		ociblob.New(cfg.Common.Concurrency),
-		resticrepo.New(daemon, resticInspectorOpener{
-			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
-			daemon: daemon,
-		}),
-	}
-}
-
-// newDaemonErasers builds the erasers carrying out the gc's actions on the daemon.
-func newDaemonErasers(daemon gcDaemon) []garbage.DaemonEraser {
-	return []garbage.DaemonEraser{
-		eraser.NewTagEraser(daemon),
-	}
-}
-
-// newComposeProjectErasers builds the erasers carrying out the gc's actions in a compose project's store.
-func newComposeProjectErasers(cfg config.Config, daemon gcDaemon) []garbage.ComposeProjectEraser {
-	return []garbage.ComposeProjectEraser{
-		eraser.NewTreeEraser(),
-		eraser.NewImageEraser(),
-		eraser.NewObjectEraser(),
-		eraser.NewForgetEraser(resticPrunerOpener{
-			cfg:    config.CDCWithDefaults(cfg.Backends.CDC),
-			daemon: daemon,
-		}, cfg.Common.Concurrency),
-	}
 }
 
 // openedRestic is one compose project's restic repositories, served to restic containers.
@@ -1159,7 +1110,7 @@ type resticInspectorOpener struct {
 }
 
 // Open opens the transport over store's repositories; the inspector's Close releases it.
-func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
+func (o resticInspectorOpener) Open(ctx context.Context, store storages.Navigator) (compose.ResticInspector, error) {
 	served, err := openResticRepositories(ctx, o.cfg, o.daemon, store)
 	if err != nil {
 		return nil, err
@@ -1183,7 +1134,7 @@ type resticPrunerOpener struct {
 }
 
 // Open opens the transport over store's repositories; the pruner's Close releases it.
-func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
+func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (compose.ResticPruner, error) {
 	served, err := openResticRepositories(ctx, o.cfg, o.daemon, store)
 	if err != nil {
 		return nil, err
