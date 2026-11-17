@@ -40,8 +40,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
@@ -386,7 +384,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	require.NoError(t, err)
 	transport := e.openTransport(t, resticRoot)
 
-	registry, err := backendregistry.New(cdc.NewFactory(cdc.Dependencies{
+	registry, err := compose.NewBackendRegistry(cdc.NewFactory(cdc.Dependencies{
 		Runner:         e.engine,
 		Transport:      transport,
 		RepositoryRoot: resticRoot,
@@ -401,7 +399,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	spec := stubAssembler{project: &types.Project{Name: cdcProject}}
 	repo := sprepo.New(composeProjectStore)
 	svc := core.New(core.Deps{
-		Savepoints:     sessionstore.NewSavepoints(repo),
+		Savepoints:     compose.NewSavepoints(repo),
 		ArcaveProject:  cdcArcaveProject,
 		SessionLocker:  newSessionLocker(t, e.arcaveProjectStore(t), session),
 		WriteAdmission: newPlainAdmission(e.arcaveProjectStore(t)),

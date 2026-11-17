@@ -29,7 +29,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
 // A service's labels choose its layer's backend and leave its upstream out.

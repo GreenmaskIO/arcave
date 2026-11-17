@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 )
 
 // probeTimeout bounds the check that the daemon answers.

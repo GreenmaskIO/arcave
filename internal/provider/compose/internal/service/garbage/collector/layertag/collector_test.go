@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/utils/gctest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/utils/gctest"
 )
 
 func TestCollector_Find(t *testing.T) {

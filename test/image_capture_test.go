@@ -37,7 +37,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
@@ -173,7 +172,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	images := newImageCopier(store, newLayerOwner("arcave-image-tenant", project), profile.engine, blobStore)
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		Savepoints:     sessionstore.NewSavepoints(repo),
+		Savepoints:     compose.NewSavepoints(repo),
 		ArcaveProject:  "arcave-image-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),

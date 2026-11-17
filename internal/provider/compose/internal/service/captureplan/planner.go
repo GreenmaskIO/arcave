@@ -30,8 +30,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 

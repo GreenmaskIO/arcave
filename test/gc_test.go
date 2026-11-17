@@ -31,14 +31,7 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/layertag"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociblob"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/ociimage"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/resticrepo"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/collector/savepointdir"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage/eraser"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
@@ -82,7 +75,7 @@ func TestGC_DeletesOnlyTheDead(t *testing.T) {
 	// An upstream image no record names, whose manifest alone lists a blob.
 	orphanImage, orphanBlob := plantUnreferencedImage(t, composeDir)
 
-	svc := env.newGarbageCollector(t, model.DefaultSession, baseline.engine(), model.GarbageDataKinds()...)
+	svc := env.newGarbageCollector(t, model.DefaultSession, baseline.engine())
 	// Each image and blob op names a file the store holds, at its size.
 	preview, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{DryRun: true})
 	require.NoError(t, err)
@@ -250,8 +243,8 @@ func TestGC_DryRun_StaysInItsSession(t *testing.T) {
 	require.NoError(t, err)
 	deadTree := model.NewSavepointID()
 	plant(t, filepath.Join(env.sessionDir(feat.ID), "compose", env.project, deadTree.String(), "x"), "partial")
-	baselineSvc := env.newGarbageCollector(t, model.DefaultSession, nil, model.GarbageDataKindSavepointData)
-	featSvc := env.newGarbageCollector(t, feat.ID, nil, model.GarbageDataKindSavepointData)
+	baselineSvc := env.newGarbageCollector(t, model.DefaultSession, nil)
+	featSvc := env.newGarbageCollector(t, feat.ID, nil)
 
 	// Act
 	request := model.GarbageCollectRequest{
@@ -269,9 +262,10 @@ func TestGC_DryRun_StaysInItsSession(t *testing.T) {
 	assert.Equal(t, []string{deadTree.String()}, targetsOf(opsByKind(inFeat)[model.GarbageDataKindSavepointData]))
 }
 
-// newGarbageCollector wires a gc over session the way openGCService does, running kinds.
+// newGarbageCollector wires a gc over session the way openGCService does; without engine it
+// finds only what a store holds.
 func (e *sessionEnv) newGarbageCollector(
-	t *testing.T, session model.SessionID, engine *dockerclient.Engine, kinds ...model.GarbageDataKind,
+	t *testing.T, session model.SessionID, engine *dockerclient.Engine,
 ) *gc.GarbageCollector {
 	t.Helper()
 
@@ -281,40 +275,21 @@ func (e *sessionEnv) newGarbageCollector(
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, sessionArcaveProject)
 	require.NoError(t, err)
 
-	var (
-		daemonCollectors         []garbage.DaemonCollector
-		composeProjectCollectors []garbage.ComposeProjectCollector
-		daemonErasers            []garbage.DaemonEraser
-		composeProjectErasers    = []garbage.ComposeProjectEraser{
-			eraser.NewTreeEraser(), eraser.NewImageEraser(), eraser.NewObjectEraser(),
-		}
-	)
+	garbage := compose.GarbageDeps{
+		ArcaveProject: sessionArcaveProject,
+		Concurrency:   2,
+	}
 	if engine != nil {
-		daemonErasers = append(daemonErasers, eraser.NewTagEraser(engine))
-		composeProjectErasers = append(composeProjectErasers, newForgetEraser(t, engine, config.CDCTransportStdio))
-	}
-	for _, kind := range kinds {
-		switch kind {
-		case model.GarbageDataKindSavepointData:
-			composeProjectCollectors = append(composeProjectCollectors, savepointdir.New())
-		case model.GarbageDataKindUpstreamImages:
-			composeProjectCollectors = append(composeProjectCollectors, ociimage.New())
-		case model.GarbageDataKindImageLayers:
-			composeProjectCollectors = append(composeProjectCollectors, ociblob.New(2))
-		case model.GarbageDataKindDeduplicatedVolumes:
-			require.NotNil(t, engine, "the restic collector runs restic in the daemon")
-			composeProjectCollectors = append(composeProjectCollectors, newResticCollector(t, engine, config.CDCTransportStdio))
-		case model.GarbageDataKindRestoredLayers:
-			require.NotNil(t, engine, "the restored-layer collector reads the daemon")
-			daemonCollectors = append(daemonCollectors, layertag.New(engine, sessionArcaveProject))
+		opener := newResticOpener(t, engine, config.CDCTransportStdio)
+		garbage = compose.GarbageDeps{
+			Daemon:           engine,
+			ArcaveProject:    sessionArcaveProject,
+			Concurrency:      2,
+			ResticInspectors: opener,
+			ResticPruners:    resticPrunerOpener{opener},
 		}
 	}
-	return newGC(t, arcaveProjectStore, e.projectRoot, session, garbage.Deps{
-		DaemonCollectors:         daemonCollectors,
-		ComposeProjectCollectors: composeProjectCollectors,
-		DaemonErasers:            daemonErasers,
-		ComposeProjectErasers:    composeProjectErasers,
-	})
+	return newGC(t, arcaveProjectStore, e.projectRoot, session, garbage)
 }
 
 // A cdc savepoint whose record is gone — a remove interrupted past its record — leaves its
@@ -342,9 +317,7 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	t.Cleanup(func() { _ = root.Close() })
 	arcaveProjectStore, err := storefactory.ArcaveProject(root, cdcArcaveProject)
 	require.NoError(t, err)
-	svc := newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, garbage.Deps{
-		ComposeProjectCollectors: []garbage.ComposeProjectCollector{newResticCollector(t, env.engine, env.cdcCfg.Transport)},
-	})
+	svc := newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
 
 	// Act
 	result, err := svc.GarbageCollect(env.ctx, model.GarbageCollectRequest{
@@ -466,28 +439,37 @@ var resticKinds = []model.GarbageDataKind{model.GarbageDataKindDeduplicatedVolum
 func newCDCGarbageCollector(t *testing.T, env *cdcEnv) *gc.GarbageCollector {
 	t.Helper()
 	arcaveProjectStore := env.arcaveProjectStore(t)
-	return newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, garbage.Deps{
-		ComposeProjectCollectors: []garbage.ComposeProjectCollector{newResticCollector(t, env.engine, env.cdcCfg.Transport)},
-		ComposeProjectErasers:    []garbage.ComposeProjectEraser{newForgetEraser(t, env.engine, env.cdcCfg.Transport)},
-	})
+	return newGC(t, arcaveProjectStore, env.projectRoot, model.DefaultSession, newCDCGarbage(t, env))
+}
+
+// newCDCGarbage is what a gc of env finds its garbage with, its restic repositories served over
+// env's transport.
+func newCDCGarbage(t *testing.T, env *cdcEnv) compose.GarbageDeps {
+	t.Helper()
+	opener := newResticOpener(t, env.engine, env.cdcCfg.Transport)
+	return compose.GarbageDeps{
+		Daemon:           env.engine,
+		ArcaveProject:    cdcArcaveProject,
+		Concurrency:      1,
+		ResticInspectors: opener,
+		ResticPruners:    resticPrunerOpener{opener},
+	}
 }
 
 // newGC wires a gc of session over arcaveProjectStore the way openGCService does, its provider
-// finding garbage with finder's collectors and erasers.
+// finding garbage as garbage says.
 func newGC(
 	t *testing.T, arcaveProjectStore storages.Storager, projectRoot string, session model.SessionID,
-	finder garbage.Deps,
+	garbage compose.GarbageDeps,
 ) *gc.GarbageCollector {
 	t.Helper()
-	finder.NewSavepointReader = newGCSavepointReader
-	finder.UnlistedNamespaces = []string{cdc.NamespaceRepos}
 	return gc.New(gc.Deps{
 		Sessions: sessionrepo.New(arcaveProjectStore),
-		ProviderSession: sessionstore.New(sessionstore.Deps{
-			Store:               arcaveProjectStore,
-			Session:             session,
-			NewSavepointRecords: newSavepointRecords,
-			Garbage:             garbage.New(finder),
+		ProviderSession: compose.NewSession(compose.SessionDeps{
+			Store:                  arcaveProjectStore,
+			Session:                session,
+			NewSavepointRepository: newSavepointRepository,
+			Garbage:                &garbage,
 		}),
 		Locker:         lock.New(projectRoot),
 		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
@@ -509,20 +491,6 @@ func repoBytes(t *testing.T, env *cdcEnv) int64 {
 	return total
 }
 
-// newResticCollector is the restic collector over engine, its repositories served over transport
-// the way the DI root serves them.
-func newResticCollector(t *testing.T, engine *dockerclient.Engine, transport string) *resticrepo.Collector {
-	t.Helper()
-	return resticrepo.New(engine, newResticOpener(t, engine, transport))
-}
-
-// newForgetEraser is the forget eraser over engine, its repositories served over transport the
-// way the DI root serves them.
-func newForgetEraser(t *testing.T, engine *dockerclient.Engine, transport string) eraser.ForgetEraser {
-	t.Helper()
-	return eraser.NewForgetEraser(resticPrunerOpener{newResticOpener(t, engine, transport)}, 1)
-}
-
 // resticOpener serves a compose project's repositories over transport, per scope.
 type resticOpener struct {
 	engine        *dockerclient.Engine
@@ -542,7 +510,7 @@ func newResticOpener(t *testing.T, engine *dockerclient.Engine, transport string
 	}
 }
 
-func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (resticrepo.Inspector, error) {
+func (o resticOpener) Open(ctx context.Context, store storages.Navigator) (compose.ResticInspector, error) {
 	_, opened, err := o.serve(ctx, store)
 	if err != nil {
 		return nil, err
@@ -581,7 +549,7 @@ func (i resticInspector) Close(context.Context) { _ = i.stop() }
 // resticPrunerOpener serves a compose project's repositories over its transport, per erase.
 type resticPrunerOpener struct{ resticOpener }
 
-func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (eraser.Pruner, error) {
+func (o resticPrunerOpener) Open(ctx context.Context, store storages.Navigator) (compose.ResticPruner, error) {
 	root, opened, err := o.serve(ctx, store)
 	if err != nil {
 		return nil, err

@@ -37,8 +37,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	"github.com/greenmaskio/arcave/internal/provider/compose/garbage"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
@@ -410,7 +408,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	images := newImageCopier(store, newLayerOwner(sessionArcaveProject, e.project), profile.engine, blobStore)
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		Savepoints:     sessionstore.NewSavepoints(repo),
+		Savepoints:     compose.NewSavepoints(repo),
 		ArcaveProject:  sessionArcaveProject,
 		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
 		WriteAdmission: newPlainAdmission(arcaveProjectStore),
@@ -658,8 +656,8 @@ func fileSizes(t *testing.T, dir string) map[string]int64 {
 	return sizes
 }
 
-// newSavepointRecords opens a compose project's savepoints the way the DI root does for a session.
-func newSavepointRecords(store storages.Storager) sessionstore.SavepointRecords {
+// newSavepointRepository opens a compose project's savepoints the way the DI root does.
+func newSavepointRepository(store storages.Storager) compose.SavepointRepository {
 	return sprepo.New(store)
 }
 
@@ -667,15 +665,10 @@ func newSavepointRecords(store storages.Storager) sessionstore.SavepointRecords 
 // session commands.
 func newProviderSession(arcaveProjectStore storages.Navigator) func(id model.SessionID) provider.Session {
 	return func(id model.SessionID) provider.Session {
-		return sessionstore.New(sessionstore.Deps{
-			Store:               arcaveProjectStore,
-			Session:             id,
-			NewSavepointRecords: newSavepointRecords,
+		return compose.NewSession(compose.SessionDeps{
+			Store:                  arcaveProjectStore,
+			Session:                id,
+			NewSavepointRepository: newSavepointRepository,
 		})
 	}
-}
-
-// newGCSavepointReader opens a compose project's savepoints the way the DI root does for gc.
-func newGCSavepointReader(store storages.Storager) garbage.SavepointReader {
-	return sprepo.New(store)
 }

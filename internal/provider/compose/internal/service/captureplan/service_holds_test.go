@@ -26,7 +26,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 )
 
 // newStateReplica is replica n of service in the given state; a nil state is none reported.

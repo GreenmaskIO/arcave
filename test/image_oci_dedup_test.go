@@ -40,7 +40,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
@@ -103,7 +102,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	images := newImageCopier(composeProjectStore, newLayerOwner("arcave-oci-tenant", project), profile.engine, blobStore)
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		Savepoints:     sessionstore.NewSavepoints(repo),
+		Savepoints:     compose.NewSavepoints(repo),
 		ArcaveProject:  "arcave-oci-tenant",
 		SessionLocker:  newStoreLocker(composeProjectStore, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(composeProjectStore),

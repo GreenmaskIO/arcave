@@ -31,8 +31,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
-	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 

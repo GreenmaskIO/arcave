@@ -45,8 +45,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
@@ -321,7 +319,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	images := newImageCopier(store, newLayerOwner("arcave-recreate-tenant", project), profile.engine, blobStore)
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
-		Savepoints:     sessionstore.NewSavepoints(repo),
+		Savepoints:     compose.NewSavepoints(repo),
 		ArcaveProject:  "arcave-recreate-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),
@@ -362,7 +360,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 func mustRegistry(t *testing.T, volumes fullcopy.VolumeStreamer) model.SnapshotBackendRegistry {
 	t.Helper()
 
-	registry, err := backendregistry.New(fullcopy.NewFactory(volumes, fullcopy.CompressionZstd))
+	registry, err := compose.NewBackendRegistry(fullcopy.NewFactory(volumes, fullcopy.CompressionZstd))
 	require.NoError(t, err)
 	return registry
 }
