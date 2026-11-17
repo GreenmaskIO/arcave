@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package captureplan
 
 import (
 	"context"
@@ -29,12 +29,11 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 )
 
 // A service's labels choose its layer's backend and leave its upstream out.
-func TestProvider_BuildPlan_LabelsDecideTheImages(t *testing.T) {
+func TestPlanner_Plan_LabelsDecideTheImages(t *testing.T) {
 	// Arrange
 	introspection := composetest.LabelledIntrospection(map[string]string{
 		string(model.CaptureLabelWritableLayerBackend): "fullcopy",
@@ -53,7 +52,7 @@ func TestProvider_BuildPlan_LabelsDecideTheImages(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{})
+	plan, err := svc.Plan(ctx, introspection, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -71,7 +70,7 @@ func TestProvider_BuildPlan_LabelsDecideTheImages(t *testing.T) {
 
 // A capture before a restore holds what the restore overwrites, whatever the labels say now;
 // a label it cannot read is returned as ignored, never refused.
-func TestProvider_newReplacementPolicy(t *testing.T) {
+func TestPlanner_newReplacementPolicy(t *testing.T) {
 	tests := []struct {
 		name        string
 		labels      map[string]string
@@ -126,7 +125,7 @@ func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, notCovered, err := FindBackupVolumes(introspection, volumePolicy)
+	_, notCovered, err := findBackupVolumes(introspection, volumePolicy)
 	taken, skipped := imageCaptureContainers(ctx, containers, imagePolicy)
 
 	// Assert
@@ -139,7 +138,7 @@ func TestNotCovered_ReportsEachExclusionOnce(t *testing.T) {
 
 // A label arcave cannot act on refuses the plan, as a capture policy error, before the spec is
 // assembled.
-func TestProvider_BuildPlan_InvalidLabelBuildsNothing(t *testing.T) {
+func TestPlanner_Plan_InvalidLabelBuildsNothing(t *testing.T) {
 	// Arrange
 	introspection := composetest.LabelledIntrospection(map[string]string{"arcave.captur": "false"})
 	// No expectation on the assembler: the refusal comes first.
@@ -154,7 +153,7 @@ func TestProvider_BuildPlan_InvalidLabelBuildsNothing(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	_, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{})
+	_, err := svc.Plan(ctx, introspection, nil)
 
 	// Assert
 	require.ErrorIs(t, err, model.ErrInvalidCapturePolicy)
@@ -192,7 +191,7 @@ func TestNewLayerCaptures(t *testing.T) {
 }
 
 // Past a bad label a capture before a restore drops the labels, not the config.
-func TestProvider_newReplacementPolicy_FallbackKeepsTheConfig(t *testing.T) {
+func TestPlanner_newReplacementPolicy_FallbackKeepsTheConfig(t *testing.T) {
 	// Arrange
 	defaults := composetest.DemoCaptureDefaults
 	defaults.SavepointCapture.WritableLayers = false
@@ -210,16 +209,13 @@ func TestProvider_newReplacementPolicy_FallbackKeepsTheConfig(t *testing.T) {
 
 // A plan that fails past a bad label still says the labels were ignored: no plan is left to
 // carry that back to the caller.
-func TestProvider_BuildPlan_FailedPlanWarnsOfIgnoredLabels(t *testing.T) {
+func TestPlanner_Plan_FailedPlanWarnsOfIgnoredLabels(t *testing.T) {
 	// Arrange
 	record := composetest.DemoRecord()
 	introspection := composetest.LabelledIntrospection(map[string]string{"arcave.captur": "false"})
-	repo := &composetest.MockSavepointRepo{}
-	repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{record.ID}).Return([]model.Savepoint{record}, nil).Once()
 	assembler := &composetest.MockAssembler{}
 	assembler.On("Assemble", mock.Anything, introspection).Return((*types.Project)(nil), errors.New("boom")).Once()
 	svc := New(Deps{
-		SavepointRepo:    repo,
 		ProjectAssembler: assembler,
 		CaptureDefaults:  composetest.DemoCaptureDefaults,
 	})
@@ -227,20 +223,19 @@ func TestProvider_BuildPlan_FailedPlanWarnsOfIgnoredLabels(t *testing.T) {
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
 	// Act
-	plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{Restoring: record.ID})
+	plan, err := svc.Plan(ctx, introspection, &record)
 
 	// Assert
 	require.EqualError(t, err, "assembling the compose spec: boom")
 	assert.Zero(t, plan)
 	assert.Contains(t, logs.String(), "the capture ignored the labels and followed the config")
 	assert.Contains(t, logs.String(), model.ErrInvalidCapturePolicy.Error())
-	repo.AssertExpectations(t)
 	assembler.AssertExpectations(t)
 }
 
 // The live compose project is planned as its artifact parses back, not as the assembler built
 // it: a rollback acts on what the same loader reads.
-func TestProvider_BuildPlan(t *testing.T) {
+func TestPlanner_Plan(t *testing.T) {
 	// Arrange
 	introspection := composetest.DemoIntrospection()
 	assembler := &composetest.MockAssembler{}
@@ -263,7 +258,7 @@ func TestProvider_BuildPlan(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{})
+	plan, err := svc.Plan(ctx, introspection, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -274,66 +269,32 @@ func TestProvider_BuildPlan(t *testing.T) {
 	registry.AssertExpectations(t)
 }
 
-// A plan before a restore reads the restoring record by id and keeps what it overwrites; a record
-// missing or unreadable refuses the plan before anything is assembled, and is no capture policy error:
-// the policy was never resolved.
-func TestProvider_BuildPlan_Restoring(t *testing.T) {
+// A plan before a restore keeps what the restore overwrites, whatever the labels say now.
+func TestPlanner_Plan_Restoring(t *testing.T) {
+	// Arrange
 	record := composetest.DemoRecord()
-	errRead := errors.New("store unreachable")
-	tests := []struct {
-		name    string
-		found   []model.Savepoint
-		readErr error
-		wantErr error
-	}{
-		{name: "the record is read and kept", found: []model.Savepoint{record}},
-		{name: "a record not found", wantErr: sessionstore.ErrRecordNotFound},
-		{name: "a record that cannot be read", readErr: errRead, wantErr: errRead},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Arrange
-			introspection := composetest.LabelledIntrospection(map[string]string{string(model.CaptureLabelCapture): "false"})
-			introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{{Service: composetest.DemoService, Target: composetest.DemoTarget}}
-			repo := &composetest.MockSavepointRepo{}
-			repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{record.ID}).Return(tt.found, tt.readErr).Once()
-			store := composetest.NewDirStore(t)
-			registry := &composetest.MockRegistry{}
-			// A refusal assembles nothing: the assembler then carries no expectation.
-			assembler := &composetest.MockAssembler{}
-			if tt.wantErr == nil {
-				assembler.On("Assemble", mock.Anything, introspection).Return(composetest.DemoAssembled, nil).Once()
-				registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once()
-			}
-			svc := New(Deps{
-				SavepointRepo:    repo,
-				ProjectAssembler: assembler,
-				SpecCodec:        composetest.DemoCodec(),
-				BackendRegistry:  registry,
-				Store:            store,
-				CaptureDefaults:  composetest.DemoCaptureDefaults,
-			})
-			ctx := zerolog.Nop().WithContext(context.Background())
+	introspection := composetest.LabelledIntrospection(map[string]string{string(model.CaptureLabelCapture): "false"})
+	introspection.Project.Volumes[0].UsedBy = []model.ServiceReference{{Service: composetest.DemoService, Target: composetest.DemoTarget}}
+	store := composetest.NewDirStore(t)
+	registry := &composetest.MockRegistry{}
+	registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once()
+	svc := New(Deps{
+		ProjectAssembler: composetest.AssemblerFor(introspection),
+		SpecCodec:        composetest.DemoCodec(),
+		BackendRegistry:  registry,
+		Store:            store,
+		CaptureDefaults:  composetest.DemoCaptureDefaults,
+	})
+	ctx := zerolog.Nop().WithContext(context.Background())
 
-			// Act
-			plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{Restoring: record.ID})
+	// Act
+	plan, err := svc.Plan(ctx, introspection, &record)
 
-			// Assert
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-				var policyErr *provider.CapturePolicyError
-				assert.False(t, errors.As(err, &policyErr))
-				assert.Zero(t, plan)
-			} else {
-				require.NoError(t, err)
-				require.Len(t, plan.Volumes, 1)
-				assert.Equal(t, "volume-named-demo_db", plan.Volumes[0].Volume().ObjectID)
-			}
-			repo.AssertExpectations(t)
-			assembler.AssertExpectations(t)
-			registry.AssertExpectations(t)
-		})
-	}
+	// Assert
+	require.NoError(t, err)
+	require.Len(t, plan.Volumes, 1)
+	assert.Equal(t, "volume-named-demo_db", plan.Volumes[0].Volume().ObjectID)
+	registry.AssertExpectations(t)
 }
 
 func TestNewReplicaGaps(t *testing.T) {
@@ -380,7 +341,7 @@ func TestNewReplicaGaps(t *testing.T) {
 
 // One named volume and one bind mount are units; the tmpfs mount is a skip and web, mounting
 // nothing, is not covered. Every backend is rooted at the one store the DI root left.
-func TestProvider_BuildPlan_CoversEveryUnit(t *testing.T) {
+func TestPlanner_Plan_CoversEveryUnit(t *testing.T) {
 	// Arrange
 	introspection := model.IntrospectionResult{Project: model.Project{
 		Name: "demo",
@@ -423,7 +384,7 @@ func TestProvider_BuildPlan_CoversEveryUnit(t *testing.T) {
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
 	// Act
-	plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{})
+	plan, err := svc.Plan(ctx, introspection, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -440,7 +401,7 @@ func TestProvider_BuildPlan_CoversEveryUnit(t *testing.T) {
 }
 
 // Every replica's anonymous volume is a unit of its own, captured by its own backend.
-func TestProvider_BuildPlan_AnonymousVolumePerReplica(t *testing.T) {
+func TestPlanner_Plan_AnonymousVolumePerReplica(t *testing.T) {
 	// Arrange
 	anon := func(replica int) model.ServiceVolume {
 		return model.ServiceVolume{Type: model.VolumeTypeAnon, RawType: "volume", Target: "/cache", Replica: replica}
@@ -474,7 +435,7 @@ func TestProvider_BuildPlan_AnonymousVolumePerReplica(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{})
+	plan, err := svc.Plan(ctx, introspection, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -484,7 +445,7 @@ func TestProvider_BuildPlan_AnonymousVolumePerReplica(t *testing.T) {
 
 // The backend a new savepoint captures with is the configured one, not a constant: it is stamped
 // on every volume the plan resolves.
-func TestProvider_BuildPlan_StampsTheConfiguredBackend(t *testing.T) {
+func TestPlanner_Plan_StampsTheConfiguredBackend(t *testing.T) {
 	// Arrange
 	backend := composetest.NewMockBackend(model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendCDC})
 	registry := &composetest.MockRegistry{}
@@ -503,7 +464,7 @@ func TestProvider_BuildPlan_StampsTheConfiguredBackend(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	plan, err := svc.buildPlan(ctx, composetest.DemoIntrospection(), provider.CaptureOptions{})
+	plan, err := svc.Plan(ctx, composetest.DemoIntrospection(), nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -513,7 +474,7 @@ func TestProvider_BuildPlan_StampsTheConfiguredBackend(t *testing.T) {
 
 // A named volume no service mounts is covered like any other: a backend addresses a volume by
 // name, so having no container to read it through is no reason to leave it out.
-func TestProvider_BuildPlan_CoversAnUnmountedVolume(t *testing.T) {
+func TestPlanner_Plan_CoversAnUnmountedVolume(t *testing.T) {
 	// Arrange
 	introspection := model.IntrospectionResult{Project: model.Project{
 		Name:     "demo",
@@ -543,7 +504,7 @@ func TestProvider_BuildPlan_CoversAnUnmountedVolume(t *testing.T) {
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
 	// Act
-	plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{})
+	plan, err := svc.Plan(ctx, introspection, nil)
 
 	// Assert
 	require.NoError(t, err)
@@ -556,7 +517,7 @@ func TestProvider_BuildPlan_CoversAnUnmountedVolume(t *testing.T) {
 
 // A plan that cannot be built is refused before anything is touched: an assembler that fails,
 // a backend without a factory, a capture of nothing, a compose project taken down.
-func TestProvider_BuildPlan_Refusals(t *testing.T) {
+func TestPlanner_Plan_Refusals(t *testing.T) {
 	errAssemble := errors.New("compose files are gone")
 	errNoFactory := errors.New("no factory")
 	nothing := model.IntrospectionResult{Project: model.Project{
@@ -623,7 +584,7 @@ func TestProvider_BuildPlan_Refusals(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			plan, err := svc.buildPlan(ctx, tt.introspection, provider.CaptureOptions{})
+			plan, err := svc.Plan(ctx, tt.introspection, nil)
 
 			// Assert
 			require.ErrorIs(t, err, tt.wantErr)
@@ -637,29 +598,23 @@ func TestProvider_BuildPlan_Refusals(t *testing.T) {
 
 // A plan takes the live compose project's upstream and its writable layer, whether for a savepoint
 // or before a restore.
-func TestProvider_BuildPlan_PlansTheImagesAndWritableLayers(t *testing.T) {
+func TestPlanner_Plan_PlansTheImagesAndWritableLayers(t *testing.T) {
 	record := composetest.DemoRecord()
 	tests := []struct {
-		name string
-		opts provider.CaptureOptions
+		name      string
+		restoring *model.Savepoint
 	}{
 		{name: "a savepoint"},
-		{name: "before a restore", opts: provider.CaptureOptions{Restoring: record.ID}},
+		{name: "before a restore", restoring: &record},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			introspection := composetest.DemoIntrospectionWithContainers()
-			repo := &composetest.MockSavepointRepo{}
-			if tt.opts.Restoring != "" {
-				repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{record.ID}).
-					Return([]model.Savepoint{record}, nil).Once()
-			}
 			store := composetest.NewDirStore(t)
 			registry := &composetest.MockRegistry{}
 			registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once()
 			svc := New(Deps{
-				SavepointRepo:    repo,
 				ProjectAssembler: composetest.AssemblerFor(introspection),
 				SpecCodec:        composetest.DemoCodec(),
 				BackendRegistry:  registry,
@@ -669,7 +624,7 @@ func TestProvider_BuildPlan_PlansTheImagesAndWritableLayers(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			plan, err := svc.buildPlan(ctx, introspection, tt.opts)
+			plan, err := svc.Plan(ctx, introspection, tt.restoring)
 
 			// Assert
 			require.NoError(t, err)
@@ -679,7 +634,6 @@ func TestProvider_BuildPlan_PlansTheImagesAndWritableLayers(t *testing.T) {
 				Backend:   model.ImageBackendDedupCopy,
 			}}, plan.WritableLayers)
 			assert.Equal(t, []model.ContainerRef{composetest.DemoContainerRef()}, plan.Containers)
-			repo.AssertExpectations(t)
 			registry.AssertExpectations(t)
 		})
 	}

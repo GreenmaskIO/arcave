@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package captureplan
 
 import (
 	"context"
@@ -52,10 +52,10 @@ var inheritedSkipReason = skipReason{model.SkipReasonInheritedFromOutside, "inhe
 // resolveBackupVolumes returns the units a savepoint of the introspected compose project
 // covers, and the mounts and services it leaves out. Every workflow comes through
 // here, so create and rollback cannot differ.
-func (s *Provider) resolveBackupVolumes(
+func resolveBackupVolumes(
 	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
 ) ([]model.Volume, model.NotCovered, error) {
-	volumes, notCovered, err := FindBackupVolumes(introspection, capturePolicy)
+	volumes, notCovered, err := findBackupVolumes(introspection, capturePolicy)
 	if err != nil {
 		return nil, model.NotCovered{}, fmt.Errorf("deciding which volumes to back up: %w", err)
 	}
@@ -86,9 +86,9 @@ func (s *Provider) resolveBackupVolumes(
 	return volumes, notCovered, nil
 }
 
-// FindBackupVolumes decides, as capturePolicy says, which units a savepoint captures with
+// findBackupVolumes decides, as capturePolicy says, which units a savepoint captures with
 // which backend, and what it leaves out; two units rendering one ObjectID are an error.
-func FindBackupVolumes(
+func findBackupVolumes(
 	introspection model.IntrospectionResult, capturePolicy model.CapturePolicy,
 ) ([]model.Volume, model.NotCovered, error) {
 	var (

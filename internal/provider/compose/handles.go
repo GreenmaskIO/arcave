@@ -40,8 +40,8 @@ func (s *Provider) newCapturePlan(plan composemodel.Plan, introspection model.In
 	return capturePlan{
 		service:              s,
 		plan:                 plan,
-		anonymousVolumeNames: newAnonymousVolumeNames(introspection),
-		ownedBefore:          ownedVolumes(introspection),
+		anonymousVolumeNames: composemodel.NewAnonymousVolumeNames(introspection),
+		ownedBefore:          composemodel.OwnedVolumes(introspection),
 	}
 }
 

@@ -161,6 +161,47 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 	targetBackend.AssertExpectations(t)
 }
 
+// A capture before a restore reads the restoring record before anything is planned; a record
+// missing or unreadable refuses it, and is no capture policy error: the policy was never resolved.
+func TestLive_PlanCapture_RestoringRecord(t *testing.T) {
+	record := composetest.DemoRecord()
+	errRead := errors.New("store unreachable")
+	tests := []struct {
+		name    string
+		readErr error
+		wantErr error
+	}{
+		{name: "a record not found", wantErr: sessionstore.ErrRecordNotFound},
+		{name: "a record that cannot be read", readErr: errRead, wantErr: errRead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: a refusal plans nothing, so the assembler carries no expectation.
+			repo := &composetest.MockSavepointRepo{}
+			repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{record.ID}).Return(nil, tt.readErr).Once()
+			assembler := &composetest.MockAssembler{}
+			svc := New(Deps{
+				SavepointRepo:    repo,
+				ProjectAssembler: assembler,
+				CaptureDefaults:  composetest.DemoCaptureDefaults,
+			})
+			live := liveWorkload{service: svc, introspection: composetest.DemoIntrospection()}
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			plan, err := live.PlanCapture(ctx, provider.CaptureOptions{Restoring: record.ID})
+
+			// Assert
+			require.ErrorIs(t, err, tt.wantErr)
+			var policyErr *provider.CapturePolicyError
+			assert.False(t, errors.As(err, &policyErr))
+			assert.Nil(t, plan)
+			repo.AssertExpectations(t)
+			assembler.AssertExpectations(t)
+		})
+	}
+}
+
 // A savepoint is prepared before anything is stopped: record, backends, spec, then layers loaded
 // and the spec pointed at them; whatever refuses it refuses there, in that order.
 func TestLive_PrepareSavepoint(t *testing.T) {
@@ -808,7 +849,7 @@ func TestProvider_Inspect(t *testing.T) {
 				require.NoError(t, err)
 				assert.True(t, live.Absent())
 			}
-			assert.Equal(t, []progress.Kind{"test", kindProjectIntrospect}, recorder.Kinds)
+			assert.Equal(t, []progress.Kind{"test", "project.introspect"}, recorder.Kinds)
 			inspector.AssertExpectations(t)
 		})
 	}
@@ -870,40 +911,6 @@ func TestNewRestoredVolumeNames(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// TestVolumesOf pins the projection, and that it is never nil — restored must
-// marshal as [], not null.
-func TestVolumesOf(t *testing.T) {
-	vol := model.Volume{ObjectID: "volume-named-demo_db", Backend: model.SnapshotBackendFullCopy}
-
-	tests := []struct {
-		name   string
-		record model.Savepoint
-		want   []model.Volume
-	}{
-		{
-			name:   "a stat per volume yields a volume per stat",
-			record: model.Savepoint{ID: "100", Stats: []model.SnapshotStat{{Volume: vol, Type: model.SnapshotBackendFullCopy}}},
-			want:   []model.Volume{vol},
-		},
-		{
-			name:   "no stats yields an empty slice, never nil",
-			record: model.Savepoint{ID: "100"},
-			want:   []model.Volume{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := volumesOf(tt.record)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-			assert.NotNil(t, got)
 		})
 	}
 }

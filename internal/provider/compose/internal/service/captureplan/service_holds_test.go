@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package captureplan
 
 import (
 	"context"
@@ -25,7 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 )
@@ -122,7 +121,7 @@ func TestNewServiceHolds(t *testing.T) {
 }
 
 // A capture before a restore stops every service, whatever a label or the config say.
-func TestProvider_newReplacementPolicy_StopsEveryService(t *testing.T) {
+func TestPlanner_newReplacementPolicy_StopsEveryService(t *testing.T) {
 	tests := []struct {
 		name   string
 		labels map[string]string
@@ -154,7 +153,7 @@ func TestProvider_newReplacementPolicy_StopsEveryService(t *testing.T) {
 }
 
 // A savepoint's plan holds each service by its label, or by the config's mode.
-func TestProvider_BuildPlan_HoldsEachServiceByItsMode(t *testing.T) {
+func TestPlanner_Plan_HoldsEachServiceByItsMode(t *testing.T) {
 	tests := []struct {
 		name       string
 		labels     map[string]string
@@ -184,7 +183,7 @@ func TestProvider_BuildPlan_HoldsEachServiceByItsMode(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			plan, err := svc.buildPlan(ctx, introspection, provider.CaptureOptions{})
+			plan, err := svc.Plan(ctx, introspection, nil)
 
 			// Assert
 			require.NoError(t, err)

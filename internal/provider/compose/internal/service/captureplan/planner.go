@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+// Package captureplan decides one capture of a compose project before anything is touched: what
+// it takes, by which backends, and what it leaves out.
+package captureplan
 
 import (
 	"cmp"
@@ -23,17 +25,61 @@ import (
 	"slices"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
 // errNoVolumesToBackUp refuses a savepoint that would cover nothing.
 var errNoVolumesToBackUp = errors.New("no stateful volumes found; nothing to capture")
+
+// projectAssembler builds a compose project's spec out of its introspection.
+type projectAssembler interface {
+	Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error)
+}
+
+// specCodec moves a spec through the artifact a savepoint commits; Parse is compose's loader, so
+// every project the runner acts on has been through it.
+type specCodec interface {
+	Marshal(project *types.Project) ([]byte, error)
+	Parse(ctx context.Context, spec []byte) (*types.Project, error)
+}
+
+// Deps are Planner's collaborators.
+type Deps struct {
+	ProjectAssembler projectAssembler
+	SpecCodec        specCodec
+	BackendRegistry  model.SnapshotBackendRegistry
+	// CaptureDefaults are the backends a unit no arcave.* label names is captured by.
+	CaptureDefaults capturepolicy.CaptureDefaults
+	// Store is the compose project's store, every backend's root.
+	Store storages.Storager
+}
+
+// Planner decides the captures of one compose project.
+type Planner struct {
+	projectAssembler projectAssembler
+	specCodec        specCodec
+	backendRegistry  model.SnapshotBackendRegistry
+	captureDefaults  capturepolicy.CaptureDefaults
+	store            storages.Storager
+}
+
+// New builds a Planner from deps.
+func New(deps Deps) *Planner {
+	return &Planner{
+		projectAssembler: deps.ProjectAssembler,
+		specCodec:        deps.SpecCodec,
+		backendRegistry:  deps.BackendRegistry,
+		captureDefaults:  deps.CaptureDefaults,
+		store:            deps.Store,
+	}
+}
 
 // imageSet is what a capture takes of the images, as the policy decides.
 type imageSet struct {
@@ -46,26 +92,18 @@ type imageSet struct {
 	skippedImages         []model.SkippedImage
 }
 
-// buildPlan decides, off introspection, what a capture of the live compose project takes and leaves
-// out; it changes nothing. A capture policy that cannot be resolved is a provider.CapturePolicyError;
-// a record of opts.Restoring that cannot be read is not.
-func (s *Provider) buildPlan(
-	ctx context.Context, introspection model.IntrospectionResult, opts provider.CaptureOptions,
+// Plan decides, off introspection, what a capture of the live compose project takes and leaves
+// out; it changes nothing. restoring is the savepoint about to replace the project, nil for none. A
+// capture policy that cannot be resolved is a provider.CapturePolicyError.
+func (s *Planner) Plan(
+	ctx context.Context, introspection model.IntrospectionResult, restoring *model.Savepoint,
 ) (composemodel.Plan, error) {
 	var (
-		restoring     *model.Savepoint
 		capturePolicy model.CapturePolicy
 		labelsIgnored error
 		plan          composemodel.Plan
 		err           error
 	)
-	if opts.Restoring != "" {
-		savepoint, err := sessionstore.LoadSavepoint(ctx, s.savepointRepo, opts.Restoring)
-		if err != nil {
-			return composemodel.Plan{}, err
-		}
-		restoring = &savepoint
-	}
 	if capturePolicy, labelsIgnored, err = s.resolveCapturePolicy(ctx, introspection, restoring); err != nil {
 		return composemodel.Plan{}, &provider.CapturePolicyError{Err: err}
 	}
@@ -82,7 +120,7 @@ func (s *Provider) buildPlan(
 // replaced with restoring gets that replacement's policy, nil being none. The first error is why
 // the policy follows the config and not the labels, nil when it reads them; the second is the
 // failure.
-func (s *Provider) resolveCapturePolicy(
+func (s *Planner) resolveCapturePolicy(
 	ctx context.Context, introspection model.IntrospectionResult, restoring *model.Savepoint,
 ) (model.CapturePolicy, error, error) {
 	if restoring == nil {
@@ -99,7 +137,7 @@ func (s *Provider) resolveCapturePolicy(
 // newReplacementPolicy is the live policy of a project about to be replaced with restoring, every
 // unit it overwrites kept and every service stopped; a bad label falls back to the config and is
 // returned as the first error, labelsIgnored, the failure being the second.
-func (s *Provider) newReplacementPolicy(
+func (s *Planner) newReplacementPolicy(
 	ctx context.Context, introspection model.IntrospectionResult, restoring model.Savepoint,
 ) (model.CapturePolicy, error, error) {
 	var (
@@ -145,7 +183,7 @@ func withStopMode(capturePolicy model.CapturePolicy) model.CapturePolicy {
 // restore overwrites.
 func keepRestored(capturePolicy model.CapturePolicy, introspection model.IntrospectionResult, savepoint model.Savepoint) model.CapturePolicy {
 	restored := map[string]bool{}
-	for _, v := range volumesOf(savepoint) {
+	for _, v := range composemodel.VolumesOf(savepoint) {
 		restored[v.ObjectID] = true
 	}
 	keep := func(decision model.VolumeDecision) model.VolumeDecision {
@@ -178,18 +216,9 @@ func keepRestored(capturePolicy model.CapturePolicy, introspection model.Introsp
 	return capturePolicy
 }
 
-// volumesOf projects a savepoint's stats back to volumes.
-func volumesOf(savepoint model.Savepoint) []model.Volume {
-	volumes := make([]model.Volume, 0, len(savepoint.Stats))
-	for _, stat := range savepoint.Stats {
-		volumes = append(volumes, stat.Volume)
-	}
-	return volumes
-}
-
 // newPlan renders and parses back the compose project's spec and builds one backend per volume
 // capturePolicy takes; an absent compose project or an empty capture is refused.
-func (s *Provider) newPlan(
+func (s *Planner) newPlan(
 	ctx context.Context, introspection model.IntrospectionResult, capturePolicy model.CapturePolicy, labelsIgnored error,
 ) (composemodel.Plan, error) {
 	if err := requireComposeProject(introspection); err != nil {
@@ -217,7 +246,7 @@ func (s *Provider) newPlan(
 		return composemodel.Plan{}, fmt.Errorf("parsing the compose spec: %w", err)
 	}
 
-	volumes, notCovered, err := s.resolveBackupVolumes(ctx, introspection, capturePolicy)
+	volumes, notCovered, err := resolveBackupVolumes(ctx, introspection, capturePolicy)
 	if err != nil {
 		return composemodel.Plan{}, err
 	}
@@ -225,7 +254,7 @@ func (s *Provider) newPlan(
 		return composemodel.Plan{}, errNoVolumesToBackUp
 	}
 
-	backends, err := s.newBackends(volumes)
+	backends, err := backendregistry.NewBackends(s.backendRegistry, s.store, volumes)
 	if err != nil {
 		return composemodel.Plan{}, err
 	}
@@ -357,4 +386,13 @@ func missingReplicas(numbers []int) []int {
 		}
 	}
 	return missing
+}
+
+// requireComposeProject refuses a compose project the daemon holds no container of: there is
+// nothing to assemble a spec from.
+func requireComposeProject(introspection model.IntrospectionResult) error {
+	if composemodel.IsAbsent(introspection) {
+		return fmt.Errorf("compose project %q: %w", introspection.Project.Name, model.ErrComposeProjectAbsent)
+	}
+	return nil
 }

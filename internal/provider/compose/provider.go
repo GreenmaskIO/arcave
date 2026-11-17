@@ -23,6 +23,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/capture"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/captureplan"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/inspection"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
@@ -126,7 +128,7 @@ type Deps struct {
 	// LeftoverVolumes is what preparing a savepoint over an absent compose project does with a
 	// volume that outlived it and the build overwrites; empty is model.LeftoverVolumesOverwrite.
 	LeftoverVolumes model.LeftoverVolumesPolicy
-	// DaemonVersion is the version the engine reports; requireDaemon judges it.
+	// DaemonVersion is the version the engine reports; Inspect judges it.
 	DaemonVersion string
 	// MinDaemonMajor is the oldest major of that engine a workflow runs on; 0 requires none.
 	MinDaemonMajor int
@@ -146,6 +148,8 @@ type Deps struct {
 type Provider struct {
 	savepointRepo           savepointRepository
 	composeInspector        composeIntrospector
+	inspector               *inspection.Inspector
+	planner                 *captureplan.Planner
 	imageBackend            imageBackend
 	composeRunner           composeRunner
 	containerControl        containerControl
@@ -153,12 +157,8 @@ type Provider struct {
 	containerRebuilder      containerRebuilder
 	imageLookup             imageLookup
 	leftoverVolumes         model.LeftoverVolumesPolicy
-	daemonVersion           string
-	minDaemonMajor          int
-	projectAssembler        projectAssembler
 	specCodec               specCodec
 	snapshotBackendRegistry model.SnapshotBackendRegistry
-	captureDefaults         capturepolicy.CaptureDefaults
 	store                   storages.Storager
 	maxConcurrentOperations int
 	capturer                *capture.Capturer
@@ -167,8 +167,20 @@ type Provider struct {
 // New builds a Provider from deps.
 func New(deps Deps) *Provider {
 	return &Provider{
-		savepointRepo:           deps.SavepointRepo,
-		composeInspector:        deps.ComposeInspector,
+		savepointRepo:    deps.SavepointRepo,
+		composeInspector: deps.ComposeInspector,
+		planner: captureplan.New(captureplan.Deps{
+			ProjectAssembler: deps.ProjectAssembler,
+			SpecCodec:        deps.SpecCodec,
+			BackendRegistry:  deps.BackendRegistry,
+			CaptureDefaults:  deps.CaptureDefaults,
+			Store:            deps.Store,
+		}),
+		inspector: inspection.New(inspection.Deps{
+			ComposeInspector: deps.ComposeInspector,
+			DaemonVersion:    deps.DaemonVersion,
+			MinDaemonMajor:   deps.MinDaemonMajor,
+		}),
 		imageBackend:            deps.ImageBackend,
 		composeRunner:           deps.ComposeRunner,
 		containerControl:        deps.ContainerControl,
@@ -176,12 +188,8 @@ func New(deps Deps) *Provider {
 		containerRebuilder:      deps.ContainerRebuilder,
 		imageLookup:             deps.ImageLookup,
 		leftoverVolumes:         deps.LeftoverVolumes,
-		daemonVersion:           deps.DaemonVersion,
-		minDaemonMajor:          deps.MinDaemonMajor,
-		projectAssembler:        deps.ProjectAssembler,
 		specCodec:               deps.SpecCodec,
 		snapshotBackendRegistry: deps.BackendRegistry,
-		captureDefaults:         deps.CaptureDefaults,
 		store:                   deps.Store,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		capturer: capture.New(capture.Deps{

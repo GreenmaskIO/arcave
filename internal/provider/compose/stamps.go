@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 )
 
 // errSpecRecordMismatch refuses a savepoint whose spec says it captured a unit its
@@ -115,7 +116,7 @@ func notRestoredMessage(mount types.ServiceVolumeConfig) string {
 
 // recordHolds reports whether savepoint captured the volume or bind service mounts at target.
 func recordHolds(savepoint model.Savepoint, service, target string) bool {
-	return slices.ContainsFunc(volumesOf(savepoint), func(volume model.Volume) bool {
+	return slices.ContainsFunc(composemodel.VolumesOf(savepoint), func(volume model.Volume) bool {
 		switch {
 		case volume.Bind != nil:
 			return volume.Bind.Service == service && volume.Bind.Target == target

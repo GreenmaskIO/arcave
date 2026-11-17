@@ -26,6 +26,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/provider/compose/backendregistry"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/sessionstore"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -47,7 +49,7 @@ type preparedSavepoint struct {
 // Summary is what building the prepared savepoint restores, and the volumes it overwrites.
 func (p preparedSavepoint) Summary() provider.PreparedSummary {
 	return provider.PreparedSummary{
-		Volumes:        volumesOf(p.savepoint),
+		Volumes:        composemodel.VolumesOf(p.savepoint),
 		WritableLayers: p.restored,
 		Overwritten:    p.overwritten,
 	}
@@ -90,8 +92,8 @@ func (l liveWorkload) Teardown(ctx context.Context, prepared provider.PreparedSa
 	}
 	return vacantWorkload{
 		service:              l.service,
-		anonymousVolumeNames: newAnonymousVolumeNames(l.introspection),
-		ownedBefore:          ownedVolumes(l.introspection),
+		anonymousVolumeNames: composemodel.NewAnonymousVolumeNames(l.introspection),
+		ownedBefore:          composemodel.OwnedVolumes(l.introspection),
 		downProject:          target.project,
 	}, nil
 }
@@ -101,7 +103,7 @@ func (l liveWorkload) Teardown(ctx context.Context, prepared provider.PreparedSa
 func (s *Provider) newOverwritten(
 	introspection model.IntrospectionResult, savepoint model.Savepoint, recovering bool,
 ) ([]string, error) {
-	leftover := leftoverVolumes(ownedVolumes(introspection), savepoint)
+	leftover := leftoverVolumes(composemodel.OwnedVolumes(introspection), savepoint)
 	if len(leftover) > 0 && s.leftoverVolumes == model.LeftoverVolumesRefuse && !recovering {
 		return nil, fmt.Errorf("%w: %s", model.ErrLeftoverVolumes, strings.Join(leftover, ", "))
 	}
@@ -114,7 +116,7 @@ func (s *Provider) prepareTarget(
 	ctx context.Context, savepoint model.Savepoint, deployment model.SavepointDeployment, overwritten []string,
 ) (preparedSavepoint, error) {
 	// Their own set, not the live one's: a volume may have been added or dropped since.
-	backends, err := s.newBackends(volumesOf(savepoint))
+	backends, err := backendregistry.NewBackends(s.snapshotBackendRegistry, s.store, composemodel.VolumesOf(savepoint))
 	if err != nil {
 		return preparedSavepoint{}, fmt.Errorf("build backends: %w", err)
 	}
@@ -146,7 +148,7 @@ func (s *Provider) prepareTarget(
 // leftoverVolumes names the volumes that outlived the project's containers and savepoint overwrites.
 func leftoverVolumes(owned map[string]bool, savepoint model.Savepoint) []string {
 	var names []string
-	for _, v := range volumesOf(savepoint) {
+	for _, v := range composemodel.VolumesOf(savepoint) {
 		if v.Named != nil && owned[v.Named.VolumeName] {
 			names = append(names, v.Named.VolumeName)
 		}
@@ -255,7 +257,7 @@ func (r restoredWorkload) Start(ctx context.Context, waitTimeout time.Duration) 
 // Reap drops the anonymous volumes the teardown orphaned and the restore replaced, and says where
 // the restored writable layers live.
 func (r restoredWorkload) Reap(ctx context.Context) {
-	r.vacant.service.removeOrphanedVolumes(ctx, r.vacant.anonymousVolumeNames, volumesOf(r.target.savepoint))
+	r.vacant.service.removeOrphanedVolumes(ctx, r.vacant.anonymousVolumeNames, composemodel.VolumesOf(r.target.savepoint))
 	logRestoredLayers(ctx, r.target.restored)
 }
 
@@ -330,12 +332,12 @@ func (s *Provider) composeDown(ctx context.Context, project *types.Project) erro
 // before: what the failed rollback created, holding nothing the savepoint does not.
 func (s *Provider) removeCreatedVolumes(ctx context.Context, ownedBefore map[string]bool) {
 	log := zerolog.Ctx(ctx)
-	introspection, err := s.introspect(ctx)
+	introspection, err := s.inspector.Introspect(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("cannot tell which volumes the failed rollback created; they are left behind")
 		return
 	}
-	for name := range ownedVolumes(introspection) {
+	for name := range composemodel.OwnedVolumes(introspection) {
 		if ownedBefore[name] {
 			continue
 		}

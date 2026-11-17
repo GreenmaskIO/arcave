@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/greenmaskio/storages"
+
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
@@ -61,4 +63,23 @@ func (s *Registry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, err
 		return nil, fmt.Errorf("%w: %s", ErrUnknownBackend, spec.Volume.Backend)
 	}
 	return factory.New(spec)
+}
+
+// NewBackends builds one backend per volume through registry, all rooted at store, in
+// input order. All up front: an unregistered backend fails before any byte moves.
+func NewBackends(
+	registry model.SnapshotBackendRegistry, store storages.Storager, volumes []model.Volume,
+) ([]model.VolumeSnapshotBackend, error) {
+	backends := make([]model.VolumeSnapshotBackend, len(volumes))
+	for i, volume := range volumes {
+		backend, err := registry.New(model.BackendSpec{
+			Store:  store,
+			Volume: volume,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("building %s backend for volume %s: %w", volume.Backend, volume.ObjectID, err)
+		}
+		backends[i] = backend
+	}
+	return backends, nil
 }

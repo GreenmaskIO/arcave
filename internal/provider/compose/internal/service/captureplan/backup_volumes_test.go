@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package captureplan
 
 import (
 	"testing"
@@ -323,7 +323,7 @@ func TestFindBackupVolumes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			got, notCovered, err := FindBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
+			got, notCovered, err := findBackupVolumes(model.IntrospectionResult{Project: tt.project}, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
 
 			// Assert
 			require.NoError(t, err)
@@ -353,7 +353,7 @@ func TestFindBackupVolumes_ObjectIDCollision(t *testing.T) {
 	}}
 
 	// Act
-	got, notCovered, err := FindBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
+	got, notCovered, err := findBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendFullCopy})
 
 	// Assert
 	require.ErrorIs(t, err, errObjectIDCollision)
@@ -379,7 +379,7 @@ func TestFindBackupVolumes_StampsTheGivenBackend(t *testing.T) {
 	}}
 
 	// Act
-	got, _, err := FindBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendCDC})
+	got, _, err := findBackupVolumes(introspection, model.CapturePolicy{VolumeBackend: model.SnapshotBackendCDC})
 
 	// Assert
 	require.NoError(t, err)
@@ -436,7 +436,7 @@ func TestFindBackupVolumes_AppliesThePolicy(t *testing.T) {
 	}
 
 	// Act
-	got, notCovered, err := FindBackupVolumes(introspection, policy)
+	got, notCovered, err := findBackupVolumes(introspection, policy)
 
 	// Assert
 	require.NoError(t, err)

@@ -24,10 +24,9 @@ const (
 	kindSavepointHold    progress.Kind = "savepoint.hold"
 	kindSavepointRelease progress.Kind = "savepoint.release"
 
-	kindProjectIntrospect progress.Kind = "project.introspect"
-	kindComposeDown       progress.Kind = "compose.down"
-	kindComposeCreate     progress.Kind = "compose.create"
-	kindComposeStart      progress.Kind = "compose.start"
+	kindComposeDown   progress.Kind = "compose.down"
+	kindComposeCreate progress.Kind = "compose.create"
+	kindComposeStart  progress.Kind = "compose.start"
 
 	kindVolumeRestore  progress.Kind = "volume.restore"
 	kindVolume         progress.Kind = "volume"

@@ -87,20 +87,3 @@ func volumeRestoreContext(ctx context.Context, backend model.VolumeSnapshotBacke
 		Logger().
 		WithContext(ctx)
 }
-
-// newBackends builds one backend per volume, all rooted at the one store, in
-// input order. All up front: an unregistered backend fails before any byte moves.
-func (s *Provider) newBackends(volumes []model.Volume) ([]model.VolumeSnapshotBackend, error) {
-	backends := make([]model.VolumeSnapshotBackend, len(volumes))
-	for i, volume := range volumes {
-		backend, err := s.snapshotBackendRegistry.New(model.BackendSpec{
-			Store:  s.store,
-			Volume: volume,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("building %s backend for volume %s: %w", volume.Backend, volume.ObjectID, err)
-		}
-		backends[i] = backend
-	}
-	return backends, nil
-}
