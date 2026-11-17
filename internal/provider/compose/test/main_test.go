@@ -25,7 +25,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
-	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
+	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 

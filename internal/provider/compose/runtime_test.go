@@ -30,9 +30,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/client/podman"
-	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
 )
 
 // A Podman daemon is reached through libpod over the very connection the client resolved: a

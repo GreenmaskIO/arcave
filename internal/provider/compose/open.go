@@ -24,10 +24,10 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog/log"
 
-	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
 	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"

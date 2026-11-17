@@ -23,8 +23,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 )
 
 // volumeExportMount is where a volume sits inside its export container; absent from

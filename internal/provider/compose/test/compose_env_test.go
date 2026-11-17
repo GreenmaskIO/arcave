@@ -29,11 +29,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
-	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
+	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )

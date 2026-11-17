@@ -22,8 +22,8 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
 )
 
 // mockLibpod is a test double for libpod.Client (the libpodAPI seam).

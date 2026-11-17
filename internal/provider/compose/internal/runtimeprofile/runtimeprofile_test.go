@@ -24,11 +24,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/client/dockerdesktop"
-	"github.com/greenmaskio/arcave/internal/client/podman"
-	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/dockerdesktop"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
 )

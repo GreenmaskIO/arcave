@@ -30,7 +30,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 
-	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
 )
 
 // mountAPIBindOption is the option libpod reports a bind of the mount API with; the bind

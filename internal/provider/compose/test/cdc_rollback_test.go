@@ -34,11 +34,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend"

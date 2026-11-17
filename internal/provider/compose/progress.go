@@ -25,8 +25,8 @@ import (
 	"github.com/rs/zerolog"
 	"golang.org/x/term"
 
-	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 

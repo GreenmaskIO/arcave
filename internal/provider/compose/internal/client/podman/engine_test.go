@@ -28,8 +28,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 )
 
 // isVolumeExportSpec reports whether spec is the export of demo_pgdata, whole: a tar of

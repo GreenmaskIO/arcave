@@ -32,11 +32,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
+	composeclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/repository/currentsession"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"

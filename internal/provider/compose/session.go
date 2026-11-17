@@ -20,10 +20,10 @@ import (
 
 	"github.com/greenmaskio/storages"
 
-	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/gcfinder"

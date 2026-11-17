@@ -33,9 +33,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/client/podman/libpod"
 )
 
 // bareImageID is an image id as libpod answers a commit with: no algorithm.

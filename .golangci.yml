@@ -59,6 +59,9 @@ linters:
       alias:
         - pkg: github.com/greenmaskio/arcave/internal/provider/compose/internal/model
           alias: composemodel
+        # The compose client shares its package name with the provider root that wires it.
+        - pkg: github.com/greenmaskio/arcave/internal/provider/compose/internal/client/compose
+          alias: composeclient
     recvcheck:
       # ImageDigestID and SessionID must mix: an unmarshaler has to take a pointer
       # to write through, while every other method reads. The exclusions name the

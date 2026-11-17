@@ -34,8 +34,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
+	dockerclient "github.com/greenmaskio/arcave/internal/provider/compose/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/runtimeprofile"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
 )
