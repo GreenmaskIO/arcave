@@ -27,11 +27,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/sessionref"
 )
 
-// workloadObserver reads the compose project's replicas as the daemon runs them.
-type workloadObserver interface {
-	Observe(ctx context.Context) (model.ObservedWorkload, error)
-}
-
 // inflightMarkerReader reads the interrupted-rollback marker.
 type inflightMarkerReader interface {
 	Get(ctx context.Context) (marker model.InflightMarker, found bool, err error)
@@ -49,7 +44,7 @@ type currentSessionReader interface {
 
 // Deps are Service's collaborators.
 type Deps struct {
-	Observer workloadObserver
+	Observer provider.Observer
 	Inflight inflightMarkerReader
 	// Current is the current-session pointer.
 	Current currentSessionReader
@@ -68,7 +63,7 @@ type Deps struct {
 // Service reports what the daemon runs for one compose project. It takes no lock, writes
 // nothing, and reads the store only to add to what the daemon's labels say.
 type Service struct {
-	observer               workloadObserver
+	observer               provider.Observer
 	inflight               inflightMarkerReader
 	current                currentSessionReader
 	openArcaveProjectStore func(ctx context.Context) (storages.Storager, error)

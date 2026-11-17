@@ -162,6 +162,53 @@ func TestNewReplicaState(t *testing.T) {
 	}
 }
 
+func TestNewReplicaStatus(t *testing.T) {
+	// Arrange
+	created := time.Date(2026, 11, 7, 14, 0, 0, 0, time.UTC)
+	started := time.Date(2026, 11, 7, 14, 2, 30, 0, time.UTC)
+	finished := time.Date(2026, 11, 7, 15, 0, 0, 0, time.UTC)
+	ports := []model.PublishedPort{{ContainerPort: 5432, Protocol: "tcp", HostIP: "127.0.0.1", HostPort: 5432}}
+	replica := model.ObservedReplica{
+		Number:        2,
+		Container:     "demo-db-2",
+		ContainerID:   "db-2-id",
+		Labels:        map[string]string{"k": "v"},
+		State:         model.ReplicaStateRunning,
+		Health:        model.ReplicaHealthUnhealthy,
+		ExitCode:      137,
+		OOMKilled:     true,
+		RestartCount:  4,
+		FailingChecks: 3,
+		CreatedAt:     &created,
+		StartedAt:     &started,
+		FinishedAt:    &finished,
+		Replaces:      "demo-db-1",
+		Ports:         ports,
+	}
+
+	// Act
+	got := newReplicaStatus(replica, false, true, false)
+
+	// Assert
+	assert.Equal(t, model.ReplicaStatus{
+		Number:        2,
+		Container:     "demo-db-2",
+		ContainerID:   "db-2-id",
+		State:         model.ReplicaStateRunning,
+		Health:        model.ReplicaHealthUnhealthy,
+		ExitCode:      137,
+		OOMKilled:     true,
+		RestartCount:  4,
+		FailingChecks: 3,
+		CreatedAt:     &created,
+		StartedAt:     &started,
+		FinishedAt:    &finished,
+		Replaces:      "demo-db-1",
+		InDeployment:  true,
+		Ports:         ports,
+	}, got)
+}
+
 func TestNewServiceState(t *testing.T) {
 	var (
 		running   = model.ReplicaStatus{State: model.ReplicaStateRunning}
@@ -381,6 +428,8 @@ func TestService_Status(t *testing.T) {
 		pointerErr error
 		ref        string
 		marker     *model.InflightMarker
+		// sessionOpenErr is opening the deployed session's savepoints failing.
+		sessionOpenErr error
 		// markerErr is the inflight marker's read failing.
 		markerErr error
 		storeErr  error
@@ -769,6 +818,21 @@ func TestService_Status(t *testing.T) {
 			},
 		},
 		{
+			name:           "a session whose savepoints cannot be opened is unreadable",
+			labels:         []map[string]string{baselineDeployment.Labels()},
+			state:          runningStateAt(started),
+			sessionOpenErr: errors.New("open failed"),
+			wantErr:        model.ErrStatusPartial,
+			verify: func(t *testing.T, status model.ComposeProjectStatus) {
+				require.NotNil(t, status.Deployment)
+				assert.Equal(t, model.DeploymentRecordUnreadable, status.Deployment.Record)
+				assert.Equal(t, []model.StatusUnreadable{{
+					Source: model.StatusUnreadableStore,
+					Error:  "open session " + model.DefaultSession.String() + ": open failed",
+				}}, status.Unreadable)
+			},
+		},
+		{
 			name:          "a record that cannot be read is unreadable",
 			labels:        []map[string]string{baselineDeployment.Labels()},
 			state:         runningStateAt(started),
@@ -841,8 +905,9 @@ func TestService_Status(t *testing.T) {
 					}
 					return sessionrepo.New(store)
 				},
-				NewProviderSession: func(_ storages.Navigator, id model.SessionID) provider.Session {
-					return newFakeSession(id, tt.stored, tt.savepointsErr)
+				NewProviderSession: func(arcaveProjectStore storages.Navigator, id model.SessionID) provider.Session {
+					assert.Same(t, store, arcaveProjectStore, "the session lies in the arcave project's store")
+					return newFakeSession(id, tt.stored, tt.sessionOpenErr, tt.savepointsErr)
 				},
 				ArcaveProject:  demoArcaveProject,
 				ComposeProject: demoProject,

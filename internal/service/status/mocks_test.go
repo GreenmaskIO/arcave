@@ -59,21 +59,23 @@ type failingReader struct{ err error }
 
 func (f failingReader) ListSessions(context.Context) ([]model.Session, error) { return nil, f.err }
 
-// fakeSession is the provider's session id: the default session holds savepoints of every
-// workload, another none; err fails every read of a savepoint.
+// fakeSession is the provider's session id: in the default session demoProject holds savepoints,
+// anything else none; openErr fails opening a workload's savepoints, err every read of one.
 type fakeSession struct {
 	id         model.SessionID
 	savepoints []model.Savepoint
+	openErr    error
 	err        error
 }
 
-func newFakeSession(id model.SessionID, savepoints []model.Savepoint, err error) fakeSession {
+func newFakeSession(id model.SessionID, savepoints []model.Savepoint, openErr, err error) fakeSession {
 	if id != model.DefaultSession {
 		savepoints = nil
 	}
 	return fakeSession{
 		id:         id,
 		savepoints: savepoints,
+		openErr:    openErr,
 		err:        err,
 	}
 }
@@ -82,7 +84,16 @@ func (f fakeSession) ID() model.SessionID { return f.id }
 
 func (f fakeSession) Workloads(context.Context) ([]provider.WorkloadName, error) { return nil, nil }
 
-func (f fakeSession) Savepoints(provider.WorkloadName) (provider.Savepoints, error) { return f, nil }
+func (f fakeSession) Savepoints(workload provider.WorkloadName) (provider.Savepoints, error) {
+	switch {
+	case f.openErr != nil:
+		return nil, f.openErr
+	case workload != demoProject:
+		return newFakeSession(f.id, nil, nil, f.err), nil
+	default:
+		return f, nil
+	}
+}
 
 func (f fakeSession) FindGarbage(context.Context, []model.GarbageDataKind) []provider.Garbage {
 	return nil
