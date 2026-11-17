@@ -74,47 +74,6 @@ func TestCapturePlan_Hold(t *testing.T) {
 	}
 }
 
-// The containers the hold's stop killed reach the committed record.
-func TestHeld_Capture(t *testing.T) {
-	// Arrange
-	runner := &composetest.MockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string{composetest.DemoContainerID}, nil).Once()
-	repo := &composetest.MockSavepointRepo{}
-	spec := composetest.ExpectSpecCommit(repo)
-	var committed model.Savepoint
-	commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
-		return savepoint.ID.Validate() == nil
-	})).Run(func(args mock.Arguments) { committed = args.Get(1).(model.Savepoint) }).Return(nil).Once()
-	mock.InOrder(stop, spec, commit)
-	svc := newComposeWorkload(Deps{
-		SavepointRepo: repo,
-		ComposeRunner: runner,
-		Store:         composetest.NewDirStore(t),
-	})
-	plan := composemodel.Plan{
-		Project:    composetest.DemoSpec,
-		Spec:       composetest.DemoSpecBytes,
-		Services:   stopServices,
-		Containers: []model.ContainerRef{composetest.DemoContainerRef()},
-	}
-	ctx := composetest.NewTestContext()
-	holding, err := svc.newCapturePlan(plan, model.IntrospectionResult{}).Hold(ctx)
-	require.NoError(t, err)
-
-	// Act
-	captured, err := holding.Capture(ctx, provider.CaptureRequest{Name: "sp"})
-	require.NoError(t, err)
-	_, err = captured.Commit(ctx)
-
-	// Assert
-	require.NoError(t, err)
-	require.NotNil(t, committed.NotCovered)
-	assert.Equal(t, []model.KilledContainer{{Service: composetest.DemoService, Replica: 1, Container: "demo-db-1"}},
-		committed.NotCovered.KilledContainers)
-	runner.AssertExpectations(t)
-	repo.AssertExpectations(t)
-}
-
 // Release starts the whole project under a savepoint.release step.
 func TestCapturePlan_Release(t *testing.T) {
 	tests := []struct {
@@ -241,28 +200,6 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 			runner.AssertExpectations(t)
 			control.AssertExpectations(t)
 			repo.AssertExpectations(t)
-		})
-	}
-}
-
-func TestFanOutLimit(t *testing.T) {
-	tests := []struct {
-		name        string
-		concurrency int
-		want        int
-	}{
-		{name: "a configured concurrency is the limit", concurrency: 5, want: 5},
-		{name: "one runs the fan-out serially", concurrency: 1, want: 1},
-		{name: "zero leaves the fan-out unbounded", concurrency: 0, want: -1},
-		{name: "a negative concurrency leaves it unbounded", concurrency: -3, want: -1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := fanOutLimit(tt.concurrency)
-
-			// Assert
-			assert.Equal(t, tt.want, got)
 		})
 	}
 }

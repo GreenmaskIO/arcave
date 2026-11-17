@@ -22,7 +22,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/hold"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -69,50 +68,6 @@ func (p capturePlan) Hold(ctx context.Context) (provider.HeldWorkload, error) {
 // ran, failed partway or never ran.
 func (p capturePlan) Release(ctx context.Context, waitTimeout time.Duration) error {
 	return p.service.release(ctx, p.plan, waitTimeout)
-}
-
-// heldWorkload is the project heldWorkload still, the containers its stop killed, the anonymous volumes its
-// teardown orphans and the volumes it owned when it was inspected.
-type heldWorkload struct {
-	service              *composeWorkload
-	plan                 composemodel.Plan
-	killed               []string
-	anonymousVolumeNames map[string]string
-	ownedBefore          map[string]bool
-}
-
-// Capture stores what is held under a new savepoint, not yet committed.
-func (h heldWorkload) Capture(ctx context.Context, req provider.CaptureRequest) (provider.CapturedSavepoint, error) {
-	return h.service.capturer.Capture(ctx, h.plan, h.killed, req)
-}
-
-// PrepareSavepoint loads the layers of the savepoint id names back into the daemon and points the
-// held project at them, over the backends that captured it: it reads no spec and refuses no image.
-func (h heldWorkload) PrepareSavepoint(
-	ctx context.Context, id model.SavepointID, opts provider.PrepareOptions,
-) (provider.PreparedSavepoint, error) {
-	savepoint, err := sessionstore.LoadSavepoint(ctx, h.service.savepointRepo, id)
-	if err != nil {
-		return nil, err
-	}
-	target, err := h.service.preparer.PrepareHeld(ctx, savepoint, h.plan, opts.Deployment)
-	if err != nil {
-		return nil, err
-	}
-	return preparedSavepoint{Target: target}, nil
-}
-
-// Teardown runs `compose down` of the held project.
-func (h heldWorkload) Teardown(ctx context.Context) (provider.VacantWorkload, error) {
-	if err := h.service.deployer.Down(ctx, h.plan.Project); err != nil {
-		return nil, err
-	}
-	return vacantWorkload{
-		service:              h.service,
-		anonymousVolumeNames: h.anonymousVolumeNames,
-		ownedBefore:          h.ownedBefore,
-		downProject:          h.plan.Project,
-	}, nil
 }
 
 // hold holds the project still as plan says and returns the containers the stop killed.

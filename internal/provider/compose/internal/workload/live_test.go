@@ -1,0 +1,291 @@
+// Copyright 2026 Greenmask Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package workload
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/container"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider"
+	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
+)
+
+// A capture before a restore reads the restoring record before anything is planned; a record
+// missing or unreadable refuses it, and is no capture policy error: the policy was never resolved.
+func TestLive_PlanCapture_RestoringRecord(t *testing.T) {
+	record := composetest.DemoRecord()
+	errRead := errors.New("store unreachable")
+	tests := []struct {
+		name    string
+		readErr error
+		wantErr error
+	}{
+		{name: "a record not found", wantErr: sessionstore.ErrRecordNotFound},
+		{name: "a record that cannot be read", readErr: errRead, wantErr: errRead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange: a refusal plans nothing, so the assembler carries no expectation.
+			repo := &composetest.MockSavepointRepo{}
+			repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{record.ID}).Return(nil, tt.readErr).Once()
+			assembler := &composetest.MockAssembler{}
+			svc := newComposeWorkload(Deps{
+				SavepointRepo:    repo,
+				ProjectAssembler: assembler,
+				CaptureDefaults:  composetest.DemoCaptureDefaults,
+			})
+			live := liveWorkload{service: svc, introspection: composetest.DemoIntrospection()}
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			plan, err := live.PlanCapture(ctx, provider.CaptureOptions{Restoring: record.ID})
+
+			// Assert
+			require.ErrorIs(t, err, tt.wantErr)
+			var policyErr *provider.CapturePolicyError
+			assert.False(t, errors.As(err, &policyErr))
+			assert.Nil(t, plan)
+			repo.AssertExpectations(t)
+			assembler.AssertExpectations(t)
+		})
+	}
+}
+
+// A savepoint is prepared before anything is stopped: record, backends, spec, then layers loaded
+// and the spec pointed at them; whatever refuses it refuses there, in that order.
+func TestLive_PrepareSavepoint(t *testing.T) {
+	errLoad := errors.New("daemon refused the archive")
+	noSpec := composetest.DemoRecordWithImages()
+	noSpec.Spec = nil
+	tests := []struct {
+		name      string
+		savepoint model.Savepoint
+		found     bool
+		loadErr   error
+		wantErr   error
+	}{
+		{name: "a savepoint with its layer", savepoint: composetest.DemoRecordWithImages(), found: true},
+		{name: "a record not found", savepoint: composetest.DemoRecordWithImages(), wantErr: sessionstore.ErrRecordNotFound},
+		{name: "a record with no spec", savepoint: noSpec, found: true, wantErr: model.ErrSavepointNoSpec},
+		{name: "a layer the daemon will not take", savepoint: composetest.DemoRecordWithImages(), found: true, loadErr: errLoad, wantErr: errLoad},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			repo := &composetest.MockSavepointRepo{}
+			var found []model.Savepoint
+			if tt.found {
+				found = []model.Savepoint{tt.savepoint}
+			}
+			calls := []*mock.Call{repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{tt.savepoint.ID}).Return(found, nil).Once()}
+			store := composetest.NewDirStore(t)
+			registry := &composetest.MockRegistry{}
+			images := &composetest.MockImageBackend{}
+			codec := &composetest.MockCodec{}
+			if tt.found {
+				calls = append(calls, registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once())
+			}
+			if tt.found && tt.savepoint.Spec != nil {
+				calls = append(calls,
+					repo.On("LoadSpec", mock.Anything, tt.savepoint.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+					codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
+					images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
+						SnapshotID: tt.savepoint.ID, Layer: composetest.DemoWritableLayer(), Tag: composetest.DemoRestoredTag(1),
+					}).Return(composetest.DemoWritableLayerRestoreResult(), tt.loadErr).Once())
+			}
+			mock.InOrder(calls...)
+			svc := newComposeWorkload(Deps{
+				SavepointRepo:   repo,
+				SpecCodec:       codec,
+				BackendRegistry: registry,
+				ImageBackend:    images,
+				ImageLookup:     &composetest.MockImageLookup{},
+				Store:           store,
+			})
+			live := liveWorkload{service: svc, introspection: composetest.DemoIntrospectionWithContainers()}
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			prepared, err := live.PrepareSavepoint(ctx, tt.savepoint.ID, provider.PrepareOptions{})
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Nil(t, prepared)
+			} else {
+				require.NoError(t, err)
+				target := prepared.(preparedSavepoint)
+				assert.Equal(t, composetest.DemoRestoredTag(1), target.Project.Services[composetest.DemoService].Image)
+				assert.Equal(t, types.PullPolicyNever, target.Project.Services[composetest.DemoService].PullPolicy)
+				assert.Equal(t, []model.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()}, prepared.Summary().WritableLayers)
+				assert.Equal(t, []model.Volume{composetest.DemoVolume()}, prepared.Summary().Volumes)
+			}
+			repo.AssertExpectations(t)
+			registry.AssertExpectations(t)
+			images.AssertExpectations(t)
+			codec.AssertExpectations(t)
+		})
+	}
+}
+
+// Over an absent compose project a leftover volume the savepoint restores into is refused under the
+// refusing policy, else named as overwritten; a recovery is never refused.
+func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
+	tests := []struct {
+		name       string
+		policy     model.LeftoverVolumesPolicy
+		recovering bool
+		wantErr    error
+	}{
+		{name: "the default overwrites", wantErr: nil},
+		{name: "overwrite", policy: model.LeftoverVolumesOverwrite},
+		{name: "refuse", policy: model.LeftoverVolumesRefuse, wantErr: model.ErrLeftoverVolumes},
+		{name: "refuse, but a recovery", policy: model.LeftoverVolumesRefuse, recovering: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			record := composetest.DemoRecord()
+			repo := &composetest.MockSavepointRepo{}
+			read := expectRecordRead(repo, record)
+			store := composetest.NewDirStore(t)
+			registry := &composetest.MockRegistry{}
+			codec := &composetest.MockCodec{}
+			if tt.wantErr == nil {
+				mock.InOrder(
+					read,
+					registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once(),
+					repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+					codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
+				)
+			}
+			svc := newComposeWorkload(Deps{
+				SavepointRepo:   repo,
+				SpecCodec:       codec,
+				BackendRegistry: registry,
+				ImageLookup:     &composetest.MockImageLookup{},
+				LeftoverVolumes: tt.policy,
+				Store:           store,
+			})
+			live := liveWorkload{service: svc, introspection: composetest.DemoAbsentIntrospection()}
+			ctx := zerolog.Nop().WithContext(context.Background())
+
+			// Act
+			prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Recovering: tt.recovering})
+
+			// Assert
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.EqualError(t, err, model.ErrLeftoverVolumes.Error()+": demo_db")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, []string{"demo_db"}, prepared.Summary().Overwritten)
+			}
+			repo.AssertExpectations(t)
+			registry.AssertExpectations(t)
+			codec.AssertExpectations(t)
+		})
+	}
+}
+
+// A live teardown resumes the replicas found frozen, then runs `compose down`; a failed resume is
+// only logged, and over an absent compose project it removes nothing.
+func TestLive_Teardown(t *testing.T) {
+	paused := composetest.DemoIntrospection()
+	paused.Project.Services[0].Containers = []model.Container{{
+		ID:     composetest.DemoContainerID,
+		Name:   composetest.DemoContainerName(1),
+		Number: 1,
+		Inspect: container.InspectResponse{
+			State: &container.State{Status: container.StatePaused, Running: true, Paused: true},
+		},
+	}}
+	tests := []struct {
+		name          string
+		introspection model.IntrospectionResult
+		unpauseErr    error
+		downErr       error
+		wantWarnings  []string
+		wantDown      bool
+		wantErr       string
+	}{
+		{name: "a running project", introspection: composetest.DemoIntrospection(), wantDown: true},
+		{
+			name:          "a failed down hands back no vacant project",
+			introspection: composetest.DemoIntrospection(),
+			downErr:       errors.New("boom"),
+			wantDown:      true,
+			wantErr:       "removing the compose project: boom",
+		},
+		{
+			name:          "a frozen replica resumed first",
+			introspection: paused,
+			wantWarnings:  []string{"db-1 was paused: resuming it before the rollback"},
+			wantDown:      true,
+		},
+		{
+			name:          "a resume that fails goes on",
+			introspection: paused,
+			unpauseErr:    errors.New("boom"),
+			wantWarnings:  []string{"db-1 was paused: resuming it before the rollback"},
+			wantDown:      true,
+		},
+		{name: "an absent project", introspection: composetest.DemoAbsentIntrospection()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			control := &composetest.MockContainerControl{}
+			runner := &composetest.MockComposeRunner{}
+			var calls []*mock.Call
+			if len(tt.wantWarnings) > 0 {
+				calls = append(calls, control.On("UnpauseContainers", mock.Anything, []string{composetest.DemoContainerID}).Return(tt.unpauseErr).Once())
+			}
+			if tt.wantDown {
+				calls = append(calls, runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(tt.downErr).Once())
+			}
+			mock.InOrder(calls...)
+			svc := newComposeWorkload(Deps{ComposeRunner: runner, ContainerControl: control})
+			live := liveWorkload{service: svc, introspection: tt.introspection}
+			recorder := &composetest.StepRecorder{}
+
+			// Act
+			vacant, err := live.Teardown(composetest.NewProgressContext(recorder), preparedSavepoint{Target: composemodel.Target{Project: composetest.DemoTargetSpec}})
+
+			// Assert
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				assert.Nil(t, vacant)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, vacant)
+			}
+			assert.Equal(t, tt.wantWarnings, recorder.Warnings)
+			control.AssertExpectations(t)
+			runner.AssertExpectations(t)
+		})
+	}
+}
