@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package deploy
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -73,32 +72,4 @@ func TestWithDeploymentLabels(t *testing.T) {
 	assert.Equal(t, types.Labels{"keep": "me"}, project.Services[composetest.DemoService].Labels, "the project handed in is left as it is")
 	assert.Nil(t, labeled.Volumes["db"].Labels, "a volume's labels are in compose's config hash")
 	assert.Nil(t, labeled.Networks["default"].Labels, "and so are a network's")
-}
-
-// matchDeploymentOf matches target with its every service labelled with a deployment, and its
-// volumes and networks with none: their labels are in compose's config hash.
-func matchDeploymentOf(target *types.Project) func(*types.Project) bool {
-	return func(project *types.Project) bool {
-		for _, volume := range project.Volumes {
-			if hasDeploymentLabel(volume.Labels) {
-				return false
-			}
-		}
-		for _, network := range project.Networks {
-			if hasDeploymentLabel(network.Labels) {
-				return false
-			}
-		}
-		return len(project.Services) == len(target.Services) &&
-			assert.ObjectsAreEqual(target, composetest.WithoutDeploymentLabels(project))
-	}
-}
-
-func hasDeploymentLabel(labels types.Labels) bool {
-	for key := range labels {
-		if strings.HasPrefix(key, model.DeploymentLabelPrefix) {
-			return true
-		}
-	}
-	return false
 }

@@ -104,7 +104,7 @@ func (h heldWorkload) PrepareSavepoint(
 
 // Teardown runs `compose down` of the held project.
 func (h heldWorkload) Teardown(ctx context.Context) (provider.VacantWorkload, error) {
-	if err := h.service.composeDown(ctx, h.plan.Project); err != nil {
+	if err := h.service.deployer.Down(ctx, h.plan.Project); err != nil {
 		return nil, err
 	}
 	return vacantWorkload{

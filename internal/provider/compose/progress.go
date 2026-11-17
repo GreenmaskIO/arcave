@@ -23,13 +23,4 @@ import (
 const (
 	kindSavepointHold    progress.Kind = "savepoint.hold"
 	kindSavepointRelease progress.Kind = "savepoint.release"
-
-	kindComposeDown   progress.Kind = "compose.down"
-	kindComposeCreate progress.Kind = "compose.create"
-	kindComposeStart  progress.Kind = "compose.start"
-
-	kindVolumeRestore  progress.Kind = "volume.restore"
-	kindVolume         progress.Kind = "volume"
-	kindReplicaRebuild progress.Kind = "replica.rebuild"
-	kindReplica        progress.Kind = "replica"
 )

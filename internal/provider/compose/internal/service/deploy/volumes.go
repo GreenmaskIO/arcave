@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package deploy
 
 import (
 	"context"
@@ -30,9 +30,9 @@ import (
 // volumeRestoreOpName is what a volume's restore is called in its logs and errors.
 const volumeRestoreOpName = "restore"
 
-// restoreVolumes writes every volume back concurrently, each carrying the payload its own
+// RestoreVolumes writes every volume back concurrently, each carrying the payload its own
 // capture reported; stats index alike with backends.
-func (s *Provider) restoreVolumes(
+func (s *Deployer) RestoreVolumes(
 	ctx context.Context, savepoint model.Savepoint, backends []model.VolumeSnapshotBackend,
 ) error {
 	if err := savepoint.ID.Validate(); err != nil {

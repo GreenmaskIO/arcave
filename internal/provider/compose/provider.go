@@ -24,6 +24,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/capture"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/captureplan"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/deploy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/inspection"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/prepare"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
@@ -147,24 +148,27 @@ type Deps struct {
 
 // Provider is the compose provider of one compose project in one session: the workload core inspects.
 type Provider struct {
-	savepointRepo           savepointRepository
-	composeInspector        composeIntrospector
-	inspector               *inspection.Inspector
-	planner                 *captureplan.Planner
-	preparer                *prepare.Preparer
-	composeRunner           composeRunner
-	containerControl        containerControl
-	volumeRemover           volumeRemover
-	containerRebuilder      containerRebuilder
-	maxConcurrentOperations int
-	capturer                *capture.Capturer
+	savepointRepo savepointRepository
+	inspector     *inspection.Inspector
+	planner       *captureplan.Planner
+	preparer      *prepare.Preparer
+	deployer      *deploy.Deployer
+	capturer      *capture.Capturer
+	// composeRunner and containerControl hold a project still for a capture and release it.
+	composeRunner    composeRunner
+	containerControl containerControl
 }
 
 // New builds a Provider from deps.
 func New(deps Deps) *Provider {
+	inspector := inspection.New(inspection.Deps{
+		ComposeInspector: deps.ComposeInspector,
+		DaemonVersion:    deps.DaemonVersion,
+		MinDaemonMajor:   deps.MinDaemonMajor,
+	})
 	return &Provider{
-		savepointRepo:    deps.SavepointRepo,
-		composeInspector: deps.ComposeInspector,
+		savepointRepo: deps.SavepointRepo,
+		inspector:     inspector,
 		planner: captureplan.New(captureplan.Deps{
 			ProjectAssembler: deps.ProjectAssembler,
 			SpecCodec:        deps.SpecCodec,
@@ -182,16 +186,15 @@ func New(deps Deps) *Provider {
 			LeftoverVolumes:         deps.LeftoverVolumes,
 			MaxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		}),
-		inspector: inspection.New(inspection.Deps{
-			ComposeInspector: deps.ComposeInspector,
-			DaemonVersion:    deps.DaemonVersion,
-			MinDaemonMajor:   deps.MinDaemonMajor,
+		deployer: deploy.New(deploy.Deps{
+			ComposeRunner:           deps.ComposeRunner,
+			ContainerControl:        deps.ContainerControl,
+			ContainerRebuilder:      deps.ContainerRebuilder,
+			Inspector:               inspector,
+			ComposeInspector:        deps.ComposeInspector,
+			VolumeRemover:           deps.VolumeRemover,
+			MaxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		}),
-		composeRunner:           deps.ComposeRunner,
-		containerControl:        deps.ContainerControl,
-		volumeRemover:           deps.VolumeRemover,
-		containerRebuilder:      deps.ContainerRebuilder,
-		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		capturer: capture.New(capture.Deps{
 			SavepointRepo:       deps.SavepointRepo,
 			ImageBackend:        deps.ImageBackend,
@@ -201,6 +204,8 @@ func New(deps Deps) *Provider {
 			HeartbeatInterval:   deps.HeartbeatInterval,
 			HeartbeatStaleAfter: deps.HeartbeatStaleAfter,
 		}),
+		composeRunner:    deps.ComposeRunner,
+		containerControl: deps.ContainerControl,
 	}
 }
 

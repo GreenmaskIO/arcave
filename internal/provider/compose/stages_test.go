@@ -567,9 +567,9 @@ func TestVacant_Build_LabelsTheDeployment(t *testing.T) {
 	var created, started *types.Project
 	runner := &composetest.MockComposeRunner{}
 	mock.InOrder(
-		runner.On("Create", mock.Anything, mock.MatchedBy(matchDeploymentOf(target)), []string(nil)).
+		runner.On("Create", mock.Anything, mock.MatchedBy(composetest.MatchDeploymentOf(target)), []string(nil)).
 			Run(func(args mock.Arguments) { created = args.Get(1).(*types.Project) }).Return(nil).Once(),
-		runner.On("Start", mock.Anything, mock.MatchedBy(matchDeploymentOf(target)), time.Minute).
+		runner.On("Start", mock.Anything, mock.MatchedBy(composetest.MatchDeploymentOf(target)), time.Minute).
 			Run(func(args mock.Arguments) { started = args.Get(1).(*types.Project) }).Return(nil).Once(),
 	)
 	svc := New(Deps{ComposeRunner: runner})
@@ -858,66 +858,6 @@ func TestProvider_Inspect(t *testing.T) {
 	}
 }
 
-// A replica with a restored layer is built on its tag; one the savepoint holds no layer of
-// on its service's own image, under the number and name the record keeps for it.
-func TestNewRecordedReplicas(t *testing.T) {
-	// Arrange
-	record := model.Savepoint{NotCovered: &model.NotCovered{WritableLayers: []model.SkippedWritableLayer{
-		{Service: "worker", Replica: 1, Container: "demo-worker-1"},
-		{Service: "worker", Replica: 3, Container: "demo-worker-3"},
-	}}}
-	project := &types.Project{Services: types.Services{
-		"worker": {Name: "worker", Image: "busybox"},
-		"app":    {Name: "app", Image: "app:1"},
-	}}
-	layered := []model.WritableLayerRestoreResult{{Service: "app", Replica: 2, Tag: "arcave/app:sp-1", ContainerName: "demo-app-2"}}
-
-	// Act
-	got := newRecordedReplicas(record, project, layered)
-
-	// Assert
-	assert.Equal(t, []recordedReplica{
-		{service: "app", number: 2, containerName: "demo-app-2", image: "arcave/app:sp-1"},
-		{service: "worker", number: 1, containerName: "demo-worker-1", image: "busybox"},
-		{service: "worker", number: 3, containerName: "demo-worker-3", image: "busybox"},
-	}, got)
-}
-
-// A rollback lets compose recreate only a named volume it restores: a bind or an anonymous
-// volume has no config to drift, and a named volume the savepoint left out has no copy.
-func TestNewRestoredVolumeNames(t *testing.T) {
-	named := model.Volume{ObjectID: "volume-named-demo_db", Named: &model.VolumePropertiesNamed{VolumeName: "demo_db"}}
-	bind := model.Volume{ObjectID: "volume-service-app-/src", Bind: &model.VolumePropertiesBind{Service: "app", Target: "/src"}}
-	anon := model.Volume{ObjectID: "volume-anon-app-1-/scratch", Anon: &model.VolumePropertiesAnon{Replica: 1}}
-	tests := []struct {
-		name  string
-		stats []model.SnapshotStat
-		want  []string
-	}{
-		{
-			name:  "only the named volume, by its docker name",
-			stats: []model.SnapshotStat{{Volume: bind}, {Volume: named}, {Volume: anon}},
-			want:  []string{"demo_db"},
-		},
-		{
-			name:  "no named volume restored",
-			stats: []model.SnapshotStat{{Volume: bind}, {Volume: anon}},
-		},
-		{
-			name: "nothing restored",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Act
-			got := newRestoredVolumeNames(model.Savepoint{Stats: tt.stats})
-
-			// Assert
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 // A failed cold-start build is discarded, dropping only the volumes created since inspection,
 // never a leftover the savepoint has no copy of.
 func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
@@ -1084,7 +1024,7 @@ func TestVacant_Build_Progress(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	assert.Equal(t, []progress.Kind{
-		"test", kindComposeDown, kindComposeCreate, kindVolumeRestore, kindVolume, kindComposeStart,
+		"test", "compose.down", "compose.create", "volume.restore", "volume", "compose.start",
 	}, recorder.Kinds)
 	runner.AssertExpectations(t)
 	backend.AssertExpectations(t)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package deploy
 
 import (
 	"cmp"
@@ -53,7 +53,7 @@ type replicaRebuild struct {
 
 // rebuildDivergentReplicas rebuilds each replica the compose spec cannot name on its own layer
 // and recorded number. It must run before the volume restore, which resolves through containers.
-func (s *Provider) rebuildDivergentReplicas(ctx context.Context, replicas []recordedReplica) error {
+func (s *Deployer) rebuildDivergentReplicas(ctx context.Context, replicas []recordedReplica) error {
 	if createdAsRecorded(replicas) {
 		return nil
 	}
@@ -79,7 +79,7 @@ func (s *Provider) rebuildDivergentReplicas(ctx context.Context, replicas []reco
 }
 
 // rebuildReplica recreates one created container as the replica the savepoint recorded.
-func (s *Provider) rebuildReplica(ctx context.Context, rebuild replicaRebuild) error {
+func (s *Deployer) rebuildReplica(ctx context.Context, rebuild replicaRebuild) error {
 	log := zerolog.Ctx(ctx)
 	replica := rebuild.recorded
 	ctx, step := progress.Run(ctx, progress.Step{Kind: kindReplica, ID: replica.containerName})

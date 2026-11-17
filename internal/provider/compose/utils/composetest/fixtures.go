@@ -328,3 +328,31 @@ func DemoWritableLayer() model.WritableLayer {
 		SizeBytes:        4096,
 	}
 }
+
+// MatchDeploymentOf matches target with its every service labelled with a deployment, and its
+// volumes and networks with none: their labels are in compose's config hash.
+func MatchDeploymentOf(target *types.Project) func(*types.Project) bool {
+	return func(project *types.Project) bool {
+		for _, volume := range project.Volumes {
+			if hasDeploymentLabel(volume.Labels) {
+				return false
+			}
+		}
+		for _, network := range project.Networks {
+			if hasDeploymentLabel(network.Labels) {
+				return false
+			}
+		}
+		return len(project.Services) == len(target.Services) &&
+			assert.ObjectsAreEqual(target, WithoutDeploymentLabels(project))
+	}
+}
+
+func hasDeploymentLabel(labels types.Labels) bool {
+	for key := range labels {
+		if strings.HasPrefix(key, model.DeploymentLabelPrefix) {
+			return true
+		}
+	}
+	return false
+}
