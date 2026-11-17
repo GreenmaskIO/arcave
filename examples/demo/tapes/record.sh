@@ -45,7 +45,7 @@ fi
 
 make -C "$REPO_ROOT" build >/dev/null
 
-# A fixed, neutral path: generate-compose prints the file it wrote, so the directory is on screen.
+# A fixed, neutral path: whatever a command prints of it is on screen.
 WORK_DIR=/tmp/arcave-tapes
 if [ -e "$WORK_DIR" ] && [ ! -f "$WORK_DIR/.arcave-tapes" ]; then
   echo "record.sh: $WORK_DIR exists and is not a previous recording's; remove it first" >&2

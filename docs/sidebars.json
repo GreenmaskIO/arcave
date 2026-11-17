@@ -148,11 +148,6 @@
                 },
                 {
                   "type": "doc",
-                  "id": "reference/cli/tools_generate_compose",
-                  "label": "tools generate-compose"
-                },
-                {
-                  "type": "doc",
                   "id": "reference/cli/gc",
                   "label": "gc"
                 },

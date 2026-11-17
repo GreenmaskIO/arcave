@@ -61,7 +61,7 @@ It speaks JSON-RPC 2.0 over stdio — the agent host launches it as a child proc
 
 Every savepoint tool takes `compose_project` explicitly: one server serves many compose projects, and the agent names the one it means per call. `session` picks the [session](../sessions.md) for that call only; without it the tool works in the current one.
 
-Two more keep the store and the project in view: `gc` reclaims the space removed savepoints held — it only reports unless `dry_run` is `false` — and `compose_generate` returns a compose file rebuilt from the running project.
+`gc` keeps the store in view: it reclaims the space removed savepoints held, and only reports unless `dry_run` is `false`.
 
 The other six manage sessions: `session_list`, `session_create`, `session_remove`, `session_current`, `session_set` and `session_unset`. An agent can fork its own session from `baseline` with `session_create` and keep its checkpoints there, apart from yours. `arcave mcp --session <name>` pins the server to one session instead; a pinned server refuses `session_set` and `session_unset`.
 

@@ -56,7 +56,6 @@ func newMCPFactories() cli.MCPFactories {
 		Savepoint:      mcpSavepointServiceFactory,
 		SavepointStore: mcpSavepointStoreServiceFactory,
 		Session:        mcpSessionServiceFactory,
-		Tools:          mcpToolsServiceFactory,
 		GC:             mcpGCServiceFactory,
 		Status:         mcpStatusServiceFactory,
 	}
@@ -94,17 +93,6 @@ func mcpSavepointStoreServiceFactory(
 func mcpSessionServiceFactory(ctx context.Context) (cli.MCPSessionService, func(), error) {
 	var opened closers
 	svc, err := openSessionService(ctx, projectRoot, projectCfg, &opened)
-	if err != nil {
-		opened.release(ctx)
-		return nil, nil, err
-	}
-	return svc, func() { opened.release(ctx) }, nil
-}
-
-// mcpToolsServiceFactory wires the tools commands for the compose project a tool call named.
-func mcpToolsServiceFactory(ctx context.Context, composeProject string) (cli.MCPToolsService, func(), error) {
-	var opened closers
-	svc, err := openComposeToolsService(ctx, projectCfg, model.DockerComposeProjectName(composeProject), &opened)
 	if err != nil {
 		opened.release(ctx)
 		return nil, nil, err

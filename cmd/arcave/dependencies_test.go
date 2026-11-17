@@ -1245,23 +1245,6 @@ func TestReadRuntimeProfile(t *testing.T) {
 	}
 }
 
-// The tools commands reach the daemon first: one that does not answer fails the wiring.
-func TestOpenComposeToolsService_DaemonUnreachable(t *testing.T) {
-	// Arrange
-	t.Setenv("DOCKER_CONFIG", t.TempDir())
-	ctx := zerolog.Nop().WithContext(context.Background())
-	cfg := config.Config{Docker: config.Docker{Host: "tcp://127.0.0.1:1"}}
-	var opened closers
-	t.Cleanup(func() { opened.release(ctx) })
-
-	// Act
-	svc, err := openComposeToolsService(ctx, cfg, "demo", &opened)
-
-	// Assert
-	require.ErrorContains(t, err, "read the daemon version")
-	assert.Nil(t, svc)
-}
-
 // newUnreachableDaemonConfig is a project over a directory store and a daemon that does not answer.
 func newUnreachableDaemonConfig(t *testing.T, projectPath string) config.Config {
 	t.Helper()
@@ -1437,24 +1420,6 @@ func TestConnectDaemon(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, daemon.api)
 	assert.Len(t, opened.releases, 1)
-}
-
-// The name is gated before anything is opened, though the tools commands open no store.
-func TestOpenComposeToolsService_RefusesABadName(t *testing.T) {
-	// Arrange
-	t.Setenv("DOCKER_CONFIG", t.TempDir())
-	ctx := zerolog.Nop().WithContext(context.Background())
-	cfg := config.Config{Docker: config.Docker{Host: "tcp://127.0.0.1:1"}}
-	var opened closers
-
-	// Act
-	svc, err := openComposeToolsService(ctx, cfg, "../x", &opened)
-
-	// Assert
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "read the daemon version")
-	assert.Nil(t, svc)
-	assert.Empty(t, opened.releases, "nothing is opened")
 }
 
 // A factory left out of the literal is no compile error: it would panic on the first tool call.

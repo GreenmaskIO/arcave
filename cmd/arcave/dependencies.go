@@ -74,7 +74,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
-	"github.com/greenmaskio/arcave/internal/service/composetools"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -544,31 +543,6 @@ func shutdownResticServer(ctx context.Context, server *echo.Echo) {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Ctx(ctx).Error().Err(err).Msg("shut down restic server")
 	}
-}
-
-// openComposeToolsService wires the tools commands for composeProject over the daemon docker.*
-// names: one connection, no store.
-func openComposeToolsService(
-	ctx context.Context, cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
-) (*composetools.Service, error) {
-	// The gate the savepoint services apply through storefactory, though no store is opened here.
-	if err := storefactory.ValidateComposeProjectName(composeProject); err != nil {
-		return nil, err
-	}
-	// Nothing here runs compose, so the CLI's progress channel goes nowhere.
-	daemon, err := connectDaemon(cfg.Docker, io.Discard, opened)
-	if err != nil {
-		return nil, err
-	}
-	profile, err := readRuntimeProfile(ctx, daemon)
-	if err != nil {
-		return nil, err
-	}
-	return composetools.New(composetools.Deps{
-		ComposeInspector: introspect.NewInspector(profile.api, composeProject),
-		ProjectAssembler: profile.assembler,
-		SpecCodec:        composespec.NewComposeFileCodec(),
-	}), nil
 }
 
 // openStatusService wires status for composeProject; the store opens lazily, so one that fails

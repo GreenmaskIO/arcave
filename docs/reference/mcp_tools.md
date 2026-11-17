@@ -1,12 +1,12 @@
 ---
 title: MCP tools
-description: The fourteen tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, the seven session tools, gc, status and compose_generate — their arguments, their output shapes, and where they differ from the CLI.
+description: The thirteen tools arcave's MCP server exposes — savepoint_create, savepoint_list, savepoint_remove, rollback, the seven session tools, gc and status — their arguments, their output shapes, and where they differ from the CLI.
 keywords: [arcave MCP tools, savepoint_create, rollback, session_create, AI agent, model context protocol]
 ---
 
 # MCP tools
 
-[`arcave mcp`](cli/mcp.md) exposes fourteen tools: four for savepoints, seven for sessions, [`gc`](#gc), [`status`](#status) and [`compose_generate`](#compose_generate). Each savepoint tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
+[`arcave mcp`](cli/mcp.md) exposes thirteen tools: four for savepoints, seven for sessions, [`gc`](#gc) and [`status`](#status). Each savepoint tool takes the compose project it acts on as an argument, so one server addresses every project on the machine.
 
 Every tool runs the workflow the CLI runs, under the same rules: the project is stopped and started again, the project lock is claimed, and a rollback of a running project that fails replays its safety snapshot. What an agent takes, you list; what you take, an agent rolls back to.
 
@@ -220,15 +220,6 @@ Takes no arguments. Clears the current session, so calls given no `session` work
 ```text
 this server is pinned to session "019a0c2f-4a6d-7e4b-9a2c-1d5e8b7a4c31" by --session or ARCAVE_SESSION, which outranks the current session: pass session on each call, or restart the server without the pin
 ```
-
-## `compose_generate`
-
-| Argument | Required | Description |
-|---|---|---|
-| `compose_project` | yes | The compose project to generate the file of. |
-| `absolute_paths` | no | Keep every bind source absolute instead of relative to the compose project's working directory. |
-
-Returns `{"compose_project": …, "services": [ … ], "spec": "<the compose file, as YAML>"}`. Read-only, and works in no session: see [`arcave tools generate-compose`](cli/tools_generate_compose.md). The file carries every environment value the containers run with, secrets included.
 
 ## `gc`
 

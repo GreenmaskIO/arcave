@@ -53,9 +53,8 @@ Twelve tools:
 | `session_set` | Make a session the current one |
 | `session_unset` | Go back to `baseline` |
 | `gc` | Reclaim the space removed savepoints held; reports only unless `dry_run` is `false` |
-| `compose_generate` | A compose file rebuilt from the running project |
 
-The four savepoint tools and `compose_generate` take `compose_project` explicitly — one server serves many compose projects, and the agent names the one it means per call. The four savepoint tools also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `compose_project`: a session holds every compose project of the directory.
+The four savepoint tools take `compose_project` explicitly — one server serves many compose projects, and the agent names the one it means per call. The four savepoint tools also take an optional `session`, by name or id, for that call only; without it they work in the current session. The session tools take no `compose_project`: a session holds every compose project of the directory.
 
 ```json title="A savepoint_create call"
 {

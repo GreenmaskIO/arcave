@@ -127,11 +127,6 @@ func (m *mockService) ShowSession(ctx context.Context, req model.ShowSessionRequ
 	return args.Get(0).(model.SessionDetail), args.Error(1)
 }
 
-func (m *mockService) GenerateCompose(ctx context.Context, req model.GenerateComposeRequest) (model.GenerateComposeResponse, error) {
-	args := m.Called(ctx, req)
-	return args.Get(0).(model.GenerateComposeResponse), args.Error(1)
-}
-
 func (m *mockService) Status(ctx context.Context, req model.StatusRequest) (model.ComposeProjectStatus, error) {
 	args := m.Called(ctx, req)
 	return args.Get(0).(model.ComposeProjectStatus), args.Error(1)
