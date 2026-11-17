@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // Init reports through the context logger, never the printer, so the contract
@@ -32,13 +33,15 @@ import (
 func TestConfigInitHandler_Init(t *testing.T) {
 	cfg := config.Config{
 		Project: config.Project{Name: "demo"},
-		Docker:  config.Docker{Host: "tcp://remote:2375"},
 		Storage: config.Storage{
 			Type:      config.StorageTypeDirectory,
 			Directory: &config.DirectoryStorage{Path: ".arcave/savepoints/demo"},
 		},
-		Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
-		Log:      config.Log{Level: "debug", Format: "console"},
+		Log: config.Log{Level: "debug", Format: "console"},
+		ComposeProvider: composeconfig.Config{
+			Docker:   composeconfig.Docker{Host: "tcp://remote:2375"},
+			Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+		},
 	}
 	svcErr := errors.New("project already initialized")
 

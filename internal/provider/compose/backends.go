@@ -20,8 +20,8 @@ import (
 	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/imagebackend"
@@ -35,7 +35,7 @@ import (
 // newBackendRegistry builds every volume backend: a rollback restores through the backend its
 // record names, so cdc is wired, its section's defaults included, whatever snapshot.backend says.
 func newBackendRegistry(
-	cfg config.Config, resticRoot storages.Storager,
+	cfg composeconfig.Config, resticRoot storages.Storager,
 	streamer fullcopy.VolumeStreamer, runner cdc.VolumeRunner, transport cdc.Transport,
 ) (model.SnapshotBackendRegistry, error) {
 	backendRegistry, err := NewBackendRegistry(
@@ -44,7 +44,7 @@ func newBackendRegistry(
 			Runner:         runner,
 			Transport:      transport,
 			RepositoryRoot: resticRoot,
-			Options:        newCDCOptions(config.CDCWithDefaults(cfg.Backends.CDC)),
+			Options:        newCDCOptions(composeconfig.CDCWithDefaults(cfg.Backends.CDC)),
 		}),
 	)
 	if err != nil {
@@ -71,7 +71,7 @@ func newImageBackend(
 
 // newCaptureDefaults is what the config says of a unit no arcave.* label names. The
 // capture keys are read as ApplyDefaults left them: every one set.
-func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
+func newCaptureDefaults(cfg composeconfig.Config) capturepolicy.CaptureDefaults {
 	return capturepolicy.CaptureDefaults{
 		VolumeBackend:        cfg.Snapshot.BackendKind(),
 		WritableLayerBackend: cfg.WritableLayers.BackendKind(),

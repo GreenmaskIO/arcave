@@ -41,7 +41,7 @@ func NewRollbackHandler(svc rollbackService, printer printer) *RollbackHandler {
 // Rollback restores a savepoint and prints what was restored; the wait bound and whether a safety
 // snapshot is taken come from cfg.
 func (h *RollbackHandler) Rollback(ctx context.Context, cfg config.Config, ref string) error {
-	res, err := h.svc.Rollback(ctx, newRollbackRequest(ref, cfg.Compose.WaitTimeout, cfg.Rollback.SkipSafetySnapshot()))
+	res, err := h.svc.Rollback(ctx, newRollbackRequest(ref, cfg.ComposeProvider.Compose.WaitTimeout, cfg.Rollback.SkipSafetySnapshot()))
 	if err != nil {
 		return err
 	}

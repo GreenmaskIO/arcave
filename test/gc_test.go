@@ -32,6 +32,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/gc"
@@ -280,7 +281,7 @@ func (e *sessionEnv) newGarbageCollector(
 		Concurrency:   2,
 	}
 	if engine != nil {
-		opener := newResticOpener(t, engine, config.CDCTransportStdio)
+		opener := newResticOpener(t, engine, composeconfig.CDCTransportStdio)
 		garbage = compose.GarbageDeps{
 			Daemon:           engine,
 			ArcaveProject:    sessionArcaveProject,
@@ -298,10 +299,10 @@ func TestGC_DryRun_ForgetsTheSnapshotsOfADeadSavepoint(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	env := newCDCEnv(t, config.CDCBackend{
-		RestoreMode: config.RestoreModeWipe,
-		Overwrite:   config.OverwriteIfChanged,
-		Image:       config.DefaultResticImage,
+	env := newCDCEnv(t, composeconfig.CDCBackend{
+		RestoreMode: composeconfig.RestoreModeWipe,
+		Overwrite:   composeconfig.OverwriteIfChanged,
+		Image:       composeconfig.DefaultResticImage,
 	})
 	first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
 	require.NoError(t, err)
@@ -356,18 +357,18 @@ func TestGC_ForgetsTheSnapshotsOfARemovedSavepoint(t *testing.T) {
 		name      string
 		transport string
 	}{
-		{name: "over stdio", transport: config.CDCTransportStdio},
-		{name: "over tcp", transport: config.CDCTransportTCP},
+		{name: "over stdio", transport: composeconfig.CDCTransportStdio},
+		{name: "over tcp", transport: composeconfig.CDCTransportTCP},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			// Arrange
-			env := newCDCEnv(t, config.CDCBackend{
-				RestoreMode: config.RestoreModeWipe,
-				Overwrite:   config.OverwriteIfChanged,
-				Image:       config.DefaultResticImage,
+			env := newCDCEnv(t, composeconfig.CDCBackend{
+				RestoreMode: composeconfig.RestoreModeWipe,
+				Overwrite:   composeconfig.OverwriteIfChanged,
+				Image:       composeconfig.DefaultResticImage,
 				Transport:   tt.transport,
 			})
 			first, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "first"})
@@ -535,7 +536,7 @@ func (o resticOpener) serve(ctx context.Context, store storages.Navigator) (stor
 }
 
 func (o resticOpener) options() cdc.Options {
-	return cdc.Options{Image: config.DefaultResticImage}
+	return cdc.Options{Image: composeconfig.DefaultResticImage}
 }
 
 // resticInspector is a cdc.Inspector with the stop of the transport it reads through.

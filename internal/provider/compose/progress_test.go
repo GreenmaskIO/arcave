@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -44,19 +44,19 @@ func TestNewComposeProgress(t *testing.T) {
 	}{
 		{
 			name:       "log folds compose's events into arcave's own log",
-			mode:       config.ProgressLog,
+			mode:       composeconfig.ProgressLog,
 			wantStream: io.Discard,
 		},
 		{
 			// Plain off a terminal, as here: compose's tree would spray ANSI escapes into a log file.
 			name:          "tty hands stderr back to compose's own renderer",
-			mode:          config.ProgressTTY,
+			mode:          composeconfig.ProgressTTY,
 			wantProcessor: display.Plain(io.Discard),
 			wantStream:    os.Stderr,
 		},
 		{
 			name:          "quiet discards the stream as well as the UI",
-			mode:          config.ProgressQuiet,
+			mode:          composeconfig.ProgressQuiet,
 			wantProcessor: display.Quiet(),
 			wantStream:    io.Discard,
 		},

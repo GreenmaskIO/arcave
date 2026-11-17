@@ -30,8 +30,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 )
 
@@ -400,7 +400,7 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendCDC)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
 	cs := newMCPClient(t, env)
 	compose := env.in(t, model.DefaultSession)
 	compose.write(t, compose.replicas(t)[0], "v1")

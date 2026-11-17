@@ -27,8 +27,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 	"github.com/greenmaskio/arcave/pkg/progress/renderer/tty"
@@ -372,19 +372,19 @@ func TestComposeProgressMode(t *testing.T) {
 		{
 			name:    "compose's renderer gives way to arcave's tree",
 			drawing: true,
-			mode:    config.ProgressTTY,
-			want:    config.ProgressLog,
+			mode:    composeconfig.ProgressTTY,
+			want:    composeconfig.ProgressLog,
 		},
 		{
 			name:    "under the tree, another mode stands",
 			drawing: true,
-			mode:    config.ProgressQuiet,
-			want:    config.ProgressQuiet,
+			mode:    composeconfig.ProgressQuiet,
+			want:    composeconfig.ProgressQuiet,
 		},
 		{
 			name: "with no tree, compose's renderer stands",
-			mode: config.ProgressTTY,
-			want: config.ProgressTTY,
+			mode: composeconfig.ProgressTTY,
+			want: composeconfig.ProgressTTY,
 		},
 	}
 	for _, tt := range tests {

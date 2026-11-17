@@ -26,6 +26,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // waitTimeout is an arbitrary configured bound. The handler carries
@@ -35,7 +36,7 @@ import (
 const waitTimeout = 90 * time.Second
 
 func TestRollbackHandler_Rollback(t *testing.T) {
-	cfg := config.Config{Compose: config.Compose{WaitTimeout: waitTimeout}}
+	cfg := config.Config{ComposeProvider: composeconfig.Config{Compose: composeconfig.Compose{WaitTimeout: waitTimeout}}}
 	wantLatest := true
 	wantReq := model.RollbackRequest{
 		Latest:      &wantLatest,

@@ -36,6 +36,11 @@ func newKeys(t reflect.Type, prefix string) []string {
 		if name == "" {
 			panic(fmt.Sprintf("config key of %s.%s: no mapstructure tag", t.Name(), field.Name))
 		}
+		// A squashed section lays its keys out at this level, under no name of its own.
+		if name == ",squash" {
+			keys = append(keys, newKeys(field.Type, prefix)...)
+			continue
+		}
 		key := name
 		if prefix != "" {
 			key = prefix + "." + name

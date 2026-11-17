@@ -33,8 +33,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
 )
@@ -46,7 +46,7 @@ import (
 // a reference, never as an assertion.
 
 // resticImage is the stock image the one-shot runner drives: the one arcave defaults to.
-const resticImage = config.DefaultResticImage
+const resticImage = composeconfig.DefaultResticImage
 
 // busyboxImage fills, hashes and wipes the volume.
 const busyboxImage = "busybox"

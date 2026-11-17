@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 )
 
@@ -51,7 +51,7 @@ func newSessionShowEnv(t *testing.T) *sessionShowEnv {
 	env := &sessionShowEnv{projectRoot: t.TempDir()}
 	runArcave(t, env.projectRoot, nil, "init", "--name", "arcave-session-show-it")
 	writeStorageConfigWith(t, env.projectRoot, startDirectoryStorage(t).file,
-		storageE2EBackend{name: config.SnapshotBackendFullCopy, backend: config.SnapshotBackendFullCopy}, false)
+		storageE2EBackend{name: composeconfig.SnapshotBackendFullCopy, backend: composeconfig.SnapshotBackendFullCopy}, false)
 	return env
 }
 

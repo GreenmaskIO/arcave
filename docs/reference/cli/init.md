@@ -42,34 +42,35 @@ project:
     name: myapp
 common:
     concurrency: 5
-compose:
-    wait_timeout: 2m0s
-    stop_timeout: 10s
-    progress: log
 storage:
     type: directory
     directory:
         path: .arcave/storage
+compose:
+    wait_timeout: 2m0s
+    stop_timeout: 10s
+    progress: log
+    leftover_volumes: overwrite
 snapshot:
     backend: fullcopy
 writable_layers:
     backend: dedupcopy
 capture:
+    mode: stop
     writable_layers: true
     images: true
     volumes:
         named: true
         bind: true
         anonymous: true
+backends:
+    fullcopy:
+        compression: zstd
 rollback:
-    leftover_volumes: overwrite
     safety_snapshot: true
 gc:
     safety_snapshots:
         retain_recent: 1
-backends:
-    fullcopy:
-        compression: zstd
 log:
     format: text
 ```

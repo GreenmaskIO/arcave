@@ -96,7 +96,7 @@ Either `refs` or the retention fields — not both, and not neither. `retain_rec
 
 ## `rollback`
 
-Returns the environment to a savepoint. Destructive: every volume it covers is overwritten with the savepoint's data, bind mounts included, and a volume a service reaches through `subpath:` goes back whole. When the project is running, arcave takes a safety snapshot of the live state first and replays it by itself if the rollback fails; the result's `safety_snapshot` names it, and rolling back to that id undoes the rollback until a `gc` retires it. A project with no containers is built from the savepoint's spec instead, with no safety snapshot, and [`rollback.leftover_volumes`](configuration.md#rollback) from the config decides about the named volumes it still owns — see [Rolling back a project that is not running](cli/rollback.md#rolling-back-a-project-that-is-not-running).
+Returns the environment to a savepoint. Destructive: every volume it covers is overwritten with the savepoint's data, bind mounts included, and a volume a service reaches through `subpath:` goes back whole. When the project is running, arcave takes a safety snapshot of the live state first and replays it by itself if the rollback fails; the result's `safety_snapshot` names it, and rolling back to that id undoes the rollback until a `gc` retires it. A project with no containers is built from the savepoint's spec instead, with no safety snapshot, and [`compose.leftover_volumes`](configuration.md#compose) from the config decides about the named volumes it still owns — see [Rolling back a project that is not running](cli/rollback.md#rolling-back-a-project-that-is-not-running).
 
 | Argument | Required | Description |
 |---|---|---|

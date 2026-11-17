@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // newDockerClientOptions is what carries the config into docker/cli. An unset option
@@ -34,14 +34,14 @@ import (
 func TestNewDockerClientOptions(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     config.Docker
+		cfg     composeconfig.Docker
 		env     map[string]string
 		wantErr string
 		verify  func(t *testing.T, got *flags.ClientOptions)
 	}{
 		{
 			name: "the zero config passes nothing through",
-			cfg:  config.Docker{},
+			cfg:  composeconfig.Docker{},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.Empty(t, got.Hosts)
 				assert.Empty(t, got.Context)
@@ -51,14 +51,14 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name: "a host",
-			cfg:  config.Docker{Host: "tcp://10.0.0.1:2376"},
+			cfg:  composeconfig.Docker{Host: "tcp://10.0.0.1:2376"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.Equal(t, []string{"tcp://10.0.0.1:2376"}, got.Hosts)
 			},
 		},
 		{
 			name: "tls settings expand to the three pem paths",
-			cfg:  config.Docker{Host: "tcp://10.0.0.1:2376", CertPath: "/certs"},
+			cfg:  composeconfig.Docker{Host: "tcp://10.0.0.1:2376", CertPath: "/certs"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
 				assert.True(t, got.TLSVerify)
@@ -71,7 +71,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name: "explicit files override the cert path per file",
-			cfg:  config.Docker{CertPath: "/certs", CAFile: "/etc/ca.pem", KeyFile: "/etc/key.pem"},
+			cfg:  composeconfig.Docker{CertPath: "/certs", CAFile: "/etc/ca.pem", KeyFile: "/etc/key.pem"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				require.NotNil(t, got.TLSOptions)
 				assert.Equal(t, "/etc/ca.pem", got.TLSOptions.CAFile, "explicit CAFile wins")
@@ -81,7 +81,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name: "explicit files alone enable tls without a cert path",
-			cfg:  config.Docker{CAFile: "/etc/ca.pem", CertFile: "/etc/cert.pem", KeyFile: "/etc/key.pem"},
+			cfg:  composeconfig.Docker{CAFile: "/etc/ca.pem", CertFile: "/etc/cert.pem", KeyFile: "/etc/key.pem"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
 				require.NotNil(t, got.TLSOptions)
@@ -94,7 +94,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 			// The rule this replaced was the inverse: the raw SDK client could not
 			// resolve a context, so one was refused without a host. docker/cli can.
 			name: "a context alone is enough",
-			cfg:  config.Docker{Context: "remote"},
+			cfg:  composeconfig.Docker{Context: "remote"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.Equal(t, "remote", got.Context)
 				assert.Empty(t, got.Hosts)
@@ -102,7 +102,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name: "skip_tls_verify alone turns tls on, with no cert material",
-			cfg:  config.Docker{Host: "tcp://10.0.0.1:2376", SkipTLSVerify: true},
+			cfg:  composeconfig.Docker{Host: "tcp://10.0.0.1:2376", SkipTLSVerify: true},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
 				assert.False(t, got.TLSVerify)
@@ -115,7 +115,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 			// A CA to verify against, but no client certificate — still a complete
 			// config, because cert/key are a pair that is simply absent here.
 			name: "a ca file alone verifies without a client certificate",
-			cfg:  config.Docker{CAFile: "/etc/ca.pem"},
+			cfg:  composeconfig.Docker{CAFile: "/etc/ca.pem"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				assert.True(t, got.TLS)
 				require.NotNil(t, got.TLSOptions)
@@ -126,19 +126,19 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name:    "a client cert without its key is refused",
-			cfg:     config.Docker{CertFile: "/etc/cert.pem"},
+			cfg:     composeconfig.Docker{CertFile: "/etc/cert.pem"},
 			wantErr: "docker.key_file is missing",
 		},
 		{
 			name:    "a client key without its cert is refused",
-			cfg:     config.Docker{KeyFile: "/etc/key.pem"},
+			cfg:     composeconfig.Docker{KeyFile: "/etc/key.pem"},
 			wantErr: "docker.cert_file is missing",
 		},
 		{
 			// cert_path supplies the whole pair from one directory, so half a pair
 			// spelled out explicitly is still completed by it rather than refused.
 			name: "a cert path completes a half-specified pair",
-			cfg:  config.Docker{CertPath: "/certs", CertFile: "/etc/cert.pem"},
+			cfg:  composeconfig.Docker{CertPath: "/certs", CertFile: "/etc/cert.pem"},
 			verify: func(t *testing.T, got *flags.ClientOptions) {
 				require.NotNil(t, got.TLSOptions)
 				assert.Equal(t, "/etc/cert.pem", got.TLSOptions.CertFile, "explicit CertFile wins")
@@ -147,7 +147,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name:    "a host and a context together name two daemons",
-			cfg:     config.Docker{Host: "unix:///d.sock", Context: "remote"},
+			cfg:     composeconfig.Docker{Host: "unix:///d.sock", Context: "remote"},
 			wantErr: "mutually exclusive",
 		},
 		{
@@ -185,7 +185,7 @@ func TestNewDockerClientOptions(t *testing.T) {
 		},
 		{
 			name: "half a client pair in the config stays refused beside the environment",
-			cfg:  config.Docker{CertFile: "/etc/cert.pem"},
+			cfg:  composeconfig.Docker{CertFile: "/etc/cert.pem"},
 			env: map[string]string{
 				client.EnvOverrideHost: "tcp://h:1", client.EnvTLSVerify: "1", client.EnvOverrideCertPath: "/env-certs",
 			},
@@ -223,55 +223,55 @@ func TestWithDockerTLSEnv(t *testing.T) {
 	const tcpHost = "tcp://h:1"
 	tests := []struct {
 		name    string
-		cfg     config.Docker
+		cfg     composeconfig.Docker
 		host    string
 		verify  string
 		path    string
-		want    config.Docker
+		want    composeconfig.Docker
 		wantErr string
 	}{
-		{name: "an empty environment changes nothing", cfg: config.Docker{CAFile: "/cfg/ca.pem"}, host: tcpHost, want: config.Docker{CAFile: "/cfg/ca.pem"}},
-		{name: "both variables", host: tcpHost, verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
-		{name: "any value of DOCKER_TLS_VERIFY counts", host: tcpHost, verify: "0", path: "/env", want: config.Docker{CertPath: "/env"}},
+		{name: "an empty environment changes nothing", cfg: composeconfig.Docker{CAFile: "/cfg/ca.pem"}, host: tcpHost, want: composeconfig.Docker{CAFile: "/cfg/ca.pem"}},
+		{name: "both variables", host: tcpHost, verify: "1", path: "/env", want: composeconfig.Docker{CertPath: "/env"}},
+		{name: "any value of DOCKER_TLS_VERIFY counts", host: tcpHost, verify: "0", path: "/env", want: composeconfig.Docker{CertPath: "/env"}},
 		{name: "a cert path with no DOCKER_TLS_VERIFY is not taken", host: tcpHost, path: "/env"},
 		{name: "DOCKER_TLS_VERIFY with no certificate is refused", host: tcpHost, verify: "1", wantErr: "DOCKER_TLS_VERIFY is set but DOCKER_CERT_PATH is not"},
-		{name: "no certificate is fine under skip_tls_verify", cfg: config.Docker{SkipTLSVerify: true}, host: tcpHost, verify: "1", want: config.Docker{SkipTLSVerify: true}},
+		{name: "no certificate is fine under skip_tls_verify", cfg: composeconfig.Docker{SkipTLSVerify: true}, host: tcpHost, verify: "1", want: composeconfig.Docker{SkipTLSVerify: true}},
 		{
 			name:   "skip_tls_verify keeps the cert path for its client certificate",
-			cfg:    config.Docker{SkipTLSVerify: true},
+			cfg:    composeconfig.Docker{SkipTLSVerify: true},
 			host:   tcpHost,
 			verify: "1",
 			path:   "/env",
-			want:   config.Docker{SkipTLSVerify: true, CertPath: "/env"},
+			want:   composeconfig.Docker{SkipTLSVerify: true, CertPath: "/env"},
 		},
 		{name: "no DOCKER_HOST: not taken", verify: "1", path: "/env"},
 		{name: "a socket DOCKER_HOST: not taken", host: "unix:///d.sock", verify: "1", path: "/env"},
 		{name: "an ssh DOCKER_HOST: not taken", host: "ssh://u@h", verify: "1", path: "/env"},
 		{name: "a DOCKER_HOST docker/cli cannot parse: not taken", host: "http://h:1", verify: "1", path: "/env"},
-		{name: "a DOCKER_HOST with no scheme is tcp", host: "h:1", verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
-		{name: "a DOCKER_HOST of a port alone is tcp", host: ":2376", verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
-		{name: "a DOCKER_HOST with spaces around it is tcp", host: " tcp://h:1 ", verify: "1", path: "/env", want: config.Docker{CertPath: "/env"}},
+		{name: "a DOCKER_HOST with no scheme is tcp", host: "h:1", verify: "1", path: "/env", want: composeconfig.Docker{CertPath: "/env"}},
+		{name: "a DOCKER_HOST of a port alone is tcp", host: ":2376", verify: "1", path: "/env", want: composeconfig.Docker{CertPath: "/env"}},
+		{name: "a DOCKER_HOST with spaces around it is tcp", host: " tcp://h:1 ", verify: "1", path: "/env", want: composeconfig.Docker{CertPath: "/env"}},
 		{name: "a DOCKER_HOST with no scheme and no certificate is refused", host: "h:1", verify: "1", wantErr: "DOCKER_TLS_VERIFY is set but DOCKER_CERT_PATH is not"},
 		{
 			name:   "the config names a host: not taken",
-			cfg:    config.Docker{Host: "tcp://plain:2375"},
+			cfg:    composeconfig.Docker{Host: "tcp://plain:2375"},
 			host:   tcpHost,
 			verify: "1",
 			path:   "/env",
-			want:   config.Docker{Host: "tcp://plain:2375"},
+			want:   composeconfig.Docker{Host: "tcp://plain:2375"},
 		},
 		{
 			name:   "the config names a context: not taken",
-			cfg:    config.Docker{Context: "remote"},
+			cfg:    composeconfig.Docker{Context: "remote"},
 			host:   tcpHost,
 			verify: "1",
 			path:   "/env",
-			want:   config.Docker{Context: "remote"},
+			want:   composeconfig.Docker{Context: "remote"},
 		},
-		{name: "the config's cert path wins", cfg: config.Docker{CertPath: "/cfg"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{CertPath: "/cfg"}},
-		{name: "a ca file in the config keeps it out", cfg: config.Docker{CAFile: "/cfg/ca.pem"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{CAFile: "/cfg/ca.pem"}},
-		{name: "a client cert in the config keeps it out", cfg: config.Docker{CertFile: "/cfg/c.pem"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{CertFile: "/cfg/c.pem"}},
-		{name: "a client key in the config keeps it out", cfg: config.Docker{KeyFile: "/cfg/k.pem"}, host: tcpHost, verify: "1", path: "/env", want: config.Docker{KeyFile: "/cfg/k.pem"}},
+		{name: "the config's cert path wins", cfg: composeconfig.Docker{CertPath: "/cfg"}, host: tcpHost, verify: "1", path: "/env", want: composeconfig.Docker{CertPath: "/cfg"}},
+		{name: "a ca file in the config keeps it out", cfg: composeconfig.Docker{CAFile: "/cfg/ca.pem"}, host: tcpHost, verify: "1", path: "/env", want: composeconfig.Docker{CAFile: "/cfg/ca.pem"}},
+		{name: "a client cert in the config keeps it out", cfg: composeconfig.Docker{CertFile: "/cfg/c.pem"}, host: tcpHost, verify: "1", path: "/env", want: composeconfig.Docker{CertFile: "/cfg/c.pem"}},
+		{name: "a client key in the config keeps it out", cfg: composeconfig.Docker{KeyFile: "/cfg/k.pem"}, host: tcpHost, verify: "1", path: "/env", want: composeconfig.Docker{KeyFile: "/cfg/k.pem"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -301,7 +301,7 @@ func TestWithDockerTLSEnv(t *testing.T) {
 func TestNewDockerTLSOptions(t *testing.T) {
 	tests := []struct {
 		name        string
-		cfg         config.Docker
+		cfg         composeconfig.Docker
 		wantErr     string
 		wantUseTLS  bool
 		wantCAFile  string
@@ -311,31 +311,31 @@ func TestNewDockerTLSOptions(t *testing.T) {
 	}{
 		{
 			name:       "an empty config leaves tls off",
-			cfg:        config.Docker{},
+			cfg:        composeconfig.Docker{},
 			wantUseTLS: false,
 		},
 		{
 			name:       "skip_tls_verify alone turns tls on with no cert material",
-			cfg:        config.Docker{SkipTLSVerify: true},
+			cfg:        composeconfig.Docker{SkipTLSVerify: true},
 			wantUseTLS: true,
 			wantSkip:   true,
 		},
 		{
 			name:       "a ca file alone verifies without a client certificate",
-			cfg:        config.Docker{CAFile: "/etc/ca.pem"},
+			cfg:        composeconfig.Docker{CAFile: "/etc/ca.pem"},
 			wantUseTLS: true,
 			wantCAFile: "/etc/ca.pem",
 		},
 		{
 			name:        "a full pair enables tls",
-			cfg:         config.Docker{CertFile: "/etc/cert.pem", KeyFile: "/etc/key.pem"},
+			cfg:         composeconfig.Docker{CertFile: "/etc/cert.pem", KeyFile: "/etc/key.pem"},
 			wantUseTLS:  true,
 			wantCert:    "/etc/cert.pem",
 			wantKeyFile: "/etc/key.pem",
 		},
 		{
 			name:        "a cert path expands to the three pem paths",
-			cfg:         config.Docker{CertPath: "/certs"},
+			cfg:         composeconfig.Docker{CertPath: "/certs"},
 			wantUseTLS:  true,
 			wantCAFile:  "/certs/ca.pem",
 			wantCert:    "/certs/cert.pem",
@@ -343,7 +343,7 @@ func TestNewDockerTLSOptions(t *testing.T) {
 		},
 		{
 			name:        "a cert path completes a half-specified pair",
-			cfg:         config.Docker{CertPath: "/certs", KeyFile: "/etc/key.pem"},
+			cfg:         composeconfig.Docker{CertPath: "/certs", KeyFile: "/etc/key.pem"},
 			wantUseTLS:  true,
 			wantCAFile:  "/certs/ca.pem",
 			wantCert:    "/certs/cert.pem",
@@ -351,12 +351,12 @@ func TestNewDockerTLSOptions(t *testing.T) {
 		},
 		{
 			name:    "a client cert without its key is refused",
-			cfg:     config.Docker{CertFile: "/etc/cert.pem"},
+			cfg:     composeconfig.Docker{CertFile: "/etc/cert.pem"},
 			wantErr: "docker.key_file is missing",
 		},
 		{
 			name:    "a client key without its cert is refused",
-			cfg:     config.Docker{KeyFile: "/etc/key.pem"},
+			cfg:     composeconfig.Docker{KeyFile: "/etc/key.pem"},
 			wantErr: "docker.cert_file is missing",
 		},
 	}
@@ -396,7 +396,7 @@ func TestNewDockerClient_AcceptsAnUnreachableHost(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	daemon, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	daemon, err := newDockerClient(composeconfig.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
@@ -416,7 +416,7 @@ func TestNewDockerClient_PinsAPIVersion(t *testing.T) {
 	t.Setenv(client.EnvOverrideAPIVersion, "")
 
 	// Act
-	daemon, err := newDockerClient(config.Docker{
+	daemon, err := newDockerClient(composeconfig.Docker{
 		Host:       "unix:///nowhere/docker.sock",
 		APIVersion: "1.45",
 	}, io.Discard)
@@ -437,7 +437,7 @@ func TestNewDockerClient_UnsetAPIVersionLeavesTheEnvUntouched(t *testing.T) {
 	t.Setenv(client.EnvOverrideAPIVersion, "1.40")
 
 	// Act
-	daemon, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	daemon, err := newDockerClient(composeconfig.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.NoError(t, err)
@@ -455,7 +455,7 @@ func TestNewDockerClient_RejectsAnUnknownContext(t *testing.T) {
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 
 	// Act
-	_, err := newDockerClient(config.Docker{Context: "nosuchcontext"}, io.Discard)
+	_, err := newDockerClient(composeconfig.Docker{Context: "nosuchcontext"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "nosuchcontext")
@@ -472,7 +472,7 @@ func TestNewDockerClient_RejectsAnUnbuildableClient(t *testing.T) {
 	t.Setenv("DOCKER_CUSTOM_HEADERS", "not-a-key-value-pair")
 
 	// Act
-	_, err := newDockerClient(config.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
+	_, err := newDockerClient(composeconfig.Docker{Host: "unix:///nowhere/docker.sock"}, io.Discard)
 
 	// Assert
 	require.ErrorContains(t, err, "DOCKER_CUSTOM_HEADERS")
@@ -486,7 +486,7 @@ func TestConnectDaemon(t *testing.T) {
 	t.Cleanup(func() { opened.release(context.Background()) })
 
 	// Act
-	daemon, err := connectDaemon(config.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard, &opened)
+	daemon, err := connectDaemon(composeconfig.Docker{Host: "tcp://127.0.0.1:1"}, io.Discard, &opened)
 
 	// Assert
 	require.NoError(t, err)

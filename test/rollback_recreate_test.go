@@ -45,6 +45,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
@@ -166,7 +167,7 @@ func TestRollback_ThroughTheBuiltBinary(t *testing.T) {
 	writeStorageConfig(t, projectRoot, config.Storage{
 		Type:      config.StorageTypeDirectory,
 		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, config.SnapshotBackendFullCopy)
+	}, composeconfig.SnapshotBackendFullCopy)
 	run := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)

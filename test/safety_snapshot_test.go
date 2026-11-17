@@ -23,8 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // safetySnapshotGarbage is the part of `arcave gc`'s JSON these tests read.
@@ -68,7 +68,7 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendCDC)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
 	compose := env.in(t, model.DefaultSession)
 	arcave := func(args ...string) []byte {
 		t.Helper()
@@ -138,7 +138,7 @@ func TestRollback_SafetySnapshotNamesItsRollback(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -195,7 +195,7 @@ func TestRollback_WithoutASafetySnapshot(t *testing.T) {
 			env := newSessionEnv(t)
 			env.withComposeProject(t)
 			initArcave(t, env)
-			writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+			writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
 			compose := env.in(t, model.DefaultSession)
 			var environment []string
 			if tt.config != "" {
@@ -239,7 +239,7 @@ func TestGC_RetainRecentFromTheEnvironment(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
 	compose := env.in(t, model.DefaultSession)
 	arcave := func(args ...string) []byte {
 		t.Helper()
@@ -268,7 +268,7 @@ func TestSavepointRemove_RetainRecentZero(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
 	compose := env.in(t, model.DefaultSession)
 	arcave := func(args ...string) []byte {
 		t.Helper()
@@ -300,7 +300,7 @@ func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	env := newSessionEnv(t)
 	env.withComposeProject(t)
 	initArcave(t, env)
-	writeStorageConfig(t, env.projectRoot, env.storage, config.SnapshotBackendFullCopy)
+	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
 	command := arcaveCommand(t, env, "mcp")
 	command.Env = append(command.Env, "ARCAVE_ROLLBACK_SAFETY_SNAPSHOT=false")
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "arcave-it", Version: "0"}, nil)

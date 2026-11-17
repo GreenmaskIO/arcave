@@ -52,7 +52,7 @@ func NewLeftoverVolumeNotice(name string) Notice {
 	return Notice{
 		Message: fmt.Sprintf("volume %s outlived the compose project's containers and was overwritten: "+
 			"no safety snapshot holds what it held", name),
-		Hint:   "rollback.leftover_volumes: refuse refuses such a rollback before anything is written",
+		Hint:   "compose.leftover_volumes: refuse refuses such a rollback before anything is written",
 		Severe: true,
 	}
 }

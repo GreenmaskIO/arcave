@@ -43,8 +43,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
@@ -106,8 +106,8 @@ type env struct {
 
 // The transports a backend can be wired over.
 const (
-	transportStdio = config.CDCTransportStdio
-	transportTCP   = config.CDCTransportTCP
+	transportStdio = composeconfig.CDCTransportStdio
+	transportTCP   = composeconfig.CDCTransportTCP
 )
 
 // newEnv wires the backend as cmd/arcave does by default — over the exec stream —
@@ -196,15 +196,15 @@ func (b *syncBuffer) String() string {
 
 // wipeOptions is the default: a restore clears the mount and restores it whole.
 func wipeOptions() cdc.Options {
-	return cdc.Options{Image: config.DefaultResticImage, Overwrite: config.OverwriteIfChanged}
+	return cdc.Options{Image: composeconfig.DefaultResticImage, Overwrite: composeconfig.OverwriteIfChanged}
 }
 
 // incrementalOptions restores over the live data instead.
 func incrementalOptions() cdc.Options {
 	return cdc.Options{
-		Image:       config.DefaultResticImage,
+		Image:       composeconfig.DefaultResticImage,
 		Incremental: true,
-		Overwrite:   config.OverwriteIfChanged,
+		Overwrite:   composeconfig.OverwriteIfChanged,
 	}
 }
 

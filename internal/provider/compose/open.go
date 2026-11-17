@@ -26,9 +26,9 @@ import (
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	"github.com/greenmaskio/arcave/internal/client/docker"
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
@@ -38,9 +38,13 @@ import (
 
 // Config is what the compose provider is opened with.
 type Config struct {
-	// Settings is arcave's resolved config; the provider reads its docker, compose, backends,
-	// snapshot, writable_layers, capture and rollback sections, project.name and common.concurrency.
-	Settings config.Config
+	// Settings are the provider's own sections of arcave's config, defaults applied.
+	Settings composeconfig.Config
+	// ArcaveProject is project.name: the namespace of the layer tags a rollback leaves.
+	ArcaveProject model.ArcaveProjectName
+	// Concurrency is common.concurrency: how many units one fan-out works at once; 0 leaves it
+	// unbounded.
+	Concurrency int
 	// ComposeProgress is where compose's own progress goes: compose.progress as the DI root resolved
 	// it against its own output.
 	ComposeProgress string
@@ -117,7 +121,7 @@ func OpenSession(cfg Config, arcaveProjectStore storages.Navigator, id model.Ses
 		return Session{}, err
 	}
 	engine := docker.NewEngine(daemon.api)
-	cdcConfig := config.CDCWithDefaults(cfg.Settings.Backends.CDC)
+	cdcConfig := composeconfig.CDCWithDefaults(cfg.Settings.Backends.CDC)
 	return Session{
 		Session: NewSession(SessionDeps{
 			Store:                  arcaveProjectStore,
@@ -125,8 +129,8 @@ func OpenSession(cfg Config, arcaveProjectStore storages.Navigator, id model.Ses
 			NewSavepointRepository: newSavepointRepository,
 			Garbage: &GarbageDeps{
 				Daemon:        engine,
-				ArcaveProject: model.ArcaveProjectName(cfg.Settings.Project.Name),
-				Concurrency:   cfg.Settings.Common.Concurrency,
+				ArcaveProject: cfg.ArcaveProject,
+				Concurrency:   cfg.Concurrency,
 				ResticInspectors: resticInspectorOpener{
 					cfg:    cdcConfig,
 					daemon: engine,
@@ -192,7 +196,7 @@ func openWorkload(
 	}
 
 	// Under tcp the server listens for the whole process, so a bad address fails up front.
-	cdcTransport, err := openCDCTransport(ctx, config.CDCWithDefaults(settings.Backends.CDC), profile.engine, resticRoot)
+	cdcTransport, err := openCDCTransport(ctx, composeconfig.CDCWithDefaults(settings.Backends.CDC), profile.engine, resticRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +207,7 @@ func openWorkload(
 		return nil, err
 	}
 	origin := model.LayerOrigin{
-		ArcaveProject:  model.ArcaveProjectName(settings.Project.Name),
+		ArcaveProject:  cfg.ArcaveProject,
 		ComposeProject: composeProject,
 	}
 	imageBackend, err := newImageBackend(store, origin, profile.engine)
@@ -235,11 +239,11 @@ func openWorkload(
 		SpecCodec:          composespec.NewCodec(),
 		BackendRegistry:    backendRegistry,
 		CaptureDefaults:    newCaptureDefaults(settings),
-		LeftoverVolumes:    settings.Rollback.Policy(),
+		LeftoverVolumes:    settings.Compose.LeftoverVolumesPolicy(),
 		DaemonVersion:      profile.version,
 		MinDaemonMajor:     profile.minDaemonMajor,
 		Store:              store,
-		Concurrency:        settings.Common.Concurrency,
+		Concurrency:        cfg.Concurrency,
 		RunnerInfo:         cfg.RunnerInfo,
 	}), nil
 }

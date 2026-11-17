@@ -181,7 +181,7 @@ arcave reads the running project from the daemon, not from your compose files. `
 compose project is not running but its volumes survive: myapp_pgdata
 ```
 
-A rollback into a project with no containers found named volumes the savepoint would restore into — usually left behind by `docker compose down` — and [`rollback.leftover_volumes`](configuration.md#rollback) is `refuse`. Nothing was created. Remove the volumes if you do not need them (`docker volume rm myapp_pgdata`), or set `leftover_volumes: overwrite` to have the rollback write over them.
+A rollback into a project with no containers found named volumes the savepoint would restore into — usually left behind by `docker compose down` — and [`compose.leftover_volumes`](configuration.md#compose) is `refuse`. Nothing was created. Remove the volumes if you do not need them (`docker volume rm myapp_pgdata`), or set `leftover_volumes: overwrite` to have the rollback write over them.
 
 ## `docker volume "myapp_pgdata" does not exist (bring the project up once to create it)`
 

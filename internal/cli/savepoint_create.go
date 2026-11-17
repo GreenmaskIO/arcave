@@ -43,7 +43,7 @@ func (h *SavepointCreateHandler) SavepointCreate(ctx context.Context, cfg config
 	savepoint, err := h.svc.CreateSavepoint(ctx, model.CreateSavepointRequest{
 		Name:        name,
 		Description: description,
-		WaitTimeout: cfg.Compose.WaitTimeout,
+		WaitTimeout: cfg.ComposeProvider.Compose.WaitTimeout,
 	})
 	if err != nil {
 		return composeProjectAbsentError(err, "-p")

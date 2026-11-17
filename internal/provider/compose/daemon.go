@@ -30,7 +30,7 @@ import (
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/moby/moby/client"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 // daemonConnection is one connection to the daemon, with no request sent over it yet.
@@ -41,7 +41,7 @@ type daemonConnection struct {
 }
 
 // connectDaemon builds the connection; its closer goes on opened.
-func connectDaemon(cfg config.Docker, progressOut io.Writer, opened *closers) (daemonConnection, error) {
+func connectDaemon(cfg composeconfig.Docker, progressOut io.Writer, opened *closers) (daemonConnection, error) {
 	daemon, err := newDockerClient(cfg, progressOut)
 	if err != nil {
 		return daemonConnection{}, err
@@ -52,7 +52,7 @@ func connectDaemon(cfg config.Docker, progressOut io.Writer, opened *closers) (d
 
 // newDockerClient resolves cfg into the docker/cli instance compose runs on and its API client.
 // progressOut becomes the CLI's error stream once the endpoint resolves.
-func newDockerClient(cfg config.Docker, progressOut io.Writer) (daemonConnection, error) {
+func newDockerClient(cfg composeconfig.Docker, progressOut io.Writer) (daemonConnection, error) {
 	clientOpts, err := newDockerClientOptions(cfg)
 	if err != nil {
 		return daemonConnection{}, fmt.Errorf("initialise docker client: %w", err)
@@ -107,7 +107,7 @@ func newDockerClient(cfg config.Docker, progressOut io.Writer) (daemonConnection
 	}, nil
 }
 
-func newDockerClientOptions(cfg config.Docker) (*flags.ClientOptions, error) {
+func newDockerClientOptions(cfg composeconfig.Docker) (*flags.ClientOptions, error) {
 	if cfg.Host != "" && cfg.Context != "" {
 		return nil, fmt.Errorf("docker.host and docker.context are mutually exclusive: %q already names a daemon, so remove one of the two", cfg.Context)
 	}
@@ -137,7 +137,7 @@ func newDockerClientOptions(cfg config.Docker) (*flags.ClientOptions, error) {
 // withDockerTLSEnv takes the cert path from DOCKER_CERT_PATH under DOCKER_TLS_VERIFY, only beside
 // a tcp DOCKER_HOST the config does not override and with no TLS file named in the config. The
 // variable with no certificate to verify against is refused: it would stay plain http.
-func withDockerTLSEnv(cfg config.Docker) (config.Docker, error) {
+func withDockerTLSEnv(cfg composeconfig.Docker) (composeconfig.Docker, error) {
 	if cfg.Host != "" || cfg.Context != "" || !isTCPHost(os.Getenv(client.EnvOverrideHost)) {
 		return cfg, nil
 	}
@@ -146,7 +146,7 @@ func withDockerTLSEnv(cfg config.Docker) (config.Docker, error) {
 	}
 	certPath := os.Getenv(client.EnvOverrideCertPath)
 	if certPath == "" && !cfg.SkipTLSVerify {
-		return config.Docker{}, errors.New(client.EnvTLSVerify + " is set but " + client.EnvOverrideCertPath + " is not, so the daemon would be reached over plain http: set it, or docker.ca_file or docker.cert_path")
+		return composeconfig.Docker{}, errors.New(client.EnvTLSVerify + " is set but " + client.EnvOverrideCertPath + " is not, so the daemon would be reached over plain http: set it, or docker.ca_file or docker.cert_path")
 	}
 	cfg.CertPath = certPath
 	return cfg, nil
@@ -162,7 +162,7 @@ func isTCPHost(host string) bool {
 // newDockerTLSOptions resolves the docker.* TLS fields into docker/cli's TLSOptions and reports
 // whether any TLS material was configured. A half-set cert_file/key_file pair is refused here:
 // docker/cli would surface it only as an opaque handshake failure.
-func newDockerTLSOptions(cfg config.Docker) (*tlsconfig.Options, bool, error) {
+func newDockerTLSOptions(cfg composeconfig.Docker) (*tlsconfig.Options, bool, error) {
 	caFile := tlsFile(cfg.CAFile, cfg.CertPath, "ca.pem")
 	certFile := tlsFile(cfg.CertFile, cfg.CertPath, "cert.pem")
 	keyFile := tlsFile(cfg.KeyFile, cfg.CertPath, "key.pem")

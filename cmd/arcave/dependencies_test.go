@@ -36,6 +36,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/core"
 )
@@ -46,10 +47,12 @@ func newUnreachableDaemonConfig(t *testing.T, projectPath string) config.Config 
 	t.Setenv("DOCKER_CONFIG", t.TempDir())
 	cfg := config.Config{
 		Project: config.Project{Name: "app"},
-		Docker:  config.Docker{Host: "tcp://127.0.0.1:1"},
 		Storage: config.Storage{
 			Type:      config.StorageTypeDirectory,
 			Directory: &config.DirectoryStorage{Path: t.TempDir()},
+		},
+		ComposeProvider: composeconfig.Config{
+			Docker: composeconfig.Docker{Host: "tcp://127.0.0.1:1"},
 		},
 	}
 	cfg.ApplyDefaults(projectPath)
@@ -64,7 +67,7 @@ func TestOpenSavepointStoreService(t *testing.T) {
 	ctx := zerolog.Nop().WithContext(context.Background())
 	projectPath := t.TempDir()
 	cfg := newUnreachableDaemonConfig(t, projectPath)
-	cfg.Backends.FullCopy.Compression = "lz4"
+	cfg.ComposeProvider.Backends.FullCopy.Compression = "lz4"
 
 	var opened closers
 	t.Cleanup(func() { opened.release(ctx) })

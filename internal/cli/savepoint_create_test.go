@@ -24,10 +24,11 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 func TestSavepointCreateHandler_SavepointCreate(t *testing.T) {
-	cfg := config.Config{Compose: config.Compose{WaitTimeout: waitTimeout}}
+	cfg := config.Config{ComposeProvider: composeconfig.Config{Compose: composeconfig.Compose{WaitTimeout: waitTimeout}}}
 	wantReq := model.CreateSavepointRequest{
 		Name:        "before-migration",
 		Description: "schema v2",

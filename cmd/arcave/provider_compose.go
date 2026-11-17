@@ -24,6 +24,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/status"
 )
@@ -34,12 +35,11 @@ func openComposeWorkload(
 	ctx context.Context, cfg config.Config, store storages.Storager,
 	composeProject model.DockerComposeProjectName, opened *closers,
 ) (provider.Workload, error) {
-	workload, err := compose.Open(ctx, compose.Config{
-		Settings: cfg,
-		// Where compose's own progress goes, on the logger initRoot resolved.
-		ComposeProgress: composeProgressMode(ctx, cfg.Compose.Progress, runProgressMode == progressModeTTY),
-		RunnerInfo:      newRunnerInfo(),
-	}, store, composeProject)
+	// Where compose's own progress goes, on the logger initRoot resolved.
+	composeProgress := composeProgressMode(
+		ctx, cfg.ComposeProvider.Compose.Progress, runProgressMode == progressModeTTY,
+	)
+	workload, err := compose.Open(ctx, newComposeConfig(cfg, composeProgress), store, composeProject)
 	if err != nil {
 		return nil, err
 	}
@@ -62,10 +62,8 @@ func newComposeSession(arcaveProjectStore storages.Storager, id model.SessionID)
 func openComposeGarbageSession(
 	cfg config.Config, arcaveProjectStore storages.Storager, id model.SessionID, opened *closers,
 ) (provider.Session, error) {
-	session, err := compose.OpenSession(compose.Config{
-		Settings:   cfg,
-		RunnerInfo: newRunnerInfo(),
-	}, arcaveProjectStore, id)
+	// Nothing a gc runs reports compose's progress.
+	session, err := compose.OpenSession(newComposeConfig(cfg, ""), arcaveProjectStore, id)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +76,7 @@ func openComposeGarbageSession(
 func openComposeContainers(
 	cfg config.Config, composeProject model.DockerComposeProjectName, opened *closers,
 ) (compose.ComposeContainers, error) {
-	containers, err := compose.OpenComposeContainers(compose.Config{
-		Settings:   cfg,
-		RunnerInfo: newRunnerInfo(),
-	}, composeProject)
+	containers, err := compose.OpenComposeContainers(newComposeConfig(cfg, ""), composeProject)
 	if err != nil {
 		return compose.ComposeContainers{}, err
 	}
@@ -89,15 +84,27 @@ func openComposeContainers(
 	return containers, nil
 }
 
+// newComposeConfig is what the compose provider is opened with: its own sections of cfg and the
+// two arcave settings it reads, project.name and common.concurrency.
+func newComposeConfig(cfg config.Config, composeProgress string) compose.Config {
+	return compose.Config{
+		Settings:        cfg.ComposeProvider,
+		ArcaveProject:   model.ArcaveProjectName(cfg.Project.Name),
+		Concurrency:     cfg.Common.Concurrency,
+		ComposeProgress: composeProgress,
+		RunnerInfo:      newRunnerInfo(),
+	}
+}
+
 // composeProgressMode keeps compose's own renderer off a terminal arcave's tree is drawn on:
 // two renderers on one stderr tear each other's frames.
 func composeProgressMode(ctx context.Context, mode string, drawing bool) string {
-	if !drawing || mode != config.ProgressTTY {
+	if !drawing || mode != composeconfig.ProgressTTY {
 		return mode
 	}
 	log.Ctx(ctx).Warn().Msg("compose.progress: tty is ignored while arcave draws its own progress; " +
 		"compose's progress goes to the log, pass --progress log to keep compose's renderer")
-	return config.ProgressLog
+	return composeconfig.ProgressLog
 }
 
 // newSavepointLoader is the savepoint repository of a compose project's store, as status reads it.

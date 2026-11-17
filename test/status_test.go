@@ -31,8 +31,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/repository/encryptionmarker"
 )
 
@@ -96,7 +96,7 @@ func newStatusEnv(t *testing.T, env ...string) *statusEnv {
 	}
 	runArcave(t, statusEnv.projectRoot, env, "init", "--name", statusArcaveProject)
 	writeStorageConfigWith(t, statusEnv.projectRoot, storage,
-		storageE2EBackend{name: config.SnapshotBackendFullCopy, backend: config.SnapshotBackendFullCopy}, len(env) > 0)
+		storageE2EBackend{name: composeconfig.SnapshotBackendFullCopy, backend: composeconfig.SnapshotBackendFullCopy}, len(env) > 0)
 	compose.upDocument(t, statusEnv.document)
 	return statusEnv
 }

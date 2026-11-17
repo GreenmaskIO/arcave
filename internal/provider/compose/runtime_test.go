@@ -37,8 +37,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/dockerdesktop"
 	"github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
 )
@@ -211,11 +211,11 @@ func TestReadRuntimeProfile(t *testing.T) {
 	})
 	tests := []struct {
 		name    string
-		newCase func(t *testing.T) config.Docker
+		newCase func(t *testing.T) composeconfig.Docker
 	}{
 		{
 			name: "a daemon on a unix socket",
-			newCase: func(t *testing.T) config.Docker {
+			newCase: func(t *testing.T) composeconfig.Docker {
 				t.Helper()
 				// t.TempDir is too long a path for a socket on macOS.
 				dir, err := os.MkdirTemp("", "arcave")
@@ -228,37 +228,37 @@ func TestReadRuntimeProfile(t *testing.T) {
 				server.Listener = listener
 				server.Start()
 				t.Cleanup(server.Close)
-				return config.Docker{Host: "unix://" + socket}
+				return composeconfig.Docker{Host: "unix://" + socket}
 			},
 		},
 		{
 			name: "a plain daemon",
-			newCase: func(t *testing.T) config.Docker {
+			newCase: func(t *testing.T) composeconfig.Docker {
 				t.Helper()
 				server := httptest.NewServer(handler)
 				t.Cleanup(server.Close)
-				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "http://")}
+				return composeconfig.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "http://")}
 			},
 		},
 		{
 			name: "a daemon behind TLS",
-			newCase: func(t *testing.T) config.Docker {
+			newCase: func(t *testing.T) composeconfig.Docker {
 				t.Helper()
 				server := httptest.NewTLSServer(handler)
 				t.Cleanup(server.Close)
 				caFile := filepath.Join(t.TempDir(), "ca.pem")
 				caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 				require.NoError(t, os.WriteFile(caFile, caPEM, 0o600))
-				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), CAFile: caFile}
+				return composeconfig.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), CAFile: caFile}
 			},
 		},
 		{
 			name: "a daemon behind TLS under skip_tls_verify, with no certificate",
-			newCase: func(t *testing.T) config.Docker {
+			newCase: func(t *testing.T) composeconfig.Docker {
 				t.Helper()
 				server := httptest.NewTLSServer(handler)
 				t.Cleanup(server.Close)
-				return config.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), SkipTLSVerify: true}
+				return composeconfig.Docker{Host: "tcp://" + strings.TrimPrefix(server.URL, "https://"), SkipTLSVerify: true}
 			},
 		},
 	}

@@ -40,6 +40,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
@@ -87,31 +88,31 @@ func TestCDCBackend_CreateAndRollback(t *testing.T) {
 
 	tests := []struct {
 		name string
-		cdc  config.CDCBackend
+		cdc  composeconfig.CDCBackend
 	}{
 		{
 			name: "wipe clears the mount and restores it whole",
-			cdc: config.CDCBackend{
-				RestoreMode: config.RestoreModeWipe,
-				Overwrite:   config.OverwriteIfChanged,
-				Image:       config.DefaultResticImage,
+			cdc: composeconfig.CDCBackend{
+				RestoreMode: composeconfig.RestoreModeWipe,
+				Overwrite:   composeconfig.OverwriteIfChanged,
+				Image:       composeconfig.DefaultResticImage,
 			},
 		},
 		{
 			name: "incremental restores over the live data",
-			cdc: config.CDCBackend{
-				RestoreMode: config.RestoreModeIncremental,
-				Overwrite:   config.OverwriteAlways,
-				Image:       config.DefaultResticImage,
+			cdc: composeconfig.CDCBackend{
+				RestoreMode: composeconfig.RestoreModeIncremental,
+				Overwrite:   composeconfig.OverwriteAlways,
+				Image:       composeconfig.DefaultResticImage,
 			},
 		},
 		{
 			name: "incremental over tcp",
-			cdc: config.CDCBackend{
-				RestoreMode: config.RestoreModeIncremental,
-				Overwrite:   config.OverwriteAlways,
-				Image:       config.DefaultResticImage,
-				Transport:   config.CDCTransportTCP,
+			cdc: composeconfig.CDCBackend{
+				RestoreMode: composeconfig.RestoreModeIncremental,
+				Overwrite:   composeconfig.OverwriteAlways,
+				Image:       composeconfig.DefaultResticImage,
+				Transport:   composeconfig.CDCTransportTCP,
 			},
 		},
 	}
@@ -172,10 +173,10 @@ func TestCDCBackend_RevertsFromTheSharedRepository(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	env := newCDCEnv(t, config.CDCBackend{
-		RestoreMode: config.RestoreModeWipe,
-		Overwrite:   config.OverwriteIfChanged,
-		Image:       config.DefaultResticImage,
+	env := newCDCEnv(t, composeconfig.CDCBackend{
+		RestoreMode: composeconfig.RestoreModeWipe,
+		Overwrite:   composeconfig.OverwriteIfChanged,
+		Image:       composeconfig.DefaultResticImage,
 	})
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
 	require.NoError(t, err)
@@ -217,10 +218,10 @@ func TestCDCBackend_RollbackInAClonedSession(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	env := newCDCEnv(t, config.CDCBackend{
-		RestoreMode: config.RestoreModeWipe,
-		Overwrite:   config.OverwriteIfChanged,
-		Image:       config.DefaultResticImage,
+	env := newCDCEnv(t, composeconfig.CDCBackend{
+		RestoreMode: composeconfig.RestoreModeWipe,
+		Overwrite:   composeconfig.OverwriteIfChanged,
+		Image:       composeconfig.DefaultResticImage,
 	})
 	before := env.hashAll(t)
 	savepoint, err := env.svc.CreateSavepoint(env.ctx, model.CreateSavepointRequest{Name: "sp"})
@@ -270,7 +271,7 @@ type cdcEnv struct {
 	// What serviceIn wires another session's service from.
 	projectRoot   string
 	storageCfg    config.Storage
-	cdcCfg        config.CDCBackend
+	cdcCfg        composeconfig.CDCBackend
 	hostNetwork   bool
 	containerHost string
 }
@@ -284,7 +285,7 @@ type cdcVolume struct {
 
 // newCDCEnv builds the project, the daemon objects and the wiring, and returns
 // the service every test in this file drives.
-func newCDCEnv(t *testing.T, cdcCfg config.CDCBackend) *cdcEnv {
+func newCDCEnv(t *testing.T, cdcCfg composeconfig.CDCBackend) *cdcEnv {
 	t.Helper()
 
 	cli := newDaemonClient(t)
@@ -348,7 +349,7 @@ type testTransport struct {
 func openTestTransport(
 	ctx context.Context, transport string, resticRoot storages.Storager, hostNetwork bool, containerHost string,
 ) (testTransport, error) {
-	if transport != config.CDCTransportTCP {
+	if transport != composeconfig.CDCTransportTCP {
 		return testTransport{
 			transport: cdc.StdioTransport{Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot))},
 			stop:      func() error { return nil },
@@ -390,7 +391,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 		RepositoryRoot: resticRoot,
 		Options: cdc.Options{
 			Image:       e.cdcCfg.Image,
-			Incremental: e.cdcCfg.RestoreMode == config.RestoreModeIncremental,
+			Incremental: e.cdcCfg.RestoreMode == composeconfig.RestoreModeIncremental,
 			Overwrite:   e.cdcCfg.Overwrite,
 		},
 	}))

@@ -298,7 +298,7 @@ Every field is omitted when empty, and `not_covered` itself when all are.
 
 `safety_snapshot` is the id of the safety snapshot the rollback took: rolling back to it undoes the rollback. It is omitted when none was taken: the project had no containers, or `rollback.safety_snapshot` or `--safety-snapshot` turned it off. In that last case the stream has no `rollback.safety-snapshot` step, and a warning, marked `in_result`, says what running without one risks.
 
-`leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`rollback.leftover_volumes: overwrite`](configuration.md#rollback). No safety snapshot holds what they held. Each is also a severe warning in the result, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
+`leftover_volumes` is only there for a project with no containers: the docker names of the named volumes that outlived its `docker compose down` and the rollback overwrote, under [`compose.leftover_volumes: overwrite`](configuration.md#compose). No safety snapshot holds what they held. Each is also a severe warning in the result, `in_result` on the progress stream. A rollback run again after an interrupted one names none: what those volumes hold is the interrupted rollback's partial writes.
 
 ## `status`
 

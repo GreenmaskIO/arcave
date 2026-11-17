@@ -184,7 +184,7 @@ After a rollback, a container whose layer was restored runs on an `arcave/…:sp
 
 A rollback also works on a compose project that has no containers — one never started here, or taken down with `docker compose down`. There is nothing to stop and nothing live to keep, so it takes a short path: no stop, no safety snapshot, no teardown. It loads the layers, creates the project from the spec, restores the volumes and starts the services.
 
-A named volume the project still owns — one `docker compose down` left behind — is overwritten with a warning. Set [`rollback.leftover_volumes`](reference/configuration.md#rollback) to `refuse` to fail instead, before anything is loaded:
+A named volume the project still owns — one `docker compose down` left behind — is overwritten with a warning. Set [`compose.leftover_volumes`](reference/configuration.md#compose) to `refuse` to fail instead, before anything is loaded:
 
 ```text
 compose project is not running but its volumes survive: myapp_pgdata

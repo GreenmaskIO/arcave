@@ -85,7 +85,7 @@ arcave reads the **running project** from the daemon by the labels compose stamp
 compose project "myapp": no containers found: bring the compose project up once, or name another project with -p
 ```
 
-`rollback` does not need them: the savepoint carries the spec it rebuilds the project from, so a project never started, or taken down, is rolled back too. Named volumes such a project left behind are overwritten, or refused under [`rollback.leftover_volumes: refuse`](configuration.md#rollback).
+`rollback` does not need them: the savepoint carries the spec it rebuilds the project from, so a project never started, or taken down, is rolled back too. Named volumes such a project left behind are overwritten, or refused under [`compose.leftover_volumes: refuse`](configuration.md#compose).
 
 Named volumes the project declares have to exist in the daemon too. A capture that finds one missing is an error rather than a skip, because an empty capture would silently replace live data at the next rollback:
 

@@ -26,7 +26,7 @@ import (
 	"golang.org/x/term"
 
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
-	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -47,13 +47,13 @@ type composeProgress struct {
 // logger re-emitting its events as log records, which a call's step can take them from.
 func newComposeProgress(mode string, logger zerolog.Logger) composeProgress {
 	switch mode {
-	case config.ProgressQuiet:
+	case composeconfig.ProgressQuiet:
 		// Discarding the stream too covers the warnings compose writes outside the UI.
 		return composeProgress{
 			processor: display.Quiet(),
 			stream:    io.Discard,
 		}
-	case config.ProgressTTY:
+	case composeconfig.ProgressTTY:
 		processor := display.Plain(os.Stderr)
 		if term.IsTerminal(int(os.Stderr.Fd())) {
 			processor = display.Full(os.Stderr, os.Stderr, false)

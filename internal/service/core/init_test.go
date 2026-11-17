@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 )
 
 const configPath = "/proj/.arcave/config.yaml"
@@ -62,15 +63,17 @@ func TestInitService_Init(t *testing.T) {
 			// Init writes the config it is handed; what that holds is the caller's.
 			name: "writes every section it is handed",
 			cfg: config.Config{
-				Project:  config.Project{Name: "demo"},
-				Docker:   config.Docker{Host: "tcp://remote:2375"},
-				Snapshot: config.Snapshot{Backend: config.SnapshotBackendFullCopy},
+				Project: config.Project{Name: "demo"},
+				ComposeProvider: composeconfig.Config{
+					Docker:   composeconfig.Docker{Host: "tcp://remote:2375"},
+					Snapshot: composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendFullCopy},
+				},
 			},
 			override: true,
 			exists:   true,
 			verify: func(t *testing.T, saved config.Config) {
-				assert.Equal(t, "tcp://remote:2375", saved.Docker.Host)
-				assert.Equal(t, config.SnapshotBackendFullCopy, saved.Snapshot.Backend)
+				assert.Equal(t, "tcp://remote:2375", saved.ComposeProvider.Docker.Host)
+				assert.Equal(t, composeconfig.SnapshotBackendFullCopy, saved.ComposeProvider.Snapshot.Backend)
 			},
 		},
 	}
@@ -160,7 +163,7 @@ func TestInitService_Init_DefaultsTheName(t *testing.T) {
 	assert.Equal(t, "myproj", name)
 	assert.Equal(t, "myproj", saved.Project.Name)
 	assert.Equal(t, filepath.Join(".arcave", "storage"), saved.Storage.DirectoryPath())
-	assert.Equal(t, config.CompressionZstd, saved.Backends.FullCopy.Compression)
+	assert.Equal(t, composeconfig.CompressionZstd, saved.ComposeProvider.Backends.FullCopy.Compression)
 	cw.AssertExpectations(t)
 }
 

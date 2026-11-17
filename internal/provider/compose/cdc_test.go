@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/config"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 )
 
@@ -36,7 +36,7 @@ import (
 func TestNewCDCOptions(t *testing.T) {
 	tests := []struct {
 		name string
-		cfg  config.CDCBackend
+		cfg  composeconfig.CDCBackend
 		want cdc.Options
 	}{
 		{
@@ -44,36 +44,36 @@ func TestNewCDCOptions(t *testing.T) {
 			// runnable image: an old cdc savepoint is rolled back through cdc
 			// whatever snapshot.backend says now.
 			name: "an absent section resolves to the defaults",
-			cfg:  config.CDCWithDefaults(nil),
+			cfg:  composeconfig.CDCWithDefaults(nil),
 			want: cdc.Options{
-				Image:       config.DefaultResticImage,
-				Overwrite:   config.OverwriteAlways,
+				Image:       composeconfig.DefaultResticImage,
+				Overwrite:   composeconfig.OverwriteAlways,
 				Incremental: true,
 			},
 		},
 		{
 			name: "wipe is not incremental, whatever overwrite says",
-			cfg: config.CDCBackend{
-				RestoreMode: config.RestoreModeWipe,
-				Overwrite:   config.OverwriteAlways,
-				Image:       config.DefaultResticImage,
+			cfg: composeconfig.CDCBackend{
+				RestoreMode: composeconfig.RestoreModeWipe,
+				Overwrite:   composeconfig.OverwriteAlways,
+				Image:       composeconfig.DefaultResticImage,
 			},
 			want: cdc.Options{
-				Image:     config.DefaultResticImage,
-				Overwrite: config.OverwriteAlways,
+				Image:     composeconfig.DefaultResticImage,
+				Overwrite: composeconfig.OverwriteAlways,
 			},
 		},
 		{
 			name: "incremental carries its overwrite policy through",
-			cfg: config.CDCBackend{
-				RestoreMode: config.RestoreModeIncremental,
-				Overwrite:   config.OverwriteIfChanged,
+			cfg: composeconfig.CDCBackend{
+				RestoreMode: composeconfig.RestoreModeIncremental,
+				Overwrite:   composeconfig.OverwriteIfChanged,
 				Image:       "restic/restic:0.18.0",
 			},
 			want: cdc.Options{
 				Image:       "restic/restic:0.18.0",
 				Incremental: true,
-				Overwrite:   config.OverwriteIfChanged,
+				Overwrite:   composeconfig.OverwriteIfChanged,
 			},
 		},
 	}
@@ -95,9 +95,9 @@ func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages
 	t.Helper()
 	store, err := directory.NewStorage(directory.Config{RootPath: t.TempDir()})
 	require.NoError(t, err)
-	cfg := config.CDCWithDefaults(&config.CDCBackend{
-		Transport:   config.CDCTransportTCP,
-		NetworkMode: config.NetworkModeHost,
+	cfg := composeconfig.CDCWithDefaults(&composeconfig.CDCBackend{
+		Transport:   composeconfig.CDCTransportTCP,
+		NetworkMode: composeconfig.NetworkModeHost,
 	})
 	return resticInspectorOpener{cfg: cfg}, store
 }
@@ -107,7 +107,7 @@ func newTestResticInspectorOpener(t *testing.T) (resticInspectorOpener, storages
 func TestOpenCDCTransport(t *testing.T) {
 	tests := []struct {
 		name    string
-		cfg     config.CDCBackend
+		cfg     composeconfig.CDCBackend
 		verify  func(t *testing.T, opened openedCDCTransport)
 		wantErr string
 	}{
@@ -115,8 +115,8 @@ func TestOpenCDCTransport(t *testing.T) {
 			// auto would ask the nil engine and the address would not bind, so
 			// either one read under stdio fails the open.
 			name: "stdio is the default and reads no tcp key",
-			cfg: config.CDCWithDefaults(&config.CDCBackend{
-				NetworkMode:   config.NetworkModeAuto,
+			cfg: composeconfig.CDCWithDefaults(&composeconfig.CDCBackend{
+				NetworkMode:   composeconfig.NetworkModeAuto,
 				ServerAddress: "192.0.2.1:1",
 			}),
 			verify: func(t *testing.T, opened openedCDCTransport) {
@@ -129,9 +129,9 @@ func TestOpenCDCTransport(t *testing.T) {
 		},
 		{
 			name: "tcp",
-			cfg: config.CDCWithDefaults(&config.CDCBackend{
-				Transport:   config.CDCTransportTCP,
-				NetworkMode: config.NetworkModeHost,
+			cfg: composeconfig.CDCWithDefaults(&composeconfig.CDCBackend{
+				Transport:   composeconfig.CDCTransportTCP,
+				NetworkMode: composeconfig.NetworkModeHost,
 			}),
 			verify: func(t *testing.T, opened openedCDCTransport) {
 				require.NotNil(t, opened.server)
@@ -144,7 +144,7 @@ func TestOpenCDCTransport(t *testing.T) {
 		},
 		{
 			name:    "a transport arcave does not offer is refused",
-			cfg:     config.CDCBackend{Transport: "ssh"},
+			cfg:     composeconfig.CDCBackend{Transport: "ssh"},
 			wantErr: `unsupported backends.cdc.transport "ssh"`,
 		},
 	}

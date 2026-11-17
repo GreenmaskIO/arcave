@@ -23,8 +23,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
@@ -51,16 +51,16 @@ type hostLoopbackReader interface {
 // openCDCTransport opens backends.cdc.transport over resticRoot: a stream server
 // under stdio, a listening server and the URL base to dial it at under tcp.
 func openCDCTransport(
-	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader, resticRoot storages.Storager,
+	ctx context.Context, cfg composeconfig.CDCBackend, daemon hostLoopbackReader, resticRoot storages.Storager,
 ) (openedCDCTransport, error) {
 	switch cfg.Transport {
-	case config.CDCTransportStdio:
+	case composeconfig.CDCTransportStdio:
 		return openedCDCTransport{
 			transport: cdc.StdioTransport{
 				Server: rest.NewConnServer(ctx, repo.NewResolver(resticRoot)),
 			},
 		}, nil
-	case config.CDCTransportTCP:
+	case composeconfig.CDCTransportTCP:
 		return openTCPTransport(ctx, cfg, daemon, resticRoot)
 	default:
 		return openedCDCTransport{}, fmt.Errorf("unsupported backends.cdc.transport %q", cfg.Transport)
@@ -70,7 +70,7 @@ func openCDCTransport(
 // openTCPTransport starts the server restic containers dial, and names the URL base
 // they dial it at.
 func openTCPTransport(
-	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader, resticRoot storages.Storager,
+	ctx context.Context, cfg composeconfig.CDCBackend, daemon hostLoopbackReader, resticRoot storages.Storager,
 ) (openedCDCTransport, error) {
 	hostNetwork, containerHost, err := resolveCDCNetwork(ctx, cfg, daemon)
 	if err != nil {
@@ -95,14 +95,14 @@ func openTCPTransport(
 // the host their repository URL names. Auto probes the daemon, but mispicks
 // host networking for a remote Linux daemon — bridge is the escape hatch there.
 func resolveCDCNetwork(
-	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader,
+	ctx context.Context, cfg composeconfig.CDCBackend, daemon hostLoopbackReader,
 ) (hostNetwork bool, containerHost string, err error) {
 	switch cfg.NetworkMode {
-	case config.NetworkModeHost:
+	case composeconfig.NetworkModeHost:
 		return true, "127.0.0.1", nil
-	case config.NetworkModeBridge:
+	case composeconfig.NetworkModeBridge:
 		return false, cfg.ContainerHost, nil
-	default: // config.NetworkModeAuto — Validate admits nothing else.
+	default: // composeconfig.NetworkModeAuto — Validate admits nothing else.
 		shared, err := daemon.HostLoopbackShared(ctx)
 		if err != nil {
 			return false, "", fmt.Errorf("resolve backends.cdc.network_mode %q: %w", cfg.NetworkMode, err)
@@ -115,10 +115,10 @@ func resolveCDCNetwork(
 }
 
 // newCDCOptions translates the backends.cdc section into the backend's own options.
-func newCDCOptions(cfg config.CDCBackend) cdc.Options {
+func newCDCOptions(cfg composeconfig.CDCBackend) cdc.Options {
 	return cdc.Options{
 		Image:       cfg.Image,
-		Incremental: cfg.RestoreMode == config.RestoreModeIncremental,
+		Incremental: cfg.RestoreMode == composeconfig.RestoreModeIncremental,
 		Overwrite:   cfg.Overwrite,
 	}
 }
@@ -158,7 +158,7 @@ type openedRestic struct {
 // openResticRepositories opens the transport over store's repositories, as Open serves them to the
 // cdc backend; the transport's Close releases it.
 func openResticRepositories(
-	ctx context.Context, cfg config.CDCBackend, daemon hostLoopbackReader, store storages.Navigator,
+	ctx context.Context, cfg composeconfig.CDCBackend, daemon hostLoopbackReader, store storages.Navigator,
 ) (openedRestic, error) {
 	resticRoot, err := store.SubStorage(cdc.NamespaceRepos, true)
 	if err != nil {
@@ -176,7 +176,7 @@ func openResticRepositories(
 
 // resticInspectorOpener serves one compose project's restic repositories to a cdc.Inspector.
 type resticInspectorOpener struct {
-	cfg    config.CDCBackend
+	cfg    composeconfig.CDCBackend
 	daemon resticDaemon
 }
 
@@ -200,7 +200,7 @@ type resticInspector struct {
 
 // resticPrunerOpener serves one compose project's restic repositories to a cdc.Pruner.
 type resticPrunerOpener struct {
-	cfg    config.CDCBackend
+	cfg    composeconfig.CDCBackend
 	daemon resticDaemon
 }
 

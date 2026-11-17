@@ -19,8 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
@@ -29,16 +29,16 @@ import (
 // because ApplyDefaults sets it.
 func TestNewCaptureDefaults(t *testing.T) {
 	// Arrange
-	cfg := config.Config{
-		Snapshot:       config.Snapshot{Backend: config.SnapshotBackendCDC},
-		WritableLayers: config.WritableLayers{Backend: "fullcopy"},
-		Capture: config.Capture{
+	cfg := composeconfig.Config{
+		Snapshot:       composeconfig.Snapshot{Backend: composeconfig.SnapshotBackendCDC},
+		WritableLayers: composeconfig.WritableLayers{Backend: "fullcopy"},
+		Capture: composeconfig.Capture{
 			Mode:           "pause",
 			WritableLayers: utils.New(false),
-			Volumes:        config.CaptureVolumes{Bind: utils.New(false), Named: utils.New(true)},
+			Volumes:        composeconfig.CaptureVolumes{Bind: utils.New(false), Named: utils.New(true)},
 		},
 	}
-	cfg.ApplyDefaults(t.TempDir())
+	cfg.ApplyDefaults()
 
 	// Act
 	got := newCaptureDefaults(cfg)
