@@ -32,7 +32,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
-	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 )
 
 // errNoVolumesToBackUp refuses a savepoint that would cover nothing.

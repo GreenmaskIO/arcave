@@ -34,7 +34,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 

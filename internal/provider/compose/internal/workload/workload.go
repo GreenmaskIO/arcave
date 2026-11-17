@@ -25,10 +25,10 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capture"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/captureplan"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/deploy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/inspection"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/prepare"
-	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 )
 
 // savepointRepository writes a capture's spec and commits its record, and reads records and specs

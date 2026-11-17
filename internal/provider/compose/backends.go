@@ -23,7 +23,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
-	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
 	imagefullcopy "github.com/greenmaskio/arcave/internal/service/imagebackend/fullcopy"

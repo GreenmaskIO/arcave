@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
 )
 
 // The compose project every plan test runs against: one service mounting one named volume.

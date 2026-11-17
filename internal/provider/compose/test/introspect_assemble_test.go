@@ -45,8 +45,8 @@ import (
 	composeclient "github.com/greenmaskio/arcave/internal/client/compose"
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/composespec"
-	"github.com/greenmaskio/arcave/internal/service/introspect"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
 
