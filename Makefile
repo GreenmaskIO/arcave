@@ -33,9 +33,10 @@ docs-serve: docs-install
 docs-build: docs-install
 	npm --prefix $(DOCS_PREVIEW_DIR) run build
 
-# Unit tests need no daemon; the integration suites under test/ need a reachable one.
-UNIT_PKGS := ./cmd/... ./internal/... ./pkg/...
-INTEGRATION_PKGS := ./test/...
+# Unit tests need no daemon; the integration suites under a provider's test/ need a reachable one.
+INTEGRATION_DIR := ./internal/provider/compose/test
+UNIT_PKGS = $(shell go list ./cmd/... ./internal/... ./pkg/... | grep -v '/internal/provider/[^/]*/test')
+INTEGRATION_PKGS := $(INTEGRATION_DIR)/...
 # Concurrent tests per integration package: the daemon's disk, not the CPU, is the bound.
 INTEGRATION_PARALLEL := 4
 # Extra go test flags for the integration run, e.g. -run or -skip to split it across CI legs.
@@ -55,12 +56,12 @@ test-verbose:
 # The spec-fidelity catalog brings a compose project up per case against the live daemon:
 # minutes, not seconds, so it stays out of `test` behind its build tag.
 test-fidelity:
-	go test -tags fidelity -run TestIntrospectAssemble -count=1 -timeout 30m ./test/
+	go test -tags fidelity -run TestIntrospectAssemble -count=1 -timeout 30m $(INTEGRATION_DIR)
 
 # The core workflow through the built binary on every storage backend, each against its
 # server in a container; part of test-integration too, this runs it alone.
 test-storage:
-	go test -run TestStorageE2E -count=1 -timeout 20m -parallel $(INTEGRATION_PARALLEL) ./test/
+	go test -run TestStorageE2E -count=1 -timeout 20m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_DIR)
 
 lint:
 	golangci-lint run ./...

@@ -555,7 +555,7 @@ var (
 )
 
 // Every case states what every engine it runs on must assemble, so none is one engine's by
-// omission. Needs no daemon, so it runs with the rest of ./test/, outside the fidelity tag.
+// omission. Needs no daemon, so it runs with the rest of the suite, outside the fidelity tag.
 func TestFidelityCases_Complete(t *testing.T) {
 	for _, group := range fidelityGroups() {
 		t.Run(group.name, func(t *testing.T) {

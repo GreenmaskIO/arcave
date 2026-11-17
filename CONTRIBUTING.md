@@ -16,8 +16,8 @@ How we develop arcave. A pull request is reviewed against this document.
   make test
   ```
 
-  `make test` runs the unit tests, then the integration tests under `test/`, which need a
-  running Docker daemon. `make test-unit` runs the unit tests alone and needs none.
+  `make test` runs the unit tests, then the integration tests under
+  `internal/provider/compose/test/`, which need a running Docker daemon. `make test-unit` runs the unit tests alone and needs none.
 
   `make test-fidelity` runs the spec-fidelity catalog against a live Docker daemon. Run it
   when you touch introspection, the compose spec or the compose client. `make test-storage`
@@ -104,7 +104,7 @@ tests run without a daemon, a filesystem or a network.
 
 - Every change comes with tests. A bug fix starts with a failing test.
 - Unit tests mock interfaces and need no Docker daemon. Tests needing one live under
-  `test/` and skip themselves without it.
+  `internal/provider/compose/test/` and skip themselves without it.
 - Table-driven where a behaviour has several input/output pairs.
 - testify: `require` for preconditions, `assert` for the values under test. Mocks are
   strict: every mock ends with `AssertExpectations(t)`.

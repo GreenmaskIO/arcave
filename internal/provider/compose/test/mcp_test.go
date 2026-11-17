@@ -57,7 +57,7 @@ func buildArcave(t *testing.T) string {
 		arcaveBin = filepath.Join(dir, "arcave")
 		var out bytes.Buffer
 		build := exec.Command("go", "build", "-o", arcaveBin, "./cmd/arcave")
-		build.Dir = ".."
+		build.Dir = "../../../.."
 		build.Stdout, build.Stderr = &out, &out
 		if err := build.Run(); err != nil {
 			arcaveBinErr = err
