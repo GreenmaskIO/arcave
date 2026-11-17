@@ -321,6 +321,7 @@ func newRecreateEnv(t *testing.T) *recreateEnv {
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewSavepoints(repo),
+		Store:          store,
 		ArcaveProject:  "arcave-recreate-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),

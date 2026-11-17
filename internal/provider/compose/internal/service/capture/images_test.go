@@ -29,7 +29,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -116,7 +115,6 @@ func TestCapturer_Capture_CommitsTheImagesAndWritableLayers(t *testing.T) {
 			svc := New(Deps{
 				SavepointRepo: repo,
 				ImageBackend:  images,
-				Store:         composetest.NewDirStore(t),
 			})
 
 			// Act
@@ -169,7 +167,6 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			var id model.SavepointID
-			store := composetest.NewDirStore(t)
 			backend := composetest.NewMockBackend(demoVolume())
 			backend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
 				Run(func(args mock.Arguments) { id = args.Get(1).(model.BackendSnapshotRequest).SnapshotID }).
@@ -187,7 +184,6 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 			svc := New(Deps{
 				SavepointRepo: repo,
 				ImageBackend:  images,
-				Store:         store,
 			})
 
 			// Act
@@ -197,7 +193,6 @@ func TestCapturer_Capture_FailedImageCaptureCommitsNothing(t *testing.T) {
 			require.ErrorIs(t, err, errBoom)
 			assert.EqualError(t, err, tt.wantErr)
 			assert.Zero(t, savepoint)
-			assert.Equal(t, heartbeat.StatusFailed, composetest.ReadCaptureHeartbeat(t, store, id).Status)
 			backend.AssertExpectations(t)
 			images.AssertExpectations(t)
 			repo.AssertExpectations(t)
@@ -220,7 +215,6 @@ func TestCapturer_Capture_ImageNotStoredWarns(t *testing.T) {
 	svc := New(Deps{
 		SavepointRepo: repo,
 		ImageBackend:  images,
-		Store:         composetest.NewDirStore(t),
 	})
 	plan := composemodel.Plan{
 		Spec:   demoSpecBytes,

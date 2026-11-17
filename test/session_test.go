@@ -409,6 +409,7 @@ func (e *sessionEnv) in(t *testing.T, session model.SessionID) *imageRollbackEnv
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewSavepoints(repo),
+		Store:          store,
 		ArcaveProject:  sessionArcaveProject,
 		SessionLocker:  newSessionLocker(t, arcaveProjectStore, session),
 		WriteAdmission: newPlainAdmission(arcaveProjectStore),

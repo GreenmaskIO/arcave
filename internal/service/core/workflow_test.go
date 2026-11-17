@@ -66,7 +66,7 @@ func TestService_prepare(t *testing.T) {
 		stages.expectInspect(nil),
 		stages.expectPlanCapture(provider.CaptureOptions{}, nil),
 	)
-	svc := newStagedService(stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
+	svc := newStagedService(t, stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
 
 	// Act
 	plan, err := svc.prepare(zerolog.Nop().WithContext(context.Background()))
@@ -82,7 +82,7 @@ func TestService_prepare_AnInspectionFailurePlansNothing(t *testing.T) {
 	// Arrange
 	stages := newMockStages(false)
 	stages.expectInspect(model.ErrUnsupportedDaemon)
-	svc := newStagedService(stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
+	svc := newStagedService(t, stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
 
 	// Act
 	plan, err := svc.prepare(zerolog.Nop().WithContext(context.Background()))

@@ -163,7 +163,9 @@ func openSavepointService(
 		Session:        scope.sessionID,
 		ComposeProject: composeProject,
 		// Re-checked under the lock: a session deleted since --session was resolved.
-		Sessions: scope.sessions,
+		Sessions:   scope.sessions,
+		Store:      scope.store,
+		RunnerInfo: newRunnerInfo(),
 	}), nil
 }
 

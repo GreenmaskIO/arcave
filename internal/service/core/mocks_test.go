@@ -17,11 +17,11 @@ package core
 import (
 	"bytes"
 	"context"
-	"errors"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
@@ -273,6 +273,8 @@ type mockStages struct {
 	captured mockCapturedSavepoint
 	target   mockBuild
 	revert   mockBuild
+	// capturedID is the id core minted for the last capture.
+	capturedID model.SavepointID
 }
 
 // newMockStages wires the handles to answer one another; absent is what the live workload reports.
@@ -339,25 +341,27 @@ func (m *mockStages) expectHold(err error) *mock.Call {
 }
 
 // expectCaptureOf declares the capture of what is held by req, failing with err, else answering
-// the captured savepoint.
+// the captured savepoint. A req with no id matches any valid one, kept as capturedID.
 func (m *mockStages) expectCaptureOf(req provider.CaptureRequest, err error) *mock.Call {
-	if err != nil {
-		return m.held.On("Capture", mock.Anything, req).Return(nil, err).Once()
+	matchReq := mock.MatchedBy(func(got provider.CaptureRequest) bool {
+		want := req
+		if want.ID == "" && got.ID.Validate() == nil {
+			want.ID = got.ID
+		}
+		return assert.ObjectsAreEqual(want, got)
+	})
+	var captured provider.CapturedSavepoint
+	if err == nil {
+		captured = &m.captured
 	}
-	return m.held.On("Capture", mock.Anything, req).Return(&m.captured, nil).Once()
+	return m.held.On("Capture", mock.Anything, matchReq).
+		Run(func(args mock.Arguments) { m.capturedID = args.Get(1).(provider.CaptureRequest).ID }).
+		Return(captured, err).Once()
 }
 
 // expectCommit declares the commit of what was captured, committing savepoint or failing with err.
 func (m *mockStages) expectCommit(savepoint model.Savepoint, err error) *mock.Call {
 	return m.captured.On("Commit", mock.Anything).Return(savepoint, err).Once()
-}
-
-// expectAbandon declares the abandon of what was captured under id, for a cause wrapping err.
-func (m *mockStages) expectAbandon(id model.SavepointID, err error) (named, abandon *mock.Call) {
-	named = m.captured.On("ID").Return(id).Once()
-	wantCause := mock.MatchedBy(func(cause error) bool { return errors.Is(cause, err) })
-	abandon = m.captured.On("Abandon", mock.Anything, wantCause).Once()
-	return named, abandon
 }
 
 // expectRelease declares the plan's release, waiting waitTimeout, failing with err.
@@ -511,19 +515,10 @@ func (m *mockHeldWorkload) Teardown(ctx context.Context) (provider.VacantWorkloa
 // mockCapturedSavepoint doubles provider.CapturedSavepoint.
 type mockCapturedSavepoint struct{ mock.Mock }
 
-func (m *mockCapturedSavepoint) ID() model.SavepointID {
-	id, _ := m.Called().Get(0).(model.SavepointID)
-	return id
-}
-
 func (m *mockCapturedSavepoint) Commit(ctx context.Context) (model.Savepoint, error) {
 	args := m.Called(ctx)
 	savepoint, _ := args.Get(0).(model.Savepoint)
 	return savepoint, args.Error(1)
-}
-
-func (m *mockCapturedSavepoint) Abandon(ctx context.Context, cause error) {
-	m.Called(ctx, cause)
 }
 
 // stubPrepared is a provider.PreparedSavepoint answering summary.

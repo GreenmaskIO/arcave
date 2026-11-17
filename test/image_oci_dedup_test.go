@@ -103,6 +103,7 @@ func newOCIDedupEnv(t *testing.T) *ociDedupEnv {
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewSavepoints(repo),
+		Store:          composeProjectStore,
 		ArcaveProject:  "arcave-oci-tenant",
 		SessionLocker:  newStoreLocker(composeProjectStore, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(composeProjectStore),

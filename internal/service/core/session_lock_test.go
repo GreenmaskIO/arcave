@@ -250,6 +250,7 @@ func TestService_CreateSavepoint_RefusedWhileSessionLocked(t *testing.T) {
 	mock.InOrder(acquire, lock, release)
 	stages := newMockStages(false)
 	svc := New(Deps{
+		Store:          newDirStore(t),
 		ArcaveProject:  demoArcaveProject,
 		ProjectLocker:  locker,
 		SessionLocker:  sessionLocker,

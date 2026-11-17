@@ -60,6 +60,7 @@ func TestService_CreateSavepoint_RefusedWhileInflight(t *testing.T) {
 	savepoints := &mockSavepoints{}
 	stages := newMockStages(false)
 	svc := New(Deps{
+		Store:          newDirStore(t),
 		ArcaveProject:  demoArcaveProject,
 		SessionLocker:  fakeSessionLocker{},
 		WriteAdmission: fakeWriteAdmission{},
@@ -117,7 +118,7 @@ func TestService_Rollback_RefusedWhileInflight(t *testing.T) {
 	locker := &mockLocker{}
 	expectLock(locker)
 	stages := newMockStages(false)
-	svc := newStagedService(stages, savepoints, locker, standingMarker(t, model.InflightRestoring))
+	svc := newStagedService(t, stages, savepoints, locker, standingMarker(t, model.InflightRestoring))
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act: a blind retry of the interrupted rollback, still refused — its undo would
@@ -149,7 +150,7 @@ func TestService_Rollback_SafetySnapshotPassesTheGateAndClearsTheMarker(t *testi
 		stages.target.expectStart(60*time.Second, nil),
 		stages.target.expectReap(),
 	)
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -205,7 +206,7 @@ func TestService_Rollback_MarkerWithoutSafetySnapshot(t *testing.T) {
 				stages.target.expectStart(60*time.Second, nil),
 				stages.target.expectReap(),
 			)
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act

@@ -28,6 +28,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -55,7 +56,7 @@ func TestService_CreateSavepoint(t *testing.T) {
 		stages.expectCommit(committed, nil),
 		stages.expectRelease(90*time.Second, nil),
 	)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -88,7 +89,7 @@ func TestService_CreateSavepoint_CarriesLabels(t *testing.T) {
 	stages.expectCaptureOf(provider.CaptureRequest{Labels: labels, InResult: true}, nil)
 	stages.expectCommit(committed, nil)
 	stages.expectRelease(0, nil)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -127,6 +128,7 @@ func TestService_CreateSavepoint_CapturesUnderTheSessionLock(t *testing.T) {
 		stages.expectRelease(0, nil),
 	)
 	svc := New(Deps{
+		Store:          newDirStore(t),
 		ArcaveProject:  demoArcaveProject,
 		SessionLocker:  sessionLocker,
 		WriteAdmission: fakeWriteAdmission{},
@@ -150,7 +152,8 @@ func TestService_CreateSavepoint_CapturesUnderTheSessionLock(t *testing.T) {
 }
 
 // savepoint create releases on every path; the hold's or capture's error outranks the release's,
-// an interrupt outranks the failure it caused, and a lock lost before the commit abandons.
+// an interrupt outranks the failure it caused, and a lock lost before the commit abandons. The
+// heartbeat ends done once the record is written, failed on every other end.
 func TestCaptureHeld(t *testing.T) {
 	errBoom := errors.New("boom")
 	committed := model.Savepoint{ID: "019e8488-3ac8-7000-8000-000000000000", Name: "sp"}
@@ -169,16 +172,20 @@ func TestCaptureHeld(t *testing.T) {
 		wantLogOrder []string
 		// wantNoRestartLog says no release failure was logged.
 		wantNoRestartLog bool
+		// wantBeat is how the savepoint's heartbeat ends.
+		wantBeat heartbeat.Status
 	}{
 		{
 			name:             "hold, capture, release",
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusDone,
 		},
 		{
 			name:             "a failed hold releases and captures nothing",
 			holdErr:          errBoom,
 			wantErr:          "boom",
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusFailed,
 		},
 		{
 			name:        "an interrupted hold releases and captures nothing",
@@ -191,12 +198,14 @@ func TestCaptureHeld(t *testing.T) {
 				"failure the interrupt caused",
 			},
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusFailed,
 		},
 		{
 			name:             "a failed capture releases",
 			captureErr:       errBoom,
 			wantErr:          "capturing the savepoint: boom",
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusFailed,
 		},
 		{
 			name:        "an interrupted capture releases",
@@ -209,30 +218,35 @@ func TestCaptureHeld(t *testing.T) {
 				"release",
 			},
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusFailed,
 		},
 		{
 			name:             "a lost lock abandons the capture and releases",
 			verifyErr:        model.ErrSessionLockLost,
 			wantErr:          "capturing the savepoint: commit savepoint " + committed.ID.String() + ": " + model.ErrSessionLockLost.Error(),
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusFailed,
 		},
 		{
 			name:             "a failed commit releases",
 			commitErr:        errBoom,
 			wantErr:          "capturing the savepoint: boom",
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusFailed,
 		},
 		{
 			name:             "an interrupt past the commit releases and fails nothing",
 			interruptOn:      "Commit",
 			wantLogOrder:     []string{"savepoint committed before the interrupt", "release"},
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusDone,
 		},
 		{
 			name:             "a failed release past the commit names the savepoint",
 			releaseErr:       errBoom,
 			wantErr:          "savepoint " + committed.ID.String() + " committed; services failed to resume: boom",
 			wantNoRestartLog: true,
+			wantBeat:         heartbeat.StatusDone,
 		},
 		{
 			name:         "a failed release under a failed capture is logged",
@@ -240,6 +254,7 @@ func TestCaptureHeld(t *testing.T) {
 			releaseErr:   errBoom,
 			wantErr:      "capturing the savepoint: capture boom",
 			wantLogOrder: []string{"services failed to resume after capture failure"},
+			wantBeat:     heartbeat.StatusFailed,
 		},
 		{
 			name:         "a failed release under a failed hold is logged",
@@ -247,6 +262,7 @@ func TestCaptureHeld(t *testing.T) {
 			releaseErr:   errBoom,
 			wantErr:      "stop boom",
 			wantLogOrder: []string{"services failed to resume after hold failure"},
+			wantBeat:     heartbeat.StatusFailed,
 		},
 	}
 
@@ -263,7 +279,9 @@ func TestCaptureHeld(t *testing.T) {
 					}
 				}
 			}
-			req := provider.CaptureRequest{Name: "sp", InResult: true}
+			req := provider.CaptureRequest{ID: committed.ID, Name: "sp", InResult: true}
+			store := newDirStore(t)
+			svc := New(Deps{Store: store})
 			grantedLock := &mockGrantedSessionLock{}
 			capturer := newMockStages(false)
 			calls := []*mock.Call{capturer.expectHold(tt.holdErr).Run(interruptIf("Hold"))}
@@ -272,10 +290,6 @@ func TestCaptureHeld(t *testing.T) {
 			}
 			if tt.holdErr == nil && tt.captureErr == nil {
 				calls = append(calls, grantedLock.On("Verify", mock.Anything).Return(tt.verifyErr).Once())
-			}
-			if tt.verifyErr != nil {
-				named, abandon := capturer.expectAbandon(committed.ID, tt.verifyErr)
-				calls = append(calls, named, abandon)
 			}
 			if tt.holdErr == nil && tt.captureErr == nil && tt.verifyErr == nil {
 				var savepoint model.Savepoint
@@ -291,7 +305,7 @@ func TestCaptureHeld(t *testing.T) {
 			mock.InOrder(calls...)
 
 			// Act
-			savepoint, err := captureHeld(ctx, grantedLock, &capturer.plan, req, time.Minute)
+			savepoint, err := svc.captureHeld(ctx, grantedLock, &capturer.plan, req, time.Minute)
 
 			// Assert
 			if tt.wantErr == "" {
@@ -310,6 +324,7 @@ func TestCaptureHeld(t *testing.T) {
 			if tt.wantNoRestartLog {
 				assert.NotContains(t, logs.String(), "services failed to resume")
 			}
+			assert.Equal(t, tt.wantBeat, readSavepointHeartbeat(t, store, committed.ID).Status)
 			capturer.AssertExpectations(t)
 			grantedLock.AssertExpectations(t)
 		})
@@ -327,7 +342,7 @@ func TestService_CreateSavepoint_APlanNotBuiltHoldsNothing(t *testing.T) {
 	stages := newMockStages(false)
 	stages.expectInspect(nil)
 	stages.expectPlanCapture(provider.CaptureOptions{}, errPlan)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -370,7 +385,7 @@ func TestService_CreateSavepoint_RefusesItsName(t *testing.T) {
 				repo.On("List", mock.Anything).Return(tt.existing, nil).Once()
 			}
 			stages := newMockStages(false)
-			svc := newStagedService(stages, repo, locker, &fakeInflight{})
+			svc := newStagedService(t, stages, repo, locker, &fakeInflight{})
 
 			// Act
 			_, err := svc.CreateSavepoint(zerolog.Nop().WithContext(context.Background()),

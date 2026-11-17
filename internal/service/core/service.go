@@ -15,13 +15,18 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/greenmaskio/storages"
+	"github.com/rs/zerolog"
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
-	"github.com/rs/zerolog"
 )
 
 type projectLocker interface {
@@ -69,14 +74,27 @@ type Deps struct {
 	ComposeProject model.DockerComposeProjectName
 	// Sessions checks, under the lock, that Session still exists.
 	Sessions sessionLookup
+	// Store is the compose project's store, a savepoint's tree and its heartbeat below it.
+	// TODO: goes with the savepoint's tree moving behind a provider stage; see startSavepointHeartbeat.
+	Store storages.Navigator
+	// RunnerInfo identifies this process in a savepoint's heartbeat.
+	RunnerInfo heartbeat.RunnerInfo
+	// HeartbeatInterval and HeartbeatStaleAfter time a savepoint's heartbeat; zero keeps
+	// heartbeat.DefaultInterval and heartbeat.DefaultStaleAfter.
+	HeartbeatInterval   time.Duration
+	HeartbeatStaleAfter time.Duration
 }
 
 // Service orchestrates arcave's savepoint workflows over one workload; a capture and a rollback
 // read savepoints through the embedded SavepointStoreService.
 type Service struct {
 	*SavepointStoreService
-	workload      provider.Workload
-	arcaveProject model.ArcaveProjectName
+	workload            provider.Workload
+	arcaveProject       model.ArcaveProjectName
+	store               storages.Navigator
+	runnerInfo          heartbeat.RunnerInfo
+	heartbeatInterval   time.Duration
+	heartbeatStaleAfter time.Duration
 }
 
 func New(deps Deps) *Service {
@@ -91,8 +109,12 @@ func New(deps Deps) *Service {
 			ComposeProject: deps.ComposeProject,
 			Sessions:       deps.Sessions,
 		}),
-		workload:      deps.Workload,
-		arcaveProject: deps.ArcaveProject,
+		workload:            deps.Workload,
+		arcaveProject:       deps.ArcaveProject,
+		store:               deps.Store,
+		runnerInfo:          deps.RunnerInfo,
+		heartbeatInterval:   cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
+		heartbeatStaleAfter: cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 	}
 }
 

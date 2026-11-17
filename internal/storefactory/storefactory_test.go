@@ -260,6 +260,9 @@ func TestDescent(t *testing.T) {
 		require.NoError(t, err)
 		composeProjectStore, err := ComposeProject(sessionStore, testComposeProject)
 		require.NoError(t, err)
+		savepointID := model.NewSavepointID()
+		savepointStore, err := Savepoint(composeProjectStore, savepointID)
+		require.NoError(t, err)
 
 		// Assert
 		base := filepath.Join(root, "snaps", "arcave")
@@ -267,6 +270,7 @@ func TestDescent(t *testing.T) {
 		assert.Equal(t, filepath.Join(base, "projects", testArcaveProject.String()), arcaveProjectStore.GetCwd())
 		assert.Equal(t, filepath.Join(base, "projects", testArcaveProject.String(), "sessions", model.DefaultSession.String()), sessionStore.GetCwd())
 		assert.Equal(t, filepath.Join(root, "snaps", layout()), composeProjectStore.GetCwd())
+		assert.Equal(t, filepath.Join(root, "snaps", layout(), savepointID.String()), savepointStore.GetCwd())
 	})
 
 	t.Run("each step gates its own segment", func(t *testing.T) {
@@ -278,11 +282,13 @@ func TestDescent(t *testing.T) {
 		_, projectErr := ArcaveProject(rootStore, "..")
 		_, sessionErr := Session(rootStore, model.SessionID{})
 		_, composeErr := ComposeProject(rootStore, "MyShop")
+		_, savepointErr := Savepoint(rootStore, "..")
 
 		// Assert
 		assert.ErrorContains(t, projectErr, "invalid arcave project name")
 		assert.ErrorContains(t, sessionErr, "invalid session id")
 		assert.ErrorContains(t, composeErr, "invalid compose project name")
+		assert.ErrorContains(t, savepointErr, "validate savepoint id")
 	})
 }
 

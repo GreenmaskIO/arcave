@@ -31,7 +31,6 @@ import (
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 )
@@ -48,8 +47,6 @@ type Config struct {
 	// ComposeProgress is where compose's own progress goes: compose.progress as the DI root resolved
 	// it against its own output.
 	ComposeProgress string
-	// RunnerInfo identifies this process in a capture's heartbeat.
-	RunnerInfo heartbeat.RunnerInfo
 }
 
 // Workload is an opened workload of one compose project, with what it holds open.
@@ -244,7 +241,6 @@ func openWorkload(
 		MinDaemonMajor:     profile.minDaemonMajor,
 		Store:              store,
 		Concurrency:        cfg.Concurrency,
-		RunnerInfo:         cfg.RunnerInfo,
 	}), nil
 }
 

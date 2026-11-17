@@ -58,7 +58,7 @@ func TestHeld_Capture(t *testing.T) {
 	require.NoError(t, err)
 
 	// Act
-	captured, err := holding.Capture(ctx, provider.CaptureRequest{Name: "sp"})
+	captured, err := holding.Capture(ctx, provider.CaptureRequest{ID: model.NewSavepointID(), Name: "sp"})
 	require.NoError(t, err)
 	_, err = captured.Commit(ctx)
 

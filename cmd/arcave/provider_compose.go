@@ -92,7 +92,6 @@ func newComposeConfig(cfg config.Config, composeProgress string) compose.Config 
 		ArcaveProject:   model.ArcaveProjectName(cfg.Project.Name),
 		Concurrency:     cfg.Common.Concurrency,
 		ComposeProgress: composeProgress,
-		RunnerInfo:      newRunnerInfo(),
 	}
 }
 

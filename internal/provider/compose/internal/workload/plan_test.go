@@ -183,7 +183,7 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 			holding, holdErr := plan.Hold(ctx)
 			var captureErr error
 			if holdErr == nil {
-				_, captureErr = holding.Capture(ctx, provider.CaptureRequest{})
+				_, captureErr = holding.Capture(ctx, provider.CaptureRequest{ID: model.NewSavepointID()})
 			}
 			releaseErr := plan.Release(ctx, time.Minute)
 

@@ -168,7 +168,7 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 	require.NoError(t, err)
 	held, err := plan.Hold(ctx)
 	require.NoError(t, err)
-	captured, err := held.Capture(ctx, provider.CaptureRequest{})
+	captured, err := held.Capture(ctx, provider.CaptureRequest{ID: model.NewSavepointID()})
 	require.NoError(t, err)
 	_, err = captured.Commit(ctx)
 	require.NoError(t, err)

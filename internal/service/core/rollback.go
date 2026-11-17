@@ -169,7 +169,7 @@ func (s *Service) rollbackLive(
 
 	// A capture of the live state, so a rollback that fails partway can be replayed
 	// back. Its committed record stays: rolling back to it by id undoes the rollback.
-	held, safetySnapshot, err := takeSafetySnapshot(ctx, grantedLock, savepoint, plan)
+	held, safetySnapshot, err := s.takeSafetySnapshot(ctx, grantedLock, savepoint, plan)
 	if err != nil {
 		// Nothing was restored, so there is nothing to revert: restart best-effort, since a stop
 		// that failed partway may have stopped some services. What the fan-out wrote stays for a
@@ -304,26 +304,35 @@ func (s *Service) runPrepare(
 
 // takeSafetySnapshot stops the services and captures the live state, the safety snapshot's phase;
 // on failure the services are the caller's to restart. The held project is the revert's.
-func takeSafetySnapshot(
+func (s *Service) takeSafetySnapshot(
 	ctx context.Context, grantedLock model.GrantedSessionLock, savepoint model.Savepoint, plan provider.CapturePlan,
 ) (_ provider.HeldWorkload, _ model.Savepoint, err error) {
 	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindRollbackSafetySnapshot})
 	defer func() { step.End(err) }()
-	held, err := plan.Hold(ctx)
-	if err != nil {
-		return nil, model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
-	}
 	// No name: one would read as the savepoint restored. TakenBefore is the resolved target, never
 	// the typed ref, since "latest" names none and a name may be removed.
-	safetySnapshot, err := commitCaptured(ctx, grantedLock, held, provider.CaptureRequest{
+	req := provider.CaptureRequest{
+		ID:     model.NewSavepointID(),
 		Labels: newSafetySnapshotLabels(),
 		TakenBefore: &model.SavepointRef{
 			ID:   savepoint.ID,
 			Name: savepoint.Name,
 		},
-	})
+	}
+	beatCtx, beat, err := s.startSavepointHeartbeat(ctx, req.ID)
 	if err != nil {
-		return nil, model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w", err)
+		return nil, model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w",
+			preferInterrupt(ctx, err))
+	}
+	held, err := plan.Hold(beatCtx)
+	if err != nil {
+		err = beat.abandon(ctx, beatCtx, err)
+		return nil, model.Savepoint{}, fmt.Errorf("stop services: %w", preferInterrupt(ctx, err))
+	}
+	safetySnapshot, err := captureAndCommit(ctx, beatCtx, beat, grantedLock, held, req)
+	if err != nil {
+		return nil, model.Savepoint{}, fmt.Errorf("pre-rollback safety snapshot failed, nothing changed: %w",
+			preferInterrupt(ctx, err))
 	}
 	return held, safetySnapshot, nil
 }

@@ -401,6 +401,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	repo := sprepo.New(composeProjectStore)
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewSavepoints(repo),
+		Store:          composeProjectStore,
 		ArcaveProject:  cdcArcaveProject,
 		SessionLocker:  newSessionLocker(t, e.arcaveProjectStore(t), session),
 		WriteAdmission: newPlainAdmission(e.arcaveProjectStore(t)),

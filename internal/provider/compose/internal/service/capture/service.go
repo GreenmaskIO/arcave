@@ -18,14 +18,9 @@
 package capture
 
 import (
-	"cmp"
 	"context"
-	"time"
-
-	"github.com/greenmaskio/storages"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
 // SavepointRepository writes a capture's spec and commits its record.
@@ -44,27 +39,15 @@ type ImageBackend interface {
 type Deps struct {
 	SavepointRepo SavepointRepository
 	ImageBackend  ImageBackend
-	// Store is the compose project's store: the capture's tree and its heartbeat.
-	Store storages.Storager
 	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
 	Concurrency int
-	// RunnerInfo identifies this process in a capture's heartbeat.
-	RunnerInfo heartbeat.RunnerInfo
-	// HeartbeatInterval and HeartbeatStaleAfter time a capture's heartbeat; zero keeps
-	// heartbeat.DefaultInterval and heartbeat.DefaultStaleAfter.
-	HeartbeatInterval   time.Duration
-	HeartbeatStaleAfter time.Duration
 }
 
 // Capturer stores the captures of one compose project.
 type Capturer struct {
 	savepointRepo           SavepointRepository
 	imageBackend            ImageBackend
-	store                   storages.Storager
 	maxConcurrentOperations int
-	runnerInfo              heartbeat.RunnerInfo
-	heartbeatInterval       time.Duration
-	heartbeatStaleAfter     time.Duration
 }
 
 // New builds a Capturer from deps.
@@ -72,11 +55,7 @@ func New(deps Deps) *Capturer {
 	return &Capturer{
 		savepointRepo:           deps.SavepointRepo,
 		imageBackend:            deps.ImageBackend,
-		store:                   deps.Store,
 		maxConcurrentOperations: fanOutLimit(deps.Concurrency),
-		runnerInfo:              deps.RunnerInfo,
-		heartbeatInterval:       cmp.Or(deps.HeartbeatInterval, heartbeat.DefaultInterval),
-		heartbeatStaleAfter:     cmp.Or(deps.HeartbeatStaleAfter, heartbeat.DefaultStaleAfter),
 	}
 }
 

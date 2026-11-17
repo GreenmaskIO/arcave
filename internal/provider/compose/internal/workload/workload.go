@@ -29,7 +29,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/inspection"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/prepare"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 )
 
 // savepointRepository writes a capture's spec and commits its record, and reads records and specs
@@ -135,16 +134,10 @@ type Deps struct {
 	DaemonVersion string
 	// MinDaemonMajor is the oldest major of that engine a workflow runs on; 0 requires none.
 	MinDaemonMajor int
-	// Store is the compose project's store: the capture's tree and its heartbeat.
+	// Store is the compose project's store.
 	Store storages.Storager
 	// Concurrency caps how many units one fan-out works at once; 0 leaves it unbounded.
 	Concurrency int
-	// RunnerInfo identifies this process in a capture's heartbeat.
-	RunnerInfo heartbeat.RunnerInfo
-	// HeartbeatInterval and HeartbeatStaleAfter time a capture's heartbeat; zero keeps
-	// heartbeat.DefaultInterval and heartbeat.DefaultStaleAfter.
-	HeartbeatInterval   time.Duration
-	HeartbeatStaleAfter time.Duration
 }
 
 // composeWorkload is one compose project in one session, as the compose provider runs it: the
@@ -203,13 +196,9 @@ func newComposeWorkload(deps Deps) *composeWorkload {
 			MaxConcurrentOperations: fanOutLimit(deps.Concurrency),
 		}),
 		capturer: capture.New(capture.Deps{
-			SavepointRepo:       deps.SavepointRepo,
-			ImageBackend:        deps.ImageBackend,
-			Store:               deps.Store,
-			Concurrency:         deps.Concurrency,
-			RunnerInfo:          deps.RunnerInfo,
-			HeartbeatInterval:   deps.HeartbeatInterval,
-			HeartbeatStaleAfter: deps.HeartbeatStaleAfter,
+			SavepointRepo: deps.SavepointRepo,
+			ImageBackend:  deps.ImageBackend,
+			Concurrency:   deps.Concurrency,
 		}),
 		composeRunner:    deps.ComposeRunner,
 		containerControl: deps.ContainerControl,

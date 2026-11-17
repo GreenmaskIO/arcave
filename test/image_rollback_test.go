@@ -242,6 +242,7 @@ func newImageRollbackEnv(t *testing.T) *imageRollbackEnv {
 	registry := mustRegistry(t, profile.volumes)
 	deps := core.Deps{
 		Savepoints:     compose.NewSavepoints(repo),
+		Store:          store,
 		ArcaveProject:  "arcave-image-rollback-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),

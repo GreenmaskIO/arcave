@@ -17,6 +17,8 @@ package core
 import (
 	"context"
 	"errors"
+	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,15 +29,18 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
+	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
 // newStagedService is a Service walking stages, its savepoints listed by savepoints, the
-// session's lock always held.
+// session's lock always held, its heartbeats written to a tempdir.
 func newStagedService(
-	stages *mockStages, savepoints *mockSavepoints, locker *mockLocker, inflight inflightMarkers,
+	t *testing.T, stages *mockStages, savepoints *mockSavepoints, locker *mockLocker, inflight inflightMarkers,
 ) *Service {
+	t.Helper()
 	return New(Deps{
+		Store:          newDirStore(t),
 		Savepoints:     savepoints,
 		ProjectLocker:  locker,
 		WriteAdmission: fakeWriteAdmission{},
@@ -121,7 +126,7 @@ func TestService_Rollback_RestoresAndKeepsTheSafetySnapshot(t *testing.T) {
 		stages.target.expectReap(),
 		inflight.On("Clear", mock.Anything).Return(nil).Once(),
 	)
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -200,7 +205,7 @@ func TestService_Rollback_RejectsAnUnsafeIDBeforeTheWorkload(t *testing.T) {
 	record.ID = "../../etc"
 	savepoints, locker := demoResolution(record)
 	stages := newMockStages(false)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -221,7 +226,7 @@ func TestService_Rollback_AnInspectionFailureTouchesNothing(t *testing.T) {
 	savepoints, locker := demoResolution(record)
 	stages := newMockStages(false)
 	stages.expectInspect(model.ErrUnsupportedDaemon)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -301,7 +306,7 @@ func TestService_Rollback_RevertsPastTheMarker(t *testing.T) {
 				inflight.On("Clear", mock.Anything).Return(nil).Once(),
 			)
 			mock.InOrder(calls...)
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 			logs := &syncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -349,7 +354,7 @@ func TestService_Rollback_FailedRevertRetainsTheSafetySnapshot(t *testing.T) {
 		stages.revert.expectBuild(errors.New("create boom")),
 		inflight.On("Put", mock.Anything, isInflightMarkerOf(record.ID, model.InflightInconsistent, safetySnapshot.ID)).Return(nil).Once(),
 	)
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -386,7 +391,7 @@ func TestService_Rollback_RevertThatCannotPrepare(t *testing.T) {
 			errors.New("load boom")),
 	)
 	inflight := &fakeInflight{}
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -436,7 +441,7 @@ func TestService_Rollback_InterruptedRestoreReverts(t *testing.T) {
 		stages.revert.restored.On("Start", live, 60*time.Second).Return(nil).Once(),
 		stages.revert.restored.On("Reap", live).Once(),
 	)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
@@ -482,7 +487,7 @@ func TestService_Rollback_SafetySnapshotNamesItsRollback(t *testing.T) {
 				}, errors.New("boom")),
 				stages.expectRelease(60*time.Second, nil),
 			)
-			svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+			svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 			req := tt.req
 			req.WaitTimeout = 60 * time.Second
 
@@ -500,8 +505,9 @@ func TestService_Rollback_SafetySnapshotNamesItsRollback(t *testing.T) {
 
 // The safety snapshot's phase: the hold, then the capture of what it holds, recorded as taken
 // before savepoint and not the command's result, then its commit once the session's lock is
-// checked. A failure in any is the caller's to release; a lost lock abandons the capture.
-func TestTakeSafetySnapshot(t *testing.T) {
+// checked. A failure in any is the caller's to release and ends the heartbeat failed; a lost lock
+// abandons the capture.
+func TestService_takeSafetySnapshot(t *testing.T) {
 	boom := errors.New("boom")
 	unnamed := demoRecord()
 	unnamed.Name = ""
@@ -511,32 +517,54 @@ func TestTakeSafetySnapshot(t *testing.T) {
 		holdErr    error
 		captureErr error
 		verifyErr  error
-		wantErr    string
+		// wantErr spells the minted id as <id>.
+		wantErr  string
+		wantBeat heartbeat.Status
 	}{
-		{name: "a failed hold captures nothing", savepoint: demoRecord(), holdErr: boom, wantErr: "stop services: boom"},
+		{
+			name:      "a failed hold captures nothing",
+			savepoint: demoRecord(),
+			holdErr:   boom,
+			wantErr:   "stop services: boom",
+			wantBeat:  heartbeat.StatusFailed,
+		},
 		{
 			name:       "a failed capture",
 			savepoint:  demoRecord(),
 			captureErr: boom,
 			wantErr:    "pre-rollback safety snapshot failed, nothing changed: boom",
+			wantBeat:   heartbeat.StatusFailed,
 		},
 		{
 			name:      "a lost lock commits nothing",
 			savepoint: demoRecord(),
 			verifyErr: model.ErrSessionLockLost,
-			wantErr: "pre-rollback safety snapshot failed, nothing changed: commit savepoint " +
-				demoSafetySnapshot().ID.String() + ": " + model.ErrSessionLockLost.Error(),
+			wantErr: "pre-rollback safety snapshot failed, nothing changed: commit savepoint <id>: " +
+				model.ErrSessionLockLost.Error(),
+			wantBeat: heartbeat.StatusFailed,
 		},
-		{name: "a named savepoint", savepoint: demoRecord()},
-		{name: "an unnamed savepoint", savepoint: unnamed},
+		{name: "a named savepoint", savepoint: demoRecord(), wantBeat: heartbeat.StatusDone},
+		{name: "an unnamed savepoint", savepoint: unnamed, wantBeat: heartbeat.StatusDone},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			var want model.Savepoint
+			var (
+				want  model.Savepoint
+				id    model.SavepointID
+				store = newDirStore(t)
+			)
+			svc := New(Deps{Store: store})
 			stages := newMockStages(false)
 			grantedLock := &mockGrantedSessionLock{}
-			calls := []*mock.Call{stages.expectHold(tt.holdErr)}
+			// The hold runs inside the heartbeat: its tree holds exactly one object then.
+			hold := stages.expectHold(tt.holdErr).Run(func(mock.Arguments) {
+				objects, err := store.List(context.Background(), "")
+				require.NoError(t, err)
+				require.Len(t, objects, 1)
+				id = model.SavepointID(path.Dir(objects[0].Name))
+			})
+			calls := []*mock.Call{hold}
 			if tt.holdErr == nil {
 				calls = append(calls, stages.expectCaptureOf(provider.CaptureRequest{
 					Labels:      safetySnapshotLabels(),
@@ -546,22 +574,23 @@ func TestTakeSafetySnapshot(t *testing.T) {
 			if tt.holdErr == nil && tt.captureErr == nil {
 				calls = append(calls, grantedLock.On("Verify", mock.Anything).Return(tt.verifyErr).Once())
 			}
-			switch {
-			case tt.verifyErr != nil:
-				named, abandon := stages.expectAbandon(demoSafetySnapshot().ID, tt.verifyErr)
-				calls = append(calls, named, abandon)
-			case tt.holdErr == nil && tt.captureErr == nil:
+			if tt.holdErr == nil && tt.captureErr == nil && tt.verifyErr == nil {
 				want = demoSafetySnapshot()
 				calls = append(calls, stages.expectCommit(want, nil))
 			}
 			mock.InOrder(calls...)
 
 			// Act
-			held, got, err := takeSafetySnapshot(context.Background(), grantedLock, tt.savepoint, &stages.plan)
+			held, got, err := svc.takeSafetySnapshot(context.Background(), grantedLock, tt.savepoint, &stages.plan)
 
 			// Assert
+			require.NoError(t, id.Validate(), "the heartbeat lands in a savepoint's tree")
+			assert.Equal(t, tt.wantBeat, readSavepointHeartbeat(t, store, id).Status)
+			if tt.holdErr == nil {
+				assert.Equal(t, id, stages.capturedID, "the capture is of the tree the heartbeat frames")
+			}
 			if tt.wantErr != "" {
-				require.EqualError(t, err, tt.wantErr)
+				require.EqualError(t, err, strings.ReplaceAll(tt.wantErr, "<id>", id.String()))
 				assert.Zero(t, got)
 				assert.Nil(t, held)
 			} else {
@@ -677,7 +706,7 @@ func TestService_Rollback_ReleasesBeforeTheMarker(t *testing.T) {
 				calls = append(calls, stages.expectRelease(60*time.Second, nil))
 			}
 			mock.InOrder(calls...)
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 			// Act
 			_, err := svc.Rollback(ctx, model.RollbackRequest{ID: ptrID(record.ID), WaitTimeout: 60 * time.Second})
@@ -727,7 +756,7 @@ func TestService_Rollback_APrepareFailureHoldsNothing(t *testing.T) {
 				calls = append(calls, stages.expectPrepare(record.ID, demoPrepareOptions(record, false), tt.prepareErr))
 			}
 			mock.InOrder(calls...)
-			svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+			svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 			// Act
 			_, err := svc.Rollback(zerolog.Nop().WithContext(context.Background()),
@@ -750,7 +779,7 @@ func TestService_planSafetySnapshot(t *testing.T) {
 	stages := newMockStages(false)
 	stages.plan.labelsIgnored = errors.New("unknown label arcave.captur")
 	stages.expectPlanCapture(provider.CaptureOptions{Restoring: record.ID}, nil)
-	svc := newStagedService(stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
+	svc := newStagedService(t, stages, &mockSavepoints{}, &mockLocker{}, &fakeInflight{})
 	logs := &syncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -826,7 +855,7 @@ func TestService_Rollback_WithoutSafetySnapshot(t *testing.T) {
 				stages.target.expectReap(),
 				inflight.On("Clear", mock.Anything).Return(nil).Once(),
 			)
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 			recorder := &warnRecorder{}
 			ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(recorder, fixedNow))
 
@@ -897,7 +926,7 @@ func TestService_Rollback_WithoutSafetySnapshotFailures(t *testing.T) {
 				calls = append(calls, stages.expectLiveTeardown(tt.teardownErr))
 			}
 			mock.InOrder(calls...)
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 			// Act
 			_, err := svc.Rollback(ctx, model.RollbackRequest{
@@ -958,7 +987,7 @@ func TestService_Rollback_ColdStartBuildsFromTheSavepoint(t *testing.T) {
 				stages.target.expectReap(),
 				inflight.On("Clear", mock.Anything).Return(nil).Once(),
 			)
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 			recorder := &warnRecorder{}
 			logs := &syncBuffer{}
 			ctx := progress.WithTracker(zerolog.New(logs).WithContext(context.Background()), progress.New(recorder, fixedNow))
@@ -995,7 +1024,7 @@ func TestService_Rollback_ColdStartRefusedByThePrepare(t *testing.T) {
 	stages.expectPrepare(record.ID, demoPrepareOptions(record, false), model.ErrLeftoverVolumes)
 	inflight := &mockInflight{}
 	inflight.On("Get", mock.Anything).Return(model.InflightMarker{}, false, nil).Once()
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 	// Act
 	_, err := svc.Rollback(zerolog.Nop().WithContext(context.Background()),
@@ -1069,7 +1098,7 @@ func TestService_Rollback_ColdStartFailure(t *testing.T) {
 			calls = append(calls, stages.target.expectDiscard(tt.discardErr))
 			mock.InOrder(calls...)
 			inflight := &fakeInflight{}
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 			logs := &syncBuffer{}
 			ctx := zerolog.New(logs).WithContext(context.Background())
 
@@ -1162,7 +1191,7 @@ func TestService_Rollback_ColdStartRerun(t *testing.T) {
 			)
 			inflight := &fakeInflight{}
 			require.NoError(t, inflight.Put(context.Background(), newRecoveredMarker(record.ID, tt.phase, tt.toSafety)))
-			svc := newStagedService(stages, savepoints, locker, inflight)
+			svc := newStagedService(t, stages, savepoints, locker, inflight)
 			recorder := &warnRecorder{}
 			ctx := progress.WithTracker(zerolog.Nop().WithContext(context.Background()), progress.New(recorder, fixedNow))
 
@@ -1199,7 +1228,7 @@ func TestService_Rollback_FailedRecoveryKeepsTheSafetySnapshot(t *testing.T) {
 		stages.expectPrepare(record.ID, demoPrepareOptions(record, true), nil),
 		stages.expectLiveTeardown(errors.New("down failed")),
 	)
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
@@ -1243,7 +1272,7 @@ func TestService_Rollback_NoSafetySnapshotCleansUpPastAnInterrupt(t *testing.T) 
 		stages.target.restored.On("Reap", live).Once(),
 	)
 	inflight := &fakeInflight{}
-	svc := newStagedService(stages, savepoints, locker, inflight)
+	svc := newStagedService(t, stages, savepoints, locker, inflight)
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{

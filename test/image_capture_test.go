@@ -173,6 +173,7 @@ func newImageCaptureEnv(t *testing.T) *imageCaptureEnv {
 	registry := mustRegistry(t, profile.volumes)
 	svc := core.New(core.Deps{
 		Savepoints:     compose.NewSavepoints(repo),
+		Store:          store,
 		ArcaveProject:  "arcave-image-tenant",
 		SessionLocker:  newStoreLocker(store, model.DefaultSession),
 		WriteAdmission: newPlainAdmission(store),

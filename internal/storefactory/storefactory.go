@@ -285,6 +285,18 @@ func ComposeProject(sessionStore storages.Navigator, name model.DockerComposePro
 	return joinKind(sessionStore, namespaceCompose, name.String())
 }
 
+// Savepoint descends from a compose project store to <id>, the savepoint's tree.
+func Savepoint(composeProjectStore storages.Navigator, id model.SavepointID) (storages.Storager, error) {
+	if err := id.Validate(); err != nil {
+		return nil, fmt.Errorf("validate savepoint id: %w", err)
+	}
+	tree, err := composeProjectStore.SubStorage(id.String(), true)
+	if err != nil {
+		return nil, fmt.Errorf("re-root storage at %s: %w", id, err)
+	}
+	return tree, nil
+}
+
 // ComposeProjects lists the compose projects a session holds, sorted by name. A
 // directory whose name the compose gate refuses is not one and is skipped.
 func ComposeProjects(ctx context.Context, sessionStore storages.Navigator) ([]model.DockerComposeProjectName, error) {

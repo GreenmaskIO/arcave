@@ -65,7 +65,7 @@ func TestService_MutatingWorkflows_AbortWhenTheProjectIsLocked(t *testing.T) {
 			locker.On("Acquire", mock.Anything).Return(model.ErrProjectLocked)
 			savepoints := &mockSavepoints{}
 			stages := newMockStages(false)
-			svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+			svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act

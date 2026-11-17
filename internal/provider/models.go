@@ -42,6 +42,8 @@ type PrepareOptions struct {
 // CaptureRequest is what core asks a savepoint to carry. The provider stores every attribute
 // with the savepoint and hands it back as given; it decides nothing by any of them.
 type CaptureRequest struct {
+	// ID is the savepoint's id, minted by core.
+	ID          model.SavepointID
 	Name        string
 	Description string
 	Labels      map[string]string

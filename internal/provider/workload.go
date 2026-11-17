@@ -61,7 +61,7 @@ type CapturePlan interface {
 
 // HeldWorkload is the workload held as its plan decided.
 type HeldWorkload interface {
-	// Capture stores the workload under a savepoint not yet committed: no listing holds it.
+	// Capture stores the workload under req.ID, a savepoint not yet committed: no listing holds it.
 	Capture(ctx context.Context, req CaptureRequest) (CapturedSavepoint, error)
 	// PrepareSavepoint makes the savepoint id names, one captured of this held workload, ready to
 	// build over the workload as it is held.
@@ -71,17 +71,11 @@ type HeldWorkload interface {
 	Teardown(ctx context.Context) (VacantWorkload, error)
 }
 
-// CapturedSavepoint is the workload stored and not committed: no listing holds it. Exactly one of
-// Commit and Abandon ends it.
+// CapturedSavepoint is the workload stored and not committed: no listing holds it. One that is
+// never committed is left to a gc.
 type CapturedSavepoint interface {
-	// ID is the savepoint's id, minted by the capture.
-	ID() model.SavepointID
 	// Commit writes the savepoint's record, the last object: once it returns, it exists.
-	// A Commit that fails has abandoned the capture itself.
 	Commit(ctx context.Context) (model.Savepoint, error)
-	// Abandon marks the capture failed with cause and leaves what was stored to a gc, whether ctx
-	// is cancelled or not.
-	Abandon(ctx context.Context, cause error)
 }
 
 // PreparedSavepoint is a savepoint ready to build.

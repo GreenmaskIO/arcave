@@ -90,7 +90,7 @@ func TestService_CreateSavepointProgress(t *testing.T) {
 		stages.expectCommit(demoRecord(), nil).Run(openStep("stage.commit")),
 		stages.expectRelease(0, nil).Run(openStep("stage.release")),
 	)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.CreateSavepoint(ctx, model.CreateSavepointRequest{})
@@ -134,7 +134,7 @@ func TestService_Rollback_Progress(t *testing.T) {
 		// rollback.cleanup is an activity: a provider warns on it and opens no step under it.
 		stages.target.expectReap(),
 	)
-	svc := newStagedService(stages, savepoints, locker, &fakeInflight{})
+	svc := newStagedService(t, stages, savepoints, locker, &fakeInflight{})
 
 	// Act
 	_, err := svc.Rollback(ctx, model.RollbackRequest{

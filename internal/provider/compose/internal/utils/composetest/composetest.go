@@ -35,7 +35,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/heartbeat"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
@@ -264,14 +263,4 @@ func ObjectNames(t *testing.T, store storages.Storager) []string {
 		names = append(names, obj.Name)
 	}
 	return names
-}
-
-// ReadCaptureHeartbeat reads the heartbeat of id's tree.
-func ReadCaptureHeartbeat(t *testing.T, store storages.Storager, id model.SavepointID) heartbeat.Heartbeat {
-	t.Helper()
-	tree, err := store.SubStorage(id.String(), true)
-	require.NoError(t, err)
-	beat, err := heartbeat.NewReader(tree).Read(context.Background())
-	require.NoError(t, err)
-	return beat
 }
