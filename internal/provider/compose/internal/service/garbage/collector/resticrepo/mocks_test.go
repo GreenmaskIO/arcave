@@ -20,7 +20,7 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 )
 
 type mockPinger struct{ mock.Mock }

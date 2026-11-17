@@ -39,12 +39,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
-	imagefullcopy "github.com/greenmaskio/arcave/internal/service/backend/imagecopy/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
+	imagefullcopy "github.com/greenmaskio/arcave/internal/service/imagebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
 	"github.com/greenmaskio/arcave/internal/storefactory"
@@ -91,7 +91,7 @@ func TestSavepoint_CommitsTheWritableLayer(t *testing.T) {
 	assert.Positive(t, capture.SizeBytes)
 
 	// The capture's own manifest, and the metadata the archive carried.
-	// Written out rather than taken from imagecopy: the key is the compatibility
+	// Written out rather than taken from imagebackend: the key is the compatibility
 	// contract, and a test sharing the constant would not notice it change.
 	captureDir := filepath.Join(savepoint.ID.String(), "images", "app", "replicas", "1")
 	keys := storeKeys(t, env.store)
@@ -241,9 +241,9 @@ func newLayerOwner(arcaveProject, composeProject string) model.LayerOrigin {
 // images deduplicated.
 func newImageCopier(
 	store storages.Navigator, origin model.LayerOrigin, engine *dockerclient.Engine, blobStore storages.Storager,
-) *imagecopy.Copier {
+) *imagebackend.Copier {
 	dedup := dedupcopy.New(blobStore)
-	return imagecopy.NewCopier(store, origin, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
+	return imagebackend.NewCopier(store, origin, engine, map[model.ImageBackendKind]imagebackend.ImageArchiver{
 		model.ImageBackendDedupCopy: dedup,
 		model.ImageBackendFullCopy:  imagefullcopy.New(),
 	}, dedup)

@@ -45,9 +45,9 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
 )
 
 const (

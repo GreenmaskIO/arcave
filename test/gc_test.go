@@ -34,11 +34,11 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
 	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/service/lock"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 
@@ -197,10 +197,10 @@ func plantUnreferencedImage(t *testing.T, composeDir string) (image, blob string
 	t.Helper()
 	imageHex, blobHex := strings.Repeat("e", 64), strings.Repeat("f", 64)
 	image, blob = "shared/oci/images/sha256/"+imageHex, "shared/oci/blobs/sha256/"+blobHex
-	manifest, err := json.Marshal(imagecopy.Manifest{
+	manifest, err := json.Marshal(imagebackend.Manifest{
 		ImageID: model.ImageDigestID("sha256:" + imageHex),
-		Format:  imagecopy.FormatBlobs,
-		Members: []imagecopy.Member{{Name: "blobs/sha256/" + blobHex, Kind: imagecopy.KindBlob, Digest: blobHex}},
+		Format:  imagebackend.FormatBlobs,
+		Members: []imagebackend.Member{{Name: "blobs/sha256/" + blobHex, Kind: imagebackend.KindBlob, Digest: blobHex}},
 	})
 	require.NoError(t, err)
 	plant(t, filepath.Join(composeDir, filepath.FromSlash(image), "image.json"), string(manifest))

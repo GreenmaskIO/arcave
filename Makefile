@@ -2,7 +2,7 @@
 
 # The restic REST API is generated from its own OpenAPI document; the version is
 # pinned because the generated code is committed and a generator bump is a diff.
-RESTIC_API_DIR := internal/service/backend/restic/rest
+RESTIC_API_DIR := internal/service/volumebackend/cdc/rest
 OAPI_CODEGEN_VERSION := v2.6.0
 
 # The build stamps cmd/arcave/cmd_root.go declares; goreleaser fills the same vars in CI.

@@ -23,7 +23,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
-	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 )
 
 func TestRegistry_New(t *testing.T) {

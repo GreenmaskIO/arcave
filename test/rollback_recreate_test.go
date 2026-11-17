@@ -47,12 +47,12 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/lock"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 

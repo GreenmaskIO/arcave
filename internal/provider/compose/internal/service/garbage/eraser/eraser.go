@@ -22,7 +22,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend"
 )
 
 // ObjectEraser deletes one object per op.
@@ -70,7 +70,7 @@ func (s ImageEraser) Erase(
 	ctx context.Context, store storages.Storager, ops []model.GarbageOp,
 ) model.GarbageDeletion {
 	return garbage.DeleteOps(ctx, ops, func(ctx context.Context, op model.GarbageOp) error {
-		return imagecopy.DeleteStoredImage(ctx, store, op.Target)
+		return imagebackend.DeleteStoredImage(ctx, store, op.Target)
 	})
 }
 

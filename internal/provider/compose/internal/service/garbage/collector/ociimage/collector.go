@@ -20,7 +20,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -40,7 +40,7 @@ func (s *Collector) DataKind() model.GarbageDataKind {
 // Find names every stored image no record names.
 func (s *Collector) Find(_ context.Context, scope garbage.ComposeProjectScope) (model.GarbageStat, error) {
 	var (
-		stored    = imagecopy.NewStoredImages(scope.Objects)
+		stored    = imagebackend.NewStoredImages(scope.Objects)
 		live      = garbage.NewLiveImages(scope.Savepoints)
 		ops       = []model.GarbageOp{}
 		liveCount int

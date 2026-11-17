@@ -30,7 +30,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/savepointdir"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 )
 
 // ResticInspectorOpener serves a compose project's restic repositories to a gc reading them, and

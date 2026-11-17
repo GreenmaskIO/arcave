@@ -29,8 +29,8 @@ import (
 	podmanclient "github.com/greenmaskio/arcave/internal/client/podman"
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 )
 
 // runtimeProfile is what arcave's DI root chooses by the engine behind the daemon.

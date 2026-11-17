@@ -43,11 +43,11 @@ import (
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 

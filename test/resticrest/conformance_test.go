@@ -40,8 +40,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
 )
 
 // rest's own tests prove the routes speak restic's protocol over a bare

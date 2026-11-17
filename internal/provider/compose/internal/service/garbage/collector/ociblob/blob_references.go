@@ -26,7 +26,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend"
 )
 
 // blobReferences is which image blobs the manifests under a compose project store list, by who
@@ -105,7 +105,7 @@ func newLiveRefs(
 	)
 	for _, savepoint := range savepoints {
 		for _, layer := range savepoint.WritableLayers {
-			key, err := imagecopy.WritableLayerKey(savepoint.ID, layer.Service, layer.Replica)
+			key, err := imagebackend.WritableLayerKey(savepoint.ID, layer.Service, layer.Replica)
 			if err != nil {
 				unreadable = append(unreadable, newUnreadableManifest(manifestRef{
 					key:       path.Join(savepoint.ID.String(), layer.Service),
@@ -120,7 +120,7 @@ func newLiveRefs(
 		}
 	}
 	for _, imageID := range slices.Sorted(maps.Keys(live)) {
-		key, err := imagecopy.ImageKey(imageID)
+		key, err := imagebackend.ImageKey(imageID)
 		if err != nil {
 			unreadable = append(unreadable, newUnreadableManifest(manifestRef{
 				key:       imageID.String(),
@@ -143,7 +143,7 @@ func newUnreferencedRefs(
 	scope garbage.ComposeProjectScope, live map[model.ImageDigestID]model.SavepointID,
 ) []manifestRef {
 	var refs []manifestRef
-	for _, image := range imagecopy.NewStoredImages(scope.Objects) {
+	for _, image := range imagebackend.NewStoredImages(scope.Objects) {
 		if _, isLive := live[image.ID]; !isLive && image.HasManifest {
 			refs = append(refs, manifestRef{
 				key:   image.Key,
@@ -152,7 +152,7 @@ func newUnreferencedRefs(
 			})
 		}
 	}
-	for _, manifest := range imagecopy.NewLayerManifests(scope.Objects) {
+	for _, manifest := range imagebackend.NewLayerManifests(scope.Objects) {
 		if slices.Contains(scope.Dead, manifest.Savepoint) {
 			refs = append(refs, manifestRef{
 				key:  manifest.Key,
@@ -167,9 +167,9 @@ func newUnreferencedRefs(
 // capture of it would reuse them, any other's as listed.
 func readListedDigests(ctx context.Context, store storages.Navigator, ref manifestRef) ([]string, error) {
 	if ref.savepoint == "" && ref.dead == "" {
-		return imagecopy.ReadReusableBlobs(ctx, store, ref.key, ref.size, ref.image)
+		return imagebackend.ReadReusableBlobs(ctx, store, ref.key, ref.size, ref.image)
 	}
-	return imagecopy.ReadListedBlobs(ctx, store, ref.key)
+	return imagebackend.ReadListedBlobs(ctx, store, ref.key)
 }
 
 // newBlobReferences sorts the blobs each manifest of refs lists, as listed reads them, by who
@@ -217,7 +217,7 @@ func newBlobReferences(
 
 func newUnreadableManifest(ref manifestRef, err error) model.UnreadableManifest {
 	return model.UnreadableManifest{
-		Key:       imagecopy.ManifestKey(ref.key),
+		Key:       imagebackend.ManifestKey(ref.key),
 		Savepoint: ref.savepoint,
 		Error:     err.Error(),
 	}

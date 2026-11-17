@@ -50,17 +50,17 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/service/backend/fullcopy"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy"
-	"github.com/greenmaskio/arcave/internal/service/backend/imagecopy/dedupcopy"
-	imagefullcopy "github.com/greenmaskio/arcave/internal/service/backend/imagecopy/fullcopy"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/cdc"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest"
-	"github.com/greenmaskio/arcave/internal/service/backend/restic/rest/repo"
 	"github.com/greenmaskio/arcave/internal/service/capturepolicy"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend"
+	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
+	imagefullcopy "github.com/greenmaskio/arcave/internal/service/imagebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/service/introspect"
 	"github.com/greenmaskio/arcave/internal/service/status"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
+	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/utils"
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
@@ -685,13 +685,13 @@ func newBackendRegistry(
 // images are always deduplicated, which needs a daemon of Docker 25 or newer.
 func newImageBackend(
 	composeProjectStore storages.Navigator, origin model.LayerOrigin, engine *docker.Engine,
-) (*imagecopy.Copier, error) {
+) (*imagebackend.Copier, error) {
 	blobStore, err := composeProjectStore.SubStorage(dedupcopy.NamespaceBlobs, true)
 	if err != nil {
 		return nil, fmt.Errorf("re-root store at the shared blob store: %w", err)
 	}
 	dedup := dedupcopy.New(blobStore)
-	return imagecopy.NewCopier(composeProjectStore, origin, engine, map[model.ImageBackendKind]imagecopy.ImageArchiver{
+	return imagebackend.NewCopier(composeProjectStore, origin, engine, map[model.ImageBackendKind]imagebackend.ImageArchiver{
 		model.ImageBackendDedupCopy: dedup,
 		model.ImageBackendFullCopy:  imagefullcopy.New(),
 	}, dedup), nil
