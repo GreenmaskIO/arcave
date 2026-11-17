@@ -15,7 +15,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -36,8 +38,8 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/service/core"
 )
 
@@ -86,7 +88,7 @@ func TestOpenSavepointStoreService(t *testing.T) {
 			{Volume: model.Volume{ObjectID: "volume-named-c", Backend: "retired"}},
 		},
 	}
-	require.NoError(t, sprepo.New(scope.store).SaveSavepoint(ctx, savepoint))
+	putSavepointRecord(ctx, t, scope.store, savepoint)
 	archive := savepoint.ID.String() + "/volume-named-a/data.tar"
 	require.NoError(t, scope.store.PutObject(ctx, archive, strings.NewReader("archive")))
 
@@ -174,9 +176,8 @@ func TestOpenGCService_RetainsTheSafetySnapshots(t *testing.T) {
 			t.Cleanup(func() { opened.release(ctx) })
 			scope, err := openComposeProjectScope(ctx, cfg, projectPath, "", "demo", &opened)
 			require.NoError(t, err)
-			repo := sprepo.New(scope.store)
 			for _, savepoint := range []model.Savepoint{{ID: oldest, Labels: labels}, {ID: newest, Labels: labels}, {ID: plain}} {
-				require.NoError(t, repo.SaveSavepoint(ctx, savepoint))
+				putSavepointRecord(ctx, t, scope.store, savepoint)
 			}
 			data := oldest.String() + "/volume-named-a/data.tar"
 			require.NoError(t, scope.store.PutObject(ctx, data, strings.NewReader("archive")))
@@ -190,7 +191,7 @@ func TestOpenGCService_RetainsTheSafetySnapshots(t *testing.T) {
 
 			// Assert
 			require.NoError(t, err)
-			left, err := repo.ListSavepoints(ctx)
+			left, err := compose.NewStoreSavepoints(scope.store).List(ctx)
 			require.NoError(t, err)
 			var ids []model.SavepointID
 			for _, savepoint := range left {
@@ -556,4 +557,13 @@ func readStoreObject(t *testing.T, store storages.Storager, key string) string {
 	data, err := io.ReadAll(body)
 	require.NoError(t, err)
 	return string(data)
+}
+
+// putSavepointRecord commits savepoint in store as the compose provider records one: its
+// "<id>/savepoint.json".
+func putSavepointRecord(ctx context.Context, t *testing.T, store storages.Storager, savepoint model.Savepoint) {
+	t.Helper()
+	data, err := json.Marshal(savepoint)
+	require.NoError(t, err)
+	require.NoError(t, store.PutObject(ctx, savepoint.ID.String()+"/savepoint.json", bytes.NewReader(data)))
 }

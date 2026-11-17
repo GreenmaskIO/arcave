@@ -24,10 +24,10 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
+	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/gcfinder"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
-	sprepo "github.com/greenmaskio/arcave/internal/repository/savepoint"
 )
 
 // Session is an opened session of the compose provider, with what it holds open.
