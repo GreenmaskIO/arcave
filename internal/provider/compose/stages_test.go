@@ -35,8 +35,8 @@ import (
 	"github.com/greenmaskio/arcave/pkg/progress"
 )
 
-// demoRestoredVolumes are the docker names of the volumes a build of demoRecord restores.
-var demoRestoredVolumes = []string{demoVolumeName}
+// demoRestoredVolumes are the docker names of the volumes a build of composetest.DemoRecord restores.
+var demoRestoredVolumes = []string{composetest.DemoVolumeName}
 
 // matchRetargetedImage matches a project by the image one of its services is pointed at, with
 // pull policy never: the tag lives only in the local daemon.
@@ -62,12 +62,12 @@ func newRestoreOf(savepoint model.Savepoint) model.BackendRestoreRequest {
 	}
 }
 
-// demoUndo is a savepoint other than demoRecord, captured of a held project before it is replaced.
+// demoUndo is a savepoint other than composetest.DemoRecord, captured of a held project before it is replaced.
 func demoUndo() model.Savepoint {
 	return model.Savepoint{
 		ID:        "019e844b-7818-7000-8000-000000000000",
 		CreatedAt: time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC),
-		Stats:     []model.SnapshotStat{{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "undo-payload"}},
+		Stats:     []model.SnapshotStat{{Volume: composetest.DemoVolume(), Type: model.SnapshotBackendFullCopy, Payload: "undo-payload"}},
 		Spec:      &model.SpecRef{Format: model.SpecFormatComposeYAML},
 	}
 }
@@ -76,42 +76,42 @@ func demoUndo() model.Savepoint {
 // teardown, and the target's backend, not the live one's, restores.
 func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 	// Arrange
-	record := demoRecord()
-	deployment := demoDeployment(record)
-	introspection := demoIntrospection()
+	record := composetest.DemoRecord()
+	deployment := composetest.DemoDeployment(record)
+	introspection := composetest.DemoIntrospection()
 	repo := &composetest.MockSavepointRepo{}
 	runner := &composetest.MockComposeRunner{}
-	liveBackend := composetest.NewMockBackend(demoVolume())
-	targetBackend := composetest.NewMockBackend(demoVolume())
+	liveBackend := composetest.NewMockBackend(composetest.DemoVolume())
+	targetBackend := composetest.NewMockBackend(composetest.DemoVolume())
 	store := composetest.NewDirStore(t)
-	registry := &mockRegistry{}
-	inspector := &mockInspector{}
+	registry := &composetest.MockRegistry{}
+	inspector := &composetest.MockInspector{}
 	mock.InOrder(
 		inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once(),
 		expectRecordRead(repo, record),
-		registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(liveBackend, nil).Once(),
+		registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(liveBackend, nil).Once(),
 		expectRecordRead(repo, record),
-		registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(targetBackend, nil).Once(),
-		repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once(),
-		runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once(),
+		registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(targetBackend, nil).Once(),
+		repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+		runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string(nil), nil).Once(),
 		liveBackend.On("Snapshot", mock.Anything, composetest.MatchValidSnapshotID()).
-			Return(model.SnapshotStat{Volume: demoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once(),
-		expectSpecCommit(repo),
+			Return(model.SnapshotStat{Volume: composetest.DemoVolume(), Type: model.SnapshotBackendFullCopy}, nil).Once(),
+		composetest.ExpectSpecCommit(repo),
 		// A fresh id: the capture never commits over the savepoint it is about to be replaced with.
 		repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
 			return savepoint.ID.Validate() == nil && savepoint.ID != record.ID
 		})).Return(nil).Once(),
-		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
-		runner.On("Create", mock.Anything, deployedFrom(demoTargetSpec, deployment), demoRestoredVolumes).Return(nil).Once(),
+		runner.On("Down", mock.Anything, composetest.DemoSpec).Return(nil).Once(),
+		runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, deployment), demoRestoredVolumes).Return(nil).Once(),
 		targetBackend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once(),
-		runner.On("Start", mock.Anything, deployedFrom(demoTargetSpec, deployment), time.Minute).Return(nil).Once(),
+		runner.On("Start", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, deployment), time.Minute).Return(nil).Once(),
 	)
-	assembler := &mockAssembler{}
-	assembler.On("Assemble", mock.Anything, introspection).Return(demoAssembled, nil).Once()
-	codec := &mockCodec{}
-	codec.On("Marshal", demoAssembled).Return(demoSpecBytes, nil).Once()
-	codec.On("Parse", mock.Anything, demoSpecBytes).Return(demoSpec, nil).Once()
-	codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil).Once()
+	assembler := &composetest.MockAssembler{}
+	assembler.On("Assemble", mock.Anything, introspection).Return(composetest.DemoAssembled, nil).Once()
+	codec := &composetest.MockCodec{}
+	codec.On("Marshal", composetest.DemoAssembled).Return(composetest.DemoSpecBytes, nil).Once()
+	codec.On("Parse", mock.Anything, composetest.DemoSpecBytes).Return(composetest.DemoSpec, nil).Once()
+	codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once()
 	svc := New(Deps{
 		SavepointRepo:    repo,
 		ComposeInspector: inspector,
@@ -119,8 +119,8 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 		ProjectAssembler: assembler,
 		SpecCodec:        codec,
 		BackendRegistry:  registry,
-		CaptureDefaults:  demoCaptureDefaults,
-		VolumeRemover:    &mockVolumeRemover{},
+		CaptureDefaults:  composetest.DemoCaptureDefaults,
+		VolumeRemover:    &composetest.MockVolumeRemover{},
 		Store:            store,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
@@ -149,7 +149,7 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, provider.PreparedSummary{Volumes: []model.Volume{demoVolume()}}, prepared.Summary())
+	assert.Equal(t, provider.PreparedSummary{Volumes: []model.Volume{composetest.DemoVolume()}}, prepared.Summary())
 	repo.AssertExpectations(t)
 	runner.AssertExpectations(t)
 	registry.AssertExpectations(t)
@@ -164,7 +164,7 @@ func TestProvider_Inspect_WalksALiveRollback(t *testing.T) {
 // and the spec pointed at them; whatever refuses it refuses there, in that order.
 func TestLive_PrepareSavepoint(t *testing.T) {
 	errLoad := errors.New("daemon refused the archive")
-	noSpec := demoRecordWithImages()
+	noSpec := composetest.DemoRecordWithImages()
 	noSpec.Spec = nil
 	tests := []struct {
 		name      string
@@ -173,10 +173,10 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 		loadErr   error
 		wantErr   error
 	}{
-		{name: "a savepoint with its layer", savepoint: demoRecordWithImages(), found: true},
-		{name: "a record not found", savepoint: demoRecordWithImages(), wantErr: errRecordNotFound},
+		{name: "a savepoint with its layer", savepoint: composetest.DemoRecordWithImages(), found: true},
+		{name: "a record not found", savepoint: composetest.DemoRecordWithImages(), wantErr: errRecordNotFound},
 		{name: "a record with no spec", savepoint: noSpec, found: true, wantErr: model.ErrSavepointNoSpec},
-		{name: "a layer the daemon will not take", savepoint: demoRecordWithImages(), found: true, loadErr: errLoad, wantErr: errLoad},
+		{name: "a layer the daemon will not take", savepoint: composetest.DemoRecordWithImages(), found: true, loadErr: errLoad, wantErr: errLoad},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -188,19 +188,19 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 			}
 			calls := []*mock.Call{repo.On("LoadSavepoints", mock.Anything, []model.SavepointID{tt.savepoint.ID}).Return(found, nil).Once()}
 			store := composetest.NewDirStore(t)
-			registry := &mockRegistry{}
+			registry := &composetest.MockRegistry{}
 			images := &composetest.MockImageBackend{}
-			codec := &mockCodec{}
+			codec := &composetest.MockCodec{}
 			if tt.found {
-				calls = append(calls, registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(demoVolume()), nil).Once())
+				calls = append(calls, registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once())
 			}
 			if tt.found && tt.savepoint.Spec != nil {
 				calls = append(calls,
-					repo.On("LoadSpec", mock.Anything, tt.savepoint.ID).Return(demoTargetSpecBytes, nil).Once(),
-					codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil).Once(),
+					repo.On("LoadSpec", mock.Anything, tt.savepoint.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+					codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
 					images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
-						SnapshotID: tt.savepoint.ID, Layer: demoWritableLayer(), Tag: demoRestoredTag(1),
-					}).Return(demoWritableLayerRestoreResult(), tt.loadErr).Once())
+						SnapshotID: tt.savepoint.ID, Layer: composetest.DemoWritableLayer(), Tag: composetest.DemoRestoredTag(1),
+					}).Return(composetest.DemoWritableLayerRestoreResult(), tt.loadErr).Once())
 			}
 			mock.InOrder(calls...)
 			svc := New(Deps{
@@ -208,10 +208,10 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 				SpecCodec:       codec,
 				BackendRegistry: registry,
 				ImageBackend:    images,
-				ImageLookup:     &mockImageLookup{},
+				ImageLookup:     &composetest.MockImageLookup{},
 				Store:           store,
 			})
-			live := liveWorkload{service: svc, introspection: demoIntrospectionWithContainers()}
+			live := liveWorkload{service: svc, introspection: composetest.DemoIntrospectionWithContainers()}
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -224,10 +224,10 @@ func TestLive_PrepareSavepoint(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				target := prepared.(preparedSavepoint)
-				assert.Equal(t, demoRestoredTag(1), target.project.Services[demoService].Image)
-				assert.Equal(t, types.PullPolicyNever, target.project.Services[demoService].PullPolicy)
-				assert.Equal(t, []model.WritableLayerRestoreResult{demoWritableLayerRestoreResult()}, prepared.Summary().WritableLayers)
-				assert.Equal(t, []model.Volume{demoVolume()}, prepared.Summary().Volumes)
+				assert.Equal(t, composetest.DemoRestoredTag(1), target.project.Services[composetest.DemoService].Image)
+				assert.Equal(t, types.PullPolicyNever, target.project.Services[composetest.DemoService].PullPolicy)
+				assert.Equal(t, []model.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()}, prepared.Summary().WritableLayers)
+				assert.Equal(t, []model.Volume{composetest.DemoVolume()}, prepared.Summary().Volumes)
 			}
 			repo.AssertExpectations(t)
 			registry.AssertExpectations(t)
@@ -254,29 +254,29 @@ func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			record := demoRecord()
+			record := composetest.DemoRecord()
 			repo := &composetest.MockSavepointRepo{}
 			read := expectRecordRead(repo, record)
 			store := composetest.NewDirStore(t)
-			registry := &mockRegistry{}
-			codec := &mockCodec{}
+			registry := &composetest.MockRegistry{}
+			codec := &composetest.MockCodec{}
 			if tt.wantErr == nil {
 				mock.InOrder(
 					read,
-					registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(demoVolume()), nil).Once(),
-					repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once(),
-					codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil).Once(),
+					registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once(),
+					repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+					codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
 				)
 			}
 			svc := New(Deps{
 				SavepointRepo:   repo,
 				SpecCodec:       codec,
 				BackendRegistry: registry,
-				ImageLookup:     &mockImageLookup{},
+				ImageLookup:     &composetest.MockImageLookup{},
 				LeftoverVolumes: tt.policy,
 				Store:           store,
 			})
-			live := liveWorkload{service: svc, introspection: demoAbsentIntrospection()}
+			live := liveWorkload{service: svc, introspection: composetest.DemoAbsentIntrospection()}
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
@@ -300,10 +300,10 @@ func TestLive_PrepareSavepoint_LeftoverVolumes(t *testing.T) {
 // A live teardown resumes the replicas found frozen, then runs `compose down`; a failed resume is
 // only logged, and over an absent compose project it removes nothing.
 func TestLive_Teardown(t *testing.T) {
-	paused := demoIntrospection()
+	paused := composetest.DemoIntrospection()
 	paused.Project.Services[0].Containers = []model.Container{{
-		ID:     demoContainerID,
-		Name:   demoContainerName(1),
+		ID:     composetest.DemoContainerID,
+		Name:   composetest.DemoContainerName(1),
 		Number: 1,
 		Inspect: container.InspectResponse{
 			State: &container.State{Status: container.StatePaused, Running: true, Paused: true},
@@ -318,10 +318,10 @@ func TestLive_Teardown(t *testing.T) {
 		wantDown      bool
 		wantErr       string
 	}{
-		{name: "a running project", introspection: demoIntrospection(), wantDown: true},
+		{name: "a running project", introspection: composetest.DemoIntrospection(), wantDown: true},
 		{
 			name:          "a failed down hands back no vacant project",
-			introspection: demoIntrospection(),
+			introspection: composetest.DemoIntrospection(),
 			downErr:       errors.New("boom"),
 			wantDown:      true,
 			wantErr:       "removing the compose project: boom",
@@ -339,7 +339,7 @@ func TestLive_Teardown(t *testing.T) {
 			wantWarnings:  []string{"db-1 was paused: resuming it before the rollback"},
 			wantDown:      true,
 		},
-		{name: "an absent project", introspection: demoAbsentIntrospection()},
+		{name: "an absent project", introspection: composetest.DemoAbsentIntrospection()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -348,10 +348,10 @@ func TestLive_Teardown(t *testing.T) {
 			runner := &composetest.MockComposeRunner{}
 			var calls []*mock.Call
 			if len(tt.wantWarnings) > 0 {
-				calls = append(calls, control.On("UnpauseContainers", mock.Anything, []string{demoContainerID}).Return(tt.unpauseErr).Once())
+				calls = append(calls, control.On("UnpauseContainers", mock.Anything, []string{composetest.DemoContainerID}).Return(tt.unpauseErr).Once())
 			}
 			if tt.wantDown {
-				calls = append(calls, runner.On("Down", mock.Anything, demoTargetSpec).Return(tt.downErr).Once())
+				calls = append(calls, runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(tt.downErr).Once())
 			}
 			mock.InOrder(calls...)
 			svc := New(Deps{ComposeRunner: runner, ContainerControl: control})
@@ -359,7 +359,7 @@ func TestLive_Teardown(t *testing.T) {
 			recorder := &composetest.StepRecorder{}
 
 			// Act
-			vacant, err := live.Teardown(composetest.NewProgressContext(recorder), preparedSavepoint{project: demoTargetSpec})
+			vacant, err := live.Teardown(composetest.NewProgressContext(recorder), preparedSavepoint{project: composetest.DemoTargetSpec})
 
 			// Assert
 			if tt.wantErr != "" {
@@ -381,30 +381,30 @@ func TestLive_Teardown(t *testing.T) {
 func TestHeld_PrepareSavepoint(t *testing.T) {
 	// Arrange
 	undo := demoUndo()
-	undo.WritableLayers = []model.WritableLayer{demoWritableLayer()}
-	backend := composetest.NewMockBackend(demoVolume())
+	undo.WritableLayers = []model.WritableLayer{composetest.DemoWritableLayer()}
+	backend := composetest.NewMockBackend(composetest.DemoVolume())
 	repo := &composetest.MockSavepointRepo{}
 	images := &composetest.MockImageBackend{}
 	tag := "arcave/demo-db-1-postgres-16:sp-" + undo.ID.String()
 	mock.InOrder(
 		expectRecordRead(repo, undo),
 		images.On("RestoreWritableLayer", mock.Anything, model.WritableLayerRestoreRequest{
-			SnapshotID: undo.ID, Layer: demoWritableLayer(), Tag: tag,
-		}).Return(model.WritableLayerRestoreResult{Service: demoService, Replica: 1, Tag: tag}, nil).Once(),
+			SnapshotID: undo.ID, Layer: composetest.DemoWritableLayer(), Tag: tag,
+		}).Return(model.WritableLayerRestoreResult{Service: composetest.DemoService, Replica: 1, Tag: tag}, nil).Once(),
 	)
 	svc := New(Deps{SavepointRepo: repo, ImageBackend: images})
-	held := heldWorkload{service: svc, plan: captureplan.Plan{Project: demoTargetSpec, Volumes: []model.VolumeSnapshotBackend{backend}}}
+	held := heldWorkload{service: svc, plan: captureplan.Plan{Project: composetest.DemoTargetSpec, Volumes: []model.VolumeSnapshotBackend{backend}}}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
 	// Act
-	prepared, err := held.PrepareSavepoint(ctx, undo.ID, provider.PrepareOptions{Deployment: demoDeployment(undo)})
+	prepared, err := held.PrepareSavepoint(ctx, undo.ID, provider.PrepareOptions{Deployment: composetest.DemoDeployment(undo)})
 
 	// Assert
 	require.NoError(t, err)
 	target := prepared.(preparedSavepoint)
-	assert.Equal(t, tag, target.project.Services[demoService].Image)
+	assert.Equal(t, tag, target.project.Services[composetest.DemoService].Image)
 	assert.Equal(t, []model.VolumeSnapshotBackend{backend}, target.backends)
-	assert.Equal(t, demoDeployment(undo), target.deployment)
+	assert.Equal(t, composetest.DemoDeployment(undo), target.deployment)
 	repo.AssertExpectations(t)
 	images.AssertExpectations(t)
 }
@@ -413,10 +413,10 @@ func TestHeld_PrepareSavepoint(t *testing.T) {
 func TestHeld_Teardown_FailedDown(t *testing.T) {
 	// Arrange
 	runner := &composetest.MockComposeRunner{}
-	runner.On("Down", mock.Anything, demoSpec).Return(errors.New("boom")).Once()
+	runner.On("Down", mock.Anything, composetest.DemoSpec).Return(errors.New("boom")).Once()
 	holding := heldWorkload{
 		service: New(Deps{ComposeRunner: runner}),
-		plan:    captureplan.Plan{Project: demoSpec},
+		plan:    captureplan.Plan{Project: composetest.DemoSpec},
 	}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -435,7 +435,7 @@ func TestHeld_Teardown_CarriesTheAnonymousVolumes(t *testing.T) {
 	// Arrange
 	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
 	introspection := model.IntrospectionResult{Project: model.Project{
-		Name: demoProject,
+		Name: composetest.DemoProject,
 		Services: []model.Service{{
 			Name: "app",
 			Volumes: []model.ServiceVolume{
@@ -444,17 +444,17 @@ func TestHeld_Teardown_CarriesTheAnonymousVolumes(t *testing.T) {
 			Containers: []model.Container{{Name: "demo-app-1", Number: 1}},
 		}},
 	}}
-	record := demoRecord()
+	record := composetest.DemoRecord()
 	record.Stats = []model.SnapshotStat{{Volume: anonVol, Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}}
 	runner := &composetest.MockComposeRunner{}
-	remover := &mockVolumeRemover{}
+	remover := &composetest.MockVolumeRemover{}
 	mock.InOrder(
-		runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once(),
-		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
+		runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string(nil), nil).Once(),
+		runner.On("Down", mock.Anything, composetest.DemoSpec).Return(nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "9f8e7d").Return(nil).Once(),
 	)
 	svc := New(Deps{ComposeRunner: runner, VolumeRemover: remover})
-	plan := svc.newCapturePlan(captureplan.Plan{Project: demoSpec, Services: []captureplan.ServiceHold{{Service: "app"}}}, introspection)
+	plan := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: []captureplan.ServiceHold{{Service: "app"}}}, introspection)
 	ctx := zerolog.Nop().WithContext(context.Background())
 	holding, err := plan.Hold(ctx)
 	require.NoError(t, err)
@@ -475,21 +475,21 @@ func TestHeld_Teardown_CarriesTheAnonymousVolumes(t *testing.T) {
 // created since it was inspected.
 func TestHeld_Teardown(t *testing.T) {
 	// Arrange: demo_db the project owned when inspected; demo_cache appeared since.
-	introspection := demoIntrospection()
-	now := demoAbsentIntrospection()
+	introspection := composetest.DemoIntrospection()
+	now := composetest.DemoAbsentIntrospection()
 	now.Project.Volumes = append(now.Project.Volumes, model.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
 	runner := &composetest.MockComposeRunner{}
-	inspector := &mockInspector{}
-	remover := &mockVolumeRemover{}
+	inspector := &composetest.MockInspector{}
+	remover := &composetest.MockVolumeRemover{}
 	mock.InOrder(
-		runner.On("Stop", mock.Anything, demoSpec).Return([]string(nil), nil).Once(),
-		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
-		runner.On("Down", mock.Anything, demoSpec).Return(nil).Once(),
+		runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string(nil), nil).Once(),
+		runner.On("Down", mock.Anything, composetest.DemoSpec).Return(nil).Once(),
+		runner.On("Down", mock.Anything, composetest.DemoSpec).Return(nil).Once(),
 		inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
 	svc := New(Deps{ComposeRunner: runner, ComposeInspector: inspector, VolumeRemover: remover})
-	plan := svc.newCapturePlan(captureplan.Plan{Project: demoSpec, Services: []captureplan.ServiceHold{{Service: demoService}}}, introspection)
+	plan := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: []captureplan.ServiceHold{{Service: composetest.DemoService}}}, introspection)
 	ctx := zerolog.Nop().WithContext(context.Background())
 	holding, err := plan.Hold(ctx)
 	require.NoError(t, err)
@@ -511,17 +511,17 @@ func TestHeld_Teardown(t *testing.T) {
 func TestVacant_Build_LabelsTheDeployment(t *testing.T) {
 	// Arrange: no volume to restore, so only the compose calls carry the deployment.
 	target := &types.Project{
-		Name: demoProject,
+		Name: composetest.DemoProject,
 		Services: types.Services{
-			"db":  {Name: "db", Image: demoBaseImage},
+			"db":  {Name: "db", Image: composetest.DemoBaseImage},
 			"web": {Name: "web", Image: "nginx:1.27"},
 		},
-		Volumes:  types.Volumes{"db": {Name: demoVolumeName}},
+		Volumes:  types.Volumes{"db": {Name: composetest.DemoVolumeName}},
 		Networks: types.Networks{"default": {Name: "demo_default"}},
 	}
-	savepoint := demoRecord()
+	savepoint := composetest.DemoRecord()
 	savepoint.Stats = nil
-	deployment := demoDeployment(savepoint)
+	deployment := composetest.DemoDeployment(savepoint)
 	var created, started *types.Project
 	runner := &composetest.MockComposeRunner{}
 	mock.InOrder(
@@ -568,22 +568,22 @@ func TestVacant_Build_LabelsTheDeployment(t *testing.T) {
 // on its own: the container set has to be final before a volume is restored into it.
 func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 	// Arrange
-	record := demoScaledRecord()
+	record := composetest.DemoScaledRecord()
 	restoredLayers := []model.WritableLayerRestoreResult{
-		demoWritableLayerRestoreResult(),
-		{Service: demoService, Replica: 2, ContainerName: demoContainerName(2), ImageID: demoSecondImageID, Tag: demoRestoredTag(2)},
+		composetest.DemoWritableLayerRestoreResult(),
+		{Service: composetest.DemoService, Replica: 2, ContainerName: composetest.DemoContainerName(2), ImageID: composetest.DemoSecondImageID, Tag: composetest.DemoRestoredTag(2)},
 	}
-	project := retargetImages(demoTargetSpec, restoredLayers)
-	backend := composetest.NewMockBackend(demoVolume())
+	project := retargetImages(composetest.DemoTargetSpec, restoredLayers)
+	backend := composetest.NewMockBackend(composetest.DemoVolume())
 	runner := &composetest.MockComposeRunner{}
-	inspector := &mockInspector{}
-	rebuilder := &mockContainerRebuilder{}
-	target := matchRetargetedImage(demoService, demoRestoredTag(1))
+	inspector := &composetest.MockInspector{}
+	rebuilder := &composetest.MockContainerRebuilder{}
+	target := matchRetargetedImage(composetest.DemoService, composetest.DemoRestoredTag(1))
 	mock.InOrder(
 		runner.On("Create", mock.Anything, target, demoRestoredVolumes).Return(nil).Once(),
-		inspector.On("Introspect", mock.Anything).Return(demoScaledIntrospection(), nil).Once(),
-		rebuilder.On("RecreateWithImage", mock.Anything, demoSecondContainerID,
-			model.ReplicaIdentity{Name: demoContainerName(2), Number: 2}, demoRestoredTag(2)).Return("rebuilt", nil).Once(),
+		inspector.On("Introspect", mock.Anything).Return(composetest.DemoScaledIntrospection(), nil).Once(),
+		rebuilder.On("RecreateWithImage", mock.Anything, composetest.DemoSecondContainerID,
+			model.ReplicaIdentity{Name: composetest.DemoContainerName(2), Number: 2}, composetest.DemoRestoredTag(2)).Return("rebuilt", nil).Once(),
 		backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once(),
 	)
 	svc := New(Deps{ComposeRunner: runner, ComposeInspector: inspector, ContainerRebuilder: rebuilder})
@@ -593,7 +593,7 @@ func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 		project:    project,
 		restored:   restoredLayers,
 		backends:   []model.VolumeSnapshotBackend{backend},
-		deployment: demoDeployment(record),
+		deployment: composetest.DemoDeployment(record),
 	}
 	ctx := zerolog.Nop().WithContext(context.Background())
 
@@ -613,8 +613,8 @@ func TestVacant_Build_RebuildsDivergentReplicasBeforeTheRestore(t *testing.T) {
 // Every line a volume's restore logs is attributed to the volume, its backend and its savepoint.
 func TestBuilt_RestoreData_LogsAreAttributedPerVolume(t *testing.T) {
 	// Arrange
-	record := demoRecord()
-	backend := composetest.NewMockBackend(demoVolume())
+	record := composetest.DemoRecord()
+	backend := composetest.NewMockBackend(composetest.DemoVolume())
 	backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
 	built := builtWorkload{
 		vacant: vacantWorkload{service: New(Deps{})},
@@ -638,8 +638,8 @@ func TestBuilt_RestoreData_LogsAreAttributedPerVolume(t *testing.T) {
 // A volume whose restore fails fails the stage, and no restored project is handed back.
 func TestBuilt_RestoreData_FailedRestore(t *testing.T) {
 	// Arrange
-	record := demoRecord()
-	backend := composetest.NewMockBackend(demoVolume())
+	record := composetest.DemoRecord()
+	backend := composetest.NewMockBackend(composetest.DemoVolume())
 	backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(errors.New("boom")).Once()
 	building := builtWorkload{
 		vacant: vacantWorkload{service: New(Deps{})},
@@ -675,9 +675,9 @@ func TestRestored_Reap(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			record := demoRecord()
-			record.Stats = []model.SnapshotStat{{Volume: anonVol}, {Volume: demoVolume()}}
-			remover := &mockVolumeRemover{}
+			record := composetest.DemoRecord()
+			record.Stats = []model.SnapshotStat{{Volume: anonVol}, {Volume: composetest.DemoVolume()}}
+			remover := &composetest.MockVolumeRemover{}
 			remover.On("RemoveVolume", mock.Anything, "9f8e7d").Return(tt.removeErr).Once()
 			restored := restoredWorkload{
 				vacant: vacantWorkload{
@@ -709,7 +709,7 @@ func TestRestored_Reap_LogsTheRestoredLayers(t *testing.T) {
 		{name: "no layer restored"},
 		{
 			name:     "layers restored",
-			restored: []model.WritableLayerRestoreResult{demoWritableLayerRestoreResult()},
+			restored: []model.WritableLayerRestoreResult{composetest.DemoWritableLayerRestoreResult()},
 			wantLog:  true,
 		},
 	}
@@ -720,7 +720,7 @@ func TestRestored_Reap_LogsTheRestoredLayers(t *testing.T) {
 			ctx := zerolog.New(logs).WithContext(context.Background())
 			restored := restoredWorkload{
 				vacant: vacantWorkload{service: New(Deps{})},
-				target: preparedSavepoint{savepoint: demoRecord(), restored: tt.restored},
+				target: preparedSavepoint{savepoint: composetest.DemoRecord(), restored: tt.restored},
 			}
 
 			// Act
@@ -746,18 +746,18 @@ func TestVacant_Discard(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange: demo_db outlived the teardown and stays; demo_cache is the build's own.
-			now := demoAbsentIntrospection()
+			now := composetest.DemoAbsentIntrospection()
 			now.Project.Volumes = append(now.Project.Volumes, model.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
 			runner := &composetest.MockComposeRunner{}
-			inspector := &mockInspector{}
-			remover := &mockVolumeRemover{}
+			inspector := &composetest.MockInspector{}
+			remover := &composetest.MockVolumeRemover{}
 			mock.InOrder(
-				runner.On("Down", mock.Anything, demoTargetSpec).Return(tt.downErr).Once(),
+				runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(tt.downErr).Once(),
 				inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
 				remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 			)
 			svc := New(Deps{ComposeRunner: runner, ComposeInspector: inspector, VolumeRemover: remover})
-			vacant := vacantWorkload{service: svc, ownedBefore: map[string]bool{"demo_db": true}, downProject: demoTargetSpec}
+			vacant := vacantWorkload{service: svc, ownedBefore: map[string]bool{"demo_db": true}, downProject: composetest.DemoTargetSpec}
 
 			// Act
 			err := vacant.Discard(zerolog.Nop().WithContext(context.Background()))
@@ -791,8 +791,8 @@ func TestProvider_Inspect(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			inspector := &mockInspector{}
-			inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once()
+			inspector := &composetest.MockInspector{}
+			inspector.On("Introspect", mock.Anything).Return(composetest.DemoAbsentIntrospection(), nil).Once()
 			svc := New(Deps{ComposeInspector: inspector, DaemonVersion: tt.version, MinDaemonMajor: 25})
 			recorder := &composetest.StepRecorder{}
 
@@ -911,25 +911,25 @@ func TestVolumesOf(t *testing.T) {
 // never a leftover the savepoint has no copy of.
 func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 	// Arrange: demo_db outlived the project; demo_cache is the failed build's own.
-	record := demoRecord()
-	now := demoAbsentIntrospection()
+	record := composetest.DemoRecord()
+	now := composetest.DemoAbsentIntrospection()
 	now.Project.Volumes = append(now.Project.Volumes, model.NamedVolume{Key: "demo_cache", Name: "demo_cache"})
 	repo := &composetest.MockSavepointRepo{}
 	store := composetest.NewDirStore(t)
-	registry := &mockRegistry{}
-	codec := &mockCodec{}
-	inspector := &mockInspector{}
+	registry := &composetest.MockRegistry{}
+	codec := &composetest.MockCodec{}
+	inspector := &composetest.MockInspector{}
 	runner := &composetest.MockComposeRunner{}
-	remover := &mockVolumeRemover{}
+	remover := &composetest.MockVolumeRemover{}
 	mock.InOrder(
-		inspector.On("Introspect", mock.Anything).Return(demoAbsentIntrospection(), nil).Once(),
+		inspector.On("Introspect", mock.Anything).Return(composetest.DemoAbsentIntrospection(), nil).Once(),
 		expectRecordRead(repo, record),
-		registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(demoVolume()), nil).Once(),
-		repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once(),
-		codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil).Once(),
-		runner.On("Create", mock.Anything, deployedFrom(demoTargetSpec, demoDeployment(record)), demoRestoredVolumes).
+		registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once(),
+		repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+		codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
+		runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), demoRestoredVolumes).
 			Return(errors.New("create boom")).Once(),
-		runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once(),
+		runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(nil).Once(),
 		inspector.On("Introspect", mock.Anything).Return(now, nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "demo_cache").Return(nil).Once(),
 	)
@@ -940,13 +940,13 @@ func TestProvider_Inspect_DiscardsAFailedColdStart(t *testing.T) {
 		SpecCodec:        codec,
 		BackendRegistry:  registry,
 		VolumeRemover:    remover,
-		ImageLookup:      &mockImageLookup{},
+		ImageLookup:      &composetest.MockImageLookup{},
 		Store:            store,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 	live, err := svc.Inspect(ctx)
 	require.NoError(t, err)
-	prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Deployment: demoDeployment(record)})
+	prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Deployment: composetest.DemoDeployment(record)})
 	require.NoError(t, err)
 	vacant, err := live.Teardown(ctx, prepared)
 	require.NoError(t, err)
@@ -972,7 +972,7 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 	// Arrange
 	anonVol := model.Volume{ObjectID: "volume-anon-app-1-scratch", Backend: model.SnapshotBackendFullCopy}
 	introspection := model.IntrospectionResult{Project: model.Project{
-		Name: demoProject,
+		Name: composetest.DemoProject,
 		Services: []model.Service{{
 			Name: "app",
 			Volumes: []model.ServiceVolume{
@@ -981,26 +981,26 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 			Containers: []model.Container{{Name: "demo-app-1", Number: 1}},
 		}},
 	}}
-	record := demoRecord()
+	record := composetest.DemoRecord()
 	record.Stats = []model.SnapshotStat{{Volume: anonVol, Type: model.SnapshotBackendFullCopy, Payload: "sp-payload"}}
 	backend := composetest.NewMockBackend(anonVol)
 	repo := &composetest.MockSavepointRepo{}
 	store := composetest.NewDirStore(t)
-	registry := &mockRegistry{}
-	codec := &mockCodec{}
-	inspector := &mockInspector{}
+	registry := &composetest.MockRegistry{}
+	codec := &composetest.MockCodec{}
+	inspector := &composetest.MockInspector{}
 	runner := &composetest.MockComposeRunner{}
-	remover := &mockVolumeRemover{}
+	remover := &composetest.MockVolumeRemover{}
 	mock.InOrder(
 		inspector.On("Introspect", mock.Anything).Return(introspection, nil).Once(),
 		expectRecordRead(repo, record),
-		registry.On("New", matchSpec(store, anonVol.ObjectID)).Return(backend, nil).Once(),
-		repo.On("LoadSpec", mock.Anything, record.ID).Return(demoTargetSpecBytes, nil).Once(),
-		codec.On("Parse", mock.Anything, demoTargetSpecBytes).Return(demoTargetSpec, nil).Once(),
-		runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once(),
-		runner.On("Create", mock.Anything, deployedFrom(demoTargetSpec, demoDeployment(record)), []string(nil)).Return(nil).Once(),
+		registry.On("New", composetest.MatchSpec(store, anonVol.ObjectID)).Return(backend, nil).Once(),
+		repo.On("LoadSpec", mock.Anything, record.ID).Return(composetest.DemoTargetSpecBytes, nil).Once(),
+		codec.On("Parse", mock.Anything, composetest.DemoTargetSpecBytes).Return(composetest.DemoTargetSpec, nil).Once(),
+		runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(nil).Once(),
+		runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), []string(nil)).Return(nil).Once(),
 		backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once(),
-		runner.On("Start", mock.Anything, deployedFrom(demoTargetSpec, demoDeployment(record)), time.Minute).Return(nil).Once(),
+		runner.On("Start", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), time.Minute).Return(nil).Once(),
 		remover.On("RemoveVolume", mock.Anything, "9f8e7d").Return(nil).Once(),
 	)
 	svc := New(Deps{
@@ -1010,13 +1010,13 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 		SpecCodec:        codec,
 		BackendRegistry:  registry,
 		VolumeRemover:    remover,
-		ImageLookup:      &mockImageLookup{},
+		ImageLookup:      &composetest.MockImageLookup{},
 		Store:            store,
 	})
 	ctx := zerolog.Nop().WithContext(context.Background())
 	live, err := svc.Inspect(ctx)
 	require.NoError(t, err)
-	prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Deployment: demoDeployment(record)})
+	prepared, err := live.PrepareSavepoint(ctx, record.ID, provider.PrepareOptions{Deployment: composetest.DemoDeployment(record)})
 	require.NoError(t, err)
 	vacant, err := live.Teardown(ctx, prepared)
 	require.NoError(t, err)
@@ -1043,20 +1043,20 @@ func TestProvider_Inspect_ReapsTheOrphanedAnonymousVolume(t *testing.T) {
 // operation and per volume restored.
 func TestVacant_Build_Progress(t *testing.T) {
 	// Arrange
-	record := demoRecord()
-	backend := composetest.NewMockBackend(demoVolume())
+	record := composetest.DemoRecord()
+	backend := composetest.NewMockBackend(composetest.DemoVolume())
 	backend.On("Restore", mock.Anything, newRestoreOf(record)).Return(nil).Once()
 	runner := &composetest.MockComposeRunner{}
-	runner.On("Down", mock.Anything, demoTargetSpec).Return(nil).Once()
-	runner.On("Create", mock.Anything, deployedFrom(demoTargetSpec, demoDeployment(record)), demoRestoredVolumes).Return(nil).Once()
-	runner.On("Start", mock.Anything, deployedFrom(demoTargetSpec, demoDeployment(record)), time.Minute).Return(nil).Once()
+	runner.On("Down", mock.Anything, composetest.DemoTargetSpec).Return(nil).Once()
+	runner.On("Create", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), demoRestoredVolumes).Return(nil).Once()
+	runner.On("Start", mock.Anything, composetest.DeployedFrom(composetest.DemoTargetSpec, composetest.DemoDeployment(record)), time.Minute).Return(nil).Once()
 	svc := New(Deps{ComposeRunner: runner})
-	held := heldWorkload{service: svc, plan: captureplan.Plan{Project: demoTargetSpec}}
+	held := heldWorkload{service: svc, plan: captureplan.Plan{Project: composetest.DemoTargetSpec}}
 	prepared := preparedSavepoint{
 		savepoint:  record,
-		project:    demoTargetSpec,
+		project:    composetest.DemoTargetSpec,
 		backends:   []model.VolumeSnapshotBackend{backend},
-		deployment: demoDeployment(record),
+		deployment: composetest.DemoDeployment(record),
 	}
 	recorder := &composetest.StepRecorder{}
 	ctx := composetest.NewProgressContext(recorder)

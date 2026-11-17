@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compose
+package composetest
 
 import (
 	"context"
@@ -22,102 +22,101 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 )
 
 // Every mock forwards all of its seam's arguments to Called, ctx included;
 // tests match ctx with mock.Anything unless they assert on it.
 
-const demoVolumeName = "demo_db"
+const DemoVolumeName = "demo_db"
 
 var (
-	demoSpec      = &types.Project{Name: "demo"}
-	demoSpecBytes = []byte("name: demo\n")
+	DemoSpec      = &types.Project{Name: "demo"}
+	DemoSpecBytes = []byte("name: demo\n")
 )
 
-// demoVolume is the unit, in the form the mock tests address it by.
-func demoVolume() model.Volume {
+// DemoVolume is the unit, in the form the mock tests address it by.
+func DemoVolume() model.Volume {
 	return model.Volume{
-		ObjectID: "volume-named-" + demoVolumeName,
+		ObjectID: "volume-named-" + DemoVolumeName,
 		Backend:  model.SnapshotBackendFullCopy,
-		Named:    &model.VolumePropertiesNamed{VolumeName: demoVolumeName},
+		Named:    &model.VolumePropertiesNamed{VolumeName: DemoVolumeName},
 	}
 }
 
-// mockInspector doubles composeIntrospector.
-type mockInspector struct{ mock.Mock }
+// MockInspector doubles composeIntrospector.
+type MockInspector struct{ mock.Mock }
 
-func (m *mockInspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
+func (m *MockInspector) Introspect(ctx context.Context) (model.IntrospectionResult, error) {
 	args := m.Called(ctx)
 	introspection, _ := args.Get(0).(model.IntrospectionResult)
 	return introspection, args.Error(1)
 }
 
-// mockVolumeRemover doubles volumeRemover.
-type mockVolumeRemover struct{ mock.Mock }
+// MockVolumeRemover doubles volumeRemover.
+type MockVolumeRemover struct{ mock.Mock }
 
-func (m *mockVolumeRemover) RemoveVolume(ctx context.Context, name string) error {
+func (m *MockVolumeRemover) RemoveVolume(ctx context.Context, name string) error {
 	return m.Called(ctx, name).Error(0)
 }
 
-// mockContainerRebuilder doubles containerRebuilder.
-type mockContainerRebuilder struct{ mock.Mock }
+// MockContainerRebuilder doubles containerRebuilder.
+type MockContainerRebuilder struct{ mock.Mock }
 
-func (m *mockContainerRebuilder) RecreateWithImage(
+func (m *MockContainerRebuilder) RecreateWithImage(
 	ctx context.Context, containerID string, as model.ReplicaIdentity, imageRef string,
 ) (string, error) {
 	args := m.Called(ctx, containerID, as, imageRef)
 	return args.String(0), args.Error(1)
 }
 
-// mockImageLookup doubles imageLookup.
-type mockImageLookup struct{ mock.Mock }
+// MockImageLookup doubles imageLookup.
+type MockImageLookup struct{ mock.Mock }
 
-func (m *mockImageLookup) ImageRefExists(ctx context.Context, ref string) (bool, error) {
+func (m *MockImageLookup) ImageRefExists(ctx context.Context, ref string) (bool, error) {
 	args := m.Called(ctx, ref)
 	return args.Bool(0), args.Error(1)
 }
 
-type mockAssembler struct{ mock.Mock }
+type MockAssembler struct{ mock.Mock }
 
-func (m *mockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
+func (m *MockAssembler) Assemble(ctx context.Context, introspection model.IntrospectionResult) (*types.Project, error) {
 	args := m.Called(ctx, introspection)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)
 }
 
-type mockCodec struct{ mock.Mock }
+type MockCodec struct{ mock.Mock }
 
-func (m *mockCodec) Marshal(project *types.Project) ([]byte, error) {
+func (m *MockCodec) Marshal(project *types.Project) ([]byte, error) {
 	args := m.Called(project)
 	spec, _ := args.Get(0).([]byte)
 	return spec, args.Error(1)
 }
 
-func (m *mockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
+func (m *MockCodec) Parse(ctx context.Context, spec []byte) (*types.Project, error) {
 	args := m.Called(ctx, spec)
 	project, _ := args.Get(0).(*types.Project)
 	return project, args.Error(1)
 }
 
-type mockRegistry struct{ mock.Mock }
+type MockRegistry struct{ mock.Mock }
 
-func (m *mockRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
+func (m *MockRegistry) New(spec model.BackendSpec) (model.VolumeSnapshotBackend, error) {
 	args := m.Called(spec)
 	backend, _ := args.Get(0).(model.VolumeSnapshotBackend)
 	return backend, args.Error(1)
 }
 
-// matchSpec matches a backend built for objectID over store.
-func matchSpec(store storages.Storager, objectID string) any {
+// MatchSpec matches a backend built for objectID over store.
+func MatchSpec(store storages.Storager, objectID string) any {
 	return mock.MatchedBy(func(spec model.BackendSpec) bool {
 		return spec.Store == store && spec.Volume.ObjectID == objectID
 	})
 }
 
-// expectSpecCommit declares the artifact a capture writes before its record, under an id
+// ExpectSpecCommit declares the artifact a capture writes before its record, under an id
 // off the clock that passes the gate.
-func expectSpecCommit(repo *composetest.MockSavepointRepo) *mock.Call {
+func ExpectSpecCommit(repo *MockSavepointRepo) *mock.Call {
 	validID := mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil })
-	return repo.On("SaveSpec", mock.Anything, validID, demoSpecBytes).Return(nil).Once()
+	return repo.On("SaveSpec", mock.Anything, validID, DemoSpecBytes).Return(nil).Once()
 }

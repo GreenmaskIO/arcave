@@ -52,12 +52,12 @@ func TestCapturePlan_Hold(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			runner := &composetest.MockComposeRunner{}
-			runner.On("Stop", mock.Anything, demoSpec).Return([]string{"c1"}, tt.stopErr).Once()
+			runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string{"c1"}, tt.stopErr).Once()
 			svc := New(Deps{ComposeRunner: runner})
 			recorder := &composetest.StepRecorder{}
 
 			// Act
-			holding, err := svc.newCapturePlan(captureplan.Plan{Project: demoSpec, Services: stopServices}, model.IntrospectionResult{}).Hold(composetest.NewProgressContext(recorder))
+			holding, err := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Hold(composetest.NewProgressContext(recorder))
 
 			// Assert
 			if tt.wantErr == "" {
@@ -78,9 +78,9 @@ func TestCapturePlan_Hold(t *testing.T) {
 func TestHeld_Capture(t *testing.T) {
 	// Arrange
 	runner := &composetest.MockComposeRunner{}
-	stop := runner.On("Stop", mock.Anything, demoSpec).Return([]string{demoContainerID}, nil).Once()
+	stop := runner.On("Stop", mock.Anything, composetest.DemoSpec).Return([]string{composetest.DemoContainerID}, nil).Once()
 	repo := &composetest.MockSavepointRepo{}
-	spec := expectSpecCommit(repo)
+	spec := composetest.ExpectSpecCommit(repo)
 	var committed model.Savepoint
 	commit := repo.On("SaveSavepoint", mock.Anything, mock.MatchedBy(func(savepoint model.Savepoint) bool {
 		return savepoint.ID.Validate() == nil
@@ -92,10 +92,10 @@ func TestHeld_Capture(t *testing.T) {
 		Store:         composetest.NewDirStore(t),
 	})
 	plan := captureplan.Plan{
-		Project:    demoSpec,
-		Spec:       demoSpecBytes,
+		Project:    composetest.DemoSpec,
+		Spec:       composetest.DemoSpecBytes,
 		Services:   stopServices,
-		Containers: []model.ContainerRef{demoContainerRef()},
+		Containers: []model.ContainerRef{composetest.DemoContainerRef()},
 	}
 	ctx := composetest.NewTestContext()
 	holding, err := svc.newCapturePlan(plan, model.IntrospectionResult{}).Hold(ctx)
@@ -109,7 +109,7 @@ func TestHeld_Capture(t *testing.T) {
 	// Assert
 	require.NoError(t, err)
 	require.NotNil(t, committed.NotCovered)
-	assert.Equal(t, []model.KilledContainer{{Service: demoService, Replica: 1, Container: "demo-db-1"}},
+	assert.Equal(t, []model.KilledContainer{{Service: composetest.DemoService, Replica: 1, Container: "demo-db-1"}},
 		committed.NotCovered.KilledContainers)
 	runner.AssertExpectations(t)
 	repo.AssertExpectations(t)
@@ -136,13 +136,13 @@ func TestCapturePlan_Release(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			runner := &composetest.MockComposeRunner{}
-			runner.On("Start", mock.Anything, demoSpec, time.Minute).Return(tt.startErr).Once()
+			runner.On("Start", mock.Anything, composetest.DemoSpec, time.Minute).Return(tt.startErr).Once()
 			svc := New(Deps{ComposeRunner: runner})
 			recorder := &composetest.StepRecorder{}
 			ctx := composetest.NewProgressContext(recorder)
 
 			// Act
-			err := svc.newCapturePlan(captureplan.Plan{Project: demoSpec, Services: stopServices}, model.IntrospectionResult{}).Release(ctx, time.Minute)
+			err := svc.newCapturePlan(captureplan.Plan{Project: composetest.DemoSpec, Services: stopServices}, model.IntrospectionResult{}).Release(ctx, time.Minute)
 
 			// Assert
 			if tt.wantErr == "" {
@@ -193,18 +193,18 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 			control := &composetest.MockContainerControl{}
 			repo := &composetest.MockSavepointRepo{}
 			calls := []*mock.Call{
-				runner.On("StopServices", mock.Anything, demoSpec, []string{"db"}).Return(nil, nil).Once(),
+				runner.On("StopServices", mock.Anything, composetest.DemoSpec, []string{"db"}).Return(nil, nil).Once(),
 				control.On("PauseContainers", mock.Anything, []string{"web1"}).Return(tt.pauseErr).Once(),
 			}
 			if tt.pauseErr == nil {
-				calls = append(calls, repo.On("SaveSpec", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil }), demoSpecBytes).
+				calls = append(calls, repo.On("SaveSpec", mock.Anything, mock.MatchedBy(func(id model.SavepointID) bool { return id.Validate() == nil }), composetest.DemoSpecBytes).
 					Return(tt.specErr).Once())
 			}
 			calls = append(calls,
 				control.On("UnpauseContainers", mock.Anything, []string{"worker1"}).Return(nil).Once(),
 				control.On("UnpauseContainers", mock.Anything, []string{"web1", "web2"}).Return(nil).Once(),
 				control.On("AwaitHealthProbes", mock.Anything, []string{"web1", "web2", "worker1"}).Return(nil).Once(),
-				runner.On("Start", mock.Anything, demoSpec, time.Minute).Return(nil).Once(),
+				runner.On("Start", mock.Anything, composetest.DemoSpec, time.Minute).Return(nil).Once(),
 			)
 			mock.InOrder(calls...)
 			svc := New(Deps{
@@ -214,8 +214,8 @@ func TestCapturePlan_HoldCaptureRelease(t *testing.T) {
 				Store:            composetest.NewDirStore(t),
 			})
 			plan := svc.newCapturePlan(captureplan.Plan{
-				Project:  demoSpec,
-				Spec:     demoSpecBytes,
+				Project:  composetest.DemoSpec,
+				Spec:     composetest.DemoSpecBytes,
 				Services: services,
 			}, model.IntrospectionResult{})
 			ctx := composetest.NewTestContext()

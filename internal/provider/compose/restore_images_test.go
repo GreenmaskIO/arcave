@@ -167,21 +167,21 @@ func TestNewReplicaPairs(t *testing.T) {
 // The service's one image is its lowest recorded replica's, whether or not that is 1.
 func TestRetargetImages_LowestRecordedReplica(t *testing.T) {
 	// Arrange
-	project := &types.Project{Name: demoProject, Services: types.Services{
-		demoService: {Name: demoService, Image: demoBaseImage},
+	project := &types.Project{Name: composetest.DemoProject, Services: types.Services{
+		composetest.DemoService: {Name: composetest.DemoService, Image: composetest.DemoBaseImage},
 	}}
 	restored := []model.WritableLayerRestoreResult{
-		{Service: demoService, Replica: 3, Tag: demoRestoredTag(3)},
-		{Service: demoService, Replica: 2, Tag: demoRestoredTag(2)},
+		{Service: composetest.DemoService, Replica: 3, Tag: composetest.DemoRestoredTag(3)},
+		{Service: composetest.DemoService, Replica: 2, Tag: composetest.DemoRestoredTag(2)},
 	}
 
 	// Act
 	got := retargetImages(project, restored)
 
 	// Assert
-	assert.Equal(t, demoRestoredTag(2), got.Services[demoService].Image)
-	assert.Equal(t, types.PullPolicyNever, got.Services[demoService].PullPolicy)
-	assert.Equal(t, demoBaseImage, project.Services[demoService].Image, "the input project is left alone")
+	assert.Equal(t, composetest.DemoRestoredTag(2), got.Services[composetest.DemoService].Image)
+	assert.Equal(t, types.PullPolicyNever, got.Services[composetest.DemoService].PullPolicy)
+	assert.Equal(t, composetest.DemoBaseImage, project.Services[composetest.DemoService].Image, "the input project is left alone")
 }
 
 func TestProvider_rebuildDivergentReplicas(t *testing.T) {
@@ -230,27 +230,27 @@ func TestProvider_rebuildDivergentReplicas(t *testing.T) {
 			// Arrange
 			replicas := make([]recordedReplica, 0, len(tt.recorded))
 			for _, n := range tt.recorded {
-				ref := demoRestoredTag(n)
+				ref := composetest.DemoRestoredTag(n)
 				if tt.sameImage {
-					ref = demoRestoredTag(tt.recorded[0])
+					ref = composetest.DemoRestoredTag(tt.recorded[0])
 				}
 				replicas = append(replicas, recordedReplica{
-					service: demoService, number: n, containerName: demoContainerName(n), image: ref,
+					service: composetest.DemoService, number: n, containerName: composetest.DemoContainerName(n), image: ref,
 				})
 			}
-			built := demoIntrospection()
-			svc := model.Service{Name: demoService}
+			built := composetest.DemoIntrospection()
+			svc := model.Service{Name: composetest.DemoService}
 			for _, n := range tt.created {
 				svc.Containers = append(svc.Containers, model.Container{ID: createdID(n), Number: n})
 			}
 			built.Project.Services = []model.Service{svc}
-			inspector := &mockInspector{}
+			inspector := &composetest.MockInspector{}
 			inspector.On("Introspect", mock.Anything).Return(built, nil).Once()
-			rebuilder := &mockContainerRebuilder{}
+			rebuilder := &composetest.MockContainerRebuilder{}
 			calls := make([]*mock.Call, 0, len(tt.want))
 			for _, w := range tt.want {
 				calls = append(calls, rebuilder.On("RecreateWithImage", mock.Anything, createdID(w.created),
-					model.ReplicaIdentity{Name: demoContainerName(w.recorded), Number: w.recorded},
+					model.ReplicaIdentity{Name: composetest.DemoContainerName(w.recorded), Number: w.recorded},
 					imageOf(replicas, w.recorded)).
 					Return("rebuilt", nil).Once())
 			}
@@ -278,12 +278,12 @@ func TestProvider_rebuildDivergentReplicas(t *testing.T) {
 // not even a look at what was created.
 func TestProvider_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 	// Arrange
-	inspector := &mockInspector{}
-	rebuilder := &mockContainerRebuilder{}
+	inspector := &composetest.MockInspector{}
+	rebuilder := &composetest.MockContainerRebuilder{}
 	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	replicas := []recordedReplica{
-		{service: demoService, number: 2, image: demoRestoredTag(1)},
-		{service: demoService, number: 1, image: demoRestoredTag(1)},
+		{service: composetest.DemoService, number: 2, image: composetest.DemoRestoredTag(1)},
+		{service: composetest.DemoService, number: 1, image: composetest.DemoRestoredTag(1)},
 	}
 
 	// Act
@@ -297,23 +297,23 @@ func TestProvider_rebuildDivergentReplicas_CreatedAsRecorded(t *testing.T) {
 
 func TestProvider_rebuildDivergentReplicas_WarnsOnARenumberedReplica(t *testing.T) {
 	// Arrange
-	built := demoIntrospection()
-	built.Project.Services = []model.Service{{Name: demoService, Containers: []model.Container{
+	built := composetest.DemoIntrospection()
+	built.Project.Services = []model.Service{{Name: composetest.DemoService, Containers: []model.Container{
 		{ID: createdID(1), Number: 1}, {ID: createdID(2), Number: 2},
 	}}}
-	inspector := &mockInspector{}
+	inspector := &composetest.MockInspector{}
 	inspector.On("Introspect", mock.Anything).Return(built, nil).Once()
-	rebuilder := &mockContainerRebuilder{}
+	rebuilder := &composetest.MockContainerRebuilder{}
 	rebuilder.On("RecreateWithImage", mock.Anything, createdID(2),
-		model.ReplicaIdentity{Name: demoContainerName(3), Number: 3}, demoRestoredTag(3)).Return("rebuilt", nil).Once()
+		model.ReplicaIdentity{Name: composetest.DemoContainerName(3), Number: 3}, composetest.DemoRestoredTag(3)).Return("rebuilt", nil).Once()
 	s := New(Deps{ComposeInspector: inspector, ContainerRebuilder: rebuilder})
 	logs := &composetest.SyncBuffer{}
 	ctx := zerolog.New(logs).WithContext(context.Background())
 
 	// Act
 	err := s.rebuildDivergentReplicas(ctx, []recordedReplica{
-		{service: demoService, number: 1, containerName: demoContainerName(1), image: demoRestoredTag(1)},
-		{service: demoService, number: 3, containerName: demoContainerName(3), image: demoRestoredTag(3)},
+		{service: composetest.DemoService, number: 1, containerName: composetest.DemoContainerName(1), image: composetest.DemoRestoredTag(1)},
+		{service: composetest.DemoService, number: 3, containerName: composetest.DemoContainerName(3), image: composetest.DemoRestoredTag(3)},
 	})
 
 	// Assert
@@ -355,7 +355,7 @@ func TestProvider_requireImages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			project := &types.Project{Services: types.Services{"db": {Name: "db", Image: "local:1", PullPolicy: tt.policy}}}
-			lookup := &mockImageLookup{}
+			lookup := &composetest.MockImageLookup{}
 			if tt.present != nil {
 				lookup.On("ImageRefExists", mock.Anything, "local:1").Return(*tt.present, nil).Once()
 			}

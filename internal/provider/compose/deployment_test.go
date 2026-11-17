@@ -22,12 +22,13 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/utils/composetest"
 )
 
 func TestNewDeployedReplicas(t *testing.T) {
 	// Arrange
 	scaleTwo, scaleZero := 2, 0
-	project := &types.Project{Name: demoProject, Services: types.Services{
+	project := &types.Project{Name: composetest.DemoProject, Services: types.Services{
 		"db":      {Name: "db"},
 		"web":     {Name: "web", Scale: &scaleTwo},
 		"app":     {Name: "app"},
@@ -55,11 +56,11 @@ func TestNewDeployedReplicas(t *testing.T) {
 func TestWithDeploymentLabels(t *testing.T) {
 	// Arrange
 	project := &types.Project{
-		Name: demoProject,
+		Name: composetest.DemoProject,
 		Services: types.Services{
-			demoService: {Name: demoService, Labels: types.Labels{"keep": "me"}},
+			composetest.DemoService: {Name: composetest.DemoService, Labels: types.Labels{"keep": "me"}},
 		},
-		Volumes:  types.Volumes{"db": {Name: demoVolumeName}},
+		Volumes:  types.Volumes{"db": {Name: composetest.DemoVolumeName}},
 		Networks: types.Networks{"default": {Name: "demo_default"}},
 	}
 
@@ -68,8 +69,8 @@ func TestWithDeploymentLabels(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, types.Labels{"keep": "me", string(model.SystemLabelDeploymentSavepointID): "id"},
-		labeled.Services[demoService].Labels)
-	assert.Equal(t, types.Labels{"keep": "me"}, project.Services[demoService].Labels, "the project handed in is left as it is")
+		labeled.Services[composetest.DemoService].Labels)
+	assert.Equal(t, types.Labels{"keep": "me"}, project.Services[composetest.DemoService].Labels, "the project handed in is left as it is")
 	assert.Nil(t, labeled.Volumes["db"].Labels, "a volume's labels are in compose's config hash")
 	assert.Nil(t, labeled.Networks["default"].Labels, "and so are a network's")
 }
@@ -89,7 +90,7 @@ func matchDeploymentOf(target *types.Project) func(*types.Project) bool {
 			}
 		}
 		return len(project.Services) == len(target.Services) &&
-			assert.ObjectsAreEqual(target, withoutDeploymentLabels(project))
+			assert.ObjectsAreEqual(target, composetest.WithoutDeploymentLabels(project))
 	}
 }
 

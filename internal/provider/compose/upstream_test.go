@@ -47,14 +47,14 @@ func TestNewContainerRefs(t *testing.T) {
 	}{
 		{
 			name:  "a container on its upstream",
-			image: demoUpstreamID, ref: demoBaseImage,
-			wantID: demoUpstreamID, want: demoBaseImage,
+			image: composetest.DemoUpstreamID, ref: composetest.DemoBaseImage,
+			wantID: composetest.DemoUpstreamID, want: composetest.DemoBaseImage,
 		},
 		{
 			name:  "a layer naming its upstream by label",
 			image: layerID, ref: layerRef,
-			labels: map[string]string{string(model.SystemLabelBaseImageID): demoUpstreamID.String(), string(model.SystemLabelBaseImageRef): demoBaseImage},
-			wantID: demoUpstreamID, want: demoBaseImage,
+			labels: map[string]string{string(model.SystemLabelBaseImageID): composetest.DemoUpstreamID.String(), string(model.SystemLabelBaseImageRef): composetest.DemoBaseImage},
+			wantID: composetest.DemoUpstreamID, want: composetest.DemoBaseImage,
 		},
 		{
 			name:  "a layer whose label is no digest",
@@ -70,9 +70,9 @@ func TestNewContainerRefs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			introspection := demoIntrospection()
-			introspection.Project.Services = []model.Service{{Name: demoService, Containers: []model.Container{{
-				ID: demoContainerID, Number: 1,
+			introspection := composetest.DemoIntrospection()
+			introspection.Project.Services = []model.Service{{Name: composetest.DemoService, Containers: []model.Container{{
+				ID: composetest.DemoContainerID, Number: 1,
 				Inspect: container.InspectResponse{
 					Image:  tt.image.String(),
 					Config: &container.Config{Image: tt.ref},
@@ -91,7 +91,7 @@ func TestNewContainerRefs(t *testing.T) {
 
 			// Assert
 			assert.Equal(t, []model.ContainerRef{{
-				Service: demoService, Replica: 1, ID: demoContainerID,
+				Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID,
 				UpstreamImageID: tt.wantID, UpstreamImageRef: tt.want,
 			}}, got)
 		})
@@ -100,9 +100,9 @@ func TestNewContainerRefs(t *testing.T) {
 
 func TestNewUnresolvedImages(t *testing.T) {
 	// Arrange
-	introspection := demoIntrospectionWithContainers()
-	resolved := demoContainerRef()
-	unresolved := model.ContainerRef{Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1)}
+	introspection := composetest.DemoIntrospectionWithContainers()
+	resolved := composetest.DemoContainerRef()
+	unresolved := model.ContainerRef{Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID, Name: composetest.DemoContainerName(1)}
 
 	// Act
 	none := newUnresolvedImages(introspection, []model.ContainerRef{resolved})
@@ -111,7 +111,7 @@ func TestNewUnresolvedImages(t *testing.T) {
 	// Assert
 	assert.Nil(t, none)
 	assert.Equal(t, []model.UnresolvedImage{{
-		Service: demoService, Replica: 1, Container: demoContainerName(1), Image: demoBaseImage,
+		Service: composetest.DemoService, Replica: 1, Container: composetest.DemoContainerName(1), Image: composetest.DemoBaseImage,
 	}}, got)
 }
 
@@ -119,10 +119,10 @@ func TestNewImageCaptures(t *testing.T) {
 	// Arrange: two replicas on one upstream, one on an upstream gone from the daemon,
 	// one that cannot be traced.
 	goneID := model.ImageDigestID("sha256:9999999999999999999999999999999999999999999999999999999999999999")
-	introspection := demoIntrospectionWithContainers()
+	introspection := composetest.DemoIntrospectionWithContainers()
 	containers := []model.ContainerRef{
-		{Service: demoService, Replica: 1, UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage},
-		{Service: demoService, Replica: 2, UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage},
+		{Service: composetest.DemoService, Replica: 1, UpstreamImageID: composetest.DemoUpstreamID, UpstreamImageRef: composetest.DemoBaseImage},
+		{Service: composetest.DemoService, Replica: 2, UpstreamImageID: composetest.DemoUpstreamID, UpstreamImageRef: composetest.DemoBaseImage},
 		{Service: "cache", Replica: 1, UpstreamImageID: goneID, UpstreamImageRef: "redis:7"},
 		{Service: "app", Replica: 1, UpstreamImageRef: "app:dev"},
 	}
@@ -132,7 +132,7 @@ func TestNewImageCaptures(t *testing.T) {
 
 	// Assert
 	assert.Equal(t, []model.ImageCaptureRequest{
-		demoImageCaptureRequest(),
+		composetest.DemoImageCaptureRequest(),
 		{Image: model.Image{ID: goneID, Refs: []string{"redis:7"}}},
 	}, got)
 }
@@ -184,12 +184,12 @@ func TestWarnOnComposeImageMismatch(t *testing.T) {
 // container's own already carries named once.
 func TestNewImageCaptures_PodmanRepoTags(t *testing.T) {
 	// Arrange
-	introspection := demoIntrospectionWithContainers()
-	upstream := introspection.Images[demoUpstreamID]
-	upstream.RepoTags = []string{"docker.io/library/" + demoBaseImage, "registry:5000/mirror/postgres:16"}
-	introspection.Images[demoUpstreamID] = upstream
+	introspection := composetest.DemoIntrospectionWithContainers()
+	upstream := introspection.Images[composetest.DemoUpstreamID]
+	upstream.RepoTags = []string{"docker.io/library/" + composetest.DemoBaseImage, "registry:5000/mirror/postgres:16"}
+	introspection.Images[composetest.DemoUpstreamID] = upstream
 	containers := []model.ContainerRef{
-		{Service: demoService, Replica: 1, UpstreamImageID: demoUpstreamID, UpstreamImageRef: demoBaseImage},
+		{Service: composetest.DemoService, Replica: 1, UpstreamImageID: composetest.DemoUpstreamID, UpstreamImageRef: composetest.DemoBaseImage},
 	}
 
 	// Act
@@ -197,5 +197,5 @@ func TestNewImageCaptures_PodmanRepoTags(t *testing.T) {
 
 	// Assert
 	require.Len(t, got, 1)
-	assert.Equal(t, []string{demoBaseImage, "registry:5000/mirror/postgres:16"}, got[0].Image.Refs)
+	assert.Equal(t, []string{composetest.DemoBaseImage, "registry:5000/mirror/postgres:16"}, got[0].Image.Refs)
 }

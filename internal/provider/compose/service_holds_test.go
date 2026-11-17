@@ -110,7 +110,7 @@ func TestNewServiceHolds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			introspection := model.IntrospectionResult{Project: model.Project{Name: demoProject, Services: tt.services}}
+			introspection := model.IntrospectionResult{Project: model.Project{Name: composetest.DemoProject, Services: tt.services}}
 
 			// Act
 			holds := newServiceHolds(introspection, tt.policy)
@@ -136,18 +136,18 @@ func TestProvider_newReplacementPolicy_StopsEveryService(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			defaults := demoCaptureDefaults
+			defaults := composetest.DemoCaptureDefaults
 			defaults.Mode = tt.mode
 			svc := New(Deps{CaptureDefaults: defaults})
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			policy, _, err := svc.newReplacementPolicy(ctx, labelledIntrospection(tt.labels), demoRecord())
+			policy, _, err := svc.newReplacementPolicy(ctx, composetest.LabelledIntrospection(tt.labels), composetest.DemoRecord())
 
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, model.CaptureModeStop, policy.Mode)
-			assert.Equal(t, model.CaptureModeStop, policy.DecideService(demoService).Mode)
+			assert.Equal(t, model.CaptureModeStop, policy.DecideService(composetest.DemoService).Mode)
 			assert.Equal(t, model.CaptureModeStop, policy.DecideService("unlabelled").Mode)
 		})
 	}
@@ -168,15 +168,15 @@ func TestProvider_BuildPlan_HoldsEachServiceByItsMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			introspection := labelledIntrospection(tt.labels)
+			introspection := composetest.LabelledIntrospection(tt.labels)
 			store := composetest.NewDirStore(t)
-			registry := &mockRegistry{}
-			registry.On("New", matchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(demoVolume()), nil).Once()
-			defaults := demoCaptureDefaults
+			registry := &composetest.MockRegistry{}
+			registry.On("New", composetest.MatchSpec(store, "volume-named-demo_db")).Return(composetest.NewMockBackend(composetest.DemoVolume()), nil).Once()
+			defaults := composetest.DemoCaptureDefaults
 			defaults.Mode = tt.configMode
 			svc := New(Deps{
-				ProjectAssembler: assemblerFor(introspection),
-				SpecCodec:        demoCodec(),
+				ProjectAssembler: composetest.AssemblerFor(introspection),
+				SpecCodec:        composetest.DemoCodec(),
 				BackendRegistry:  registry,
 				Store:            store,
 				CaptureDefaults:  defaults,
@@ -189,9 +189,9 @@ func TestProvider_BuildPlan_HoldsEachServiceByItsMode(t *testing.T) {
 			// Assert
 			require.NoError(t, err)
 			assert.Equal(t, []captureplan.ServiceHold{{
-				Service: demoService,
+				Service: composetest.DemoService,
 				Mode:    tt.wantMode,
-				Running: []model.ContainerRef{{Service: demoService, Replica: 1, ID: demoContainerID, Name: demoContainerName(1)}},
+				Running: []model.ContainerRef{{Service: composetest.DemoService, Replica: 1, ID: composetest.DemoContainerID, Name: composetest.DemoContainerName(1)}},
 			}}, plan.Services)
 			registry.AssertExpectations(t)
 		})
