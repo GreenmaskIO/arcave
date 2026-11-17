@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package provider is the stages a workload is run through, one handle per stage; a provider
-// implements them, core and gc call them. A stage that fails returns a nil handle.
 package provider
 
 import (
@@ -23,8 +21,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 )
 
-// Workload is one workload of one session, a compose project for the compose provider, built at
-// the DI root for one command.
+// Workload is one workload of one session, built at the DI root for one command.
 type Workload interface {
 	// Inspect reads the workload as it runs and refuses a daemon it cannot work on. It changes
 	// nothing.
@@ -48,33 +45,6 @@ type LiveWorkload interface {
 	// built what stands there, capturing nothing of it; on an absent one it removes nothing. Its
 	// data stays.
 	Teardown(ctx context.Context, prepared PreparedSavepoint) (VacantWorkload, error)
-}
-
-// CaptureOptions are what a capture is planned for.
-type CaptureOptions struct {
-	// Restoring is the savepoint about to replace the workload, empty for none; when set, the
-	// capture keeps everything it overwrites and holds the workload still.
-	Restoring model.SavepointID
-}
-
-// CapturePolicyError refuses a capture whose policy could not be resolved.
-type CapturePolicyError struct {
-	Err error
-}
-
-func (e *CapturePolicyError) Error() string { return e.Err.Error() }
-
-func (e *CapturePolicyError) Unwrap() error { return e.Err }
-
-// PrepareOptions are what a savepoint is prepared to build by.
-type PrepareOptions struct {
-	// Deployment is what the build is of; the provider stamps it as given on what it creates,
-	// adding when it built and the replicas.
-	Deployment model.SavepointDeployment
-	// Recovering says the rollback repairs an interrupted one: what the workload still holds is
-	// that rollback's own writes, never something to refuse. The summary names it all the same;
-	// what to say of it is the caller's.
-	Recovering bool
 }
 
 // CapturePlan is one capture, decided; nothing is touched.
@@ -101,18 +71,6 @@ type HeldWorkload interface {
 	Teardown(ctx context.Context) (VacantWorkload, error)
 }
 
-// CaptureRequest is what core asks a savepoint to carry. The provider stores every attribute
-// with the savepoint and hands it back as given; it decides nothing by any of them.
-type CaptureRequest struct {
-	Name        string
-	Description string
-	Labels      map[string]string
-	TakenBefore *model.SavepointRef
-	// InResult says the savepoint is the command's own result: what it leaves out is repeated
-	// there, and its warnings are marked so.
-	InResult bool
-}
-
 // CapturedSavepoint is the workload stored and not committed: no listing holds it. Exactly one of
 // Commit and Abandon ends it.
 type CapturedSavepoint interface {
@@ -126,53 +84,10 @@ type CapturedSavepoint interface {
 	Abandon(ctx context.Context, cause error)
 }
 
-// Savepoints is what the provider keeps, read and removed without touching any workload.
-type Savepoints interface {
-	// List returns every committed savepoint, oldest first, attributes as they were given.
-	List(ctx context.Context) ([]model.Savepoint, error)
-	// Remove uncommits the savepoint id names, then deletes what was stored under it; one already
-	// gone is no error. Several savepoints may be removed at once.
-	Remove(ctx context.Context, id model.SavepointID) error
-}
-
-// WorkloadName names one workload, a compose project, as its provider does; the provider validates it.
-type WorkloadName string
-
-// Session is one session as the provider holds it: every workload with savepoints in it, and
-// whatever those savepoints left in the store and on the daemon.
-type Session interface {
-	// ID is the session's id.
-	ID() model.SessionID
-	// Workloads names the workloads the session holds anything of, running or not, sorted.
-	Workloads(ctx context.Context) ([]WorkloadName, error)
-	// Savepoints opens one workload's savepoints.
-	Savepoints(workload WorkloadName) (Savepoints, error)
-	// FindGarbage finds what no committed savepoint and nothing running holds among dataKinds, none
-	// named being every one, and changes nothing; a place it could not read is an aborted report.
-	FindGarbage(ctx context.Context, dataKinds []model.GarbageDataKind) []Garbage
-}
-
-// Garbage is one kind's findings in one place.
-type Garbage interface {
-	// Report is what was found, with no deletion.
-	Report() model.GarbageReport
-	// Delete carries the report's ops out until ctx is done; what it could not is in the deletion.
-	Delete(ctx context.Context) model.GarbageDeletion
-}
-
 // PreparedSavepoint is a savepoint ready to build.
 type PreparedSavepoint interface {
 	// Summary is what a rollback's result says of building it.
 	Summary() PreparedSummary
-}
-
-// PreparedSummary is what building a prepared savepoint restores.
-type PreparedSummary struct {
-	// Volumes and WritableLayers are what building it restores.
-	Volumes        []model.Volume
-	WritableLayers []model.WritableLayerRestoreResult
-	// Overwritten names what outlived an absent workload and the build overwrites.
-	Overwritten []string
 }
 
 // VacantWorkload is the workload torn down: nothing of it is left but its data.
