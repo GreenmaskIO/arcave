@@ -119,7 +119,7 @@ func TestProgressE2E_JSONStream(t *testing.T) {
 	t.Parallel()
 
 	// Arrange
-	compose := newImageRollbackEnv(t)
+	compose := newComposeProject(t, "progress-it")
 	projectRoot := t.TempDir()
 	runArcave(t, projectRoot, nil, "init", "--name", "arcave-progress-e2e")
 	writeStorageConfig(t, projectRoot, startDirectoryStorage(t).file, composeconfig.SnapshotBackendFullCopy)

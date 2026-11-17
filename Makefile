@@ -33,10 +33,12 @@ docs-serve: docs-install
 docs-build: docs-install
 	npm --prefix $(DOCS_PREVIEW_DIR) run build
 
-# Unit tests need no daemon; the integration suites under a provider's test/ need a reachable one.
+# Unit tests need no daemon; the e2e suite under test/ and the compose provider's integration suite
+# need a reachable one.
+E2E_DIR := ./test
 INTEGRATION_DIR := ./internal/provider/compose/test
 UNIT_PKGS = $(shell go list ./cmd/... ./internal/... ./pkg/... | grep -Ev '/internal/provider/[^/]+/test(/|$$)')
-INTEGRATION_PKGS := $(INTEGRATION_DIR)/...
+INTEGRATION_PKGS := $(E2E_DIR)/... $(INTEGRATION_DIR)/...
 # Concurrent tests per integration package: the daemon's disk, not the CPU, is the bound.
 INTEGRATION_PARALLEL := 4
 # Extra go test flags for the integration run, e.g. -run or -skip to split it across CI legs.
@@ -62,10 +64,17 @@ test-fidelity:
 # The core workflow through the built binary on every storage backend, each against its
 # server in a container; part of test-integration too, this runs it alone.
 test-storage:
-	go test -run TestStorageE2E -count=1 -timeout 20m -parallel $(INTEGRATION_PARALLEL) $(INTEGRATION_DIR)
+	go test -run TestStorageE2E -count=1 -timeout 20m -parallel $(INTEGRATION_PARALLEL) $(E2E_DIR)
+
+# What the e2e suite may import of arcave: it drives the built binary, never a service, client or
+# provider of its own.
+E2E_ALLOWED_IMPORTS := internal/(model|config|provider/compose/config|storefactory|repository/[a-z]+|service/lock|utils/testutils/daemontest)|pkg/.+
 
 lint:
 	golangci-lint run ./...
+	@leaked=$$(go list -f '{{join .TestImports "\n"}}' $(E2E_DIR)/... | grep 'greenmaskio/arcave/' | \
+		grep -Ev 'greenmaskio/arcave/($(E2E_ALLOWED_IMPORTS))$$' | sort -u); \
+	if [ -n "$$leaked" ]; then echo "test/ imports what the e2e suite may not: $$leaked" >&2; exit 1; fi
 
 clean:
 	rm -rf bin/

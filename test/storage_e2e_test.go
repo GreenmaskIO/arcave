@@ -156,7 +156,7 @@ func runStorageE2E(t *testing.T, target storageTarget, backend storageE2EBackend
 		require.NoError(t, err)
 		env = append(slices.Clone(env), "ARCAVE_ENCRYPTION_KEY="+identity.String())
 	}
-	compose := newImageRollbackEnv(t)
+	compose := newComposeProject(t, "storage-it")
 	projectRoot := t.TempDir()
 	run := func(args ...string) []byte {
 		t.Helper()

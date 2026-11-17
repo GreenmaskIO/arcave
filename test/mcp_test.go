@@ -57,7 +57,7 @@ func buildArcave(t *testing.T) string {
 		arcaveBin = filepath.Join(dir, "arcave")
 		var out bytes.Buffer
 		build := exec.Command("go", "build", "-o", arcaveBin, "./cmd/arcave")
-		build.Dir = "../../../.."
+		build.Dir = moduleRoot(t)
 		build.Stdout, build.Stderr = &out, &out
 		if err := build.Run(); err != nil {
 			arcaveBinErr = err
@@ -66,6 +66,15 @@ func buildArcave(t *testing.T) string {
 	})
 	require.NoError(t, arcaveBinErr, "build arcave: %s", arcaveBin)
 	return arcaveBin
+}
+
+// moduleRoot is the directory of arcave's go.mod, where the binary builds from.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+
+	gomod, err := exec.Command("go", "env", "GOMOD").Output()
+	require.NoError(t, err)
+	return filepath.Dir(strings.TrimSpace(string(gomod)))
 }
 
 // arcaveCommand runs the binary in the session env's project root, unswayed by the caller's
@@ -90,8 +99,8 @@ func arcaveCommandIn(t *testing.T, projectRoot string, args ...string) *exec.Cmd
 	return cmd
 }
 
-// initArcave writes the config `arcave mcp` reads: the arcave project and the default storage
-// newSessionEnv already opened, so the env's helpers see what the server writes.
+// initArcave writes the config `arcave mcp` reads: the arcave project and the default storage, the
+// one the env's helpers read on disk.
 func initArcave(t *testing.T, env *sessionEnv) {
 	t.Helper()
 
@@ -251,8 +260,7 @@ func TestMCP_PinnedServer(t *testing.T) {
 	assert.NotContains(t, removeMsg, "arcave")
 
 	// The pin is the session, not its name: a new "feat" is not the pinned one.
-	_, err := env.sessions.RemoveSession(env.ctx, model.RemoveSessionRequest{Session: "feat"})
-	require.NoError(t, err)
+	runArcave(t, env.projectRoot, nil, "session", "remove", "feat")
 	env.create(t, "feat")
 	assert.Contains(t, callToolErr(t, cs, "session_current", nil), feat.ID.String())
 }
@@ -382,12 +390,8 @@ func TestMCP_SavepointsFollowTheCurrentSession(t *testing.T) {
 	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(inBaseline.Savepoints))
 	assert.Equal(t, v1.ID, rolledBack.RolledBackTo.ID)
 
-	forkStore, err := env.in(t, fork.ID).svc.ListSavepoints(env.ctx, model.ListRequest{})
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []model.SavepointID{v1.ID, v2.ID}, savepointIDs(forkStore))
-	baselineStore, err := env.in(t, model.DefaultSession).svc.ListSavepoints(env.ctx, model.ListRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(baselineStore))
+	assert.ElementsMatch(t, []model.SavepointID{v1.ID, v2.ID}, savepointIDs(env.listSavepoints(t, fork.ID.String(), false)))
+	assert.Equal(t, []model.SavepointID{v1.ID}, savepointIDs(env.listSavepoints(t, model.DefaultSessionName, false)))
 }
 
 // The cdc backend runs under `arcave mcp` as under the CLI: each tool call serves its
@@ -402,7 +406,7 @@ func TestMCP_CDCOverStdio(t *testing.T) {
 	initArcave(t, env)
 	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
 	cs := newMCPClient(t, env)
-	compose := env.in(t, model.DefaultSession)
+	compose := env.composeProject
 	compose.write(t, compose.replicas(t)[0], "v1")
 	v1 := callTool[model.Savepoint](t, cs, "savepoint_create", map[string]any{"compose_project": env.project, "name": "v1"})
 	compose.write(t, compose.replicas(t)[0], "v2")

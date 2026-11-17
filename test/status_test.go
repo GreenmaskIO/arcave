@@ -75,7 +75,7 @@ const statusArcaveProject = "arcave-status-it"
 
 // statusEnv is a compose project run from statusSpec and an arcave project over it.
 type statusEnv struct {
-	*imageRollbackEnv
+	*composeProject
 	projectRoot string
 	storeDir    string
 	document    string
@@ -85,14 +85,14 @@ type statusEnv struct {
 func newStatusEnv(t *testing.T, env ...string) *statusEnv {
 	t.Helper()
 
-	compose := newImageRollbackEnv(t)
+	compose := newComposeProject(t, "status-it")
 	storage := startDirectoryStorage(t).file
 	statusEnv := &statusEnv{
-		imageRollbackEnv: compose,
-		projectRoot:      t.TempDir(),
-		storeDir:         storage.Directory.Path,
-		document:         fmt.Sprintf(statusSpec, compose.project),
-		env:              env,
+		composeProject: compose,
+		projectRoot:    t.TempDir(),
+		storeDir:       storage.Directory.Path,
+		document:       fmt.Sprintf(statusSpec, compose.project),
+		env:            env,
 	}
 	runArcave(t, statusEnv.projectRoot, env, "init", "--name", statusArcaveProject)
 	writeStorageConfigWith(t, statusEnv.projectRoot, storage,

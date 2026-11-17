@@ -32,6 +32,7 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -62,20 +63,20 @@ func (r resource) String() string { return r.kind + " " + r.name }
 // It returns the exit code for TestMain's os.Exit.
 func Run(m *testing.M) int {
 	flag.Parse()
-	cli, err := client.New(client.FromEnv)
+	daemon, err := client.New(client.FromEnv)
 	if err != nil || testing.Short() {
 		return m.Run()
 	}
-	defer func() { _ = cli.Close() }()
-	disableReaperOnPodman(cli)
-	before, err := readDaemonResources(cli)
+	defer func() { _ = daemon.Close() }()
+	disableReaperOnPodman(daemon)
+	before, err := readDaemonResources(daemon)
 	if err != nil {
 		return m.Run()
 	}
 
 	code := m.Run()
 
-	after, err := readDaemonResources(cli)
+	after, err := readDaemonResources(daemon)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "leak check: %v\n", err)
 		return code
@@ -115,14 +116,14 @@ func NewClient(t *testing.T) *client.Client {
 	if testing.Short() {
 		t.Skip("skipping the integration test in short mode")
 	}
-	cli, err := client.New(client.FromEnv)
+	daemon, err := client.New(client.FromEnv)
 	require.NoError(t, err)
-	if _, err := cli.Ping(context.Background(), client.PingOptions{}); err != nil {
-		_ = cli.Close()
+	if _, err := daemon.Ping(context.Background(), client.PingOptions{}); err != nil {
+		_ = daemon.Close()
 		t.Skip("skipping the integration test: no reachable docker daemon: " + err.Error())
 	}
-	t.Cleanup(func() { _ = cli.Close() })
-	return cli
+	t.Cleanup(func() { _ = daemon.Close() })
+	return daemon
 }
 
 // RandomSuffix keeps concurrent copies of a test apart on one daemon; Run's leak check knows
@@ -138,36 +139,53 @@ func RandomSuffix(t *testing.T) string {
 	return suffix
 }
 
-// IsPodman reports whether cli's daemon is Podman.
-func IsPodman(ctx context.Context, cli client.APIClient) (bool, error) {
-	version, err := cli.ServerVersion(ctx, client.ServerVersionOptions{})
+// IsPodman reports whether daemon's daemon is Podman.
+func IsPodman(ctx context.Context, daemon client.APIClient) (bool, error) {
+	version, err := daemon.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return false, fmt.Errorf("read the daemon version: %w", err)
 	}
 	return model.NewContainerRuntime(version.Version, version.Components).Kind == model.ContainerRuntimePodman, nil
 }
 
+// SkipWithoutVolumeSubpath skips on a Docker older than the API that mounts a volume at a subpath.
+func SkipWithoutVolumeSubpath(t *testing.T, daemon *client.Client) {
+	t.Helper()
+
+	const volumeSubpathAPI = "1.45"
+	podman, err := IsPodman(context.Background(), daemon)
+	require.NoError(t, err)
+	if podman {
+		return
+	}
+	version, err := daemon.ServerVersion(context.Background(), client.ServerVersionOptions{})
+	require.NoError(t, err)
+	if versions.LessThan(version.APIVersion, volumeSubpathAPI) {
+		t.Skipf("the daemon's API %s mounts no volume at a subpath", version.APIVersion)
+	}
+}
+
 // RemoveComposeProject drops everything a test left of project, images included. It goes
 // straight to the daemon: a compose down keeps volumes.
-func RemoveComposeProject(t *testing.T, cli *client.Client, project string) {
+func RemoveComposeProject(t *testing.T, daemon *client.Client, project string) {
 	t.Helper()
 
 	ctx := context.Background()
 	byProject := make(client.Filters).Add("label", api.ProjectLabel+"="+project)
 
-	containers, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: byProject})
+	containers, err := daemon.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: byProject})
 	if assert.NoError(t, err, "list containers of %s", project) {
-		removeContainers(t, cli, containers.Items)
+		removeContainers(t, daemon, containers.Items)
 	}
-	volumes, err := cli.VolumeList(ctx, client.VolumeListOptions{Filters: byProject})
+	volumes, err := daemon.VolumeList(ctx, client.VolumeListOptions{Filters: byProject})
 	if assert.NoError(t, err, "list volumes of %s", project) {
 		for _, v := range volumes.Items {
-			_, err := cli.VolumeRemove(ctx, v.Name, client.VolumeRemoveOptions{Force: true})
+			_, err := daemon.VolumeRemove(ctx, v.Name, client.VolumeRemoveOptions{Force: true})
 			assert.NoError(t, err, "remove volume %s", v.Name)
 		}
 	}
-	RemoveProjectNetworks(t, cli, project)
-	images, err := cli.ImageList(ctx, client.ImageListOptions{All: true})
+	RemoveProjectNetworks(t, daemon, project)
+	images, err := daemon.ImageList(ctx, client.ImageListOptions{All: true})
 	if assert.NoError(t, err, "list images") {
 		for _, img := range images.Items {
 			for _, repoTag := range img.RepoTags {
@@ -175,7 +193,7 @@ func RemoveComposeProject(t *testing.T, cli *client.Client, project string) {
 				// Docker spells them: Podman prefixes docker.io/.
 				tag := string(model.ImageRef(repoTag).Familiar())
 				if strings.HasPrefix(tag, "arcave/"+project+"-") || strings.HasPrefix(tag, project+"-") {
-					_, err := cli.ImageRemove(ctx, tag, client.ImageRemoveOptions{PruneChildren: true})
+					_, err := daemon.ImageRemove(ctx, tag, client.ImageRemoveOptions{PruneChildren: true})
 					assert.NoError(t, err, "remove image %s", tag)
 				}
 			}
@@ -186,29 +204,29 @@ func RemoveComposeProject(t *testing.T, cli *client.Client, project string) {
 // RemoveProjectNetworks drops the networks compose created for project. A down called by
 // name alone removes the containers but not these, and every leaked one holds an address
 // pool until the daemon has none left.
-func RemoveProjectNetworks(t *testing.T, cli *client.Client, project string) {
+func RemoveProjectNetworks(t *testing.T, daemon *client.Client, project string) {
 	t.Helper()
 
 	ctx := context.Background()
-	networks, err := cli.NetworkList(ctx, client.NetworkListOptions{
+	networks, err := daemon.NetworkList(ctx, client.NetworkListOptions{
 		Filters: make(client.Filters).Add("label", api.ProjectLabel+"="+project),
 	})
 	if !assert.NoError(t, err, "list networks of %s", project) {
 		return
 	}
 	for _, n := range networks.Items {
-		_, err := cli.NetworkRemove(ctx, n.ID, client.NetworkRemoveOptions{})
+		_, err := daemon.NetworkRemove(ctx, n.ID, client.NetworkRemoveOptions{})
 		assert.NoError(t, err, "remove network %s", n.Name)
 	}
 }
 
 // disableReaperOnPodman turns testcontainers' reaper off on Podman, whose machine socket the
 // reaper cannot mount; every test removes its own containers in t.Cleanup.
-func disableReaperOnPodman(cli *client.Client) {
+func disableReaperOnPodman(daemon *client.Client) {
 	if _, set := os.LookupEnv(ryukDisabled); set {
 		return
 	}
-	podman, err := IsPodman(context.Background(), cli)
+	podman, err := IsPodman(context.Background(), daemon)
 	if err != nil || !podman {
 		return
 	}
@@ -216,14 +234,14 @@ func disableReaperOnPodman(cli *client.Client) {
 }
 
 // readDaemonResources is every container, volume, network and image tag the daemon holds.
-func readDaemonResources(cli *client.Client) (map[resource]bool, error) {
+func readDaemonResources(daemon *client.Client) (map[resource]bool, error) {
 	ctx := context.Background()
-	if _, err := cli.Ping(ctx, client.PingOptions{}); err != nil {
+	if _, err := daemon.Ping(ctx, client.PingOptions{}); err != nil {
 		return nil, err
 	}
 	held := map[resource]bool{}
 
-	containers, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true})
+	containers, err := daemon.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +250,7 @@ func readDaemonResources(cli *client.Client) (map[resource]bool, error) {
 			held[resource{"container", strings.TrimPrefix(name, "/")}] = true
 		}
 	}
-	volumes, err := cli.VolumeList(ctx, client.VolumeListOptions{})
+	volumes, err := daemon.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -243,14 +261,14 @@ func readDaemonResources(cli *client.Client) (map[resource]bool, error) {
 		}
 		held[resource{"volume", v.Name}] = true
 	}
-	networks, err := cli.NetworkList(ctx, client.NetworkListOptions{})
+	networks, err := daemon.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return nil, err
 	}
 	for _, n := range networks.Items {
 		held[resource{"network", n.Name}] = true
 	}
-	images, err := cli.ImageList(ctx, client.ImageListOptions{All: true})
+	images, err := daemon.ImageList(ctx, client.ImageListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +293,7 @@ func ownResource(name string) bool {
 // removeContainers removes every container, the replica's anonymous volumes with it, in
 // passes: Podman refuses to remove one whose ipc or pid namespace another still joins, and a
 // summary does not say which. It asserts what a pass that removes nothing leaves.
-func removeContainers(t *testing.T, cli *client.Client, containers []container.Summary) {
+func removeContainers(t *testing.T, daemon *client.Client, containers []container.Summary) {
 	t.Helper()
 
 	pending := containers
@@ -283,7 +301,7 @@ func removeContainers(t *testing.T, cli *client.Client, containers []container.S
 		var held []container.Summary
 		errs := map[string]error{}
 		for _, c := range pending {
-			if _, err := cli.ContainerRemove(context.Background(), c.ID,
+			if _, err := daemon.ContainerRemove(context.Background(), c.ID,
 				client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
 				held = append(held, c)
 				errs[c.ID] = err

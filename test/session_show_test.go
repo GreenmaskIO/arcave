@@ -24,7 +24,6 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	"github.com/greenmaskio/arcave/internal/service/composespec"
 )
 
 // sessionShowSpec is one service holding a named volume.
@@ -59,11 +58,8 @@ func newSessionShowEnv(t *testing.T) *sessionShowEnv {
 func upComposeProject(t *testing.T) model.DockerComposeProjectName {
 	t.Helper()
 
-	compose := newImageRollbackEnv(t)
-	project, err := composespec.NewCodec().Parse(compose.ctx, fmt.Appendf(nil, sessionShowSpec, compose.project))
-	require.NoError(t, err)
-	require.NoError(t, compose.compose.Create(compose.ctx, project, nil))
-	require.NoError(t, compose.compose.Start(compose.ctx, project, 90*time.Second))
+	compose := newComposeProject(t, "session-show-it")
+	compose.upDocument(t, fmt.Sprintf(sessionShowSpec, compose.project))
 	return model.DockerComposeProjectName(compose.project)
 }
 

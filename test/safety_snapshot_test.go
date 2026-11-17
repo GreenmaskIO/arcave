@@ -69,7 +69,7 @@ func TestGC_RetainsTheNewestSafetySnapshot(t *testing.T) {
 	env.withComposeProject(t)
 	initArcave(t, env)
 	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendCDC)
-	compose := env.in(t, model.DefaultSession)
+	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -196,7 +196,7 @@ func TestRollback_WithoutASafetySnapshot(t *testing.T) {
 			env.withComposeProject(t)
 			initArcave(t, env)
 			writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
-			compose := env.in(t, model.DefaultSession)
+			compose := env.composeProject
 			var environment []string
 			if tt.config != "" {
 				environment = []string{tt.config}
@@ -240,7 +240,7 @@ func TestGC_RetainRecentFromTheEnvironment(t *testing.T) {
 	env.withComposeProject(t)
 	initArcave(t, env)
 	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
-	compose := env.in(t, model.DefaultSession)
+	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -269,7 +269,7 @@ func TestSavepointRemove_RetainRecentZero(t *testing.T) {
 	env.withComposeProject(t)
 	initArcave(t, env)
 	writeStorageConfig(t, env.projectRoot, env.storage, composeconfig.SnapshotBackendFullCopy)
-	compose := env.in(t, model.DefaultSession)
+	compose := env.composeProject
 	arcave := func(args ...string) []byte {
 		t.Helper()
 		return runArcave(t, env.projectRoot, nil, append([]string{"-p", env.project}, args...)...)
@@ -318,4 +318,13 @@ func TestMCP_RollbackSafetySnapshot(t *testing.T) {
 	// Assert
 	assert.Empty(t, byDefault.SafetySnapshot)
 	assert.NotEmpty(t, asked.SafetySnapshot)
+}
+
+// targetsOf is what each of ops names, in order.
+func targetsOf(ops []model.GarbageOp) []string {
+	targets := make([]string, 0, len(ops))
+	for _, op := range ops {
+		targets = append(targets, op.Target)
+	}
+	return targets
 }

@@ -34,7 +34,6 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
-	"github.com/moby/moby/client/pkg/versions"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +44,6 @@ import (
 	"github.com/greenmaskio/arcave/internal/config"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose"
-	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	"github.com/greenmaskio/arcave/internal/service/composespec"
 	"github.com/greenmaskio/arcave/internal/service/core"
@@ -117,7 +115,7 @@ func TestRollback_RebuiltReplicaKeepsItsMountsAndLogSize(t *testing.T) {
 
 	// Arrange
 	env := newImageRollbackEnv(t)
-	skipWithoutVolumeSubpath(t, env.daemon)
+	daemontest.SkipWithoutVolumeSubpath(t, env.daemon)
 	env.externalVolume(t, env.project+"-shared", "mkdir /data/app && printf %s kept > /data/app/marker")
 	env.upDocument(t, fmt.Sprintf(rebuiltReplicaSpec, env.project, t.TempDir()))
 	containers := env.containers(t)
@@ -146,59 +144,6 @@ func TestRollback_RebuiltReplicaKeepsItsMountsAndLogSize(t *testing.T) {
 	assert.ElementsMatch(t, before.Inspect.HostConfig.Mounts, after.Inspect.HostConfig.Mounts, "mount requests")
 	assert.Equal(t, "1MB", after.Inspect.HostConfig.LogConfig.Config["max-size"], "the log's size")
 	assert.ElementsMatch(t, storedBefore, env.storedMounts(t, after.ID), "what the daemon stores of each mount")
-}
-
-// The built binary, over the DI root itself and not this package's mirror of it: a replica rebuilt by
-// itself keeps its subpath and log size, and a volume comes back with its owner. Each goes wrong on
-// Podman alone, should the wiring hand a workflow the wrong engine.
-func TestRollback_ThroughTheBuiltBinary(t *testing.T) {
-	t.Parallel()
-
-	// Arrange
-	env := newImageRollbackEnv(t)
-	skipWithoutVolumeSubpath(t, env.daemon)
-	shared := env.project + "-shared"
-	env.externalVolume(t, shared, "mkdir /data/app && printf %s kept > /data/app/marker && chown 999:999 /data/app/marker")
-	env.upDocument(t, fmt.Sprintf(rebuiltReplicaSpec, env.project, t.TempDir()))
-	projectRoot := t.TempDir()
-	runArcave(t, projectRoot, nil, "init", "--name", "arcave-binary-rollback")
-	writeStorageConfig(t, projectRoot, config.Storage{
-		Type:      config.StorageTypeDirectory,
-		Directory: &config.DirectoryStorage{Path: t.TempDir()},
-	}, composeconfig.SnapshotBackendFullCopy)
-	run := func(args ...string) []byte {
-		t.Helper()
-		return runArcave(t, projectRoot, nil, append([]string{"-p", env.project}, args...)...)
-	}
-	savepoint := decode[model.Savepoint](t, run("savepoint", "create", "two-replicas"))
-	require.Len(t, savepoint.WritableLayers, 2, "one layer per replica, so the second has to be rebuilt")
-	busybox(t, dockerclient.NewEngine(env.daemon), shared, "printf %s drifted > /data/app/marker && chown 0:0 /data/app/marker")
-
-	// Act
-	run("rollback", "two-replicas")
-
-	// Assert
-	containers := env.containers(t)
-	require.Contains(t, containers, "app-2")
-	replica := containers["app-2"]
-	assert.Equal(t, "kept", env.read(t, replica.ID, "/sub/marker"), "the subpath, not the volume whole, and its data")
-	assert.Equal(t, "999:999", strings.TrimSpace(env.exec(t, replica.ID, "stat", "-c", "%u:%g", "/sub/marker")), "its owner")
-	assert.Equal(t, "1MB", replica.Inspect.HostConfig.LogConfig.Config["max-size"], "the log's size")
-}
-
-// skipWithoutVolumeSubpath skips on a Docker older than the API that mounts a volume at a subpath.
-func skipWithoutVolumeSubpath(t *testing.T, daemon *client.Client) {
-	t.Helper()
-
-	const volumeSubpathAPI = "1.45"
-	if isPodman(t, daemon) {
-		return
-	}
-	version, err := daemon.ServerVersion(context.Background(), client.ServerVersionOptions{})
-	require.NoError(t, err)
-	if versions.LessThan(version.APIVersion, volumeSubpathAPI) {
-		t.Skipf("the daemon's API %s mounts no volume at a subpath", version.APIVersion)
-	}
 }
 
 // storedMounts are a container's mounts as libpod stores them; none on Docker, which has no libpod.
