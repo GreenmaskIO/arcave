@@ -45,9 +45,9 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
 )
 
 const (

@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package backendregistry resolves a volume's backend to the factory that builds it.
-package backendregistry
+// Package volumebackend resolves a volume's backend to the factory that builds it; the backends
+// live beneath it, one package per kind.
+package volumebackend
 
 import (
 	"errors"
@@ -36,9 +37,9 @@ type Registry struct {
 	factories map[model.SnapshotBackendKind]model.SnapshotBackendFactory
 }
 
-// New indexes the factories by Kind; a duplicate is
+// NewRegistry indexes the factories by Kind; a duplicate is
 // ErrBackendAlreadyRegistered.
-func New(factories ...model.SnapshotBackendFactory) (*Registry, error) {
+func NewRegistry(factories ...model.SnapshotBackendFactory) (*Registry, error) {
 	indexed := make(map[model.SnapshotBackendKind]model.SnapshotBackendFactory, len(factories))
 	for _, factory := range factories {
 		if _, ok := indexed[factory.Kind()]; ok {

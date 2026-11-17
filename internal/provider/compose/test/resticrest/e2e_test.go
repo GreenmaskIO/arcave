@@ -35,8 +35,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
 )
 
 // The transport's proof: a stock restic container reaches the served endpoint

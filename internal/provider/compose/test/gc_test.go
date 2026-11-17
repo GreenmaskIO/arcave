@@ -37,14 +37,14 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/gcfinder"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/sessionstore"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/gc"
 	"github.com/greenmaskio/arcave/internal/service/heartbeat"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend"
 	"github.com/greenmaskio/arcave/internal/service/lock"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 )
 

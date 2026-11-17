@@ -27,9 +27,9 @@ import (
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
 )
 
 // resticShutdownTimeout bounds the restic server's graceful shutdown.

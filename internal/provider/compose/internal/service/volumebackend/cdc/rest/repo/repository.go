@@ -28,7 +28,7 @@ import (
 	"github.com/greenmaskio/storages"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // configKey is the repository config, the one object that lives at the store

@@ -30,10 +30,10 @@ import (
 	echoSwagger "github.com/swaggo/echo-swagger"
 	"github.com/ziflex/lecho/v3"
 
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/api"
-	docs "github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/docs/api"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/handler"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/api"
+	docs "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/docs/api"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/handler"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // readHeaderTimeout sheds a client that connects and sends no request header.

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package backendregistry
+package volumebackend
 
 import (
 	"testing"
@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/utils/composetest"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
 )
 
 func TestRegistry_New(t *testing.T) {
@@ -69,7 +69,7 @@ func TestRegistry_New(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
-			registry, err := New(fullcopy.NewFactory(composetest.FakeVolumeStreamer{}, fullcopy.CompressionNone))
+			registry, err := NewRegistry(fullcopy.NewFactory(composetest.FakeVolumeStreamer{}, fullcopy.CompressionNone))
 			require.NoError(t, err)
 
 			// Act
@@ -91,7 +91,7 @@ func TestRegistry_New(t *testing.T) {
 func TestRegistry_New_ValidatesBeforeTheFactory(t *testing.T) {
 	// Arrange
 	factory := &mockBackendFactory{kind: model.SnapshotBackendFullCopy}
-	registry, err := New(factory)
+	registry, err := NewRegistry(factory)
 	require.NoError(t, err)
 
 	// Act
@@ -117,7 +117,7 @@ func TestRegistry_New_PassesTheSpecThrough(t *testing.T) {
 		Run(func(args mock.Arguments) {
 			got = args.Get(0).(model.BackendSpec)
 		}).Return(composetest.NewMockBackend(volume), nil).Once()
-	registry, err := New(factory)
+	registry, err := NewRegistry(factory)
 	require.NoError(t, err)
 
 	// Act
@@ -135,7 +135,7 @@ func TestNew_DuplicateKind(t *testing.T) {
 	docker := composetest.FakeVolumeStreamer{}
 
 	// Act
-	_, err := New(fullcopy.NewFactory(docker, fullcopy.CompressionNone), fullcopy.NewFactory(docker, fullcopy.CompressionNone))
+	_, err := NewRegistry(fullcopy.NewFactory(docker, fullcopy.CompressionNone), fullcopy.NewFactory(docker, fullcopy.CompressionNone))
 
 	// Assert
 	require.ErrorIs(t, err, ErrBackendAlreadyRegistered)

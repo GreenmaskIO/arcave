@@ -23,7 +23,7 @@ import (
 	"github.com/greenmaskio/storages/directory"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // blobID is a syntactically valid object name: exactly 64 lowercase hex

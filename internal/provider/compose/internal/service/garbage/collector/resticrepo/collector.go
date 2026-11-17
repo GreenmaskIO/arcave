@@ -25,7 +25,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 

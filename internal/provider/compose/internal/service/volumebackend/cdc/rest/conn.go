@@ -27,7 +27,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
 
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // The HTTP/2 flow-control windows of one served stream, at net/http's ceilings:

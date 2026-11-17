@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 )
 
 // R1/R2: both modes converge on the snapshot — the mutation is rolled back and the

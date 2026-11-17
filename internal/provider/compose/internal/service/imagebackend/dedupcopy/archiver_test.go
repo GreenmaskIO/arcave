@@ -34,8 +34,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
 )
 
 const imageID = model.ImageDigestID("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

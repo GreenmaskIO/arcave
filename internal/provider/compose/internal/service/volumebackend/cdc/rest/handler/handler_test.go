@@ -32,8 +32,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/api"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/api"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 // The twelve operations run through the generated contract into a recorder, over

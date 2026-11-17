@@ -40,16 +40,16 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
 	sprepo "github.com/greenmaskio/arcave/internal/provider/compose/internal/repository/savepoint"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/repo"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/workload"
 	inflightrepo "github.com/greenmaskio/arcave/internal/repository/inflight"
 	sessionrepo "github.com/greenmaskio/arcave/internal/repository/session"
 	"github.com/greenmaskio/arcave/internal/service/core"
 	"github.com/greenmaskio/arcave/internal/service/lock"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/repo"
 	"github.com/greenmaskio/arcave/internal/storefactory"
 	"github.com/greenmaskio/arcave/internal/utils/testutils/daemontest"
 )
@@ -387,7 +387,7 @@ func (e *cdcEnv) serviceIn(t *testing.T, session model.SessionID) (*core.Service
 	require.NoError(t, err)
 	transport := e.openTransport(t, resticRoot)
 
-	registry, err := backendregistry.New(cdc.NewFactory(cdc.Dependencies{
+	registry, err := volumebackend.NewRegistry(cdc.NewFactory(cdc.Dependencies{
 		Runner:         e.engine,
 		Transport:      transport,
 		RepositoryRoot: resticRoot,

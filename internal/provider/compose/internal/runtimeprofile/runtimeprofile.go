@@ -32,8 +32,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
 )
 
 // Profile is everything that differs by the engine behind the daemon.

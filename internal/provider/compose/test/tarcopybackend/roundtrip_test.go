@@ -37,7 +37,7 @@ import (
 	dockerclient "github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/runtimeprofile"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
 )
 
 const (

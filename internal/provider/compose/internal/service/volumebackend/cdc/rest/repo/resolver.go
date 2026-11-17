@@ -20,7 +20,7 @@ import (
 
 	"github.com/greenmaskio/storages"
 
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc/rest/model"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc/rest/model"
 )
 
 var _ model.RepositoryResolver = (*Resolver)(nil)

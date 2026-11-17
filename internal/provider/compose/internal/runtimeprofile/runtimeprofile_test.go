@@ -30,7 +30,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/podman/libpod"
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/composespec"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
 )
 
 // The engine decides the profile whole: Podman is reached past its compat API, through the

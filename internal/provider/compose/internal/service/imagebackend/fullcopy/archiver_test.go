@@ -28,8 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/greenmaskio/arcave/internal/model"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/fullcopy"
 )
 
 const (

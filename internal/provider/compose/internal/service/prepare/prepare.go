@@ -26,7 +26,7 @@ import (
 
 	"github.com/greenmaskio/arcave/internal/model"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend"
 )
 
 // specReader reads a savepoint's spec artifact by id.
@@ -97,7 +97,7 @@ func (s *Preparer) Prepare(
 	ctx context.Context, savepoint model.Savepoint, deployment model.SavepointDeployment, overwritten []string,
 ) (composemodel.Target, error) {
 	// Their own set, not the live one's: a volume may have been added or dropped since.
-	backends, err := backendregistry.NewBackends(s.backendRegistry, s.store, composemodel.VolumesOf(savepoint))
+	backends, err := volumebackend.NewBackends(s.backendRegistry, s.store, composemodel.VolumesOf(savepoint))
 	if err != nil {
 		return composemodel.Target{}, fmt.Errorf("build backends: %w", err)
 	}

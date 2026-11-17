@@ -22,13 +22,13 @@ import (
 	"github.com/greenmaskio/arcave/internal/client/docker"
 	"github.com/greenmaskio/arcave/internal/model"
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend"
-	"github.com/greenmaskio/arcave/internal/service/imagebackend/dedupcopy"
-	imagefullcopy "github.com/greenmaskio/arcave/internal/service/imagebackend/fullcopy"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/dedupcopy"
+	imagefullcopy "github.com/greenmaskio/arcave/internal/provider/compose/internal/service/imagebackend/fullcopy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/fullcopy"
 	"github.com/greenmaskio/arcave/internal/utils"
 )
 
@@ -38,7 +38,7 @@ func newBackendRegistry(
 	cfg composeconfig.Config, resticRoot storages.Storager,
 	streamer fullcopy.VolumeStreamer, runner cdc.VolumeRunner, transport cdc.Transport,
 ) (model.SnapshotBackendRegistry, error) {
-	backendRegistry, err := backendregistry.New(
+	backendRegistry, err := volumebackend.NewRegistry(
 		fullcopy.NewFactory(streamer, fullcopy.Compression(cfg.Backends.FullCopy.Compression)),
 		cdc.NewFactory(cdc.Dependencies{
 			Runner:         runner,

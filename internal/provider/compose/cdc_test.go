@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	composeconfig "github.com/greenmaskio/arcave/internal/provider/compose/config"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 )
 
 // newCDCOptions is the translation that keeps internal/config free of any package

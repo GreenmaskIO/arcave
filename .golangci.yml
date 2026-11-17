@@ -81,7 +81,7 @@ linters:
       - path: ^internal/utils/testutils/
         linters:
           - errcheck
-      - path: ^internal/service/volumebackend/cdc/rest/modeltest/
+      - path: ^internal/provider/compose/internal/service/volumebackend/cdc/rest/modeltest/
         linters:
           - errcheck
       - path: ^internal/provider/compose/internal/utils/composetest/

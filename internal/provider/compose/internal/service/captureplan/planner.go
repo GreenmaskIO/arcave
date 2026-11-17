@@ -31,8 +31,8 @@ import (
 	"github.com/greenmaskio/arcave/internal/model"
 	"github.com/greenmaskio/arcave/internal/provider"
 	composemodel "github.com/greenmaskio/arcave/internal/provider/compose/internal/model"
-	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/backendregistry"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/capturepolicy"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend"
 )
 
 // errNoVolumesToBackUp refuses a savepoint that would cover nothing.
@@ -254,7 +254,7 @@ func (s *Planner) newPlan(
 		return composemodel.Plan{}, errNoVolumesToBackUp
 	}
 
-	backends, err := backendregistry.NewBackends(s.backendRegistry, s.store, volumes)
+	backends, err := volumebackend.NewBackends(s.backendRegistry, s.store, volumes)
 	if err != nil {
 		return composemodel.Plan{}, err
 	}

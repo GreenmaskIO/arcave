@@ -28,7 +28,7 @@ import (
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/resticrepo"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/collector/savepointdir"
 	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/garbage/eraser"
-	"github.com/greenmaskio/arcave/internal/service/volumebackend/cdc"
+	"github.com/greenmaskio/arcave/internal/provider/compose/internal/service/volumebackend/cdc"
 )
 
 // daemon is all a gc asks of the daemon.
