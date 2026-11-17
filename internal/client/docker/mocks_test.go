@@ -68,6 +68,11 @@ func (m *mockAPI) ExecAttach(ctx context.Context, execID string, options client.
 	return client.ExecAttachResult{HijackedResponse: args.Get(0).(client.HijackedResponse)}, args.Error(1)
 }
 
+func (m *mockAPI) ExecInspect(ctx context.Context, execID string, options client.ExecInspectOptions) (client.ExecInspectResult, error) {
+	args := m.Called(ctx, execID, options)
+	return args.Get(0).(client.ExecInspectResult), args.Error(1)
+}
+
 func (m *mockAPI) ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult {
 	args := m.Called(ctx, containerID, options)
 	return client.ContainerWaitResult{

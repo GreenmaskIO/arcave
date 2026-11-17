@@ -99,7 +99,7 @@ func (m *MockComposeRunner) Start(ctx context.Context, project *types.Project, w
 	return m.Called(ctx, project, waitTimeout).Error(0)
 }
 
-// MockContainerControl doubles the pause, the unpause and the wait on health probes.
+// MockContainerControl doubles the pause, the unpause, the wait on health probes and the exec.
 type MockContainerControl struct{ mock.Mock }
 
 func (m *MockContainerControl) PauseContainers(ctx context.Context, ids []string) error {
@@ -112,6 +112,14 @@ func (m *MockContainerControl) UnpauseContainers(ctx context.Context, ids []stri
 
 func (m *MockContainerControl) AwaitHealthProbes(ctx context.Context, ids []string) error {
 	return m.Called(ctx, ids).Error(0)
+}
+
+func (m *MockContainerControl) ExecInContainer(
+	ctx context.Context, id string, spec model.ExecSpec,
+) (model.ExecResult, error) {
+	args := m.Called(ctx, id, spec)
+	result, _ := args.Get(0).(model.ExecResult)
+	return result, args.Error(1)
 }
 
 // MockImageBackend doubles the image backend, both ways.

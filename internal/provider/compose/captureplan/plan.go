@@ -57,6 +57,9 @@ type ServiceHold struct {
 	// Running replicas are the ones a hold acts on; Idle ones are already still.
 	Running []model.ContainerRef
 	Idle    []IdleReplica
+	// PreCapture and PostCapture run in its replicas around the capture; nil is no hook.
+	PreCapture  *model.Hook
+	PostCapture *model.Hook
 }
 
 // IdleReplica is a replica found not running, or frozen; State is the daemon's word for it.
@@ -97,12 +100,13 @@ func (p Plan) ServicesHeldBy(mode model.CaptureMode) []ServiceHold {
 	return held
 }
 
-// NewNotCovered is what a capture of plan leaves out, killed being the containers the stop
-// killed; nil when it leaves out nothing.
-func (p Plan) NewNotCovered(killed []string) *model.NotCovered {
+// NewNotCovered is what a capture of plan leaves out, beside the containers the stop killed and the
+// pre-capture hooks let through; nil when it leaves out nothing.
+func (p Plan) NewNotCovered(killed []string, failedHooks []model.FailedHook) *model.NotCovered {
 	// A copy of the plan's whole, so a field model.NotCovered gains is carried with no line here.
 	notCovered := p.NotCovered
 	notCovered.KilledContainers = p.newKilledContainers(killed)
+	notCovered.FailedHooks = failedHooks
 	if notCovered.IsEmpty() {
 		return nil
 	}

@@ -19,11 +19,13 @@ package capturepolicy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -38,8 +40,19 @@ var (
 		model.CaptureLabelMountsInclude, model.CaptureLabelMountsFullCopy, model.CaptureLabelMountsCDC,
 		model.CaptureLabelWritableLayerCapture, model.CaptureLabelWritableLayerBackend, model.CaptureLabelImageCapture,
 		model.CaptureLabelCaptureMode,
+		model.CaptureLabelHookPreCapture, model.CaptureLabelHookPreCaptureUser,
+		model.CaptureLabelHookPreCaptureTimeout, model.CaptureLabelHookPreCaptureOnError,
+		model.CaptureLabelHookPostCapture, model.CaptureLabelHookPostCaptureUser,
+		model.CaptureLabelHookPostCaptureTimeout, model.CaptureLabelHookPostCaptureOnError,
 	}
 	volumeLabelKeys = []model.CaptureLabel{model.CaptureLabelCapture, model.CaptureLabelBackend}
+)
+
+// Why a hook's command label cannot be run.
+var (
+	errUnparsableCommand = errors.New("unparsable command")
+	errShellOperator     = errors.New("a shell operator outside quotes")
+	errEmptyCommand      = errors.New("want a command")
 )
 
 // CaptureDefaults are what the config says of a resource no label names: its backend,
@@ -48,7 +61,10 @@ type CaptureDefaults struct {
 	VolumeBackend        model.SnapshotBackendKind
 	WritableLayerBackend model.ImageBackendKind
 	// Mode holds a service no arcave.capture.mode label names.
-	Mode             model.CaptureMode
+	Mode model.CaptureMode
+	// HookTimeout and HookOnError tune a hook whose labels leave them unset.
+	HookTimeout      time.Duration
+	HookOnError      model.HookOnError
 	SavepointCapture SavepointCaptureSettings
 }
 
@@ -76,6 +92,9 @@ type serviceLabels struct {
 	writableLayerBackend *model.ImageBackendKind
 	imageCapture         *model.CaptureDecision
 	mode                 *model.CaptureMode
+	// preCapture and postCapture are the hooks as the labels set them, their defaults not applied.
+	preCapture  *model.Hook
+	postCapture *model.Hook
 }
 
 // volumeLabels is one named volume's arcave.* labels, parsed; a nil field is unset.
@@ -85,7 +104,8 @@ type volumeLabels struct {
 }
 
 // Resolve decides every resource of the compose project from its labels and defaults, a bind or
-// anonymous volume by its service's; a label it cannot act on is model.ErrInvalidCapturePolicy.
+// anonymous volume by its service's. Its only failure is a label it cannot act on,
+// model.ErrInvalidCapturePolicy: a caller may fall back to ResolveWithoutLabels on any error.
 func Resolve(
 	ctx context.Context, introspection model.IntrospectionResult, defaults CaptureDefaults,
 ) (model.CapturePolicy, error) {
@@ -128,32 +148,36 @@ func Resolve(
 	return capturePolicy, nil
 }
 
-// ResolveWithoutLabels decides every resource by the defaults alone, every label ignored.
-func ResolveWithoutLabels(
-	ctx context.Context, introspection model.IntrospectionResult, defaults CaptureDefaults,
-) (model.CapturePolicy, error) {
-	unlabelled := introspection
-	unlabelled.Project.Services = make([]model.Service, len(introspection.Project.Services))
-	for serviceIdx, service := range introspection.Project.Services {
-		service.Labels = nil
-		service.Volumes = slices.Clone(service.Volumes)
-		for volumeIdx, mount := range service.Volumes {
-			if mount.Volume != nil {
-				options := *mount.Volume
-				options.Labels = nil
-				service.Volumes[volumeIdx].Volume = &options
+// ResolveWithoutLabels decides every resource by the defaults alone, every label ignored; with no
+// label to refuse, it cannot fail.
+func ResolveWithoutLabels(introspection model.IntrospectionResult, defaults CaptureDefaults) model.CapturePolicy {
+	var (
+		services = map[string]model.ServiceDecision{}
+		named    = map[string]model.VolumeDecision{}
+		mounts   = map[model.MountRef]model.VolumeDecision{}
+	)
+	for _, service := range introspection.Project.Services {
+		unlabelled := serviceLabels{name: service.Name}
+		services[service.Name] = unlabelled.decideService(defaults)
+		for _, mount := range service.Volumes {
+			if !isMountOwnedByService(mount) {
+				continue
 			}
+			ref := model.MountRef{Service: service.Name, Replica: mount.Replica, Target: mount.Target}
+			mounts[ref] = unlabelled.decideMount(mount, defaults)
 		}
-		unlabelled.Project.Services[serviceIdx] = service
 	}
-	unlabelled.Project.Volumes = make([]model.NamedVolume, len(introspection.Project.Volumes))
-	for volumeIdx, named := range introspection.Project.Volumes {
-		named.Labels = nil
-		unlabelled.Project.Volumes[volumeIdx] = named
+	for _, volume := range introspection.Project.Volumes {
+		named[volume.Name] = newDefaultNamedDecision(defaults)
 	}
-	unlabelled.Images = nil
-
-	return Resolve(ctx, unlabelled, defaults)
+	return model.CapturePolicy{
+		VolumeBackend:        defaults.VolumeBackend,
+		WritableLayerBackend: defaults.WritableLayerBackend,
+		Mode:                 defaults.Mode,
+		Services:             services,
+		NamedVolumes:         named,
+		Mounts:               mounts,
+	}
 }
 
 // findImageLabels are the labels of the image the service's first replica runs on.
@@ -237,6 +261,12 @@ func parseServiceLabels(
 		}
 		labels.mode = &mode
 	}
+	if labels.preCapture, err = parseHookLabels(raw, model.HookPhasePreCapture, where); err != nil {
+		return serviceLabels{}, err
+	}
+	if labels.postCapture, err = parseHookLabels(raw, model.HookPhasePostCapture, where); err != nil {
+		return serviceLabels{}, err
+	}
 
 	if labels.excludedTargets, err = parseTargets(service, raw, model.CaptureLabelMountsExclude); err != nil {
 		return serviceLabels{}, err
@@ -274,7 +304,8 @@ func parseServiceLabels(
 }
 
 // decideService decides a service's writable layer and image — its own label, else the
-// service's arcave.capture, else the config — and its capture mode, its label else the config.
+// service's arcave.capture, else the config —, its capture mode, its label else the config, and
+// its hooks.
 func (sl serviceLabels) decideService(defaults CaptureDefaults) model.ServiceDecision {
 	writableLayerConfig := newConfigDecision(defaults.SavepointCapture.WritableLayers, "writable_layers")
 	writableLayer := model.WritableLayerDecision{
@@ -293,6 +324,8 @@ func (sl serviceLabels) decideService(defaults CaptureDefaults) model.ServiceDec
 		WritableLayer: writableLayer,
 		Image:         image,
 		Mode:          mode,
+		PreCapture:    withHookDefaults(sl.preCapture, defaults),
+		PostCapture:   withHookDefaults(sl.postCapture, defaults),
 	}
 }
 
@@ -374,10 +407,7 @@ func decideNamed(
 		return model.VolumeDecision{}, err
 	}
 
-	decision := model.VolumeDecision{
-		CaptureDecision: newConfigDecision(defaults.SavepointCapture.NamedVolumes, "volumes.named"),
-		Backend:         defaults.VolumeBackend,
-	}
+	decision := newDefaultNamedDecision(defaults)
 	switch {
 	case ownLabels.backend != nil:
 		decision.Backend = *ownLabels.backend
@@ -395,6 +425,14 @@ func decideNamed(
 		}
 	}
 	return decision, nil
+}
+
+// newDefaultNamedDecision is what the config says of a named volume no label names.
+func newDefaultNamedDecision(defaults CaptureDefaults) model.VolumeDecision {
+	return model.VolumeDecision{
+		CaptureDecision: newConfigDecision(defaults.SavepointCapture.NamedVolumes, "volumes.named"),
+		Backend:         defaults.VolumeBackend,
+	}
 }
 
 // decideNamedByTargetLists is what the services mounting a named volume say of its

@@ -18,6 +18,9 @@ package model
 // are arcave's own, SystemLabel.
 const CaptureLabelPrefix = "arcave."
 
+// CaptureLabelHookPrefix opens every hook label: arcave.hook.<phase>[.<setting>].
+const CaptureLabelHookPrefix = "arcave.hook."
+
 // CaptureLabel is a label a compose project sets its capture policy with.
 type CaptureLabel string
 
@@ -51,6 +54,18 @@ const (
 	// CaptureLabelCaptureMode is how a service is held still while a savepoint captures it:
 	// stop, pause or live.
 	CaptureLabelCaptureMode CaptureLabel = "arcave.capture.mode"
+	// CaptureLabelHookPreCapture is a command run in each running replica of a service before a
+	// capture holds it still; .user, .timeout and .on-error tune it.
+	CaptureLabelHookPreCapture        CaptureLabel = "arcave.hook.pre-capture"
+	CaptureLabelHookPreCaptureUser    CaptureLabel = "arcave.hook.pre-capture.user"
+	CaptureLabelHookPreCaptureTimeout CaptureLabel = "arcave.hook.pre-capture.timeout"
+	CaptureLabelHookPreCaptureOnError CaptureLabel = "arcave.hook.pre-capture.on-error"
+	// CaptureLabelHookPostCapture is a command run in each replica of a service once the capture
+	// brought the project back; tuned the same.
+	CaptureLabelHookPostCapture        CaptureLabel = "arcave.hook.post-capture"
+	CaptureLabelHookPostCaptureUser    CaptureLabel = "arcave.hook.post-capture.user"
+	CaptureLabelHookPostCaptureTimeout CaptureLabel = "arcave.hook.post-capture.timeout"
+	CaptureLabelHookPostCaptureOnError CaptureLabel = "arcave.hook.post-capture.on-error"
 )
 
 func (m CaptureLabel) String() string { return string(m) }

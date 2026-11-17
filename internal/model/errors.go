@@ -124,6 +124,8 @@ var (
 
 	// ErrInvalidCapturePolicy reports an arcave.* label arcave cannot act on.
 	ErrInvalidCapturePolicy = errors.New("invalid capture policy label")
+	// ErrContainerNotRunning reports an exec into a container stopped, frozen or gone.
+	ErrContainerNotRunning = errors.New("container is not running")
 
 	// ErrComposeProjectAbsent reports a compose project the daemon holds no container of.
 	ErrComposeProjectAbsent = errors.New("no containers found")

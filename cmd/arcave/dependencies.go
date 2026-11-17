@@ -1032,6 +1032,8 @@ func newCaptureDefaults(cfg config.Config) capturepolicy.CaptureDefaults {
 		VolumeBackend:        cfg.Snapshot.BackendKind(),
 		WritableLayerBackend: cfg.WritableLayers.BackendKind(),
 		Mode:                 model.CaptureMode(cfg.Capture.Mode),
+		HookTimeout:          cfg.Capture.Hooks.Timeout,
+		HookOnError:          cfg.Capture.Hooks.OnErrorKind(),
 		SavepointCapture: capturepolicy.SavepointCaptureSettings{
 			WritableLayers:   utils.Value(cfg.Capture.WritableLayers),
 			Images:           utils.Value(cfg.Capture.Images),

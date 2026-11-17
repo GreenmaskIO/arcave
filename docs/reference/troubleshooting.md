@@ -215,14 +215,31 @@ An earlier run was interrupted after it started writing and before it committed 
 
 If there is no `savepoint.json` there, nothing lists what is in it and nothing puts it back. Its `heartbeat.json` says whether the run that wrote it failed, and [`arcave gc`](cli/gc.md) deletes such a directory — `--dry-run` only names it.
 
-## `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to resume`
+## `savepoint 019e843e-1650-7000-8000-000000000000 committed; bringing the project back: …`
 
-**The savepoint exists and is complete.** Only the restart failed, so note the id and look at the project: the services are stopped, paused, or unhealthy, or slower than [`--wait-timeout`](configuration.md#compose). Do not take another savepoint to compensate.
+**The savepoint exists and is complete.** Only what came after the commit failed — the restart, or a `post-capture` hook. Note the id and do not take another savepoint to compensate.
 
-```shell
-docker compose ps
-arcave --log-level debug savepoint create retry --wait-timeout 5m
-```
+- `… starting services: …` — the services are stopped, paused, or unhealthy, or slower than [`--wait-timeout`](configuration.md#compose). Look at the project:
+
+  ```shell
+  docker compose ps
+  arcave --log-level debug savepoint create retry --wait-timeout 5m
+  ```
+
+- `… post-capture hook of app-1 failed: exit 1: <its last line of stderr>` — the hook ran after the project was back and failed; whatever it was to undo (a maintenance switch, a lock) may still be on. Run it by hand with `docker exec`, then fix it. Set its `arcave.hook.post-capture.on-error: continue` if a failure should only warn.
+
+## A hook failed
+
+| Error | What happened, what to do |
+|---|---|
+| `pre-capture hook of db-1 failed: exit 3: <its last line of stderr>` | The hook exited non-zero, so nothing was held or captured, and the `post-capture` hooks ran. The line quoted is the last of its stderr, else of its stdout; `--log-level debug` logs its command and the tail of both streams. Fix the hook, or set `arcave.hook.pre-capture.on-error: continue` — or run once with `ARCAVE_CAPTURE_HOOKS_ON_ERROR=continue`; the savepoint then lists the failure in `not_covered.failed_hooks`. |
+| `pre-capture hook of db-1 failed: timed out after 1m0s` | It ran past its `.timeout` ([`capture.hooks.timeout`](configuration.md#capture), 60s). The process is not killed: it runs on in the container. Raise the timeout or make the hook shorter. |
+| `pre-capture hook of db-1 failed: exit 127: OCI runtime exec failed: …` | The command is not in the image (`127`), or not executable (`126`): the container's runtime could not start it. |
+| `pre-capture hook of db-1 failed: <the daemon's error>` | The daemon did not run it — a user that does not exist (`.user`). |
+| `…; and 2 more hooks failed` | Every hook of the phase ran; the first failure by service and replica is the command's error, and each of the others is its own failed `hook` step in the progress. |
+| `db-2 was paused: pre-capture hook skipped` (a warning) | The replica was not running when the savepoint started, so its hook did not run; it is captured as it was. |
+| `app-1 is not running: post-capture hook skipped` (a warning) | The replica did not come back up — look at the `starting services` error beside it. |
+
 
 ## Services never become healthy
 

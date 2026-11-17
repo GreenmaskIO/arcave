@@ -49,16 +49,16 @@ func (p capturePlan) LabelsIgnored() error {
 	return p.plan.LabelsIgnored
 }
 
-// Hold holds the project still as the plan says; the killed containers ride on what it returns.
+// Hold holds the project still as the plan says; what holding it did rides on what it returns.
 func (p capturePlan) Hold(ctx context.Context) (provider.HeldWorkload, error) {
-	killed, err := p.service.hold(ctx, p.plan)
+	outcome, err := p.service.hold(ctx, p.plan)
 	if err != nil {
 		return nil, err
 	}
 	return heldWorkload{
 		service:              p.service,
 		plan:                 p.plan,
-		killed:               killed,
+		outcome:              outcome,
 		anonymousVolumeNames: p.anonymousVolumeNames,
 		ownedBefore:          p.ownedBefore,
 	}, nil
@@ -70,19 +70,19 @@ func (p capturePlan) Release(ctx context.Context, waitTimeout time.Duration) err
 	return p.service.release(ctx, p.plan, waitTimeout)
 }
 
-// heldWorkload is the project heldWorkload still, the containers its stop killed, the anonymous volumes its
-// teardown orphans and the volumes it owned when it was inspected.
+// heldWorkload is the project held still, what holding it did, the anonymous volumes its teardown
+// orphans and the volumes it owned when it was inspected.
 type heldWorkload struct {
 	service              *Provider
 	plan                 captureplan.Plan
-	killed               []string
+	outcome              hold.Outcome
 	anonymousVolumeNames map[string]string
 	ownedBefore          map[string]bool
 }
 
 // Capture stores what is held under a new savepoint, not yet committed.
 func (h heldWorkload) Capture(ctx context.Context, req provider.CaptureRequest) (provider.CapturedSavepoint, error) {
-	return h.service.capturer.Capture(ctx, h.plan, h.killed, req)
+	return h.service.capturer.Capture(ctx, h.plan, h.outcome, req)
 }
 
 // PrepareSavepoint loads the layers of the savepoint id names back into the daemon and points the
@@ -120,17 +120,18 @@ func (h heldWorkload) Teardown(ctx context.Context) (provider.VacantWorkload, er
 	}, nil
 }
 
-// hold holds the project still as plan says and returns the containers the stop killed.
-func (s *Provider) hold(ctx context.Context, plan captureplan.Plan) (_ []string, err error) {
-	ctx, step := progress.Run(ctx, progress.Step{Kind: kindSavepointHold}, progress.MeasureResources)
+// hold runs the pre-capture hooks, holds the project still as plan says and returns what that did.
+func (s *Provider) hold(ctx context.Context, plan captureplan.Plan) (_ hold.Outcome, err error) {
+	ctx, step := progress.Begin(ctx, progress.Step{Kind: kindSavepointHold})
 	defer func() { step.End(err) }()
 
 	return hold.NewTriggersByMode(s.composeRunner, s.containerControl, plan, 0).BeforeCapture(ctx)
 }
 
-// release brings back the project plan holds, waiting waitTimeout on its health checks.
+// release brings back the project plan holds, waiting waitTimeout on its health checks, and runs
+// the post-capture hooks.
 func (s *Provider) release(revertCtx context.Context, plan captureplan.Plan, waitTimeout time.Duration) (err error) {
-	revertCtx, step := progress.Run(revertCtx, progress.Step{Kind: kindSavepointRelease}, progress.MeasureResources)
+	revertCtx, step := progress.Begin(revertCtx, progress.Step{Kind: kindSavepointRelease})
 	defer func() { step.End(err) }()
 
 	return hold.NewTriggersByMode(s.composeRunner, s.containerControl, plan, waitTimeout).AfterCapture(revertCtx)

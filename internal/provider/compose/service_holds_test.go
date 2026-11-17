@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/rs/zerolog"
@@ -82,6 +83,24 @@ func TestNewServiceHolds(t *testing.T) {
 			},
 		},
 		{
+			name: "a service's hooks are carried",
+			services: []model.Service{
+				{Name: "db", Containers: []model.Container{newStateReplica("db", 1, running)}},
+			},
+			policy: model.CapturePolicy{Services: map[string]model.ServiceDecision{
+				"db": {PreCapture: &model.Hook{Command: []string{"pre"}}, PostCapture: &model.Hook{Command: []string{"post"}}},
+			}},
+			want: func(services []model.Service) []captureplan.ServiceHold {
+				return []captureplan.ServiceHold{{
+					Service:     "db",
+					Mode:        model.CaptureModeStop,
+					Running:     []model.ContainerRef{refOf(services[0].Containers[0], "db")},
+					PreCapture:  &model.Hook{Command: []string{"pre"}},
+					PostCapture: &model.Hook{Command: []string{"post"}},
+				}}
+			},
+		},
+		{
 			name: "a paused, exited, created or restarting replica is idle; no state is running",
 			services: []model.Service{{Name: "db", Containers: []model.Container{
 				newStateReplica("db", 1, paused),
@@ -142,15 +161,36 @@ func TestProvider_newReplacementPolicy_StopsEveryService(t *testing.T) {
 			ctx := zerolog.Nop().WithContext(context.Background())
 
 			// Act
-			policy, _, err := svc.newReplacementPolicy(ctx, labelledIntrospection(tt.labels), demoRecord())
+			policy, _ := svc.newReplacementPolicy(ctx, labelledIntrospection(tt.labels), demoRecord())
 
 			// Assert
-			require.NoError(t, err)
 			assert.Equal(t, model.CaptureModeStop, policy.Mode)
 			assert.Equal(t, model.CaptureModeStop, policy.DecideService(demoService).Mode)
 			assert.Equal(t, model.CaptureModeStop, policy.DecideService("unlabelled").Mode)
 		})
 	}
+}
+
+// A capture before a restore runs no hook, whatever the labels say.
+func TestProvider_newReplacementPolicy_RunsNoHook(t *testing.T) {
+	// Arrange
+	defaults := demoCaptureDefaults
+	defaults.HookTimeout = time.Minute
+	defaults.HookOnError = model.HookOnErrorFail
+	svc := New(Deps{CaptureDefaults: defaults})
+	ctx := zerolog.Nop().WithContext(context.Background())
+	labels := map[string]string{
+		string(model.CaptureLabelHookPreCapture):  "pre",
+		string(model.CaptureLabelHookPostCapture): "post",
+	}
+
+	// Act
+	policy, labelsIgnored := svc.newReplacementPolicy(ctx, labelledIntrospection(labels), demoRecord())
+
+	// Assert
+	assert.NoError(t, labelsIgnored)
+	assert.Nil(t, policy.DecideService(demoService).PreCapture)
+	assert.Nil(t, policy.DecideService(demoService).PostCapture)
 }
 
 // A savepoint's plan holds each service by its label, or by the config's mode.

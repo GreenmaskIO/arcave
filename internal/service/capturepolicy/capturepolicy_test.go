@@ -450,12 +450,48 @@ func TestResolveWithoutLabels(t *testing.T) {
 	introspection := demoProject(map[string]string{"arcave.captur": "false"}, nil, map[string]string{string(model.CaptureLabelCapture): "false"}, nil)
 
 	// Act
-	policy, err := ResolveWithoutLabels(nopCtx(), introspection, noBinds)
+	policy := ResolveWithoutLabels(introspection, noBinds)
 
 	// Assert
-	require.NoError(t, err)
 	assert.False(t, policy.DecideMount(appBind).Capture)
 	assert.True(t, policy.DecideMount(appAnon).Capture)
+}
+
+// Past every label, the policy is the one Resolve gives the project with none, whatever the config.
+func TestResolveWithoutLabels_IsResolveOfNoLabel(t *testing.T) {
+	tests := []struct {
+		name     string
+		defaults CaptureDefaults
+	}{
+		{name: "everything captured", defaults: hookDefaults},
+		{
+			name: "every kind left out, by cdc and pause",
+			defaults: CaptureDefaults{
+				VolumeBackend:        model.SnapshotBackendCDC,
+				WritableLayerBackend: model.ImageBackendFullCopy,
+				Mode:                 model.CaptureModePause,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			labelled := demoProject(
+				map[string]string{string(model.CaptureLabelCapture): "false", "arcave.hook.pre-capture": "true"},
+				map[string]string{string(model.CaptureLabelCaptureMode): "live"},
+				nil,
+				map[string]string{string(model.CaptureLabelBackend): "cdc"},
+			)
+			want, err := Resolve(nopCtx(), demoProject(nil, nil, nil, nil), tt.defaults)
+			require.NoError(t, err)
+
+			// Act
+			got := ResolveWithoutLabels(labelled, tt.defaults)
+
+			// Assert
+			assert.Equal(t, want, got)
+		})
+	}
 }
 
 // Every decision is stamped on the services, with its origin and source; a named

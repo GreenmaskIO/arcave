@@ -42,9 +42,9 @@ Returns the savepoint record — the shape [Output](output.md#the-savepoint-reco
 }
 ```
 
-`not_covered` is what the savepoint does **not** hold — skipped mounts with a reason code, services without a captured volume, containers killed at the stop deadline, replica gaps, unresolvable images, and layers or images a [capture label](capture_labels.md) left out. The tool's description tells an agent to report it before relying on the savepoint.
+`not_covered` is what the savepoint does **not** hold — skipped mounts with a reason code, services without a captured volume, containers killed at the stop deadline, `pre-capture` hooks that failed and were let through, replica gaps, unresolvable images, and layers or images a [capture label](capture_labels.md) left out. The tool's description tells an agent to report it before relying on the savepoint.
 
-A failure of the form `savepoint 019e843e-1650-7000-8000-000000000000 committed; services failed to resume: …` means the savepoint **exists and is safe to roll back to**; only the restart failed. The tool's own description tells an agent this, so it reports the id rather than taking another savepoint.
+A failure of the form `savepoint 019e843e-1650-7000-8000-000000000000 committed; bringing the project back: …` means the savepoint **exists and is safe to roll back to**; only the restart or a `post-capture` hook failed. The tool's own description tells an agent this, so it reports the id rather than taking another savepoint.
 
 ## `savepoint_list`
 

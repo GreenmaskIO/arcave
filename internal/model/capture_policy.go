@@ -162,13 +162,16 @@ type WritableLayerDecision struct {
 	Backend ImageBackendKind
 }
 
-// ServiceDecision is what a savepoint takes of one service's writable layers and image, and
-// how it holds the service still.
+// ServiceDecision is what a savepoint takes of one service's writable layers and image, how it
+// holds the service still, and the hooks run around it.
 type ServiceDecision struct {
 	WritableLayer WritableLayerDecision
 	Image         CaptureDecision
 	// Mode is empty for CaptureModeStop.
 	Mode CaptureMode
+	// PreCapture and PostCapture run in its replicas around the capture; nil is no hook.
+	PreCapture  *Hook
+	PostCapture *Hook
 }
 
 // MountRef addresses one bind or anonymous mount: a bind by service and target,

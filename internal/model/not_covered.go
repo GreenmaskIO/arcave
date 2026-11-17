@@ -55,12 +55,16 @@ type NotCovered struct {
 	WritableLayers []SkippedWritableLayer `json:"writable_layers,omitempty"`
 	// Images are the services whose image a label leaves out.
 	Images []SkippedImage `json:"images,omitempty"`
+	// FailedHooks are the pre-capture hooks that failed and were let through: the application
+	// may not have been prepared.
+	FailedHooks []FailedHook `json:"failed_hooks,omitempty"`
 }
 
 // IsEmpty reports whether nothing is left out.
 func (m NotCovered) IsEmpty() bool {
 	return len(m.Mounts) == 0 && len(m.ServicesWithoutVolumes) == 0 && len(m.KilledContainers) == 0 &&
-		len(m.ReplicaGaps) == 0 && len(m.UnresolvedImages) == 0 && len(m.WritableLayers) == 0 && len(m.Images) == 0
+		len(m.ReplicaGaps) == 0 && len(m.UnresolvedImages) == 0 && len(m.WritableLayers) == 0 && len(m.Images) == 0 &&
+		len(m.FailedHooks) == 0
 }
 
 // Notice is one thing a savepoint does not hold or a status finds, for a reader: what it is, and,
@@ -86,6 +90,15 @@ func (m NotCovered) Notices() []Notice {
 			Message: fmt.Sprintf("%s was killed at the stop deadline: its volumes may hold a crash state",
 				formatReplica(killed.Service, killed.Replica, formatShortID(killed.Container))),
 			Hint:   "raise compose.stop_timeout or the service's stop_grace_period",
+			Severe: true,
+		})
+	}
+	for _, failed := range m.FailedHooks {
+		notices = append(notices, Notice{
+			Message: fmt.Sprintf("%s: %s hook failed (%s), captured anyway: the application may not have been prepared",
+				formatReplica(failed.Service, failed.Replica, failed.Container), failed.Hook, failed.Error),
+			Hint: fmt.Sprintf("fix the hook, or set %s%s.on-error: %s to refuse such a capture",
+				CaptureLabelHookPrefix, failed.Hook, HookOnErrorFail),
 			Severe: true,
 		})
 	}
@@ -245,6 +258,19 @@ type SkippedWritableLayer struct {
 	Container string     `json:"container"`
 	Reason    SkipReason `json:"reason"`
 	Detail    string     `json:"detail,omitempty"`
+}
+
+// FailedHook is a pre-capture hook that failed under on-error continue: the capture went on, and
+// the application may not have been prepared.
+type FailedHook struct {
+	Service   string    `json:"service"`
+	Replica   int       `json:"replica"`
+	Container string    `json:"container"`
+	Hook      HookPhase `json:"hook"`
+	// ExitCode is nil for a hook that timed out or that the daemon did not run.
+	ExitCode *int `json:"exit_code,omitempty"`
+	// Error says how it failed: "exit 3: <its last line of output>", "timed out after 2m0s".
+	Error string `json:"error"`
 }
 
 // SkippedImage is a service whose image bytes are left out.
